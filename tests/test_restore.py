@@ -2148,9 +2148,10 @@ def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
         server.vault.db.run_task(_drop)
         _add_deleted_log(server, gone_path, pixel_sha="sha_gone", file_removed=True)
 
-        # Explicit re-add of the folder: a fresh row (never scanned, nothing
-        # indexed). Because the gone file is absent from disk it is never in
-        # disk_paths, so the re-import override cannot touch its ledger entry.
+        # Explicit re-add of the folder (pending_reimport=True — the strongest
+        # override signal). Because the gone file is absent from disk it is never
+        # in disk_paths, so even the explicit override cannot touch its ledger
+        # entry.
         def _add_folder(session):
             rf = ReferenceFolder(
                 folder=ref_dir,
@@ -2158,6 +2159,7 @@ def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
                 allow_delete_file=False,
                 status=ReferenceFolderStatus.ACTIVE,
                 last_scanned=None,
+                pending_reimport=True,
             )
             session.add(rf)
             session.commit()
@@ -2187,9 +2189,10 @@ def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
 
 
 # ---------------------------------------------------------------------------
-# Change 2: explicit reference-folder re-import overrides the ledger; a routine
-# sync scan does not. Driven with background workers off (module fixture) so the
-# scan runs deterministically without a concurrent finder-triggered scan.
+# Change 2: an EXPLICIT reference-folder re-import (the dedicated one-shot
+# `pending_reimport` flag, set only by the deliberate folder-add endpoint)
+# overrides the ledger; a routine sync scan does not. Driven with background
+# workers off (module fixture) so the scan runs deterministically.
 # ---------------------------------------------------------------------------
 
 
@@ -2214,7 +2217,7 @@ def _make_ref_image(folder_dir, file_name):
     return path
 
 
-def _add_ref_folder(server, folder_dir, *, last_scanned=None):
+def _add_ref_folder(server, folder_dir, *, pending_reimport=False, last_scanned=None):
     from pixlstash.db_models.reference_folder import ReferenceFolderStatus
 
     def _insert(session):
@@ -2224,6 +2227,7 @@ def _add_ref_folder(server, folder_dir, *, last_scanned=None):
             allow_delete_file=False,
             status=ReferenceFolderStatus.ACTIVE,
             last_scanned=last_scanned,
+            pending_reimport=pending_reimport,
         )
         session.add(rf)
         session.commit()
@@ -2231,6 +2235,12 @@ def _add_ref_folder(server, folder_dir, *, last_scanned=None):
         return rf.id
 
     return server.vault.db.run_task(_insert)
+
+
+def _ref_pending_reimport(server, folder_id):
+    return server.vault.db.run_immediate_read_task(
+        lambda s: s.get(ReferenceFolder, folder_id).pending_reimport
+    )
 
 
 def _index_ref_picture(server, folder_id, file_path):
@@ -2265,9 +2275,9 @@ def _run_ref_scan(server, folder_id, folder_dir):
 
 
 def test_reference_folder_explicit_reimport_overrides_ledger(server):
-    """A freshly re-added folder (never scanned, nothing indexed) must re-import
-    a removed-but-kept file present on disk and clear its ledger entry so restore
-    can resurface it."""
+    """A deliberate folder (re-)add (pending_reimport=True) must re-import a
+    removed-but-kept file present on disk, clear its ledger entry so restore can
+    resurface it, and clear the one-shot flag once consumed."""
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     with tempfile.TemporaryDirectory() as ref_dir:
@@ -2275,7 +2285,7 @@ def test_reference_folder_explicit_reimport_overrides_ledger(server):
         pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
         _add_deleted_log(server, abs_path, pixel_sha=pixel_sha, file_removed=False)
 
-        folder_id = _add_ref_folder(server, ref_dir, last_scanned=None)
+        folder_id = _add_ref_folder(server, ref_dir, pending_reimport=True)
         result = _run_ref_scan(server, folder_id, ref_dir)
 
         assert result["new_count"] == 1, (
@@ -2290,11 +2300,46 @@ def test_reference_folder_explicit_reimport_overrides_ledger(server):
         assert _ref_ledger_flags(server, abs_path) == [], (
             "The ledger entry for the resurfaced file must be cleared."
         )
+        assert _ref_pending_reimport(server, folder_id) is False, (
+            "The one-shot pending_reimport flag must be cleared after the scan."
+        )
+
+
+def test_reference_folder_reimport_flag_is_one_shot(server):
+    """Once a scan consumes pending_reimport, a subsequent scan is a routine scan
+    and does NOT override the ledger — the override cannot recur without a fresh
+    deliberate add."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = _make_ref_image(ref_dir, "once.png")
+        pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
+
+        folder_id = _add_ref_folder(server, ref_dir, pending_reimport=True)
+        # First scan consumes the flag and imports the file.
+        _run_ref_scan(server, folder_id, ref_dir)
+        assert _ref_pending_reimport(server, folder_id) is False
+
+        # A new removed-but-kept ledger entry appears for that path (e.g. the
+        # picture is scrapheaped-and-purged while protected). A second, routine
+        # scan must NOT resurface it — the flag is already spent.
+        server.vault.db.run_task(
+            lambda s: s.exec(delete(Picture).where(Picture.file_path == abs_path))
+        )
+        _add_deleted_log(server, abs_path, pixel_sha=pixel_sha, file_removed=False)
+
+        result = _run_ref_scan(server, folder_id, ref_dir)
+        assert result["new_count"] == 0, (
+            f"A spent flag must not override the ledger again: {result}"
+        )
+        assert _ref_ledger_flags(server, abs_path) == [False], (
+            "A routine second scan must leave the ledger entry intact."
+        )
 
 
 def test_reference_folder_routine_rescan_does_not_reimport(server):
-    """A routine re-scan of an EXISTING folder (last_scanned set) must NOT auto
-    re-import a removed-but-kept file and must leave its ledger entry intact."""
+    """A routine re-scan of an existing folder (pending_reimport=False) must NOT
+    auto re-import a removed-but-kept file and must leave its ledger intact."""
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     with tempfile.TemporaryDirectory() as ref_dir:
@@ -2304,7 +2349,9 @@ def test_reference_folder_routine_rescan_does_not_reimport(server):
 
         import time as _time
 
-        folder_id = _add_ref_folder(server, ref_dir, last_scanned=_time.time())
+        folder_id = _add_ref_folder(
+            server, ref_dir, pending_reimport=False, last_scanned=_time.time()
+        )
         result = _run_ref_scan(server, folder_id, ref_dir)
 
         assert result["new_count"] == 0, (
@@ -2323,25 +2370,32 @@ def test_reference_folder_routine_rescan_does_not_reimport(server):
         )
 
 
-def test_reference_folder_reset_last_scanned_with_pictures_no_override(server):
-    """last_scanned reset to None while the folder still has indexed pictures
-    (the shape of a sync-toggle / rename) is NOT an explicit re-import: a
-    removed-but-kept file must not resurface and its ledger entry is retained."""
+def test_reference_folder_emptied_then_last_scanned_reset_no_override(server):
+    """Edge closed by the dedicated flag: an already-emptied folder (zero indexed
+    pictures) whose last_scanned is reset to None by a sync-toggle / rename /
+    mount-recovery is NOT an explicit re-import (pending_reimport stays False), so
+    a removed-but-kept file present on disk must NOT resurface and its ledger
+    entry must be retained. Under the old last_scanned heuristic this would have
+    wrongly fired."""
     from pixlstash.utils.image_processing.image_utils import ImageUtils
 
     with tempfile.TemporaryDirectory() as ref_dir:
-        live_path = _make_ref_image(ref_dir, "live.png")
         kept_path = _make_ref_image(ref_dir, "kept.png")
         kept_sha = ImageUtils.calculate_hash_from_file_path(kept_path)
-
-        folder_id = _add_ref_folder(server, ref_dir, last_scanned=None)
-        _index_ref_picture(server, folder_id, live_path)
         _add_deleted_log(server, kept_path, pixel_sha=kept_sha, file_removed=False)
 
-        _run_ref_scan(server, folder_id, ref_dir)
+        # Zero indexed pictures AND last_scanned reset to None — the exact shape
+        # that the removed heuristic misread as a fresh re-add.
+        folder_id = _add_ref_folder(
+            server, ref_dir, pending_reimport=False, last_scanned=None
+        )
+        result = _run_ref_scan(server, folder_id, ref_dir)
 
+        assert result["new_count"] == 0, (
+            f"An emptied folder with reset last_scanned must not re-import: {result}"
+        )
         assert _ref_ledger_flags(server, kept_path) == [False], (
-            "A last_scanned reset with pictures present must not clear the ledger."
+            "The ledger entry must be retained — this is not an explicit re-import."
         )
         assert (
             server.vault.db.run_task(
@@ -2350,7 +2404,7 @@ def test_reference_folder_reset_last_scanned_with_pictures_no_override(server):
                 ).all()
             )
             == []
-        ), "Removed-but-kept file must not resurface on a non-fresh scan."
+        ), "Removed-but-kept file must not resurface without a deliberate re-add."
 
 
 def test_full_restore_ledger_rescue_drops_when_content_differs(server):

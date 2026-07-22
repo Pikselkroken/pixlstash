@@ -381,11 +381,9 @@ def _make_reference_folder_picture(server, folder_dir, file_name, *, allow_delet
             label="refs",
             allow_delete_file=allow_delete,
             status="active",
-            # A folder that has imported a picture has completed a scan, so
-            # stamp last_scanned. Without it the folder looks freshly-added
-            # (never scanned, and once its picture is purged, empty), which the
-            # explicit-re-import override would treat as a deliberate re-add.
-            last_scanned=time.time(),
+            # pending_reimport defaults to False, so this folder never triggers
+            # the explicit-re-import ledger override — a routine scan of it
+            # simply skips ledger paths, which is what these tests assert.
         )
         session.add(folder)
         session.commit()

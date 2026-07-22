@@ -133,7 +133,7 @@ class ReferenceFolderScanTask(BaseTask):
                 rf.description_suffix,
                 bool(rf.sync_tags),
                 bool(rf.sync_descriptions),
-                rf.last_scanned,
+                bool(rf.pending_reimport),
             )
 
         config = self._db.run_task(fetch_folder_config, priority=DBPriority.LOW)
@@ -142,8 +142,8 @@ class ReferenceFolderScanTask(BaseTask):
             self._description_suffix,
             sync_tags,
             sync_descriptions,
-            last_scanned,
-        ) = config or (None, None, False, False, None)
+            pending_reimport,
+        ) = config or (None, None, False, False, False)
 
         # When a synced folder has no explicit suffix yet (a migrated folder or a
         # Docker folder added before its mount was reachable), detect the naming
@@ -224,19 +224,19 @@ class ReferenceFolderScanTask(BaseTask):
         candidate_new = disk_paths - set(existing_by_path.keys())
 
         # An *explicit* (re-)import overrides the ledger; a routine background
-        # sync does not.  The distinguishing signal is a freshly-created
-        # reference_folder row: it has never completed a scan (last_scanned is
-        # None) AND has nothing indexed yet (existing_by_path empty).  That is
-        # exactly the maintainer's remove-then-re-add case (and a first mount).
-        # Every routine reset of last_scanned — toggling sync, renaming, or
-        # recovering a mount — keeps the folder's existing Picture rows, so
-        # existing_by_path is non-empty and this stays False; a folder whose
-        # files all vanished from disk keeps last_scanned set.  On this path we
-        # re-import ledger-listed files that are actually present on disk and
-        # clear their ledger entries so restore resurfaces them.  Because every
-        # cleared path is drawn from disk_paths, genuinely-gone content (absent
-        # on disk, never in disk_paths) is never resurfaced or restored.
-        is_explicit_import = last_scanned is None and not existing_by_path
+        # sync does not.  The signal is the dedicated ``pending_reimport`` flag,
+        # set only by the deliberate folder (re-)add endpoint and cleared by this
+        # scan once it completes (see the end of _run_task).  No routine path
+        # (sync-toggle, rename, relocate, mount-recovery, watcher, periodic
+        # re-scan) ever sets it, so a routine scan can never override the ledger
+        # — this closes the edge where an already-emptied folder whose
+        # last_scanned was reset would have resurfaced removed-but-kept files.
+        # On the explicit path we re-import ledger-listed files that are actually
+        # present on disk and clear their ledger entries so restore resurfaces
+        # them.  Because every cleared path is drawn from disk_paths,
+        # genuinely-gone content (absent on disk, never in disk_paths) is never
+        # resurfaced or restored.
+        is_explicit_import = pending_reimport
         if is_explicit_import:
             new_paths = set(candidate_new)
             override_path_shas = {
@@ -414,7 +414,15 @@ class ReferenceFolderScanTask(BaseTask):
                 len(caption_updates),
             )
 
-        self._set_status(ReferenceFolderStatus.ACTIVE, update_last_scanned=True)
+        # Clear the one-shot explicit-re-import flag now that a scan has
+        # consumed it (same transaction as the status update). A mount_error
+        # exit above does NOT clear it, so the explicit intent survives until a
+        # real scan runs.
+        self._set_status(
+            ReferenceFolderStatus.ACTIVE,
+            update_last_scanned=True,
+            clear_pending_reimport=is_explicit_import,
+        )
         return {
             "status": "active",
             "folder_id": folder_id,
@@ -700,6 +708,7 @@ class ReferenceFolderScanTask(BaseTask):
         status: str,
         *,
         update_last_scanned: bool = False,
+        clear_pending_reimport: bool = False,
     ) -> None:
         def update(session: Session) -> None:
             rf = session.get(ReferenceFolder, self._folder_id)
@@ -708,6 +717,8 @@ class ReferenceFolderScanTask(BaseTask):
             rf.status = status
             if update_last_scanned:
                 rf.last_scanned = time.time()
+            if clear_pending_reimport:
+                rf.pending_reimport = False
             session.add(rf)
             session.commit()
 
