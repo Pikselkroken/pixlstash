@@ -1,0 +1,1862 @@
+<!--
+  PixlStash v1.8.0 UI preview — lead-designer visual mockup, rev 4.
+  Body-content-only fragment (no doctype/html/head/body) so it can be published
+  as an Artifact directly. Self-contained: all CSS/JS inline, no external assets.
+
+  Rev 4 changes two maintainer decisions from rev 3:
+    1. DELETE FOREVER now means ACTUAL destruction. The Scrapheap "Delete
+       forever" confirm promises permanent destruction with no softening; for a
+       reference-folder original it NAMES the exact on-disk file path being
+       destroyed. (Rev 3 had softened this to "keeps the file on disk" for
+       protected reference-folder pictures — that is reversed here. See the
+       backend implementation note in the decisions panel: delete_scrapheap_
+       selection must os.remove even allow_delete_file=False items on explicit
+       delete-forever and log file_removed=True.)
+    2. The import's minimize / flight TARGET is the TASK MANAGER in the STATS
+       SIDEBAR (StatsSidebar.vue, Tasks tab) — NOT the orphaned sidebar
+       task-btn slot and NOT the toolbar dot. The auto-hide flight carries the
+       import chip into the task manager, where it appears as another task row
+       (mirroring the ComfyUI generation row) with live server-side progress.
+
+  Carried over from rev 3 (unchanged): the soft-delete surface is the existing
+  SCRAPHEAP (general treatment, not a new view); the import dialog AUTO-HIDES at
+  the safe transition — the flight is the dismissal (no manual close on the safe
+  path; Phase A's only action is Cancel).
+
+  This revision grounds every surface in the REAL shipped components:
+    - SideBar.vue        — brand row, Global/Projects/Folders tabs, list rows,
+                           section headers
+    - Toolbar.vue        — 36px band, bar-btn--icon, tb-stats-activity dot
+    - StatsSidebar.vue   — 288px stats panel, Tags/Pictures/Tasks tabs, and the
+                           Tasks-tab TASK MANAGER (.tm-worker-row / .tm-comfy-bar
+                           / .tm-status-dot / .tm-sparkline / .tm-system-bar)
+    - ImageGrid.vue      — 4px-gap grid, 1:1 tiles, radius 8, info-blue selection
+                           overlay, empty-state card, gridNewPulse
+    - SelectionBar.vue   — the floating bottom-centre selection pill
+    - ImageImporter.vue  — the two-bar (Upload / Import) dialog anatomy
+  Blocks that MIRROR shipped code reproduce its values verbatim and carry
+  "mirrors <file>" comments; where a shipped value conflicts with the design
+  tokens it is annotated "DRIFT:" rather than silently fixed. All NEW chrome
+  (phase copy, guard strip, restore/purge actions) is strictly tokenized
+  from docs/design/design-tokens.css + frontend/src/main.js.
+-->
+
+<style>
+  /* ==========================================================================
+     1. COLOR THEMES — mirrors frontend/src/main.js (pixlStashLight/Dark).
+     Consumed exactly like the app: rgb(var(--v-theme-*)) / rgba(..., a).
+     Light is the default; dark applies via prefers-color-scheme; an explicit
+     :root[data-theme] (set by the in-page toggle) wins over both.
+     ========================================================================== */
+  :root,
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --v-theme-background: 250, 249, 247;      /* #faf9f7 */
+    --v-theme-on-background: 35, 33, 29;      /* #23211d */
+    --v-theme-surface: 255, 255, 255;
+    --v-theme-on-surface: 35, 33, 29;
+    --v-theme-sidebar: 240, 237, 233;         /* #f0ede9 */
+    --v-theme-sidebar-text: 37, 35, 30;       /* #25231e */
+    --v-theme-toolbar: 240, 237, 233;
+    --v-theme-toolbar-text: 37, 35, 30;
+    --v-theme-panel: 239, 237, 233;           /* #efede9 */
+    --v-theme-on-panel: 35, 33, 29;
+    --v-theme-accent: 176, 115, 43;           /* #b0732b */
+    --v-theme-on-accent: 255, 255, 255;
+    --v-theme-primary: 92, 124, 10;           /* #5c7c0a */
+    --v-theme-on-primary: 255, 255, 255;
+    --v-theme-secondary: 203, 58, 114;        /* #cb3a72 */
+    --v-theme-tertiary: 95, 135, 144;         /* #5f8790 */
+    --v-theme-border: 216, 211, 200;          /* #d8d3c8 */
+    --v-theme-divider: 232, 228, 220;         /* #e8e4dc */
+    --v-theme-success: 76, 175, 80;
+    --v-theme-error: 207, 59, 48;             /* #cf3b30 */
+    --v-theme-warning: 184, 134, 31;          /* #b8861f */
+    --v-theme-info: 33, 150, 243;             /* #2196F3 */
+    --v-theme-on-info: 255, 255, 255;
+    --v-theme-dark-surface: 36, 38, 40;
+    --v-theme-on-dark-surface: 242, 229, 218;
+    --v-theme-input-background: 255, 255, 255;
+    --v-theme-input-text: 35, 33, 29;
+    --v-theme-cancel-button: 230, 225, 216;   /* #e6e1d8 */
+    --v-theme-cancel-button-text: 35, 33, 29;
+    --v-theme-shadow: 28, 22, 12;             /* #1c160c — warm shadow */
+    --v-theme-scrim: 0, 0, 0;
+    /* Interactive washes — style.css .v-theme--pixlStashLight (accent-warm selection) */
+    --hover-wash: rgba(var(--v-theme-accent), 0.14);
+    --active-wash: rgba(var(--v-theme-accent), 0.20);
+    --active-bar: rgb(var(--v-theme-accent));
+    --active-text: rgb(var(--v-theme-on-surface));
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --v-theme-background: 27, 31, 36;       /* #1b1f24 */
+      --v-theme-on-background: 242, 229, 218; /* #f2e5da */
+      --v-theme-surface: 35, 40, 47;          /* #23282f */
+      --v-theme-on-surface: 242, 229, 218;
+      --v-theme-sidebar: 35, 40, 47;
+      --v-theme-sidebar-text: 216, 208, 200;  /* #d8d0c8 */
+      --v-theme-toolbar: 35, 40, 47;
+      --v-theme-toolbar-text: 216, 208, 200;
+      --v-theme-panel: 49, 51, 55;            /* #313337 */
+      --v-theme-on-panel: 242, 229, 218;
+      --v-theme-accent: 242, 143, 59;         /* #f28f3b */
+      --v-theme-on-accent: 27, 27, 27;
+      --v-theme-primary: 142, 166, 4;         /* #8EA604 */
+      --v-theme-on-primary: 17, 17, 17;
+      --v-theme-secondary: 218, 65, 103;
+      --v-theme-tertiary: 119, 160, 169;
+      --v-theme-border: 54, 61, 69;           /* #363d45 */
+      --v-theme-divider: 44, 50, 58;          /* #2c323a */
+      --v-theme-success: 76, 175, 80;
+      --v-theme-error: 244, 67, 54;           /* #f44336 */
+      --v-theme-warning: 219, 121, 0;
+      --v-theme-info: 33, 150, 243;
+      --v-theme-on-info: 255, 255, 255;
+      --v-theme-dark-surface: 24, 27, 32;
+      --v-theme-on-dark-surface: 242, 229, 218;
+      --v-theme-input-background: 43, 49, 56;
+      --v-theme-input-text: 242, 229, 218;
+      --v-theme-cancel-button: 58, 64, 71;    /* #3a4047 */
+      --v-theme-cancel-button-text: 242, 229, 218;
+      --v-theme-shadow: 42, 47, 54;           /* #2a2f36 */
+      --v-theme-scrim: 0, 0, 0;
+      /* style.css .v-theme--pixlStashDark (olive primary selection convention) */
+      --hover-wash: rgba(var(--v-theme-accent), 0.08);
+      --active-wash: rgba(var(--v-theme-primary), 0.18);
+      --active-bar: rgb(var(--v-theme-primary));
+      --active-text: rgb(var(--v-theme-on-primary));
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --v-theme-background: 27, 31, 36;
+    --v-theme-on-background: 242, 229, 218;
+    --v-theme-surface: 35, 40, 47;
+    --v-theme-on-surface: 242, 229, 218;
+    --v-theme-sidebar: 35, 40, 47;
+    --v-theme-sidebar-text: 216, 208, 200;
+    --v-theme-toolbar: 35, 40, 47;
+    --v-theme-toolbar-text: 216, 208, 200;
+    --v-theme-panel: 49, 51, 55;
+    --v-theme-on-panel: 242, 229, 218;
+    --v-theme-accent: 242, 143, 59;
+    --v-theme-on-accent: 27, 27, 27;
+    --v-theme-primary: 142, 166, 4;
+    --v-theme-on-primary: 17, 17, 17;
+    --v-theme-secondary: 218, 65, 103;
+    --v-theme-tertiary: 119, 160, 169;
+    --v-theme-border: 54, 61, 69;
+    --v-theme-divider: 44, 50, 58;
+    --v-theme-success: 76, 175, 80;
+    --v-theme-error: 244, 67, 54;
+    --v-theme-warning: 219, 121, 0;
+    --v-theme-info: 33, 150, 243;
+    --v-theme-on-info: 255, 255, 255;
+    --v-theme-dark-surface: 24, 27, 32;
+    --v-theme-on-dark-surface: 242, 229, 218;
+    --v-theme-input-background: 43, 49, 56;
+    --v-theme-input-text: 242, 229, 218;
+    --v-theme-cancel-button: 58, 64, 71;
+    --v-theme-cancel-button-text: 242, 229, 218;
+    --v-theme-shadow: 42, 47, 54;
+    --v-theme-scrim: 0, 0, 0;
+    --hover-wash: rgba(var(--v-theme-accent), 0.08);
+    --active-wash: rgba(var(--v-theme-primary), 0.18);
+    --active-bar: rgb(var(--v-theme-primary));
+    --active-text: rgb(var(--v-theme-on-primary));
+  }
+
+  /* ==========================================================================
+     2. NON-COLOR TOKENS — verbatim from docs/design/design-tokens.css
+     ========================================================================== */
+  :root {
+    --space-0: 0;  --space-1: 2px;  --space-2: 4px;  --space-3: 8px;
+    --space-4: 12px; --space-5: 16px; --space-6: 24px; --space-7: 32px;
+    --space-8: 48px; --space-9: 64px;
+
+    --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px; --radius-pill: 999px;
+
+    --text-2xs: 0.6875rem; --text-xs: 0.75rem; --text-sm: 0.8125rem;
+    --text-base: 0.875rem; --text-md: 1rem; --text-lg: 1.125rem;
+    --text-xl: 1.375rem; --text-2xl: 1.75rem;
+
+    --leading-tight: 1.2; --leading-snug: 1.35; --leading-body: 1.5;
+    --weight-regular: 400; --weight-medium: 500; --weight-semibold: 600;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-pixel: "Tiny5", monospace; /* brand-only; falls back to mono in this standalone preview */
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    --tracking-label: 0.06em;
+
+    --elevation-1: 0 1px 2px rgba(var(--v-theme-shadow), 0.12);
+    --elevation-2: 0 2px 6px rgba(var(--v-theme-shadow), 0.18);
+    --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22);
+    --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30);
+    --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+    --scrim-surface: rgba(var(--v-theme-surface), 0.55);
+    --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+
+    --badge-size: 16px; --badge-size-dot: 8px; --bar-height: 48px;
+
+    --dur-1: 150ms; --dur-2: 200ms; --dur-3: 250ms; --dur-4: 420ms;
+    --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+    --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+    --ease-spring: cubic-bezier(0.2, 1.4, 0.4, 1);
+  }
+
+  /* Honour reduced motion globally — mirrors design-tokens.css. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  /* ==========================================================================
+     3. PAGE SCAFFOLD (preview chrome, tokenized)
+     ========================================================================== */
+  body {
+    margin: 0;
+    background: rgb(var(--v-theme-background));
+    color: rgb(var(--v-theme-on-background));
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    line-height: var(--leading-body);
+  }
+  .page { max-width: 1040px; margin: 0 auto; padding: var(--space-6) var(--space-5) var(--space-9); }
+  .page * { box-sizing: border-box; }
+
+  .masthead { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4) 0 var(--space-6); flex-wrap: wrap; }
+  .wordmark { font-family: var(--font-pixel); font-size: var(--text-xl); line-height: var(--leading-tight); letter-spacing: 0.02em; }
+  .wordmark .stash { color: rgb(var(--v-theme-accent)); }
+  .masthead .sub { font-size: var(--text-sm); color: rgba(var(--v-theme-on-background), 0.6); }
+  .masthead .spacer { flex: 1; }
+
+  .section { margin-top: var(--space-8); }
+  .section-label {
+    font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    text-transform: uppercase; letter-spacing: var(--tracking-label);
+    color: rgba(var(--v-theme-on-surface), 0.5);
+    margin-bottom: var(--space-3);
+  }
+  .section h2 { font-size: var(--text-xl); font-weight: var(--weight-semibold); line-height: var(--leading-tight); margin: 0 0 var(--space-3); }
+  .caption { font-size: var(--text-sm); color: rgba(var(--v-theme-on-background), 0.65); margin: 0 0 var(--space-5); max-width: 72ch; }
+  .caption code, .decisions code, .drift code {
+    font-family: var(--font-mono); font-size: var(--text-xs);
+    background: rgba(var(--v-theme-on-background), 0.06);
+    border-radius: var(--radius-sm); padding: 0 var(--space-1);
+  }
+
+  .btn {
+    font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    padding: var(--space-3) var(--space-5);
+    border-radius: var(--radius-sm); border: 1px solid transparent;
+    cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-2);
+    transition: filter var(--dur-1) var(--ease-standard), box-shadow var(--dur-1) var(--ease-standard);
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .btn:disabled { opacity: 0.38; cursor: default; }
+  .btn-primary { background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary)); }
+  .btn-quiet { background: rgb(var(--v-theme-cancel-button)); color: rgb(var(--v-theme-cancel-button-text)); }
+  /* Destructive: tinted-outline — error text stays contrast-safe on both themes;
+     the confirm step carries the destructive weight. (The shipped ImageImporter
+     cancel is filled error + on-error; treatment unification is flagged in §8.) */
+  .btn-danger { background: rgba(var(--v-theme-error), 0.10); border-color: rgba(var(--v-theme-error), 0.55); color: rgb(var(--v-theme-error)); }
+  .btn-ghost { background: none; color: rgba(var(--v-theme-on-surface), 0.75); border-color: rgb(var(--v-theme-border)); }
+
+  .demo-controls { display: flex; gap: var(--space-3); margin-top: var(--space-4); flex-wrap: wrap; align-items: center; }
+  svg.i { width: 1em; height: 1em; flex: none; display: inline-block; vertical-align: -0.125em; }
+
+  .stage {
+    border: 1px solid rgb(var(--v-theme-border));
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: rgb(var(--v-theme-background));
+    box-shadow: var(--elevation-1);
+  }
+
+  /* ==========================================================================
+     4. SIDEBAR — mirrors SideBar.vue
+     ========================================================================== */
+  .shell { display: flex; min-height: 480px; position: relative; }
+
+  .sb {
+    /* mirrors .sidebar: width 240px, sidebar tokens, border-right */
+    width: 240px; flex: none;
+    background: rgb(var(--v-theme-sidebar));
+    color: rgb(var(--v-theme-sidebar-text));
+    border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+
+  /* Brand row — mirrors .sidebar-brand / -left / -logo / -title */
+  .sb-brand { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1); }
+  .sb-brand-left { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3); }
+  .sb-logo { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; }
+  /* CSS pixel padlock stand-in for /Logo.png (6px pixels, accent, dissolving top-right) */
+  .px-lock { width: 36px; height: 36px; position: relative; }
+  .px-lock::before {
+    content: ""; position: absolute; width: 6px; height: 6px; left: 0; top: 0;
+    background: none;
+    box-shadow:
+      /* shackle */
+      12px 0 rgb(var(--v-theme-accent)), 18px 0 rgb(var(--v-theme-accent)),
+      6px 6px rgb(var(--v-theme-accent)), 24px 6px rgba(var(--v-theme-accent), 0.55),
+      /* body (top-right pixels dissolve — the "stash" motif) */
+      6px 12px rgb(var(--v-theme-accent)), 12px 12px rgb(var(--v-theme-accent)), 18px 12px rgb(var(--v-theme-accent)), 30px 12px rgba(var(--v-theme-accent), 0.35),
+      6px 18px rgb(var(--v-theme-accent)), 12px 18px rgb(var(--v-theme-accent)), 18px 18px rgb(var(--v-theme-accent)), 24px 18px rgb(var(--v-theme-accent)),
+      6px 24px rgb(var(--v-theme-accent)), 12px 24px rgb(var(--v-theme-accent)), 18px 24px rgb(var(--v-theme-accent)), 24px 24px rgb(var(--v-theme-accent)),
+      30px 22px rgba(var(--v-theme-accent), 0.3);
+  }
+  .sb-title { font-family: var(--font-pixel); font-size: var(--text-xl); line-height: var(--leading-tight); color: rgb(var(--v-theme-sidebar-text)); }
+  .sb-title .stash { color: rgb(var(--v-theme-accent)); }
+
+  /* The ORPHANED .sidebar-brand-task-btn style block from SideBar.vue (30×30,
+     --radius-md, opacity .6, hover accent .25), reproduced verbatim. Rev 4 does
+     NOT use it as the badge host or flight target (that is the stats-sidebar
+     task manager); this rule is unused here, mirroring its unused state in the
+     real component. Kept only as a faithful mirror. */
+  .sb-task-btn {
+    position: relative;
+    min-width: 30px; min-height: 30px; width: 30px; height: 30px;
+    padding: 0; border-radius: var(--radius-md);
+    background: transparent; border: none; box-shadow: none;
+    opacity: 0.6; cursor: pointer;
+    color: rgb(var(--v-theme-sidebar-text));
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-right: var(--space-2);
+    transition: opacity var(--dur-1) var(--ease-standard), background-color var(--dur-1) var(--ease-standard);
+  }
+  .sb-task-btn:hover { opacity: 1; background-color: rgba(var(--v-theme-accent), 0.25); }
+  .sb-task-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); opacity: 1; }
+  .sb-task-btn.has-badge { opacity: 1; }
+
+  /* View header + tabs — mirrors .sidebar-view-header / .sidebar-view-tab
+     (36px header, tab: --text-xs semibold, inactive sidebar-text @ .55,
+     active accent text + 2px accent underline overlapping the 1px border) */
+  .sb-view-header {
+    display: flex; align-items: stretch; flex-shrink: 0;
+    height: 36px; min-height: 0; box-sizing: border-box;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid rgb(var(--v-theme-divider));
+  }
+  .sb-tabs { display: flex; align-items: stretch; gap: 0; flex: 1; min-width: 0; }
+  .sb-tab {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+    padding: 0 var(--space-2); flex: 1 1 0; min-width: 0; overflow: hidden;
+    border: none; border-radius: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.02em;
+    cursor: pointer; background: transparent;
+    color: rgba(var(--v-theme-sidebar-text), 0.55);
+    transition: color var(--dur-1), border-color var(--dur-1);
+    white-space: nowrap; font-family: inherit;
+  }
+  .sb-tab.active { color: rgb(var(--v-theme-accent)); border-bottom-color: rgb(var(--v-theme-accent)); }
+  .sb-tab:hover:not(.active) { color: rgb(var(--v-theme-sidebar-text)); }
+
+  .sb-scroll { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: stretch; }
+
+  /* List rows — mirrors .sidebar-list-item (+ .active / :hover), icon slot,
+     label, count. Active = --active-wash + 3px --active-bar left edge. */
+  .sb-item {
+    display: flex; align-items: center;
+    min-height: 30px; /* thumb 24 + 6, mirrors calc(--sidebar-thumb-size + 6px) */
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer; border-radius: 0;
+    font-size: var(--text-sm); font-weight: var(--weight-regular);
+    background: transparent; color: rgb(var(--v-theme-sidebar-text));
+    border-left: 3px solid transparent;
+    transition: background var(--dur-1) var(--ease-standard), color var(--dur-1) var(--ease-standard);
+  }
+  .sb-item:hover { background: var(--hover-wash); }
+  .sb-item.active { background: var(--active-wash); color: var(--active-text); border-left-color: var(--active-bar); }
+  .sb-icon {
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; /* mirrors .sidebar-list-icon--toplevel */
+    margin-right: var(--space-3); flex-shrink: 0;
+    color: inherit;
+  }
+  .sb-icon svg { width: 18px; height: 18px; } /* mirrors v-icon size=18 */
+  .sb-thumb {
+    width: 24px; height: 24px; border-radius: 25%; /* mirrors --sidebar-thumb-size / --sidebar-item-radius */
+    margin-right: var(--space-3); flex-shrink: 0;
+  }
+  .sb-label { flex: 1; min-width: 0; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sb-count {
+    font-size: var(--text-xs); min-width: 2.4em; text-align: right;
+    font-weight: var(--weight-regular); letter-spacing: 0.01em;
+    display: inline-flex; justify-content: flex-end;
+    color: inherit;
+  }
+
+  .sb-divider { height: 1px; background: rgba(var(--v-theme-border), 0.2); margin: var(--space-1) 0; } /* mirrors .sidebar-section-divider */
+
+  /* Section header — mirrors .sidebar-section-header.
+     DRIFT: shipped letter-spacing is 0.07em vs the 0.06em --tracking-label token. */
+  .sb-section-header {
+    font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    letter-spacing: 0.07em; text-transform: uppercase;
+    min-height: 18px; padding: var(--space-1) var(--space-3);
+    display: flex; align-items: center;
+    color: rgb(var(--v-theme-sidebar-text));
+    cursor: pointer; user-select: none;
+  }
+  .sb-section-header:hover { background: rgba(var(--v-theme-accent), 0.08); }
+  .sb-section-header .chev { margin-right: var(--space-2); flex-shrink: 0; display: inline-flex; }
+  .sb-section-header .chev svg { width: 16px; height: 16px; }
+
+  .sb-footer-spacer { flex: 1 1 auto; } /* mirrors .sidebar-footer-spacer */
+
+  /* Entity thumb placeholders (content stand-ins from theme-token mixes) */
+  .thumb-a { background: linear-gradient(135deg, rgba(var(--v-theme-tertiary), 0.7), rgba(var(--v-theme-primary), 0.4)); }
+  .thumb-b { background: linear-gradient(135deg, rgba(var(--v-theme-warning), 0.6), rgba(var(--v-theme-secondary), 0.4)); }
+  .thumb-c { background: linear-gradient(135deg, rgba(var(--v-theme-secondary), 0.5), rgba(var(--v-theme-tertiary), 0.5)); }
+  .thumb-d { background: linear-gradient(135deg, rgba(var(--v-theme-primary), 0.55), rgba(var(--v-theme-warning), 0.35)); }
+
+  /* ==========================================================================
+     5. TOOLBAR — mirrors Toolbar.vue (36px band, 32px icon buttons,
+     tb-stats-activity dot: 7px primary dot @ top/right 7px, 1.4s pulse)
+     ========================================================================== */
+  .tb {
+    height: 36px; flex: none;
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: 0 var(--space-3);
+    background: rgb(var(--v-theme-toolbar)); color: rgb(var(--v-theme-toolbar-text));
+    border-bottom: 1px solid rgb(var(--v-theme-divider));
+  }
+  .tb-title { font-size: var(--text-sm); font-weight: var(--weight-semibold); display: inline-flex; align-items: center; gap: var(--space-2); }
+  .tb-meta { font-size: var(--text-xs); color: rgba(var(--v-theme-toolbar-text), 0.6); font-variant-numeric: tabular-nums; }
+  .tb-spacer { flex: 1; }
+  .bar-btn {
+    /* mirrors .bar-btn--icon: 32×32 icon button */
+    width: 32px; height: 32px; padding: 0;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    background: transparent; border: none; border-radius: var(--radius-sm);
+    color: rgb(var(--v-theme-toolbar-text)); cursor: pointer; position: relative;
+  }
+  .bar-btn:hover { background: var(--hover-wash); }
+  .bar-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .bar-btn svg { width: 20px; height: 20px; }
+  .tb-stats-activity {
+    /* mirrors .tb-stats-activity verbatim.
+       DRIFT: 7px dot vs the 8px --badge-size-dot token (the ad-hoc size the
+       token was minted to replace); reproduced faithfully. */
+    position: absolute; top: 7px; right: 7px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: rgb(var(--v-theme-primary));
+    box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
+    animation: ps-attention 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .hidden { display: none !important; }
+
+  /* Attention pulse — mirrors tb-stats-pulse (1.4s ease-in-out infinite) */
+  @keyframes ps-attention {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tb-stats-activity { animation: none; }
+  }
+
+  /* ==========================================================================
+     5b. STATS SIDEBAR + TASK MANAGER — mirrors StatsSidebar.vue.
+     This is the DECIDED flight/minimize host: the import lands here as a task
+     row (mirroring the ComfyUI generation row). All values reproduced verbatim
+     from StatsSidebar.vue's <style> and carry "mirrors" intent.
+     ========================================================================== */
+  .stats-sb {
+    /* mirrors .stats-sidebar: 288px, sidebar chrome, no visible left divider */
+    width: 288px; min-width: 288px; flex: none;
+    background: rgb(var(--v-theme-sidebar));
+    border-left: 1px solid transparent;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+  }
+  .stats-sb-content {
+    /* mirrors .stats-sidebar-content */
+    flex: 1; min-width: 0;
+    padding: 0 var(--space-3) var(--space-4);
+    overflow-y: auto; overflow-x: hidden;
+    display: flex; flex-direction: column; gap: var(--space-3);
+  }
+  .stats-sb-header { /* mirrors .stats-sidebar-header: 36px band aligning with toolbar */
+    display: flex; flex-direction: column; height: 36px; flex-shrink: 0; margin-bottom: var(--space-2);
+  }
+  .stats-sb-title-row { display: flex; align-items: center; justify-content: space-between; flex: 1; padding: 0 var(--space-2) 0 var(--space-3); }
+  .stats-sb-title { /* mirrors .stats-sidebar-title-text */
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: rgba(var(--v-theme-on-surface), 0.5);
+  }
+  .stats-sb-title svg { width: 13px; height: 13px; color: rgba(var(--v-theme-on-surface), 0.4); }
+  .stats-sb-tabs { display: flex; align-items: stretch; flex-shrink: 0; }
+  .stats-tab { /* mirrors .stats-tab-btn */
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+    font-size: var(--text-2xs); font-weight: 500; padding: 0 var(--space-3);
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    cursor: pointer; color: rgba(var(--v-theme-on-surface), 0.45);
+    text-transform: uppercase; letter-spacing: 0.06em; font-family: inherit; position: relative;
+    transition: color var(--dur-1), border-color var(--dur-1);
+  }
+  .stats-tab svg { width: 12px; height: 12px; }
+  .stats-tab:hover:not(.active) { color: rgba(var(--v-theme-on-surface), 0.75); }
+  .stats-tab.active { color: rgb(var(--v-theme-primary)); border-bottom-color: rgba(var(--v-theme-primary), 0.85); }
+  /* mirrors .tm-tab-icon--busy + .tm-tab-pulse — Tasks tab "busy" indicators */
+  .stats-tab .tm-tab-icon--busy { color: rgb(var(--v-theme-primary)); animation: tm-dot-pulse 1.4s ease-in-out infinite; }
+  .tm-tab-pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgb(var(--v-theme-primary));
+    box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.6);
+    animation: tm-dot-pulse 1.4s ease-in-out infinite;
+  }
+
+  /* Task manager list — mirrors .tm-worker-list / .tm-worker-row */
+  .tm-idle-msg { font-size: var(--text-xs); color: rgba(var(--v-theme-on-surface), 0.4); font-style: italic; padding: var(--space-4) 0 var(--space-2); }
+  .tm-worker-list { display: flex; flex-direction: column; gap: var(--space-1); width: 100%; }
+  .tm-worker-row {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: rgba(var(--v-theme-on-surface), 0.04);
+    border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+    min-width: 0;
+  }
+  .tm-worker-row[hidden] { display: none; }
+  .tm-worker-row-top { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+  .tm-worker-row-bottom { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+  .tm-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: rgba(var(--v-theme-on-surface), 0.2); }
+  .tm-status-dot--running {
+    background: rgb(var(--v-theme-primary));
+    box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.55);
+    animation: tm-dot-pulse 1.4s ease-in-out infinite;
+  }
+  .tm-worker-label {
+    flex: 1; font-size: var(--text-2xs); font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: rgba(var(--v-theme-on-surface), 0.85);
+  }
+  .tm-worker-progress { font-size: var(--text-2xs); color: rgba(var(--v-theme-on-surface), 0.5); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  /* Determinate task rows (ComfyUI + the import) — mirrors .tm-comfy-bar/-fill/-message */
+  .tm-comfy-bar { height: 6px; border-radius: var(--radius-sm); background: rgba(var(--v-theme-on-surface), 0.12); overflow: hidden; }
+  .tm-comfy-fill { height: 100%; border-radius: var(--radius-sm); background: rgb(var(--v-theme-primary)); transition: width 0.25s ease; }
+  .tm-comfy-message { font-size: var(--text-2xs); color: rgba(var(--v-theme-on-surface), 0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tm-comfy-abort {
+    flex-shrink: 0; border: none; background: none; color: rgba(var(--v-theme-on-surface), 0.45);
+    cursor: pointer; font-size: var(--text-xs); line-height: 1; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm);
+  }
+  .tm-comfy-abort:hover { color: rgb(var(--v-theme-error)); background: rgba(var(--v-theme-error), 0.12); }
+  /* Backend-worker rows — mirrors .tm-sparkline (canvas) + .tm-worker-rate.
+     PREVIEW STAND-IN: the shipped sparkline is a <canvas>; here an inline SVG
+     polyline fills the same 28px-tall .tm-sparkline slot. */
+  .tm-sparkline { flex: 1; height: 28px; min-width: 0; display: block; border-radius: var(--radius-sm); }
+  .tm-sparkline svg { width: 100%; height: 100%; display: block; }
+  .tm-worker-rate { font-size: var(--text-2xs); color: rgba(var(--v-theme-on-surface), 0.45); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
+  /* System bar — mirrors .tm-system-bar/-item/-label/-value */
+  .tm-system-bar { margin-top: auto; padding-top: var(--space-3); border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08); display: flex; flex-direction: column; gap: var(--space-2); width: 100%; }
+  .tm-system-item { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); font-size: var(--text-2xs); }
+  .tm-system-label { font-weight: var(--weight-semibold); letter-spacing: 0.04em; color: rgba(var(--v-theme-on-surface), 0.5); text-transform: uppercase; font-size: var(--text-2xs); flex-shrink: 0; }
+  .tm-system-value { color: rgba(var(--v-theme-on-surface), 0.75); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* mirrors tm-dot-pulse keyframes (verbatim) */
+  @keyframes tm-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.78); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tm-status-dot--running, .stats-tab .tm-tab-icon--busy, .tm-tab-pulse { animation: none; }
+  }
+  /* Landing punctuation on the import row when the flight lands — reuses the
+     §6 spring-pop + gridNewPulse glow cadence (--dur-4 / --ease-spring). */
+  .tm-import-row.tm-landing {
+    animation: ps-badge-pop var(--dur-4) var(--ease-spring) both, ps-row-glow 2.2s ease-out both;
+  }
+  @keyframes ps-row-glow {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5); border-color: rgba(var(--v-theme-primary), 0.6); }
+    35%  { box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18); border-color: rgba(var(--v-theme-primary), 0.45); }
+    100% { box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0); border-color: rgba(var(--v-theme-on-surface), 0.07); }
+  }
+
+  /* ==========================================================================
+     6. BADGE — §12 pattern (count pill: primary/on-primary, --badge-size,
+     --text-2xs semibold tabular). NEW chrome, fully tokenized.
+     ========================================================================== */
+  .badge-pill {
+    position: absolute; top: calc(-1 * var(--space-1)); right: calc(-1 * var(--space-1));
+    min-width: var(--badge-size); height: var(--badge-size);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-pill);
+    background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary));
+    font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+    display: inline-flex; align-items: center; justify-content: center;
+    line-height: 1; z-index: 2;
+  }
+  .badge-dot {
+    position: absolute; top: calc(-1 * var(--space-1)); right: calc(-1 * var(--space-1));
+    width: var(--badge-size-dot); height: var(--badge-size-dot);
+    border-radius: var(--radius-pill);
+    background: rgb(var(--v-theme-accent));
+  }
+  /* Landing: spring pop on --ease-spring/--dur-4 + one-shot accent glow ring
+     mirroring the shipped gridNewPulse cadence (2.2s ease-out, no layout shift). */
+  .badge-landing {
+    animation:
+      ps-badge-pop var(--dur-4) var(--ease-spring) both,
+      ps-badge-glow 2.2s ease-out both;
+  }
+  @keyframes ps-badge-pop { 0% { transform: scale(0.4); } 100% { transform: scale(1); } }
+  @keyframes ps-badge-glow {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--v-theme-accent), 0.55); }
+    35%  { box-shadow: 0 0 0 6px rgba(var(--v-theme-accent), 0.25), 0 0 10px rgba(var(--v-theme-accent), 0.5); }
+    100% { box-shadow: 0 0 0 10px rgba(var(--v-theme-accent), 0), 0 0 0 rgba(var(--v-theme-accent), 0); }
+  }
+  .pulse-live { animation: ps-attention 1.4s ease-in-out infinite; }
+
+  /* Badge specimen row */
+  .spec-row {
+    display: flex; align-items: center; gap: var(--space-7); flex-wrap: wrap;
+    background: rgb(var(--v-theme-panel)); color: rgb(var(--v-theme-on-panel));
+    border: 1px solid rgb(var(--v-theme-border)); border-radius: var(--radius-md);
+    padding: var(--space-5) var(--space-6); margin-top: var(--space-5);
+  }
+  .spec { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
+  .spec .host {
+    position: relative; width: 30px; height: 30px; border-radius: var(--radius-md);
+    background: rgba(var(--v-theme-on-panel), 0.08);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(var(--v-theme-on-panel), 0.7);
+  }
+  .spec .lbl { font-size: var(--text-xs); color: rgba(var(--v-theme-on-panel), 0.6); }
+
+  /* ==========================================================================
+     7. IMAGE GRID — mirrors ImageGrid.vue
+     ========================================================================== */
+  .ps-grid {
+    display: grid; gap: 4px; /* mirrors .image-grid gap: 4px */
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    align-content: start;
+  }
+  .image-card { min-width: 0; display: flex; flex-direction: column; align-items: center; position: relative; padding: 0; border: none; background: none; cursor: pointer; font-family: inherit; color: inherit; }
+  .image-card:focus-visible { outline: none; }
+  .image-card:focus-visible .thumb-img { box-shadow: var(--focus-ring); }
+  .thumbnail-card { width: 100%; position: relative; padding: 4px; display: block; } /* mirrors .thumbnail-card */
+  .thumbnail-container { width: 100%; position: relative; aspect-ratio: 1 / 1; display: block; } /* mirrors */
+  .thumb-img {
+    /* mirrors .thumbnail-img: radius 8px + resting shadow.
+       DRIFT: shipped shadow `1px 2px 3px 3px rgba(shadow,.3)` is not on the
+       --elevation ladder; reproduced faithfully. */
+    position: absolute; inset: 0; border-radius: 8px;
+    box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
+    transition: box-shadow 0.18s;
+  }
+  .image-card:hover .thumb-img {
+    /* mirrors .thumbnail-img:hover inset accent glow */
+    box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
+                inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+  }
+  /* Photo-placeholder art (content stand-ins mixed from theme tokens) */
+  .image-card:nth-child(6n+1) .thumb-img { background: linear-gradient(135deg, rgba(var(--v-theme-tertiary), 0.65), rgba(var(--v-theme-primary), 0.35)); }
+  .image-card:nth-child(6n+2) .thumb-img { background: linear-gradient(160deg, rgba(var(--v-theme-warning), 0.55), rgba(var(--v-theme-secondary), 0.35)); }
+  .image-card:nth-child(6n+3) .thumb-img { background: linear-gradient(120deg, rgba(var(--v-theme-secondary), 0.45), rgba(var(--v-theme-tertiary), 0.5)); }
+  .image-card:nth-child(6n+4) .thumb-img { background: linear-gradient(150deg, rgba(var(--v-theme-primary), 0.5), rgba(var(--v-theme-warning), 0.3)); }
+  .image-card:nth-child(6n+5) .thumb-img { background: linear-gradient(140deg, rgba(var(--v-theme-accent), 0.5), rgba(var(--v-theme-tertiary), 0.35)); }
+  .image-card:nth-child(6n+6) .thumb-img { background: linear-gradient(125deg, rgba(var(--v-theme-on-background), 0.35), rgba(var(--v-theme-tertiary), 0.3)); }
+
+  /* Selection — mirrors .selection-overlay (info @ .38, radius 8) and the
+     touch-select checkmark (26px info circle, top/right 6px).
+     DRIFT: selection rides the `info` blue, not the --active-wash system. */
+  .selection-overlay {
+    position: absolute; inset: 0;
+    background: rgba(var(--v-theme-info), 0.38);
+    pointer-events: none; border-radius: 8px; z-index: 25;
+  }
+  .selection-overlay::after {
+    content: "\2713";
+    position: absolute; top: 6px; right: 6px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgb(var(--v-theme-info)); color: rgb(var(--v-theme-on-info));
+    font-size: 16px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: var(--elevation-1);
+  }
+  /* Days-remaining chip — NEW (tokenized): --scrim-photo backing over photo
+     content, matching the shipped bottom-left thumbnail-badge convention. */
+  .days {
+    position: absolute; bottom: var(--space-3); left: var(--space-3);
+    font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+    color: rgb(var(--v-theme-on-dark-surface));
+    background: var(--scrim-photo);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    line-height: var(--leading-snug); z-index: 26;
+  }
+  /* Info row — mirrors .thumbnail-info-row/.thumbnail-info (24px, centred).
+     DRIFT: shipped sizes it 0.88em (em, off-ramp); --text-xs used here as the
+     nearest ramp token, flagged rather than copied. */
+  .thumb-info {
+    margin-top: 2px; height: 24px; line-height: 24px; width: 100%;
+    text-align: center; font-size: var(--text-xs);
+    color: rgba(var(--v-theme-on-background), 0.78);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--font-mono); display: block;
+  }
+  .image-card.removing { transform: scale(0.9); opacity: 0; transition: transform var(--dur-3) var(--ease-accelerate), opacity var(--dur-3) var(--ease-accelerate); }
+
+  /* Empty state — mirrors .empty-state / .empty-state-card.
+     DRIFT: radius 18px, padding 26px 30px, gap 10px, shadow 0 10px 30px are all
+     off the token sets; title is system-font 1.2em while visual-language §9
+     specifies a Tiny5 --text-2xl headline. Shipped values reproduced. */
+  .empty-state { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; z-index: 5; }
+  .empty-state.show { display: flex; }
+  .empty-state-card {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 26px 30px; border-radius: 18px;
+    border: 1px dashed rgba(var(--v-theme-border), 0.5);
+    background: rgba(var(--v-theme-panel), 0.72);
+    color: rgb(var(--v-theme-on-background));
+    text-align: center; max-width: 420px;
+    box-shadow: 0 10px 30px rgba(var(--v-theme-shadow), 0.08);
+  }
+  .empty-state-title { font-size: 1.2em; font-weight: 600; }
+  .empty-state-subtitle { font-size: 0.95em; opacity: 0.8; }
+  /* CSS pixel-art trash can — placeholder for the real EmptyTrash.png asset.
+     8px pixels, accent amber, top-right dissolving like the brand padlock. */
+  .px-trash { width: 88px; height: 80px; position: relative; }
+  .px-trash::before {
+    content: ""; position: absolute; width: var(--space-3); height: var(--space-3);
+    left: 0; top: 0; background: none;
+    box-shadow:
+      32px 0 rgb(var(--v-theme-accent)), 40px 0 rgb(var(--v-theme-accent)), 48px 0 rgb(var(--v-theme-accent)),
+      8px 8px rgb(var(--v-theme-accent)), 16px 8px rgb(var(--v-theme-accent)), 24px 8px rgb(var(--v-theme-accent)),
+      32px 8px rgb(var(--v-theme-accent)), 40px 8px rgb(var(--v-theme-accent)), 48px 8px rgb(var(--v-theme-accent)),
+      56px 8px rgb(var(--v-theme-accent)), 64px 8px rgb(var(--v-theme-accent)),
+      16px 16px rgb(var(--v-theme-accent)), 24px 16px rgb(var(--v-theme-accent)), 32px 16px rgb(var(--v-theme-accent)),
+      40px 16px rgb(var(--v-theme-accent)), 48px 16px rgb(var(--v-theme-accent)), 56px 16px rgb(var(--v-theme-accent)),
+      16px 24px rgb(var(--v-theme-accent)), 24px 24px rgb(var(--v-theme-accent)), 32px 24px rgba(var(--v-theme-scrim), 0.35),
+      40px 24px rgb(var(--v-theme-accent)), 48px 24px rgba(var(--v-theme-scrim), 0.35), 56px 24px rgb(var(--v-theme-accent)),
+      16px 32px rgb(var(--v-theme-accent)), 24px 32px rgb(var(--v-theme-accent)), 32px 32px rgba(var(--v-theme-scrim), 0.35),
+      40px 32px rgb(var(--v-theme-accent)), 48px 32px rgba(var(--v-theme-scrim), 0.35), 56px 32px rgb(var(--v-theme-accent)),
+      16px 40px rgb(var(--v-theme-accent)), 24px 40px rgb(var(--v-theme-accent)), 32px 40px rgba(var(--v-theme-scrim), 0.35),
+      40px 40px rgb(var(--v-theme-accent)), 48px 40px rgba(var(--v-theme-scrim), 0.35), 56px 40px rgb(var(--v-theme-accent)),
+      16px 48px rgb(var(--v-theme-accent)), 24px 48px rgb(var(--v-theme-accent)), 32px 48px rgba(var(--v-theme-scrim), 0.35),
+      40px 48px rgb(var(--v-theme-accent)), 48px 48px rgba(var(--v-theme-scrim), 0.35), 56px 48px rgb(var(--v-theme-accent)),
+      16px 56px rgb(var(--v-theme-accent)), 24px 56px rgb(var(--v-theme-accent)), 32px 56px rgb(var(--v-theme-accent)),
+      40px 56px rgb(var(--v-theme-accent)), 48px 56px rgb(var(--v-theme-accent)), 56px 56px rgb(var(--v-theme-accent)),
+      24px 64px rgb(var(--v-theme-accent)), 32px 64px rgb(var(--v-theme-accent)), 40px 64px rgb(var(--v-theme-accent)),
+      48px 64px rgb(var(--v-theme-accent)),
+      72px 0 rgba(var(--v-theme-accent), 0.55),
+      80px 16px rgba(var(--v-theme-accent), 0.35),
+      72px 24px rgba(var(--v-theme-accent), 0.45),
+      80px 40px rgba(var(--v-theme-accent), 0.25);
+  }
+
+  /* ==========================================================================
+     8. FLOATING SELECTION PILL — mirrors SelectionBar.vue
+     .floating-selection-bar. DRIFT (reproduced faithfully): bottom 18px and
+     gap 6px are off-grid; the shadow hardcodes rgba(0,0,0,.35) (spec: never
+     hardcode shadow colour); .stack-btn radius is 5px (off the radius set)
+     with em font sizes. Also: handoff §13 describes this bar as a full-width
+     --bar-height band — the shipped component is this floating pill; that
+     doc/code mismatch is flagged in the decisions below.
+     ========================================================================== */
+  .sel-pill {
+    position: absolute; bottom: 18px; left: 50%;
+    width: max-content; transform: translateX(-50%);
+    z-index: 200; display: flex; align-items: center; gap: 6px;
+    max-width: calc(100% - 24px); padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(var(--v-theme-surface), 0.86);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+    backdrop-filter: blur(12px);
+    color: rgb(var(--v-theme-on-surface));
+    transition: transform 0.22s ease, opacity 0.22s ease; /* mirrors selbar-pop */
+  }
+  .sel-pill.pill-hidden { transform: translateX(-50%) translateY(120%); opacity: 0; pointer-events: none; }
+  .sel-count { font-weight: 700; font-size: 1.1em; white-space: nowrap; padding: 0 4px; } /* mirrors .selection-count (em is shipped drift) */
+  .stack-btn {
+    /* mirrors .stack-btn: transparent, 40px tall, radius 5px, 0.88em */
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent; color: rgb(var(--v-theme-on-background));
+    border: none; padding: 0 10px; border-radius: 5px;
+    cursor: pointer; font-size: 0.88em; font-family: inherit;
+    height: 40px; white-space: nowrap;
+  }
+  .stack-btn:hover:not(:disabled) { background: rgba(var(--v-theme-on-background), 0.12); }
+  .stack-btn:disabled { opacity: 0.35; cursor: default; }
+  .stack-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .stack-btn svg { width: 20px; height: 20px; }
+  .stack-btn.act-restore svg { color: rgb(var(--v-theme-primary)); }  /* affirmative weight */
+  .stack-btn.act-purge svg { color: rgb(var(--v-theme-error)); }      /* destructive, behind confirm */
+  .icon-btn { width: 40px; height: 40px; padding: 0; justify-content: center; } /* mirrors .clear-btn/.delete-btn */
+
+  /* ==========================================================================
+     9. IMPORT DIALOG — the NEW #459 design (tokenized). Keeps the shipped
+     ImageImporter anatomy (title + Upload bar + Import bar + cancel) but on
+     the standard dialog pattern: surface, --radius-lg, --elevation-4,
+     --space-7. (Deliberate change from the shipped full-screen dark-surface
+     modal — flagged in the decisions.)
+     ========================================================================== */
+  .dlg-scrim {
+    position: absolute; inset: 0; z-index: 30;
+    background: rgba(var(--v-theme-scrim), 0.35);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity var(--dur-3) var(--ease-accelerate);
+  }
+  .dlg-scrim.leaving { opacity: 0; pointer-events: none; }
+  .dialog {
+    width: min(440px, calc(100% - var(--space-7)));
+    background: rgb(var(--v-theme-surface)); color: rgb(var(--v-theme-on-surface));
+    border-radius: var(--radius-lg); box-shadow: var(--elevation-4);
+    padding: var(--space-7);
+    transition: transform var(--dur-3) var(--ease-accelerate), opacity var(--dur-3) var(--ease-accelerate);
+  }
+  .dlg-scrim.leaving .dialog { transform: scale(0.96); opacity: 0; }
+  .dialog h3 { font-size: var(--text-lg); font-weight: var(--weight-semibold); line-height: var(--leading-tight); margin: 0; }
+  .dlg-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dlg-head .grow { flex: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    font-size: var(--text-sm); line-height: var(--leading-snug);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: rgba(var(--v-theme-accent), 0.12);
+    border: 1px solid rgba(var(--v-theme-accent), 0.4);
+    color: rgb(var(--v-theme-on-surface));
+    font-variant-numeric: tabular-nums;
+  }
+  .chip .i { color: rgb(var(--v-theme-accent)); }
+
+  .bar-section { margin-bottom: var(--space-5); }
+  .bar-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: var(--text-xs); color: rgba(var(--v-theme-on-surface), 0.65);
+    margin-bottom: var(--space-2); font-variant-numeric: tabular-nums; gap: var(--space-3);
+  }
+  .bar-track { height: var(--space-3); border-radius: var(--radius-pill); background: rgba(var(--v-theme-on-surface), 0.10); overflow: hidden; }
+  .bar-fill { height: 100%; width: 0%; border-radius: var(--radius-pill); transition: width var(--dur-2) var(--ease-standard); }
+  /* Phase colour story: amber accent = "attention, tab busy" (Phase A upload);
+     olive primary = "safe, productive" (Phase B server import). Replaces the
+     shipped unnamed multi-hue gradients (drift). */
+  .bar-fill--upload { background: rgb(var(--v-theme-accent)); }
+  .bar-fill--import { background: rgb(var(--v-theme-primary)); }
+
+  /* Phase note row: the "don't refresh" that is never written as a warning.
+     Present-tense, calm; swaps to a success note at the safe transition. */
+  .note-row {
+    display: flex; gap: var(--space-3); align-items: flex-start;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: rgba(var(--v-theme-accent), 0.08);
+    margin-bottom: var(--space-5);
+  }
+  .note-row .i { width: 1.2em; height: 1.2em; margin-top: var(--space-1); color: rgb(var(--v-theme-accent)); }
+  .note-title { font-size: var(--text-sm); font-weight: var(--weight-semibold); line-height: var(--leading-snug); }
+  .note-sub { font-size: var(--text-xs); color: rgba(var(--v-theme-on-surface), 0.65); margin-top: var(--space-1); }
+
+  /* Phase A footer holds exactly one action: Cancel. There is deliberately no
+     close/minimize control anywhere in the dialog — the safe path auto-hides. */
+  .dlg-foot { display: flex; justify-content: flex-start; gap: var(--space-3); margin-top: var(--space-6); }
+
+  .fly-chip { position: fixed; z-index: 100; margin: 0; pointer-events: none; will-change: transform, opacity; }
+
+  /* Guard strip — annotation UI (preview-only chrome) showing the beforeunload
+     guard state under the stage. */
+  .guard-strip {
+    display: flex; align-items: center; gap: var(--space-3);
+    font-size: var(--text-xs); font-variant-numeric: tabular-nums;
+    padding: var(--space-2) var(--space-3);
+    border: 1px dashed rgb(var(--v-theme-border));
+    border-radius: var(--radius-sm);
+    color: rgba(var(--v-theme-on-background), 0.65);
+  }
+  .guard-strip .state { font-weight: var(--weight-semibold); }
+  .guard-strip.armed .state { color: rgb(var(--v-theme-warning)); }
+  .guard-strip.free .state { color: rgb(var(--v-theme-success)); }
+
+  /* Native beforeunload prompt — a MOCK of browser chrome (annotated as such;
+     deliberately generic, not our design language). */
+  .native-scrim { position: absolute; inset: 0; z-index: 60; background: rgba(var(--v-theme-scrim), 0.25); display: none; align-items: flex-start; justify-content: center; }
+  .native-scrim.show { display: flex; }
+  .native-prompt {
+    margin-top: var(--space-6);
+    width: min(360px, calc(100% - var(--space-7)));
+    background: rgb(var(--v-theme-surface)); color: rgb(var(--v-theme-on-surface));
+    border: 1px solid rgb(var(--v-theme-border));
+    border-radius: var(--radius-sm); box-shadow: var(--elevation-3);
+    padding: var(--space-5);
+    font-size: var(--text-sm);
+  }
+  .native-prompt .np-title { font-weight: var(--weight-semibold); margin-bottom: var(--space-2); }
+  .native-prompt .np-body { color: rgba(var(--v-theme-on-surface), 0.75); margin-bottom: var(--space-4); }
+  .native-prompt .np-row { display: flex; justify-content: flex-end; gap: var(--space-3); }
+  .native-note {
+    font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label);
+    color: rgba(var(--v-theme-on-surface), 0.45); margin-bottom: var(--space-3);
+  }
+
+  /* Transient "reload is safe" pill (Phase B refresh attempt) */
+  .reload-pill {
+    position: absolute; top: var(--space-3); left: 50%; transform: translateX(-50%);
+    z-index: 60;
+    background: rgba(var(--v-theme-surface), 0.86); backdrop-filter: blur(12px);
+    border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+    border-radius: var(--radius-pill);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-xs); color: rgb(var(--v-theme-on-surface));
+    box-shadow: var(--elevation-2);
+    display: none; align-items: center; gap: var(--space-2);
+    white-space: nowrap;
+  }
+  .reload-pill.show { display: inline-flex; }
+  .reload-pill .i { color: rgb(var(--v-theme-success)); }
+
+  /* Confirm dialog (Delete forever) — standard dialog pattern, tokenized. */
+  .confirm-scrim { position: absolute; inset: 0; z-index: 40; background: rgba(var(--v-theme-scrim), 0.35); display: none; align-items: center; justify-content: center; }
+  .confirm-scrim.show { display: flex; }
+  .confirm {
+    width: min(380px, calc(100% - var(--space-7)));
+    background: rgb(var(--v-theme-surface)); color: rgb(var(--v-theme-on-surface));
+    border-radius: var(--radius-lg); box-shadow: var(--elevation-4);
+    padding: var(--space-7);
+  }
+  .confirm h4 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: 0 0 var(--space-3); line-height: var(--leading-tight); }
+  .confirm p { font-size: var(--text-md); margin: 0 0 var(--space-5); color: rgba(var(--v-theme-on-surface), 0.8); }
+  .confirm .row { display: flex; justify-content: flex-end; gap: var(--space-3); }
+  /* Reference-folder original warning — strong, specific: this is your photo on
+     disk, not just a library entry. error-tinted panel, tokenized. */
+  .ref-warn {
+    display: block; margin: 0 0 var(--space-6);
+    border: 1px solid rgba(var(--v-theme-error), 0.5);
+    background: rgba(var(--v-theme-error), 0.08);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+  }
+  .ref-warn[hidden] { display: none; }
+  .ref-warn-head {
+    display: flex; align-items: flex-start; gap: var(--space-3);
+    font-size: var(--text-sm); font-weight: var(--weight-semibold);
+    line-height: var(--leading-snug); color: rgb(var(--v-theme-error));
+  }
+  .ref-warn-head .i { width: 1.2em; height: 1.2em; flex: none; margin-top: 1px; }
+  .ref-warn-paths {
+    list-style: none; margin: var(--space-3) 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: var(--space-2);
+  }
+  .ref-warn-paths li {
+    font-family: var(--font-mono); font-size: var(--text-xs);
+    color: rgb(var(--v-theme-on-surface));
+    background: rgba(var(--v-theme-on-surface), 0.06);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    word-break: break-all;
+  }
+  .ref-warn-more { font-family: var(--font-ui); font-size: var(--text-xs); color: rgba(var(--v-theme-on-surface), 0.65); background: none; padding: 0; }
+
+  /* ==========================================================================
+     10. DECISIONS + DRIFT PANELS
+     ========================================================================== */
+  .decisions, .drift {
+    background: rgb(var(--v-theme-panel)); color: rgb(var(--v-theme-on-panel));
+    border: 1px solid rgb(var(--v-theme-border));
+    border-radius: var(--radius-md);
+    padding: var(--space-6);
+  }
+  .decisions dt { font-size: var(--text-base); font-weight: var(--weight-semibold); margin-top: var(--space-5); }
+  .decisions dt:first-child { margin-top: 0; }
+  .decisions dd { margin: var(--space-2) 0 0; font-size: var(--text-sm); color: rgba(var(--v-theme-on-panel), 0.8); max-width: 78ch; }
+  .flag {
+    display: inline-block; font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+    text-transform: uppercase; letter-spacing: var(--tracking-label);
+    color: rgb(var(--v-theme-warning));
+    border: 1px solid rgba(var(--v-theme-warning), 0.5);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1) var(--space-2);
+    margin-left: var(--space-2); vertical-align: middle;
+  }
+  .drift ul { margin: 0; padding-left: var(--space-6); }
+  .drift li { font-size: var(--text-sm); color: rgba(var(--v-theme-on-panel), 0.8); margin-bottom: var(--space-3); max-width: 80ch; }
+
+  footer.note { margin-top: var(--space-8); font-size: var(--text-xs); color: rgba(var(--v-theme-on-background), 0.5); }
+</style>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="wordmark">Pixl<span class="stash">Stash</span></div>
+    <div class="sub">v1.8.0 UI preview — async imports (#459) &amp; Scrapheap (DAM 1.1) — grounded in the shipped components</div>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" id="theme-toggle" type="button">Theme: auto</button>
+  </header>
+
+  <!-- ======================================================================
+       SECTION 1 — ASYNC IMPORTS: two-phase dialog → FLIP flight → badge
+       ====================================================================== -->
+  <section class="section">
+    <div class="section-label">Surface 1 · async imports (#459)</div>
+    <h2>Two-phase import: unsafe upload &rarr; safe background</h2>
+    <p class="caption">
+      The shell mirrors the real app: <code>SideBar.vue</code> (brand row, Global/Projects/Folders
+      tabs, list rows, section headers), <code>Toolbar.vue</code> (36px band, stats button with
+      the shipped activity dot), and the <code>StatsSidebar.vue</code> panel docked on the right,
+      open to its <strong>Tasks tab</strong> (the task manager). The dialog keeps
+      <code>ImageImporter.vue</code>'s two-bar anatomy.
+      <strong>Phase A (uploading, unsafe):</strong> calm present-tense copy, amber upload bar, and
+      exactly one action — Cancel. No close/minimize control exists; a <code>beforeunload</code>
+      guard is the hard backstop (press "Try to refresh"). <strong>Transition:</strong> the moment
+      the last byte lands, the guard drops and the dialog <strong>auto-hides on its own</strong>
+      — the dialog animates out while the count chip flies into the
+      <strong>stats-sidebar task manager</strong> in one continuous motion, landing as a new task
+      row. The flight <em>is</em> the dismissal: "moved to background, tab is free". No button
+      press. <strong>Phase B (safe):</strong> the dialog is gone; the import is now
+      <strong>just another task row</strong> (mirroring the ComfyUI generation row above it) with
+      a live progress bar counting server-side import; the toolbar activity dot and the Tasks-tab
+      pulse are the app-wide "work is live" lights; refresh is harmless. Reduced motion: plain
+      fade, the row appears without travel.
+    </p>
+
+    <div class="stage">
+      <div class="shell" id="shell1">
+        <nav class="sb" aria-label="Sidebar (mirrors SideBar.vue)">
+          <div class="sb-brand">
+            <div class="sb-brand-left">
+              <span class="sb-logo"><span class="px-lock" role="img" aria-label="PixlStash logo placeholder"></span></span>
+              <span class="sb-title">Pixl<span class="stash">Stash</span></span>
+            </div>
+            <!-- Rev 4: the orphaned .sidebar-brand-task-btn slot is deliberately
+                 NOT the badge host. The import's flight target is the stats-sidebar
+                 task manager (right panel). The brand row stays as the real
+                 SideBar.vue renders it. -->
+          </div>
+
+          <div class="sb-view-header">
+            <div class="sb-tabs">
+              <button class="sb-tab active" type="button">Global</button>
+              <button class="sb-tab" type="button">Projects</button>
+              <button class="sb-tab" type="button">Folders</button>
+            </div>
+          </div>
+
+          <div class="sb-scroll">
+            <div class="sb-item active">
+              <span class="sb-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 16V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2zm-11-4 2.03 2.71L16 11l4 5H8l3-4zM2 6v14a2 2 0 0 0 2 2h14v-2H4V6H2z"/></svg></span>
+              <span class="sb-label">All Pictures</span>
+              <span class="sb-count">1&#8202;284</span>
+            </div>
+            <div class="sb-item">
+              <span class="sb-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3v1H4v2h1v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6h1V4h-5V3H9zM7 6h10v13H7V6zm2 2v9h2V8H9zm4 0v9h2V8h-2z"/></svg></span>
+              <span class="sb-label">Scrapheap</span>
+              <span class="sb-count">6</span>
+            </div>
+            <div class="sb-divider"></div>
+            <div class="sb-section-header">
+              <span class="chev"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6 1.4-1.4z"/></svg></span>
+              People
+            </div>
+            <div class="sb-item"><span class="sb-thumb thumb-a"></span><span class="sb-label">Astrid</span><span class="sb-count">214</span></div>
+            <div class="sb-item"><span class="sb-thumb thumb-b"></span><span class="sb-label">Bj&#248;rn</span><span class="sb-count">98</span></div>
+            <div class="sb-divider"></div>
+            <div class="sb-section-header">
+              <span class="chev"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6 1.4-1.4z"/></svg></span>
+              Sets
+            </div>
+            <div class="sb-item"><span class="sb-thumb thumb-c"></span><span class="sb-label">Iceland '24</span><span class="sb-count">61</span></div>
+            <div class="sb-item"><span class="sb-thumb thumb-d"></span><span class="sb-label">Studio tests</span><span class="sb-count">33</span></div>
+            <div class="sb-footer-spacer"></div>
+          </div>
+        </nav>
+
+        <div style="flex:1; display:flex; flex-direction:column; min-width:0; position:relative;">
+          <div class="tb" aria-label="Toolbar (mirrors Toolbar.vue)">
+            <span class="tb-title">All Pictures</span>
+            <span class="tb-meta">1&#8202;284 pictures</span>
+            <span class="tb-spacer"></span>
+            <button class="bar-btn" type="button" title="Settings">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm7.4-2c0-.5 0-.9-.1-1.4l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-2.4-1.4L14 2h-4l-.5 2.7a7.6 7.6 0 0 0-2.4 1.4l-2.5-1-2 3.5 2.1 1.6a8 8 0 0 0 0 2.8L2.6 14.6l2 3.5 2.5-1c.7.6 1.5 1 2.4 1.4L10 22h4l.5-2.7a7.6 7.6 0 0 0 2.4-1.4l2.5 1 2-3.5-2.1-1.6c.1-.5.1-.9.1-1.4z"/></svg>
+            </button>
+            <button class="bar-btn" type="button" title="Stats / tasks (mirrors tb-stats-btn + activity dot) — opens the stats sidebar">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 20V10h3v10H4zm6.5 0V4h3v16h-3zM17 20v-7h3v7h-3z"/></svg>
+              <!-- App-wide activity light: on because a task is running (the
+                   ComfyUI generation, and the import once it moves to Phase B). -->
+              <span class="tb-stats-activity" id="tb-dot"></span>
+            </button>
+          </div>
+
+          <div style="flex:1; position:relative; padding: var(--space-3); overflow:hidden;">
+            <div class="ps-grid" aria-hidden="true">
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+              <div class="image-card"><div class="thumbnail-card"><div class="thumbnail-container"><div class="thumb-img"></div></div></div></div>
+            </div>
+
+            <!-- The new import dialog -->
+            <div class="dlg-scrim" id="import-scrim">
+              <div class="dialog" role="dialog" aria-label="Import pictures">
+                <div class="dlg-head">
+                  <h3 id="dlg-title">Uploading pictures</h3>
+                  <div class="grow"></div>
+                  <span class="chip" id="count-chip">
+                    <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm2 12 3.5-4.5 2.5 3 3.5-4.5L20 15v2H6v-2z"/></svg>
+                    <span id="chip-count">128 files</span>
+                  </span>
+                </div>
+
+                <div class="note-row" id="note-row">
+                  <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path id="note-icon-path" d="M9 16V10H5l7-7 7 7h-4v6H9zm-4 4v-2h14v2H5z"/></svg>
+                  <div>
+                    <div class="note-title" id="note-title">Keep this tab open while files upload</div>
+                    <div class="note-sub" id="note-sub">Your pictures aren't on the server yet &mdash; leaving now would stop the upload.</div>
+                  </div>
+                </div>
+
+                <!-- Two-bar anatomy mirrors ImageImporter.vue (Upload / Import) -->
+                <div class="bar-section">
+                  <div class="bar-label"><span id="up-label">Uploading 0 of 128 files</span><span id="up-bytes">0 MB of 512 MB</span></div>
+                  <div class="bar-track"><div class="bar-fill bar-fill--upload" id="up-fill"></div></div>
+                </div>
+                <div class="bar-section">
+                  <div class="bar-label"><span id="imp-label">Import pending&#8230;</span><span id="imp-count">&nbsp;</span></div>
+                  <div class="bar-track"><div class="bar-fill bar-fill--import" id="imp-fill"></div></div>
+                </div>
+
+                <div class="dlg-foot">
+                  <button class="btn btn-danger" id="btn-cancel" type="button" title="Cancel-mid-staging semantics are a flagged UI/UX flow call">Cancel import</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- MOCK of the native beforeunload prompt (browser chrome, annotated) -->
+            <div class="native-scrim" id="native-scrim">
+              <div class="native-prompt" role="alertdialog" aria-label="Native browser prompt (mock)">
+                <div class="native-note">Native browser prompt &mdash; beforeunload backstop (browser-worded; mocked here)</div>
+                <div class="np-title">Leave site?</div>
+                <div class="np-body">Uploads are in progress. Changes you made may not be saved.</div>
+                <div class="np-row">
+                  <button class="btn btn-ghost" id="np-cancel" type="button">Cancel</button>
+                  <button class="btn btn-quiet" id="np-leave" type="button">Leave</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="reload-pill" id="reload-pill">
+              <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+              No guard &mdash; the tab reloads freely; the import continues on the server.
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats sidebar (mirrors StatsSidebar.vue), docked open on its Tasks
+             tab — the DECIDED flight/minimize host for the import. -->
+        <aside class="stats-sb" aria-label="Stats sidebar (mirrors StatsSidebar.vue)">
+          <div class="stats-sb-header">
+            <div class="stats-sb-title-row">
+              <span class="stats-sb-title">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 20V10h3v10H4zm6.5 0V4h3v16h-3zM17 20v-7h3v7h-3z"/></svg>
+                Stats
+              </span>
+            </div>
+            <div class="stats-sb-tabs">
+              <button class="stats-tab" type="button">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 3h6l8 8-6 6-8-8V3zm3.5 2A1.5 1.5 0 1 0 8.5 8 1.5 1.5 0 0 0 8.5 5z"/></svg>
+                Tags
+              </button>
+              <button class="stats-tab" type="button">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16v14H4V5zm2 2v7l4-3 3 3 3-4 3 3V7H6z"/></svg>
+                Pictures
+              </button>
+              <button class="stats-tab active" type="button" id="stats-tab-tasks">
+                <!-- mirrors tm-tab-icon--busy + tm-tab-pulse: Tasks tab is busy -->
+                <svg class="tm-tab-icon--busy" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 10 10h-2a8 8 0 1 1-8-8V2zm-1 5h2v6l4 2-1 1.7L11 13V7z"/></svg>
+                Tasks
+                <span class="tm-tab-pulse" title="active tasks"></span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Tasks-tab task manager — mirrors StatsSidebar.vue's .tm-worker-list -->
+          <div class="stats-sb-content">
+            <div class="tm-worker-list" id="tm-list">
+              <!-- Existing task: a ComfyUI generation run (the import lands as a
+                   sibling of this). Mirrors the entry.kind === 'comfyui' row. -->
+              <div class="tm-worker-row">
+                <div class="tm-worker-row-top">
+                  <span class="tm-status-dot tm-status-dot--running"></span>
+                  <span class="tm-worker-label">SDXL portrait &middot; batch 4</span>
+                  <button class="tm-comfy-abort" type="button" title="Abort ComfyUI run">&#10005;</button>
+                </div>
+                <div class="tm-comfy-bar"><div class="tm-comfy-fill" style="width:60%"></div></div>
+                <div class="tm-comfy-message">KSampler &middot; step 18 / 30</div>
+              </div>
+
+              <!-- The import task row — hidden until the flight lands (Phase B).
+                   Determinate, so it mirrors the ComfyUI bar+message row. -->
+              <div class="tm-worker-row tm-import-row" id="tm-import-row" hidden>
+                <div class="tm-worker-row-top">
+                  <span class="tm-status-dot tm-status-dot--running"></span>
+                  <span class="tm-worker-label">Importing pictures</span>
+                  <span class="tm-worker-progress" id="tm-import-progress">0 / 128</span>
+                </div>
+                <div class="tm-comfy-bar"><div class="tm-comfy-fill" id="tm-import-fill" style="width:0%"></div></div>
+                <div class="tm-comfy-message" id="tm-import-msg">Queued on the server&#8230;</div>
+              </div>
+
+              <!-- Backend-worker row: throughput sparkline + rate. Mirrors the
+                   entry.kind !== 'comfyui' row (canvas sparkline stood in by SVG). -->
+              <div class="tm-worker-row">
+                <div class="tm-worker-row-top">
+                  <span class="tm-status-dot tm-status-dot--running"></span>
+                  <span class="tm-worker-label">Tags</span>
+                  <span class="tm-worker-progress">1&#8202;040 / 1&#8202;284</span>
+                </div>
+                <div class="tm-worker-row-bottom">
+                  <span class="tm-sparkline" aria-hidden="true">
+                    <svg viewBox="0 0 120 28" preserveAspectRatio="none">
+                      <polyline points="2,22 16,18 30,20 44,10 58,14 72,6 86,11 100,7 118,9"
+                                fill="none" stroke="rgba(var(--v-theme-tertiary),0.85)" stroke-width="1.5"/>
+                      <polygon points="2,22 16,18 30,20 44,10 58,14 72,6 86,11 100,7 118,9 118,26 2,26"
+                               fill="rgba(var(--v-theme-tertiary),0.18)"/>
+                    </svg>
+                  </span>
+                  <span class="tm-worker-rate">7.4/s</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- System bar — mirrors .tm-system-bar (CPU / RAM / VRAM) -->
+            <div class="tm-system-bar">
+              <div class="tm-system-item"><span class="tm-system-label">CPU</span><span class="tm-system-value">34%</span></div>
+              <div class="tm-system-item"><span class="tm-system-label">RAM</span><span class="tm-system-value">9.2 GB / 32.0 GB (29%)</span></div>
+              <div class="tm-system-item"><span class="tm-system-label">VRAM</span><span class="tm-system-value">7.8 GB / 24.0 GB (32%)</span></div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div class="demo-controls">
+      <div class="guard-strip armed" id="guard-strip">
+        <span>beforeunload guard:</span><span class="state" id="guard-state">ACTIVE &mdash; upload in flight</span>
+      </div>
+      <button class="btn btn-ghost" id="btn-refresh" type="button">Try to refresh the tab</button>
+      <button class="btn btn-ghost" id="btn-skip" type="button">Skip to safe transition</button>
+      <button class="btn btn-ghost" id="btn-restart" type="button">Restart (Phase A)</button>
+    </div>
+
+    <!-- Badge specimens (§12 pattern) -->
+    <div class="spec-row">
+      <div class="spec">
+        <span class="host"><svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px;"><path d="M12 2 4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4z"/></svg><span class="badge-pill" style="top:-4px;right:-8px;">3</span></span>
+        <span class="lbl">Count pill &mdash; primary / on-primary (4.84:1)</span>
+      </div>
+      <div class="spec">
+        <span class="host"><svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px;"><path d="M12 2 4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4z"/></svg><span class="badge-pill" style="top:-4px;right:-8px;">99+</span></span>
+        <span class="lbl">Overflow &mdash; tabular-nums, no jitter</span>
+      </div>
+      <div class="spec">
+        <span class="host"><svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px;"><path d="M12 2 4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4z"/></svg><span class="badge-dot"></span></span>
+        <span class="lbl">Attention dot &mdash; accent, no text</span>
+      </div>
+      <div class="spec">
+        <span class="host"><svg class="i" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px;"><path d="M12 2 4 6v6c0 5 3.4 9.4 8 10 4.6-.6 8-5 8-10V6l-8-4z"/></svg><span class="badge-dot pulse-live"></span></span>
+        <span class="lbl">Live &mdash; attention pulse (only while running)</span>
+      </div>
+      <div class="spec">
+        <button class="btn btn-ghost" id="btn-replay-pulse" type="button">Replay landing pulse</button>
+        <span class="lbl">Spring pop + gridNewPulse glow</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================================
+       SECTION 2 — SCRAPHEAP: the existing view, upgraded with the general
+       soft-delete treatment (real grid + real selection-pill pattern)
+       ====================================================================== -->
+  <section class="section">
+    <div class="section-label">Surface 2 · Scrapheap (DAM 1.1)</div>
+    <h2>Scrapheap &mdash; the existing view, with the general soft-delete treatment</h2>
+    <p class="caption">
+      This is not a new view: it is the <strong>existing Scrapheap</strong>, reached from the real
+      sidebar Scrapheap row (shown in the stage above), wearing the DAM 1.1 soft-delete
+      treatment. The grid is <code>ImageGrid.vue</code> verbatim: 4px gap, 4px tile padding, 1:1
+      tiles at radius 8, the shipped hover glow, and the shipped selection treatment (the
+      <code>info</code>-blue overlay + checkmark &mdash; noted below as drift vs the
+      <code>--active-wash</code> system, reproduced faithfully). Selection actions live where the
+      real app puts them: the floating bottom-centre pill (<code>SelectionBar.vue</code>
+      structure) with <strong>Restore</strong> (affirmative, <code>primary</code>-tinted icon) and
+      <strong>Delete forever</strong> (<code>error</code>, always behind a confirm — the existing
+      <code>delete_scrapheap_selection</code> model). The resting context (title, count,
+      retention, "Empty scrapheap") sits in the real 36px toolbar band. New elements &mdash;
+      days-remaining chips (<code>--scrim-photo</code>) and the confirm dialog &mdash; are fully
+      tokenized. Click tiles to select; empty the scrapheap to see the shipped empty-state card
+      (pixel art stands in for <code>EmptyTrash.png</code>).
+      <strong>Delete forever means actual destruction (rev 4):</strong> the confirm promises the
+      files are removed from disk, no softening. When the selection includes a
+      <strong>reference-folder original</strong> (a picture whose <code>file_path</code> is an
+      absolute path to your photo on disk), the confirm <strong>names that exact original path</strong>
+      &mdash; select <code>harbor_dusk.raw</code> or <code>north_face.raw</code> and choose Delete
+      forever to see the path-level warning.
+    </p>
+
+    <div class="stage">
+      <div style="position: relative; display: flex; flex-direction: column; min-height: 420px;">
+        <div class="tb">
+          <span class="tb-title">
+            <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M9 3v1H4v2h1v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6h1V4h-5V3H9zM7 6h10v13H7V6zm2 2v9h2V8H9zm4 0v9h2V8h-2z"/></svg>
+            Scrapheap
+          </span>
+          <span class="tb-meta" id="scrap-meta">6 items &middot; kept 30 days</span>
+          <span class="tb-spacer"></span>
+          <button class="btn btn-danger" id="btn-empty-scrap" type="button" style="height: 28px; padding: 0 var(--space-4);">Empty scrapheap</button>
+        </div>
+
+        <div style="flex:1; position: relative; padding: var(--space-3); overflow: hidden;">
+          <div class="ps-grid" id="scrap-grid">
+            <button class="image-card" type="button"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">28 d</span></span></span><span class="thumb-info">IMG_2041.jpg</span></button>
+            <button class="image-card" type="button"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">26 d</span></span></span><span class="thumb-info">IMG_2042.jpg</span></button>
+            <button class="image-card" type="button" data-refpath="/mnt/photos/iceland-2024/harbor_dusk.raw"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">21 d</span></span></span><span class="thumb-info">harbor_dusk.raw</span></button>
+            <button class="image-card" type="button"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">14 d</span></span></span><span class="thumb-info">IMG_2044.jpg</span></button>
+            <button class="image-card" type="button" data-refpath="/mnt/photos/iceland-2024/north_face.raw"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">6 d</span></span></span><span class="thumb-info">north_face.raw</span></button>
+            <button class="image-card" type="button"><span class="thumbnail-card"><span class="thumbnail-container"><span class="thumb-img"></span><span class="days">2 d</span></span></span><span class="thumb-info">IMG_2046.jpg</span></button>
+          </div>
+
+          <div class="empty-state" id="empty-state">
+            <div class="empty-state-card">
+              <div class="px-trash" role="img" aria-label="Pixel-art scrapheap illustration (placeholder for EmptyTrash.png)"></div>
+              <div class="empty-state-title">The scrapheap is empty</div>
+              <div class="empty-state-subtitle">Scrapheaped pictures land here and are kept for 30 days before purge.</div>
+            </div>
+          </div>
+
+          <!-- Restore/purge pill — mirrors .floating-selection-bar -->
+          <div class="sel-pill pill-hidden" id="sel-pill">
+            <span class="sel-count" id="sel-count">0 selected</span>
+            <button class="stack-btn act-restore" id="btn-restore" type="button" title="Restore selected to the library">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
+              <span>Restore</span>
+            </button>
+            <button class="stack-btn act-purge" id="btn-purge" type="button" title="Delete forever (confirmed)">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 3v1H4v2h1v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6h1V4h-5V3H9zm.4 5 1.6 1.6L12.6 8 14 9.4l-1.6 1.6 1.6 1.6-1.4 1.4-1.6-1.6-1.6 1.6L8 12.6l1.6-1.6L8 9.4 9.4 8z"/></svg>
+              <span>Delete forever</span>
+            </button>
+            <button class="stack-btn icon-btn" id="btn-clear-sel" type="button" title="Clear selection (ESC)">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4z"/></svg>
+            </button>
+          </div>
+
+          <!-- Delete-forever confirm. Rev 4: promises ACTUAL destruction. When
+               the selection contains reference-folder originals, the confirm
+               NAMES the exact on-disk file path(s) being destroyed. -->
+          <div class="confirm-scrim" id="confirm-scrim">
+            <div class="confirm" role="alertdialog" aria-label="Delete forever">
+              <h4>Delete forever?</h4>
+              <p id="confirm-body">This permanently deletes 3 pictures, including their files on disk. This cannot be undone.</p>
+              <!-- Reference-folder original warning — shown only when the
+                   selection includes originals from a watched folder. -->
+              <div class="ref-warn" id="confirm-refwarn" hidden>
+                <div class="ref-warn-head">
+                  <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 1 21h22L12 2zm0 5 7.5 13h-15L12 7zm-1 4v4h2v-4h-2zm0 5v2h2v-2h-2z"/></svg>
+                  <span id="refwarn-title">This also deletes your original photo on disk</span>
+                </div>
+                <ul class="ref-warn-paths" id="refwarn-paths"></ul>
+              </div>
+              <div class="row">
+                <button class="btn btn-quiet" id="btn-confirm-cancel" type="button">Cancel</button>
+                <button class="btn btn-danger" id="btn-confirm-purge" type="button">Delete forever</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-controls">
+      <button class="btn btn-ghost" id="btn-toggle-empty" type="button">Toggle empty state</button>
+      <button class="btn btn-ghost" id="btn-reset-scrap" type="button">Reset demo</button>
+    </div>
+  </section>
+
+  <!-- ======================================================================
+       SECTION 3 — §8 DECISIONS + OBSERVED DRIFT
+       ====================================================================== -->
+  <section class="section">
+    <div class="section-label">Handoff §8 · open decisions</div>
+    <h2>Proposed defaults, with rationale</h2>
+    <dl class="decisions">
+      <dt>Import dismissal &mdash; DECIDED: the dialog auto-hides at the safe transition; the flight is the dismissal</dt>
+      <dd>
+        Phase A has no close/minimize affordance at all &mdash; its only action is Cancel; the calm
+        "keep this tab open" note plus the native <code>beforeunload</code> prompt are the soft and
+        hard layers of the same message, so the user never has to <em>read</em> a warning to be
+        protected. The moment staging completes, the guard drops and the dialog animates out on
+        its own while the count chip flies into the <strong>stats-sidebar task manager</strong> in
+        one continuous motion &mdash; the flight <em>is</em> "moved to background, tab is free". No
+        manual dismiss exists or is needed. Still open: cancel-mid-staging semantics (abort vs.
+        keep-partial) <span class="flag">ui/ux flow</span>
+      </dd>
+
+      <dt>Flight / minimize host &rarr; the TASK MANAGER in the stats sidebar (StatsSidebar.vue, Tasks tab) &mdash; DECIDED</dt>
+      <dd>
+        The import lands as a <strong>task row</strong> in the Tasks-tab task manager, a sibling of
+        every other running job (the ComfyUI generation run, backend workers). It mirrors the
+        determinate <code>.tm-comfy-bar</code> row: a <code>primary</code> progress bar counting
+        server-side import down to done, a <code>.tm-status-dot--running</code> (primary, 1.4s
+        pulse) and a live message. This unifies "my import" with the app's existing task model
+        instead of inventing a second indicator: the toolbar <code>tb-stats-activity</code> dot and
+        the <code>.tm-tab-pulse</code> on the Tasks tab are the shared app-wide "work is live"
+        lights, and the toolbar stats button is what opens the panel. The two rejected
+        alternatives &mdash; reviving SideBar.vue's orphaned <code>.sidebar-brand-task-btn</code>
+        slot, or landing a badge on the toolbar dot &mdash; are <em>not</em> used: the first is a
+        one-off indicator with no task detail; the second overloads the activity light with a
+        count. Landing punctuation on the row reuses the §6 spring-pop + glow (<code>--dur-4</code>
+        / <code>--ease-spring</code>).
+      </dd>
+
+      <dt>Scrapheap restore/purge &mdash; DECIDED as the general treatment of the existing Scrapheap: floating selection pill + toolbar-resting "Empty scrapheap", all destructive behind a confirm</dt>
+      <dd>
+        This styles the <em>existing</em> Scrapheap (the shipped sidebar row and
+        <code>delete_scrapheap_selection</code> flow), not a new view. Selection actions follow
+        <code>SelectionBar.vue</code>'s real pattern (floating bottom-centre pill); Restore
+        carries the affirmative weight (<code>primary</code> icon), Delete forever is
+        <code>error</code> and always confirmed; the resting context (count, retention, Empty
+        scrapheap) lives in the real 36px toolbar band. Note: handoff &sect;13
+        describes SelectionBar as a full-width <code>--bar-height</code> band; the shipped
+        component is this floating pill &mdash; the doc should be reconciled to reality (or vice
+        versa) before the bar-height migration.
+      </dd>
+
+      <dt>Delete forever = ACTUAL destruction, including reference-folder originals &mdash; DECIDED (reverses rev 3)</dt>
+      <dd>
+        "Delete forever" now genuinely destroys the file, with no softening in the copy. For a
+        <strong>reference-folder picture</strong> (whose <code>file_path</code> is an absolute path
+        to the user's original on disk), the confirm carries a strong, specific
+        <code>error</code>-tinted warning that <strong>names the exact original file path</strong>
+        being removed (e.g. <code>/mnt/photos/iceland-2024/harbor_dusk.raw</code>) &mdash; it is
+        deleting the original photo, not just the library entry. Managed pictures get the standard
+        permanent-delete copy.
+        <br><br>
+        <strong>Backend behavior change (implementation note):</strong>
+        <code>delete_scrapheap_selection</code> (<code>pixlstash/routes/pictures/_crud.py</code>)
+        must <code>os.remove</code> even <code>allow_delete_file=False</code> items on an explicit
+        delete-forever, and log <code>file_removed=True</code>. This deliberately
+        <em>overrides</em> the routine reference-folder file protection (which today keeps the file
+        and logs <code>file_removed=False</code>) because the user has explicitly chosen
+        destruction. Recording <code>file_removed=True</code> keeps the restore ledger honest:
+        <code>file_removed=True</code> means the content is genuinely gone, so restore correctly
+        drops the row rather than resurrecting a still-alive file. (The routine reference-folder
+        scan / soft-delete path is unchanged &mdash; only the explicit delete-forever action
+        escalates to physical removal.)
+      </dd>
+
+      <dt>Retention window shown as 30 days
+        <span class="flag">product / flow &mdash; veto welcome</span></dt>
+      <dd>
+        Surfaced in the toolbar meta, per-tile days-remaining chips (<code>--scrim-photo</code>,
+        matching the shipped bottom-left badge convention), and the empty-state copy, aligned
+        with the <code>file_removed</code> retention semantics of the missing-file purge. The
+        visual treatment holds for any window; the number is the maintainer's call.
+      </dd>
+
+      <dt>New-dialog surface: standard <code>surface</code> dialog, not the shipped dark-surface modal
+        <span class="flag">veto welcome</span></dt>
+      <dd>
+        Handoff &sect;7 specifies the standard dialog look for the non-blocking import;
+        <code>ImageImporter.vue</code>'s current full-screen <code>dark-surface</code> modal reads
+        as "the app is busy" &mdash; exactly the impression #459 removes. Phase colours replace the
+        shipped unnamed gradients: amber accent = attention (upload), olive primary = safe
+        (server import).
+      </dd>
+    </dl>
+
+    <div class="section-label" style="margin-top: var(--space-6);">Real drift observed while mirroring (reproduced, not fixed)</div>
+    <div class="drift">
+      <ul>
+        <li><code>SelectionBar.vue</code>: hardcoded <code>rgba(0,0,0,.35)</code> shadow (spec: never hardcode shadow colour), 5px button radius (off the radius set), <code>em</code> font sizes (0.88/1.1/0.92em), off-grid 18px offset and 6px gaps.</li>
+        <li><code>ImageGrid.vue</code>: selection overlay rides <code>info</code> blue @ .38 instead of the <code>--active-wash</code> system; tile shadow <code>1px 2px 3px 3px</code> off the elevation ladder; empty-state card radius 18px / padding 26&times;30px / gap 10px (all off-token) with a system-font 1.2em title where visual-language &sect;9 specifies a Tiny5 <code>--text-2xl</code> headline; <code>.pending-imports-pill</code> hardcodes <code>#fff</code> and radius 9999 (the documented typo); <code>--selbar-height</code> is 34px vs the 48px <code>--bar-height</code> token (known &sect;13 item).</li>
+        <li><code>SideBar.vue</code>: <code>.sidebar-brand-task-btn</code> is orphaned CSS (styles, no template usage &mdash; and rev 4 deliberately leaves it orphaned, since the flight host is now the stats-sidebar task manager); section-header letter-spacing 0.07em vs the 0.06em <code>--tracking-label</code> token; known <code>#c96000</code>/<code>#c62828</code> hover literals.</li>
+        <li><code>StatsSidebar.vue</code> task manager: <code>.tm-status-dot</code> is 7px (same off-token size as the toolbar activity dot, vs the 8px <code>--badge-size-dot</code>), with a <code>0 0 5px</code> primary glow off the elevation ladder; <code>.tm-comfy-bar</code> height is 6px (off the 4/8px spacing grid); <code>.tm-comfy-fill</code> uses a raw <code>0.25s</code> transition instead of the <code>--dur-3</code> token; the throughput sparkline is a raw <code>&lt;canvas&gt;</code> (stood in here by an inline SVG polyline). All reproduced faithfully.</li>
+        <li><code>Toolbar.vue</code>: activity dot is 7px vs the 8px <code>--badge-size-dot</code> token (the exact ad-hoc size the token was minted to replace).</li>
+        <li><code>ImageImporter.vue</code>: full-screen dark-surface modal vs the handoff's standard-dialog direction; unnamed multi-hue gradient bars (primary&rarr;secondary, warning&rarr;accent); 18px bar height off-grid; filled-error cancel uses an <code>on-error</code> token absent from the handoff table.</li>
+        <li>Docs: handoff &sect;6/&sect;13 cite <code>SelectionBar.vue</code> as the full-width <code>--bar-height</code> reference; the shipped component is a floating pill.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer class="note">
+    Blocks marked "mirrors" reproduce shipped component values verbatim (including their drift,
+    annotated in the CSS); all new chrome is built from the design tokens. Tile/thumb art is
+    photo-placeholder content mixed from theme tokens; pixel art stands in for
+    <span style="font-family: var(--font-mono);">Logo.png</span> /
+    <span style="font-family: var(--font-mono);">EmptyTrash.png</span>; Tiny5 falls back to mono
+    here. <span style="font-family: var(--font-mono);">prefers-reduced-motion</span> is honoured:
+    the flight becomes a plain fade and looping pulses stop.
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var root = document.documentElement;
+  var css = getComputedStyle(root);
+  function ms(name, fallback) {
+    var v = parseFloat(css.getPropertyValue(name));
+    return isNaN(v) ? fallback : v;
+  }
+  var DUR3 = ms("--dur-3", 250);
+  var DUR4 = ms("--dur-4", 420);
+  var EASE_STANDARD = (css.getPropertyValue("--ease-standard") || "cubic-bezier(0.4,0,0.2,1)").trim();
+  function reducedMotion() { return matchMedia("(prefers-reduced-motion: reduce)").matches; }
+  function $(id) { return document.getElementById(id); }
+
+  /* ---------------- Theme toggle ---------------- */
+  var themeBtn = $("theme-toggle");
+  var themeOrder = ["auto", "light", "dark"];
+  var themeIdx = 0;
+  themeBtn.addEventListener("click", function () {
+    themeIdx = (themeIdx + 1) % themeOrder.length;
+    var t = themeOrder[themeIdx];
+    if (t === "auto") root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", t);
+    themeBtn.textContent = "Theme: " + t;
+  });
+
+  /* ================= SECTION 1 — two-phase import ================= */
+  var TOTAL_FILES = 128, TOTAL_MB = 512;
+  var phase = "A";          // "A" (uploading, unsafe) | "B" (server import, safe) | "done"
+  var upMB = 0, impCount = 0;
+  var timerA = null, timerB = null;
+
+  var dlgTitle = $("dlg-title"), chipCount = $("chip-count");
+  var upLabel = $("up-label"), upBytes = $("up-bytes"), upFill = $("up-fill");
+  var impLabel = $("imp-label"), impCountEl = $("imp-count"), impFill = $("imp-fill");
+  var btnCancel = $("btn-cancel");
+  var importScrim = $("import-scrim");
+  var guardStrip = $("guard-strip"), guardState = $("guard-state");
+  var tbDot = $("tb-dot"); /* app-wide activity light — stays on while any task runs */
+  var importRow = $("tm-import-row");
+  var importFill = $("tm-import-fill"), importMsg = $("tm-import-msg"), importProgress = $("tm-import-progress");
+  var countChip = $("count-chip");
+  var nativeScrim = $("native-scrim"), reloadPill = $("reload-pill");
+  var reloadPillTimer = null;
+
+  function renderUpload() {
+    var frac = Math.min(1, upMB / TOTAL_MB);
+    var files = Math.round(frac * TOTAL_FILES);
+    upFill.style.width = (frac * 100) + "%";
+    if (frac >= 1) {
+      upLabel.textContent = "Upload complete — " + TOTAL_FILES + " files";
+      upBytes.textContent = TOTAL_MB + " MB";
+    } else {
+      upLabel.textContent = "Uploading " + files + " of " + TOTAL_FILES + " files";
+      upBytes.textContent = Math.round(upMB) + " MB of " + TOTAL_MB + " MB";
+    }
+  }
+  function renderImport() {
+    var frac = Math.min(1, impCount / TOTAL_FILES);
+    impFill.style.width = (frac * 100) + "%";
+    if (phase === "A") {
+      impLabel.textContent = "Import pending…";
+      impCountEl.innerHTML = "&nbsp;";
+    } else if (impCount >= TOTAL_FILES) {
+      impLabel.textContent = "Import complete";
+      impCountEl.textContent = TOTAL_FILES + " / " + TOTAL_FILES;
+    } else {
+      impLabel.textContent = "Importing on the server";
+      impCountEl.textContent = impCount + " / " + TOTAL_FILES;
+    }
+  }
+  /* The import task row lives in the stats-sidebar task manager. Reveal/update
+     it exactly like any other determinate task (mirrors the ComfyUI row). */
+  function renderImportRow() {
+    var frac = Math.min(1, impCount / TOTAL_FILES);
+    importFill.style.width = (frac * 100) + "%";
+    importProgress.textContent = impCount + " / " + TOTAL_FILES;
+    if (impCount >= TOTAL_FILES) {
+      importMsg.textContent = "Import complete";
+      importRow.querySelector(".tm-status-dot").classList.remove("tm-status-dot--running");
+    } else {
+      importMsg.textContent = "Importing on the server";
+      importRow.querySelector(".tm-status-dot").classList.add("tm-status-dot--running");
+    }
+  }
+  function hideImportRow() {
+    importRow.hidden = true;
+    importRow.classList.remove("tm-landing");
+    impCount = 0;
+    importFill.style.width = "0%";
+    importProgress.textContent = "0 / " + TOTAL_FILES;
+    importMsg.textContent = "Queued on the server…";
+    importRow.querySelector(".tm-status-dot").classList.add("tm-status-dot--running");
+  }
+  function landImportRow() {
+    importRow.hidden = false;
+    importRow.classList.remove("tm-landing");
+    void importRow.offsetWidth; /* restart the one-shot landing animation */
+    importRow.classList.add("tm-landing");
+    renderImportRow();
+  }
+
+  function setPhaseA() {
+    phase = "A"; upMB = 0; impCount = 0;
+    clearInterval(timerA); clearInterval(timerB);
+    timerA = null; timerB = null;
+    dlgTitle.textContent = "Uploading pictures";
+    chipCount.textContent = TOTAL_FILES + " files";
+    importScrim.classList.remove("leaving");
+    guardStrip.classList.add("armed"); guardStrip.classList.remove("free");
+    guardState.textContent = "ACTIVE — upload in flight";
+    hideImportRow();
+    nativeScrim.classList.remove("show");
+    reloadPill.classList.remove("show");
+    renderUpload(); renderImport();
+    timerA = setInterval(function () {
+      upMB = Math.min(TOTAL_MB, upMB + 19);
+      renderUpload();
+      if (upMB >= TOTAL_MB) { clearInterval(timerA); timerA = null; transition(); }
+    }, 250);
+  }
+
+  /* The safe transition — DECIDED: the dialog AUTO-HIDES; the flight is the
+     dismissal, and its TARGET is the stats-sidebar task manager. In one
+     continuous motion the guard drops, the dialog animates out (--dur-3 /
+     --ease-accelerate), and the count chip flies into the task manager where
+     the import appears as a new task row. No manual dismiss exists. */
+  function transition() {
+    if (phase !== "A") return;
+    phase = "B";
+    upMB = TOTAL_MB; renderUpload();
+    guardStrip.classList.remove("armed"); guardStrip.classList.add("free");
+    guardState.textContent = "REMOVED — refresh is safe";
+    nativeScrim.classList.remove("show");
+    renderImport();
+    importScrim.classList.add("leaving"); /* auto-hide starts with the flight */
+    flyChipToTaskManager(function () {
+      landImportRow();
+      startPhaseB();
+    });
+  }
+
+  function startPhaseB() {
+    clearInterval(timerB);
+    timerB = setInterval(function () {
+      impCount = Math.min(TOTAL_FILES, impCount + 4);
+      renderImportRow();
+      if (impCount >= TOTAL_FILES) {
+        clearInterval(timerB); timerB = null;
+        phase = "done";
+        /* The completed import lingers a beat, then leaves the list. The
+           app-wide activity light + Tasks-tab pulse stay on: the ComfyUI run
+           is still working. */
+        setTimeout(function () { if (phase === "done") importRow.hidden = true; }, 1400);
+      }
+    }, 300);
+  }
+
+  function flyChipToTaskManager(onLanded) {
+    /* Reduced motion: the dialog's auto-hide collapses to a plain fade (the
+       global animation clamp) and the task row appears with no travel. */
+    if (reducedMotion()) { onLanded(); return; }
+    /* Reveal the destination row (transparent) so we can fly TO its real
+       resting position in the task manager, then punctuate the landing. */
+    importRow.hidden = false;
+    importRow.style.visibility = "hidden";
+    var from = countChip.getBoundingClientRect();
+    var to = importRow.getBoundingClientRect();
+    importRow.hidden = true;
+    importRow.style.visibility = "";
+    var clone = countChip.cloneNode(true);
+    clone.classList.add("fly-chip");
+    clone.style.left = from.left + "px";
+    clone.style.top = from.top + "px";
+    document.body.appendChild(clone);
+    var dx = (to.left + to.width / 2) - (from.left + from.width / 2);
+    var dy = (to.top + to.height / 2) - (from.top + from.height / 2);
+    var lift = Math.max(40, Math.abs(dx) * 0.12); /* slight arc */
+    var flight = clone.animate([
+      { transform: "translate(0px, 0px) scale(1)", opacity: 1, offset: 0 },
+      { transform: "translate(" + dx * 0.55 + "px, " + (dy * 0.45 - lift) + "px) scale(0.8)", opacity: 0.95, offset: 0.55 },
+      { transform: "translate(" + dx + "px, " + dy + "px) scale(0.3)", opacity: 0, offset: 1 }
+    ], { duration: DUR4, easing: EASE_STANDARD, fill: "forwards" });
+    flight.onfinish = function () { clone.remove(); onLanded(); };
+  }
+
+  btnCancel.addEventListener("click", function () {
+    /* Mock: cancel-mid-staging semantics are a flagged UI/UX flow call; here it
+       resets the demo. */
+    setPhaseA();
+  });
+
+  $("btn-skip").addEventListener("click", function () {
+    if (phase === "A") { clearInterval(timerA); timerA = null; upMB = TOTAL_MB; renderUpload(); transition(); }
+  });
+  $("btn-restart").addEventListener("click", setPhaseA);
+
+  $("btn-refresh").addEventListener("click", function () {
+    if (phase === "A") {
+      nativeScrim.classList.add("show");
+    } else {
+      reloadPill.classList.add("show");
+      clearTimeout(reloadPillTimer);
+      reloadPillTimer = setTimeout(function () { reloadPill.classList.remove("show"); }, 2600);
+    }
+  });
+  $("np-cancel").addEventListener("click", function () { nativeScrim.classList.remove("show"); });
+  $("np-leave").addEventListener("click", function () {
+    /* Leaving mid-upload kills the upload. Mock it by resetting to a fresh Phase A. */
+    nativeScrim.classList.remove("show");
+    setPhaseA();
+  });
+
+  $("btn-replay-pulse").addEventListener("click", function () {
+    /* Replays the import row's landing punctuation in the task manager. */
+    if (importRow.hidden) { impCount = Math.round(TOTAL_FILES * 0.35); }
+    landImportRow();
+  });
+
+  setPhaseA();
+
+  /* ================= SECTION 2 — Scrapheap ================= */
+  var grid = $("scrap-grid");
+  var selPill = $("sel-pill"), selCount = $("sel-count");
+  var scrapMeta = $("scrap-meta");
+  var emptyState = $("empty-state");
+  var confirmScrim = $("confirm-scrim"), confirmBody = $("confirm-body");
+  var refWarn = $("confirm-refwarn"), refWarnTitle = $("refwarn-title"), refWarnPaths = $("refwarn-paths");
+  var purgeMode = "selection";
+
+  function tiles() {
+    return Array.prototype.slice.call(grid.querySelectorAll(".image-card"))
+      .filter(function (t) { return t.style.display !== "none"; });
+  }
+  function selectedTiles() {
+    return tiles().filter(function (t) { return t.classList.contains("selected"); });
+  }
+  function setTileSelected(tile, on) {
+    tile.classList.toggle("selected", on);
+    var cont = tile.querySelector(".thumbnail-container");
+    var ov = cont.querySelector(".selection-overlay");
+    if (on && !ov) {
+      ov = document.createElement("span");
+      ov.className = "selection-overlay";
+      cont.appendChild(ov);
+    } else if (!on && ov) {
+      ov.remove();
+    }
+  }
+  function refreshScrap() {
+    var sel = selectedTiles().length;
+    var n = tiles().length;
+    scrapMeta.innerHTML = n + (n === 1 ? " item" : " items") + " &middot; kept 30 days";
+    selCount.textContent = sel + " selected";
+    selPill.classList.toggle("pill-hidden", sel === 0);
+    var empty = n === 0;
+    grid.style.display = empty ? "none" : "grid";
+    emptyState.classList.toggle("show", empty);
+    $("btn-empty-scrap").disabled = empty;
+  }
+
+  grid.addEventListener("click", function (e) {
+    var tile = e.target.closest(".image-card");
+    if (!tile) return;
+    setTileSelected(tile, !tile.classList.contains("selected"));
+    refreshScrap();
+  });
+
+  $("btn-clear-sel").addEventListener("click", function () {
+    selectedTiles().forEach(function (t) { setTileSelected(t, false); });
+    refreshScrap();
+  });
+
+  function removeTiles(list) {
+    list.forEach(function (t) { t.classList.add("removing"); });
+    setTimeout(function () {
+      list.forEach(function (t) {
+        t.style.display = "none";
+        t.classList.remove("removing");
+        setTileSelected(t, false);
+      });
+      refreshScrap();
+    }, DUR3);
+  }
+
+  $("btn-restore").addEventListener("click", function () { removeTiles(selectedTiles()); });
+
+  function openConfirm(mode) {
+    purgeMode = mode;
+    var targets = mode === "all" ? tiles() : selectedTiles();
+    var n = targets.length;
+    /* Rev 4: Delete forever destroys the files, no softening. */
+    confirmBody.textContent =
+      "This permanently deletes " + n + (n === 1 ? " picture" : " pictures") +
+      ", including " + (n === 1 ? "its file" : "their files") + " on disk. This cannot be undone.";
+    /* Reference-folder originals: name the exact path(s) being destroyed. */
+    var refPaths = targets
+      .map(function (t) { return t.getAttribute("data-refpath"); })
+      .filter(Boolean);
+    refWarnPaths.innerHTML = "";
+    if (refPaths.length) {
+      refWarnTitle.textContent = refPaths.length === 1
+        ? "This also deletes your original photo on disk:"
+        : "This also deletes your original photos on disk:";
+      var shown = refPaths.slice(0, 4);
+      shown.forEach(function (p) {
+        var li = document.createElement("li");
+        li.textContent = p;
+        refWarnPaths.appendChild(li);
+      });
+      if (refPaths.length > shown.length) {
+        var more = document.createElement("li");
+        more.className = "ref-warn-more";
+        more.textContent = "+ " + (refPaths.length - shown.length) + " more original file" +
+          (refPaths.length - shown.length === 1 ? "" : "s");
+        refWarnPaths.appendChild(more);
+      }
+      refWarn.hidden = false;
+    } else {
+      refWarn.hidden = true;
+    }
+    confirmScrim.classList.add("show");
+  }
+  $("btn-purge").addEventListener("click", function () { openConfirm("selection"); });
+  $("btn-empty-scrap").addEventListener("click", function () { openConfirm("all"); });
+  $("btn-confirm-cancel").addEventListener("click", function () { confirmScrim.classList.remove("show"); });
+  $("btn-confirm-purge").addEventListener("click", function () {
+    confirmScrim.classList.remove("show");
+    removeTiles(purgeMode === "all" ? tiles() : selectedTiles());
+  });
+
+  $("btn-toggle-empty").addEventListener("click", function () {
+    if (emptyState.classList.contains("show") && tiles().length === 0) {
+      Array.prototype.slice.call(grid.querySelectorAll(".image-card")).forEach(function (t) {
+        t.style.display = ""; t.classList.remove("removing"); setTileSelected(t, false);
+      });
+    } else {
+      tiles().forEach(function (t) { t.style.display = "none"; setTileSelected(t, false); });
+    }
+    refreshScrap();
+  });
+
+  $("btn-reset-scrap").addEventListener("click", function () {
+    Array.prototype.slice.call(grid.querySelectorAll(".image-card")).forEach(function (t) {
+      t.style.display = ""; t.classList.remove("removing"); setTileSelected(t, false);
+    });
+    confirmScrim.classList.remove("show");
+    refreshScrap();
+  });
+
+  refreshScrap();
+})();
+</script>
