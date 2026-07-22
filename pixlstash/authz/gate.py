@@ -71,7 +71,7 @@ from pixlstash.authz.policy import (
     RoutePolicy,
     validate_policy_declarations,
 )
-from pixlstash.authz.registry import ROUTE_POLICIES
+from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES, ROUTE_POLICIES
 from pixlstash.route_inventory import iter_api_route_contexts
 
 if TYPE_CHECKING:
@@ -244,7 +244,16 @@ class AuthzGate:
         self._resolved = True
 
         undeclared = sorted(key for key in live if key not in self._registry)
-        dead = sorted(key for key in self._registry if key not in live)
+        # A conditionally-mounted route (see CONDITIONALLY_MOUNTED_ROUTES) is
+        # absent in the normal configuration by design, so its declaration is not
+        # rot. Absence is waived; coverage is not — when the route IS mounted it
+        # is resolved and enforced exactly like any other, and an undeclared
+        # route is still denied and still aborts boot.
+        dead = sorted(
+            key
+            for key in self._registry
+            if key not in live and key not in CONDITIONALLY_MOUNTED_ROUTES
+        )
         return undeclared, dead
 
     def enforce_startup(self, app) -> None:

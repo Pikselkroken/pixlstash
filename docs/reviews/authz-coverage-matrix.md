@@ -2,7 +2,7 @@
 
 - **Branch:** `backend-refactoring`
 - **Scope:** Phase 1 **Step 2 only** of the centralised-authz refactor (backend refactor plan §3.5). This PR **declares** the access policy of every mounted HTTP route in `pixlstash/authz/registry.py::ROUTE_POLICIES`. It does **not** enforce anything (`AUTHZ_GATE_ENFORCING = False`), remove any inline check, or change any handler. It is the regenerated coverage matrix the adversarial security review consumes.
-- **Arithmetic completeness:** **215 / 215** mounted HTTP routes declared (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459) and +2 from the v1.8.0 scrapheap-retention config pair, GET/PATCH `/server-config/scrapheap-retention`, both `owner_only`). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
+- **Arithmetic completeness:** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
 - **WebSockets:** the 2 WS routes (`/ws/comfyui`, `/api/v1/ws/updates`) are **out of the HTTP registry by design** — their chokepoint is `authenticate_websocket` (plan §6). They remain acknowledged in `tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged`, and `registry.py` carries the `# WS routes: see authn/websocket.py` sentinel.
 
 ## How each policy was derived (preserve-today's-behaviour rule)
@@ -26,20 +26,20 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (215 total)
+## Policy distribution (217 total)
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 16 |
-| `owner_only` | 82 |
+| `owner_only` | 83 |
 | `picture_scoped` | 33 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 5 |
 | `project_scoped` | 6 |
 | `local_owner_only` | 13 |
-| `loopback_owner_only` | 4 |
+| `loopback_owner_only` | 5 |
 
 > **Updated for Step 3 (2026-07-21).** The §16.3 host-capability retarget moved 16
 > rows `owner_only` → the host-capability tiers, and the F-c rider tightened
@@ -477,6 +477,15 @@ The filesystem / import-folder / reference-folder / `server/restart` / `pictures
 - **13 `local_owner_only`** (filesystem / folder authority). Locality uses the scoped predicate `is_local_or_tailscale_ip` = loopback ∪ RFC1918 ∪ **Tailscale CGNAT `100.64.0.0/10`** ∪ Tailscale ULA `fd7a:115c:a1e0::/48`. The shared `is_local_ip` is deliberately **not** widened (it also backs `_require_local_for_write`, the middleware remote-`ALL`-token block, and the HTTPS-skip carve-out — coupling Tailscale into those is an unrelated remote-login decision the debate refused). A genuinely remote owner is admitted only when the dedicated `allow_remote_host_ops` server-config flag (default `false`) is set; the deny is a 403 whose message names that flag. `allow_remote_host_ops` is **not** `require_local_for_write` (remote-login risk ≠ remote-host-ops risk).
 - **4 `loopback_owner_only`** (host-shell RED LINE): `POST /server/restart`, `POST /reference-folders/{folder_id}/open`, `POST /pictures/{id}/open-location`, `POST /server-config/open`. All four spawn a host GUI process (`os.startfile`/`open`/`xdg-open`); `server-config/open` was folded in by **CSO Condition 1** (it shipped `owner_only` with no locality check despite the identical `_open_in_os` spawn — corrected arithmetic: host-capability locality total 17 = 13 local + 4 loopback, and `owner_only` 76 → 75). Strict loopback only (`is_loopback_ip` — 127.0.0.0/8 + ::1); **not** RFC1918, **not** Tailscale. `allow_remote_host_ops` never loosens them (the enforcement branch does not consult the flag). `loopback_owner_only` is a new, deliberate member of the closed `AccessPolicy` enum (principal ruling: closed-enum extension, added to `policy.py` + tests).
 
+> **Superseded 2026-07-23 (tier arithmetic).** The loopback tier is now **5**, not 4: the
+> conditionally-mounted e2e hook `POST /api/v1/test-hooks/ws-event` joined it (see
+> "Conditionally-mounted routes" below). The host-capability locality total is therefore
+> **18 = 13 local + 5 loopback**. The four routes enumerated above remain the *host-shell
+> GUI-spawn* subset; the hook is on the same tier for a different reason (authority over
+> other clients' state), and it is the only member that is not always mounted.
+> `docs/backend_architecture.md` §16.3.1 still states "4 routes" / "17 = 13 local + 4
+> loopback" and **must be updated to match** — see CSO Condition C1 in the sign-off below.
+
 Declared and armed behind the report-only gate (`AUTHZ_GATE_ENFORCING` stays `False`); no runtime change until the Step-6 flip. Both-direction tests: `tests/test_authz_host_capability_16_3.py`.
 
 ---
@@ -513,6 +522,169 @@ Declared and armed behind the report-only gate (`AUTHZ_GATE_ENFORCING` stays `Fa
 
 ## Readiness
 
-- **For the CSO adversarial review:** the matrix is arithmetically complete (215/215, allowlist zero, guardrails green) and every `public`/`owner_only` cell carries a rationale. The refute-target list is §N1–N6 (classification ambiguities) and §F-a–F-d (documented existing exposures). Nothing is committed — the review runs against the working tree.
+- **For the CSO adversarial review:** the matrix is arithmetically complete (217 declared = 216 mounted + 1 conditional, allowlist zero, guardrails green) and every `public`/`owner_only` cell carries a rationale. The refute-target list is §N1–N6 (classification ambiguities) and §F-a–F-d (documented existing exposures). Nothing is committed — the review runs against the working tree.
 - **For Step 3 (first enforcing step, `OWNER_ONLY`/`LOCAL_OWNER_ONLY`/`PUBLIC`-consistency):** the two behaviour-sensitive spots to clear first are **N2** (unscoped-READ vs. `owner_only` on reviews/tag_health reads) and **N1** (the SPA fallback PUBLIC-consistency). `tests/test_read_token_security.py` (ML-heavy) must be green before Step 3, per the plan.
 - **Not in this step:** enforcement, inline-check removal (Step 5), `SCOPED_LIST`/`body_ids` filtering logic (Step 4), and the §16.3 `local_owner_only` retarget (Step 3).
+
+---
+
+## Conditionally-mounted routes (added 2026-07-23)
+
+One declared route is **not mounted in the default configuration**:
+
+| Method | Path | Policy | Mounted when |
+|---|---|---|---|
+| POST | `/api/v1/test-hooks/ws-event` | `loopback_owner_only` | server-config `enable_test_hooks: true` |
+
+**Why it is declared even though it is usually absent.** The gate resolves declarations against the routes actually mounted at startup, and an undeclared route is denied at runtime *and* aborts boot. With the flag on and no declaration, `enforce_startup` aborted — which is precisely what took the Playwright e2e backend down (`frontend/e2e/serve_e2e_backend.py` sets the flag), pre-existing at `3803476f`. The gate behaved correctly; the route really was undeclared.
+
+**Why the absence needs a waiver.** The same check also treats a declaration with no mounted route as a *dead declaration* and aborts. A static registry cannot satisfy both flag states, so `CONDITIONALLY_MOUNTED_ROUTES` in `pixlstash/authz/registry.py` waives the dead-declaration complaint for exactly this set. The waiver:
+
+- **only suppresses an absence complaint.** `undeclared` is computed from the mounted set against the registry and never consults it, so it cannot admit an undeclared route.
+- **cannot weaken enforcement.** When the route *is* mounted it resolves and enforces exactly like any other.
+- **cannot be used to smuggle coverage.** An import-time invariant requires every member to also appear in `ROUTE_POLICIES` (`RuntimeError` at import otherwise), and `test_conditionally_mounted_routes_are_all_declared` asserts it.
+- **costs** only that a listed declaration will not be flagged as rot if its route is deleted outright. Keep the set tiny.
+
+**Why `loopback_owner_only` and not `owner_only`.** The hook calls `vault.notify` with a caller-supplied payload, i.e. it synthesises arbitrary grid WebSocket events broadcast to *every connected client*. That is authority over other clients' state, not over the caller's own data, which places it with the host-shell red line rather than with ordinary owner writes. Loopback is free: the router is mounted only by the e2e backend, which binds `127.0.0.1` and is driven by Playwright on the same host (CI runs Playwright directly on the runner, no container), so there is no legitimate remote caller by construction. `loopback` rather than `local_owner_only` specifically so that `allow_remote_host_ops` — a filesystem-operations flag — can never expose a test hook. Net effect: if `enable_test_hooks` were ever switched on in a network-reachable deployment, the hook still cannot be reached remotely; the safety stops depending on the flag being off. The handler's existing inline `require_unscoped_owner` remains as defence in depth.
+
+Covered both directions by `tests/test_authz_host_capability_16_3.py`: loopback owner reaches the handler (200, event emitted); LAN / Tailscale / public owner is 403 *even with* `allow_remote_host_ops=true`; the route is absent from the mounted table without the flag; and the normal configuration still boots enforcing.
+
+---
+
+## CSO independent adversarial sign-off — `CONDITIONALLY_MOUNTED_ROUTES` + the e2e hook declaration (2026-07-23)
+
+**Reviewer:** CSO adversarial review, independent of the author (author did not certify).
+**Branch:** `v1.8.0-foundations`, uncommitted working tree at HEAD `3803476f`.
+**Scope:** `pixlstash/authz/registry.py`, `pixlstash/authz/gate.py`,
+`tests/test_authz_host_capability_16_3.py`, this matrix. A parallel design lane's
+`frontend/**` + `docs/design/**` churn was out of scope.
+
+**Verdict: CERTIFY WITH CONDITIONS.** No release blocker. The escape hatch is genuinely
+absence-only and the tier is a strict tightening. Two documentation conditions (C1, C2)
+and three hardening items (H1–H3) below.
+
+### The escape hatch — all three author claims survived refutation
+
+Each claim was attacked against the code, not the description, and reproduced.
+
+1. **"Cannot admit an undeclared route."** *Upheld.* `resolve_routes` computes `undeclared`
+   from `live` against `self._registry` and never consults the waiver set
+   (`gate.py:246`). Reproduced: put an always-mounted route (`GET /api/v1/pictures`) into
+   `CONDITIONALLY_MOUNTED_ROUTES` **and** delete its declaration → the route is still
+   reported `undeclared`, is **not** absorbed into `dead`, and `enforce_startup` raises
+   `RuntimeError: authz gate is ENFORCING but the coverage matrix is incomplete: 1
+   undeclared route(s)`. The waiver is subtracted from `dead` only.
+2. **"Cannot weaken the policy when the route IS mounted."** *Upheld.* Reproduced against a
+   real `Server(enable_test_hooks=True)` booting with the shipped
+   `AUTHZ_GATE_ENFORCING = True`: loopback owner **200** (`emitted: 1`); XFF
+   `192.168.1.9` / `10.0.0.5` / `100.64.0.5` / `8.8.8.8` all **403** with the
+   "restricted to loopback" body; `8.8.8.8` with `allow_remote_host_ops=true` still
+   **403**. Waiver membership changes nothing about enforcement — the policy map is built
+   by iterating `live` and looking up the registry by exact `(method, path)`, so a waived
+   declaration for an absent route maps onto no route object and cannot bleed onto a
+   sibling.
+3. **"Cannot smuggle coverage."** *Upheld.* The import-time invariant in `registry.py`
+   raises `RuntimeError` if any waiver member lacks a `ROUTE_POLICIES` entry. Note that
+   `test_conditionally_mounted_routes_are_all_declared` is **redundant** for that direction
+   (the module import would already have failed); its load-bearing assertion is the
+   non-empty check.
+
+**Renamed / mis-pathed declaration.** Attempted and *not* a hole. If the hook's path
+changes, the flag-on configuration mounts a key the registry does not have → `undeclared`
+→ boot abort (reproduced: removing the declaration while the flag is on aborts boot). The
+waiver only silences the complaint in the configuration where the route does not exist,
+which is the configuration in which the mis-path is unreachable. Fail-closed where it
+matters.
+
+**Conditional inventory is complete.** `pixlstash/server.py` has exactly one conditional
+`include_router` (line 1162, `enable_test_hooks`); every other router is unconditional. The
+waiver set of size 1 is arithmetically correct, not a sample.
+
+### Tier — `LOOPBACK_OWNER_ONLY` upheld, but one claim over-states
+
+Loopback is genuinely enforced for this route: `_enforce_unscoped_owner` runs **before**
+`_enforce_loopback` (`gate.py:467-470`), `_enforce_loopback` never consults
+`allow_remote_host_ops`, and unauthenticated loopback is **401**. Verified.
+
+The tier is a strict tightening over what shipped (inline `require_unscoped_owner` only),
+so it cannot be refuted as *too weak relative to today*. The residual locality caveat is
+**pre-existing and already documented** in `backend_architecture.md` §16.3.1 ("CSO
+Condition 2", same-host-proxy assumption) and applies identically to the other four
+loopback routes. Reproduced against `get_real_client_ip` + `is_loopback_ip` — four
+configurations resolve a remote caller to "loopback": same-host proxy that sets no XFF;
+a proxy that passes inbound XFF through unchanged (attacker sends `127.0.0.1` or `::1`);
+an unparseable XFF hop (`is_loopback_ip` fails **open** on unparseable input); and
+`request.client is None` (UDS), which defaults to `127.0.0.1`. A correctly-configured
+appending proxy (`$proxy_add_x_forwarded_for`) blocks all of them.
+
+Container port-mapping is **not** a bypass: Docker bridge / rootless slirp source addresses
+are `172.17.0.0/16` / `10.0.2.x`, not loopback. SSH local port-forwarding *is* (the hop
+originates on the host), but that presupposes shell access.
+
+**Over-blocking checked — no regression.** The e2e topology is loopback end to end:
+`playwright.config.js` `BASE_URL = http://127.0.0.1:9600`, `serve_e2e_backend.py` binds
+`host: 127.0.0.1` and sets no `trusted_proxies`, CI runs Playwright directly on the runner
+with no container, and the specs call the hook through `apiContext` on the same host.
+Verified live: flag-on server admits the loopback owner with **200**.
+
+### Arithmetic — verified independently
+
+Built the default app and counted: **216 mounted**, **217 declared**, waiver set **1**,
+`undeclared = []`, `dead` before waiver `= [POST /api/v1/test-hooks/ws-event]`, `dead`
+after waiver `= []`. `217 == 216 + 1` holds. Policy distribution matches this document
+exactly (`owner_only` 83, `loopback_owner_only` 5, …). `_CURRENT_ROUTE_ALLOWLIST` is still
+`frozenset()`. Suites: `test_authz_host_capability_16_3.py` 20 passed,
+`test_architecture_guardrails.py` 17 passed, all authz-related suites 68 passed. `ruff
+check` + `ruff format --check` clean.
+
+**Guardrail caveat:** `test_all_routes_declare_access_policy` checks `live - declared` and
+`allowlist - live - declared`; it does **not** check `declared - live`. The dead-declaration
+arithmetic is enforced solely by `enforce_startup`. The waiver therefore did not need a
+guardrail change — but the guardrail also never protected that direction.
+
+### Conditions (documentation; must land with the change)
+
+- **C1 — `docs/backend_architecture.md` §16.3.1 is now stale and contradicts the registry.**
+  It states "`LOOPBACK_OWNER_ONLY` (4 routes)", enumerates the four GUI-spawn routes, and
+  gives "17 = 13 local + 4 loopback". The registry has **5** and the total is **18**.
+  CLAUDE.md names §16.3 as the authority for these tiers, so the authoritative doc must be
+  corrected. (This matrix has been annotated in-place; the architecture doc has not — it is
+  outside this reviewer's edit mandate.)
+- **C2 — `CONDITIONALLY_MOUNTED_ROUTES` is a structural change to the gate and is absent
+  from `docs/backend_architecture.md` §16.2**, which documents the shipped gate design. A
+  new bypass surface in a deny-by-default chokepoint must be described where an
+  implementer will read it, not only in a review artifact. Add the absence-only semantics
+  and the "keep the set tiny" rule to §16.2.
+
+### Hardening (not blockers)
+
+- **H1 — waiver rot has no expiry.** The author correctly flagged that deleting
+  `test_hooks.py` leaves the declaration silently un-flagged. Accepted as low risk: a stale
+  declaration grants nothing (it maps onto no route object) and the set is size 1. Cheapest
+  durable mitigation is not a periodic re-justification ritual but an assertion that each
+  waiver member's owning module still imports — e.g. a test that
+  `pixlstash.routes.test_hooks` is importable and exposes `create_router`. Consider it if
+  the set ever exceeds one entry; a set of one is self-policing by inspection.
+- **H2 — `is_loopback_ip` fails OPEN on unparseable input** (`auth.py:220-223`, returns
+  `True` for `"testclient"`). For the red-line tier specifically this is the wrong default:
+  an attacker-controlled XFF hop of `"garbage"` reads as loopback wherever the proxy does
+  not overwrite XFF. Pre-existing and shared with the other four loopback routes, so out of
+  scope for this diff, but the test-sentinel accommodation should be narrowed to the
+  literal `"testclient"` rather than "anything unparseable".
+- **H3 — waiver set is not injectable.** `registry` is a constructor parameter but
+  `CONDITIONALLY_MOUNTED_ROUTES` is read as a module global inside `resolve_routes`, so a
+  gate constructed with a test registry still gets the production waiver subtracted. Not
+  exploitable (subtraction can only hide an absence), but the asymmetry invites a future
+  test to assert against a waiver it did not configure. Make it a constructor parameter
+  defaulting to the module constant.
+
+### Test quality
+
+Both directions are asserted and neither test is hollow. The negative test matches on the
+**"restricted to loopback"** body, so it proves the loopback branch fired rather than
+accepting any 403; the positive test asserts `200` **and** `emitted == 1`, proving the
+handler body ran rather than merely passing the gate. One gap: the tests cover the locality
+dimension only — no case asserts that a READ / resource-scoped token from **loopback** is
+rejected. That direction is structurally covered (`_enforce_unscoped_owner` runs first, and
+the handler retains its inline `require_unscoped_owner`), and unauthenticated loopback was
+verified **401**, so this is a completeness nit rather than a gap in enforcement.

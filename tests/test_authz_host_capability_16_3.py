@@ -40,15 +40,23 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 
 API = "/api/v1"
 
-# The 4 host-shell red-line routes on the stricter loopback-only tier. All four
-# spawn a host GUI process (os.startfile / open / xdg-open); server-config/open was
-# a byte-identical sibling that shipped owner_only with no locality check (CSO
+# The 5 red-line routes on the stricter loopback-only tier. Four spawn a host GUI
+# process (os.startfile / open / xdg-open); server-config/open was a
+# byte-identical sibling that shipped owner_only with no locality check (CSO
 # Condition 1, 2026-07-21) and is reclassified here.
+#
+# The fifth is the e2e test hook. It spawns nothing, but it synthesises arbitrary
+# WebSocket grid events broadcast to every connected client — a capability over
+# OTHER clients' state rather than over the caller's own data — and it is mounted
+# only by the e2e backend, which binds 127.0.0.1 and is driven from the same
+# host. Loopback therefore costs nothing and removes the dependence on
+# enable_test_hooks staying off in production.
 _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server/restart"),
     ("POST", "/api/v1/reference-folders/{folder_id}/open"),
     ("POST", "/api/v1/pictures/{id}/open-location"),
     ("POST", "/api/v1/server-config/open"),
+    ("POST", "/api/v1/test-hooks/ws-event"),
 }
 
 
@@ -132,12 +140,12 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_13_local_4_loopback():
-    """The 4 host-shell GUI-spawn routes are LOOPBACK_OWNER_ONLY; the 13
-    filesystem/folder routes stay LOCAL_OWNER_ONLY. Corrected arithmetic after CSO
-    Condition 1 folded server-config/open into the loopback tier: 17 host-capability
-    routes carry a locality tier = 13 local + 4 loopback (was 16 = 13 + 3).
-    Arithmetic, not judgement."""
+def test_host_capability_tier_split_is_13_local_5_loopback():
+    """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
+    hook; the 13 filesystem/folder routes stay LOCAL_OWNER_ONLY. 18 routes carry a
+    locality tier = 13 local + 5 loopback (was 17 = 13 + 4 before the test hook
+    was declared; 16 = 13 + 3 before CSO Condition 1 folded in
+    server-config/open). Arithmetic, not judgement."""
     loopback = {
         key
         for key, rp in ROUTE_POLICIES.items()
@@ -149,7 +157,7 @@ def test_host_capability_tier_split_is_13_local_4_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 4, sorted(loopback)
+    assert len(loopback) == 5, sorted(loopback)
     assert len(local) == 13, sorted(local)
 
 
@@ -387,3 +395,122 @@ def test_reverse_proxy_real_lan_client_allowed():
 # Import Server after the pure-unit tests are defined so predicate/policy tests
 # do not depend on the heavier server import path.
 from pixlstash.server import Server  # noqa: E402
+
+
+# ---- The e2e test hook (LOOPBACK_OWNER_ONLY, conditionally mounted) --------
+#
+# Mounted only when ``enable_test_hooks`` is true, so it needs its own server
+# env. Its declaration exists unconditionally; CONDITIONALLY_MOUNTED_ROUTES
+# waives the "dead declaration" complaint for the normal (flag off) config.
+
+_WS_HOOK = f"{API}/test-hooks/ws-event"
+_WS_HOOK_BODY = {"event_type": "CHANGED_PICTURES", "picture_ids": [1]}
+
+
+@contextlib.contextmanager
+def _test_hooks_owner_env():
+    """Owner-authenticated server with ``enable_test_hooks`` ON."""
+    from starlette.testclient import TestClient
+
+    tmp = tempfile.TemporaryDirectory()
+    cfg = os.path.join(tmp.name, "server-config.json")
+    with open(cfg, "w") as fh:
+        json.dump(
+            {
+                "port": 8000,
+                "trusted_proxies": ["testclient"],
+                "enable_test_hooks": True,
+                "disable_background_workers": True,
+            },
+            fh,
+        )
+    server = Server(cfg)
+    server.__enter__()
+    try:
+        client = TestClient(server.api, raise_server_exceptions=True)
+        r = client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert r.status_code == 200, r.text
+        yield {"server": server, "owner": client, "tmp": tmp}
+    finally:
+        server.__exit__(None, None, None)
+        tmp.cleanup()
+
+
+def test_test_hooks_route_is_absent_unless_the_flag_is_on():
+    """Declaring the route must not cause it to EXIST.
+
+    Asserted against the mounted route table, which is the precise claim; the
+    HTTP status alone is ambiguous because the SPA catch-all answers unmatched
+    paths (405 for a POST, not 404). Either way the handler is unreachable.
+    """
+    from pixlstash.route_inventory import api_endpoint_set
+
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        assert ("POST", _WS_HOOK) not in api_endpoint_set(server.api), (
+            "the test-hooks router must not be mounted without the flag"
+        )
+        with _enforcing(server):
+            r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY)
+            assert r.status_code in (404, 405), (
+                f"expected the route to be absent, got {r.status_code}: {r.text}"
+            )
+
+
+def test_test_hooks_declaration_does_not_boot_fail_when_unmounted():
+    """The conditional waiver's whole job: a declaration for an absent route is
+    NOT a dead declaration, so the normal configuration still boots enforcing."""
+    from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES
+
+    assert ("POST", _WS_HOOK) in CONDITIONALLY_MOUNTED_ROUTES
+    with _owner_env() as env:
+        server = env["server"]
+        with _enforcing(server):
+            # Would raise RuntimeError("...dead declaration(s)") without the waiver.
+            server.authz.enforce_startup(server.api)
+
+
+def test_test_hooks_loopback_owner_reaches_the_handler():
+    """POSITIVE direction: with the flag on, a loopback owner gets through the
+    gate to the handler (over-blocking would break the entire e2e suite)."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server):
+            r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY)
+            assert not _is_loopback_403(r), (
+                f"loopback owner must reach the hook; got {r.status_code}: {r.text}"
+            )
+            assert r.status_code == 200, (
+                f"expected the handler's success past the gate, got "
+                f"{r.status_code}: {r.text}"
+            )
+            assert r.json()["emitted"] == 1, r.text
+
+
+def test_test_hooks_non_loopback_owner_is_403_even_with_flag_on():
+    """NEGATIVE direction: an owner from LAN / Tailscale / public is 403'd even
+    with ``allow_remote_host_ops=True`` — this tier is flag-immune, so switching
+    ``enable_test_hooks`` on in a network-reachable deployment still does not
+    expose the event-injection primitive remotely."""
+    with _test_hooks_owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            for ip in ("192.168.1.9", "10.0.0.5", "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_WS_HOOK, json=_WS_HOOK_BODY, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the test hook even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+
+
+def test_conditionally_mounted_routes_are_all_declared():
+    """The waiver is an ABSENCE waiver, not a coverage waiver: every conditional
+    route must still carry a policy, or it could be used to smuggle an undeclared
+    route past the matrix."""
+    from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES, ROUTE_POLICIES
+
+    assert CONDITIONALLY_MOUNTED_ROUTES, "the set must not silently empty out"
+    missing = CONDITIONALLY_MOUNTED_ROUTES - set(ROUTE_POLICIES)
+    assert not missing, f"conditional routes with no declaration: {sorted(missing)}"

@@ -792,7 +792,76 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete tagger artifact; DELETE blocked for READ tokens; owner only",
     ),
+    # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
+    # Conditionally mounted, but ALWAYS declared: the gate resolves declarations
+    # against the routes actually mounted at startup, so an undeclared
+    # conditional route aborts boot the moment its flag is on — which is exactly
+    # what killed the Playwright e2e backend. The mirror image (a declaration
+    # with no mounted route) is a "dead declaration" and also aborts, so this
+    # route is additionally listed in CONDITIONALLY_MOUNTED_ROUTES below, which
+    # waives ONLY that absence complaint.
+    ("POST", "/api/v1/test-hooks/ws-event"): RoutePolicy(
+        _LOOPBACK,
+        justification=(
+            "E2E-only hook that calls vault.notify with a caller-supplied "
+            "payload, i.e. it SYNTHESISES arbitrary grid WebSocket events "
+            "(CHANGED_PICTURES / PICTURE_IMPORTED / CHANGED_TAGS / ...) that are "
+            "broadcast to every connected client. That is a capability to drive "
+            "OTHER clients' state, not merely to read or write the caller's own "
+            "data, so it is classed with the host-shell red line rather than as "
+            "an ordinary owner write. Loopback is free here and permanent: the "
+            "router is mounted only when enable_test_hooks=True, which only "
+            "frontend/e2e/serve_e2e_backend.py sets, and that backend binds "
+            "127.0.0.1 with Playwright's webServer running the test on the same "
+            "host — there is no legitimate remote caller, ever, by construction. "
+            "LOOPBACK rather than LOCAL_OWNER_ONLY specifically because "
+            "allow_remote_host_ops (a filesystem-operations flag) must never be "
+            "able to expose a test hook. Net effect: if enable_test_hooks were "
+            "ever switched on in a real, network-reachable deployment, the hook "
+            "is still unreachable remotely for any correctly-configured "
+            "deployment. Do NOT over-read that: it inherits the pre-existing "
+            "proxy caveat shared by all loopback routes (docs §16.3.1, CSO "
+            "Condition 2) — a reverse proxy that sets no X-Forwarded-For, or "
+            "passes an inbound one through, makes a remote caller resolve to "
+            "loopback. So safety depends on the flag being off OR the proxy "
+            "being configured correctly, not on the tier alone. (Container "
+            "port-mapping is not a bypass: Docker bridge / slirp present "
+            "172.17.x / 10.0.2.x, which are not loopback.) Strictly stronger "
+            "than the handler's existing inline require_unscoped_owner, which "
+            "remains as defence in depth."
+        ),
+    ),
 }
+
+# Routes that exist only when a server-config flag is set. They are declared in
+# ROUTE_POLICIES above so the gate admits them WHEN mounted (an undeclared route
+# is denied at runtime and aborts boot), but they must not be reported as "dead
+# declarations" in the normal configuration where they are absent.
+#
+# This set only ever SUPPRESSES a dead-declaration complaint. It cannot admit an
+# undeclared route — ``undeclared`` is computed from the mounted set against the
+# registry and never consults this — and it cannot weaken the policy applied to
+# the route when it IS mounted. The cost is narrow and explicit: a declaration
+# listed here will not be flagged as rot if its route is deleted outright, so
+# keep the set tiny and justified.
+CONDITIONALLY_MOUNTED_ROUTES: frozenset[tuple[str, str]] = frozenset(
+    {
+        # routes/test_hooks.py — mounted only when ``enable_test_hooks`` is true,
+        # which only frontend/e2e/serve_e2e_backend.py sets.
+        ("POST", "/api/v1/test-hooks/ws-event"),
+    }
+)
+
+# A conditional route must still be DECLARED: this set is an absence waiver, not
+# a coverage waiver. Asserted at import so it can never be used to smuggle an
+# undeclared route past the matrix.
+_undeclared_conditionals = CONDITIONALLY_MOUNTED_ROUTES - set(ROUTE_POLICIES)
+if _undeclared_conditionals:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        "CONDITIONALLY_MOUNTED_ROUTES entries must also appear in ROUTE_POLICIES "
+        f"(these do not): {sorted(_undeclared_conditionals)}"
+    )
+del _undeclared_conditionals
 
 # WS routes: see authn/websocket.py — the HTTP authz gate does NOT cover
 # WebSockets; their chokepoint is authenticate_websocket (plan §6). The two WS
@@ -800,4 +869,4 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
 # matrix (tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged)
 # and are deliberately absent from ROUTE_POLICIES.
 
-__all__ = ["ROUTE_POLICIES"]
+__all__ = ["ROUTE_POLICIES", "CONDITIONALLY_MOUNTED_ROUTES"]
