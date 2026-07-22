@@ -81,9 +81,16 @@ def clean_db(server):
 # ---------------------------------------------------------------------------
 
 
-def _add_picture(server, filename="test.jpg", description=None) -> Picture:
+def _add_picture(
+    server, filename="test.jpg", description=None, pixel_sha=None
+) -> Picture:
     def _do(session):
-        pic = Picture(file_path=filename, filename=filename, description=description)
+        pic = Picture(
+            file_path=filename,
+            filename=filename,
+            description=description,
+            pixel_sha=pixel_sha,
+        )
         session.add(pic)
         session.commit()
         session.refresh(pic)
@@ -1849,6 +1856,232 @@ def test_full_restore_skips_permanently_deleted_picture(server):
     # The ledger entry recorded after the snapshot must survive the swap.
     assert _count_deleted_log(server, "purged.jpg") == 1, (
         "deleted_file_log entry must be replayed across the DB swap."
+    )
+
+
+def test_full_restore_keeps_live_reference_picture_in_ledger(server):
+    """A reference-folder picture that is ALIVE (deleted=False) with its file on
+    disk must survive restore even when its path is in deleted_file_log from an
+    earlier scrapheap purge.
+
+    Regression for ~145 reference-folder rows vanishing on a
+    snapshot->immediate-restore: their absolute paths were in the ledger (a
+    protected-folder purge logged the path but kept the file), the pictures were
+    later re-indexed and alive again, and restore's permanent-deletion
+    cross-check dropped them by path_sha even though the user was actively using
+    them. The live-active cross-check must keep them."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        # File lives OUTSIDE image_root, referenced by its absolute path — the
+        # real reference-folder shape.
+        abs_path = os.path.join(ref_dir, "reference.png")
+        open(abs_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                label="ref",
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            pic = Picture(
+                file_path=abs_path,
+                filename="reference.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return rf.id, pic.id
+
+        folder_id, pic_id = server.vault.db.run_task(_setup)
+
+        # Brand-new snapshot captures the reference picture ALIVE.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Its absolute path was recorded in the ledger by an earlier protected
+        # purge (file kept on disk, path logged).
+        _add_deleted_log(server, abs_path)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.permanently_deleted_count == 0, (
+            "A live, actively-used reference picture must not be counted as "
+            f"permanently deleted: {report.permanently_deleted_count}"
+        )
+        restored = _get_picture(server, pic_id)
+        assert restored is not None, (
+            "Live reference-folder picture with its file on disk must survive "
+            "restore even though its path is in deleted_file_log."
+        )
+        assert restored.reference_folder_id == folder_id, (
+            "reference_folder_id link must be intact after restore."
+        )
+        assert not restored.deleted
+
+
+def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
+    """The live-active cross-check must distinguish a genuinely purged path
+    (still dropped) from one re-indexed and alive again (kept), even when both
+    share the ledger — guarding the rescue from over-keeping (the ledger's
+    'never resurrect' guarantee must still hold for content the user really
+    deleted)."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        alive_path = os.path.join(ref_dir, "alive.png")
+        purged_path = os.path.join(ref_dir, "purged.png")
+        open(alive_path, "wb").close()
+        open(purged_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            alive = Picture(
+                file_path=alive_path,
+                filename="alive.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            purged = Picture(
+                file_path=purged_path,
+                filename="purged.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(alive)
+            session.add(purged)
+            session.commit()
+            session.refresh(alive)
+            session.refresh(purged)
+            return alive.id, purged.id
+
+        alive_id, purged_id = server.vault.db.run_task(_setup)
+
+        # Snapshot captures BOTH alive.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Both paths are logged; the "purged" one is ALSO removed from the live
+        # DB (a genuine permanent deletion — file lingers because protected).
+        _add_deleted_log(server, alive_path)
+        _add_deleted_log(server, purged_path)
+
+        def _drop_purged(session):
+            session.delete(session.get(Picture, purged_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop_purged)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert _get_picture(server, alive_id) is not None, (
+            "Re-indexed, live reference picture must be kept."
+        )
+        assert _get_picture(server, purged_id) is None, (
+            "A genuinely purged path with no live active picture must still be "
+            "dropped by the ledger."
+        )
+        assert report.permanently_deleted_count == 1, (
+            f"Exactly one (the purged) should count: {report.permanently_deleted_count}"
+        )
+
+
+def test_full_restore_ledger_rescue_drops_when_content_differs(server):
+    """CSO purge-evasion: a ledger-matched snapshot row must NOT be rescued when
+    DIFFERENT content now sits at the same path.
+
+    Content C1 was purged (its path AND pixel_sha are in the ledger); different
+    content C2 (different pixel_sha) is alive at the same path. The path-only
+    rescue would keep C1's stale row on the strength of the path collision; the
+    content-aware rescue must leave it dropped because the two shas are known
+    and differ.
+    """
+    _create_file(server, "evasion.jpg")
+    c1 = _add_picture(server, filename="evasion.jpg", pixel_sha="C1_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: C1 is purged (row dropped + logged by path AND content)
+    # and DIFFERENT content C2 is indexed alive at the same path.
+    _drop_picture_row(server, c1.id)
+    _add_deleted_log(server, "evasion.jpg", pixel_sha="C1_sha")
+    _add_picture(server, filename="evasion.jpg", pixel_sha="C2_sha")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, c1.id) is None, (
+        "stale purged content (C1) must NOT be resurrected when different live "
+        "content (C2) sits at the same path — this is the purge-evasion vector"
+    )
+    assert report.permanently_deleted_count == 1, (
+        f"C1 must still count as permanently deleted: {report.permanently_deleted_count}"
+    )
+
+
+def test_full_restore_ledger_rescue_keeps_when_content_matches(server):
+    """A ledger-matched row whose live content MATCHES (same file re-indexed →
+    same pixel_sha) must be rescued and survive restore."""
+    _create_file(server, "match.jpg")
+    pic = _add_picture(server, filename="match.jpg", pixel_sha="M_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Its path was logged by an earlier protected-folder purge, but the SAME
+    # content is alive and in active use (pixel_sha unchanged).
+    _add_deleted_log(server, "match.jpg", pixel_sha="OTHER_sha")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, pic.id) is not None, (
+        "a ledger-matched picture whose live content matches must be rescued"
+    )
+    assert report.permanently_deleted_count == 0, (
+        f"matching live content must not count as purged: {report.permanently_deleted_count}"
+    )
+
+
+def test_full_restore_ledger_rescue_keeps_when_live_sha_null(server):
+    """NULL fallback: a ledger-matched row must be rescued when the live-active
+    picture at its path is not yet hashed (pixel_sha=NULL).
+
+    This is the not-yet-hashed reference-folder picture — the maintainer's
+    explicit non-strict choice: unconfirmable content must be kept, never
+    re-dropped.
+    """
+    _create_file(server, "nullref.jpg")
+    snap_pic = _add_picture(server, filename="nullref.jpg", pixel_sha="N_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the path is logged, the old row dropped, and the file
+    # re-indexed as a NEW alive picture that has not been hashed yet.
+    _drop_picture_row(server, snap_pic.id)
+    _add_deleted_log(server, "nullref.jpg")
+    _add_picture(server, filename="nullref.jpg", pixel_sha=None)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, snap_pic.id) is not None, (
+        "a ledger-matched row must be rescued when the live picture is not yet "
+        "hashed (NULL pixel_sha) — the non-strict NULL fallback"
+    )
+    assert report.permanently_deleted_count == 0, (
+        f"unconfirmable content must not count as purged: {report.permanently_deleted_count}"
     )
 
 
