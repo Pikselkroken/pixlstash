@@ -145,6 +145,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
         "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
+        "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
     }
 
     violations = []
@@ -386,7 +387,7 @@ _LABEL_SINK_EXEMPT = {
     ("pixlstash/routes/pictures/_import.py", "apply_sidecar_tags"): (
         "applies sidecar tags to freshly-imported pictures (new pics)"
     ),
-    ("pixlstash/routes/comfyui.py", "import_task"): (
+    ("pixlstash/services/comfyui_service.py", "import_task"): (
         "sentinel Tag on freshly-imported ComfyUI pictures (new pics)"
     ),
     ("pixlstash/tasks/watch_folder_import_task.py", "insert_pictures"): (
