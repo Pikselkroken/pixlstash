@@ -199,6 +199,126 @@ export const LOCKED_BADGE_LABEL = "Locked set";
 export const LOCKED_BADGE_TITLE =
   "In a locked set — won't auto-delete. Unlock the set to put it back on the auto-empty clock.";
 
+// ── Lowering the window is destructive ──────────────────────────────────────
+// Raising the window, or switching to Never, only ever spares pictures. LOWERING
+// it makes pictures eligible for permanent, unrecoverable deletion — and the
+// biggest jump (Never → 30) is the one that reads most like a harmless dropdown
+// pick. So a reduction is confirmed; every other direction stays one click.
+
+/**
+ * Order retention windows by how much they keep. "Never" keeps everything, so
+ * it ranks above every finite window.
+ *
+ * @param {number|null} days - retention in days, or `null` for Never.
+ * @returns {number} comparable magnitude; `Infinity` for Never.
+ */
+export function retentionRank(days) {
+  if (days === null || days === undefined) return Infinity;
+  const parsed = Number(days);
+  return Number.isFinite(parsed) ? parsed : Infinity;
+}
+
+/**
+ * Is moving from `previous` to `next` a REDUCTION — i.e. does it expose
+ * pictures to auto-deletion that were previously safe?
+ *
+ * @param {number|null} previous - the currently saved window.
+ * @param {number|null} next - the window the user just picked.
+ * @param {{previousKnown?: boolean}} [options] - `previousKnown: false` (the
+ *   saved value has not loaded yet) is never treated as a reduction: we cannot
+ *   claim a direction we do not know, and confirming against a guessed baseline
+ *   would be its own lie.
+ * @returns {boolean}
+ */
+export function isRetentionReduction(
+  previous,
+  next,
+  { previousKnown = true } = {},
+) {
+  if (!previousKnown) return false;
+  return retentionRank(next) < retentionRank(previous);
+}
+
+/** The consequence, stated the same way wherever a reduction is confirmed. */
+export const RETENTION_PURGE_WARNING =
+  "Files are removed from disk and cannot be restored from a snapshot.";
+
+/**
+ * Copy for the "you are about to shorten the window" confirm.
+ *
+ * Two shapes, because an unverified reduction must never be presented as a
+ * verified one (the same fail-safe the scrapheap delete-preview follows: never
+ * schedule destruction on a basis we could not check):
+ *   - `verified: true`  → states the exact count and when deletion starts;
+ *   - `verified: false` → says plainly that the impact could not be checked and
+ *     that nothing has changed yet, leaving the user to proceed deliberately.
+ *
+ * @param {Object} options
+ * @param {number|null} options.nextDays - the window being switched to.
+ * @param {number} [options.wouldPurgeCount] - server's `would_purge_count`. A
+ *   value that is absent or not a number is treated as UNVERIFIED, never as
+ *   zero — see below.
+ * @param {string|null} [options.firstPurgeAt] - server's `first_purge_at` (ISO).
+ * @param {(iso: string) => string} [options.formatDate] - renders that instant.
+ * @param {boolean} [options.verified=true] - was the impact successfully read?
+ * @returns {{title: string, body: string, warning: string, confirmLabel: string}|null}
+ *   `null` when a verified check found nothing would be deleted — a reduction
+ *   that destroys nothing needs no confirmation.
+ */
+export function buildRetentionReductionMessage({
+  nextDays,
+  wouldPurgeCount,
+  firstPurgeAt = null,
+  formatDate = (iso) => iso,
+  verified = true,
+} = {}) {
+  const target = retentionLabel(nextDays);
+  const confirmLabel = `Change to ${target}`;
+
+  // FAIL SAFE, NOT FAIL OPEN. `null` from this function means "save without
+  // asking", so an unreadable count must never collapse into 0 — a 200 whose
+  // body is missing or garbled would then silently schedule deletion.
+  //
+  // The check is on the TYPE, not on `Number(...)`: JS coercion maps `null`,
+  // `""` and even `[]` to 0, which is precisely the wrong answer here. Only a
+  // real number or a non-blank numeric string counts as a reading. (There is
+  // also deliberately no default for `wouldPurgeCount`.)
+  const isCountLike =
+    typeof wouldPurgeCount === "number" ||
+    (typeof wouldPurgeCount === "string" && wouldPurgeCount.trim() !== "");
+  const parsedCount = isCountLike ? Number(wouldPurgeCount) : NaN;
+  const countUsable = Number.isFinite(parsedCount) && parsedCount >= 0;
+
+  if (!verified || !countUsable) {
+    return {
+      title: "Couldn't check what this would delete",
+      body:
+        `Switching to ${target} makes older scrapheap pictures eligible for ` +
+        `permanent deletion, but the impact couldn't be checked just now. ` +
+        `Nothing has been changed yet.`,
+      warning: RETENTION_PURGE_WARNING,
+      confirmLabel: "Change anyway",
+    };
+  }
+
+  const count = Math.floor(parsedCount);
+  // A reduction that would delete nothing is not a destructive act. Save it.
+  if (count === 0) return null;
+
+  const noun = count === 1 ? "picture" : "pictures";
+  // Deletion starts when the reduction grace elapses, NOT on save. Say so — the
+  // difference is the user's window to change their mind.
+  const when = firstPurgeAt
+    ? `, starting ${formatDate(firstPurgeAt)}`
+    : " once the grace period ends";
+  return {
+    title: "Shorten the auto-empty window?",
+    body: `${target} will permanently delete ${count} ${noun}${when}.`,
+    warning: RETENTION_PURGE_WARNING,
+    confirmLabel,
+  };
+}
+
 /**
  * Resolve why a scrapheap picture is exempt from the auto-purge, if it is.
  *

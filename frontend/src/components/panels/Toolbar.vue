@@ -907,7 +907,7 @@ const gbOverlayOptions = computed(() => [
   {
     key: "problem",
     label: "Problems",
-    icon: "mdi-alert",
+    icon: "mdi-alert-outline",
     model: {
       get value() {
         return gbShowProblemIconModel.value;

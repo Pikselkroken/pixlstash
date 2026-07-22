@@ -41,6 +41,9 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import ImageGrid from "./components/views/ImageGrid.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import NoticeHost from "./components/widgets/NoticeHost.vue";
+import { useFloatingBottomInset } from "./composables/useBottomAnchor";
+import { toPx } from "./utils/floatingBottom.js";
 import { isInternalImageDrag } from "./utils/media.js";
 
 const BACKEND_URL = API_BASE_URL;
@@ -501,6 +504,30 @@ function refreshSidebarPicturesDebounced(flash) {
 function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
+
+// ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
+// App.vue owns `--floating-bottom-h`: the height of the tallest bottom-anchored
+// floating element currently visible inside the notice column's footprint, plus
+// its gap. The elements themselves register through `useBottomAnchor` (the
+// SelectionBar pill, and the grid breadcrumb below 600px), each reporting a
+// MEASURED height from a ResizeObserver — the pill wraps and grows on coarse
+// pointers, so a constant would let a notice overlap it.
+const appViewportEl = ref(null);
+const { inset: floatingBottomInset } = useFloatingBottomInset();
+
+watch(
+  [floatingBottomInset, appViewportEl],
+  ([inset, el]) => {
+    if (!el) return;
+    el.style.setProperty("--floating-bottom-h", toPx(inset));
+  },
+  { immediate: true },
+);
+
+// The lightbox is a dark surface; the notice host takes its `--on-dark`
+// modifier there so a white card does not read as foreign chrome (§2.5).
+const lightboxOpen = ref(false);
+const noticeOnDark = computed(() => lightboxOpen.value);
 
 function openImportDialog() {
   photosDialogOpen.value = true;
@@ -2051,7 +2078,7 @@ defineExpose({
 </script>
 <template>
   <v-app>
-    <div class="app-viewport">
+    <div ref="appViewportEl" class="app-viewport">
       <TitleBar
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
@@ -2337,6 +2364,7 @@ defineExpose({
                   gridStore.visibleRangeLabel = $event
                 "
                 @update:match-count="gridStore.matchCount = $event"
+                @update:overlay-open="lightboxOpen = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
@@ -2452,6 +2480,12 @@ defineExpose({
         :backendUrl="BACKEND_URL"
         @close="reviewSessionsStore.overlayOpen = false"
       />
+      <!-- The notice surface. LAST child of `.app-viewport` on purpose
+           (notice-surface.md §8): its buttons then come last in DOM order, so a
+           keyboard user reaches them after the page content, not before it. It
+           is global — it renders over the lightbox, the review overlay and
+           Settings — so it must not be nested inside the grid column. -->
+      <NoticeHost :on-dark="noticeOnDark" />
     </div>
     <button
       v-show="

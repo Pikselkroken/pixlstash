@@ -168,7 +168,7 @@ onUnmounted(() => {
   right: 20px;
   pointer-events: none;
   z-index: 5;
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
   animation: rs-glow 0.65s ease-out forwards;
 }
 

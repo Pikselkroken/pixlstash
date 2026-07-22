@@ -70,6 +70,7 @@
          Hidden on the desktop shell, where it lives in the title bar. -->
     <nav
       v-if="breadcrumb.length && !isDesktop"
+      ref="breadcrumbEl"
       class="grid-breadcrumb"
       :class="{
         'grid-breadcrumb--above-bar': isMultiCharacterView || isSetOverlapView,
@@ -247,12 +248,6 @@
       :busy="deleteForeverBusy"
       @confirm="confirmDeleteForever"
       @cancel="cancelDeleteForever"
-    />
-    <LockedDeleteNoticeDialog
-      v-model:open="lockedDeleteNoticeOpen"
-      :title="lockedDeleteNotice.title"
-      :body="lockedDeleteNotice.body"
-      :hint="lockedDeleteNotice.hint"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -986,7 +981,9 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
+import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import {
@@ -1009,7 +1006,6 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
-import LockedDeleteNoticeDialog from "../widgets/LockedDeleteNoticeDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   arraysEqualByString,
@@ -1052,6 +1048,7 @@ import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 
 const emit = defineEmits([
   "open-overlay",
+  "update:overlay-open",
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
@@ -1553,7 +1550,9 @@ async function runPluginWithParameters(
     }
   } catch (err) {
     console.error("Failed to run plugin:", err);
-    alert(err?.response?.data?.detail || err?.message || String(err));
+    noticeStore.error(`Plugin run failed. ${errorDetail(err)}`, {
+      key: "plugin-run",
+    });
   }
 }
 
@@ -2792,6 +2791,19 @@ const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
+// Every failure path in this component reports through the notice surface. A
+// native alert() is unstyled, blocking and focus-stealing; a bare `catch` that
+// only logs is worse, because the user is never told at all.
+const noticeStore = useNoticeStore();
+
+/**
+ * Human-readable reason from an axios/HTTP error, for a one-sentence notice.
+ * @param {unknown} err
+ * @param {string} fallback - used when the server sent nothing useful.
+ */
+function errorDetail(err, fallback = "Please try again.") {
+  return err?.response?.data?.detail || err?.message || fallback;
+}
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
 // grid's keyboard shortcuts and native drag must go inert while it is open.
@@ -2806,6 +2818,13 @@ const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 const isDesktop =
   typeof window !== "undefined" && !!window.pixlstashDesktop;
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
+
+// Below 600px the centred notice card widens over the bottom-left breadcrumb, so
+// there it joins the bottom-edge contract (notice-surface.md §2.4). Above that
+// width it sits outside the notice column's footprint and contributes nothing —
+// which is what `narrowOnly` encodes.
+const breadcrumbEl = ref(null);
+useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
 
 watch(
   visibleRangeLabel,
@@ -2934,7 +2953,11 @@ async function removeFromGroup() {
         picture_ids: pictureIds,
       })
       .catch((err) => {
-        alert(`Error restoring images: ${err.message}`);
+        console.error("Failed to restore pictures from the scrapheap", err);
+        noticeStore.error(
+          `Couldn't restore those pictures. ${errorDetail(err)}`,
+          { key: "scrapheap-restore-selection" },
+        );
       })
       .finally(() => {
         allGridImages.value = allGridImages.value.filter(
@@ -2982,7 +3005,11 @@ async function removeFromGroup() {
     if (!requests.length) return;
     Promise.all(requests)
       .catch((err) => {
-        alert(`Error removing faces from character: ${err.message}`);
+        console.error("Failed to remove faces from character", err);
+        noticeStore.error(
+          `Couldn't remove those faces from the person. ${errorDetail(err)}`,
+          { key: "faces-remove-character" },
+        );
       })
       .finally(() => {
         if (pictureIds.length) {
@@ -3058,8 +3085,18 @@ async function removeFromGroup() {
         try {
           const res = await apiClient.get(`${backendUrl}/stacks/${stackId}`);
           memberIds = res.data?.picture_ids ?? [];
-        } catch {
-          // Fallback: only remove the originally-selected picture(s).
+        } catch (err) {
+          // Fallback: only remove the originally-selected picture(s). That is a
+          // narrower result than the user asked for (a collapsed stack tile
+          // stands for the whole stack), so it is reported rather than swallowed.
+          console.warn(
+            `Failed to fetch members of stack ${stackId}; removing only the selected pictures from it.`,
+            err,
+          );
+          noticeStore.warning(
+            "Couldn't read a stack's members, so only the selected pictures were removed from it.",
+            { key: "stack-members-fetch" },
+          );
           memberIds = pictureIds.filter((id) => {
             const img = imageById.get(String(id));
             return getPictureStackId(img) === stackId;
@@ -3104,7 +3141,11 @@ async function removeFromGroup() {
         (img) => !removedSet.has(String(img?.id)),
       );
     } catch (err) {
-      alert(`Error removing images from set: ${err.message}`);
+      console.error("Failed to remove pictures from set", err);
+      noticeStore.error(
+        `Couldn't remove those pictures from the set. ${errorDetail(err)}`,
+        { key: "set-remove-pictures" },
+      );
     }
 
     selectedImageIds.value = [];
@@ -3216,24 +3257,42 @@ function handleRemoveFromCharacter(payload) {
   emit("refresh-sidebar");
 }
 
-// ── "Frozen by a locked set" outcome notice ──────────────────────────────────
+// ── "Frozen by a locked set" outcome ─────────────────────────────────────────
 // The bulk delete skips locked pictures and reports them in `skipped_locked`.
 // Surfacing that is the whole point: a 200 that deleted nothing must never look
-// like success. `useNoticeStore` is still a headless scaffold (no mounted host),
-// so a toast would be swallowed — this uses the shipped confirm-dialog pattern
-// instead. Migrate to the notice rail once a visible host exists.
-const lockedDeleteNoticeOpen = ref(false);
-const lockedDeleteNotice = ref({ title: "", body: "", hint: "" });
-
+// like success.
+//
+// This was a dialog only because no notice host existed. It is a `warning`
+// notice now (notice-surface.md §1): it reports an outcome already committed,
+// needs no consent, and enumerates nothing — so it fails all three dialog tests.
+// The dialog's title + body collapse to the one sentence the surface allows,
+// and its `hint` becomes the action, which routes to the locked set the user has
+// to unlock.
 /**
- * Show the locked-set outcome, if there is one to show.
+ * Report the locked-set outcome, if there is one to report.
  * @param {{title: string, body: string, hint: string}|null} message - from
  *   `buildLockedDeleteMessage`; `null` means nothing was skipped, so stay quiet.
  */
 function showLockedDeleteNotice(message) {
   if (!message) return;
-  lockedDeleteNotice.value = message;
-  lockedDeleteNoticeOpen.value = true;
+  noticeStore.warning(message.body, {
+    // One key for both the pre-flight block and the post-response outcome: a
+    // user retrying a locked selection gets one card with a count, not a stack.
+    key: "delete-skipped-locked",
+    action: {
+      label: "Why?",
+      handler: () => {
+        // Sticky follow-up carrying the lever (how to unlock), which is too
+        // long for the one-sentence rule on the first card.
+        noticeStore.push({
+          level: "info",
+          text: message.hint,
+          timeout: 0,
+          key: "delete-skipped-locked-help",
+        });
+      },
+    },
+  });
 }
 
 async function deleteSelected() {
@@ -3383,13 +3442,18 @@ async function deleteSelected() {
       }),
     );
   } catch (err) {
-    alert(`Error deleting images: ${err?.message || err}`);
+    console.error("Bulk delete failed", err);
+    noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
+      key: "pictures-delete",
+    });
   }
 }
 
 async function handleSetProjectForSelected(payload) {
   if (partialStackGroupingReason.value) {
-    window.alert(partialStackGroupingReason.value);
+    noticeStore.warning(partialStackGroupingReason.value, {
+      key: "partial-stack-grouping",
+    });
     return;
   }
   const explicitPictureIds = Array.isArray(payload?.pictureIds)
@@ -3413,7 +3477,9 @@ async function handleSetProjectForSelected(payload) {
       ? null
       : Number(nextProjectIdRaw);
   if (nextProjectId !== null && !Number.isFinite(nextProjectId)) {
-    window.alert("Invalid project selected.");
+    noticeStore.error("That project is no longer available.", {
+      key: "project-invalid",
+    });
     return;
   }
 
@@ -3454,7 +3520,9 @@ async function handleSetProjectForSelected(payload) {
     emit("refresh-sidebar");
   } catch (err) {
     const message = err?.response?.data?.detail || err?.message || String(err);
-    window.alert(`Failed to update project association: ${message}`);
+    noticeStore.error(`Couldn't update the project. ${message}`, {
+      key: "project-update",
+    });
   }
 }
 
@@ -3891,8 +3959,11 @@ async function loadDeletePreview(ids) {
     deleteForeverOpen.value = true;
   } catch (err) {
     console.error("Failed to load scrapheap delete preview", err);
-    alert(
-      "Couldn't verify which files would be destroyed, so nothing was deleted. Please try again.",
+    // Fail SAFE: the destructive confirm is never opened on an unverified
+    // basis, and the user is told why rather than seeing nothing happen.
+    noticeStore.error(
+      "Couldn't check which files would be destroyed, so nothing was deleted.",
+      { key: "scrapheap-delete-preview" },
     );
   } finally {
     deleteForeverLoading.value = false;
@@ -3962,7 +4033,11 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       }),
     );
   } catch (err) {
-    alert(`Error deleting images: ${err?.message || err}`);
+    console.error("Scrapheap purge failed", err);
+    noticeStore.error(
+      `Couldn't delete those pictures. ${errorDetail(err)}`,
+      { key: "scrapheap-purge" },
+    );
   } finally {
     deleteForeverBusy.value = false;
     deleteForeverOpen.value = false;
@@ -4010,7 +4085,10 @@ async function runEmptyScrapheap(includeProtected) {
     });
     showSnapshotsWithDeleted(resp);
   } catch (e) {
-    alert("Failed to empty scrapheap.");
+    console.error("Failed to empty the scrapheap", e);
+    noticeStore.error(`Couldn't empty the scrapheap. ${errorDetail(e)}`, {
+      key: "scrapheap-empty",
+    });
   } finally {
     scrapheapEmptying.value = false;
     deleteForeverBusy.value = false;
@@ -4037,7 +4115,10 @@ async function confirmRestoreScrapheap() {
       updateVisibleThumbnails();
     });
   } catch (e) {
-    alert("Failed to restore scrapheap.");
+    console.error("Failed to restore the scrapheap", e);
+    noticeStore.error(`Couldn't restore the scrapheap. ${errorDetail(e)}`, {
+      key: "scrapheap-restore-all",
+    });
   } finally {
     scrapheapRestoring.value = false;
   }
@@ -4046,8 +4127,15 @@ async function confirmRestoreScrapheap() {
 async function openReferenceLocation(picId) {
   try {
     await apiClient.post(`${props.backendUrl}/pictures/${picId}/open-location`);
-  } catch {
-    // silently ignore — the OS might not support it
+  } catch (err) {
+    // Was a silent ignore ("the OS might not support it"), which left a click
+    // doing nothing with no explanation. The cause is worth stating: it is
+    // usually a headless/remote server with no desktop file manager.
+    console.warn(`Failed to open the location of picture ${picId}`, err);
+    noticeStore.warning(
+      "Couldn't open that folder — the server has no desktop file manager.",
+      { key: "open-location" },
+    );
   }
 }
 
@@ -4276,6 +4364,12 @@ const {
 // OVERLAY STATE
 // ============================================================
 const overlayOpen = ref(false);
+// The lightbox is a deliberately-dark surface, so the notice host switches to
+// its `--on-dark` variant while it is up (notice-surface.md §2.5). The host
+// lives in App.vue (it must also render where there is no grid), so the state
+// has to travel up; `isOverlayOpen()` on the imperative API is a getter, not a
+// reactive signal, and cannot drive a binding.
+watch(overlayOpen, (isOpen) => emit("update:overlay-open", isOpen));
 const overlayImageId = ref(null);
 
 // ---- Overlay route tracking ----
@@ -5508,7 +5602,9 @@ async function applyScoresByEntries(entries, options = {}) {
 async function applyScore(img, newScore) {
   const imageId = img?.id;
   if (!imageId) {
-    alert("Failed to set score: image id is missing.");
+    noticeStore.error("Couldn't set that score — the picture id is missing.", {
+      key: "score-missing-id",
+    });
     return;
   }
   try {
@@ -5548,7 +5644,10 @@ async function applyScore(img, newScore) {
       return;
     }
   } catch (e) {
-    alert(e.message);
+    console.error("Failed to set score", e);
+    noticeStore.error(`Couldn't set that score. ${errorDetail(e)}`, {
+      key: "score-set",
+    });
   }
 }
 
@@ -6759,7 +6858,10 @@ async function exportCurrentViewToZip(options = {}) {
   } catch (e) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
-    alert("Export failed: " + (e.message || e));
+    console.error("ZIP export failed", e);
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
+      key: "export-zip",
+    });
     setTimeout(() => {
       exportProgress.visible = false;
       exportProgress.status = "idle";
@@ -7076,7 +7178,7 @@ function handleEmptyStateReset() {
   padding: 4px 12px;
   white-space: nowrap;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   pointer-events: none;
   user-select: none;
   z-index: 50;
@@ -7102,7 +7204,7 @@ function handleEmptyStateReset() {
   white-space: nowrap;
   overflow: hidden;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   user-select: none;
   z-index: 50;
   transition: bottom 0.15s;
@@ -7152,7 +7254,7 @@ function handleEmptyStateReset() {
   padding: 4px 12px;
   white-space: nowrap;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   pointer-events: none;
   user-select: none;
   z-index: 50;

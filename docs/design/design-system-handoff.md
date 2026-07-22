@@ -78,6 +78,22 @@ Dark mode leans on lightness for elevation; keep shadows subtle.
 - `--badge-size` = 16px (count-pill min height/width) · `--badge-size-dot` = 8px
   (attention dot). See §5 Badges.
 - `--bar-height` = 48px (contextual action-bar / toolbar band). See §6 Action bars.
+- `--notice-max-w` = 420px (the notice card, and any floating card of that family).
+
+### Layers (`--z-*`)
+Eight named steps replace 40+ ad-hoc z-index values. **Pick a name, not a number.**
+
+`--z-base` 0 (in-flow) · `--z-raised` 10 (over an immediate sibling) · `--z-sticky`
+100 (sticky headers in a scroll container) · `--z-floating` 200 (chrome anchored to
+the content area: selection pill, breadcrumb) · `--z-dropdown` 300 (menus, popovers,
+tooltips) · `--z-drawer` 1000 (full-panel overlays: the lightbox) · `--z-overlay`
+2000 (app-level overlays, context menus) · `--z-modal` 4000 (dialogs and scrims) ·
+`--z-notice` (the notice surface, above everything).
+
+Steps are 10× apart so a component can be wedged between strata. `--z-notice` is
+parked at `100000` rather than its ladder slot of 5000 because three un-migrated
+call sites still sit above 5000; it drops when they move. Existing raw z-indexes
+migrate opportunistically — a raw z-index in **new** code is drift.
 
 ### Interactive washes (in `style.css`, tuned per theme)
 `--hover-wash` · `--active-wash` (selection fill) · `--active-bar` (selection edge) ·
@@ -125,15 +141,28 @@ go white; dark: chrome is a raised dark surface, elevation reads by lightness).
 | `secondary` / `onSecondary` | `#cb3a72` / `#ffffff` | `#DA4167` / `#ffffff` | secondary action |
 | `tertiary` / `onTertiary` | `#5f8790` / `#ffffff` | `#77A0A9` / `#0f1418` | tertiary action |
 | `border` / `divider` | `#d8d3c8` / `#e8e4dc` | `#363d45` / `#2c323a` | visible / subtle line |
-| `success` | `#4caf50` | `#4caf50` | success state |
-| `error` | `#cf3b30` | `#f44336` | error / destructive |
-| `warning` | `#b8861f` | `#db7900` | warning |
-| `info` | `#2196F3` | `#2196F3` | info |
+| `success` / `on-success` | `#2e7d32` / `#ffffff` | `#4caf50` / `#1b1b1b` | success state |
+| `error` / `on-error` | `#cf3b30` / `#ffffff` | `#f44336` / `#1b1b1b` | error / destructive |
+| `warning` / `on-warning` | `#b8861f` / `#23211d` | `#db7900` / `#1b1b1b` | warning |
+| `info` / `on-info` | `#1a6ec4` / `#ffffff` | `#2196F3` / `#1b1b1b` | info |
 | `dark-surface` / `on-dark-surface` | `#242628` / `#f2e5da` | `#181b20` / `#f2e5da` | deliberately-dark chrome (lightbox) |
+| `dark-surface-success` | `#4caf50` | `#4caf50` | status hue **inside** a `dark-surface` |
+| `dark-surface-error` | `#f44336` | `#f44336` | " |
+| `dark-surface-warning` | `#db7900` | `#db7900` | " |
+| `dark-surface-info` | `#2196F3` | `#2196F3` | " |
+| `sidebar-hover` / `on-sidebar-hover` | `#b0732b` / `#ffffff` | `#f28f3b` / `#f2e5da` | sidebar row hover |
+| `focus` | `#7c4dff` | `#7c4dff` | (legacy; focus rings use `--focus-ring`) |
+| `overlay` | `#00000033` | `#00000066` | legacy overlay wash |
+| `hover` | `#2d200f0f` | `#ffffff14` | warm hover wash source |
 | `input-background` / `input-text` | `#ffffff` / `#23211d` | `#2b3138` / `#f2e5da` | inputs |
 | `cancel-button` / `cancel-button-text` | `#e6e1d8` / `#23211d` | `#3a4047` / `#f2e5da` | quiet/secondary button |
 | `shadow` | `#1c160c` | `#2a2f36` | elevation shadow color |
 | `scrim` | `#000000` | `#000000` | full-screen backdrops, `--scrim-photo` |
+
+**Key spelling is load-bearing.** Vuetify emits `--v-theme-<key>` verbatim, so a
+camelCase `onSurface` key produces `--v-theme-onSurface` (which nothing reads) and
+Vuetify then auto-derives the `--v-theme-on-surface` the app *does* read as pure
+`#000`/`#fff`. **Every `on-*` pair is spelled in kebab-case**; do not "tidy" them back.
 
 **Contrast (proven, WCAG floors: body ≥4.5:1, large/UI ≥3:1):**
 - `primary` olive `#5c7c0a` + white = **4.84:1** — passes. The primary-action button
@@ -142,6 +171,17 @@ go white; dark: chrome is a raised dark surface, elevation reads by lightness).
   the 3:1 large/UI floor. So amber is for large labels (≥18px, or ≥14px bold), icons,
   borders, state washes, and badge **dots/glow** — **not** a background behind small
   white text. This is the single most-missed trap; honor it.
+- Status hues on their own canvas (light / dark): `error` 4.62 / 4.50 · `warning`
+  3.09 / 5.32 · `success` 4.87 / 5.96 · `info` 4.90 / 5.30.
+- The eight `on-<status>` values on their **solid** fill: light 4.86 / 4.95 / 5.13 /
+  5.16, dark 4.68 / 5.53 / 6.20 / 5.51 (error / warning / success / info).
+
+**Three status jobs, three tokens.** `<status>` = hue as foreground, border or tint
+on the theme's own canvas. `on-<status>` = text or glyph on a **solid** status fill,
+and *only* there — on a translucent tint it is the wrong color (the near-black
+`on-warning` measures 1.41:1 on a 20% tint; use `on-surface` / `on-dark-surface`
+instead). `dark-surface-<status>` = the hue anywhere inside a `dark-surface`, which
+stays dark in both themes and so needs its own set.
 
 Status never rides on color alone — always pair with an icon or text.
 **Named decorative exemption:** the review-celebration confetti palette
@@ -192,16 +232,30 @@ Small count pill or attention dot pinned to a control, overlaid without shifting
 
 ## 6. Contextual action bar (pattern)
 
-Full-width bar above the grid to act on a context — bulk **selection bar**, image-overlay
-top bar, and the new **Trash restore/purge bar** are one pattern; the grid is reused,
-only the bar changes.
+A bar that appears to act on a context — the bulk **selection bar**, the image-overlay
+top bar, and the **Trash restore/purge bar**. The grid is reused; only the bar changes.
+There are **two shipped shapes**, and the earlier version of this section described the
+first while pointing at a component that is the second.
 
-- **Anatomy:** left cluster (count/title: "12 selected", "Trash") + right cluster of
-  actions, on a chrome surface (`toolbar`/`panel`), `--elevation-2`, full width, height
-  `--bar-height` (48px). Reference: `SelectionBar.vue`.
-- **Action weight:** affirmative (Restore) = `primary` button; destructive (Purge /
-  Delete forever) = `error`, visually distinct, **always behind a confirm**. Secondary
-  actions quiet.
+**a) Full-width band.** Left cluster (count/title: "12 selected", "Trash") + right
+cluster of actions, on a chrome surface (`toolbar`/`panel`), `--elevation-2`, full
+width, height `--bar-height` (48px). Reference: the image-overlay top bar.
+
+**b) Floating pill.** `SelectionBar.vue` — **`frontend/src/components/panels/`, not
+`components/widgets/`**. It is *not* a full-width band: it is a centred pill sized to
+its content, `border-radius: var(--radius-pill)`, `background: rgba(surface, .86)`
+with `backdrop-filter: blur(12px)`, `--elevation-3`, `bottom: var(--space-5)` inside
+`.grid-content-area` (its positioned ancestor and its `container: selbar` context).
+Occupied height ~50px, and it grows when it wraps or on coarse pointers — which is why
+the notice surface *measures* it rather than assuming a height (`notice-surface.md`
+§2.2). It is the reference for floating contextual actions.
+
+- **Action weight** (both shapes): affirmative (Restore) = `primary` button;
+  destructive (Purge / Delete forever) = `error`, visually distinct, **always behind a
+  confirm**. Secondary actions quiet.
+- **Open:** whether (b) converges onto (a). It moves pixels on the app's most-used
+  control, so it is UI/UX-gated. Until then both shapes are legitimate and this section
+  names which is which.
 
 ---
 

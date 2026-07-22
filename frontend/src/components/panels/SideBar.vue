@@ -35,6 +35,7 @@ import {
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
@@ -42,6 +43,17 @@ import { useVersionCheck } from "../../composables/useVersionCheck";
 const entityNames = useEntityNamesStore();
 const sidebarStore = useSidebarStore();
 const lockedSetsStore = useLockedSetsStore();
+// Failures and outcomes report through the notice surface rather than a
+// blocking native alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
+
+/**
+ * Human-readable reason from an axios/HTTP error, for a one-sentence notice.
+ * @param {unknown} e
+ */
+function noticeDetail(e) {
+  return e?.response?.data?.detail || e?.message || "Please try again.";
+}
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
@@ -490,9 +502,14 @@ function closeImportFolderEditor() {
 }
 
 function showDockerRestartPrompt() {
-  window.alert(
-    "Docker mode: restart the PixlStash container with the new folder mount, then open PixlStash again.",
-  );
+  // Informational outcome, not a decision — a notice, not a blocking dialog.
+  // Sticky (no auto-dismiss) because it asks the user to go and do something.
+  noticeStore.push({
+    level: "info",
+    text: "Docker: restart the PixlStash container with the new folder mount, then reopen PixlStash.",
+    timeout: 0,
+    key: "docker-restart-prompt",
+  });
 }
 
 async function referenceFolderSaved(savedFolder = null) {
@@ -507,9 +524,14 @@ async function referenceFolderSaved(savedFolder = null) {
     const issueText = issues
       ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
       : "";
-    window.alert(
-      `Reference folder relocated. Rewritten ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`,
-    );
+    // A partial outcome (some items may need attention) reads as `warning`;
+    // a clean relocation is a plain success.
+    const relocationText = `Reference folder relocated — rewrote ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`;
+    if (issues) {
+      noticeStore.warning(relocationText, { key: "reference-relocated" });
+    } else {
+      noticeStore.success(relocationText, { key: "reference-relocated" });
+    }
   }
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
@@ -1194,7 +1216,10 @@ async function deleteProjectById(project) {
     await apiClient.delete(`${props.backendUrl}/projects/${project.id}`);
     await projectDeleted(project.id);
   } catch (e) {
-    alert("Failed to delete project: " + (e.message || e));
+    console.error("Failed to delete project", e);
+    noticeStore.error(`Couldn't delete that project. ${noticeDetail(e)}`, {
+      key: "project-delete",
+    });
   }
 }
 
@@ -1863,7 +1888,10 @@ async function deleteSetById(id) {
     await fetchPictureSets();
     await fetchSidebarData();
   } catch (e) {
-    alert("Failed to delete set: " + (e.message || e));
+    console.error("Failed to delete set", e);
+    noticeStore.error(`Couldn't delete that set. ${noticeDetail(e)}`, {
+      key: "set-delete",
+    });
   }
 }
 
@@ -1894,7 +1922,10 @@ async function deleteSetsByIds(ids) {
     await fetchPictureSets();
     await fetchSidebarData();
   } catch (e) {
-    alert("Failed to delete picture set(s): " + (e.message || e));
+    console.error("Failed to delete picture sets", e);
+    noticeStore.error(`Couldn't delete those sets. ${noticeDetail(e)}`, {
+      key: "set-delete-many",
+    });
   }
 }
 
@@ -1911,7 +1942,11 @@ async function deleteReferenceFolderById(id) {
     }
     await fetchReferenceFolders();
   } catch (e) {
-    alert("Failed to remove reference folder: " + (e.message || e));
+    console.error("Failed to remove reference folder", e);
+    noticeStore.error(
+      `Couldn't remove that reference folder. ${noticeDetail(e)}`,
+      { key: "reference-folder-remove" },
+    );
   }
 }
 
@@ -1930,7 +1965,13 @@ async function deleteImportFolderById(id) {
     }
     await fetchImportFolders();
   } catch (e) {
-    alert("Failed to remove import folder: " + (e.message || e));
+    console.error("Failed to remove import folder", e);
+    noticeStore.error(
+      `Couldn't remove that import folder. ${noticeDetail(e)}`,
+      {
+        key: "import-folder-remove",
+      },
+    );
   }
 }
 
@@ -2798,13 +2839,17 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
     const failures = detail?.failures || [];
     if (failures.length) {
       const first = failures[0];
-      alert(
-        `Failed to move ${failures.length} image${failures.length === 1 ? "" : "s"}: ${first.reason || "unknown error"}`,
+      console.error("Failed to move images", e);
+      noticeStore.error(
+        `Couldn't move ${failures.length} image${failures.length === 1 ? "" : "s"}. ${first.reason || "Please try again."}`,
+        { key: "images-move" },
       );
       return;
     }
-    alert(
-      "Failed to move images: " + (detail?.message || detail || e.message || e),
+    console.error("Failed to move images", e);
+    noticeStore.error(
+      `Couldn't move those images. ${detail?.message || detail || e?.message || "Please try again."}`,
+      { key: "images-move" },
     );
   }
 }
@@ -2923,7 +2968,11 @@ async function onCharacterDrop(characterId, event) {
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
     } catch (e) {
-      alert("Failed to assign faces to character: " + (e.message || e));
+      console.error("Failed to assign faces to character", e);
+      noticeStore.error(
+        `Couldn't assign those faces to the person. ${noticeDetail(e)}`,
+        { key: "faces-assign-character" },
+      );
     }
     return;
   }
@@ -8135,7 +8184,10 @@ defineExpose({
   transform: translateY(-50%);
   z-index: 1200;
   color: rgb(var(--v-theme-on-error));
-  background: rgba(var(--v-theme-error), 0.8);
+  /* Solid, not 80%: `on-error` is authored against the SOLID fill (4.86:1 light,
+     4.68:1 dark). Blending the fill toward the surface lightens it and drops
+     this --text-base label to 3.49:1, under the 4.5 floor. */
+  background: rgb(var(--v-theme-error));
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-lg);
   font-size: var(--text-base);

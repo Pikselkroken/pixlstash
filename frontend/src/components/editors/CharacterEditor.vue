@@ -101,12 +101,17 @@
 <script setup>
 import { computed, ref, watch, nextTick } from "vue";
 import { apiClient, appendShareToken } from "../../utils/apiClient";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -270,7 +275,11 @@ async function saveCharacter(charData) {
     }
     emit("saved");
   } catch (e) {
-    alert("Failed to save character: " + (e.message || e));
+    console.error("Failed to save character", e);
+    noticeStore.error(
+      `Couldn't save that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "character-save" },
+    );
   }
 }
 

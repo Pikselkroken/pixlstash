@@ -8,6 +8,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
@@ -49,7 +50,10 @@ const VIcon = {
   setup: (_p, { slots }) => () => h("i", slots.default?.()),
 };
 
+// The editor reports save failures through `useNoticeStore`, so a mount needs an
+// active Pinia even though these tests never assert on a notice.
 const globalOpts = {
+  plugins: [],
   stubs: {
     AppDialog,
     AppInput: fieldStub("AppInput"),
@@ -79,6 +83,9 @@ const lockedSet = {
 };
 
 beforeEach(() => {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  globalOpts.plugins = [pinia];
   apiClient.post.mockClear();
   apiClient.patch.mockClear();
 });

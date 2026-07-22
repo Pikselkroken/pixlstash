@@ -770,7 +770,7 @@ defineExpose({ startImport });
         </div>
       </div>
       <div v-else class="note-row note-row--error">
-        <VIcon class="note-icon note-icon--error" size="18">mdi-alert</VIcon>
+        <VIcon class="note-icon note-icon--error" size="18">mdi-alert-outline</VIcon>
         <div>
           <div class="note-title">Import failed</div>
           <div class="note-sub">{{ importError }}</div>

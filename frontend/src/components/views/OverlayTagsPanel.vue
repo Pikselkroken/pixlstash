@@ -1125,7 +1125,7 @@ defineExpose({
 }
 
 .tag-pred-btn--confirm:hover {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 
 .tag-pred-btn--reject:hover {

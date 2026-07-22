@@ -54,3 +54,25 @@ export async function setScrapheapRetentionDays(days) {
   });
   return res.data;
 }
+
+/**
+ * Ask what SHORTENING the window to `days` would destroy, before saving it.
+ *
+ * `would_purge_count` already excludes protected and locked pictures (neither is
+ * ever auto-purged) and is computed with the same helpers as the sweep, so the
+ * number the user confirms is the number that gets deleted. `first_purge_at` is
+ * when the reduction grace elapses — deletion starts then, not on save.
+ *
+ * Rejects on any transport/HTTP failure (including a 404 from a server that has
+ * not shipped this endpoint yet). Callers MUST treat a rejection as "could not
+ * verify" and confirm deliberately — never as "nothing would be deleted".
+ *
+ * @param {number} days - the candidate (lower) retention window.
+ * @returns {Promise<{would_purge_count: number, first_purge_at: string|null}>}
+ */
+export async function getScrapheapRetentionImpact(days) {
+  const res = await apiClient.get(`${SCRAPHEAP_RETENTION_URL}/impact`, {
+    params: { days },
+  });
+  return res.data;
+}
