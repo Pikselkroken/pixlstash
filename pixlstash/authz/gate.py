@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import HTTPConnection
 
 from pixlstash.auth import (
     is_auth_excluded_path,
@@ -369,9 +370,25 @@ class AuthzGate:
             len(public_drift),
         )
 
-    async def __call__(self, request: Request) -> None:
+    async def __call__(self, conn: HTTPConnection) -> None:
         """Router-level dependency: deny-by-default on an undeclared route, plus
         owner-class enforcement (Step 3).
+
+        **WebSocket short-circuit (this gate is HTTP-only by design).** The gate is
+        mounted router-wide (``dependencies=[Depends(self.authz)]`` on every
+        ``include_router``), so FastAPI also attaches it to any ``@router.websocket``
+        route in those routers. WebSocket routes are deliberately OUT of the HTTP
+        gate — their chokepoint is ``authenticate_websocket`` +
+        ``is_websocket_origin_allowed`` inside each handler (plan §6; see the
+        ``# WS routes: see authn/websocket.py`` sentinel). The parameter is typed
+        ``HTTPConnection`` (not ``Request``) because FastAPI fills an
+        ``HTTPConnection`` param for BOTH http and websocket scopes, whereas a
+        ``Request`` param is left unset on a WS handshake — which crashed the
+        dependency (``TypeError: missing 'request'``) *before* the handler's own
+        auth could run. A non-``Request`` connection is a WebSocket: return
+        immediately so the gate resolves harmlessly and enforces nothing on it.
+        This runs before the policy-map lookup, so an enforcing gate never 403s a
+        WS route as an "undeclared" miss either.
 
         Keys the policy map by the matched route's object identity
         (``id(request.scope["route"])``). A route not in the map is a miss:
@@ -386,6 +403,11 @@ class AuthzGate:
         When report-only, every declared route passes untouched (the inline checks
         are the sole enforcement).
         """
+        if not isinstance(conn, Request):
+            # WebSocket connection: out of the HTTP gate (see docstring). WS auth
+            # is enforced entirely by authenticate_websocket in the handler.
+            return
+        request = conn
         route = request.scope.get("route")
         route_policy = (
             self._policy_by_route_id.get(id(route)) if route is not None else None
