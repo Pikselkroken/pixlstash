@@ -46,6 +46,9 @@ from pixlstash.startup_checks import StartupChecks
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
+from pixlstash.routes.characters_faces import (
+    create_router as create_characters_faces_router,
+)
 from pixlstash.routes.picture_sets import create_router as create_picture_sets_router
 from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
@@ -1015,6 +1018,12 @@ class Server(
         )
         self.api.include_router(
             create_characters_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["characters"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_characters_faces_router(self),
             prefix=API_V1_PREFIX,
             tags=["characters"],
             dependencies=gate,

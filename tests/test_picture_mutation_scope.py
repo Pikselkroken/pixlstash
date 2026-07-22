@@ -32,7 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import pixlstash.routes.tags as tags_module
-import pixlstash.routes.characters as characters_module
+import pixlstash.routes.characters_faces as characters_faces_module
 import pixlstash.routes.comfyui as comfyui_module
 import pixlstash.routes.pictures._crud as crud_module
 import pixlstash.routes.pictures._misc as misc_module
@@ -398,7 +398,7 @@ def test_run_plugin_denied_when_any_out_of_scope(env, monkeypatch):
 def test_assign_face_picture_ids_branch_denied(env, monkeypatch):
     server, client, picture_ids, character_id = env
     in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    _scope_to(monkeypatch, [characters_module], {in_scope})
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
     r = client.post(
         f"{API}/characters/{character_id}/faces",
         json={"picture_ids": [out_of_scope]},
@@ -419,7 +419,7 @@ def test_assign_face_face_ids_branch_denied(env, monkeypatch):
     assert r.status_code == 200, r.text
     out_face_id = r.json()["id"]
 
-    _scope_to(monkeypatch, [characters_module], {in_scope})
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
     r = client.post(
         f"{API}/characters/{character_id}/faces",
         json={"face_ids": [out_face_id]},
@@ -441,7 +441,7 @@ def test_remove_character_face_ids_branch_denied(env, monkeypatch):
     assert r.status_code == 200, r.text
     out_face_id = r.json()["id"]
 
-    _scope_to(monkeypatch, [characters_module], {in_scope})
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
     r = client.request(
         "DELETE",
         f"{API}/characters/{character_id}/faces",
@@ -453,7 +453,7 @@ def test_remove_character_face_ids_branch_denied(env, monkeypatch):
 def test_assign_face_owner_not_blocked(env, monkeypatch):
     """Owner / unscoped token is not blocked by the face-mutation guard."""
     server, client, picture_ids, character_id = env
-    _scope_to(monkeypatch, [characters_module], None)
+    _scope_to(monkeypatch, [characters_faces_module], None)
     r = client.post(
         f"{API}/characters/{character_id}/faces",
         json={"picture_ids": [picture_ids[1]]},
