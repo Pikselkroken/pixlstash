@@ -2,9 +2,9 @@ import os
 import sys
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session
@@ -316,6 +316,43 @@ def create_router(server) -> APIRouter:
                 "scrapheap when the window was last lowered."
             ),
             examples=[1],
+        )
+
+    class ScrapheapRetentionImpactResponse(BaseModel):
+        """What lowering the retention window to a candidate value would destroy."""
+
+        model_config = ConfigDict(
+            extra="allow",
+            json_schema_extra={
+                "example": {
+                    "would_purge_count": 412,
+                    "first_purge_at": "2026-07-23T09:15:00+00:00",
+                }
+            },
+        )
+
+        would_purge_count: int = Field(
+            description=(
+                "How many scrapheap pictures the auto-purge would permanently "
+                "destroy under the candidate window, counted at the moment the "
+                "change would first bite (see `first_purge_at`) so it can never "
+                "understate the consequence. EXCLUDES protected reference-folder "
+                "originals and locked-set members, which the sweep never "
+                "destroys. `0` when the candidate window is not a REDUCTION "
+                "(raising it, setting it for the first time, or re-saving the "
+                "same value destroys nothing new) — show no confirmation then."
+            ),
+            examples=[412],
+        )
+        first_purge_at: Optional[str] = Field(
+            default=None,
+            description=(
+                "ISO 8601 UTC instant at which those deletions would begin, i.e. "
+                "when the reduction's grace floor elapses if the change were "
+                "applied now. Nothing is destroyed before this. `null` when "
+                "`would_purge_count` is 0."
+            ),
+            examples=["2026-07-23T09:15:00+00:00"],
         )
 
     class OpenServerConfigResponse(BaseModel):
@@ -861,6 +898,61 @@ def create_router(server) -> APIRouter:
         if config_path:
             write_json_atomic(config_path, server._server_config)
         return _scrapheap_retention_payload()
+
+    @router.get(
+        "/server-config/scrapheap-retention/impact",
+        summary="Preview the impact of a scrapheap retention change",
+        response_model=ScrapheapRetentionImpactResponse,
+        description=(
+            "Reports what LOWERING the scrapheap retention window to `days` "
+            "would permanently destroy, so the UI can confirm before applying a "
+            "reduction instead of silently wiping a long-lived scrapheap on a "
+            "dropdown change.\n\n"
+            "**Pure read.** It applies nothing, stamps no "
+            "`scrapheap_retention_reduced_at`, and schedules no purge; call "
+            "`PATCH /server-config/scrapheap-retention` to actually apply the "
+            "value.\n\n"
+            "`would_purge_count` is computed with the same helpers the sweep "
+            "itself uses, so it cannot drift from reality, and excludes the "
+            "pictures the sweep never touches (protected reference-folder "
+            "originals and locked-set members). It is evaluated at "
+            "`first_purge_at` — the instant the reduction's grace floor "
+            "elapses — rather than at now, so pictures that expire during the "
+            "grace day are counted rather than omitted.\n\n"
+            "Returns `{would_purge_count: 0, first_purge_at: null}` when `days` "
+            "is not lower than the current window."
+        ),
+        responses={
+            422: {"description": "days is not one of 30/60/90/120."},
+        },
+    )
+    def get_scrapheap_retention_impact(
+        request: Request,
+        days: int = Query(
+            ...,
+            description=(
+                "Candidate retention window in days — one of 30, 60, 90, 120. "
+                "Any other value is a 422. ('Never' is never a reduction, so "
+                "there is nothing to preview for it.)"
+            ),
+            examples=[30],
+        ),
+    ):
+        _ensure_secure_when_required(request)
+        if int(days) not in scrapheap_service.RETENTION_DAY_CHOICES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "days must be one of "
+                    f"{list(scrapheap_service.RETENTION_DAY_CHOICES)}."
+                ),
+            )
+        return scrapheap_service.retention_impact(
+            server.vault,
+            datetime.now(timezone.utc),
+            int(days),
+            scrapheap_service.read_retention_days(server._server_config),
+        )
 
     @router.post(
         "/server-config/open",

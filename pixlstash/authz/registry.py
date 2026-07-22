@@ -203,6 +203,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "tier applies."
         ),
     ),
+    ("GET", "/api/v1/server-config/scrapheap-retention/impact"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner server-config read; sibling of GET "
+            "/server-config/scrapheap-retention. Reports a per-LIBRARY "
+            "destruction count (how many scrapheap pictures a retention "
+            "reduction would purge), which is exactly the kind of aggregate a "
+            "resource-scoped share token must not see, so owner_only rather "
+            "than any_token. Pure read: no config write, no purge, no "
+            "reduced_at stamp. Not a §16.3 host-capability route."
+        ),
+    ),
     ("PATCH", "/api/v1/server-config/scrapheap-retention"): RoutePolicy(
         _OWNER,
         justification=(
