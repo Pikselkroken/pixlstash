@@ -144,7 +144,11 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
-        "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
+        # restore_service.py was decomposed into the restore/ package (plan §4.4);
+        # the DB-swap / upsert / preview modules keep the vault-injection pattern.
+        "pixlstash/services/restore/full_restore.py",  # vault-injection pattern; owns DB-swap lifecycle
+        "pixlstash/services/restore/resource_restore.py",  # vault-injection pattern; per-resource upsert
+        "pixlstash/services/restore/preview.py",  # vault-injection pattern; restore previews + hash compare
         "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
     }
 
@@ -403,7 +407,7 @@ _LABEL_SINK_EXEMPT = {
         "logo / default-data import (new pictures)"
     ),
     # --- Whole-DB snapshot restore rebuilds every row (CSO-named exempt) ---
-    ("pixlstash/services/restore_service.py", "_upsert_rows"): (
+    ("pixlstash/services/restore/resource_restore.py", "_upsert_rows"): (
         "whole-DB snapshot restore rebuilds all rows; a locked set is itself "
         "restored from the snapshot, not mutated in place"
     ),
