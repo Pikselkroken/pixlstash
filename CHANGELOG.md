@@ -1,3 +1,7 @@
+# [1.7.2] [Security:Critical]
+
+- Fixes a snapshot-restore data-loss bug. Restoring a snapshot could silently drop library pictures whose image files were still on disk — notably reference-folder pictures — and, when the scrapheap was emptied afterwards, could permanently delete some of those files. Root cause: pictures removed from the library while their file was deliberately kept were recorded as "permanently deleted," so a later restore dropped them. If you have used snapshot restore, update before restoring again; pictures lost this way are recoverable from an earlier snapshot once on this version.
+
 # [1.7.1] [Security:Critical]
 
 - Update tar, brace-expansion and js-yaml node packages
