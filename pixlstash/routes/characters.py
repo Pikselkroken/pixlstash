@@ -56,8 +56,8 @@ from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     VALID_COMBINE_MODES,
 )
-from pixlstash.utils.service.path_utils import resolve_path_within
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.serialization_utils import safe_model_dict
 
 logger = get_logger(__name__)
 

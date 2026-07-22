@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority, VaultDatabase
 from pixlstash.db_models import Character, PictureSet, Project, User, UserToken
 from pixlstash.utils.atomic_write import write_json_atomic
-from pixlstash.utils.service.system_utils import default_max_vram_gb
+from pixlstash.utils.system_utils import default_max_vram_gb
 
 
 class LoginRequest(BaseModel):

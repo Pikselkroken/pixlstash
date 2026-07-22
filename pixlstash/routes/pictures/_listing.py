@@ -28,7 +28,7 @@ from pixlstash.picture_scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
 )
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     fetch_scope_allowed_picture_ids,
