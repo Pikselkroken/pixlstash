@@ -288,6 +288,20 @@ themes was therefore inert. Measured at runtime before the fix:
 The kebab-cased keys already in the theme (`on-dark-surface`, `on-sidebar-hover`) always
 worked. A missing or misspelled `on-*` is never *absent* — it is present and wrong.
 
+> **Superseded for the last three rows (2026-07-23).** Dark `on-accent`, `on-primary`
+> and `on-tertiary` were first fixed by flipping the *labels* to the warm near-black,
+> which cleared the checker and left three fills with dark labels beside five with white
+> ones. The maintainer has since set a system invariant: **the foreground on `accent`,
+> `primary`, `secondary` and `tertiary` is `#ffffff`, in both themes, always.** So the
+> *fills* moved instead — dark `accent` `#f28f3b`→`#b85c0c`, `primary`
+> `#8EA604`→`#6b7d04`, `tertiary` `#77A0A9`→`#547b84`, `secondary` `#DA4167`→`#d13a5f`,
+> light `accent` `#b0732b`→`#9e6727` and `tertiary` `#5f8790`→`#557982` — and all eight
+> `on-*` are now white at 4.59 – 4.84:1. Values, arithmetic and knock-ons (the focus
+> ring, the dark washes, `sidebar-hover`, `dark-surface-primary`) are in
+> `visual-language.md` §4, "The action-fill tier". **The four `on-<status>` values below
+> are unaffected** — statuses are not part of that tier and keep their measured
+> foregrounds.
+
 #### What was actually authored
 
 All keys kebab-cased, and the light theme's `success` / `info` deepened first (§10.8),
@@ -383,9 +397,12 @@ mechanical migration large enough to want its own eyeball pass. Logged in §10.
 | **Gap action→dismiss** | `var(--space-2)` |
 
 **Why the action is not `primary`.** `primary` olive on the tinted card measures
-**4.30:1** (light, `error` tint) to 4.50:1 — at or under the 4.5 floor for 13px text.
-Underlined semibold `on-surface` is 14.3:1, is unambiguously actionable without colour
-(WCAG 1.4.1), and keeps the accent unspent.
+**4.30 – 4.45:1** in light (at or under the 4.5 floor for 13px text) and, since the
+action-fill deepen (`visual-language.md` §4), **2.85 – 3.00:1** in dark — it was
+4.75 – 5.00:1 before, so this is now a clear fail rather than a near miss. Underlined
+semibold `on-surface` is 14.3:1, is unambiguously actionable without colour (WCAG 1.4.1),
+and keeps the accent unspent. This is also a worked example of the tier rule: an action
+fill is not a small-text foreground on a canvas or on a tint.
 
 **Why `--elevation-3` and not `-4`.** `-4` is reserved for dialogs and lightbox chrome
 (§7 of the visual language). A notice must read as lighter than a modal, and this is one
@@ -627,9 +644,16 @@ moves pixels somewhere; the list is the record of where to look.
 - **The ~40 `error`-on-`dark-surface` declarations** in the review overlay measure 3.12:1
   and want `dark-surface-error` (4.12:1). Pre-existing, unrelated to this change, and a
   large mechanical migration that deserves its own eyeball pass.
-- **`primary` on `dark-surface`** (`.rs-tally-added`, `.rs-archived-added`) has the same
-  shape of problem: the light theme's olive on a near-black card. No token exists for it
-  yet; needs a decision, not a swap.
+- ~~**`primary` on `dark-surface`** (`.rs-tally-added`, `.rs-archived-added`)…~~
+  **DECIDED, 2026-07-23.** The family gets a fifth member: **`dark-surface-primary:
+  #8EA604`**, identical in both themes, exactly like the four status members. Measured
+  **5.50:1** on `#242628` and **6.25:1** on `#181b20`, against 3.14:1 for the light
+  theme's olive today (and 3.30:1 for the deepened dark one) — both of which fail the
+  4.5:1 body floor these two spans need, because they are small text. The value is the
+  dark theme's *outgoing* `primary`: a good foreground on a dark card, a bad fill under a
+  white label, so it moves to the token whose whole job is the former. The two
+  declarations point at it; their siblings `.rs-tally-kept` / `.rs-archived-kept` already
+  read `dark-surface-success`. Full rationale in `visual-language.md` §4.
 - **The 40+ raw z-index call sites.** The ladder is shipped (`--z-base` … `--z-modal`,
   visual-language §14) so new code has a target; retrofitting the existing ones is
   opportunistic, because each move is pixel-visible on a different screen.
@@ -692,12 +716,25 @@ The original findings, kept for the evidence:
 
 Two were requested here; six more followed from the §3.3 / §10.8 fix.
 
-**`--z-notice`** — now the top of a declared eight-step `--z-*` ladder rather than a lone
-value (`design-tokens.css`; the ladder is documented in visual-language §14). It is
-parked at `100000` instead of its ladder slot of 5000 because three call sites still sit
-above 5000 — `ImageImporter.vue:848,1041` (99999) and `TitleBar.vue:188` (100000, which
-the original 99999 claim here missed). It drops to 5000 when those move. Retrofitting the
-other 40+ raw z-indexes stays opportunistic, per finding 10.11.
+**`--z-notice`** — **at its ladder slot of `5000`**, the top of a declared nine-step
+`--z-*` ladder (`design-tokens.css`; documented in visual-language §14). No longer parked.
+
+The migration that unblocked it: `TitleBar.vue:188` (100000) moved to a new closed rung
+`--z-titlebar: 4500`, and `ImageImporter.vue:848` `.dlg-scrim` (99999) onto `--z-modal`.
+Only those two were ever in `.app-viewport`'s stacking context — this spec's earlier
+"three squatters" count was wrong: `.import-fly-chip` is appended to `<body>` and lives in
+the ROOT context, where any positive value already clears the shell.
+
+The title bar needed its own rung because `--z-modal` was not enough: `ReviewSessionsOverlay`
+is itself a 4000 stacking context, so a tie there hands the win to whichever is later in the
+DOM, and its full-viewport sub-scrim would paint over the window drag region and controls.
+
+**Stacking no longer depends on DOM order**, which was the actual defect: `--z-notice`
+previously *tied* the maximum and `NoticeHost` won only by being a later sibling of
+`.app-viewport`. Proven by moving the host to first child and re-checking — before the
+change the title bar won, after it the notice does, in both orders. Retrofitting the
+remaining raw z-indexes stays opportunistic per finding 10.11; four survive harmlessly,
+each verified to be inside a nested stacking context where it cannot compete.
 
 **`--notice-max-w: 420px`** — in `design-tokens.css`, next to `--badge-size` and
 `--bar-height`, which is the existing home for fixed component dimensions that are
@@ -716,6 +753,12 @@ reasoning and measurements in §3.3.
 
 **Eight theme colours, `on-<status>`** — the §3.3 fix itself, plus the kebab-case
 respelling of the seven camelCase pairs the same bug had silenced.
+
+**One theme colour, `dark-surface-primary` (`#8EA604`, both themes)** — the fifth member
+of the `dark-surface-*` family, for `primary` used as a foreground on a deliberately-dark
+card. Decided 2026-07-23; see §10 and `visual-language.md` §4. It is not part of the
+notice host, but it comes out of the same colour pass and is recorded here so the token
+requests stay in one list.
 
 **Not tokens, and deliberately so:** `--notice-safe-bottom`, `--floating-bottom-h`,
 `--selbar-h` and `--breadcrumb-h` are **runtime layout variables**, computed per frame
@@ -741,6 +784,20 @@ exists to stop.
   declarations.
 - `frontend/src/components/widgets/LockedDeleteNoticeDialog.vue` — retired in favour of a
   `warning` notice once the host is live (a behaviour change: UI/UX signs it off).
+
+**Affected files for the action-fill tier (`visual-language.md` §4) — a separate lane:**
+
+- `frontend/src/main.js` — six fill values, four `on-*` flips to `#ffffff`, the
+  `sidebar-hover` / `on-sidebar-hover` pair in both themes, and one new key
+  `dark-surface-primary` in both themes.
+- `frontend/src/styles/design-tokens.css` — `--focus-ring` goes solid.
+- `frontend/src/style.css` — dark `--hover-wash` `.14`→`.24`, dark `--active-wash`
+  `.20`→`.34`, light `--active-text` `on-primary`→`on-surface`.
+- `ReviewSessionView.vue` `.rs-tally-added`, `ReviewArchivedReceipt.vue`
+  `.rs-archived-added` — onto `dark-surface-primary`.
+- The `on-tertiary`-on-a-non-tertiary-surface sites in `SideBar.vue` and the
+  `on-secondary` ones in `App.css` — see the drift list in `visual-language.md` §4 and
+  `design-system-handoff.md` §9.
 
 **Acceptance checks:**
 
@@ -777,25 +834,113 @@ exists to stop.
 14. The review overlay and the lightbox render in the **light** theme: green ticks,
     tallies and the archive button still read as green against the dark card.
 15. Warm neutrals: body text is `#23211d`, not pure `#000` (light), and `#f2e5da`, not
-    pure `#fff` (dark). Dark-theme `accent`, `primary` and `tertiary` buttons carry dark
-    labels, not white ones.
+    pure `#fff` (dark). Status fills in dark mode (`error`, `warning`, `success`, `info`)
+    carry the warm near-black `#1b1b1b`, not white. **`accent`, `primary`, `secondary`
+    and `tertiary` buttons carry white labels in both themes** — that is the action-fill
+    invariant (`visual-language.md` §4), and it is the opposite of what an earlier
+    revision of this check said.
+16. Focus a control in the **light** theme: the ring is a solid amber stroke, clearly
+    visible against the near-white canvas (4.51:1). The old translucent ring measured
+    1.96:1 there and was effectively absent.
 
-**Open, and not this document's call:**
+---
 
-- Whether `info` and `success` notices are suppressed (queued, not shown) while a
-  blocking modal is open. They currently would render above the scrim, which is correct
-  for `error` and arguably noise for the rest. Flow decision.
-- Whether `Esc` should dismiss the newest notice globally rather than only when focus is
-  inside the host. It collides with the existing `Esc` bindings in `SelectionBar` and the
-  grid. Behaviour decision.
-- Whether the horizontal offset between the viewport-centred notice stack and the
-  grid-column-centred selection pill is acceptable (§2.3). If not, the fix is to move
-  `SelectionBar` into the same bottom-stack container — a pixel-moving change.
+## 13. The §12 open items, decided (2026-07-23)
+
+The maintainer asked for calls rather than questions. Each item below is now a decision
+with its rationale and its reversal cost. Two of the three are pure design; the third
+touches a key binding, and the boundary with UI/UX is drawn explicitly inside it.
+
+### 13.1 Notices while a blocking modal is open — **no suppression, all four variants render**
+
+**Decision: every variant renders normally while a modal is open.** `info` and `success`
+are not queued, not suppressed, not demoted.
+
+Why, in order of weight:
+
+1. **Suppression's failure mode is the bug this surface exists to fix.** A queued
+   `success` whose timer is paused behind a dialog that stays open for two minutes is a
+   message the user never sees — §9.2's "silently lost message", re-created deliberately.
+   The alternative (queue it *and* start its timer) is worse: it expires unseen.
+2. **It needs a global "a modal is open" signal that does not exist.** Every dialog in
+   the app would have to register and de-register, and the first one that forgets
+   reintroduces the noise inconsistently. That is a new cross-cutting invariant bought
+   for a cosmetic gain.
+3. **The geometry already separates them.** The notice host is bottom-anchored at
+   `--notice-safe-bottom`; dialogs are centred. A notice does not cover a dialog, and at
+   `--z-notice` it is legible above the scrim, which is the behaviour `error` needs and
+   is not worth branching per variant.
+
+Reversible cheaply: one guard in the host's render condition, if it ever reads as noisy
+in practice. Flow-wise this is a rendering rule rather than a change to what any control
+does, so it is decided here; UI/UX keeps a standing veto.
+
+### 13.2 `Esc` — **host-scoped, and it stays that way until UI/UX says otherwise**
+
+**Decision: `Esc` dismisses the newest notice only while focus is inside the notice
+host.** No global binding.
+
+`Esc` in this app already means three destructive-ish things: clear the grid selection
+(which can be hundreds of pictures and is not undoable in one keystroke), close the
+plugin / ComfyUI / tag menus in `SelectionBar`, and close the lightbox or a dialog. A
+global notice binding would make the meaning of `Esc` depend on whether a transient card
+happens to be on screen at that instant — the user presses `Esc` to clear a selection,
+a success toast is still up, and the toast eats the keystroke. There is no affordance
+that could tell them which one will win.
+
+Every notice already has three other dismissal routes (the ✕, the timeout for non-sticky
+variants, and the action). Nothing is unreachable, and the ✕'s hit area is 40×40.
+
+**This one genuinely changes what a control does, so the line is:** *narrowing* to the
+host is a confirmation of the safe default and is decided here; *widening* `Esc` to
+global is a keyboard-model change across three existing consumers and belongs to
+`ui-ux-expert`. Do not widen it in an implementation pass.
+
+### 13.3 The centre-axis offset — **accepted; the host stays viewport-centred**
+
+**Decision: keep the notice host centred on the viewport. Do not make it sidebar-aware,
+and do not move `SelectionBar` into the notice stack.**
+
+The offset is measurable and bounded. The pill is centred on `.grid-content-area`, whose
+centre is displaced from the viewport centre by `(sidebarWidth − statsWidth) / 2`.
+Sidebar is user-resizable **140 – 300px** (`SideBar.vue:1497-1498`); the stats panel is a
+fixed **288px** (`StatsSidebar.vue:1805-1807`). So:
+
+| Shell state | Axis offset (pill vs notice) |
+|---|---|
+| both panels closed | **0px** |
+| sidebar only, at min / max width | **+70px / +150px** |
+| stats only | **−144px** |
+| both open, sidebar at min / max | **−74px / +6px** |
+
+Worst case is **150px of horizontal offset at 78px of vertical separation** (§2.2), on
+two objects of different width, shape and radius. Two things that never share a line and
+never share an edge do not read as a failed alignment; they read as two objects. The
+common case is smaller still — with both panels open the axes are within 74px and often
+within 6px.
+
+The rejected alternative is worse than the problem. Putting `SelectionBar` inside the
+notice column couples a permanent control's position to a transient surface, which
+breaks §2.2's rule that **notices move and the pill does not** — the pill would shift
+whenever a message arrived, under a cursor already travelling toward it. Making the host
+sidebar-aware instead breaks §2.3: the host renders on the login screen, over the
+lightbox and inside Settings, none of which have a grid column to centre on.
+
+Reversible cheaply (one container change) if it looks wrong on a wide monitor with only
+the sidebar open, which is the worst case above.
+
+### 13.4 Previously closed, kept for the record
+
 - ~~Authoring the four `on-<status>` theme colours (§3.3) and deepening the light theme's
   `success` / `info` (§10.8).~~ **Done, 2026-07** — maintainer-approved. It reached
   further than expected: eight `on-<status>` values, seven camelCase `on*` keys
   respelled, four new `dark-surface-<status>` colours, and four components whose
   translucent status fills made `on-<status>` the wrong token. See §3.3.
+- ~~The right token for `primary` on a `dark-surface`.~~ **Decided, 2026-07-23** —
+  `dark-surface-primary: #8EA604`. See §10.
+
+**Still open, and still not this document's call:**
+
 - Migrating the ~40 `error`-on-`dark-surface` declarations in the review overlay onto
-  `dark-surface-error` (3.12:1 → 4.12:1), and finding the right token for `primary` on
-  a `dark-surface`. Both pre-existing; the second needs a decision, not a swap.
+  `dark-surface-error` (3.12:1 → 4.12:1). Pre-existing, mechanical, large enough to want
+  its own eyeball pass.

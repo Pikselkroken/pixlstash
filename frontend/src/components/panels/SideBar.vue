@@ -7178,13 +7178,18 @@ defineExpose({
   overflow: hidden;
 }
 
+/* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
+   solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
+   `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
+   simply a different colour on a tint (measured 1.43-1.70:1 in light). On a
+   tint the foreground is the surface's own. See design-system-handoff.md §9.2. */
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   transition:
     background 0.1s,
     color 0.1s;
@@ -7194,12 +7199,12 @@ defineExpose({
 
 .sidebar-project-menu-item:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-menu-item.active {
   background: rgba(var(--v-theme-tertiary), 0.3);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   font-weight: 600;
 }
 
@@ -7213,7 +7218,7 @@ defineExpose({
 .sidebar-project-menu-item-action {
   flex-shrink: 0;
   opacity: 0;
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   transition: opacity 0.12s;
 }
 
@@ -7233,7 +7238,7 @@ defineExpose({
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  color: rgba(var(--v-theme-on-tertiary), 0.65);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   border-top: 1px solid rgba(var(--v-theme-border), 0.25);
   min-height: 26px;
   transition:
@@ -7243,7 +7248,7 @@ defineExpose({
 
 .sidebar-project-menu-add:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-select {
@@ -7898,7 +7903,14 @@ defineExpose({
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-accent), 0.15);
-  color: rgb(var(--v-theme-accent));
+  /* 11px text on a 15% accent tint. The accent as its own foreground here
+     measured 3.41:1 light / 2.81:1 dark after the fill deepen — under the 4.5:1
+     body floor in both, and under even the 3:1 UI floor in dark. Same rule as
+     the project-menu fixes: on a TINT the foreground is the surface's own, not
+     the tint's hue. `on-surface` gives 11.55:1 light / 10.43:1 dark at rest
+     (9.77 / 9.00 on the 28% hover tint); the accent still carries the
+     affordance through the tint itself. */
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-decoration: none;

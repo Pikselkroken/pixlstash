@@ -213,15 +213,18 @@ describe("useNoticeStore — cap and pending queue (§9.2)", () => {
     expect(store.maxVisible).toBe(3);
   });
 
-  // §5 — an error is never queued behind a success.
-  it("evicts the oldest non-error to make room for an error", () => {
+  // §5 — an error is never queued behind a success. The oldest non-error yields
+  // its visible slot, but is DEMOTED rather than destroyed: the insert is what
+  // buys the room, so there is nothing to be gained by losing the message.
+  it("displaces the oldest non-error to make room for an error", () => {
     const store = useNoticeStore();
     store.push({ level: "success", text: "s1", timeout: 0 });
     store.push({ level: "info", text: "i1", timeout: 0 });
     store.push({ level: "info", text: "i2", timeout: 0 });
     store.error("boom");
     expect(store.visible.map((n) => n.text)).toContain("boom");
-    expect(store.notices.map((n) => n.text)).not.toContain("s1");
+    expect(store.notices.map((n) => n.text)).toContain("s1");
+    expect(store.pending.map((n) => n.text)).toEqual(["s1"]);
   });
 
   it("does not evict another error", () => {

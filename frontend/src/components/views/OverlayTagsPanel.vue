@@ -1040,11 +1040,11 @@ defineExpose({
 }
 
 .overlay-tag--penalised {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   line-height: 1.2;
-  border: 1px solid rgba(var(--v-theme-error), 0.6);
-  background: rgba(var(--v-theme-error), 0.15);
+  border: 1px solid rgba(var(--v-theme-dark-surface-error), 0.6);
+  background: rgba(var(--v-theme-dark-surface-error), 0.15);
 }
 
 .overlay-tag--sentinel {
@@ -1061,17 +1061,17 @@ defineExpose({
   color: color-mix(
     in srgb,
     rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
-    rgb(var(--v-theme-error)) calc(var(--ac) * 100%)
+    rgb(var(--v-theme-dark-surface-error)) calc(var(--ac) * 100%)
   );
   border-color: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.2) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.7) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.7) calc(var(--ac) * 100%)
   );
   background: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.05) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.2) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.2) calc(var(--ac) * 100%)
   );
 }
 
@@ -1129,7 +1129,7 @@ defineExpose({
 }
 
 .tag-pred-btn--reject:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 .tag-drop-zone {

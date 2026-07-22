@@ -96,10 +96,19 @@
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22); /* popovers, floating panels */
   --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30); /* dialogs, lightbox chrome */
 
-  /* Focus ring — one definition, used on every focusable element. Accent-tinted,
-     3px, offset by the element's own radius. This is the keyboard-user's lifeline;
-     never remove an outline without replacing it with this. */
-  --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+  /* Focus ring — one definition, used on every focusable element. A SOLID 3px accent
+     stroke. This is the keyboard-user's lifeline; never remove an outline without
+     replacing it with this.
+
+     It is solid on purpose. The previous `rgba(accent, 0.55)` blended toward the
+     canvas and measured 1.96:1 in the light theme and 3.01:1 in dark, against the
+     3:1 focus-indicator floor (WCAG 1.4.11 / 2.4.11) — i.e. it failed outright in the
+     default theme, and would have fallen to 1.90 – 1.95:1 once the accent deepened for the
+     white-label rule (visual-language.md §4). At full opacity the ring measures
+     dark 3.61 / 3.23 / 3.76 and light 4.51 / 4.75 / 4.07 on
+     `background` / `surface` / `dark-surface` (light: sidebar) respectively.
+     A focus ring is the one place in this system where "subtle" is a defect. */
+  --focus-ring: 0 0 0 3px rgb(var(--v-theme-accent));
 
   /* ---------------------------------------------------------------------------
      SCRIMS — translucent legibility backings for corner badges/chips that sit on
@@ -161,16 +170,21 @@
   --z-overlay: 2000;   /* app-level overlays and context menus */
   --z-modal: 4000;     /* modal dialogs and their scrims */
 
-  /* The notice layer sits above everything, including a modal: an error about a
-     failed background job must be readable while a dialog is open.
+  /* CLOSED RUNG, one member: TitleBar.vue. In the desktop build the title strip
+     carries the window drag region and the window controls, so no in-app overlay
+     may paint over it — occluding it costs the user the ability to move or close
+     the window. --z-modal is NOT sufficient: ReviewSessionsOverlay is itself a
+     4000 stacking context whose full-viewport sub-scrims would win that tie on
+     DOM order. A sticky toolbar is not a title bar; it belongs on --z-sticky. */
+  --z-titlebar: 4500;
 
-     Its LADDER slot is 5000 (one step above --z-modal). It is parked at 100000
-     because three un-migrated squatters currently sit higher — ImageImporter.vue
-     (99999, ×2) and TitleBar.vue (100000) — and a notice must clear them today.
-     Drop this to 5000 in the same change that moves those three onto the ladder;
-     until then it is deliberately out of band and that is recorded here rather
-     than left to be rediscovered. */
-  --z-notice: 100000;
+  /* CLOSED RUNG, one member: NoticeHost.vue. Above everything, including a modal
+     and the title bar: an error about a failed background job must be readable
+     while a dialog is open, and must NOT depend on being a later sibling of
+     .app-viewport to be seen — it previously "won" only by DOM order, so moving
+     the host earlier in App.vue silently hid every notice behind the chrome.
+     A floating status pill is not a notice; it belongs on --z-floating. */
+  --z-notice: 5000;
 
   /* ---------------------------------------------------------------------------
      MOTION — durations and easings. Motion confirms what happened; it is

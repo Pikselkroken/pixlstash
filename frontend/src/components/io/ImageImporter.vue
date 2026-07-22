@@ -838,14 +838,19 @@ defineExpose({ startImport });
 <style scoped>
 /* Standard surface dialog (not the old full-screen dark-surface modal): the
    non-blocking import should not read as "the app is busy". Anchored below the
-   desktop title bar; sits above the grid. */
+   desktop title bar; sits above the grid.
+
+   `--z-modal` is the rung: this is a modal dialog and its scrim. It no longer
+   needs to out-number the title bar — it never overlapped it anyway (it starts
+   at `top: var(--titlebar-h)`), and the strip now holds `--z-titlebar` above
+   every modal by value. */
 .dlg-scrim {
   position: fixed;
   top: var(--titlebar-h);
   left: 0;
   width: 100vw;
   height: calc(100vh - var(--titlebar-h));
-  z-index: 99999;
+  z-index: var(--z-modal);
   background: rgba(var(--v-theme-scrim), 0.35);
   display: flex;
   align-items: center;
@@ -1035,10 +1040,13 @@ defineExpose({ startImport });
 <style>
 .import-fly-chip {
   position: fixed;
-  /* Same ceiling as the import dialog (99999); the desktop title bar stays above
-     at 100000 (frontend_architecture.md §7). Appended to <body> after the dialog,
-     so it paints over the fading dialog at equal z-index. */
-  z-index: 99999;
+  /* Same rung as the import dialog it flies out of (`--z-modal`). This clone is
+     appended to <body>, so unlike the dialog it lives in the ROOT stacking
+     context, where `.app-viewport` (z-index: 0) is its only in-app competitor:
+     any positive value already clears the whole app shell, including the title
+     bar and the notice host. It is a 420ms pointer-events:none flight clone, so
+     that is intended and matches what it did at 99999. */
+  z-index: var(--z-modal);
   margin: 0;
   pointer-events: none;
   will-change: transform, opacity;

@@ -4757,7 +4757,7 @@ function resetOverlayCopyState() {
   position: absolute;
   left: 8px;
   top: 8px;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
   z-index: 1001;
   font-size: var(--text-sm);
