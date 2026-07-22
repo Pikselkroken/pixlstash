@@ -21,7 +21,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.stacking import (
     build_stack_filename_prefix,
     get_or_create_stack_for_picture,

@@ -40,8 +40,8 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
-from pixlstash.utils.service.path_utils import resolve_path_within
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 from pixlstash.utils.query.predicate_filter import PredicateFilter
 

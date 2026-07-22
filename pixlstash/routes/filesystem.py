@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 

@@ -35,7 +35,7 @@ from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)

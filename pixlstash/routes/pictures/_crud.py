@@ -48,7 +48,7 @@ from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     fetch_scope_allowed_set_ids,
 )
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.serialization_utils import safe_model_dict
 
 from ._helpers import (
     _score_anchor_membership_changed,

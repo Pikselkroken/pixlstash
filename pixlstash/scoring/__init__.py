@@ -1,14 +1,13 @@
-"""Compatibility shim for the former monolithic ``picture_scoring`` module.
+"""Picture scoring package.
 
-The module was split (Backend Refactor Phase 2 §4.6) into two focused siblings:
+Two distinct features that formerly shared ``pixlstash.picture_scoring``:
 
 * :mod:`pixlstash.scoring.smart_score` — anchor-based smart-score heuristic.
 * :mod:`pixlstash.scoring.character_likeness` — face↔reference likeness scoring.
 
-This module re-exports every public (and the handful of internal) symbol that
-external callers historically imported from ``pixlstash.picture_scoring`` so
-those import paths keep resolving unchanged. New code should import from
-:mod:`pixlstash.scoring` (or the submodules) directly.
+The legacy ``pixlstash.picture_scoring`` module is kept as a thin re-export shim
+so existing imports keep resolving; new code may import from here or the
+submodules directly.
 """
 
 from pixlstash.scoring.character_likeness import (
@@ -20,10 +19,6 @@ from pixlstash.scoring.character_likeness import (
     select_reference_faces_for_character,
 )
 from pixlstash.scoring.smart_score import (
-    _BUILTIN_MIN_BAD,
-    _BUILTIN_MIN_GOOD,
-    _BuiltinAnchor,
-    _load_builtin_anchors,
     attach_anomaly_inputs,
     fetch_anomaly_confidences,
     fetch_smart_score_data,
@@ -35,10 +30,6 @@ from pixlstash.scoring.smart_score import (
 )
 
 __all__ = [
-    "_BUILTIN_MIN_BAD",
-    "_BUILTIN_MIN_GOOD",
-    "_BuiltinAnchor",
-    "_load_builtin_anchors",
     "attach_anomaly_inputs",
     "compute_character_likeness_for_faces",
     "count_pictures_by_character_likeness",

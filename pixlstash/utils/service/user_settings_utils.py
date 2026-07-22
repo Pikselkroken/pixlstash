@@ -2,7 +2,7 @@
 
 import json
 
-from pixlstash.utils.service.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
+from pixlstash.utils.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
 
 # Bounds (in pixels) for the draggable, non-docked sidebar width.
 SIDEBAR_WIDTH_MIN = 220
