@@ -381,6 +381,11 @@ def _make_reference_folder_picture(server, folder_dir, file_name, *, allow_delet
             label="refs",
             allow_delete_file=allow_delete,
             status="active",
+            # A folder that has imported a picture has completed a scan, so
+            # stamp last_scanned. Without it the folder looks freshly-added
+            # (never scanned, and once its picture is purged, empty), which the
+            # explicit-re-import override would treat as a deliberate re-add.
+            last_scanned=time.time(),
         )
         session.add(folder)
         session.commit()
@@ -521,6 +526,133 @@ def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_pa
     # deletion: file_removed=True (restore must never resurrect it).
     assert removed_flags[0] is True, (
         f"Unprotected purge must log file_removed=True, got {removed_flags[0]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# deleted_file_log Change 1: a genuine hard delete upgrades a stale
+# file_removed=False row to True instead of skipping. (Change 2, the explicit
+# reference-folder re-import override, is tested in test_restore.py where the
+# reference-folder scan runs deterministically with background workers off.)
+# ---------------------------------------------------------------------------
+
+
+def _seed_deleted_log(server, file_path, *, file_removed, pixel_sha=None):
+    """Insert one deleted_file_log row for *file_path* (path stored hashed)."""
+    from datetime import datetime, timezone
+
+    def _do(session: Session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path(file_path),
+                pixel_sha=pixel_sha,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=file_removed,
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def _ledger_flags_for(server, file_path):
+    """Return the file_removed flags of every ledger row for *file_path*."""
+    path_sha = DeletedFileLog.hash_path(file_path)
+    return server.vault.db.run_task(
+        lambda s: [
+            r.file_removed
+            for r in s.exec(
+                select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
+            ).all()
+        ]
+    )
+
+
+def test_missing_file_purge_upgrades_kept_flag_to_removed(server, tmp_path):
+    """Change 1: a path first logged file_removed=False (removed-but-kept) that
+    is later genuinely purged must have its existing row UPGRADED to
+    file_removed=True — one row, updated not duplicated — so the ledger is
+    truthful rather than relying only on restore's missing-file net."""
+    from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
+
+    folder_dir = str(tmp_path / "refs_upgrade")
+    os.makedirs(folder_dir, exist_ok=True)
+    abs_path = os.path.join(folder_dir, "vanished.png")
+
+    # First recorded as protected/kept (file_removed=False).
+    _seed_deleted_log(server, abs_path, file_removed=False, pixel_sha="sha_keep")
+
+    # A picture still points at that path, but the file is now genuinely gone.
+    def _insert(session: Session):
+        pic = Picture(
+            file_path=abs_path,
+            pixel_sha="sha_keep",
+            original_file_name="vanished.png",
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return pic.id
+
+    pic_id = server.vault.db.run_task(_insert)
+    assert not os.path.isfile(abs_path), "File must be absent for the purge to fire."
+
+    pics = server.vault.db.run_task(
+        lambda s: s.exec(select(Picture).where(Picture.id == pic_id)).all()
+    )
+    result = MissingFilePurgeTask(server.vault.db, pics)._run_task()
+    assert result["purged"] == 1, result
+
+    flags = _ledger_flags_for(server, abs_path)
+    assert flags == [True], (
+        f"Expected exactly one ledger row upgraded to file_removed=True, got {flags}"
+    )
+    assert server.vault.db.run_task(lambda s: s.get(Picture, pic_id)) is None
+
+
+def test_scrapheap_purge_upgrades_kept_flag_on_genuine_delete(server, tmp_path):
+    """Change 1 via the scrapheap writer: a protected purge logs
+    file_removed=False; a later genuine (unprotected) hard delete of the same
+    path upgrades that row to True instead of skipping — still one row."""
+    client = TestClient(server.api)
+    assert (
+        client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        ).status_code
+        == 200
+    )
+
+    folder_dir = str(tmp_path / "refs_scrapheap_upgrade")
+    _folder_id, pic_id, abs_file_path = _make_reference_folder_picture(
+        server, folder_dir, "kept_then_gone.png", allow_delete=False
+    )
+
+    # Protected purge -> ledger row file_removed=False, file kept on disk.
+    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    assert client.delete("/pictures/scrapheap").json()["deleted_count"] == 1
+    assert _ledger_flags_for(server, abs_file_path) == [False]
+    assert os.path.isfile(abs_file_path)
+
+    # A second picture now points at the SAME path but is NOT protected
+    # (no reference folder), and is genuinely hard-deleted.
+    def _insert_plain(session: Session):
+        pic = Picture(
+            file_path=abs_file_path,
+            pixel_sha="sha_gone",
+            original_file_name="kept_then_gone.png",
+            deleted=True,
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return pic.id
+
+    server.vault.db.run_task(_insert_plain)
+    assert client.delete("/pictures/scrapheap").json()["deleted_count"] == 1
+
+    flags = _ledger_flags_for(server, abs_file_path)
+    assert flags == [True], (
+        f"Genuine hard delete must upgrade the kept row to True (one row): {flags}"
     )
 
 

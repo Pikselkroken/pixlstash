@@ -2350,15 +2350,25 @@ def register_routes(router, server):
                 already_logged = session.exec(
                     select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
                 ).first()
+                new_file_removed = record.get("file_removed", True)
                 if already_logged is None:
                     session.add(
                         DeletedFileLog(
                             path_sha=path_sha,
                             pixel_sha=record.get("pixel_sha"),
                             deleted_at=now,
-                            file_removed=record.get("file_removed", True),
+                            file_removed=new_file_removed,
                         )
                     )
+                elif new_file_removed and not already_logged.file_removed:
+                    # A path first logged file_removed=False (protected file kept
+                    # on disk) is now being genuinely hard-deleted. Upgrade the
+                    # stale flag to True so the ledger stays truthful rather than
+                    # leaving a False row that only restore's missing-file net
+                    # would catch. Only ever raise False -> True; never downgrade
+                    # a genuine permanent deletion back to "kept".
+                    already_logged.file_removed = True
+                    session.add(already_logged)
             session.exec(delete(Picture).where(Picture.id.in_(ids)))
             session.commit()
             return len(ids)

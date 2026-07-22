@@ -1164,6 +1164,17 @@ Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPla
 
 All snapshot routes require `auth.require_unscoped_owner` — scoped tokens are rejected.
 
+### 18.6 Permanent-deletion ledger (`deleted_file_log`)
+
+`deleted_file_log` (`db_models/deleted_file_log.py`) is not a block-list that hides files forever — it is the record *restore* consults so it never resurrects content the user permanently deleted. A row keys on `path_sha` (SHA-256 of the picture's vault/absolute path — never cleartext) plus an optional `pixel_sha`, and carries a `file_removed` flag:
+
+- **`file_removed=True`** — a genuine hard delete: the on-disk file is gone. `restore_service._load_deleted_file_index` returns only these rows, so restore drops/never resurrects them. Pre-migration rows default to `True`.
+- **`file_removed=False`** — the picture was removed from the library but its file was deliberately **kept** on disk (a protected reference-folder picture, `allow_delete_file=False`). Its content is *not* gone, so restore must **not** treat it as a permanent deletion. The row exists only so the routine scanner does not auto re-import that path.
+
+Two writers create rows — the scrapheap purge (`routes/pictures/_crud.py::delete_rows`) and the missing-file purge (`tasks/missing_file_purge_task.py`). Both **dedup by `path_sha`**, and on a genuine hard delete they **upgrade** an existing `file_removed=False` row to `True` (they never downgrade `True`→`False`), so a kept path that is later truly purged is recorded truthfully rather than relying solely on restore's ledger-independent missing-file pass.
+
+**Explicit re-import overrides the ledger; a routine sync does not.** The reference-folder scanner (`tasks/reference_folder_scan_task.py`) normally skips any disk path present in the ledger — no fully-automatic re-import of a removed-but-kept file. But a deliberate re-add of a folder (a freshly-created `reference_folder` row: `last_scanned IS NULL` **and** nothing indexed yet, so `existing_by_path` is empty) is treated as an **explicit re-import**: files found on disk are re-imported and their matching ledger rows are **cleared** so restore can resurface them. Every routine reset of `last_scanned` (sync-toggle, rename, mount-recover) keeps the folder's existing Picture rows, so `existing_by_path` is non-empty and the override does not fire. (Edge, tracked for 1.8.0-final: a folder that has *already* lost all its Picture rows — its files were removed from disk and a prior scan deleted the rows — then has `last_scanned` reset by a sync-toggle/rename would also satisfy the marker and auto-resurface a still-present removed-but-kept file without the explicit re-add gesture. The content-safety invariant below still holds; only the "explicit" intent is looser than ideal, pending a stronger signal.) **Invariant:** the override only ever clears rows for paths drawn from `disk_paths` (files actually present on disk), so genuinely-gone content — absent on disk, `file_removed=True` — is never in the disk set, is never cleared, and stays permanently guarded by restore.
+
 ---
 
 ## 19. Mermaid Diagrams
