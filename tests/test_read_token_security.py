@@ -25,7 +25,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-import pixlstash.routes.pictures._crud as crud_module
+import pixlstash.routes.pictures._character_likeness as likeness_module
 import pixlstash.routes.pictures._listing as listing_module
 import pixlstash.utils.rate_limiter as rl_module
 from pixlstash.db_models import Picture
@@ -1192,12 +1192,12 @@ class TestResourceScopedReadTokenIsolation:
 
                 with (
                     patch.object(
-                        crud_module,
+                        likeness_module,
                         "select_reference_faces_for_character",
                         _fake_select_reference_faces,
                     ),
                     patch.object(
-                        crud_module,
+                        likeness_module,
                         "compute_character_likeness_for_faces",
                         _fake_compute_likeness,
                     ),

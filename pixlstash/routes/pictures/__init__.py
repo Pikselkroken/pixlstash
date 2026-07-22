@@ -6,14 +6,17 @@ from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
 from . import (
     _anomaly,
+    _character_likeness,
     _crud,
     _export,
+    _faces,
     _face_search,
     _import,
     _likeness_search,
     _listing,
     _misc,
     _search,
+    _serving,
     _thumbnails,
 )
 
@@ -28,9 +31,13 @@ def create_router(server) -> APIRouter:
     _likeness_search.register_routes(router, server)
     _face_search.register_routes(router, server)
     _import.register_routes(router, server)
-    # Register before _crud so /pictures/{id}/anomaly_region is matched ahead of
-    # the /pictures/{id}/{field} catch-all registered in _crud.
+    _serving.register_routes(router, server)
+    _faces.register_routes(router, server)
+    # Register the specific /pictures/{id}/... GET routes (anomaly_region,
+    # character_likeness) before _crud so they are matched ahead of the
+    # /pictures/{id}/{field} catch-all registered in _crud.
     _anomaly.register_routes(router, server)
+    _character_likeness.register_routes(router, server)
     _crud.register_routes(router, server)
     _listing.register_routes(router, server)
     return router
