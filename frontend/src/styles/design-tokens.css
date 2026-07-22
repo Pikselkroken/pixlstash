@@ -79,7 +79,12 @@
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22);
   --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.3);
 
-  --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+  /* SOLID, not an alpha. `rgba(accent, .55)` was already failing before the
+     accent deepen — 1.96:1 on the light canvas, 3.01:1 on the dark one, against
+     the 3:1 floor of WCAG 1.4.11 / 2.4.11 — i.e. every focus indicator in the
+     app. At full opacity: light 4.51 (background) / 4.75 (surface) / 4.07
+     (sidebar); dark 3.61 / 3.23 / 3.76 (dark-surface). Width stays 3px. */
+  --focus-ring: 0 0 0 3px rgb(var(--v-theme-accent));
 
   /* ---------------------------------------------------------------------------
      SCRIMS — translucent legibility backings for corner badges/chips that sit
@@ -113,6 +118,14 @@
      component can always be wedged between two strata. A raw z-index is drift;
      migrating the existing call sites is opportunistic (touch a rule, move it),
      not a big-bang rewrite, because each move is pixel-visible somewhere else.
+
+     The whole ladder lives inside ONE stacking context: `.app-viewport` is
+     `position: fixed; z-index: 0`, so these values only ever compete with each
+     other, and a raw z-index nested inside the lightbox (`.image-overlay`,
+     z 1000) or the review overlay (`.rs-overlay`, z 4000) is trapped at its
+     parent's rung no matter how large it is. Vuetify's teleported overlays sit
+     outside that context at ~2000 in the root; they are kept off the title
+     strip by anchoring to `--titlebar-h`, not by z-index.
      --------------------------------------------------------------------------- */
   --z-base: 0; /* in-flow content; the grid itself */
   --z-raised: 10; /* lifted over an immediate sibling: tile badge, hover scrim */
@@ -122,11 +135,21 @@
   --z-drawer: 1000; /* full-panel overlays inside the shell: the lightbox */
   --z-overlay: 2000; /* app-level overlays and context menus */
   --z-modal: 4000; /* modal dialogs and their scrims */
-  /* Above everything, including a modal: an error about a failed background job
-     must be readable while a dialog is open. Ladder slot is 5000; parked at
-     100000 until the three un-migrated squatters above it (ImageImporter 99999
-     ×2, TitleBar 100000) move onto the ladder. */
-  --z-notice: 100000;
+  /* CLOSED RUNG, one member: TitleBar.vue. The desktop title strip owns the
+     window drag region and the window controls, so no in-app overlay may ever
+     paint over it — occluding it costs the user the ability to move or close
+     the window. `--z-modal` is not sufficient: ReviewSessionsOverlay is itself
+     a 4000 stacking context, and TitleBar is the FIRST child of .app-viewport
+     while that overlay is a later sibling, so a tie at 4000 is resolved by DOM
+     order in the overlay's favour and its full-viewport sub-scrims
+     (`.rs-keys-backdrop`, inset: 0) would cover the strip. A sticky toolbar is
+     NOT a title bar; it belongs on `--z-sticky`. */
+  --z-titlebar: 4500;
+  /* CLOSED RUNG, one member: NoticeHost.vue. Above everything, including a
+     modal and the title bar: an error about a failed background job has to be
+     readable while a dialog is open, and must clear the chrome BY VALUE — it
+     must not depend on being a later sibling in .app-viewport to be seen. */
+  --z-notice: 5000;
 
   /* ---------------------------------------------------------------------------
      MOTION — durations and easings. Motion is feedback, not decoration.

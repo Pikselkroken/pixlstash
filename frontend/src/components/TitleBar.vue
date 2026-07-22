@@ -175,17 +175,21 @@ const close = () => desktop?.windowClose?.();
   height: 34px;
   flex-shrink: 0;
   box-sizing: border-box;
-  /* Positioned + a z-index above every overlay in the app so the title bar (and
-     its drag region + window controls) is NEVER covered. The title bar is a
-     child of .app-viewport alongside the in-app overlays, so this wins over all
-     of them. z-index audit (highest overlays in the app): import-progress modal
-     99999, autocomplete dropdowns / ref-preview 9999, rf-zoom 4100, image
-     overlay 1000. 100000 must stay above all of them — bump it if any overlay
-     ever goes higher. (Vuetify dialogs/overlays teleport to <body> at ~2000 and
-     so live outside this stacking context; they are kept off the strip by
-     anchoring their top at var(--titlebar-h) instead, not by this z-index.) */
+  /* Positioned + the `--z-titlebar` rung so the title bar (and its drag region
+     + window controls) is NEVER covered by an in-app overlay: occluding it
+     costs the user the ability to move or close the window. The title bar is a
+     child of .app-viewport alongside the in-app overlays, and .app-viewport is
+     `position: fixed; z-index: 0`, so this rung competes with exactly those
+     siblings. It sits ABOVE `--z-modal` (4000) on purpose — the title bar is
+     the FIRST child of .app-viewport and ReviewSessionsOverlay (its own 4000
+     stacking context, with `inset: 0` sub-scrims) is a later one, so a tie at
+     4000 would be resolved by DOM order against the strip. It sits BELOW
+     `--z-notice` (5000) so an error notice is still readable over the chrome.
+     (Vuetify dialogs/overlays teleport to <body> at ~2000 and so live outside
+     this stacking context; they are kept off the strip by anchoring their top
+     at var(--titlebar-h) instead, not by this z-index.) */
   position: relative;
-  z-index: 100000;
+  z-index: var(--z-titlebar);
   border-bottom: 1px solid rgba(var(--v-theme-on-background), 0.12);
   /* Paint from the `toolbar` token so the title bar and the toolbar strip below it
      read as one continuous piece. Both now track `toolbar`, which the theme can set

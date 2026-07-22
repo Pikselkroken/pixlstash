@@ -7065,12 +7065,16 @@ function handleEmptyStateReset() {
    as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
    set") carry the difference from `--protected` — no colour needed. */
 
-/* Last-day emphasis. The tint is on the ICON only: `error` text at 11px on a
-   translucent scrim over an unknown photo cannot be proven to clear the 4.5:1
-   body floor, while an icon only needs 3:1. The label still says "Purges today"
-   / "1 day left", so nothing depends on seeing the colour. */
+/* Last-day emphasis. The tint is on the ICON only: status-coloured text at 11px
+   on a translucent scrim over an unknown photo cannot be proven to clear the
+   4.5:1 body floor, while an icon only needs 3:1. The label still says "Purges
+   today" / "1 day left", so nothing depends on seeing the colour.
+   `dark-surface-error`, not `error`: the badge sits on `--scrim-photo`, which is
+   the `scrim` token and therefore dark in BOTH themes, so it needs the hue tuned
+   for a dark surface (4.12:1) rather than the light theme's deepened one
+   (3.12:1). See notice-surface.md §3.3. */
 .thumbnail-purge-badge--countdown-urgent .thumbnail-purge-badge__icon {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 /* Format and resolution badges are hover-only */

@@ -36,15 +36,28 @@ body {
 }
 
 /* Interactive wash tokens for sidebar hover/selection. The raw alphas were tuned
-   for the dark theme, where a bright accent/primary over a dark surface reads
-   well at 8–18%. Over the light theme's near-white canvas those same alphas wash
-   out, so light gets stronger values (and dark-on-light selection text). Dark
-   keeps its original values. Defined on the Vuetify theme classes so they cascade
-   into the scoped component styles. */
+   for the dark theme, where an accent/primary over a dark surface reads well at
+   a low alpha. Over the light theme's near-white canvas those same alphas wash
+   out, so light gets stronger values (and dark-on-light selection text). Defined
+   on the Vuetify theme classes so they cascade into the scoped component styles.
+
+   DARK ALPHAS ARE COMPENSATION, NOT TASTE. A wash is its fill composited over
+   the surface, so when the action-fill tier was deepened for the white-label
+   invariant (visual-language.md §4) both dark washes lost most of their step:
+   hover 1.138 → 1.072 and selection 1.340 → 1.202. The alphas below restore the
+   PRE-EXISTING perceived weight (1.136 and 1.322) — they do not strengthen it.
+   Restoring .08 / .18 would silently reintroduce a near-invisible 1.072 hover.
+   Recompute these if an action fill ever moves again. */
 .v-theme--pixlStashDark {
-  --hover-wash: rgba(var(--v-theme-accent), 0.08);
-  --active-wash: rgba(var(--v-theme-primary), 0.18);
+  /* .08 → .14: compensates the deepened accent (#f28f3b → #b85c0c). */
+  --hover-wash: rgba(var(--v-theme-accent), 0.14);
+  /* .18 → .26: compensates the deepened primary (#8EA604 → #6b7d04). */
+  --active-wash: rgba(var(--v-theme-primary), 0.26);
   --active-bar: rgb(var(--v-theme-primary));
+  /* Correct as-is: `on-primary` (now #fff) over the 26% primary tint on the
+     dark sidebar measures 11.22:1. The 1.32:1 figure in the docs is a
+     light-theme claim about a dark-theme rule; light already reads
+     `on-surface` (10.84:1) and needs no change either. */
   --active-text: rgb(var(--v-theme-on-primary));
 }
 .v-theme--pixlStashLight {

@@ -130,6 +130,9 @@ async function handleLogin() {
   --wordmark-accent: rgb(var(--v-theme-accent));
 }
 
+/* The login screen paints `dark-surface` in BOTH themes, so its status hues come
+   from the `dark-surface-<status>` family, not the theme's canvas-tuned ones —
+   the light theme's deepened `error` measures 3.12:1 here. notice-surface.md §3.3. */
 .token-error-banner {
   display: flex;
   align-items: center;
@@ -137,9 +140,9 @@ async function handleLogin() {
   margin-bottom: var(--space-6);
   padding: var(--space-4) var(--space-6);
   border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-error), 0.15);
-  border: 1px solid rgba(var(--v-theme-error), 0.5);
-  color: rgb(var(--v-theme-error));
+  background: rgba(var(--v-theme-dark-surface-error), 0.15);
+  border: 1px solid rgba(var(--v-theme-dark-surface-error), 0.5);
+  color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-md);
   max-width: 360px;
   text-align: center;
@@ -147,7 +150,7 @@ async function handleLogin() {
 
 .token-error-icon {
   flex-shrink: 0;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 /* Visually hidden but exposed to assistive tech, so the login page keeps an
@@ -234,6 +237,6 @@ form {
 }
 
 .error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 </style>

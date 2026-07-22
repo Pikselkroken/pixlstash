@@ -784,10 +784,10 @@ defineExpose({ handleKey });
   font-variant-numeric: tabular-nums;
 }
 .rs-tally-removed {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-tally-added {
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-dark-surface-primary));
 }
 .rs-tally-kept {
   color: rgb(var(--v-theme-dark-surface-success));
@@ -854,7 +854,7 @@ defineExpose({ handleKey });
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 .rs-state--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-state-check {
   color: rgb(var(--v-theme-dark-surface-success));
@@ -920,9 +920,9 @@ defineExpose({ handleKey });
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   border: 1px solid
-    color-mix(in srgb, rgb(var(--v-theme-error)) 55%, transparent);
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
-  color: rgb(var(--v-theme-error));
+    color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 55%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-error-msg {
   flex: 1;
@@ -935,9 +935,9 @@ defineExpose({ handleKey });
   cursor: pointer;
   border-radius: var(--radius-sm);
   border: 1px solid
-    color-mix(in srgb, rgb(var(--v-theme-error)) 55%, transparent);
+    color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 55%, transparent);
   background: transparent;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
 }

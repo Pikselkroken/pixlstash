@@ -664,7 +664,7 @@ function archivedSummary(a) {
   background: transparent;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   cursor: pointer;
 }
 .rs-rail-session-wrap:hover .rs-rail-abort,
@@ -672,7 +672,7 @@ function archivedSummary(a) {
   visibility: visible;
 }
 .rs-rail-abort:hover {
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 
 .rs-abort-backdrop {
@@ -728,8 +728,8 @@ function archivedSummary(a) {
   color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-abort-btn--undo {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-error)) 60%, transparent);
-  color: rgb(var(--v-theme-error));
+  border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 60%, transparent);
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 .rs-rail-none {
@@ -786,11 +786,11 @@ function archivedSummary(a) {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-archived-clear:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-archived-clear--armed {
-  color: rgb(var(--v-theme-error));
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  color: rgb(var(--v-theme-dark-surface-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 
 /* The wrap carries the card surface (hover / active) so it extends under the
@@ -851,7 +851,7 @@ function archivedSummary(a) {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   cursor: pointer;
 }
 .rs-rail-archived-wrap:hover .rs-rail-archived-del,
@@ -859,7 +859,7 @@ function archivedSummary(a) {
   visibility: visible;
 }
 .rs-rail-archived-del:hover {
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 
 /* Sticker shelf: hard-capped height + own scroll so navigation always wins
@@ -908,11 +908,11 @@ function archivedSummary(a) {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-shelf-clear:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-shelf-clear--armed {
-  color: rgb(var(--v-theme-error));
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  color: rgb(var(--v-theme-dark-surface-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 .rs-shelf-grid {
   min-height: 0;

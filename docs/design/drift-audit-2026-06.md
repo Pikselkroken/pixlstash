@@ -53,6 +53,15 @@ should be a small fixed set, and the gap is the bug list.
   the 3:1 large/UI floor. Amber is for large labels, icons, borders, and washes, not a
   background under small white text. See `visual-language.md` §4.
 
+> **Superseded, 2026-07-23.** This file is a dated snapshot and is left as written. The
+> accent finding above was resolved by *deepening the fill* rather than by restricting
+> its use: white on `accent`, `primary`, `secondary` and `tertiary` is now a system
+> invariant, the six fills that could not carry it were deepened, and all eight measure
+> 4.59 – 4.84:1. The "not a background under small white text" half of the finding is
+> obsolete; the "amber is for large labels, icons, borders and washes" half survives, and
+> now applies to the whole action-fill tier in **both** themes. Current values and
+> arithmetic: `visual-language.md` §4, "The action-fill tier".
+
 ## Fix order (lowest risk first)
 
 This is migration, not a rewrite. Each step is mechanical and independently shippable.

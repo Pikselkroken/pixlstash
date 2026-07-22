@@ -160,41 +160,88 @@ export const useNoticeStore = defineStore("notice", () => {
   }
 
   /**
-   * Give every visible notice that has no running timer one. Called after any
-   * change to the visible window, so a notice promoted out of the pending queue
-   * starts its countdown at the moment it becomes visible (§9.2).
+   * Reconcile every notice's timer against the visible window. Called after any
+   * change to that window, in BOTH directions (§9.2):
+   *
+   *   promoted  → start the countdown at the moment it becomes visible;
+   *   demoted   → stop the countdown and restore its FULL window.
+   *
+   * The demotion half matters because the cap is not constant: `NoticeHost`
+   * drops it from 3 to 2 when the viewport crosses 600px, so a resize or a
+   * tablet rotation pushes a visible notice back into the queue. Leaving its
+   * timer running would expire it off-screen — §9.2's bug in the other
+   * direction. The window is RESET rather than banked because a notice that was
+   * pulled off-screen part-way through was never actually read.
    */
-  function syncTimers() {
-    for (const notice of visible.value) {
+  function reconcileTimers() {
+    const visibleIds = new Set(visible.value.map((n) => n.id));
+    for (const notice of notices.value) {
       if (notice.timeout <= 0) continue;
       const entry = timers.get(notice.id);
-      if (!entry) {
-        timers.set(notice.id, {
-          handle: null,
-          remaining: notice.timeout,
-          startedAt: 0,
-          paused: false,
-        });
-        startTimer(notice.id);
-      } else if (
-        entry.handle == null &&
-        !entry.paused &&
-        !globallyPaused.value
-      ) {
-        startTimer(notice.id);
+
+      if (visibleIds.has(notice.id)) {
+        if (!entry) {
+          timers.set(notice.id, {
+            handle: null,
+            remaining: notice.timeout,
+            startedAt: 0,
+            paused: false,
+          });
+          startTimer(notice.id);
+        } else if (
+          entry.handle == null &&
+          !entry.paused &&
+          !globallyPaused.value
+        ) {
+          startTimer(notice.id);
+        }
+        continue;
       }
+
+      // Off-screen: never let a countdown run where nobody can see it.
+      if (!entry) continue;
+      if (entry.handle != null) clearTimeout(entry.handle);
+      entry.handle = null;
+      entry.startedAt = 0;
+      entry.remaining = notice.timeout;
+      timers.set(notice.id, entry);
     }
   }
 
   /**
-   * Spec §5 "errors outrank": an error is never queued behind a success. If the
-   * visible window is full of non-errors, evict the oldest one to make room.
-   * @returns {boolean} true if a slot was freed.
+   * Spec §5 "errors outrank": an error is never queued behind a success.
+   *
+   * Appending the error and freeing a slot does NOT achieve that — `notices`
+   * holds the pending queue too, so the freed slot goes to the next notice in
+   * push order while the error, appended last, stays queued. The error has to be
+   * placed INTO the visible window directly.
+   *
+   * The displaced notice is DEMOTED to the front of the pending queue, not
+   * dismissed. Spec §5's wording is "the oldest non-error is dismissed
+   * immediately to make room", but destroying a message is not what buys the
+   * room here — the insert does. Demotion satisfies the same rule (the error is
+   * visible now) while honouring §5's other half, "overflow waits in the store".
+   * Losing a bystander message would be a second, quieter version of exactly the
+   * bug this surface exists to fix.
+   *
+   * @param {Object} notice - the error being pushed.
+   * @returns {boolean} true when the error was placed in the visible window.
    */
-  function evictOldestNonErrorForError() {
-    const oldestNonError = visible.value.find((n) => n.level !== "error");
-    if (!oldestNonError) return false;
-    dismiss(oldestNonError.id);
+  function insertErrorIntoVisibleWindow(notice) {
+    const cap = maxVisible.value;
+    const idx = notices.value.findIndex(
+      (n, i) => i < cap && n.level !== "error",
+    );
+    // The visible window is all errors: this one waits its turn behind them,
+    // which §5 permits — the rule is that an error never queues behind a
+    // *success*.
+    if (idx === -1) return false;
+
+    const [displaced] = notices.value.splice(idx, 1);
+    // Newest-last within the visible window, matching push order elsewhere.
+    notices.value.splice(cap - 1, 0, notice);
+    // The bystander becomes the first thing shown when a slot next frees up.
+    notices.value.splice(cap, 0, displaced);
     return true;
   }
 
@@ -250,8 +297,24 @@ export const useNoticeStore = defineStore("notice", () => {
         existing.action = hasAction ? action : null;
         // Restart the countdown: the event just happened again, so the reading
         // window starts over rather than expiring mid-burst.
+        //
+        // The per-notice pause MUST survive this. `clearTimer` drops the whole
+        // entry including `paused`, so a repeat arriving while the cursor is on
+        // the card used to hand it a fresh countdown and dismiss it out from
+        // under the user — WCAG 2.2.1. Carry the flag across. (The global
+        // `document.hidden` pause was never affected: `startTimer` re-checks
+        // `globallyPaused` independently.)
+        const wasPaused = timers.get(existing.id)?.paused === true;
         clearTimer(existing.id);
-        syncTimers();
+        if (resolved > 0) {
+          timers.set(existing.id, {
+            handle: null,
+            remaining: resolved,
+            startedAt: 0,
+            paused: wasPaused,
+          });
+        }
+        reconcileTimers();
         return existing.id;
       }
     }
@@ -267,13 +330,14 @@ export const useNoticeStore = defineStore("notice", () => {
       count: 1,
     };
 
-    // Make room for an error rather than queueing it behind a success.
-    if (safeLevel === "error" && notices.value.length >= maxVisible.value) {
-      evictOldestNonErrorForError();
-    }
+    // An error takes a visible slot rather than queueing behind a success.
+    const placed =
+      safeLevel === "error" &&
+      notices.value.length >= maxVisible.value &&
+      insertErrorIntoVisibleWindow(notice);
+    if (!placed) notices.value.push(notice);
 
-    notices.value.push(notice);
-    syncTimers();
+    reconcileTimers();
     return id;
   }
 
@@ -291,7 +355,7 @@ export const useNoticeStore = defineStore("notice", () => {
     const idx = notices.value.findIndex((n) => n.id === id);
     if (idx !== -1) notices.value.splice(idx, 1);
     // A slot may have opened: promote and start the newly-visible timers.
-    syncTimers();
+    reconcileTimers();
   }
 
   /**
@@ -325,7 +389,7 @@ export const useNoticeStore = defineStore("notice", () => {
     const next = Number(value);
     if (!Number.isFinite(next) || next < 1) return;
     maxVisible.value = Math.floor(next);
-    syncTimers();
+    reconcileTimers();
   }
 
   return {

@@ -54,7 +54,9 @@ const pixlStashLight = {
     "sidebar-text": "#25231e",
     toolbar: "#f0ede9",
     "toolbar-text": "#25231e",
-    "sidebar-hover": "#b0732b",
+    // `sidebar-hover` is the accent duplicated, so it moves with it. White on
+    // the new value measures 4.75:1 (was 3.94:1).
+    "sidebar-hover": "#9e6727",
     "on-sidebar-hover": "#ffffff",
     // Raised controls: inputs and buttons sit above the canvas, pure/near white.
     "input-background": "#ffffff",
@@ -75,17 +77,30 @@ const pixlStashLight = {
     "dark-surface-warning": "#db7900",
     "dark-surface-success": "#4caf50",
     "dark-surface-info": "#2196F3",
+    // The fifth member of the family, same rationale: `primary` as a FOREGROUND
+    // on a dark card. This is the dark theme's outgoing bright olive — a good
+    // foreground on a dark card and a bad fill under a white label, so it moves
+    // to the token whose whole job is the former. 5.50:1 on the light theme's
+    // `dark-surface` #242628, 6.25:1 on the dark theme's #181b20.
+    "dark-surface-primary": "#8EA604",
     surface: "#ffffff",
     "on-surface": "#23211d",
     background: "#faf9f7",
     "on-background": "#23211d",
-    accent: "#b0732b",
+    // ── The action-fill tier ────────────────────────────────────────────────
+    // The foreground on all four is #ffffff in BOTH themes, always: one label
+    // colour on every branded fill, and no `on-*` pair that can silently
+    // disagree with its fill. A white label fixes the fill's lightness at
+    // L <= 0.1833; see visual-language.md §4 for the arithmetic.
+    // Consequence: these four are NEVER small body text on a canvas (4.49-4.60:1
+    // light, 3.53-3.61:1 dark) — icons, borders, rails, >=18px or >=14px bold.
+    accent: "#9e6727", // white 4.75:1 (was #b0732b, 3.94:1)
     "on-accent": "#ffffff",
-    primary: "#5c7c0a",
+    primary: "#5c7c0a", // white 4.84:1 — unchanged
     "on-primary": "#ffffff",
-    secondary: "#cb3a72",
+    secondary: "#cb3a72", // white 4.79:1 — unchanged
     "on-secondary": "#ffffff",
-    tertiary: "#5f8790",
+    tertiary: "#557982", // white 4.73:1 (was #5f8790, 3.92:1)
     "on-tertiary": "#ffffff",
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
     border: "#d8d3c8",
@@ -119,8 +134,10 @@ const pixlStashDark = {
     "sidebar-text": "#d8d0c8",
     toolbar: "#23282f",
     "toolbar-text": "#d8d0c8",
-    "sidebar-hover": "#f28f3b",
-    "on-sidebar-hover": "#f2e5da",
+    // Was #f28f3b + #f2e5da = 1.94:1 — the worst pair in either theme. Now the
+    // accent value with a white label: 4.59:1.
+    "sidebar-hover": "#b85c0c",
+    "on-sidebar-hover": "#ffffff",
     "input-background": "#2b3138",
     "input-text": "#f2e5da",
     "cancel-button": "#3a4047",
@@ -134,18 +151,28 @@ const pixlStashDark = {
     "dark-surface-warning": "#db7900",
     "dark-surface-success": "#4caf50",
     "dark-surface-info": "#2196F3",
+    // Identical in both themes, like the four above. Keeps the retired bright
+    // olive in service as a dark-card foreground (6.25:1 on #181b20).
+    "dark-surface-primary": "#8EA604",
     surface: "#23282f",
     "on-surface": "#f2e5da",
     background: "#1b1f24",
     "on-background": "#f2e5da",
-    accent: "#f28f3b",
-    "on-accent": "#1b1b1b",
-    primary: "#8EA604",
-    "on-primary": "#111111",
-    secondary: "#DA4167",
+    // ── The action-fill tier ────────────────────────────────────────────────
+    // White labels are the invariant (see the light theme above), so the FILLS
+    // moved rather than the labels. Every dark action fill sits in the window
+    // L in [0.1624, 0.1833]: bright enough to clear 3:1 on the dark canvas,
+    // dark enough to carry white at 4.5:1. Hue is untouched (H28/H69/H345/H191);
+    // only lightness moves. These sit at the bright end of the legal window, so
+    // there is no value that is both brighter and legal.
+    accent: "#b85c0c", // white 4.59:1 (was #f28f3b + #1b1b1b, 2.40:1)
+    "on-accent": "#ffffff",
+    primary: "#6b7d04", // white 4.60:1 (was #8EA604 + #111111, 2.76:1)
+    "on-primary": "#ffffff",
+    secondary: "#d13a5f", // white 4.69:1 (was #DA4167, 4.26:1)
     "on-secondary": "#ffffff",
-    tertiary: "#77A0A9",
-    "on-tertiary": "#0f1418",
+    tertiary: "#547b84", // white 4.62:1 (was #77A0A9 + #0f1418, 2.84:1)
+    "on-tertiary": "#ffffff",
     border: "#363d45",
     divider: "#2c323a",
     overlay: "#00000066",
