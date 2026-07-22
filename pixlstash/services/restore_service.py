@@ -745,20 +745,42 @@ class RestoreService:
                 return None
             return os.path.normcase(os.path.realpath(resolved))
 
-        live_active_file_paths: list[str] = self._vault.db.run_immediate_read_task(
+        def _confirmably_differs(snap_sha: Optional[str], live_shas: set) -> bool:
+            # True only when BOTH sides are known and none match — i.e. the file
+            # on disk is provably DIFFERENT content from the snapshot row (the
+            # CSO's purge-evasion case: content C1 was purged, different content
+            # C2 is alive at the same path). A NULL ``pixel_sha`` on either side
+            # is unconfirmable, so we do NOT claim a difference: the caller then
+            # rescues/keeps, which never re-drops a not-yet-hashed reference
+            # picture (the deliberately non-strict variant).
+            if snap_sha is None:
+                return False
+            if None in live_shas:
+                return False
+            return snap_sha not in live_shas
+
+        # Resolved path (resolve → realpath → normcase) → set of ``pixel_sha`` of
+        # every LIVE, non-deleted picture at that path. The set may include
+        # ``None`` (a picture imported/indexed but not yet hashed). Both the
+        # shadow-ghost guard (path membership) and the ledger rescue (content
+        # comparison) read this map, so the two decisions share one capture.
+        live_active_rows: list[tuple] = self._vault.db.run_immediate_read_task(
             lambda s: [
-                fp
-                for fp in s.exec(
-                    select(Picture.file_path).where(Picture.deleted.is_(False))
+                (fp, sha)
+                for fp, sha in s.exec(
+                    select(Picture.file_path, Picture.pixel_sha).where(
+                        Picture.deleted.is_(False)
+                    )
                 ).all()
                 if fp
             ]
         )
-        live_active_resolved: set[str] = {
-            key
-            for fp in live_active_file_paths
-            if (key := _resolved_key(fp)) is not None
-        }
+        live_active_map: dict[str, set] = {}
+        for fp, sha in live_active_rows:
+            key = _resolved_key(fp)
+            if key is None:
+                continue
+            live_active_map.setdefault(key, set()).add(sha)
 
         logger.info(
             "RestoreService: swapping live DB with snapshot (snapshot id=%d)",
@@ -787,17 +809,71 @@ class RestoreService:
             # bound-variable limit and because the scrapheap is normally a small
             # fraction of the library.
             shadow_ids: set[int] = set()
-            if live_active_resolved:
+            if live_active_map:
                 for pid, fp in session.execute(
                     sa_select(Picture.id, Picture.file_path).where(
                         Picture.deleted.is_(True)
                     )
                 ).all():
                     key = _resolved_key(fp)
-                    if key is not None and key in live_active_resolved:
+                    if key is not None and key in live_active_map:
                         shadow_ids.add(pid)
 
-            all_drop_ids = sorted(set(drop_ids) | shadow_ids)
+            # Rescue ledger-matched pictures that are CURRENTLY alive and active,
+            # but ONLY when the on-disk content actually matches (content-aware).
+            # ``deleted_ids`` drops any SNAPSHOT picture whose path/content sha is
+            # in ``deleted_file_log`` so intentionally-purged content is never
+            # resurrected. But the ledger is keyed by path/content, not by picture
+            # identity: a path (or content hash) purged in the past — its file kept
+            # on disk because the reference folder is protected
+            # (``allow_delete_file=False``) — that the user has since RE-INDEXED is
+            # alive again. Dropping it is silent data loss. Here the row is
+            # ``deleted=False``: if its file resolves to one the LIVE DB is
+            # actively using (``live_active_map``), the user is keeping it.
+            #
+            # Content-aware (CSO purge-evasion guard): rescue only when the
+            # snapshot row is NOT ``_confirmably_differs`` from the live content at
+            # that path — i.e. the shas MATCH, or either side is NULL
+            # (not-yet-hashed → unconfirmable → keep, never re-drop a reference
+            # picture). When BOTH shas are known and DIFFER, the on-disk file is
+            # genuinely different content that merely shares a purged path, so the
+            # stale snapshot row stays dropped and is not resurrected. The ledger
+            # still drops any purged path with no live active picture
+            # (``test_full_restore_skips_permanently_deleted_picture``: row removed
+            # from live, file lingers — its path is NOT in ``live_active_map``).
+            # Genuinely missing files (``missing_ids``) are never rescued: there is
+            # no file to protect, and the check is independent of the ledger.
+            rescued_ids: set[int] = set()
+            ledger_only = set(deleted_ids) - set(missing_ids)
+            if live_active_map and ledger_only:
+                ledger_list = sorted(ledger_only)
+                # Chunk the id filter to stay under SQLite's bound-variable limit
+                # (the ledger can hold far more than 999 entries).
+                for i in range(0, len(ledger_list), 900):
+                    chunk = ledger_list[i : i + 900]
+                    for pid, fp, sha in session.execute(
+                        sa_select(
+                            Picture.id, Picture.file_path, Picture.pixel_sha
+                        ).where(Picture.id.in_(chunk))
+                    ).all():
+                        key = _resolved_key(fp)
+                        if key is None or key not in live_active_map:
+                            continue
+                        if not _confirmably_differs(sha, live_active_map[key]):
+                            rescued_ids.add(pid)
+            if rescued_ids:
+                # Keep the report honest: these were counted as permanently
+                # deleted before the live-active cross-check ran.
+                report.permanently_deleted_count -= len(rescued_ids)
+                logger.info(
+                    "RestoreService: kept %d ledger-matched picture(s) after "
+                    "restore — their file resolves to a live, actively-used "
+                    "picture (re-indexed after an earlier purge), so the "
+                    "permanent-deletion ledger must not drop them.",
+                    len(rescued_ids),
+                )
+
+            all_drop_ids = sorted((set(drop_ids) - rescued_ids) | shadow_ids)
             if all_drop_ids:
                 # Drop dependents explicitly in FK-safe order, then the
                 # pictures. SQLite FK CASCADE would normally take care of
@@ -805,8 +881,9 @@ class RestoreService:
                 # relationship-config drift and prevents one failing ORM
                 # cascade from rolling back the entire post-restore task and
                 # silently leaving the dropped rows behind. ``all_drop_ids``
-                # covers missing-on-disk files, permanent deletions, and
-                # scrapheap ghosts that shadow a live added-after file.
+                # covers missing-on-disk files, permanent deletions (minus
+                # live-active rescues), and scrapheap ghosts that shadow a live
+                # added-after file.
                 for child_model in (
                     Tag,
                     Face,
@@ -824,11 +901,13 @@ class RestoreService:
                 logger.info(
                     "RestoreService: dropped %d picture row(s) after restore "
                     "(%d missing-file, %d permanently deleted, %d scrapheap "
-                    "ghost(s) shadowing a live added-after file — files kept).",
+                    "ghost(s) shadowing a live added-after file — files kept; "
+                    "%d ledger match(es) rescued as live).",
                     result.rowcount,
                     len(missing_ids),
-                    len(deleted_ids),
+                    len(deleted_ids) - len(rescued_ids),
                     len(shadow_ids),
+                    len(rescued_ids),
                 )
             # NOTE: derived columns (embeddings + scores) are NOT NULL-reset
             # here. Snapshots now carry these blobs, so the swapped-in DB
