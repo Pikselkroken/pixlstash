@@ -46,6 +46,7 @@ from pixlstash.event_types import EventType
 from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
 
@@ -80,6 +81,8 @@ class Vault:
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
         insightface_model_pack: str = "buffalo_l",
+        scrapheap_retention_days: Optional[int] = DEFAULT_RETENTION_DAYS,
+        scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
     ):
         """
         Initialize a Vault instance.
@@ -129,6 +132,13 @@ class Vault:
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled
+        # Scrapheap auto-purge retention window (days) or None = "Never", plus
+        # the instant it was last LOWERED (puts a +1 day floor under EVERY
+        # picture's purge deadline, however old). See scrapheap_service.
+        self._scrapheap_retention_days: Optional[int] = scrapheap_retention_days
+        self._scrapheap_retention_reduced_at: Optional[datetime.datetime] = (
+            scrapheap_retention_reduced_at
+        )
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -172,11 +182,18 @@ class Vault:
         from pixlstash.tasks import (
             TaskType,
             EnsureGfsSnapshotFinder,
+            ScrapheapRetentionPurgeFinder,
             TagHealthAutoRebuildFinder,
         )
 
         self._planner_work_finders[TaskType.GFS_SNAPSHOT] = EnsureGfsSnapshotFinder(
             vault=self
+        )
+        # Needs a full Vault to read the retention settings (and to notify on
+        # purge); same reason GFS_SNAPSHOT is registered here rather than in
+        # WorkPlanner.work_finders().
+        self._planner_work_finders[TaskType.SCRAPHEAP_RETENTION_PURGE] = (
+            ScrapheapRetentionPurgeFinder(vault=self)
         )
         # Needs a full Vault (not just `database`) to reach its service
         # layer's vault-facing wrapper (start_rebuild), same reason
@@ -489,6 +506,39 @@ class Vault:
     def daily_snapshots_enabled(self) -> bool:
         """Whether automatic (GFS) snapshots are enabled."""
         return self._daily_snapshots_enabled
+
+    def set_scrapheap_retention(
+        self,
+        retention_days: Optional[int],
+        reduced_at: Optional[datetime.datetime],
+    ) -> None:
+        """Set the scrapheap auto-purge window at runtime.
+
+        Takes effect on the next ScrapheapRetentionPurgeFinder cycle. It never
+        purges anything synchronously — a config save must not destroy files.
+
+        Args:
+            retention_days: Days an UNPROTECTED soft-deleted picture stays in
+                the scrapheap, or None for "Never" (auto-purge disabled).
+            reduced_at: When the window was last lowered, or None if it never
+                was. Puts a floor of ``reduced_at + 1 day`` under every
+                picture's deadline, so a lowering never purges anything within
+                a day of the save, however old it is.
+        """
+        self._scrapheap_retention_days = (
+            None if retention_days is None else int(retention_days)
+        )
+        self._scrapheap_retention_reduced_at = reduced_at
+
+    @property
+    def scrapheap_retention_days(self) -> Optional[int]:
+        """Scrapheap auto-purge window in days; None means "Never"."""
+        return self._scrapheap_retention_days
+
+    @property
+    def scrapheap_retention_reduced_at(self) -> Optional[datetime.datetime]:
+        """When the retention window was last lowered, or None."""
+        return self._scrapheap_retention_reduced_at
 
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory

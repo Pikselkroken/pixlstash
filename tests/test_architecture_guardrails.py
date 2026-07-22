@@ -154,6 +154,7 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/restore/resource_restore.py",  # vault-injection pattern; per-resource upsert
         "pixlstash/services/restore/preview.py",  # vault-injection pattern; restore previews + hash compare
         "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
+        "pixlstash/services/scrapheap_service.py",  # vault-injection pattern; thin wrappers around the *_in_session purge/retention functions
     }
 
     violations = []

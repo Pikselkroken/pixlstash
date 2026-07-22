@@ -351,6 +351,9 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
+// Nav entry the settings dialog should land on. Set by `openSettingsDialog(tab)`
+// so a caller can deep-link (e.g. the scrapheap header's "change" link).
+const settingsDialogInitialTab = ref("");
 // --- Reference Folders (Folders tab) ---
 const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
 const referenceFolders = ref([]);
@@ -1614,7 +1617,13 @@ function closeSetEditor() {
   setEditorSet.value = null;
 }
 
-function openSettingsDialog() {
+/**
+ * Open the settings dialog, optionally on a specific nav entry.
+ * @param {string} [tab] - nav entry id (e.g. "scrapheap"); Appearance if omitted
+ *   or not visible in this session.
+ */
+function openSettingsDialog(tab = "") {
+  settingsDialogInitialTab.value = typeof tab === "string" ? tab : "";
   settingsDialogOpen.value = true;
 }
 
@@ -3575,6 +3584,7 @@ defineExpose({
     v-model:theme-mode="themeModeModel"
     :checkForUpdates="props.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
+    :initial-tab="settingsDialogInitialTab"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
     @update:comfyui-configured="

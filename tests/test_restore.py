@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 import shutil
 import tempfile
 from contextlib import closing
@@ -2989,3 +2990,116 @@ def test_full_restore_ghost_path_drift_does_not_delete_live_file(
         "snapshot was hard-deleted by the restore -> empty-scrapheap cycle"
     )
     assert _count_deleted_log(server, rel) == 0
+
+
+# ---------------------------------------------------------------------------
+# Restore must not arm the scrapheap retention auto-purge (v1.8.0)
+# ---------------------------------------------------------------------------
+
+
+def _set_deleted(server, pic_id, deleted_at):
+    def _do(session):
+        p = session.get(Picture, pic_id)
+        p.deleted = True
+        p.deleted_at = deleted_at
+        session.add(p)
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def test_full_restore_rearms_the_scrapheap_retention_clock(server):
+    """A restored scrapheap must get a FULL retention window, not the snapshot's.
+
+    The snapshot DB carries each scrapheap row's ORIGINAL ``deleted_at``. For any
+    snapshot older than the window that deadline is already expired, so the first
+    sweep after the restore would permanently destroy the very scrapheap the user
+    just restored — and write ``file_removed=True``, so a second restore could
+    not bring it back. Same failure family as the logged restore data-loss
+    incident.
+    """
+    from pixlstash.services import scrapheap_service
+
+    _create_file(server, "scrapheaped.jpg")
+    pic = _add_picture(server, filename="scrapheaped.jpg")
+    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    _set_deleted(server, pic.id, ancient)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored is not None, "the scrapheap row must survive the restore"
+    assert restored.deleted is True, "restore must not silently un-delete it"
+    stamped = restored.deleted_at
+    assert stamped is not None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    assert stamped > datetime.now(timezone.utc) - timedelta(minutes=5), (
+        f"deleted_at must be re-stamped to the restore time, got {stamped}"
+    )
+
+    # The concrete consequence: it is no longer due for auto-purge.
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault, datetime.now(timezone.utc), 30, None, 100
+        )
+        == []
+    ), "a just-restored scrapheap picture must not be immediately purgeable"
+
+
+def test_full_restore_leaves_live_pictures_deleted_at_alone(server):
+    """The other direction: re-arming must not touch non-deleted rows."""
+    _create_file(server, "alive.jpg")
+    pic = _add_picture(server, filename="alive.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored.deleted is False
+    assert restored.deleted_at is None, (
+        "A live picture must never be given a scrapheap deadline by a restore"
+    )
+
+
+def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
+    """The per-resource upsert path merges snapshot rows verbatim, so it needs
+    the same re-stamp as the full restore."""
+    from pixlstash.services import scrapheap_service
+
+    _create_file(server, "res_scrapheaped.jpg")
+    pic = _add_picture(server, filename="res_scrapheaped.jpg")
+    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    _set_deleted(server, pic.id, ancient)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Move the clock forward live, then restore the resource from the snapshot.
+    def _bump(session):
+        p = session.get(Picture, pic.id)
+        p.description = "mutated"
+        session.commit()
+
+    server.vault.db.run_task(_bump)
+
+    report = server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored.deleted is True
+    stamped = restored.deleted_at
+    assert stamped is not None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    assert stamped > datetime.now(timezone.utc) - timedelta(minutes=5), (
+        f"deleted_at must be re-stamped by the resource restore, got {stamped}"
+    )
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault, datetime.now(timezone.utc), 30, None, 100
+        )
+        == []
+    )

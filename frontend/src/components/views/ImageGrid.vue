@@ -226,8 +226,10 @@
       :visible="showScrapheapBar"
       :disabled="scrapheapEmptyDisabled"
       :restoreDisabled="scrapheapRestoreDisabled"
+      :retention-label="scrapheapRetentionLabel"
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
+      @open-retention-settings="emit('open-settings', 'scrapheap')"
     />
     <SnapshotsWithDeletedDialog
       v-model="snapshotsWithDeletedOpen"
@@ -572,6 +574,23 @@
                   >
                 </div>
               </div>
+              <!-- Scrapheap auto-purge state (permanent, bottom-left).
+                   Either a countdown to the server's `purge_at` or, for a
+                   protected reference original, the "won't auto-delete" badge.
+                   Icon + text, never colour alone. -->
+              <div
+                v-if="getScrapheapPurgeBadge(img)"
+                class="thumbnail-purge-badge"
+                :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
+                :title="getScrapheapPurgeBadge(img).title"
+              >
+                <v-icon size="12" class="thumbnail-purge-badge__icon">{{
+                  getScrapheapPurgeBadge(img).icon
+                }}</v-icon>
+                <span class="thumbnail-purge-badge__text">{{
+                  getScrapheapPurgeBadge(img).label
+                }}</span>
+              </div>
               <!-- Resolution overlay (always rendered, visible on hover) -->
               <div
                 v-if="
@@ -717,7 +736,16 @@
                     img.format &&
                     img.format !== 'unknown'
                   "
-                  class="thumbnail-bottom-left-badges"
+                  :class="[
+                    'thumbnail-bottom-left-badges',
+                    {
+                      // The scrapheap purge badge is permanent and owns the
+                      // bottom-left corner; the hover-only format badge stacks
+                      // above it instead of landing on top of it.
+                      'thumbnail-bottom-left-badges--raised':
+                        !!getScrapheapPurgeBadge(img),
+                    },
+                  ]"
                 >
                   <!-- Format badge: hover-only -->
                   <div class="thumbnail-id-overlay thumbnail-badge">
@@ -950,7 +978,9 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
+import { buildPurgeBadge } from "../../utils/retention.js";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -2752,6 +2782,7 @@ const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+const scrapheapRetentionStore = useScrapheapRetentionStore();
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
 // grid's keyboard shortcuts and native drag must go inert while it is open.
@@ -3418,6 +3449,79 @@ const isScrapheapView = computed(() => {
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
+
+// ── Scrapheap auto-empty policy ─────────────────────────────────────────────
+// Two separate things, deliberately not conflated:
+//   * the retention WINDOW — a server setting, shared via the store, shown in
+//     the scrapheap header so the policy is visible where the actions are;
+//   * each picture's purge DATE — `purge_at`, stamped by the server, which
+//     already accounts for the grace period applied when the window is
+//     shortened. The grid only formats the distance to it and never re-derives
+//     a purge date from the window.
+// An exempt picture carries `auto_purge_exempt: true`, a null `purge_at`, and
+// an `auto_purge_exempt_reason` naming WHY — "protected" (a reference-folder
+// original) or "locked" (frozen by a locked set). The two get different badges
+// because only the second is something the user can change (unlock the set).
+// The descriptor itself is built by `buildPurgeBadge` in utils/retention.js so
+// the three states are unit-testable without a grid.
+const scrapheapRetentionLabel = computed(() =>
+  isScrapheapView.value && scrapheapRetentionStore.loaded
+    ? scrapheapRetentionStore.label
+    : "",
+);
+
+// Captured on entry to the scrapheap view so every tile counts down from one
+// instant and no two labels can disagree within a render.
+const purgeNowMs = ref(Date.now());
+
+watch(
+  isScrapheapView,
+  (isScrapheap) => {
+    if (!isScrapheap) return;
+    purgeNowMs.value = Date.now();
+    scrapheapRetentionStore.fetchRetention();
+  },
+  { immediate: true },
+);
+
+/**
+ * Auto-purge badge state for the pictures in the current render window, keyed
+ * by picture id. Built once per window rather than per cell so a large virtual
+ * grid does not re-derive it for every tile on every render.
+ * @returns {Map<number|string, {kind: string, icon: string, label: string, title: string}>}
+ */
+const scrapheapPurgeBadges = computed(() => {
+  const badges = new Map();
+  if (!isScrapheapView.value) return badges;
+  // Nothing is on a clock when auto-empty is off, so neither a countdown nor a
+  // "won't auto-delete" badge means anything — the header already states the
+  // policy. Also suppressed until the policy is known, so the badges can't
+  // appear and then vanish once the fetch lands.
+  if (!scrapheapRetentionStore.loaded || scrapheapRetentionStore.isNever) {
+    return badges;
+  }
+  const now = purgeNowMs.value;
+  const dateFormat =
+    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+  const formatDate = (iso) => formatUserDate(iso, dateFormat);
+  for (const img of gridImagesToRender.value || []) {
+    if (!img || img.id == null) continue;
+    const badge = buildPurgeBadge(img, { now, formatDate });
+    if (badge) badges.set(img.id, badge);
+  }
+  return badges;
+});
+
+/**
+ * Badge descriptor for one tile, or `undefined` outside the scrapheap view.
+ * @param {Object} img - grid picture.
+ */
+function getScrapheapPurgeBadge(img) {
+  return img && img.id != null
+    ? scrapheapPurgeBadges.value.get(img.id)
+    : undefined;
+}
+
 const selectedMediaSupport = computed(() => {
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
@@ -6684,6 +6788,63 @@ function handleEmptyStateReset() {
 
 .thumbnail-bottom-left-badges > .thumbnail-badge {
   max-width: 100%;
+}
+
+/* Raised so the permanent scrapheap purge badge keeps the bottom-left corner. */
+.thumbnail-bottom-left-badges--raised {
+  bottom: var(--space-6);
+}
+
+/* ── Scrapheap auto-purge badge ─────────────────────────────────────────────
+   Permanent status chip over an arbitrary photo, so it sits on `--scrim-photo`
+   with an `on-dark-surface` glyph (visual-language §7 "scrims"). Meaning is
+   carried by icon + text; the error tint on the last day is reinforcement, not
+   the signal. */
+.thumbnail-purge-badge {
+  position: absolute;
+  left: var(--space-1);
+  bottom: var(--space-1);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-3));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-snug);
+  pointer-events: none;
+}
+
+.thumbnail-purge-badge__icon {
+  flex-shrink: 0;
+}
+
+.thumbnail-purge-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thumbnail-purge-badge--protected .thumbnail-purge-badge__icon {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* `--locked` deliberately has no tint: its icon inherits `on-dark-surface`, the
+   same as the shipped `.thumbnail-lock-badge`, so the two lock affordances read
+   as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
+   set") carry the difference from `--protected` — no colour needed. */
+
+/* Last-day emphasis. The tint is on the ICON only: `error` text at 11px on a
+   translucent scrim over an unknown photo cannot be proven to clear the 4.5:1
+   body floor, while an icon only needs 3:1. The label still says "Purges today"
+   / "1 day left", so nothing depends on seeing the colour. */
+.thumbnail-purge-badge--countdown-urgent .thumbnail-purge-badge__icon {
+  color: rgb(var(--v-theme-error));
 }
 
 /* Format and resolution badges are hover-only */
