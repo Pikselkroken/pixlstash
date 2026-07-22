@@ -209,7 +209,7 @@ function confirmDeleteUnprotected() {
 
         <div class="ref-warn">
           <div class="ref-warn-head">
-            <v-icon size="18">mdi-alert</v-icon>
+            <v-icon size="18">mdi-alert-outline</v-icon>
             <span>{{ refWarnTitle }}</span>
           </div>
           <ul class="ref-warn-paths">

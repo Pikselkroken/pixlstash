@@ -754,6 +754,7 @@ import {
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
@@ -769,6 +770,10 @@ import {
   toggleScore,
 } from "../../utils/utils.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -973,9 +978,7 @@ function setOverlayImageById(nextId) {
       // snapshot captured on open, so it carries the pre-edit score. Re-applying it
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
-      ...(isSameImage && existingScore != null
-        ? { score: existingScore }
-        : {}),
+      ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
@@ -2793,7 +2796,11 @@ async function onDrawEnd(event) {
       });
     }
   } catch (e) {
-    alert(`Failed to create ${drawModeLabel.value} box: ${e?.message || e}`);
+    console.error("Failed to create box", e);
+    noticeStore.error(
+      `Couldn't create that ${drawModeLabel.value} box. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-create-box" },
+    );
   } finally {
     clearDrawMode();
   }
@@ -3321,7 +3328,11 @@ async function assignFaceToCharacter(face, character) {
       });
     }
   } catch (e) {
-    alert(`Failed to assign character: ${e?.message || e}`);
+    console.error("Failed to assign character", e);
+    noticeStore.error(
+      `Couldn't assign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-assign-character" },
+    );
   }
 }
 
@@ -3349,7 +3360,11 @@ async function unassignFaceCharacter(face) {
       });
     }
   } catch (e) {
-    alert(`Failed to unassign character: ${e?.message || e}`);
+    console.error("Failed to unassign character", e);
+    noticeStore.error(
+      `Couldn't unassign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-unassign-character" },
+    );
   }
 }
 
@@ -3914,7 +3929,6 @@ function resetOverlayCopyState() {
   color: rgba(var(--v-theme-on-dark-surface), 0.8);
 }
 
-
 .overlay-comfy-activator {
   gap: 6px;
 }
@@ -4029,9 +4043,15 @@ function resetOverlayCopyState() {
   font-size: var(--text-2xs);
 }
 
+/* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
+   `on-warning` / `on-error` are the wrong tokens here — they are authored for a
+   solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
+   The right foreground is the surface's own, matching `.overlay-comfy-note` and
+   `.overlay-comfy-status` directly above; the hue comes from the dark-surface
+   status set because the lightbox is dark in both themes. 9.18:1 – 11.24:1. */
 .overlay-comfy-warning {
-  background: rgba(var(--v-theme-warning), 0.2);
-  color: rgb(var(--v-theme-on-warning));
+  background: rgba(var(--v-theme-dark-surface-warning), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .overlay-comfy-note {
@@ -4045,8 +4065,8 @@ function resetOverlayCopyState() {
 }
 
 .overlay-comfy-error {
-  background: rgba(var(--v-theme-error), 0.2);
-  color: rgb(var(--v-theme-on-error));
+  background: rgba(var(--v-theme-dark-surface-error), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .overlay-comfy-success {

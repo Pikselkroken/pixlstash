@@ -4,6 +4,7 @@ import {
   isFileDrag,
   isVideo,
 } from "../utils/media.js";
+import { useNoticeStore } from "../stores/useNoticeStore";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -32,6 +33,11 @@ export function useGridDragDrop(
   },
   props,
 ) {
+  // Drag/drop failures are reported through the notice surface rather than a
+  // blocking native alert() (docs/design/notice-surface.md §1). Called during
+  // the host component's setup, so Pinia is active.
+  const noticeStore = useNoticeStore();
+
   // ── Drag overlay state ────────────────────────────────────────────────────
   const dragOverlayVisible = ref(false);
   const dragOverlayMessage = "Drop files here to import";
@@ -170,7 +176,10 @@ export function useGridDragDrop(
       e.dataTransfer,
     );
     if (!files.length) {
-      alert("No supported files found.");
+      noticeStore.warning(
+        "None of those files are a supported image, video or archive.",
+        { key: "import-unsupported-files" },
+      );
       return;
     }
 

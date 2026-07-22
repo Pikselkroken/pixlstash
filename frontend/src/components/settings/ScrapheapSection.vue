@@ -14,8 +14,14 @@ import { VIcon, VTooltip } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsInfoCard from "./SettingsInfoCard.vue";
+import RetentionReductionDialog from "../widgets/RetentionReductionDialog.vue";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { getScrapheapRetentionImpact } from "../../api/serverConfig";
+import { formatUserDate } from "../../utils/utils";
 import {
+  buildRetentionReductionMessage,
+  isRetentionReduction,
   retentionSelectOptions,
   retentionToSelectValue,
   selectValueToRetention,
@@ -26,6 +32,7 @@ const props = defineProps({
 });
 
 const store = useScrapheapRetentionStore();
+const userPrefsStore = useUserPrefsStore();
 
 // Vuetify dialogs stay mounted after the first open, so onMounted would only
 // ever fire once — fetch on the open transition instead (the house pattern).
@@ -42,8 +49,29 @@ watch(
 const options = computed(() =>
   retentionSelectOptions(store.retentionDays, store.choices),
 );
-const selectValue = computed(() => retentionToSelectValue(store.retentionDays));
-const busy = computed(() => store.loading || store.saving);
+// The select is NOT bound straight to the store: a reduction is only saved after
+// a confirm, so between the pick and the answer the control shows a value the
+// server has not accepted. A local ref lets a cancel push the old value back
+// into the DOM — binding the store directly would leave the native <select>
+// visually stuck on the abandoned choice, because the bound value never changed
+// and Vue would have nothing to patch.
+const selectValue = ref(retentionToSelectValue(store.retentionDays));
+watch(
+  () => store.retentionDays,
+  (days) => {
+    selectValue.value = retentionToSelectValue(days);
+  },
+);
+
+/** Put the control back on the saved value after an abandoned change. */
+function revertSelect() {
+  selectValue.value = retentionToSelectValue(store.retentionDays);
+}
+
+const checkingImpact = ref(false);
+const busy = computed(
+  () => store.loading || store.saving || checkingImpact.value,
+);
 
 // ── Tooltip copy ────────────────────────────────────────────────────────────
 // The three things a user cannot infer from the control itself. Kept as data so
@@ -67,8 +95,8 @@ const tooltipAriaLabel = computed(
 const savedFlash = ref(false);
 let savedFlashToken = 0;
 
-async function onSelect(value) {
-  const days = selectValueToRetention(value);
+/** Persist the picked window and flash confirmation. */
+async function commitRetention(days) {
   savedFlash.value = false;
   try {
     await store.setRetention(days);
@@ -79,9 +107,97 @@ async function onSelect(value) {
     }, 2000);
   } catch (err) {
     // The store already rolled the optimistic value back and set `store.error`,
-    // which is rendered below; nothing further to do here.
+    // which is rendered below. Put the control back on the saved value too, so
+    // it can't sit showing a window the server rejected.
     console.warn("Scrapheap retention change was not saved.", err);
+    revertSelect();
   }
+}
+
+// ── Reduction confirm ───────────────────────────────────────────────────────
+// Lowering the window schedules permanent deletion; every other direction only
+// spares pictures. So only a reduction is gated, and only when the server says
+// it would actually delete something.
+const reductionDialogOpen = ref(false);
+const reductionMessage = ref({
+  title: "",
+  body: "",
+  warning: "",
+  confirmLabel: "Confirm",
+});
+const reductionUnverified = ref(false);
+const pendingReductionDays = ref(null);
+
+async function onSelect(value) {
+  const days = selectValueToRetention(value);
+  // Reflect the pick immediately; `revertSelect()` undoes it if we don't save.
+  selectValue.value = value;
+
+  const isReduction = isRetentionReduction(store.retentionDays, days, {
+    // Never confirm against a baseline we haven't loaded — we'd be asserting a
+    // direction we don't actually know.
+    previousKnown: store.loaded,
+  });
+  if (!isReduction) {
+    await commitRetention(days);
+    return;
+  }
+
+  // Check the blast radius BEFORE saving. Mirrors the scrapheap delete-preview
+  // fail-safe: never schedule destruction on an unverified basis.
+  checkingImpact.value = true;
+  let impact = null;
+  let verified = true;
+  try {
+    impact = await getScrapheapRetentionImpact(days);
+  } catch (err) {
+    // Includes a 404 from a server that hasn't shipped the endpoint yet. Do NOT
+    // guess a count and do NOT save silently — say so and let the user decide.
+    console.warn(
+      `Couldn't check the impact of lowering scrapheap retention to ${String(days)} days; ` +
+        "asking the user to confirm on an unverified basis.",
+      err,
+    );
+    verified = false;
+  } finally {
+    checkingImpact.value = false;
+  }
+
+  const message = buildRetentionReductionMessage({
+    nextDays: days,
+    // Passed RAW on purpose. Coercing a missing field to 0 here would make a
+    // 200 with a malformed body look like "nothing would be deleted" and save
+    // without asking; the builder routes an unreadable count to the unverified
+    // confirm instead.
+    wouldPurgeCount: impact?.would_purge_count,
+    firstPurgeAt: impact?.first_purge_at ?? null,
+    formatDate: (iso) => formatUserDate(iso, userPrefsStore.dateFormat),
+    verified,
+  });
+
+  // A verified reduction that would delete nothing is not destructive: save it.
+  if (!message) {
+    await commitRetention(days);
+    return;
+  }
+
+  reductionMessage.value = message;
+  reductionUnverified.value = !verified;
+  pendingReductionDays.value = days;
+  reductionDialogOpen.value = true;
+}
+
+async function confirmReduction() {
+  const days = pendingReductionDays.value;
+  reductionDialogOpen.value = false;
+  pendingReductionDays.value = null;
+  await commitRetention(days);
+}
+
+function cancelReduction() {
+  pendingReductionDays.value = null;
+  // Nothing was saved, so the control must not keep showing the abandoned pick.
+  revertSelect();
 }
 </script>
 
@@ -126,6 +242,18 @@ async function onSelect(value) {
         {{ store.error }}
       </div>
       <div v-else-if="savedFlash" class="sr-success" role="status">Saved.</div>
+
+      <RetentionReductionDialog
+        v-model:open="reductionDialogOpen"
+        :title="reductionMessage.title"
+        :body="reductionMessage.body"
+        :warning="reductionMessage.warning"
+        :confirm-label="reductionMessage.confirmLabel"
+        :unverified="reductionUnverified"
+        :busy="store.saving"
+        @confirm="confirmReduction"
+        @cancel="cancelReduction"
+      />
 
       <div class="sr-note">
         <SettingsInfoCard>

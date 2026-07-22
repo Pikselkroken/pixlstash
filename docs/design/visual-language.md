@@ -148,7 +148,8 @@ below.
 | Primary action button | `primary` / `onPrimary` |
 | Secondary / tertiary action | `secondary` / `tertiary` |
 | Divider line | `divider` (subtle) / `border` (visible) |
-| Success / error / warning / info | `success` / `error` / `warning` / `info` |
+| Success / error / warning / info | `success` / `error` / `warning` / `info` (+ `on-*`, see below) |
+| The same four, **inside a `dark-surface`** | `dark-surface-success` / `-error` / `-warning` / `-info` |
 | Hover / selection wash | `--hover-wash` / `--active-wash` (in `style.css`) |
 | Shadow color (for elevation) | `shadow` |
 
@@ -167,11 +168,35 @@ accent would make it sad. It is exempt the same way brand/source marks are (§8)
 and do not treat it as licence for a second off-token palette without a new named
 exemption here.
 
+### Status colors, and the three ways to get them wrong
+
+There are three separate status jobs, and they need three different tokens. Reaching
+for the wrong one is the single most common color bug in this codebase.
+
+| The job | Reach for | Floor |
+|---|---|---|
+| Status hue as a **foreground / border / tint** on the theme's own canvas | `success` `error` `warning` `info` | 3:1 (UI) |
+| Text or a glyph **on a SOLID status fill** | the matching `on-<status>` | 4.5:1 |
+| Status hue anywhere inside a **`dark-surface`** (lightbox, review overlay) | `dark-surface-<status>` | 3:1 |
+
+**`on-<status>` means "on the solid fill" — literally.** It is authored against
+`rgb(var(--v-theme-<status>))` at full opacity. Put it on a translucent tint
+(`rgba(status, .2)`) and it is simply the wrong color: the fill blends toward the
+surface, and the near-black `on-warning` measured **1.41:1** on a 20% warning tint
+over the lightbox. On a tint, the foreground is the *surface's* own — `on-surface`
+or `on-dark-surface`. Three shipped components had this bug; all three now either
+use a solid fill or the surface foreground.
+
+**`dark-surface` needs its own status set** because it stays dark in *both* themes,
+so a light-theme hue tuned for a near-white canvas is exactly wrong on it. The four
+`dark-surface-*` values are identical in both themes and measure 4.12:1 – 5.46:1
+there. This is why the light theme's status hues can be deepened at all.
+
 ### Contrast (proven, not eyeballed)
 WCAG floors: body text **≥ 4.5:1**, large text and meaningful UI **≥ 3:1**.
 
-Two findings to honour:
-- **`primary` (olive `#5c7c0a`) with white text = 4.83:1.** Passes. This is the
+Findings to honour:
+- **`primary` (olive `#5c7c0a`) with white text = 4.84:1.** Passes. This is the
   primary-action button color for normal-size labels.
 - **`accent` (amber `#b0732b`) with white text = 3.94:1.** Fails the 4.5:1 body floor;
   passes the 3:1 large/UI floor. So **the amber accent is for large labels (≥18px or
@@ -179,6 +204,24 @@ Two findings to honour:
   body text.** Want an amber-backed button with a small label? Darken the amber or use
   `primary`. This is exactly the kind of "looks fine to the eye, fails the checker"
   trap the system exists to catch.
+- **The status hues on their own canvas** (light on `#faf9f7`, dark on `#1b1f24`):
+  `error` 4.62 / 4.50 · `warning` 3.09 / 5.32 · `success` 4.87 / 5.96 · `info`
+  4.90 / 5.30. All clear the 3:1 UI floor. Light `success` and `info` were Material
+  500s until 2026-07 and measured 2.64 / 2.97 — **below the floor** — which is the
+  reason they were deepened to `#2e7d32` and `#1a6ec4`.
+- **The eight `on-<status>` values, on their solid fill:** light `on-error` #ffffff
+  4.86 · `on-warning` #23211d 4.95 · `on-success` #ffffff 5.13 · `on-info` #ffffff
+  5.16; dark, all four `#1b1b1b`: `on-error` 4.68 · `on-warning` 5.53 · `on-success`
+  6.20 · `on-info` 5.51. All clear 4.5:1.
+
+**Author every `on-*` pair explicitly, and spell the key in kebab-case.** Vuetify
+emits one CSS variable per theme key *verbatim* — `--v-theme-<key>` — so a camelCase
+`onSurface` produces `--v-theme-onSurface`, which nothing reads, and Vuetify then
+derives the `--v-theme-on-surface` the app actually consumes as pure `#000`/`#fff`
+by APCA. That silently overrode seven authored pairs here: the warm near-black text
+ramp was rendering as pure `#000` (banned above), and dark `on-accent`, `on-primary`
+and `on-tertiary` were rendering as white at **2.40:1, 2.76:1 and 2.84:1**. A missing
+or misspelled `on-*` is never absent — it is present and wrong.
 
 ---
 
@@ -393,7 +436,17 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
 
 - **Anatomy:** a left cluster (a count or title: "12 selected", "Trash") and a right
   cluster of actions, on a chrome surface (`toolbar` / `panel`), `--elevation-2`,
-  full width, at height **`--bar-height`** (48px). Reference: `SelectionBar.vue`.
+  full width, at height **`--bar-height`** (48px).
+- **The shipped `SelectionBar.vue` is not this bar** — do not use it as the reference
+  for the full-width pattern. It lives in `components/panels/` (not `widgets/`) and is
+  a **floating centred pill**: `--radius-pill`, `rgba(surface, .86)` with
+  `backdrop-filter: blur(12px)`, `--elevation-3`, `bottom: var(--space-5)` inside
+  `.grid-content-area`, sized to its content rather than to the viewport. That is
+  deliberate for a bulk-selection affordance over a photo grid, and it is also why it
+  owns `--floating-bottom-h` for the notice stack (`notice-surface.md` §2.2). Whether
+  it converges on the full-width pattern or stays a pill is the **One band** open item
+  below; until that is decided, the pill is the reference for **floating** contextual
+  actions and the overlay top bar is the reference for the full-width one.
 - **Action weight:** the primary/affirmative action (Restore) is a `primary` button;
   a destructive action (Purge / Delete forever) is `error`, kept visually distinct,
   and **always behind a confirm** — deletion is irreversible and must never be a
@@ -407,7 +460,47 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
 
 ---
 
-## 14. Using this system
+## 14. Layers (`--z-*`)
+
+There was no stacking scale: 40+ distinct raw z-index values from `0` to `99999`,
+two of them `!important`. "Put it above that thing" was luck, not a rule, and every
+new floating layer was placed by guessing higher than whatever was found nearby.
+Eight named steps replace the guessing. **A new floating layer picks a name, not a
+number.**
+
+| Token | Value | Stratum |
+|---|---|---|
+| `--z-base` | 0 | in-flow content; the grid itself |
+| `--z-raised` | 10 | lifted over an immediate sibling: a tile badge, a hover scrim |
+| `--z-sticky` | 100 | sticky headers/toolbars inside a scroll container |
+| `--z-floating` | 200 | chrome anchored to the content area: selection pill, breadcrumb, range pill |
+| `--z-dropdown` | 300 | menus, popovers, tooltips anchored to a control |
+| `--z-drawer` | 1000 | full-panel overlays inside the shell: the lightbox |
+| `--z-overlay` | 2000 | app-level overlays and context menus |
+| `--z-modal` | 4000 | modal dialogs and their scrims |
+| `--z-notice` | see below | the notice surface, above everything |
+
+Steps are 10× apart so a component can always be wedged between two strata without
+inventing a ninth. Vuetify's own teleported overlays land at ~2000 and sit outside
+these stacking contexts; they are kept off the desktop title strip by anchoring to
+`--titlebar-h`, not by z-index.
+
+**`--z-notice` is deliberately out of band at `100000`.** Its ladder slot is 5000
+(one step above `--z-modal`) — an error about a failed background job has to be
+readable while a dialog is open. It is parked high because three un-migrated
+squatters currently sit above 5000: `ImageImporter.vue` (99999, twice) and
+`TitleBar.vue` (100000). Drop `--z-notice` to 5000 in the same change that moves
+those three onto the ladder.
+
+**Migration is opportunistic, not a big-bang.** Touch a rule that carries a raw
+z-index, move that rule onto the ladder. A wholesale rewrite is not worth it: each
+move is pixel-visible on a different screen and has to be eyeballed there, and a
+mistake in stacking order is invisible until the exact combination of overlays that
+exposes it. From now on a raw z-index in new code is drift.
+
+---
+
+## 15. Using this system
 
 1. Reach for a token before you type a value. Spacing, radius, type, elevation, motion
    are in `design-tokens.css`; color is `rgb(var(--v-theme-*))` from `main.js`.

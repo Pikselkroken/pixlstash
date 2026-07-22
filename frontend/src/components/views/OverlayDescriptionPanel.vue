@@ -142,10 +142,15 @@
 import { ref, computed, nextTick, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
 } from "../../utils/descriptions";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   image: { type: Object, default: null },
@@ -229,7 +234,11 @@ async function saveDescription() {
     emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
   } catch (err) {
-    alert(`Failed to update description: ${err?.message || err}`);
+    console.error("Failed to update description", err);
+    noticeStore.error(
+      `Couldn't save the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      { key: "description-save" },
+    );
   } finally {
     isSavingDescription.value = false;
   }
@@ -256,7 +265,9 @@ async function copyDescription() {
       resetCopyState();
     }, 2000);
   } else {
-    alert("Unable to copy description.");
+    noticeStore.error("Couldn't copy the description to the clipboard.", {
+      key: "description-copy",
+    });
   }
 }
 
@@ -294,7 +305,11 @@ async function refreshDescription(model = null) {
     emit("update-description", capturedImageId, null);
     cancelEditDescription();
   } catch (err) {
-    alert(`Failed to reset description: ${err?.message || err}`);
+    console.error("Failed to reset description", err);
+    noticeStore.error(
+      `Couldn't reset the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      { key: "description-reset" },
+    );
   } finally {
     isDescriptionRefreshing.value = false;
   }

@@ -9,7 +9,11 @@ import {
   PROTECTED_BADGE_LABEL,
   PROTECTED_BADGE_TITLE,
   RETENTION_DAY_OPTIONS,
+  RETENTION_PURGE_WARNING,
   buildPurgeBadge,
+  buildRetentionReductionMessage,
+  isRetentionReduction,
+  retentionRank,
   daysUntilPurge,
   normalizeRetentionDays,
   parseServerTimestamp,
@@ -362,5 +366,165 @@ describe("buildPurgeBadge", () => {
       { now },
     );
     expect(badge.title).toBe("Auto-deletes 2026-08-21T12:00:00Z");
+  });
+});
+
+describe("retentionRank", () => {
+  it("ranks Never above every finite window", () => {
+    expect(retentionRank(null)).toBe(Infinity);
+    expect(retentionRank(undefined)).toBe(Infinity);
+    expect(retentionRank(120)).toBeLessThan(retentionRank(null));
+  });
+
+  it("ranks finite windows by size", () => {
+    expect(retentionRank(30)).toBeLessThan(retentionRank(60));
+  });
+});
+
+describe("isRetentionReduction", () => {
+  it("is true for a smaller finite window", () => {
+    expect(isRetentionReduction(60, 30)).toBe(true);
+    expect(isRetentionReduction(120, 90)).toBe(true);
+  });
+
+  it("is true for Never → any window (the biggest drop of all)", () => {
+    expect(isRetentionReduction(null, 30)).toBe(true);
+    expect(isRetentionReduction(null, 120)).toBe(true);
+  });
+
+  it("is false for a larger window", () => {
+    expect(isRetentionReduction(30, 60)).toBe(false);
+    expect(isRetentionReduction(90, 120)).toBe(false);
+  });
+
+  it("is false for any window → Never", () => {
+    expect(isRetentionReduction(30, null)).toBe(false);
+    expect(isRetentionReduction(120, null)).toBe(false);
+  });
+
+  it("is false when the value is unchanged", () => {
+    expect(isRetentionReduction(30, 30)).toBe(false);
+    expect(isRetentionReduction(null, null)).toBe(false);
+  });
+
+  // Setting the window for the first time is not a reduction: 30 is the
+  // smallest offered value, so picking it from the 30-day default is a no-op,
+  // and any other pick is a raise.
+  it("is false for a first set from the default", () => {
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 30)).toBe(false);
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 60)).toBe(false);
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, null)).toBe(false);
+  });
+
+  // Never assert a direction against a baseline that has not loaded.
+  it("is false when the previous value is unknown", () => {
+    expect(isRetentionReduction(null, 30, { previousKnown: false })).toBe(
+      false,
+    );
+    expect(isRetentionReduction(120, 30, { previousKnown: false })).toBe(false);
+  });
+});
+
+describe("buildRetentionReductionMessage", () => {
+  const formatDate = () => "23 Jul 2026";
+
+  it("returns nothing when a verified check finds no victims", () => {
+    expect(
+      buildRetentionReductionMessage({
+        nextDays: 30,
+        wouldPurgeCount: 0,
+        firstPurgeAt: "2026-07-23T00:00:00Z",
+        formatDate,
+      }),
+    ).toBeNull();
+  });
+
+  it("states the count and when deletion starts", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 30,
+      wouldPurgeCount: 412,
+      firstPurgeAt: "2026-07-23T00:00:00Z",
+      formatDate,
+    });
+    expect(msg.title).toBe("Shorten the auto-empty window?");
+    expect(msg.body).toBe(
+      "30 days will permanently delete 412 pictures, starting 23 Jul 2026.",
+    );
+    expect(msg.warning).toBe(RETENTION_PURGE_WARNING);
+    expect(msg.confirmLabel).toBe("Change to 30 days");
+  });
+
+  it("uses the singular for one picture", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 60,
+      wouldPurgeCount: 1,
+      firstPurgeAt: "2026-07-23T00:00:00Z",
+      formatDate,
+    });
+    expect(msg.body).toBe(
+      "60 days will permanently delete 1 picture, starting 23 Jul 2026.",
+    );
+  });
+
+  // Deletion starts when the grace elapses, not on save — never imply "now".
+  it("never claims deletion happens immediately", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 30,
+      wouldPurgeCount: 5,
+      firstPurgeAt: null,
+      formatDate,
+    });
+    expect(msg.body).toBe(
+      "30 days will permanently delete 5 pictures once the grace period ends.",
+    );
+    expect(msg.body).not.toMatch(/immediately|right now|instantly/i);
+  });
+
+  it("says plainly when the impact could not be checked", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 30,
+      verified: false,
+    });
+    expect(msg.title).toBe("Couldn't check what this would delete");
+    expect(msg.body).toMatch(/couldn't be checked/i);
+    expect(msg.body).toMatch(/nothing has been changed yet/i);
+    expect(msg.confirmLabel).toBe("Change anyway");
+    expect(msg.warning).toBe(RETENTION_PURGE_WARNING);
+  });
+
+  // The unverified branch must never be silently downgraded to "nothing to do"
+  // by a zero count it never actually read.
+  it("still confirms when unverified, even with a zero count", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 30,
+      wouldPurgeCount: 0,
+      verified: false,
+    });
+    expect(msg).not.toBeNull();
+    expect(msg.confirmLabel).toBe("Change anyway");
+  });
+
+  // Fail safe, not fail open: `null` means "save without asking", so a count we
+  // cannot read must never produce it.
+  it("treats an unreadable count as unverified, never as zero", () => {
+    for (const bad of [NaN, undefined, null, "", "many", {}, [], true]) {
+      const msg = buildRetentionReductionMessage({
+        nextDays: 30,
+        wouldPurgeCount: bad,
+      });
+      expect(msg).not.toBeNull();
+      expect(msg.confirmLabel).toBe("Change anyway");
+    }
+  });
+
+  it("accepts a numeric string count", () => {
+    const msg = buildRetentionReductionMessage({
+      nextDays: 30,
+      wouldPurgeCount: "7",
+      firstPurgeAt: null,
+    });
+    expect(msg.body).toBe(
+      "30 days will permanently delete 7 pictures once the grace period ends.",
+    );
   });
 });

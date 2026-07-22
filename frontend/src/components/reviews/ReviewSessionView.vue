@@ -790,7 +790,7 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-primary));
 }
 .rs-tally-kept {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-tally-skipped {
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
@@ -857,7 +857,7 @@ defineExpose({ handleKey });
   color: rgb(var(--v-theme-error));
 }
 .rs-state-check {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-state-big {
   font-size: 17px;
@@ -899,9 +899,9 @@ defineExpose({ handleKey });
   background: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 .rs-state-btn--archive {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-success)) 60%, transparent);
-  background: color-mix(in srgb, rgb(var(--v-theme-success)) 16%, transparent);
-  color: rgb(var(--v-theme-success));
+  border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-success)) 60%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-success)) 16%, transparent);
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-state-btn--accent {
   border-color: color-mix(in srgb, rgb(var(--v-theme-accent)) 60%, transparent);

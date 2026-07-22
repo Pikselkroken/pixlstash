@@ -724,8 +724,8 @@ function archivedSummary(a) {
   white-space: nowrap;
 }
 .rs-abort-btn--keep {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-success)) 60%, transparent);
-  color: rgb(var(--v-theme-success));
+  border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-success)) 60%, transparent);
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-abort-btn--undo {
   border-color: color-mix(in srgb, rgb(var(--v-theme-error)) 60%, transparent);
@@ -822,7 +822,7 @@ function archivedSummary(a) {
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-rail-archived-check {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-rail-archived-tag {
   flex: 1;

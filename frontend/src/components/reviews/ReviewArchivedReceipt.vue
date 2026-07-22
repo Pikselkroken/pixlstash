@@ -90,7 +90,7 @@ function formatWhen(iso) {
   gap: 10px;
 }
 .rs-archived-check {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-archived-title {
   font-size: 16px;
@@ -117,7 +117,7 @@ function formatWhen(iso) {
   color: rgb(var(--v-theme-primary));
 }
 .rs-archived-kept {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-archived-back {
   align-self: flex-start;

@@ -56,6 +56,30 @@ body {
   --active-text: rgb(var(--v-theme-on-surface));
 }
 
+/* ---------------------------------------------------------------------------
+   Bottom-edge floating layout contract (notice-surface.md §2.2).
+
+   RUNTIME layout variables, not design tokens: they are computed per frame from
+   what is actually on screen, so they live here beside --hover-wash and friends
+   rather than in design-tokens.css, which holds fixed scales only.
+
+   `--floating-bottom-h` is the height of the TALLEST bottom-anchored floating
+   element currently visible INSIDE the notice column's footprint, plus its gap.
+   0px when nothing is parked there. Whoever parks something on the bottom edge
+   owns this variable — today that is the SelectionBar pill (and, below 600px
+   where the centred card widens over it, the grid breadcrumb). App.vue writes it
+   from measured heights (ResizeObserver), never from a constant, because the
+   pill wraps and grows on coarse pointers.
+
+   Because the notice host's inset is derived from that measurement, overlap
+   between a notice and the pill is impossible by construction rather than by
+   a hardcoded guess.
+   --------------------------------------------------------------------------- */
+.app-viewport {
+  --floating-bottom-h: 0px;
+  --notice-safe-bottom: calc(var(--space-5) + var(--floating-bottom-h));
+}
+
 /* Reusable uppercase section label — matches font-size 11px, weight 600, spacing 0.06em */
 .section-label {
   font-size: var(--text-2xs);

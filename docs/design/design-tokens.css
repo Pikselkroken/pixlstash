@@ -132,6 +132,46 @@
      it (see `--titlebar-h` and the desktop overrides in style.css). */
   --bar-height: 48px;
 
+  /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
+     de-facto width already used by LockedDeleteNoticeDialog and
+     .plugin-menu-panel, so the surface does not introduce a fifth floating-card
+     width. */
+  --notice-max-w: 420px;
+
+  /* ---------------------------------------------------------------------------
+     LAYERS (`--z-*`) — the stacking ladder. See visual-language.md §14.
+
+     There was no scale: 40+ distinct raw values from 0 to 99999, two of them
+     `!important`. "Put it above that thing" was luck, not a rule. These eight
+     steps are the strata the app actually has, so a new floating layer picks a
+     NAME, not a number. Steps are 10× apart on purpose: there is always room to
+     wedge one component between two strata without inventing a ninth stratum.
+
+     A raw z-index is now drift. Migrating the existing 40+ call sites is
+     opportunistic follow-up work — touch a rule, move it onto the ladder — not
+     a big-bang rewrite, because each move is pixel-visible in a different
+     screen and has to be eyeballed there.
+     --------------------------------------------------------------------------- */
+  --z-base: 0;         /* in-flow content; the grid itself */
+  --z-raised: 10;      /* lifted over an immediate sibling: a tile badge, a hover scrim */
+  --z-sticky: 100;     /* sticky headers/toolbars inside a scroll container */
+  --z-floating: 200;   /* chrome anchored to the content area: selection pill, breadcrumb, range pill */
+  --z-dropdown: 300;   /* menus, popovers, tooltips anchored to a control */
+  --z-drawer: 1000;    /* full-panel overlays inside the shell: the lightbox */
+  --z-overlay: 2000;   /* app-level overlays and context menus */
+  --z-modal: 4000;     /* modal dialogs and their scrims */
+
+  /* The notice layer sits above everything, including a modal: an error about a
+     failed background job must be readable while a dialog is open.
+
+     Its LADDER slot is 5000 (one step above --z-modal). It is parked at 100000
+     because three un-migrated squatters currently sit higher — ImageImporter.vue
+     (99999, ×2) and TitleBar.vue (100000) — and a notice must clear them today.
+     Drop this to 5000 in the same change that moves those three onto the ladder;
+     until then it is deliberately out of band and that is recorded here rather
+     than left to be rediscovered. */
+  --z-notice: 100000;
+
   /* ---------------------------------------------------------------------------
      MOTION — durations and easings. Motion confirms what happened; it is
      feedback, not decoration. --dur-1..3 are the routine-interaction ceiling:
