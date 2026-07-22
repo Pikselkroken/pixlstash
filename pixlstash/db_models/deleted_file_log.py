@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Boolean, Column, DateTime
 from sqlmodel import Field, SQLModel
 
 
@@ -23,6 +23,14 @@ class DeletedFileLog(SQLModel, table=True):
         pixel_sha: Content hash of the image at deletion time (may be NULL for
             rows whose pixel hash was never computed).
         deleted_at: UTC timestamp of permanent deletion.
+        file_removed: Whether the on-disk file was actually removed. ``True`` for a
+            genuine permanent deletion (content is gone — restore must never
+            resurrect it). ``False`` when the picture was removed from the library
+            but the file was deliberately kept on disk (a protected reference-folder
+            picture, ``allow_delete_file=False``): the row exists only to stop the
+            scanner auto re-importing that path, and restore must NOT treat it as a
+            permanent deletion. Existing rows predate this distinction and default
+            to ``True`` so the never-resurrect guarantee is preserved for them.
     """
 
     __tablename__ = "deleted_file_log"
@@ -32,6 +40,15 @@ class DeletedFileLog(SQLModel, table=True):
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted_at: datetime = Field(
         sa_column=Column("deleted_at", type_=DateTime, nullable=False)
+    )
+    file_removed: bool = Field(
+        default=True,
+        sa_column=Column(
+            "file_removed",
+            Boolean,
+            nullable=False,
+            server_default="1",
+        ),
     )
 
     @staticmethod

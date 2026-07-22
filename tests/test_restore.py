@@ -115,8 +115,20 @@ def _remove_file(server, relative_path: str):
     os.remove(os.path.join(server.vault.image_root, relative_path))
 
 
-def _add_deleted_log(server, file_path: str, pixel_sha: str | None = None):
-    """Record a permanent deletion in deleted_file_log (path stored hashed)."""
+def _add_deleted_log(
+    server,
+    file_path: str,
+    pixel_sha: str | None = None,
+    file_removed: bool = True,
+):
+    """Record a deletion in deleted_file_log (path stored hashed).
+
+    ``file_removed=True`` (default) is a genuine permanent deletion — the file
+    was removed from disk and restore must never resurrect it. ``file_removed=
+    False`` records a picture removed from the library whose file was KEPT on
+    disk (a protected reference-folder picture): restore must NOT treat it as a
+    permanent deletion.
+    """
     from datetime import datetime, timezone
 
     def _do(session):
@@ -125,6 +137,7 @@ def _add_deleted_log(server, file_path: str, pixel_sha: str | None = None):
                 path_sha=DeletedFileLog.hash_path(file_path),
                 pixel_sha=pixel_sha,
                 deleted_at=datetime.now(timezone.utc),
+                file_removed=file_removed,
             )
         )
         session.commit()
@@ -2002,6 +2015,107 @@ def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
         assert report.permanently_deleted_count == 1, (
             f"Exactly one (the purged) should count: {report.permanently_deleted_count}"
         )
+
+
+def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
+    """Root-cause test: a ledger entry with ``file_removed=False`` (file kept on
+    disk) must NEVER count as a permanent deletion, even for a snapshot picture
+    that is NOT present in the live DB — so the content-aware live-active rescue
+    net (which only saves pictures alive in the live DB) does not apply.
+
+    This isolates the ``_load_deleted_file_index`` ``file_removed`` filter from
+    the secondary rescue net: the picture was removed from the library but its
+    file kept (protected reference folder), a snapshot captured it ALIVE, and on
+    rollback restore must bring it back because its content is not gone. With the
+    old ledger (path-only, no ``file_removed``) this row would be dropped as a
+    permanent deletion — the ~139-picture data-loss class."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = os.path.join(ref_dir, "kept.png")
+        open(abs_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                label="ref",
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            pic = Picture(
+                file_path=abs_path,
+                filename="kept.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return rf.id, pic.id
+
+        folder_id, pic_id = server.vault.db.run_task(_setup)
+
+        # Snapshot captures the reference picture ALIVE.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Now it is removed from the LIVE library (protected purge: file kept,
+        # logged with file_removed=False). It is NOT in the live DB anymore, so
+        # the live-active rescue net cannot save it — only the ledger filter can.
+        def _drop(session):
+            session.delete(session.get(Picture, pic_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop)
+        _add_deleted_log(server, abs_path, file_removed=False)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.permanently_deleted_count == 0, (
+            "A file_removed=False ledger entry must never count as a permanent "
+            f"deletion: {report.permanently_deleted_count}"
+        )
+        restored = _get_picture(server, pic_id)
+        assert restored is not None, (
+            "Reference picture whose file was KEPT must be restored from the "
+            "snapshot that captured it alive — its content is not gone."
+        )
+        assert restored.reference_folder_id == folder_id
+        assert not restored.deleted
+        assert os.path.isfile(abs_path), "The kept file must be untouched."
+
+
+def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
+    """The other direction: a ``file_removed=True`` ledger entry (genuine purge,
+    file gone) must STILL be dropped on restore and never resurrected — the
+    never-resurrect guarantee holds after the meaning split."""
+    _create_file(server, "gone.jpg")
+    pic = _add_picture(server, filename="gone.jpg", description="doomed")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Genuine permanent purge after the snapshot: row dropped, file logged as
+    # actually removed. (File left on disk here to prove the drop comes from the
+    # ledger's file_removed=True flag, not the missing-file check.)
+    def _del(session):
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_del)
+    _add_deleted_log(server, "gone.jpg", file_removed=True)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert report.missing_files_count == 0, "File is on disk — not missing."
+    assert report.permanently_deleted_count == 1, report.permanently_deleted_count
+    assert _get_picture(server, pic.id) is None, (
+        "A genuinely purged (file_removed=True) picture must not be resurrected."
+    )
 
 
 def test_full_restore_ledger_rescue_drops_when_content_differs(server):

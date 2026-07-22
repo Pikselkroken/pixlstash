@@ -449,13 +449,21 @@ def test_scrapheap_purge_protected_folder_keeps_file_and_blocks_reimport(
 
     def _fetch_logs(session: Session):
         return [
-            (r.path_sha, r.pixel_sha)
+            (r.path_sha, r.pixel_sha, r.file_removed)
             for r in session.exec(select(DeletedFileLog)).all()
         ]
 
     logs = server.vault.db.run_task(_fetch_logs)
-    assert any(path_sha == expected_path_sha for path_sha, _ in logs), (
-        f"Expected ledger entry for protected file, got {logs}"
+    protected_entries = [
+        removed for path_sha, _, removed in logs if path_sha == expected_path_sha
+    ]
+    assert protected_entries, f"Expected ledger entry for protected file, got {logs}"
+    # The file was KEPT on disk, so the ledger must record file_removed=False so
+    # restore does not treat it as a permanent deletion and drop the alive
+    # picture. The row still blocks scanner re-import.
+    assert protected_entries[0] is False, (
+        "Protected (kept-on-disk) purge must log file_removed=False, got "
+        f"{protected_entries[0]!r}"
     )
 
     # A scan of the folder must NOT re-import the still-present file.
@@ -501,9 +509,19 @@ def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_pa
     assert not os.path.isfile(abs_file_path), "Unprotected source file must be removed"
 
     logs = server.vault.db.run_task(
-        lambda s: [r.path_sha for r in s.exec(select(DeletedFileLog)).all()]
+        lambda s: [
+            (r.path_sha, r.file_removed) for r in s.exec(select(DeletedFileLog)).all()
+        ]
     )
-    assert expected_path_sha in logs, f"Expected ledger entry, got {logs}"
+    removed_flags = [
+        removed for path_sha, removed in logs if path_sha == expected_path_sha
+    ]
+    assert removed_flags, f"Expected ledger entry, got {logs}"
+    # The file was actually removed from disk, so this is a genuine permanent
+    # deletion: file_removed=True (restore must never resurrect it).
+    assert removed_flags[0] is True, (
+        f"Unprotected purge must log file_removed=True, got {removed_flags[0]!r}"
+    )
 
 
 def test_scrapheap_count_matches_grid(server):

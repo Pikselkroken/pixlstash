@@ -2285,18 +2285,23 @@ def register_routes(router, server):
             if pic_id is not None:
                 picture_ids.append(pic_id)
             if file_path:
-                # Log every deleted picture so it can never be resurrected,
-                # regardless of whether the on-disk file is protected.
-                log_records.append(
-                    {
-                        "path_sha": DeletedFileLog.hash_path(file_path),
-                        "pixel_sha": pixel_sha,
-                    }
-                )
                 # Only enqueue the physical file for removal when its reference
                 # folder permits it; a protected file stays on disk.
                 file_protected = (
                     ref_folder_id is not None and ref_folder_id in no_delete_folder_ids
+                )
+                # Log every deleted picture so the scanner never re-imports its
+                # path, but record whether the on-disk file was actually removed.
+                # ``file_removed=False`` (protected file kept on disk) means the
+                # content is NOT gone: restore must not treat it as a permanent
+                # deletion and drop the alive picture. ``file_removed=True`` is a
+                # genuine purge the restore drop must honour.
+                log_records.append(
+                    {
+                        "path_sha": DeletedFileLog.hash_path(file_path),
+                        "pixel_sha": pixel_sha,
+                        "file_removed": not file_protected,
+                    }
                 )
                 if not file_protected:
                     file_paths.append(file_path)
@@ -2351,6 +2356,7 @@ def register_routes(router, server):
                             path_sha=path_sha,
                             pixel_sha=record.get("pixel_sha"),
                             deleted_at=now,
+                            file_removed=record.get("file_removed", True),
                         )
                     )
             session.exec(delete(Picture).where(Picture.id.in_(ids)))
