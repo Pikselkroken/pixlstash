@@ -461,12 +461,27 @@ The store's `DEFAULT_TIMEOUTS` are close to right and are kept:
 
 Three rules on top, none of which the store enforces today:
 
-1. **Any notice carrying an `action` never auto-dismisses**, whatever its variant. A 3s
-   window to hit "Undo" is a failure of WCAG 2.2.1 and of common sense. If a level
-   default would apply, it is overridden to sticky.
+1. **A notice carrying an `action` does not auto-dismiss *by default*,** whatever its
+   variant. A 3s window to hit "Undo" is a failure of WCAG 2.2.1 and of common sense. If
+   a level default would apply, it is overridden to sticky.
+
+   **This is a default, not a law.** A caller passing an explicit `timeout` overrides it.
+   The rule was written for actions that stay true forever ("Undo", "Retry"); it is wrong
+   for a card whose sentence is about the *current* state, which should expire rather than
+   sit there needing a manual ✕. Two things make the override safe: the hover/`:focus-within`
+   pause (rule 3) already satisfies WCAG 2.2.1 on its own, and rule 2's floor still guarantees
+   the sentence is readable. Use it only where the sentence has its own expiry — and pair it
+   with a scope (§9.6), because a timeout alone does not know the selection changed.
+
+   **Do not stretch the window to cover the fix the card names.** A notice that says
+   "unlock the set" should be long gone before the unlock happens: that is several clicks
+   deep in a sidebar context menu, and no notice should follow a user through a menu. The
+   card's job is to report and to point; the lock badge's tooltip carries the same copy for
+   anyone who needs it after the card is gone.
 2. **Reading-time floor.** Effective timeout =
-   `min(12000, max(levelDefault, 2000 + 60 × characterCount))`. A 110-character success
-   message does not get 3 seconds.
+   `max(levelDefault, min(12000, 2000 + 60 × characterCount))`. A 110-character success
+   message does not get 3 seconds. The 12s ceiling bounds the *computed* reading time; it
+   does not cap a window a caller chose deliberately.
 3. **The timer pauses** on `:hover`, on `:focus-within`, and while `document.hidden`;
    it resumes on leave / on visibility. Required by WCAG 2.2.1 (Pause, Stop, Hide) —
    `setTimeout` alone cannot satisfy it. §9.3.
@@ -630,6 +645,14 @@ reading the store. This one was found by using it: the locked-delete warning sta
 screen after the selection it described was gone, because rule 1 of §6 makes any
 action-carrying notice sticky and nothing else could take it down. A sticky card that
 asserts something about the *present* has a second deadline the store knew nothing about.
+
+**Two deadlines, not one.** Scope answers "is this still true?"; the timeout answers "has
+this been read?". A card about the current state needs both, and the fix is not to pick
+one. Scope alone leaves the card up indefinitely whenever the user simply stops touching
+the selection — reading their email with a stale warning on screen. A timeout alone leaves
+it up through a selection change it no longer describes. So the locked-delete card takes
+the ordinary `warning` window (explicitly, to opt out of rule 1's sticky default) *and*
+declares a scope, and whichever deadline lands first wins.
 
 The contract:
 

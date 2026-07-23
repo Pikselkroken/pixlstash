@@ -368,3 +368,60 @@ describe("useNoticeStore — dismissByKey (§9.6 scoped notices)", () => {
     expect(store.notices).toHaveLength(1);
   });
 });
+
+describe("useNoticeStore — explicit timeout outranks the action rule (§6 rule 1)", () => {
+  it("keeps action⇒sticky as the default", () => {
+    expect(
+      resolveTimeout({ baseTimeout: 3000, text: "done", hasAction: true }),
+    ).toBe(0);
+  });
+
+  it("honours a window the caller asked for on an action card", () => {
+    expect(
+      resolveTimeout({
+        baseTimeout: 6000,
+        text: "hi",
+        hasAction: true,
+        explicit: true,
+      }),
+    ).toBe(6000);
+  });
+
+  it("still lets an explicit 0 mean sticky", () => {
+    expect(
+      resolveTimeout({
+        baseTimeout: 0,
+        text: "hi",
+        hasAction: true,
+        explicit: true,
+      }),
+    ).toBe(0);
+  });
+
+  it("does not cap an explicit window at the reading-time ceiling", () => {
+    // The ceiling exists to bound the COMPUTED reading time. Applying it to a
+    // deliberate choice silently rewrote a 30s card as 12s.
+    expect(
+      resolveTimeout({ baseTimeout: 30000, text: "hi", explicit: true }),
+    ).toBe(30000);
+  });
+
+  it("still raises an explicit window to the reading time of a long message", () => {
+    const text = "x".repeat(100); // 2000 + 60*100 = 8000
+    expect(resolveTimeout({ baseTimeout: 3000, text, explicit: true })).toBe(
+      8000,
+    );
+  });
+
+  it("auto-dismisses an action card that asked for a window", () => {
+    const store = useNoticeStore();
+    store.warning("3 selected pictures are in locked sets.", {
+      timeout: 6000,
+      action: { label: "Help", handler: () => {} },
+    });
+    const effective = store.notices[0].timeout;
+    expect(effective).toBeGreaterThan(0);
+    vi.advanceTimersByTime(effective);
+    expect(store.notices).toEqual([]);
+  });
+});

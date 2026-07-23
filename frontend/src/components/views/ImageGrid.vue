@@ -981,7 +981,10 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
-import { useNoticeStore } from "../../stores/useNoticeStore";
+import {
+  useNoticeStore,
+  DEFAULT_TIMEOUTS,
+} from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { useScopedNotice } from "../../composables/useScopedNotice";
@@ -3283,15 +3286,24 @@ function showLockedDeleteNotice(message) {
     // One key for both the pre-flight block and the post-response outcome: a
     // user retrying a locked selection gets one card with a count, not a stack.
     key: "delete-skipped-locked",
+    // The ordinary `warning` window, restated explicitly for one reason: to opt
+    // out of the action⇒sticky default (§6 rule 1). This card reports what just
+    // happened to the current selection; it is not a companion to the unlock,
+    // which is several clicks deep in a sidebar context menu and will outlast
+    // any sane notice. It should be long gone by then. The reading-time floor
+    // still applies, and hover/focus still pauses it for a slow reader.
+    timeout: DEFAULT_TIMEOUTS.warning,
     action: {
       label: "Help",
       handler: () => {
-        // Sticky follow-up carrying the lever (how to unlock), which is too
-        // long for the one-sentence rule on the first card.
+        // Follow-up carrying the lever (how to unlock), too long for the
+        // one-sentence rule on the first card. No explicit window: the `info`
+        // default raised by the reading-time floor is exactly the right rule for
+        // a long sentence, and the same copy lives on the lock badge tooltip, so
+        // nothing is lost when it goes.
         noticeStore.push({
           level: "info",
           text: message.hint,
-          timeout: 0,
           key: "delete-skipped-locked-help",
         });
       },
