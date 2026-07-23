@@ -41,10 +41,15 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import ImageGrid from "./components/views/ImageGrid.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
 import { isInternalImageDrag } from "./utils/media.js";
+import {
+  clampSizeLevel,
+  nearestSizeLevelForColumns,
+} from "./utils/thumbnailSizes";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -91,6 +96,7 @@ const theme = useTheme();
 // --- Component & DOM refs ---
 const gridContainer = ref(null);
 const sidebarRef = ref(null);
+const statsSidebarRef = ref(null);
 const toolbarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
@@ -115,6 +121,7 @@ const configSnapshot = ref({});
 const config = reactive({
   sort: "",
   thumbnail: 256,
+  thumbnail_mode: "square",
   sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
@@ -634,21 +641,14 @@ function updateIsMobile() {
   updateMaxColumns();
 }
 
-function clampColumnsToBounds() {
-  if (gridStore.columns > gridStore.maxColumns) {
-    gridStore.columns = gridStore.maxColumns;
-  }
-  if (gridStore.columns < gridStore.minColumns) {
-    gridStore.columns = gridStore.minColumns;
-  }
-}
-
 function updateMaxColumns() {
+  // Maintain the responsive column bounds. gridStore.columns is derived from
+  // the size level and clamps itself to these bounds, so there is nothing to
+  // write back here — updating the bounds re-evaluates the derived count.
   const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
   if (!width) {
     gridStore.minColumns = MIN_COLUMNS;
     gridStore.maxColumns = MAX_COLUMNS;
-    clampColumnsToBounds();
     return;
   }
   const availableWidth = Math.max(0, width - 8);
@@ -662,7 +662,6 @@ function updateMaxColumns() {
   );
   gridStore.minColumns = Math.max(MIN_COLUMNS, computedMin);
   gridStore.maxColumns = Math.min(MAX_COLUMNS, computedMax);
-  clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
@@ -1311,6 +1310,32 @@ function handleUpdateSidebarThumbnailSize(value) {
   userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
+// The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
+// already switched the view to the scrapheap; defer to the next tick so the grid
+// is showing that view before we open its existing consent-gated empty-forever
+// confirm (whose post-confirm refetch then reconciles the right view).
+function handleEmptyScrapheapFromSidebar() {
+  nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
+}
+
+// Open the stats sidebar and focus its Tasks tab. Shared by the thumbnail-mode
+// "View progress" notice action and the ThumbnailUpgradeBanner's link, so both
+// use the same statsSidebarRef.focusTasksTab() plumbing.
+function focusTasksTabPanel() {
+  sidebarStore.statsOpen = true;
+  nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
+}
+
+function handleUpdateThumbnailMode(value) {
+  if (value !== "square" && value !== "justified") return;
+  if (value === gridStore.thumbnailMode) return;
+  // Apply immediately with no regeneration: both modes render from the same
+  // stored bitmap (justified shows it whole; square crops it to the stored
+  // rectangle), so the grid re-lays-out at once. The persist watch saves it,
+  // and the radiogroup's aria-checked change is what a screen reader announces.
+  gridStore.thumbnailMode = value;
+}
+
 function handleUpdateSidebarWidth(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
@@ -1376,8 +1401,18 @@ async function fetchConfig() {
     if (typeof res.data.descending === "boolean") {
       sortStore.selectedDescending = res.data.descending;
     }
-    if (typeof res.data.columns === "number") {
-      gridStore.columns = res.data.columns;
+    if (typeof res.data.thumbnail_size_level === "number") {
+      gridStore.sizeLevel = clampSizeLevel(res.data.thumbnail_size_level);
+    } else if (typeof res.data.columns === "number") {
+      // Legacy config predating the size ladder: derive the nearest level so
+      // an old install keeps roughly the same tile size after upgrading.
+      gridStore.sizeLevel = nearestSizeLevelForColumns(res.data.columns);
+    }
+    if (
+      res.data.thumbnail_mode === "square" ||
+      res.data.thumbnail_mode === "justified"
+    ) {
+      gridStore.thumbnailMode = res.data.thumbnail_mode;
     }
     if (typeof res.data.sidebar_thumbnail_size === "number") {
       userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
@@ -1391,6 +1426,7 @@ async function fetchConfig() {
     config.sort_order = sortValue || sortStore.selectedSort;
     config.descending = sortStore.selectedDescending;
     config.columns = gridStore.columns;
+    config.thumbnail_mode = gridStore.thumbnailMode;
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
     config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
@@ -1518,6 +1554,9 @@ async function patchConfigUIOptions() {
   const patch = {};
   if (sortStore.selectedSort) patch.sort = sortStore.selectedSort;
   patch.descending = sortStore.selectedDescending;
+  patch.thumbnail_size_level = gridStore.sizeLevel;
+  // Keep the legacy `columns` field in sync with the derived count so older
+  // clients (and anything still reading `columns`) stay consistent.
   if (gridStore.columns) patch.columns = gridStore.columns;
   if (userPrefsStore.sidebarThumbnailSize) {
     patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
@@ -1538,6 +1577,12 @@ async function patchConfigUIOptions() {
   }
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
+  }
+  if (
+    gridStore.thumbnailMode === "square" ||
+    gridStore.thumbnailMode === "justified"
+  ) {
+    patch.thumbnail_mode = gridStore.thumbnailMode;
   }
   if (typeof sidebarStore.sidebarDocked === "boolean") {
     patch.sidebar_docked = sidebarStore.sidebarDocked;
@@ -1888,7 +1933,15 @@ watch(
 );
 
 watch(
-  () => gridStore.columns,
+  () => gridStore.sizeLevel,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  () => gridStore.thumbnailMode,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -2136,6 +2189,9 @@ defineExpose({
             :installType="installType"
             :dockerVariant="dockerVariant"
             :showKeyboardHint="userPrefsStore.showKeyboardHint"
+            :thumbnailMode="gridStore.thumbnailMode"
+            @update:thumbnail-mode="handleUpdateThumbnailMode"
+            @empty-scrapheap="handleEmptyScrapheapFromSidebar"
             @update:show-keyboard-hint="
               userPrefsStore.showKeyboardHint = $event
             "
@@ -2234,6 +2290,7 @@ defineExpose({
           @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">
+          <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
           <div
             :class="[
               'main-content',
@@ -2323,6 +2380,8 @@ defineExpose({
                 :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
                 :columns="gridStore.columns"
+                :sizeLevel="gridStore.sizeLevel"
+                :thumbnailMode="gridStore.thumbnailMode"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
@@ -2372,6 +2431,7 @@ defineExpose({
               />
             </div>
             <StatsSidebar
+              ref="statsSidebarRef"
               :open="sidebarStore.statsOpen"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectionStore.selectedCharacter"

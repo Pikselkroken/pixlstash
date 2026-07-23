@@ -98,8 +98,26 @@ def create_router(server) -> APIRouter:
         sort_order: Optional[str] = None
         descending: Optional[bool] = None
         columns: Optional[int] = None
+        thumbnail_size_level: Optional[int] = Field(
+            default=None,
+            description=(
+                "Unified grid thumbnail size index (0..6, larger index means "
+                "fewer/larger thumbnails). Default 3 = Medium."
+            ),
+        )
         sidebar_thumbnail_size: Optional[int] = None
         sidebar_width: Optional[int] = None
+        thumbnail_mode: Optional[str] = Field(
+            default=None,
+            description=(
+                "Grid thumbnail shape preference: 'square' renders a square cell "
+                "cropped to the stored face-weighted rectangle; 'justified' lays "
+                "out the full aspect-ratio-preserving thumbnail. This is a "
+                "DISPLAY-ONLY preference — the frontend applies it instantly from "
+                "the single stored bitmap; the backend never regenerates "
+                "thumbnails when it changes."
+            ),
+        )
         show_stars: Optional[bool] = None
         show_face_bboxes: Optional[bool] = None
         show_hand_bboxes: Optional[bool] = None

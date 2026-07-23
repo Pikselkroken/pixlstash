@@ -574,8 +574,15 @@ class Server(
             self._ws_loop = loop
         if Server.DEFAULT_CLEANUP_MISSING_PICTURES:
             await loop.run_in_executor(None, self._cleanup_missing_pictures)
-        if self._server_config.get("generate_thumbnails_on_startup", True):
-            await loop.run_in_executor(None, self._generate_missing_thumbnails)
+        # Thumbnail generation is NOT run here anymore. It used to block startup
+        # (awaited before vault.start()), which on a large library — or after the
+        # v1.8.0 upgrade reset thumbnails to NULL — held the server unusable for
+        # many minutes. It was also redundant: the blocking pass wrote only the
+        # file, never the thumbnail_width/square_crop columns, so the background
+        # MissingThumbnailFinder (keyed on thumbnail_width IS NULL) regenerated
+        # every picture again. That finder now solely owns generation — it runs
+        # after vault.start() (non-blocking) and reports progress via
+        # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
             # The desktop window uses the ephemeral loopback HTTP port (env), not

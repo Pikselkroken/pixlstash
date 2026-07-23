@@ -388,12 +388,8 @@ def test_model_pack_set_on_written_faces_including_sentinel(tmp_path, monkeypatc
     monkeypatch.setattr(
         FaceExtractionTask, "detect_faces_in_images", staticmethod(_detect_by_path)
     )
-    # Avoid thumbnail file I/O.
-    monkeypatch.setattr(
-        "pixlstash.tasks.face_extraction_task.FaceUtils."
-        "generate_face_weighted_thumbnail_with_crop",
-        lambda *a, **k: (None, None),
-    )
+    # The face-extraction thumbnail step is now pure geometry (no image encode or
+    # file write), so no thumbnail I/O needs to be stubbed out here.
 
     changed, bulk_faces, _crops = task._extract_features(list(pics))
     # Persist via the fake DB.

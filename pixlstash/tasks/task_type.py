@@ -26,6 +26,7 @@ class TaskType(str, Enum):
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
     SCRAPHEAP_RETENTION_PURGE = "ScrapheapRetentionPurgeTask"
+    THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
 
     @staticmethod
     def all():

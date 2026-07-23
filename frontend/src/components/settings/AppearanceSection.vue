@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -15,6 +16,7 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
@@ -22,7 +24,61 @@ const emit = defineEmits([
   "update:theme-mode",
   "update:date-format",
   "update:show-keyboard-hint",
+  "update:thumbnail-mode",
 ]);
+
+// Thumbnail layout: 'square' (uniform grid) vs 'justified' (variable-width rows).
+// A two-option radiogroup, not a switch; both layouts are peers of a binary
+// visual choice (ui-ux-expert decision). Arrow keys move between the options;
+// Space/Enter selects the focused one.
+const THUMBNAIL_MODES = ["square", "justified"];
+
+// Justified needs the whole-frame aspect-ratio thumbnails. After the v1.8.0
+// upgrade those regenerate in the background; until that finishes, justified
+// would render old square crops stretched into variable-width slots, worse than
+// square. So the Justified option is gated on the thumbnail-regeneration worker
+// (the same signal the "Upgrading thumbnails" bar reads): disabled while any
+// pictures still await regeneration. Reading the shared worker snapshot keeps
+// this in lockstep with the progress bar and the Tasks tab.
+const tasksStore = useTasksStore();
+const thumbnailRegen = computed(() => {
+  const s = tasksStore.workerSnapshots?.["ThumbnailGenerationTask"];
+  const remaining = Number(s?.remaining) || 0;
+  const total = Number(s?.total) || 0;
+  const current = Number(s?.current) || 0;
+  return { active: remaining > 0, remaining, total, current };
+});
+
+// Don't disable the option the user is already on (a disabled-but-checked radio
+// is a dead end); the gate only blocks SWITCHING to justified mid-regeneration.
+const justifiedDisabled = computed(
+  () =>
+    thumbnailRegen.value.active &&
+    (props.thumbnailMode ?? "square") !== "justified",
+);
+
+function setThumbnailMode(next) {
+  if (!THUMBNAIL_MODES.includes(next)) return;
+  if (next === "justified" && justifiedDisabled.value) return;
+  if (next === (props.thumbnailMode ?? "square")) return;
+  emit("update:thumbnail-mode", next);
+}
+function onThumbnailModeKeydown(event) {
+  const cur = THUMBNAIL_MODES.indexOf(props.thumbnailMode ?? "square");
+  let nextIdx = null;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    nextIdx = (cur + 1) % THUMBNAIL_MODES.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    nextIdx = (cur - 1 + THUMBNAIL_MODES.length) % THUMBNAIL_MODES.length;
+  }
+  if (nextIdx === null) return;
+  event.preventDefault();
+  // Skip past the disabled option rather than landing focus on a dead target.
+  if (THUMBNAIL_MODES[nextIdx] === "justified" && justifiedDisabled.value) {
+    return;
+  }
+  setThumbnailMode(THUMBNAIL_MODES[nextIdx]);
+}
 
 const sidebarThumbnailSizeModel = computed({
   get: () => props.sidebarThumbnailSize ?? 32,
@@ -126,6 +182,58 @@ async function clearGuestSession() {
         :step="4"
         suffix="px"
       />
+    </SettingsSection>
+
+    <SettingsSection>
+      <div class="thumb-layout-row">
+        <span id="thumb-layout-label" class="thumb-layout-label"
+          >Thumbnail layout</span
+        >
+        <div
+          class="thumb-layout-toggle"
+          role="radiogroup"
+          aria-labelledby="thumb-layout-label"
+          @keydown="onThumbnailModeKeydown"
+        >
+          <button
+            class="thumb-layout-opt"
+            :class="{ active: (props.thumbnailMode ?? 'square') === 'square' }"
+            type="button"
+            role="radio"
+            title="Uniform squares for a tidy grid"
+            :aria-checked="(props.thumbnailMode ?? 'square') === 'square'"
+            :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
+            @click="setThumbnailMode('square')"
+          >
+            Square
+          </button>
+          <button
+            class="thumb-layout-opt"
+            :class="{
+              active: props.thumbnailMode === 'justified',
+              disabled: justifiedDisabled,
+            }"
+            type="button"
+            role="radio"
+            title="Each photo keeps its own shape, like Google Photos"
+            :aria-checked="props.thumbnailMode === 'justified'"
+            :aria-disabled="justifiedDisabled"
+            :disabled="justifiedDisabled"
+            :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
+            @click="setThumbnailMode('justified')"
+          >
+            Justified
+          </button>
+        </div>
+        <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
+          Available when thumbnails finish updating<template
+            v-if="thumbnailRegen.total"
+          >
+            ({{ thumbnailRegen.current.toLocaleString() }} of
+            {{ thumbnailRegen.total.toLocaleString() }})</template
+          >.
+        </p>
+      </div>
     </SettingsSection>
 
     <SettingsSection
@@ -235,6 +343,66 @@ async function clearGuestSession() {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin-top: var(--space-2);
+}
+
+/* Thumbnail-layout radiogroup: a two-option segmented control mirroring the
+   Sidebar Width toggle's token treatment (accent border + wash when active),
+   built as a real radiogroup for keyboard/AT. */
+.thumb-layout-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.thumb-layout-label {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+.thumb-layout-toggle {
+  display: flex;
+  gap: var(--space-3);
+}
+.thumb-layout-opt {
+  flex: 1;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s,
+    color 0.12s;
+}
+.thumb-layout-opt:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+.thumb-layout-opt.active {
+  border-color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.1);
+  color: rgb(var(--v-theme-accent));
+}
+.thumb-layout-opt:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.thumb-layout-opt.disabled,
+.thumb-layout-opt:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-color: rgba(var(--v-theme-on-surface), 0.16);
+  color: rgb(var(--v-theme-on-surface));
+}
+.thumb-layout-notice {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  line-height: var(--leading-snug);
 }
 
 .sidebar-width-toggle {

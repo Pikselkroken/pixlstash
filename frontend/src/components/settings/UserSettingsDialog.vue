@@ -26,6 +26,7 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
   /**
    * Nav entry to land on when the dialog opens. Lets a caller deep-link to a
    * setting from where it matters (e.g. the scrapheap header's "change" link).
@@ -46,6 +47,7 @@ const emit = defineEmits([
   "update:check-for-updates",
   "update:show-keyboard-hint",
   "update:public-url",
+  "update:thumbnail-mode",
 ]);
 
 const dialogOpen = computed({
@@ -173,12 +175,14 @@ watch(
           :theme-mode="props.themeMode"
           :date-format="props.dateFormat"
           :show-keyboard-hint="props.showKeyboardHint"
+          :thumbnail-mode="props.thumbnailMode"
           @update:sidebar-thumbnail-size="
             emit('update:sidebar-thumbnail-size', $event)
           "
           @update:theme-mode="emit('update:theme-mode', $event)"
           @update:date-format="emit('update:date-format', $event)"
           @update:show-keyboard-hint="emit('update:show-keyboard-hint', $event)"
+          @update:thumbnail-mode="emit('update:thumbnail-mode', $event)"
         />
       </div>
       <div

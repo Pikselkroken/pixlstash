@@ -4,6 +4,7 @@ import json
 
 from pixlstash.utils.system_utils import default_max_vram_gb, MAX_VRAM_BUDGET_GB  # noqa: F401
 
+
 # Bounds (in pixels) for the draggable, non-docked sidebar width.
 SIDEBAR_WIDTH_MIN = 220
 SIDEBAR_WIDTH_MAX = 300
@@ -44,6 +45,8 @@ def serialize_user_config(user) -> dict:
         "columns",
         "sidebar_thumbnail_size",
         "sidebar_width",
+        "thumbnail_mode",
+        "thumbnail_size_level",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -68,10 +71,13 @@ def serialize_user_config(user) -> dict:
         "embed_watermark",
     }
 
+    # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
+    # predates a newly-added setting simply falls back to the default rather
+    # than raising — keeps serialisation resilient to schema growth.
     config = {
         key: (
-            getattr(source, key)
-            if getattr(source, key) is not None
+            getattr(source, key, None)
+            if getattr(source, key, None) is not None
             else getattr(default_user, key)
         )
         for key in allowed_fields
@@ -151,6 +157,8 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "columns",
         "sidebar_thumbnail_size",
         "sidebar_width",
+        "thumbnail_mode",
+        "thumbnail_size_level",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -191,6 +199,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "ymd-jp",
     }
     allowed_theme_modes = {"light", "dark"}
+    allowed_thumbnail_modes = {"square", "justified"}
 
     updated = False
     for key, value in patch_data.items():
@@ -361,6 +370,35 @@ def apply_user_config_patch(user, patch_data) -> bool:
             new_value = max(SIDEBAR_WIDTH_MIN, min(SIDEBAR_WIDTH_MAX, new_value))
             if user.sidebar_width != new_value:
                 user.sidebar_width = new_value
+                updated = True
+            continue
+        if key == "thumbnail_mode":
+            if value in ("", None, "null"):
+                # A blank patch resets to the default rather than persisting an
+                # empty grid shape.
+                new_value = "square"
+            else:
+                new_value = str(value).strip().lower()
+            if new_value not in allowed_thumbnail_modes:
+                raise ValueError(
+                    f"thumbnail_mode must be one of {sorted(allowed_thumbnail_modes)}"
+                )
+            if user.thumbnail_mode != new_value:
+                user.thumbnail_mode = new_value
+                updated = True
+            continue
+        if key == "thumbnail_size_level":
+            if value in ("", None, "null"):
+                # A blank patch resets to the default (Medium) rather than
+                # persisting an empty size.
+                new_value = 3
+            else:
+                new_value = int(value)
+            # Clamp to the supported 0..6 range instead of rejecting, mirroring
+            # how the sidebar sizes snap to their allowed set.
+            new_value = max(0, min(6, new_value))
+            if user.thumbnail_size_level != new_value:
+                user.thumbnail_size_level = new_value
                 updated = True
             continue
         if key == "sidebar_docked":

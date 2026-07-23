@@ -1289,6 +1289,15 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.THUMBNAIL_GENERATION:
+                # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
+                # the v1.8.0 upgrade this counts the entire library, which is what
+                # the in-app "Upgrading thumbnails" progress bar reads.
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_thumbnails)
+                    or 0
+                )
+                label = "thumbnails_generated"
             else:
                 missing = 0
                 label = "planner_managed"
@@ -1312,6 +1321,24 @@ class Vault:
     @staticmethod
     def _count_total_pictures(session: Session) -> int:
         result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_thumbnails(session: Session) -> int:
+        """Pictures awaiting whole-frame thumbnail (re)generation.
+
+        Mirrors ``MissingThumbnailFinder._fetch_missing``: keyed on
+        ``thumbnail_width IS NULL`` for live, file-backed pictures.
+        """
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.thumbnail_width.is_(None))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.file_path.is_not(None))
+        ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0
