@@ -34,8 +34,9 @@ This is acceptable because WS routes are acknowledged, not gated, in Phase 1.
 
 from collections.abc import Iterator
 
+import fastapi
 import fastapi.routing
-from fastapi.routing import APIWebSocketRoute, iter_route_contexts
+from fastapi.routing import APIWebSocketRoute
 from starlette.routing import WebSocketRoute
 
 # Fail loud if the FastAPI internal we depend on to flatten lazily-included
@@ -43,12 +44,26 @@ from starlette.routing import WebSocketRoute
 # helper would make enumeration fall back to under-counting and report false
 # "complete coverage" — the exact silent failure a security matrix must never
 # have. See the module docstring and the principal-engineer decision memo.
-assert hasattr(fastapi.routing, "iter_route_contexts"), (
-    "fastapi.routing.iter_route_contexts is missing — the route-inventory "
-    "enumeration mechanism has broken (FastAPI upgrade?). Fix pixlstash/"
-    "route_inventory.py before trusting any route-coverage claim. See "
-    "docs/backend_architecture.md §16.2."
-)
+#
+# Resolved with getattr rather than imported by name ON PURPOSE. A plain
+# ``from fastapi.routing import iter_route_contexts`` raises ImportError on the
+# import line itself, so this message — the whole point of the guard — could
+# never be reached. That is exactly how it failed: a workstation installed from
+# requirements.txt (then pinned at fastapi 0.135.1, three minors below the floor)
+# got a bare "cannot import name 'iter_route_contexts'" with no hint of the
+# cause. Keep the guard reachable.
+iter_route_contexts = getattr(fastapi.routing, "iter_route_contexts", None)
+if iter_route_contexts is None:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        "fastapi.routing.iter_route_contexts is missing (installed FastAPI "
+        f"{getattr(fastapi, '__version__', 'unknown')}). PixlStash requires "
+        "fastapi>=0.138.0, which is where that helper first appears; below it "
+        "the route inventory cannot enumerate lazily-included routers. Upgrade "
+        "with `pip install -U 'fastapi>=0.138.0'`. If this is a NEWER FastAPI "
+        "that renamed or removed the helper, fix pixlstash/route_inventory.py "
+        "before trusting any route-coverage claim — see "
+        "docs/backend_architecture.md §16.2."
+    )
 
 # HTTP methods FastAPI/Starlette add automatically for a declared handler. They
 # are not endpoints an author declares a policy for, so the inventory omits them

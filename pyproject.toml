@@ -34,7 +34,9 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "open_clip_torch>=3.3.0",
-    "fastapi>=0.135.1",
+    # Hard floor: route_inventory.py needs fastapi.routing.iter_route_contexts,
+    # added in 0.138.0. Below that the server fails to import at startup.
+    "fastapi>=0.138.0",
     "uvicorn>=0.41.0",
     "uvicorn[standard]>=0.41.0",
     "setuptools>=42",

@@ -1034,3 +1034,97 @@ def test_authz_gate_keys_by_request_time_route_identity():
         "identity keying must match the declared route at request time"
     )
     assert client.get(_DECOY_UNDECLARED_PATH).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Dependency pin consistency
+# ---------------------------------------------------------------------------
+# CI installs with ``pip install .[test,dev]`` on a fresh runner, which resolves
+# every pyproject specifier to the newest compatible release. It therefore NEVER
+# exercises the pinned set in requirements.txt, and cannot notice when a pin sits
+# below the floor the code actually needs.
+#
+# That is not hypothetical: requirements.txt pinned ``fastapi==0.135.1`` while
+# pixlstash/route_inventory.py required ``iter_route_contexts`` (added in
+# 0.138.0). CI was green throughout; every workstation installed from
+# requirements.txt failed to start the server at all.
+
+
+def _parse_requirements_pins() -> dict:
+    """``{canonical name: pinned version}`` for every ``==`` line."""
+    from packaging.utils import canonicalize_name
+
+    pins = {}
+    text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "==" not in line:
+            continue
+        name, _, version = line.partition("==")
+        # Drop any extras marker: ``uvicorn[standard]`` pins the same project.
+        name = name.split("[", 1)[0].strip()
+        pins[canonicalize_name(name)] = version.strip()
+    return pins
+
+
+def _parse_pyproject_specifiers() -> dict:
+    """``{canonical name: SpecifierSet}`` for every runtime dependency."""
+    import tomli
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    data = tomli.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    specs = {}
+    for entry in data["project"]["dependencies"]:
+        req = Requirement(entry)
+        specs[canonicalize_name(req.name)] = req.specifier
+    return specs
+
+
+def test_requirements_pins_satisfy_pyproject_specifiers():
+    """Every pinned version must satisfy pyproject's declared range.
+
+    Both files are hand-maintained, so they drift. When they drift *downward*
+    the failure lands on a developer's machine at import time, long after CI
+    said the branch was fine.
+    """
+    pins = _parse_requirements_pins()
+    specs = _parse_pyproject_specifiers()
+
+    violations = []
+    for name, pinned in sorted(pins.items()):
+        specifier = specs.get(name)
+        if specifier is None:
+            continue  # test-only or transitive pin; pyproject makes no claim.
+        if not specifier.contains(pinned, prereleases=True):
+            violations.append(
+                f"{name}: requirements.txt pins {pinned}, pyproject requires {specifier}"
+            )
+
+    assert not violations, (
+        "requirements.txt pins conflict with pyproject.toml:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_fastapi_floor_covers_route_inventory_dependency():
+    """The declared FastAPI floor must include ``iter_route_contexts``.
+
+    Pinned explicitly because the requirement is invisible in the specifier
+    itself: nothing about ``fastapi>=0.138.0`` says why, and a future tidy-up
+    that "relaxes" it would silently break startup for anyone who resolves
+    lower. See pixlstash/route_inventory.py.
+    """
+    from packaging.version import Version
+
+    specs = _parse_pyproject_specifiers()
+    floors = [
+        Version(spec.version)
+        for spec in specs["fastapi"]
+        if spec.operator in (">=", "==", "~=")
+    ]
+    assert floors, "fastapi must declare a lower bound in pyproject.toml"
+    assert min(floors) >= Version("0.138.0"), (
+        "fastapi.routing.iter_route_contexts (required by "
+        "pixlstash/route_inventory.py) first appears in 0.138.0"
+    )
