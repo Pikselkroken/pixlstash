@@ -396,6 +396,13 @@ mechanical migration large enough to want its own eyeball pass. Logged in §10.
 | **Dismiss hit area** | expanded to 40×40 with a transparent `::before` inset expansion — clears WCAG 2.5.8 (24×24) with room, without a 40px hole in the layout |
 | **Gap action→dismiss** | `var(--space-2)` |
 
+**Action labels name the destination, not the question.** The label is a button, so it
+reads as the thing the user gets: `Undo`, `Retry`, `Help`, `Open set`. A label phrased as
+the user's own question — `Why?` — is the one shape to avoid: it puts a question mark in a
+row of verbs, reads as the card interrogating itself, and at 13px semibold a two-character
+word plus punctuation is a thin target next to a 24px ✕. `Why?` on the locked-delete card
+was corrected to `Help` for exactly this reason.
+
 **Why the action is not `primary`.** `primary` olive on the tinted card measures
 **4.30 – 4.45:1** in light (at or under the 4.5 floor for 13px text) and, since the
 action-fill deepen (`visual-language.md` §4), **2.85 – 3.00:1** in dark — it was
@@ -454,15 +461,35 @@ The store's `DEFAULT_TIMEOUTS` are close to right and are kept:
 
 Three rules on top, none of which the store enforces today:
 
-1. **Any notice carrying an `action` never auto-dismisses**, whatever its variant. A 3s
-   window to hit "Undo" is a failure of WCAG 2.2.1 and of common sense. If a level
-   default would apply, it is overridden to sticky.
+1. **A notice carrying an `action` does not auto-dismiss *by default*,** whatever its
+   variant. A 3s window to hit "Undo" is a failure of WCAG 2.2.1 and of common sense. If
+   a level default would apply, it is overridden to sticky.
+
+   **This is a default, not a law.** A caller passing an explicit `timeout` overrides it.
+   The rule was written for actions that stay true forever ("Undo", "Retry"); it is wrong
+   for a card whose sentence is about the *current* state, which should expire rather than
+   sit there needing a manual ✕. Two things make the override safe: the hover/`:focus-within`
+   pause (rule 3) already satisfies WCAG 2.2.1 on its own, and rule 2's floor still guarantees
+   the sentence is readable. Use it only where the sentence has its own expiry — and pair it
+   with a scope (§9.6), because a timeout alone does not know the selection changed.
+
+   **Do not stretch the window to cover the fix the card names.** A notice that says
+   "unlock the set" should be long gone before the unlock happens: that is several clicks
+   deep in a sidebar context menu, and no notice should follow a user through a menu. The
+   card's job is to report and to point; the lock badge's tooltip carries the same copy for
+   anyone who needs it after the card is gone.
 2. **Reading-time floor.** Effective timeout =
-   `min(12000, max(levelDefault, 2000 + 60 × characterCount))`. A 110-character success
-   message does not get 3 seconds.
+   `max(levelDefault, min(12000, 2000 + 60 × characterCount))`. A 110-character success
+   message does not get 3 seconds. The 12s ceiling bounds the *computed* reading time; it
+   does not cap a window a caller chose deliberately.
 3. **The timer pauses** on `:hover`, on `:focus-within`, and while `document.hidden`;
    it resumes on leave / on visibility. Required by WCAG 2.2.1 (Pause, Stop, Hide) —
    `setTimeout` alone cannot satisfy it. §9.3.
+4. **A notice that describes the current context dies with it.** Rules 1 and 3 mean a card
+   carrying an action has *no* deadline at all, which is right for "Undo" (true forever)
+   and wrong for "3 of the selected pictures are in locked sets" (true only of that
+   selection). The second kind declares a scope; when the scope changes, it is dismissed.
+   §9.6.
 
 **Dismissal routes**
 
@@ -474,8 +501,12 @@ Three rules on top, none of which the store enforces today:
   A global `Esc` binding is not available: `Esc` already clears the grid selection and
   closes the plugin/ComfyUI/tag menus in `SelectionBar`. Making `Esc` steal from those is
   a behaviour change and is UI/UX's call, not this document's.
+- Scope invalidation, for a notice that declared one (§9.6).
 - `clear()` on route change: **no.** A notice reporting a failed background operation
-  must survive navigation; that is the whole point of a central queue.
+  must survive navigation; that is the whole point of a central queue. Scope
+  invalidation is not a version of this and does not weaken it: it retires *named* keys
+  whose own sentence has expired, chosen by the code that pushed them. A blanket clear
+  destroys bystanders — the failed-upload card the user navigated away to go fix.
 
 ---
 
@@ -608,6 +639,44 @@ notice unless the handler returns `false`**, and enforce §6 rule 1 in `push()` 
 **9.5 Minor.** `text` is coerced with `String(text ?? "")`, so `push({})` yields a card
 with no message. The store should refuse an empty-text notice (and log it) rather than
 leave the host to filter blanks.
+
+**9.6 Scoped notices — added in use, not in review.** The five gaps above were found by
+reading the store. This one was found by using it: the locked-delete warning stayed on
+screen after the selection it described was gone, because rule 1 of §6 makes any
+action-carrying notice sticky and nothing else could take it down. A sticky card that
+asserts something about the *present* has a second deadline the store knew nothing about.
+
+**Two deadlines, not one.** Scope answers "is this still true?"; the timeout answers "has
+this been read?". A card about the current state needs both, and the fix is not to pick
+one. Scope alone leaves the card up indefinitely whenever the user simply stops touching
+the selection — reading their email with a stale warning on screen. A timeout alone leaves
+it up through a selection change it no longer describes. So the locked-delete card takes
+the ordinary `warning` window (explicitly, to opt out of rule 1's sticky default) *and*
+declares a scope, and whichever deadline lands first wins.
+
+The contract:
+
+- `dismissByKey(key)` retires every live notice under a key. Coalescing already caps that
+  at one, but a scope owns a small **family** (a card and its follow-up), and the
+  invalidating code never saw their ids.
+- `useScopedNotice(keys, signature)` (`composables/useScopedNotice.js`) binds a family to
+  a getter over everything the message asserts. Signature changes → family dismissed.
+  For the locked-delete pair that is: the selected ids, the view they are selected in,
+  and the locked-set membership. The last matters most — unlocking the set is the fix the
+  card asks for, so leaving the warning up would make the fix look like it failed.
+- **`arm()` is deferred by one tick, and that is load-bearing.** The operation that pushes
+  such a notice usually mutates the state the signature watches (the bulk delete narrows
+  the selection to the frozen survivors, *then* reports what it skipped). Arming at push
+  time makes the watcher fire on the pusher's own mutation and dismiss the card before it
+  is read. `arm()` therefore marks the family pending synchronously — so the already-queued
+  watcher job stands down — and records the real baseline in `nextTick`. Without the
+  synchronous half, the *second* locked delete in a row is silent: the first card is still
+  live, its context change is queued, and that pending job kills the refreshed card.
+  Both halves are pinned by tests.
+
+This applies to any future notice whose sentence contains "the selected", "this", or a
+count of the current state. It does **not** apply to event reports ("Import finished"),
+which are true forever and need only a timeout.
 
 Nothing else needs to change. In particular the store should **not** grow a `title`
 field, a second action, or per-notice styling — those all break the one-sentence rule and

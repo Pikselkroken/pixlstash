@@ -26,7 +26,7 @@ const LEVELS = new Set(["info", "success", "warning", "error"]);
 
 // Default auto-dismiss (ms) per level (spec §6). Errors persist until dismissed
 // so a failure is never lost; timeouts can be overridden per push.
-const DEFAULT_TIMEOUTS = {
+export const DEFAULT_TIMEOUTS = {
   info: 4000,
   success: 3000,
   warning: 6000,
@@ -50,15 +50,35 @@ const READ_TIME_CEILING_MS = 12000;
  * @param {Object} options
  * @param {number} options.baseTimeout - the level default or an explicit override.
  * @param {string} options.text - the message (drives the reading-time floor).
- * @param {boolean} options.hasAction - a notice with an action is always sticky.
+ * @param {boolean} options.hasAction - an action makes a notice sticky by DEFAULT.
+ * @param {boolean} options.explicit - `baseTimeout` came from the caller, not from
+ *   the level default. An explicit window outranks the action rule and is not
+ *   capped by the reading-time ceiling — see below.
  * @returns {number} milliseconds, or 0 for sticky.
  */
-export function resolveTimeout({ baseTimeout, text = "", hasAction = false }) {
-  // §6 rule 1: a 3s window to hit "Undo" fails WCAG 2.2.1 and common sense.
-  if (hasAction) return 0;
+export function resolveTimeout({
+  baseTimeout,
+  text = "",
+  hasAction = false,
+  explicit = false,
+}) {
+  // An explicit 0 still means sticky, whoever asked for it.
+  if (explicit && (!baseTimeout || baseTimeout <= 0)) return 0;
+  // §6 rule 1: a 3s window to hit "Undo" fails WCAG 2.2.1 and common sense, so
+  // an action defaults to sticky. It is a DEFAULT, not a law: a card whose
+  // sentence is about the current state should not outlive that state, and a
+  // long window with the hover/focus pause (§9.3) satisfies 2.2.1 on its own.
+  // The caller has to say so deliberately.
+  if (hasAction && !explicit) return 0;
   if (!baseTimeout || baseTimeout <= 0) return 0;
-  const readingTime = READ_TIME_BASE_MS + READ_TIME_PER_CHAR_MS * text.length;
-  return Math.min(READ_TIME_CEILING_MS, Math.max(baseTimeout, readingTime));
+  // The ceiling caps the COMPUTED reading time. It must not cap a window the
+  // caller chose on purpose — that is how a deliberate 30s instruction card
+  // silently became 12s.
+  const readingTime = Math.min(
+    READ_TIME_CEILING_MS,
+    READ_TIME_BASE_MS + READ_TIME_PER_CHAR_MS * text.length,
+  );
+  return Math.max(baseTimeout, readingTime);
 }
 
 export const useNoticeStore = defineStore("notice", () => {
@@ -252,8 +272,8 @@ export const useNoticeStore = defineStore("notice", () => {
    * @param {'info'|'success'|'warning'|'error'} [opts.level='info']
    * @param {string} opts.text - the message. Empty text is refused (§9.5).
    * @param {number} [opts.timeout] - auto-dismiss ms; 0 = sticky. Defaults per
-   *   level, then raised by the reading-time floor. Forced to 0 when `action`
-   *   is set.
+   *   level, then raised by the reading-time floor. An `action` forces 0 unless
+   *   this is passed explicitly, which overrides that default (§6 rule 1).
    * @param {{label: string, handler: Function}} [opts.action] - single optional
    *   action. Invoking it dismisses the notice unless the handler returns false.
    * @param {string} [opts.key] - coalescing key (§9.1). Pushing with a key that
@@ -282,9 +302,14 @@ export const useNoticeStore = defineStore("notice", () => {
     }
 
     const hasAction = Boolean(action && typeof action.handler === "function");
-    const baseTimeout =
-      typeof timeout === "number" ? timeout : DEFAULT_TIMEOUTS[safeLevel];
-    const resolved = resolveTimeout({ baseTimeout, text: message, hasAction });
+    const explicit = typeof timeout === "number";
+    const baseTimeout = explicit ? timeout : DEFAULT_TIMEOUTS[safeLevel];
+    const resolved = resolveTimeout({
+      baseTimeout,
+      text: message,
+      hasAction,
+      explicit,
+    });
 
     // §9.1 — coalesce onto a live notice with the same key.
     if (key != null) {
@@ -359,6 +384,26 @@ export const useNoticeStore = defineStore("notice", () => {
   }
 
   /**
+   * Dismiss every live notice carrying `key` (§9.6 — scoped notices).
+   *
+   * Coalescing already guarantees at most one live notice per key, but a scope
+   * usually owns a small FAMILY of keys (a card and its follow-up), and the
+   * caller invalidating that scope must be able to retire them by name without
+   * tracking ids it never saw. Unknown keys are a silent no-op: the notice may
+   * already have timed out or been dismissed by hand, and that is the normal
+   * case, not an error.
+   *
+   * @param {string} key - the coalescing key to retire.
+   * @returns {number} how many notices were dismissed.
+   */
+  function dismissByKey(key) {
+    if (key == null) return 0;
+    const doomed = notices.value.filter((n) => n.key === key).map((n) => n.id);
+    for (const id of doomed) dismiss(id);
+    return doomed.length;
+  }
+
+  /**
    * Invoke a notice's action (§9.4). The notice is dismissed afterwards unless
    * the handler explicitly returns `false`, which lets a handler keep the card
    * up (e.g. to report that the retry also failed).
@@ -406,6 +451,7 @@ export const useNoticeStore = defineStore("notice", () => {
     warning,
     error,
     dismiss,
+    dismissByKey,
     invokeAction,
     clear,
     pause,
