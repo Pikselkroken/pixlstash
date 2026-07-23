@@ -328,3 +328,43 @@ describe("useNoticeStore — action contract (§9.4)", () => {
     expect(store.notices).toHaveLength(1);
   });
 });
+
+describe("useNoticeStore — dismissByKey (§9.6 scoped notices)", () => {
+  it("dismisses the notice carrying the key and leaves the rest", () => {
+    const store = useNoticeStore();
+    store.push({ text: "scoped", timeout: 0, key: "locked-card" });
+    store.push({ text: "unrelated", timeout: 0, key: "other" });
+
+    expect(store.dismissByKey("locked-card")).toBe(1);
+    expect(store.notices.map((n) => n.key)).toEqual(["other"]);
+  });
+
+  it("clears the dismissed notice's timer", () => {
+    const store = useNoticeStore();
+    store.push({ text: "scoped", timeout: 5000, key: "locked-card" });
+    store.dismissByKey("locked-card");
+    // A stale timer firing against a dropped id would throw or resurrect state;
+    // running the clock proves neither happens.
+    vi.advanceTimersByTime(10000);
+    expect(store.notices).toEqual([]);
+  });
+
+  it("promotes a pending notice when a scoped one is retired", () => {
+    const store = useNoticeStore();
+    store.setMaxVisible(1);
+    store.push({ text: "scoped", timeout: 0, key: "locked-card" });
+    store.push({ text: "queued", timeout: 0, key: "queued" });
+    expect(store.visible.map((n) => n.key)).toEqual(["locked-card"]);
+
+    store.dismissByKey("locked-card");
+    expect(store.visible.map((n) => n.key)).toEqual(["queued"]);
+  });
+
+  it("is a no-op for an unknown or null key", () => {
+    const store = useNoticeStore();
+    store.push({ text: "scoped", timeout: 0, key: "locked-card" });
+    expect(store.dismissByKey("never-pushed")).toBe(0);
+    expect(store.dismissByKey(null)).toBe(0);
+    expect(store.notices).toHaveLength(1);
+  });
+});

@@ -359,6 +359,26 @@ export const useNoticeStore = defineStore("notice", () => {
   }
 
   /**
+   * Dismiss every live notice carrying `key` (§9.6 — scoped notices).
+   *
+   * Coalescing already guarantees at most one live notice per key, but a scope
+   * usually owns a small FAMILY of keys (a card and its follow-up), and the
+   * caller invalidating that scope must be able to retire them by name without
+   * tracking ids it never saw. Unknown keys are a silent no-op: the notice may
+   * already have timed out or been dismissed by hand, and that is the normal
+   * case, not an error.
+   *
+   * @param {string} key - the coalescing key to retire.
+   * @returns {number} how many notices were dismissed.
+   */
+  function dismissByKey(key) {
+    if (key == null) return 0;
+    const doomed = notices.value.filter((n) => n.key === key).map((n) => n.id);
+    for (const id of doomed) dismiss(id);
+    return doomed.length;
+  }
+
+  /**
    * Invoke a notice's action (§9.4). The notice is dismissed afterwards unless
    * the handler explicitly returns `false`, which lets a handler keep the card
    * up (e.g. to report that the retry also failed).
@@ -406,6 +426,7 @@ export const useNoticeStore = defineStore("notice", () => {
     warning,
     error,
     dismiss,
+    dismissByKey,
     invokeAction,
     clear,
     pause,

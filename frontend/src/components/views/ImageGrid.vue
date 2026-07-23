@@ -984,6 +984,7 @@ import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionSt
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import {
@@ -3268,6 +3269,9 @@ function handleRemoveFromCharacter(payload) {
 // The dialog's title + body collapse to the one sentence the surface allows,
 // and its `hint` becomes the action, which routes to the locked set the user has
 // to unlock.
+//
+// Both cards are scoped (notice-surface.md §9.6) — see `lockedDeleteNotice`,
+// declared with the selection state it watches.
 /**
  * Report the locked-set outcome, if there is one to report.
  * @param {{title: string, body: string, hint: string}|null} message - from
@@ -3280,7 +3284,7 @@ function showLockedDeleteNotice(message) {
     // user retrying a locked selection gets one card with a count, not a stack.
     key: "delete-skipped-locked",
     action: {
-      label: "Why?",
+      label: "Help",
       handler: () => {
         // Sticky follow-up carrying the lever (how to unlock), which is too
         // long for the one-sentence rule on the first card.
@@ -3293,6 +3297,10 @@ function showLockedDeleteNotice(message) {
       },
     },
   });
+  // After the flush this operation's own selection edit schedules — see
+  // useScopedNotice: arming any earlier would let the delete dismiss its own
+  // report.
+  lockedDeleteNotice.arm();
 }
 
 async function deleteSelected() {
@@ -4331,6 +4339,39 @@ const {
   onFaceBboxDragStart,
   clearSelection,
 } = useMultiSelect();
+
+// The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
+// they describe: the sentence is about THIS selection in THIS view, and it
+// carries an action, so it is sticky and nothing would otherwise take it down.
+// The signature is everything the message asserts — which pictures are selected,
+// where they are being viewed, and which sets are locked. Change any of them and
+// the card is describing the past, so it goes. Unlocking the set is the
+// important one: it is the fix the card asks for, and leaving the warning up
+// afterwards would make the fix look like it failed.
+//
+// Declared here rather than beside `showLockedDeleteNotice` because
+// `useScopedNotice` evaluates the signature immediately to seed its watcher, so
+// `selectedImageIds` has to exist first.
+const lockedDeleteNotice = useScopedNotice(
+  ["delete-skipped-locked", "delete-skipped-locked-help"],
+  () =>
+    [
+      // Joined in place, not sorted: the getter re-runs on every selection
+      // change, and sorting a 10k-picture selection per click to catch a pure
+      // reorder is not worth it. A reorder is a user action anyway, so treating
+      // it as a context change is the right answer, not a false positive.
+      selectedImageIds.value.join(","),
+      String(props.selectedCharacter ?? ""),
+      String(props.selectedSet ?? ""),
+      String(props.selectedProjectId ?? ""),
+      // Locked sets are few, so a per-set membership fingerprint is cheap and
+      // catches an unlock, a re-lock and a membership edit alike.
+      lockedSetsStore.sets
+        .map((s) => `${s?.id}:${(s?.picture_ids || []).length}`)
+        .sort()
+        .join(","),
+    ].join("|"),
+);
 
 // ============================================================
 // VIEWPORT + RENDER
