@@ -510,7 +510,14 @@ class ResourceRestoreMixin:
                                 )
                                 if not os.path.isfile(resolved):
                                     continue
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug(
+                                    "Restore: skipping picture %s with "
+                                    "unresolvable path %r: %s",
+                                    pid,
+                                    pic.file_path,
+                                    exc,
+                                )
                                 continue
                         valid_pids.append(pid)
 
