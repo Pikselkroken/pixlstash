@@ -834,9 +834,11 @@ Selected milestones:
 | 0072 | Review receipt snapshot + suggestion prior-decision fields |
 | 0073 | Picture-set lock (`PictureSet.locked`) |
 | 0074–0075 | Tag-health recompute (exclude human decisions) + ground truth |
-| 0076–0079 | `smart_score` NULL-resets as the anomaly penalty was recalibrated: stale tag edits (0076), graded defect-count aggregation (0077), user penalised-tag weights + apply-threshold gate (0078), threshold-relative confidence grading (0079) |
+| 0076 | `smart_score` NULL-reset after the anomaly-penalty overhaul |
+| 0077–0079 | Deletion/retention plumbing: `deleted_file_log.file_removed` to disambiguate the ledger (0077), `reference_folder.pending_reimport` re-import signal (0078), `picture.deleted_at` scrapheap retention clock (0079) |
+| 0080–0082 | Thumbnails: dimensions + `user.thumbnail_mode` for justified layout (0080), single-bitmap square-crop — adds the square-crop rectangle and drops the original-space crop columns (0081), `user.thumbnail_size_level` unified grid size (0082) |
 
-Current head: `0079_recompute_smart_score_threshold_relative_confidence`.
+Current head: `0082_add_thumbnail_size_level`.
 
 ---
 
