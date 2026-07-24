@@ -100,7 +100,13 @@
 
 <script setup>
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
-import { apiClient, appendShareToken } from "../../utils/apiClient";
+import { appendShareToken } from "../../utils/apiClient";
+import {
+  createCharacter,
+  patchCharacter,
+  getReferencePictures,
+} from "../../api/characters";
+import { listPicturesByIds } from "../../api/pictures";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -156,20 +162,16 @@ const previewPic = ref(null);
 async function fetchReferencePictures(characterId) {
   referencePicturesLoading.value = true;
   try {
-    const refRes = await apiClient.get(
-      `${props.backendUrl}/characters/${characterId}/reference_pictures`,
-    );
-    const ids = refRes.data?.reference_picture_ids ?? [];
+    const refBody = await getReferencePictures(characterId, {
+      baseUrl: props.backendUrl,
+    });
+    const ids = refBody?.reference_picture_ids ?? [];
     if (!ids.length) {
       referencePictures.value = [];
       return;
     }
-    const params = new URLSearchParams();
-    ids.forEach((id) => params.append("id", String(id)));
-    const picsRes = await apiClient.get(
-      `${props.backendUrl}/pictures?${params.toString()}`,
-    );
-    const pics = Array.isArray(picsRes.data) ? picsRes.data : [];
+    const rows = await listPicturesByIds(ids, { baseUrl: props.backendUrl });
+    const pics = Array.isArray(rows) ? rows : [];
     const picsById = new Map(pics.map((p) => [String(p.id), p]));
     referencePictures.value = ids
       .map((id) => picsById.get(String(id)))
@@ -263,15 +265,11 @@ function handleKeydown(event) {
 
 async function saveCharacter(charData) {
   try {
-    const isNew = !charData.id;
-    const url = isNew
-      ? `${props.backendUrl}/characters`
-      : `${props.backendUrl}/characters/${charData.id}`;
-
-    if (isNew) {
-      await apiClient.post(url, JSON.stringify(charData));
+    const opts = { baseUrl: props.backendUrl };
+    if (charData.id) {
+      await patchCharacter(charData.id, charData, opts);
     } else {
-      await apiClient.patch(url, JSON.stringify(charData));
+      await createCharacter(charData, opts);
     }
     emit("saved");
   } catch (e) {

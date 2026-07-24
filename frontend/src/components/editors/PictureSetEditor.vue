@@ -154,7 +154,10 @@
 <script setup>
 import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
-import { apiClient } from "../../utils/apiClient";
+import {
+  createPictureSet,
+  patchPictureSet,
+} from "../../api/pictureSets";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   SET_COLORS,
@@ -296,15 +299,11 @@ function handleKeydown(event) {
 
 async function saveSetFromEditor(setData) {
   try {
-    const isNew = !setData.id;
-    const url = isNew
-      ? `${props.backendUrl}/picture_sets`
-      : `${props.backendUrl}/picture_sets/${setData.id}`;
-
-    if (isNew) {
-      await apiClient.post(url, setData);
+    const opts = { baseUrl: props.backendUrl };
+    if (setData.id) {
+      await patchPictureSet(setData.id, setData, opts);
     } else {
-      await apiClient.patch(url, setData);
+      await createPictureSet(setData, opts);
     }
 
     emit("close");
