@@ -32,7 +32,6 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
-import { useNoticeStore } from "./stores/useNoticeStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -67,7 +66,6 @@ const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
-const noticeStore = useNoticeStore();
 const lockedSetsStore = useLockedSetsStore();
 
 // --- Router ---
@@ -1334,35 +1332,12 @@ function focusTasksTabPanel() {
 
 function handleUpdateThumbnailMode(value) {
   if (value !== "square" && value !== "justified") return;
-  const previous = gridStore.thumbnailMode;
-  if (value === previous) return;
-  // Apply immediately: the justified layout is computed from each picture's
-  // stored width/height, so the grid re-lays-out at once — the persist watch
-  // below saves it. The radiogroup's aria-checked change is what a screen
-  // reader announces (ui-ux-expert decision 9); no extra live region needed.
+  if (value === gridStore.thumbnailMode) return;
+  // Apply immediately with no regeneration: both modes render from the same
+  // stored bitmap (justified shows it whole; square crops it to the stored
+  // rectangle), so the grid re-lays-out at once. The persist watch saves it,
+  // and the radiogroup's aria-checked change is what a screen reader announces.
   gridStore.thumbnailMode = value;
-
-  // Either switch re-crops thumbnails in the background (to justified:
-  // aspect-ratio-preserving; back to square: face-weighted square crops). The
-  // layout is correct instantly and the bitmaps sharpen as the task runs
-  // (visible in the Tasks tab). Surface that as one notice, on both directions,
-  // because the backend regenerates on any mode change.
-  //
-  // NOTE: the trigger is the mode transition, which matches the backend
-  // contract (a mode switch always queues regeneration). If the backend is ever
-  // optimised to skip regeneration in some direction, key the notice off an
-  // explicit "regeneration pending" signal instead (ui-ux-expert decision 5).
-  const body =
-    value === "justified"
-      ? "Sharpening thumbnails for the justified layout — images refine as they finish."
-      : "Restoring square thumbnails — images refine as they finish.";
-  noticeStore.info(body, {
-    key: "thumbnail-regen",
-    action: {
-      label: "View progress",
-      handler: focusTasksTabPanel,
-    },
-  });
 }
 
 function handleUpdateSidebarWidth(value) {
