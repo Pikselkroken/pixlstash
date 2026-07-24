@@ -1,5 +1,17 @@
 import { ref, computed, nextTick } from "vue";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../utils/apiClient";
+import {
+  getPictureCount,
+  streamPictures,
+  getLikenessGroups,
+  faceSearch,
+  likenessSearch,
+  searchPictures,
+  listPicturesByIds,
+} from "../api/pictures";
+import { getCharacterSummary } from "../api/characters";
+import { getProjectSummary } from "../api/projects";
+import { listPictureSets } from "../api/pictureSets";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
 import { getPictureId, PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../utils/media.js";
 import { debounce } from "lodash-es";
@@ -482,13 +494,9 @@ export function useGridFetch(
         fetchMode = "likeness-groups";
         const threshold = getStackThreshold(props.stackThreshold);
         const likenessGroupParams = buildLikenessGroupQueryParams();
-        const url = `${
-          props.backendUrl
-        }/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
-          likenessGroupParams ? `&${likenessGroupParams}` : ""
-        }`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
+        const data = await getLikenessGroups(threshold, likenessGroupParams, {
+          baseUrl: props.backendUrl,
+        });
         if (fetchAllGridImages.lastRequestId !== requestId) {
           if (isSortedFetch && options?.showProgress === true)
             completeSmartScoreProgress(loadId, 0, false);
@@ -513,24 +521,20 @@ export function useGridFetch(
         fetchMode = "face-likeness-search";
         // Face likeness search: POST to face-search with source_face_id.
         const queryFaceId = faceLikenessSearchFaceId.value;
-        const faceRes = await apiClient.post(
-          `${props.backendUrl}/pictures/face-search?source_face_id=${queryFaceId}&top_n=500`,
-        );
-        const faceResults = Array.isArray(faceRes.data) ? faceRes.data : [];
+        const faceResultsRaw = await faceSearch(queryFaceId, {
+          baseUrl: props.backendUrl,
+        });
+        const faceResults = Array.isArray(faceResultsRaw) ? faceResultsRaw : [];
         if (!faceResults.length) {
           images = [];
         } else {
           const idOrder = faceResults.map((r) => r.picture_id);
-          const idParams = new URLSearchParams();
-          idOrder.forEach((id) => idParams.append("id", id));
-          idParams.append("fields", "grid");
-          const picturesRes = await apiClient.get(
-            `${props.backendUrl}/pictures?${idParams.toString()}`,
-          );
+          const rows = await listPicturesByIds(idOrder, {
+            fields: "grid",
+            baseUrl: props.backendUrl,
+          });
           const picturesById = {};
-          for (const pic of Array.isArray(picturesRes.data)
-            ? picturesRes.data
-            : []) {
+          for (const pic of Array.isArray(rows) ? rows : []) {
             picturesById[pic.id] = pic;
           }
           images = idOrder.map((id) => picturesById[id]).filter(Boolean);
@@ -540,30 +544,20 @@ export function useGridFetch(
         // Reverse image search: POST to likeness-search with stored CLIP embeddings.
         // Multiple IDs are combined with min similarity (must match all sources).
         const queryPicIds = reverseImageSearchPictureIds.value;
-        const likenessParams = new URLSearchParams();
-        queryPicIds.forEach((id) => likenessParams.append("source_picture_ids", id));
-        likenessParams.append("top_n", "500");
-        likenessParams.append("threshold", "0.05");
-        const likenessRes = await apiClient.post(
-          `${props.backendUrl}/pictures/likeness-search?${likenessParams.toString()}`,
-        );
-        const likenessResults = Array.isArray(likenessRes.data)
-          ? likenessRes.data
-          : [];
+        const likenessRaw = await likenessSearch(queryPicIds, {
+          baseUrl: props.backendUrl,
+        });
+        const likenessResults = Array.isArray(likenessRaw) ? likenessRaw : [];
         if (!likenessResults.length) {
           images = [];
         } else {
           const idOrder = likenessResults.map((r) => r.picture_id);
-          const idParams = new URLSearchParams();
-          idOrder.forEach((id) => idParams.append("id", id));
-          idParams.append("fields", "grid");
-          const picturesRes = await apiClient.get(
-            `${props.backendUrl}/pictures?${idParams.toString()}`,
-          );
+          const rows = await listPicturesByIds(idOrder, {
+            fields: "grid",
+            baseUrl: props.backendUrl,
+          });
           const picturesById = {};
-          for (const pic of Array.isArray(picturesRes.data)
-            ? picturesRes.data
-            : []) {
+          for (const pic of Array.isArray(rows) ? rows : []) {
             picturesById[pic.id] = pic;
           }
           images = idOrder.map((id) => picturesById[id]).filter(Boolean);
@@ -572,14 +566,10 @@ export function useGridFetch(
         fetchMode = "text-search";
         // Use /pictures/search endpoint for text search
         const params = buildPictureIdsQueryParams();
-        const url = `${
-          props.backendUrl
-        }/pictures/search?query=${encodeURIComponent(
-          props.searchQuery.trim(),
-        )}&threshold=0.1&top_n=10000${params ? `&${params}` : ""}`;
-        const res = await apiClient.get(url);
-        const data = await res.data;
-        images = data;
+        images = await searchPictures(props.searchQuery.trim(), {
+          query: params,
+          baseUrl: props.backendUrl,
+        });
       } else {
         fetchMode = "stream";
         // Overlay open: the streaming path rebuilds a placeholder grid and
@@ -742,14 +732,16 @@ export function useGridFetch(
         // Filter params: hidden-tag filter
         if (props.applyTagFilter) _filterP.set('apply_tag_filter', 'true');
         const _filterSuffix = _filterP.size ? `&${_filterP.toString()}` : '';
-        const streamBase =
-          `${props.backendUrl}/pictures/stream?fields=grid&grid_lite=true&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;
+        const streamQuery =
+          `fields=grid&grid_lite=true&stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`;
 
+        // Wraps a resource-module call (which resolves to the response BODY,
+        // not the Axios envelope) so the grid can report per-batch timings.
         async function timeRequest(requestPromise) {
           const startedAt = getNowMs();
-          const response = await requestPromise;
+          const body = await requestPromise;
           return {
-            response,
+            body,
             elapsedMs: Math.max(0, getNowMs() - startedAt),
           };
         }
@@ -783,11 +775,14 @@ export function useGridFetch(
 
         // 1. Fast total count — single indexed SQL query.
         const countStartedAt = getNowMs();
-        const countRes = await apiClient.get(`${props.backendUrl}/pictures/count?stack_leaders_only=true${_charSuffix}${_formatSuffix}${_filterSuffix}`);
+        const countBody = await getPictureCount(
+          `stack_leaders_only=true${_charSuffix}${_formatSuffix}${_filterSuffix}`,
+          { baseUrl: props.backendUrl },
+        );
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         fetchPhaseTimings.countMs = Math.max(0, getNowMs() - countStartedAt);
         const total =
-          typeof countRes.data?.count === 'number' ? countRes.data.count : 0;
+          typeof countBody?.count === 'number' ? countBody.count : 0;
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
         const placeholderStartedAt = getNowMs();
@@ -856,16 +851,22 @@ export function useGridFetch(
         // await the tail. Both requests are already in flight, so the tail is not
         // delayed by this ordering.
         const firstReqPromise = timeRequest(
-          apiClient.get(`${streamBase}&offset=0&batch_limit=${FIRST_BATCH}`),
+          streamPictures(streamQuery, {
+            offset: 0,
+            batchLimit: FIRST_BATCH,
+            baseUrl: props.backendUrl,
+          }),
         );
         // Tail batch: for collections where the gap exceeds TAIL_THRESHOLD.
         // `.catch` keeps it from becoming an unhandled rejection if we bail out
         // (stale requestId) before awaiting it below.
         const tailReqPromise = (shouldFetchTailEarly
           ? timeRequest(
-              apiClient.get(
-                `${streamBase}&offset=${potentialLastBatchStart}&batch_limit=${LAST_BATCH}`,
-              ),
+              streamPictures(streamQuery, {
+                offset: potentialLastBatchStart,
+                batchLimit: LAST_BATCH,
+                baseUrl: props.backendUrl,
+              }),
             )
           : Promise.resolve(null)
         ).catch(() => null);
@@ -874,7 +875,7 @@ export function useGridFetch(
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         fetchPhaseTimings.firstBatchMs = firstResTimed?.elapsedMs ?? null;
 
-        const firstPics = firstResTimed?.response?.data?.pictures ?? [];
+        const firstPics = firstResTimed?.body?.pictures ?? [];
         splicePictures(firstPics, 0);
         hasLoadedOnce.value = true;
         initialRender.value = false;
@@ -910,8 +911,8 @@ export function useGridFetch(
         const lastResTimed = await tailReqPromise;
         if (fetchAllGridImages.lastRequestId !== requestId) return;
         fetchPhaseTimings.tailBatchMs = lastResTimed?.elapsedMs ?? null;
-        if (lastResTimed?.response) {
-          const lastPics = lastResTimed?.response?.data?.pictures ?? [];
+        if (lastResTimed?.body) {
+          const lastPics = lastResTimed?.body?.pictures ?? [];
           splicePictures(lastPics, potentialLastBatchStart);
         }
 
@@ -931,15 +932,19 @@ export function useGridFetch(
         while (bgOff < lastBatchStart) {
           if (fetchAllGridImages.lastRequestId !== requestId) return;
           const limit = Math.min(BG_BATCH, lastBatchStart - bgOff);
-          const bgResTimed = await timeRequest(apiClient.get(
-            `${streamBase}&offset=${bgOff}&batch_limit=${limit}`,
-          ));
+          const bgResTimed = await timeRequest(
+            streamPictures(streamQuery, {
+              offset: bgOff,
+              batchLimit: limit,
+              baseUrl: props.backendUrl,
+            }),
+          );
           if (fetchAllGridImages.lastRequestId !== requestId) return;
           const bgOffset = bgOff;
           bgOff += limit;
           const bgNetworkElapsedMs = bgResTimed.elapsedMs;
           const bgUiStartedAt = getNowMs();
-          const bgPics = bgResTimed?.response?.data?.pictures ?? [];
+          const bgPics = bgResTimed?.body?.pictures ?? [];
           splicePictures(bgPics, bgOffset);
           updateVisibleThumbnails();
           // Keep lastFetchedGridImages current so deletes during streaming work.
@@ -1138,17 +1143,22 @@ export function useGridFetch(
 
   async function fetchAllPicturesCount() {
     try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.allPicturesId}/summary${props.applyTagFilter ? "?apply_tag_filter=true" : ""}`,
+      const data = await getCharacterSummary(
+        props.allPicturesId,
+        props.applyTagFilter ? { apply_tag_filter: true } : undefined,
+        { baseUrl: props.backendUrl },
       );
-      const data = await res.data;
       totalAllPicturesCount.value = Number(data.image_count) || 0;
     } catch (e) {
       console.warn("[ImageGrid.vue] Failed to fetch all pictures count:", e);
     }
 
     try {
-      let url = `${props.backendUrl}/characters/${props.allPicturesId}/summary`;
+      // The scoped count comes from one of two summary resources; the ladder
+      // below picks which one and under what id, then a single call runs it.
+      let summaryKind = "character";
+      let summaryId = props.allPicturesId;
+      let summaryProjectId = null;
       const selectedCharacter = String(props.selectedCharacter ?? "");
       if (isSetOverlapView.value) {
         totalCurrentCategoryCount.value = Number(allGridImages.value.length) || 0;
@@ -1160,8 +1170,7 @@ export function useGridFetch(
         selectedSetId !== undefined &&
         String(selectedSetId) !== ""
       ) {
-        const setRes = await apiClient.get(`${props.backendUrl}/picture_sets`);
-        const setList = await setRes.data;
+        const setList = await listPictureSets({ baseUrl: props.backendUrl });
         const selectedSetNumericId = Number(selectedSetId);
         const selectedSet = Array.isArray(setList)
           ? setList.find((item) => {
@@ -1175,48 +1184,43 @@ export function useGridFetch(
         totalCurrentCategoryCount.value = Number(selectedSet?.picture_count) || 0;
         return;
       }
+      const inProjectView = props.projectViewMode === "project";
+      const activeProjectId =
+        props.selectedProjectId != null
+          ? props.selectedProjectId
+          : "UNASSIGNED";
       if (selectedCharacter === String(props.allPicturesId)) {
-        if (props.projectViewMode === "project") {
-          const pid =
-            props.selectedProjectId != null
-              ? props.selectedProjectId
-              : "UNASSIGNED";
-          url = `${props.backendUrl}/projects/${pid}/summary`;
+        if (inProjectView) {
+          summaryKind = "project";
+          summaryId = activeProjectId;
         }
       } else if (selectedCharacter === String(props.unassignedPicturesId)) {
-        if (props.projectViewMode === "project") {
-          const pid =
-            props.selectedProjectId != null
-              ? props.selectedProjectId
-              : "UNASSIGNED";
-          url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${pid}`;
-        } else {
-          url = `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
-        }
+        summaryId = props.unassignedPicturesId;
+        if (inProjectView) summaryProjectId = activeProjectId;
       } else if (selectedCharacter === String(props.scrapheapPicturesId)) {
-        url = `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`;
-      } else if (
-        selectedCharacter &&
-        !hasSetSelection.value &&
-        selectedCharacter !== String(props.allPicturesId)
-      ) {
-        if (props.projectViewMode === "project") {
-          const pid =
-            props.selectedProjectId != null
-              ? props.selectedProjectId
-              : "UNASSIGNED";
-          url = `${props.backendUrl}/characters/${selectedCharacter}/summary?project_id=${pid}`;
-        } else {
-          url = `${props.backendUrl}/characters/${selectedCharacter}/summary`;
-        }
+        summaryId = props.scrapheapPicturesId;
+      } else if (selectedCharacter && !hasSetSelection.value) {
+        summaryId = selectedCharacter;
+        if (inProjectView) summaryProjectId = activeProjectId;
       }
 
-      if (props.applyTagFilter) {
-        url += (url.includes("?") ? "&" : "?") + "apply_tag_filter=true";
-      }
+      const summaryParams = {};
+      if (summaryProjectId != null) summaryParams.project_id = summaryProjectId;
+      if (props.applyTagFilter) summaryParams.apply_tag_filter = true;
+      const hasParams = Object.keys(summaryParams).length > 0;
 
-      const scopedRes = await apiClient.get(url);
-      const scopedData = await scopedRes.data;
+      const scopedData =
+        summaryKind === "project"
+          ? await getProjectSummary(
+              summaryId,
+              hasParams ? summaryParams : undefined,
+              { baseUrl: props.backendUrl },
+            )
+          : await getCharacterSummary(
+              summaryId,
+              hasParams ? summaryParams : undefined,
+              { baseUrl: props.backendUrl },
+            );
       totalCurrentCategoryCount.value = Number(scopedData.image_count) || 0;
     } catch (e) {
       console.warn("[ImageGrid.vue] Failed to fetch scoped category count:", e);
