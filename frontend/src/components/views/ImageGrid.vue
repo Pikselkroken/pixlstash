@@ -1053,17 +1053,13 @@ import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vu
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
-  arraysEqualByString,
   faceBoxColor,
   formatUserDate,
   getInfoFont,
-  getStackColor,
   isRangeOverlap,
   normalizePluginProgressMessage,
   rangeCovers,
-  shiftRangesForDelta,
   sleep,
-  getStackThreshold,
   toggleScore,
 } from "../../utils/utils.js";
 import {
@@ -1215,7 +1211,6 @@ const props = defineProps({
 // CONSTANTS
 // ============================================================
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
-const MIN_THUMBNAIL_SIZE = 128;
 // Per-column thumbnail width is now driven by `1fr` tracks that fill the grid;
 // the 384px upper bound is enforced via the column-count clamp in App.vue
 // (updateMaxColumns), so no fixed max is applied to the track itself here.
@@ -2284,16 +2279,9 @@ function isImageRecentlyAdded(id) {
 // ============================================================
 // THUMBNAIL HELPERS
 // ============================================================
-function onThumbnailLoad(id, event = null) {
+function onThumbnailLoad(id) {
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
   const assignedAt = Number(thumbnailAssignedAtMap[id]);
-  const eventTarget = event?.target || null;
-  const src =
-    eventTarget?.currentSrc ||
-    eventTarget?.src ||
-    thumbnailRefs[id]?.currentSrc ||
-    thumbnailRefs[id]?.src ||
-    null;
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
     delete thumbnailAssignedAtMap[id];
   }
@@ -2717,127 +2705,6 @@ function formatCompactDatetime(dateStr) {
       );
   }
 }
-
-function getCompactGroupLabel(img, visualIdx) {
-  if (!props.compactMode || !img) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
-
-  function getGroupKey(item) {
-    if (!item) return null;
-    if (isSearchMode && typeof item.likeness_score === "number")
-      return Math.round(item.likeness_score * 20);
-    if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 19);
-    if (sort.includes("DATE") && item.created_at)
-      return item.created_at.slice(0, 10);
-    const smartScore = getGridSmartScoreValue(item);
-    if (sort.includes("SMART_SCORE") && smartScore !== null)
-      return Math.round(smartScore * 10);
-    if (
-      sort.includes("CHARACTER_LIKENESS") &&
-      typeof item.character_likeness === "number"
-    )
-      return Math.round(item.character_likeness * 100);
-    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
-      return Math.round(item.text_score * 10);
-    return null;
-  }
-
-  const currentKey = getGroupKey(img);
-  if (currentKey === null) return null;
-
-  const prevImg =
-    visualIdx > 0 ? gridImagesToRender.value[visualIdx - 1] : null;
-  if (visualIdx > 0 && getGroupKey(prevImg) === currentKey) return null;
-
-  if (isSearchMode && typeof img.likeness_score === "number")
-    return `≈ ${img.likeness_score.toFixed(2)}`;
-  if (sort === "IMPORTED_AT" && img.imported_at)
-    return formatCompactDatetime(img.imported_at);
-  if (sort.includes("DATE") && img.created_at)
-    return formatCompactDate(img.created_at);
-  const smartScore = getGridSmartScoreValue(img);
-  if (sort.includes("SMART_SCORE") && smartScore !== null)
-    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
-  if (
-    sort.includes("CHARACTER_LIKENESS") &&
-    typeof img.character_likeness === "number"
-  )
-    return `≈ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
-  if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
-    return `${(img.text_score * 100).toFixed(0)}%`;
-  return null;
-}
-
-const compactStickyLabel = computed(() => {
-  if (!props.compactMode) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
-
-  function getGroupKey(item) {
-    if (!item) return null;
-    if (isSearchMode && typeof item.likeness_score === "number")
-      return Math.round(item.likeness_score * 20);
-    if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 19);
-    if (sort.includes("DATE") && item.created_at)
-      return item.created_at.slice(0, 10);
-    const smartScore = getGridSmartScoreValue(item);
-    if (sort.includes("SMART_SCORE") && smartScore !== null)
-      return Math.round(smartScore * 10);
-    if (
-      sort.includes("CHARACTER_LIKENESS") &&
-      typeof item.character_likeness === "number"
-    )
-      return Math.round(item.character_likeness * 100);
-    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
-      return Math.round(item.text_score * 10);
-    return null;
-  }
-
-  const firstVisibleVisualIdx = visibleStart.value - renderStart.value;
-  const firstImg = gridImagesToRender.value?.[firstVisibleVisualIdx];
-  if (!firstImg) return null;
-
-  // Suppress if this item already has a between-row pill (it's a group boundary)
-  const prevImg =
-    firstVisibleVisualIdx > 0
-      ? gridImagesToRender.value[firstVisibleVisualIdx - 1]
-      : null;
-  const isGroupBoundary =
-    firstVisibleVisualIdx === 0 ||
-    getGroupKey(prevImg) !== getGroupKey(firstImg);
-  if (isGroupBoundary) return null;
-
-  if (isSearchMode && typeof firstImg.likeness_score === "number")
-    return `≈ ${firstImg.likeness_score.toFixed(2)}`;
-  if (sort === "IMPORTED_AT" && firstImg.imported_at)
-    return formatCompactDatetime(firstImg.imported_at);
-  if (sort.includes("DATE") && firstImg.created_at)
-    return formatCompactDate(firstImg.created_at);
-  const smartScore = getGridSmartScoreValue(firstImg);
-  if (sort.includes("SMART_SCORE") && smartScore !== null)
-    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
-  if (
-    sort.includes("CHARACTER_LIKENESS") &&
-    typeof firstImg.character_likeness === "number"
-  )
-    return `≈ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
-  if (sort === "TEXT_CONTENT" && typeof firstImg.text_score === "number")
-    return `${(firstImg.text_score * 100).toFixed(0)}%`;
-  if (
-    sort === "TAG_UNCERTAINTY" &&
-    typeof firstImg.tag_uncertainty === "number"
-  )
-    return `⚠ ${(firstImg.tag_uncertainty * 100).toFixed(0)}%`;
-  if (
-    sort === "ANOMALY_TAG_UNCERTAINTY" &&
-    typeof firstImg.anomaly_tag_uncertainty === "number"
-  )
-    return `⚠ ${(firstImg.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
-  return null;
-});
 
 // ── Visible range label (emitted to SelectionBar) ──────────────
 function getImageSortLabel(img) {
@@ -3965,9 +3832,6 @@ const selectedExpandedCount = computed(() => {
   }
   return total;
 });
-const isSelectionEmpty = computed(() => {
-  return !showSelectionBar.value;
-});
 const showScrapheapBar = computed(() => {
   return isScrapheapView.value;
 });
@@ -4541,7 +4405,6 @@ const {
   renderEnd,
   topSpacerHeight,
   bottomSpacerHeight,
-  getGridColumnWidth,
   updateRowHeightFromGrid,
   recalculateVisibleRange,
   onGridScroll,
@@ -4717,7 +4580,7 @@ function getGridFetchContextSummary(fetchKey) {
       searchQuery: parsed?.searchQuery ?? "",
       mediaTypeFilter: parsed?.mediaTypeFilter ?? "all",
     };
-  } catch (_err) {
+  } catch {
     return {};
   }
 }
@@ -4840,11 +4703,6 @@ if (
 const {
   dragOverlayVisible,
   dragOverlayMessage,
-  dragOverlayDepth,
-  dragSource,
-  dragSourceImageIds,
-  setDragSourceImageIds,
-  clearDragSourceImageIds,
   isDragSourceImage,
   stackReorderDrag,
   stackReorderHoverId,
@@ -4885,18 +4743,14 @@ const {
 // ============================================================
 const {
   imagesLoading,
-  imagesError,
   totalAllPicturesCount,
   totalCurrentCategoryCount,
   gridReady,
-  gridLoadEpoch,
-  lastFetchKey,
   lastFetchError,
   lastFetchSuccess,
   smartScoreLoadingVisible,
   buildGridFetchKey,
   buildPictureIdsQueryParams,
-  buildLikenessGroupQueryParams,
   fetchAllGridImages,
   fetchAllPicturesCount,
   debouncedFetchAllGridImages,
@@ -4961,13 +4815,10 @@ const {
   expandedStackIds,
   expandedStackMembers,
   expandedStackLoading,
-  stackVisualOrderMap,
-  selectedStackId,
   selectedMultipleStackIds,
   showRemoveFromStack,
   mapGridImages,
   getStackCardStyle,
-  getStackCardColor,
   getStackBadgeIconStyle,
   getStackBandStyle,
   isStackExpandedForImage,
@@ -4980,14 +4831,12 @@ const {
   prefetchStackMembers,
   emitStackStats,
   syncExpandAllStacksFromFetchedImages,
-  collectExpandableStackIds,
   handleStackReorderDragOver,
   handleStackReorderDragLeave,
   handleStackReorderDrop,
   createStackFromSelection,
   dissolveSelectedStacks,
   removeSelectedFromStack,
-  getLikenessGroupId,
   createStacksFromSelectedGroups,
   collapseStackImages,
   getLocalStackMembers,
@@ -5491,11 +5340,6 @@ function getGridSmartScoreValue(img) {
         ? img.smart_score
         : null;
   return Number.isFinite(raw) ? raw : null;
-}
-
-function formatGridSmartScoreValue(img) {
-  const value = getGridSmartScoreValue(img);
-  return value === null ? "" : value.toFixed(2);
 }
 
 // The ONE null-ordering rule shared by every client-side smart-score sort path
@@ -6409,7 +6253,6 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           .map((img) => String(img.id)),
       ),
     );
-    const requestedIdPreview = ids.slice(0, 8);
     let overlayNeedsRedraw = false;
     if (ids.length) {
       const thumbRes = await apiClient.post(
@@ -6585,7 +6428,7 @@ function handleImageCardClick(img, idx, event) {
   cursorIdx.value = idx;
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
-  let newSelection = [];
+  let newSelection;
   const allGrid = allGridImages.value;
   const anchorIndex =
     lastSelectedImageId.value != null
@@ -6865,7 +6708,7 @@ function scheduleSharedPictureFetch() {
         }
       }
       sharedPictureIds.value = nextShared;
-    } catch (e) {
+    } catch {
       // Non-critical — silently ignore
     }
   }, 300);

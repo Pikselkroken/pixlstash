@@ -152,12 +152,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
 import { apiClient } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
-  SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
@@ -196,7 +195,7 @@ const projectSelection = computed({
   },
 });
 
-const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
+const emit = defineEmits(["close", "refresh-sidebar"]);
 
 // Tooltip on every field disabled by the lock. The set editor is set-scoped, so
 // this reason is about the set (the store's picture-scoped lockReason is for
@@ -330,6 +329,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>

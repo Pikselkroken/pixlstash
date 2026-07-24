@@ -899,18 +899,6 @@ const isScrapheapView = computed(() => {
   return String(props.selectedCharacter || "").toUpperCase() === scrapId;
 });
 
-const normalizedSelectedCharacter = computed(() => {
-  const raw = String(props.selectedCharacter ?? "")
-    .trim()
-    .toUpperCase();
-  return !raw || raw === "NULL" || raw === "UNDEFINED" ? "" : raw;
-});
-
-const hasSetSelectionContext = computed(() => {
-  const setId = Number(props.selectedSet);
-  return Number.isFinite(setId) && setId > 0;
-});
-
 const showRemoveButton = computed(() => {
   if (!selectedCount.value) return false;
   return isScrapheapView.value;

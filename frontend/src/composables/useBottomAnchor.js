@@ -144,9 +144,3 @@ export function useFloatingBottomInset() {
 
   return { inset, narrow: isNarrowViewport };
 }
-
-/** Test seam: drop every registration. */
-export function __resetBottomAnchors() {
-  anchors.value = {};
-  isNarrowViewport.value = false;
-}

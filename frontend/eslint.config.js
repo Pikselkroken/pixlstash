@@ -5,7 +5,13 @@ import vueParser from "vue-eslint-parser";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "playwright-report/**",
+      "test-results/**",
+      "coverage/**",
+    ],
   },
   js.configs.recommended,
   ...pluginVue.configs["flat/essential"],
@@ -28,6 +34,7 @@ export default [
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
+          ignoreRestSiblings: true,
         },
       ],
       "no-useless-assignment": "warn",

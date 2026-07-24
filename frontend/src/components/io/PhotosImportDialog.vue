@@ -163,7 +163,7 @@ async function fetchWatchFolders({ force = false } = {}) {
     const response = await apiClient.get("/import-folders");
     importFolders.value = response?.data?.folders || [];
     importFoldersLoaded.value = true;
-  } catch (error) {
+  } catch {
     importFoldersError.value =
       "Unable to load monitored folders. Check server connection.";
     importFolders.value = [];

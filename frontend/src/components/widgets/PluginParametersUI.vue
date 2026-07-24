@@ -110,10 +110,10 @@ function cloneParameterValue(value) {
   if (typeof value !== "object") return value;
   try {
     return structuredClone(value);
-  } catch (_) {
+  } catch {
     try {
       return JSON.parse(JSON.stringify(value));
-    } catch (_) {
+    } catch {
       return value;
     }
   }

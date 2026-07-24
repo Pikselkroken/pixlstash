@@ -97,7 +97,6 @@ const theme = useTheme();
 const gridContainer = ref(null);
 const sidebarRef = ref(null);
 const statsSidebarRef = ref(null);
-const toolbarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
 
@@ -108,8 +107,6 @@ const photosDialogOpen = ref(false);
 const folderScanning = ref(false);
 const installType = ref("pip");
 const dockerVariant = ref("gpu");
-const columnsMenuOpen = ref(false);
-const overlaysMenuOpen = ref(false);
 const loading = ref(null);
 const error = ref(null);
 
@@ -139,7 +136,6 @@ const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 14;
 const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
-const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
 // Coalescing window for incoming grid-driving WS events (see
@@ -323,10 +319,10 @@ function connectUpdatesSocket() {
   };
 
   ws.onmessage = (event) => {
-    let payload = null;
+    let payload;
     try {
       payload = JSON.parse(event.data);
-    } catch (e) {
+    } catch {
       return;
     }
     const isPictureChange =
@@ -635,14 +631,6 @@ function handleWindowPaste(event) {
   event.preventDefault();
   const projectId = sidebarRef.value?.currentProjectId ?? null;
   sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
-}
-
-const STATS_SIDEBAR_WIDTH = 288;
-
-function toolbarWidth() {
-  // gridWrapperRef is the flex:1 div that wraps ImageGrid — its clientWidth
-  // is exactly the toolbar width regardless of sidebar states.
-  return gridWrapperRef.value?.clientWidth ?? window.innerWidth ?? 0;
 }
 
 function updateSidebarBreakpoints() {
@@ -1244,10 +1232,6 @@ function handleUpdateSortOptions(options) {
   sortStore.sortOptions = Array.isArray(options) ? options : [];
 }
 
-function handleUpdateStackThreshold(value) {
-  sortStore.stackThreshold = value;
-}
-
 function handleStackStatsUpdate(payload) {
   const expanded = Number(payload?.expanded ?? 0);
   const total = Number(payload?.total ?? 0);
@@ -1255,22 +1239,6 @@ function handleStackStatsUpdate(payload) {
     ? Math.max(0, expanded)
     : 0;
   gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
-}
-
-function handleExpandAllStacks() {
-  nextTick(() => {
-    gridContainer.value?.expandAllStacks?.();
-  });
-}
-
-function handleCollapseAllStacks() {
-  nextTick(() => {
-    gridContainer.value?.collapseAllStacks?.();
-  });
-}
-
-function handleComfyuiRunGrid(payload) {
-  gridContainer.value?.runComfyuiOnGridImages(payload);
 }
 
 function handleUpdateSimilarityCharacter(val) {
@@ -1357,16 +1325,6 @@ function handleUpdateSidebarWidth(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
   userPrefsStore.sidebarWidth = nextValue;
-}
-
-function handleColumnsEnd() {
-  if (columnsMenuCloseTimeout) {
-    clearTimeout(columnsMenuCloseTimeout);
-  }
-  columnsMenuCloseTimeout = setTimeout(() => {
-    columnsMenuOpen.value = false;
-    columnsMenuCloseTimeout = null;
-  }, COLUMNS_MENU_CLOSE_DELAY_MS);
 }
 
 async function fetchConfig() {
@@ -1638,8 +1596,7 @@ async function patchConfigUIOptions() {
   }
 
   try {
-    const response = await apiClient.patch("/users/me/config", changed);
-    const updatedConfig = await response.data;
+    await apiClient.patch("/users/me/config", changed);
     configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
     console.error("Error patching /users/me/config:", e);
@@ -1752,7 +1709,7 @@ function handleImagesMoved({ imageIds, kind, refresh }) {
   }
 }
 
-function handleFacesAssignedToCharacter({ characterId, faceIds }) {
+function handleFacesAssignedToCharacter() {
   if (
     gridContainer.value &&
     typeof gridContainer.value.clearFaceSelection === "function"
@@ -1789,34 +1746,6 @@ function handleClearSearch() {
   searchStore.searchInput = "";
   searchStore.isSearchHistoryOpen = false;
   gridStore.refreshGridVersion();
-}
-
-function blurSearchInput() {
-  toolbarRef.value?.blurSearchInput?.();
-}
-
-function blurSearch(event) {
-  if (event && event.target) {
-    event.target.blur();
-  }
-  blurSearchInput();
-}
-
-function addToSearchHistory(query) {
-  searchStore.addToSearchHistory(query);
-}
-
-function applySearchHistory(query) {
-  searchStore.searchInput = query;
-  searchStore.commitSearch();
-  searchStore.isSearchHistoryOpen = false;
-  nextTick(() => {
-    blurSearchInput();
-  });
-}
-
-function commitSearch() {
-  searchStore.commitSearch();
 }
 
 function handleResetToAll() {
@@ -1930,7 +1859,7 @@ watch(
     () => gridStore.showProblemIcon,
     () => gridStore.showStacks,
   ],
-  ([face, problem, stacks]) => {},
+  () => {},
   { immediate: true },
 );
 

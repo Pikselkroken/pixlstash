@@ -172,7 +172,7 @@ function toggleExpanded() {
   }
 }
 
-function onDragOver(e) {
+function onDragOver() {
   clearTimeout(dragLeaveTimer);
   dragOver.value = true;
 }
@@ -296,15 +296,6 @@ function urlLabel(file) {
     return name.replace(/^https?:\/\//, "").replace(/\/$/, "");
   }
   return name;
-}
-
-function shortenUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./, "");
-  } catch {
-    return url.slice(0, 24);
-  }
 }
 
 function fileIcon(file) {

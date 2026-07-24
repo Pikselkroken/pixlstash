@@ -769,7 +769,6 @@ import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
   faceBoxColor,
-  formatUserDate,
   getStackColor,
   toggleScore,
 } from "../../utils/utils.js";
@@ -1022,7 +1021,6 @@ const isDescriptionEditing = computed(
 const overlayCopyState = ref("idle");
 const imagePlaceholderLabel = "{{image_path}}";
 const captionPlaceholderLabel = "{{caption}}";
-const canCopyOverlay = computed(() => !!image.value);
 const descriptionTeaser = computed(() => {
   const desc = image.value?.description || "";
   const trimmed = desc.trim();
@@ -1471,27 +1469,6 @@ function compareOverlayStackOrder(a, b) {
 function sortOverlayStackMembers(members) {
   if (!Array.isArray(members)) return [];
   return members.slice().sort(compareOverlayStackOrder);
-}
-
-function buildOverlayStackLeaderMap(images) {
-  const byStack = new Map();
-  for (const img of images) {
-    const stackId = getOverlayStackId(img);
-    if (!stackId || img?.id == null) continue;
-    if (!byStack.has(stackId)) {
-      byStack.set(stackId, []);
-    }
-    byStack.get(stackId).push(img);
-  }
-  const leaders = new Map();
-  for (const [stackId, members] of byStack.entries()) {
-    const ordered = sortOverlayStackMembers(members);
-    const leader = ordered[0];
-    if (leader?.id != null) {
-      leaders.set(stackId, String(leader.id));
-    }
-  }
-  return leaders;
 }
 
 function getOverlayLocalStackMembers(stackId) {
@@ -2435,7 +2412,7 @@ function onPanEnd(event) {
   isPanning.value = false;
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
 }
@@ -2847,7 +2824,7 @@ async function onDrawEnd(event) {
   drawState.value = { ...drawState.value, active: false };
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
   if (Math.abs(x2 - x1) < 5 || Math.abs(y2 - y1) < 5) {
@@ -2887,7 +2864,7 @@ async function onDrawEnd(event) {
 function onDrawCancel(event) {
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
   clearDrawMode();
@@ -3221,7 +3198,7 @@ async function fetchFaceBboxes(imageId) {
             );
             const data = res.data;
             face.character_name = data.name || null;
-          } catch (e) {
+          } catch {
             face.character_name = null;
           }
         } else {
@@ -3666,7 +3643,7 @@ function handleDescriptionUpdate(imageId, newDescription) {
 async function copyOverlayImage() {
   if (!image.value) return;
   const url = getFullImageUrl(image.value);
-  let copied = false;
+  let copied;
   try {
     if (isSupportedVideoFile(getOverlayFormat(image.value))) {
       copied = await copyVideoFrameToClipboard();
@@ -3710,7 +3687,7 @@ async function copyImageElementToClipboard() {
     const blob = await canvasToBlob(canvas, "image/png");
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -3731,7 +3708,7 @@ async function copyVideoFrameToClipboard() {
     const blob = await canvasToBlob(canvas, "image/png");
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -3744,7 +3721,7 @@ async function copyImageByFetch(url) {
     const blob = await response.blob();
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }

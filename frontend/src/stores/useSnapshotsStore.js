@@ -121,7 +121,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
 
   // ── WebSocket event handlers (called from App.vue) ─────────────────────────
 
-  function onSnapshotCreated(payload) {
+  function onSnapshotCreated() {
     // Refresh the full list so ordering / counts are correct.
     fetchSnapshots();
   }
@@ -142,7 +142,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     };
   }
 
-  function onRestoreCompleted(payload) {
+  function onRestoreCompleted() {
     activeJob.value = null;
     // Refresh snapshot list in case a safety OPPORTUNISTIC snapshot was
     // created during the restore.

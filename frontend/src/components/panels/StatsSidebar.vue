@@ -66,7 +66,6 @@ const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "avi", "mkv", "m4v"];
 const topTagsOpen = ref(true);
 const coocOpen = ref(false);
 const confHistOpen = ref(false);
-const tagCountHistOpen = ref(false);
 
 // Tab state
 const activeTab = ref("tags");
@@ -259,7 +258,7 @@ async function fetchStats() {
   try {
     const res = await apiClient.get(`/pictures/stats${qs ? `?${qs}` : ""}`);
     stats.value = { ...res.data, regular_tags: prevRegularTags };
-  } catch (e) {
+  } catch {
     error.value = "Failed to load stats";
     stats.value = null;
   } finally {
@@ -652,7 +651,6 @@ const donutUntaggedDash = computed(() => {
   if (!stats.value || stats.value.total === 0)
     return DONUT_CIRCUMFERENCE + " " + DONUT_CIRCUMFERENCE;
   const fraction = stats.value.untagged / stats.value.total;
-  const taggedFraction = stats.value.tagged / stats.value.total;
   return `${fraction * DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`;
 });
 
@@ -793,13 +791,6 @@ const confHistBuckets = computed(() => {
 const confHistMax = computed(() =>
   Math.max(1, ...confHistBuckets.value.map((b) => b.count)),
 );
-const tagCountBuckets = computed(
-  () => stats.value?.anomaly_tag_count_histogram ?? [],
-);
-const tagCountHistMax = computed(() =>
-  Math.max(1, ...tagCountBuckets.value.map((b) => b.count)),
-);
-
 function histBarWidth(count, maxCount) {
   return Math.max(count > 0 ? 2 : 0, (count / maxCount) * 208);
 }

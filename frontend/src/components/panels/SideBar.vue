@@ -219,7 +219,6 @@ const setThumbnails = ref({});
 const setThumbnailRetryCounts = ref({});
 const setThumbnailRetryTimers = new Map();
 const SET_THUMBNAIL_MAX_RETRIES = 2;
-const expandedCharacters = ref({});
 
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
@@ -774,7 +773,7 @@ async function browseFolderPath(path, prefetchChildren = false) {
         void browseFolderPath(entry.path, false);
       });
     }
-  } catch (e) {
+  } catch {
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
       [path]: { entries: [], loading: false, image_count: null, error: true },
@@ -1130,7 +1129,6 @@ function cancelCloseProjectSubMenu() {
 
 function _flyoutPos(rect) {
   const menuMaxH = window.innerHeight * 0.6;
-  const menuMinW = 200;
   const left = rect.right + 4;
   // Clamp top so menu doesn't go below viewport
   const top = Math.min(rect.top, window.innerHeight - menuMaxH - 8);
@@ -1467,9 +1465,6 @@ const charsCollapsed = computed(() => {
   );
 });
 
-const sidebarFolderRootIconSize = computed(() =>
-  Math.round(sidebarThumbnailSizeModel.value * 0.75),
-);
 const sidebarFolderChildIconSize = computed(() =>
   Math.round(sidebarThumbnailSizeModel.value * 0.5),
 );
@@ -1592,16 +1587,11 @@ function onSidebarResizeKey(e) {
   }
 }
 
-const isSearchActive = computed(() => {
-  const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
-  return query.trim().length > 0;
-});
-
 const reactiveSelectedDescending = ref(props.selectedDescending);
 
 watch(
   () => props.selectedDescending,
-  (newValue, oldValue) => {
+  (newValue) => {
     reactiveSelectedDescending.value = newValue;
   },
 );
@@ -1623,11 +1613,6 @@ const sortModel = computed({
       sort: value != null ? String(value) : "",
       descending: descendingModel.value,
     }),
-});
-
-const searchModel = computed({
-  get: () => props.searchQuery,
-  set: (value) => emit("update:search-query", value ?? ""),
 });
 
 // --- Character Editor Dialog Functions ---
@@ -1844,19 +1829,6 @@ async function deleteCharacter() {
     );
 
     await fetchCharacters(); // Refresh sidebar
-  } catch (e) {
-    setError(e.message);
-  }
-}
-
-async function deleteCharacterById(id) {
-  const char = characters.value.find((c) => c.id === id);
-  if (!char) return;
-  if (!window.confirm(`Delete character "${char.name}"?`)) return;
-  try {
-    await apiClient.delete(`/characters/${id}`);
-    characters.value = characters.value.filter((c) => c.id !== id);
-    await fetchCharacters();
   } catch (e) {
     setError(e.message);
   }
@@ -2252,10 +2224,6 @@ function handleImportFinished(payload) {
   emit("import-finished", payload);
 }
 
-function openImportDialog() {
-  emit("open-import-dialog");
-}
-
 function startLocalImport(files, projectId = null) {
   const list = Array.isArray(files) ? files : [];
   if (!list.length) return;
@@ -2329,12 +2297,6 @@ const isAllPicturesRowActive = computed(() => {
   if (selectedSetIdSet.value.size > 0) return false;
   return true;
 });
-
-const isUnassignedPicturesRowActive = computed(
-  () =>
-    !props.hasFolderFilter &&
-    props.selectedCharacter === props.unassignedPicturesId,
-);
 
 const allPicturesRowLabel = computed(() => {
   if (projectViewMode.value === "global") return "All Pictures";
@@ -2422,7 +2384,9 @@ async function fetchSidebarData() {
         );
         const data = await res.data;
         setCategoryCount(char.id, data.image_count, shouldFlash);
-      } catch {}
+      } catch (e) {
+        console.warn("Error fetching character images summary:", e);
+      }
     }),
   );
   // Fetch counts for each project and the unassigned bucket
@@ -2801,7 +2765,7 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      const res = await apiClient.post(
+      await apiClient.post(
         `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
       );
     });
@@ -2991,7 +2955,7 @@ async function onCharacterDrop(characterId, event) {
   // Accept faceIds or imageIds from drag event
   let faceIds = [];
   let imageIds = [];
-  let dragType = null;
+  let dragType;
   try {
     const rawDataStr = event.dataTransfer.getData("application/json");
     const data = JSON.parse(rawDataStr);
@@ -3029,7 +2993,7 @@ async function onCharacterDrop(characterId, event) {
     // Assign faces to character
     try {
       const body = { face_ids: faceIds };
-      const res = await apiClient.post(
+      await apiClient.post(
         `${props.backendUrl}/characters/${characterId}/faces`,
         body,
       );
@@ -3053,7 +3017,7 @@ async function onCharacterDrop(characterId, event) {
   try {
     // Fallback: assign images to character
     const body = { picture_ids: imageIds };
-    const res = await apiClient.post(
+    await apiClient.post(
       `${props.backendUrl}/characters/${characterId}/faces`,
       body,
     );
@@ -3605,36 +3569,6 @@ function onProjectSetsDrop(projectId) {
   moveDragOverSetsId.value = null;
   if (draggingEntityKind.value === "set" && id != null) {
     moveSetToProject(id, projectId);
-  }
-}
-
-async function handleDropOnProjectPictures(event) {
-  if (projectViewMode.value !== "project" || selectedProjectId.value === null) {
-    return;
-  }
-  let draggedIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (data.imageIds && Array.isArray(data.imageIds)) {
-      draggedIds = data.imageIds;
-    }
-  } catch (e) {
-    console.error("Could not parse drag data:", e);
-    return;
-  }
-  if (draggedIds.length === 0) return;
-  try {
-    // Many-to-many membership via the batch endpoint (see onProjectDrop).
-    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-      picture_ids: draggedIds,
-      project_id: selectedProjectId.value,
-      mode: "add",
-    });
-    emit("images-moved", { imageIds: draggedIds });
-    // Reassignment changes per-project image counts.
-    fetchSidebarData();
-  } catch (e) {
-    console.error("Failed to assign pictures to project:", e);
   }
 }
 
@@ -5252,7 +5186,6 @@ defineExpose({
                   >
                 </div>
                 <div
-                  v-if="visibleCharacters.length > 0"
                   v-for="char in visibleCharacters"
                   :key="char.id"
                   class="sidebar-character-group"
@@ -5404,7 +5337,7 @@ defineExpose({
                     >Click the + button to add one.</span
                   >
                 </div>
-                <template v-for="(pset, idx) in visibleSets" :key="pset.id">
+                <template v-for="pset in visibleSets" :key="pset.id">
                   <div
                     :class="[
                       'sidebar-list-item',

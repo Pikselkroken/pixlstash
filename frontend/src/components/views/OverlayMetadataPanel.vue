@@ -180,7 +180,7 @@ function parseMetadataValue(value) {
     ) {
       try {
         return JSON.parse(trimmed);
-      } catch (e) {
+      } catch {
         return value;
       }
     }
@@ -270,7 +270,7 @@ function formatDuration(seconds) {
 function stringifyMetadata(value) {
   try {
     return JSON.stringify(value, null, 2);
-  } catch (e) {
+  } catch {
     return String(value);
   }
 }

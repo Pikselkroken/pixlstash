@@ -69,7 +69,7 @@ import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
 import WordmarkLogo from "../WordmarkLogo.vue";
 
-const props = defineProps({
+defineProps({
   tokenError: { type: String, default: null },
 });
 

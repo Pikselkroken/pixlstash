@@ -17,7 +17,6 @@
 // set and try again" is something the user can act on.
 
 /** Outcome kinds, in the order of how much the user needs to care. */
-export const LOCKED_DELETE_NONE = "none";
 export const LOCKED_DELETE_PARTIAL = "partial";
 export const LOCKED_DELETE_ALL_LOCKED = "all-locked";
 
