@@ -42,6 +42,7 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import ImageGrid from "./components/views/ImageGrid.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
@@ -1323,6 +1324,14 @@ function handleEmptyScrapheapFromSidebar() {
   nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
 }
 
+// Open the stats sidebar and focus its Tasks tab. Shared by the thumbnail-mode
+// "View progress" notice action and the ThumbnailUpgradeBanner's link, so both
+// use the same statsSidebarRef.focusTasksTab() plumbing.
+function focusTasksTabPanel() {
+  sidebarStore.statsOpen = true;
+  nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
+}
+
 function handleUpdateThumbnailMode(value) {
   if (value !== "square" && value !== "justified") return;
   const previous = gridStore.thumbnailMode;
@@ -1351,10 +1360,7 @@ function handleUpdateThumbnailMode(value) {
     key: "thumbnail-regen",
     action: {
       label: "View progress",
-      handler: () => {
-        sidebarStore.statsOpen = true;
-        nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
-      },
+      handler: focusTasksTabPanel,
     },
   });
 }
@@ -2306,6 +2312,7 @@ defineExpose({
           @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">
+          <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
           <div
             :class="[
               'main-content',
