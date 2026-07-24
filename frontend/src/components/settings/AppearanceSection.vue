@@ -28,14 +28,14 @@ const emit = defineEmits([
 ]);
 
 // Thumbnail layout: 'square' (uniform grid) vs 'justified' (variable-width rows).
-// A two-option radiogroup, not a switch — both layouts are peers of a binary
+// A two-option radiogroup, not a switch; both layouts are peers of a binary
 // visual choice (ui-ux-expert decision). Arrow keys move between the options;
 // Space/Enter selects the focused one.
 const THUMBNAIL_MODES = ["square", "justified"];
 
 // Justified needs the whole-frame aspect-ratio thumbnails. After the v1.8.0
 // upgrade those regenerate in the background; until that finishes, justified
-// would render old square crops stretched into variable-width slots — worse than
+// would render old square crops stretched into variable-width slots, worse than
 // square. So the Justified option is gated on the thumbnail-regeneration worker
 // (the same signal the "Upgrading thumbnails" bar reads): disabled while any
 // pictures still await regeneration. Reading the shared worker snapshot keeps
@@ -184,7 +184,7 @@ async function clearGuestSession() {
       />
     </SettingsSection>
 
-    <SettingsSection title="Image Grid">
+    <SettingsSection>
       <div class="thumb-layout-row">
         <span id="thumb-layout-label" class="thumb-layout-label"
           >Thumbnail layout</span
@@ -200,6 +200,7 @@ async function clearGuestSession() {
             :class="{ active: (props.thumbnailMode ?? 'square') === 'square' }"
             type="button"
             role="radio"
+            title="Uniform squares for a tidy grid"
             :aria-checked="(props.thumbnailMode ?? 'square') === 'square'"
             :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
             @click="setThumbnailMode('square')"
@@ -214,6 +215,7 @@ async function clearGuestSession() {
             }"
             type="button"
             role="radio"
+            title="Each photo keeps its own shape, like Google Photos"
             :aria-checked="props.thumbnailMode === 'justified'"
             :aria-disabled="justifiedDisabled"
             :disabled="justifiedDisabled"
@@ -224,16 +226,12 @@ async function clearGuestSession() {
           </button>
         </div>
         <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
-          Justified layout becomes available once thumbnails finish updating
-          <template v-if="thumbnailRegen.total">
+          Available when thumbnails finish updating<template
+            v-if="thumbnailRegen.total"
+          >
             ({{ thumbnailRegen.current.toLocaleString() }} of
-            {{ thumbnailRegen.total.toLocaleString() }} done)</template
-          >. This runs in the background — the grid stays usable meanwhile.
-        </p>
-        <p class="thumb-layout-desc">
-          Choose how photos fill the grid. <strong>Justified</strong> sizes each
-          thumbnail to the photo's own shape for an edge-to-edge wall;
-          <strong>Square</strong> keeps every thumbnail uniform for a tidy grid.
+            {{ thumbnailRegen.total.toLocaleString() }})</template
+          >.
         </p>
       </div>
     </SettingsSection>
@@ -404,12 +402,6 @@ async function clearGuestSession() {
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.75);
-  line-height: var(--leading-snug);
-}
-.thumb-layout-desc {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  margin: 0;
   line-height: var(--leading-snug);
 }
 
