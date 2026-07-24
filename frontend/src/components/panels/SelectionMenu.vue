@@ -307,7 +307,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { hashCompareSnapshot } from "../../api/snapshots";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
@@ -580,13 +580,10 @@ watch(restoreSubmenuOpen, async (isOpen) => {
   await Promise.all(
     recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(
-          `/api/v1/snapshots/${cp.id}/hash-compare`,
-          { picture_ids: pictureIds },
-        );
+        const body = await hashCompareSnapshot(cp.id, pictureIds);
         // Bail on stale apply — a newer run has superseded this one.
         if (token !== _hashCompareRunToken) return;
-        const identicalSet = new Set(res.data.identical_ids);
+        const identicalSet = new Set(body.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));
         if (allIdentical) {
           matchedIds.add(cp.id);
