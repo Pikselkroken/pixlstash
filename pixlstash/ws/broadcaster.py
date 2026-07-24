@@ -287,7 +287,10 @@ class WsBroadcasterMixin:
                         continue
                     try:
                         payload = json.loads(message)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug(
+                            "Ignoring unparseable websocket message (%s).", exc
+                        )
                         continue
                     if payload.get("type") == "set_filters":
                         filters = {

@@ -34,4 +34,6 @@ def default_max_vram_gb() -> float:
         half_gb = (total_mb / 1024.0) / 2.0
         return round(min(6.0, half_gb), 2)
     except Exception:
+        # nvidia-smi absent/failing is normal on CPU-only hosts; the documented
+        # 6GB default IS the answer, so logging it would be routine noise.
         return 6.0

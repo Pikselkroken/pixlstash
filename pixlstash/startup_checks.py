@@ -522,6 +522,8 @@ class StartupChecks:
             except metadata.PackageNotFoundError:
                 continue
             except Exception:
+                # Best-effort package probe for a diagnostic hint; an unreadable
+                # distribution just means "try the next name / unknown".
                 continue
         return "unknown"
 

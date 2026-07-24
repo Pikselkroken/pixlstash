@@ -432,7 +432,13 @@ def register_routes(router, server):
                     ],
                     True,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Could not map bbox to thumbnail for picture %s (%s); "
+                    "returning unscaled bbox.",
+                    getattr(picture, "id", None),
+                    exc,
+                )
                 return bbox, False
 
         pics = server.vault.db.run_task(

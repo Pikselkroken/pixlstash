@@ -106,6 +106,8 @@ def smart_score_penalised_tags(
         try:
             tags = json.loads(value)
         except Exception:
+            # Documented parse-reject: unparseable JSON falls back to the caller's
+            # default weights (see docstring); the fallback IS the answer.
             return fallback
     else:
         tags = value

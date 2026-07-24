@@ -1068,6 +1068,8 @@ class Vault:
                 try:
                     return len(value or []) > 0, value
                 except Exception:
+                    # Relationship-length guard: a non-lenable value is simply
+                    # "not populated"; (False, value) IS the answer.
                     return False, value
             return value is not None, value
 

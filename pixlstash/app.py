@@ -66,7 +66,12 @@ def _should_prompt_bootstrap(server_config_path: str, force: bool) -> bool:
         with open(server_config_path, "r") as handle:
             data = json.load(handle)
         return not isinstance(data, dict)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Could not read server config %s (%s); prompting first-run bootstrap.",
+            server_config_path,
+            exc,
+        )
         return True
 
 

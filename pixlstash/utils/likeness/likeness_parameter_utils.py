@@ -479,7 +479,8 @@ class LikenessParameterUtils:
             for bit in bits:
                 value = (value << 1) | int(bit)
             return f"{value:0{hash_size * hash_size // 4}x}"
-        except Exception:
+        except Exception as exc:
+            logger.debug("Could not compute dHash for image (%s).", exc)
             return None
 
     def compute_phash_from_file(

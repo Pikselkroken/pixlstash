@@ -49,6 +49,9 @@ class ImageUtils:
     @staticmethod
     def _coerce_metadata_value(value):
         """Coerce a raw metadata value to a JSON-serialisable Python type."""
+        # Best-effort coercion: when a numeric/bytes value cannot be converted the
+        # str()/repr() fallback below IS the JSON-serialisable result, not an error
+        # path (these swallows are allowlisted in the except-hygiene guardrail).
         if IFDRational is not None and isinstance(value, IFDRational):
             try:
                 return float(value)
@@ -256,7 +259,12 @@ class ImageUtils:
                     pil_img = pil_img.convert("RGB")
                 rgb = np.array(pil_img)
                 return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Could not load image %s via PIL fallback (%s); returning None.",
+                file_path,
+                exc,
+            )
             return None
 
     @staticmethod
@@ -366,7 +374,10 @@ class ImageUtils:
                                     ).strip()
                                     if text:
                                         return text
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug(
+                                    "Could not read EXIF timezone offset (%s).", exc
+                                )
                                 return None
                             return None
 
