@@ -50,6 +50,7 @@
  */
 import { ref, reactive, onUnmounted, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { abortRun } from "../../api/comfyui";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
@@ -768,7 +769,7 @@ async function abortComfyui() {
   if (isAborting.value) return;
   isAborting.value = true;
   try {
-    await apiClient.post(`${props.backendUrl}/comfyui/abort`);
+    await abortRun({ baseUrl: props.backendUrl });
   } catch (err) {
     // Best-effort abort — ignore errors and still reset local state
     logComfyuiDebug("abort-error", { error: err?.message || String(err) });

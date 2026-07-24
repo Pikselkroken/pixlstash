@@ -141,6 +141,7 @@
 <script setup>
 import { ref, computed, nextTick, watch } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
@@ -275,8 +276,8 @@ async function fetchDescPlugins() {
   if (descPluginsLoading.value || descPlugins.value.length) return;
   descPluginsLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    descPlugins.value = (res.data?.plugins ?? []).filter(
+    const body = await listTaggers();
+    descPlugins.value = (body?.plugins ?? []).filter(
       (p) => p.supports_descriptions,
     );
   } catch {
