@@ -265,8 +265,10 @@ a {
   background: var(--accent);
   color: var(--on-accent);
 }
+/* Darken on hover (not brighten) — the amber accent is already near the
+   contrast floor, so lightening it would drop the warm-white label below 3:1. */
 .download-btn:hover {
-  background: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 86%, #000);
 }
 
 /* ── Page hero (inner pages) ── */
@@ -497,7 +499,7 @@ a {
   background: var(--panel);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  box-shadow: 0 16px 48px var(--shadow);
+  box-shadow: 0 4px 16px var(--shadow);
   overflow: hidden;
   position: relative;
   min-width: 0;

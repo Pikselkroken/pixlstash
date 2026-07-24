@@ -371,10 +371,11 @@ async function clearGuestSession() {
 .thumb-layout-opt {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -396,6 +397,7 @@ async function clearGuestSession() {
 .tli {
   width: 78px;
   height: 50px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
   overflow: hidden;
@@ -477,10 +479,11 @@ async function clearGuestSession() {
 .sidebar-width-opt {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -509,6 +512,7 @@ async function clearGuestSession() {
   display: flex;
   width: 78px;
   height: 50px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
   overflow: hidden;
