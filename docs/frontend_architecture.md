@@ -74,6 +74,7 @@ frontend/src/
 ├── api/                         # Backend resource modules: the only place URL strings live (see §8)
 │   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config
 │   ├── serverConfig.js          # Server-wide config topics under /server-config/
+│   ├── users.js                 # /users/me/* — account, tokens/share links, watermark
 │   ├── session.js               # /session/context — the current credential's scope
 │   ├── workers.js               # /workers/progress — background-worker poll
 │   ├── snapshots.js             # /snapshots + restore/preview sub-resources
@@ -789,6 +790,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 |---|---|
 | `api/config.js` | `GET`/`PATCH /users/me/config`, the per-user config blob |
 | `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots) |
+| `api/users.js` | `/users/me/*`: the owner account, its tokens and share links, the watermark |
 | `api/session.js` | `/session/context`, what the current credential is allowed to do |
 | `api/workers.js` | `/workers/progress`, the background-worker poll |
 | `api/snapshots.js` | `/snapshots` and its restore/preview sub-resources |

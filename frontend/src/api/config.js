@@ -7,21 +7,29 @@
 
 import { apiClient } from "../utils/apiClient";
 
+/** Path of the per-user config blob. */
+const CONFIG_URL = "/users/me/config";
+
 /**
  * Fetch the current user's configuration blob.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""] - explicit backend base, for the call
+ *   sites that address the backend absolutely.
  * @returns {Promise<Object>} the config object (the response body).
  */
-export async function getUserConfig() {
-  const res = await apiClient.get("/users/me/config");
+export async function getUserConfig({ baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}${CONFIG_URL}`);
   return res.data;
 }
 
 /**
  * Patch a partial slice of the current user's configuration.
  * @param {Object} partial - only the keys to change.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the updated config (the response body).
  */
-export async function patchUserConfig(partial) {
-  const res = await apiClient.patch("/users/me/config", partial);
+export async function patchUserConfig(partial, { baseUrl = "" } = {}) {
+  const res = await apiClient.patch(`${baseUrl}${CONFIG_URL}`, partial);
   return res.data;
 }

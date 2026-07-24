@@ -5,7 +5,8 @@
 // be changed afterwards. Switching the runtime restarts the local server, which
 // reloads this page — so a successful action ends with the app reloading.
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { apiClient, login } from "../../utils/apiClient";
+import { login } from "../../utils/apiClient";
+import { getAuthState } from "../../api/users";
 import AppButton from "../widgets/AppButton.vue";
 import AppStepper from "../widgets/AppStepper.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -225,9 +226,9 @@ async function refreshServer() {
 
 async function refreshAuthState() {
   try {
-    const res = await apiClient.get("/users/me/auth");
-    accountUsername.value = res.data?.username || "";
-    accountHasPassword.value = Boolean(res.data?.has_password);
+    const auth = await getAuthState();
+    accountUsername.value = auth?.username || "";
+    accountHasPassword.value = Boolean(auth?.has_password);
     // Prefill the form with any existing username so the user only fills gaps.
     if (accountUsername.value && !ownerUsername.value) {
       ownerUsername.value = accountUsername.value;
