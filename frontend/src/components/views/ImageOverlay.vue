@@ -787,6 +787,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
+  smartScoreUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -810,6 +811,7 @@ const {
   backendUrl,
   tagUpdate,
   descriptionUpdate,
+  smartScoreUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1031,6 +1033,7 @@ const descriptionTeaser = computed(() => {
 
 const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
+const lastSmartScoreUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -3146,11 +3149,20 @@ async function fetchOverlayMetadata(imageId) {
           ? image.value.smart_score
           : null;
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
-      // Keep Smart Score consistent with the grid/list payload when already
-      // present there; metadata endpoint currently computes a different
-      // single-candidate value for some images.
+      // Prefer the server's freshly-committed value. After a tag or penalised-tag
+      // settings edit the backend NULLs the cached score and recomputes, so an
+      // authoritative NON-NULL fetch is the corrected number and MUST replace the
+      // stale value currently shown (the panel used to keep the old value here,
+      // which is why the score stayed stale until a full reload).
+      // Only fall back to the currently-displayed value when the fetch returns
+      // null/absent: the brief post-invalidation window before the recompute
+      // lands, and grid-sourced images that don't carry a smartScore at all — so
+      // we never flash "unscored" during the transient.
+      const freshSmartScore = data.smartScore;
       merged.smartScore =
-        existingSmartScore !== null ? existingSmartScore : data.smartScore;
+        freshSmartScore !== null && freshSmartScore !== undefined
+          ? freshSmartScore
+          : existingSmartScore;
     }
     const dataTags = getTagList(data.tags);
     if (data.tags !== undefined) {
@@ -3547,6 +3559,30 @@ watch(
     const nextKey = payload.key || 0;
     if (!nextKey || nextKey === lastDescriptionUpdateKey.value) return;
     lastDescriptionUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    const pictureIds = Array.isArray(payload.pictureIds)
+      ? payload.pictureIds.map((id) => String(id))
+      : [];
+    const currentId = String(image.value.id);
+    if (pictureIds.length && !pictureIds.includes(currentId)) return;
+    fetchOverlayMetadata(image.value.id);
+  },
+);
+
+// A smart_score recompute landed for some pictures (after a tag edit or a
+// penalised-tag settings change). If the open card is one of them, re-fetch its
+// metadata so the panel shows the freshly-committed score. Matches on picture id
+// (never origin), so it fires for both the editing tab's own interactive edits
+// and the origin-less bulk settings drain. fetchOverlayMetadata keeps the old
+// value if the recompute hasn't committed yet (transient NULL), so a
+// still-pending recompute never flashes "unscored".
+watch(
+  () => smartScoreUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastSmartScoreUpdateKey.value) return;
+    lastSmartScoreUpdateKey.value = nextKey;
     if (!open.value || !image.value?.id) return;
     const pictureIds = Array.isArray(payload.pictureIds)
       ? payload.pictureIds.map((id) => String(id))

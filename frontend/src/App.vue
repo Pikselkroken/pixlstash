@@ -339,6 +339,23 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
+      // Signal the open lightbox to re-fetch its card's smart_score. The overlay
+      // always displays the score (independent of grid sort), so this fires for
+      // any smart_score change regardless of the current sort and regardless of
+      // origin — matching on picture id + field, not origin, so it covers both
+      // origin-stamped interactive tag edits and the origin-less bulk drain that
+      // rides a penalised-tag settings change. `fields` absent = full change.
+      if (payload?.type === "pictures_changed" && pictureIds.length > 0) {
+        const changedFields = Array.isArray(payload.fields)
+          ? payload.fields
+          : [];
+        const touchesSmartScore =
+          changedFields.length === 0 || changedFields.includes("smart_score");
+        if (touchesSmartScore) {
+          const nextKey = (wsStore.wsSmartScoreUpdate?.key || 0) + 1;
+          wsStore.wsSmartScoreUpdate = { key: nextKey, pictureIds };
+        }
+      }
       if (
         pictureIds.length > 0 &&
         sortStore.selectedSort === "LIKENESS_GROUPS" &&
@@ -2330,6 +2347,7 @@ defineExpose({
                 :wsUpdateKey="gridStore.wsUpdateKey"
                 :wsTagUpdate="wsStore.wsTagUpdate"
                 :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
+                :wsSmartScoreUpdate="wsStore.wsSmartScoreUpdate"
                 :wsPluginProgress="wsStore.wsPluginProgress"
                 :mediaTypeFilter="filterStore.mediaTypeFilter"
                 :comfyuiModelFilter="filterStore.comfyuiModelFilter"

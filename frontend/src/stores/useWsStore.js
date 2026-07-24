@@ -38,6 +38,13 @@ function resolveClientId() {
 export const useWsStore = defineStore("ws", () => {
   const wsTagUpdate = ref({ key: 0, pictureIds: [] });
   const wsDescriptionUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals a smart_score recompute landed for the given pictures. Unlike the
+  // grid (which only shows/sorts smart_score under SMART_SCORE sort, so it gates
+  // this behind pictureChangeAffectsView), the open lightbox ALWAYS shows the
+  // score, so it must refresh on any smart_score change regardless of sort or
+  // origin. Fired for both origin-stamped (interactive tag edits) and origin-less
+  // (bulk penalised-tag settings drain) CHANGED_PICTURES events.
+  const wsSmartScoreUpdate = ref({ key: 0, pictureIds: [] });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -87,6 +94,7 @@ export const useWsStore = defineStore("ws", () => {
   return {
     wsTagUpdate,
     wsDescriptionUpdate,
+    wsSmartScoreUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,
