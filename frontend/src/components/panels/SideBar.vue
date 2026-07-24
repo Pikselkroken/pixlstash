@@ -87,6 +87,7 @@ const props = defineProps({
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
@@ -107,6 +108,8 @@ const emit = defineEmits([
   "update:sidebar-width",
   "update:date-format",
   "update:theme-mode",
+  "update:thumbnail-mode",
+  "empty-scrapheap",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -279,6 +282,7 @@ const sidebarCtxFolderScopePath = ref(null); // null means the reference folder 
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
+const sidebarCtxScrapheap = ref(false); // true when ctx opened from the Scrapheap row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
 
 // Computed style for the main context menu — opens upward when near the bottom.
@@ -1978,6 +1982,24 @@ async function deleteImportFolderById(id) {
 function openSidebarCtxMenu(type, item, event) {
   if (isReadOnly.value && (type === "folder" || type === "import-folder"))
     return;
+  // Reset here rather than in every branch: only the scrapheap branch turns it
+  // on, so a single top-level reset keeps the per-type blocks below untouched.
+  sidebarCtxScrapheap.value = false;
+  if (type === "scrapheap") {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = null;
+    sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
+    sidebarCtxImportFolder.value = null;
+    sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
+    sidebarCtxScrapheap.value = true;
+    sidebarCtxDeleteIds.value = [];
+    sidebarCtxX.value = event.clientX;
+    sidebarCtxY.value = event.clientY;
+    sidebarCtxVisible.value = true;
+    return;
+  }
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
@@ -2057,6 +2079,24 @@ function closeSidebarCtxMenu() {
   sidebarCtxVisible.value = false;
   setCtxIconMenuOpen.value = false;
   setCtxColorMenuOpen.value = false;
+}
+
+// True when the Scrapheap holds nothing to empty — drives the disabled state of
+// the context-menu item (a confirm on an empty heap is a dead-end affordance).
+// The sidebar row already owns this count, so we read it here rather than reach
+// into the grid's `scrapheapEmptyDisabled`.
+const scrapheapIsEmpty = computed(
+  () => !categoryCounts[props.scrapheapPicturesId],
+);
+
+// Empty Scrapheap from the sidebar context menu. Navigate into the scrapheap
+// first so the grid's post-confirm refetch reconciles the right view, then hand
+// off to the grid's existing consent-gated delete-forever-all flow via App.vue.
+function emptyScrapheapFromCtx() {
+  if (scrapheapIsEmpty.value) return;
+  closeSidebarCtxMenu();
+  selectCharacter(props.scrapheapPicturesId, "Scrapheap");
+  emit("empty-scrapheap");
 }
 
 function openSetCtxIconMenu(event) {
@@ -3633,6 +3673,8 @@ defineExpose({
     v-model:theme-mode="themeModeModel"
     :checkForUpdates="props.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
+    :thumbnail-mode="props.thumbnailMode"
+    @update:thumbnail-mode="(value) => emit('update:thumbnail-mode', value)"
     :initial-tab="settingsDialogInitialTab"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
@@ -5019,6 +5061,9 @@ defineExpose({
                   },
                 ]"
                 @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+                @contextmenu.prevent="
+                  openSidebarCtxMenu('scrapheap', null, $event)
+                "
               >
                 <span class="sidebar-list-icon sidebar-list-icon--toplevel"
                   ><v-icon size="18">mdi-trash-can-outline</v-icon></span
@@ -5979,6 +6024,22 @@ defineExpose({
             >mdi-share-variant-outline</v-icon
           >
           Share
+        </button>
+      </template>
+      <template v-if="sidebarCtxScrapheap">
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly || scrapheapIsEmpty"
+          :title="
+            scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined
+          "
+          :aria-disabled="isReadOnly || scrapheapIsEmpty"
+          @click="emptyScrapheapFromCtx()"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-trash-can-outline</v-icon
+          >
+          Empty Scrapheap
         </button>
       </template>
       <template v-if="sidebarCtxCharacter">
