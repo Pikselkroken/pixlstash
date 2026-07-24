@@ -61,6 +61,13 @@ export class GridPage {
 
   async waitForLoaded() {
     await expect(this.thumbnails.first()).toBeVisible({ timeout: 15_000 })
+    // A visible `.thumbnail-card` is only the placeholder: the grid is still
+    // filling and re-rendering at that point, so an interaction started here can
+    // land on a card that is about to be replaced and be silently swallowed.
+    // Waiting for a real thumbnail image settles the grid before a spec touches
+    // it, which is what most of the intermittent "click did nothing" failures
+    // in this suite came down to.
+    await expect(this.thumbnailImages.first()).toBeVisible({ timeout: 15_000 })
   }
 
   /** Wait until a real thumbnail image (not the loading placeholder) renders. */
