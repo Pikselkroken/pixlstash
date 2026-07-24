@@ -41,14 +41,26 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
             pictures: Candidate picture objects (must expose an ``id`` attr).
             batch_limit: Maximum number of pictures to include in one task.
 
+        Pictures whose image file cannot be decoded (issue #585) are excluded
+        here, at the one point every batch finder claims through, so a corrupt
+        image is skipped uniformly instead of being re-selected on every sweep.
+        Suppression is looked up by picture id against the registry's own stored
+        path (never ``picture.file_path``, which is often deferred and the
+        candidate pictures are detached here); a rewritten file lifts it
+        automatically (see :class:`UnprocessableImageRegistry`).
+
         Returns:
             A list of pictures selected from *pictures* that were unclaimed.
         """
+        database = getattr(self, "_db", None)
+        registry = getattr(database, "unprocessable_images", None)
         selected = []
         with self._claim_lock:
             for picture in pictures:
                 picture_id = getattr(picture, "id", None)
                 if picture_id is None or picture_id in self._claimed_picture_ids:
+                    continue
+                if registry is not None and registry.is_suppressed(picture_id):
                     continue
                 self._claimed_picture_ids.add(picture_id)
                 selected.append(picture)

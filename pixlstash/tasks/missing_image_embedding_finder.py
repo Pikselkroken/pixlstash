@@ -44,9 +44,14 @@ class MissingImageEmbeddingFinder(BaseTaskFinder):
             )
 
         # Fetch more than one task worth so _filter_and_claim can skip claimed IDs.
+        # Exclude undecodable pictures (issue #585) at the query so they cannot
+        # crowd the candidate window and stall real work.
+        suppressed_ids = self._db.unprocessable_images.active_suppressed_ids()
         candidates = self._db.run_immediate_read_task(
             lambda session: ImageEmbeddingTask.fetch_work(
-                session=session, limit=batch_size * IMAGE_EMBEDDING_MAX_INFLIGHT
+                session=session,
+                limit=batch_size * IMAGE_EMBEDDING_MAX_INFLIGHT,
+                suppressed_ids=suppressed_ids,
             )
         )
         if not candidates:

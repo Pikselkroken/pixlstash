@@ -18,6 +18,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
 from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
 
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -169,9 +170,17 @@ class ImageEmbeddingTask(BaseTask):
 
     @classmethod
     def count_remaining(
-        cls, session: Session, aesthetic_disabled: Optional[bool] = None
+        cls,
+        session: Session,
+        aesthetic_disabled: Optional[bool] = None,
+        suppressed_ids: Optional[set] = None,
     ) -> int:
-        """Count pictures needing image embedding or aesthetic score work."""
+        """Count pictures needing image embedding or aesthetic score work.
+
+        *suppressed_ids* — pictures whose file cannot be decoded (issue #585) —
+        are excluded so progress does not stall at a non-zero "remaining" that can
+        never drain.
+        """
         if aesthetic_disabled is None:
             aesthetic_disabled = cls._is_aesthetic_disabled()
 
@@ -187,6 +196,8 @@ class ImageEmbeddingTask(BaseTask):
                 Picture.aesthetic_score.is_(None),
             )
         stmt = select(func.count()).select_from(Picture).where(condition)
+        if suppressed_ids:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
         result = session.exec(stmt).one()
         if isinstance(result, tuple):
             return result[0]
@@ -198,8 +209,14 @@ class ImageEmbeddingTask(BaseTask):
         session: Session,
         aesthetic_disabled: Optional[bool] = None,
         limit: Optional[int] = None,
+        suppressed_ids: Optional[set] = None,
     ):
-        """Fetch pictures needing image embedding or aesthetic score work."""
+        """Fetch pictures needing image embedding or aesthetic score work.
+
+        *suppressed_ids* — undecodable pictures (issue #585) — are excluded from
+        the candidate window so a handful of corrupt files cannot crowd out real
+        work and stall the finder.
+        """
         if aesthetic_disabled is None:
             aesthetic_disabled = cls._is_aesthetic_disabled()
 
@@ -215,11 +232,10 @@ class ImageEmbeddingTask(BaseTask):
                 Picture.aesthetic_score.is_(None),
             )
 
-        stmt = (
-            select(Picture.id, Picture.file_path)
-            .where(condition)
-            .limit(int(limit or cls.BATCH_SIZE))
-        )
+        stmt = select(Picture.id, Picture.file_path).where(condition)
+        if suppressed_ids:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
+        stmt = stmt.limit(int(limit or cls.BATCH_SIZE))
         return session.exec(stmt).all()
 
     @classmethod
@@ -230,6 +246,28 @@ class ImageEmbeddingTask(BaseTask):
         empty_emb = np.array([], dtype=np.float32).tobytes()
         score = None if self._is_aesthetic_disabled() else -1.0
         return [(pid, empty_emb, score, None) for pid in pids]
+
+    def _mark_decode_failures(self, pids: set[int], batch_files: dict) -> None:
+        """Suppress pictures that genuinely could not be decoded (issue #585).
+
+        Only the pids whose image failed to open/decode are passed here — never a
+        transient inference failure (CLIP/GPU OOM), which must keep retrying. The
+        empty-blob 'failed' marker this task writes is treated as still-missing by
+        ``fetch_work``, so without this a corrupt image is re-selected every sweep.
+        """
+        registry = getattr(self._db, "unprocessable_images", None)
+        if registry is None or not pids:
+            return
+        image_root = getattr(self._db, "image_root", "") or ""
+        for pid in pids:
+            file_path = batch_files.get(pid)
+            if not file_path:
+                continue
+            registry.mark_unprocessable(
+                pid,
+                ImageUtils.resolve_picture_path(image_root, str(file_path)),
+                reason="image could not be decoded",
+            )
 
     @staticmethod
     def _compute_dhash(image: Image.Image, hash_size: int = 8) -> Optional[str]:
@@ -382,17 +420,22 @@ class ImageEmbeddingTask(BaseTask):
         flat_images = []
         flat_pids = []
         flat_hashes = []
-        failed_pids = set()
+        decode_failed_pids = set()
         batch_pids = {pid for pid, _, _ in preloaded}
         batch_files = {pid: fp for pid, fp, _ in preloaded}
 
         for pid, file_path, img in preloaded:
             if img is None:
-                failed_pids.add(pid)
+                decode_failed_pids.add(pid)
                 continue
             flat_images.append(img)
             flat_hashes.append(self._compute_dhash(img))
             flat_pids.append(pid)
+
+        # A None image means the file could not be decoded — suppress those
+        # pictures (issue #585) so they are not re-selected every sweep. This is
+        # the decode-failure path only; inference failures below still retry.
+        self._mark_decode_failures(decode_failed_pids, batch_files)
 
         if not flat_images:
             failure_updates = self._build_failure_updates(batch_pids)
@@ -404,11 +447,11 @@ class ImageEmbeddingTask(BaseTask):
                 "ImageEmbeddingTask: No images loaded for batch. Marked %s pictures as failed.",
                 len(batch_pids),
             )
-            if failed_pids:
+            if decode_failed_pids:
                 logger.warning(
                     "ImageEmbeddingTask: Failed to load %d pictures: %s",
-                    len(failed_pids),
-                    [batch_files.get(pid) for pid in failed_pids],
+                    len(decode_failed_pids),
+                    [batch_files.get(pid) for pid in decode_failed_pids],
                 )
             return changed
 
