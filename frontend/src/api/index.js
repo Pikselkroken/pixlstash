@@ -3,9 +3,9 @@
 // One module per backend resource, each exporting named async functions that
 // return `response.data`. URL strings live ONLY in this directory; components,
 // stores, and composables import these functions instead of calling
-// `apiClient.<verb>('/some/url')` inline. This is Phase 1 of the frontend
-// refactoring plan (docs/frontend_architecture.md; frontend_refactoring_plan.md
-// §3 Phase 1) and issue #459's alignment rule 1.
+// `apiClient.<verb>('/some/url')` inline. The layer and its rules are specified
+// in docs/frontend_architecture.md §8 ("The `src/api/` resource layer"), and it
+// satisfies issue #459's alignment rule 1.
 //
 // Rules for modules in this directory:
 //   - URL strings exist only here (a future `no-restricted-imports` lint rule
