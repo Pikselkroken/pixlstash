@@ -1,6 +1,7 @@
 import { computed, reactive, ref } from "vue";
 import { defineStore } from "pinia";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../utils/apiClient";
+import { getWorkerProgress } from "../api/workers";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
 // actively running; slow when the app is merely idle-watching for new work.
@@ -228,9 +229,9 @@ export const useTasksStore = defineStore("tasks", () => {
     if (isReadOnly.value) return;
     fetchInFlight = true;
     try {
-      const res = await apiClient.get("/workers/progress");
-      const workers = res.data?.workers || {};
-      systemUsage.value = res.data?.process || res.data?.system || null;
+      const progress = await getWorkerProgress();
+      const workers = progress?.workers || {};
+      systemUsage.value = progress?.process || progress?.system || null;
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };

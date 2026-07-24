@@ -72,9 +72,19 @@ frontend/src/
 │   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │
 ├── api/                         # Backend resource modules: the only place URL strings live (see §8)
-│   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config (+ *.test.js)
-│   ├── serverConfig.js          # Server-wide config topics under /server-config/ (+ *.test.js)
-│   └── characters.js            # /characters list + delete (+ *.test.js)
+│   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config
+│   ├── serverConfig.js          # Server-wide config topics under /server-config/
+│   ├── session.js               # /session/context — the current credential's scope
+│   ├── workers.js               # /workers/progress — background-worker poll
+│   ├── snapshots.js             # /snapshots + restore/preview sub-resources
+│   ├── reviews.js               # /reviews — tag-review session bookkeeping
+│   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
+│   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
+│   ├── characters.js            # /characters
+│   ├── projects.js              # /projects
+│   ├── pictureSets.js           # /picture_sets
+│   └── pictures.js              # /pictures (largest resource; migration in progress)
+│                                # every module has a co-located *.test.js
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
@@ -775,8 +785,19 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | Module | Resource |
 |---|---|
 | `api/config.js` | `GET`/`PATCH /users/me/config`, the per-user config blob |
-| `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots, watch folders) |
+| `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots) |
+| `api/session.js` | `/session/context`, what the current credential is allowed to do |
+| `api/workers.js` | `/workers/progress`, the background-worker poll |
+| `api/snapshots.js` | `/snapshots` and its restore/preview sub-resources |
+| `api/reviews.js` | `/reviews`, tag-review session bookkeeping |
+| `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
+| `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
 | `api/characters.js` | `/characters` list and delete |
+| `api/projects.js` | `/projects` |
+| `api/pictureSets.js` | `/picture_sets` |
+| `api/pictures.js` | `/pictures`, the largest resource; still mostly unmigrated |
+
+Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
 
 **Rules for modules in this directory:**
 

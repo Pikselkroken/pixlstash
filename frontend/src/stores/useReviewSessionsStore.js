@@ -16,7 +16,30 @@
 
 import { ref, computed } from "vue";
 import { defineStore } from "pinia";
-import { apiClient } from "../utils/apiClient";
+import { getUserConfig } from "../api/config";
+import {
+  listReviews,
+  getReview,
+  listReviewSuggestions,
+  // Aliased: the store's own action is also called createReview.
+  createReview as postReview,
+  refreshReview,
+  archiveReview,
+  abortReview,
+  deleteReview,
+  deleteReviewsByStatus,
+} from "../api/reviews";
+import {
+  resolveTagSuggestion,
+  skipTagSuggestion,
+  reopenTagSuggestion,
+  bulkReopenTagSuggestions,
+} from "../api/tagSuggestions";
+import { getTagHealth, rebuildTagHealth } from "../api/tagHealth";
+import { listCharacters } from "../api/characters";
+import { listProjects } from "../api/projects";
+import { listPictureSets } from "../api/pictureSets";
+import { getAnomalyRegion } from "../api/pictures";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
 
 const PAGE_SIZE = 200;
@@ -377,10 +400,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   async function fetchSessions() {
     sessionsLoading.value = true;
     try {
-      const res = await apiClient.get("/reviews", {
-        params: { status: "OPEN" },
-      });
-      sessions.value = Array.isArray(res.data) ? res.data : [];
+      const rows = await listReviews("OPEN");
+      sessions.value = Array.isArray(rows) ? rows : [];
     } catch (e) {
       error.value = e?.message || "Failed to load reviews";
     } finally {
@@ -390,10 +411,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function fetchArchived() {
     try {
-      const res = await apiClient.get("/reviews", {
-        params: { status: "ARCHIVED" },
-      });
-      archived.value = Array.isArray(res.data) ? res.data : [];
+      const rows = await listReviews("ARCHIVED");
+      archived.value = Array.isArray(rows) ? rows : [];
     } catch {
       archived.value = [];
     }
@@ -401,8 +420,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function fetchDetail(id) {
     try {
-      const res = await apiClient.get(`/reviews/${id}`);
-      const data = res.data ?? null;
+      const data = (await getReview(id)) ?? null;
       details.value = { ...details.value, [id]: data };
       seedTallyFromReceipt(id, data);
     } catch {
@@ -448,13 +466,14 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   async function fetchQueue(id, { markNewFrom = null } = {}) {
     setQueue(id, { loading: true, error: null });
     try {
-      const res = await apiClient.get(`/reviews/${id}/suggestions`, {
-        params: { status: "PENDING", limit: PAGE_SIZE },
+      const page = await listReviewSuggestions(id, {
+        status: "PENDING",
+        limit: PAGE_SIZE,
       });
-      let items = Array.isArray(res.data?.items)
-        ? res.data.items
-        : Array.isArray(res.data)
-          ? res.data
+      let items = Array.isArray(page?.items)
+        ? page.items
+        : Array.isArray(page)
+          ? page
           : [];
       if (markNewFrom) {
         items = items.map((it) =>
@@ -478,11 +497,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       if (s.projectId != null) params.project_id = s.projectId;
       if (s.setId != null) params.set_id = s.setId;
       if (s.characterId != null) params.character_id = s.characterId;
-      const res = await apiClient.get("/tag_health", { params });
+      const body = await getTagHealth(params);
       // A stale response for a scope the user has already navigated away
       // from must not clobber the current scope's rows.
       if (healthScope.value !== s) return;
-      const data = res.data ?? {};
+      const data = body ?? {};
       healthRows.value = Array.isArray(data.rows) ? data.rows : [];
       healthBuilding.value = !!data.building;
       const p = Number(data.progress ?? 0);
@@ -521,7 +540,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function rebuildHealth() {
     try {
-      await apiClient.post("/tag_health/rebuild");
+      await rebuildTagHealth();
       healthBuilding.value = true;
       healthProgress.value = 0;
       scheduleHealthPoll();
@@ -535,8 +554,8 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // a {tag: weight} map). Degrades to an empty Set on error.
   async function fetchAnomalyTags() {
     try {
-      const res = await apiClient.get("/users/me/config");
-      const raw = res.data?.smart_score_penalised_tags;
+      const cfg = await getUserConfig();
+      const raw = cfg?.smart_score_penalised_tags;
       const next = new Set();
       if (Array.isArray(raw)) {
         for (const item of raw) {
@@ -562,28 +581,25 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // Populate the creation dialog's scope dropdowns (mirrors the old store: each
   // call independent, degrades to an empty list on error).
   async function fetchScopeOptions() {
-    apiClient
-      .get("/projects")
-      .then((res) => {
-        projects.value = Array.isArray(res.data) ? res.data : [];
+    listProjects()
+      .then((rows) => {
+        projects.value = Array.isArray(rows) ? rows : [];
       })
       .catch(() => {
         projects.value = [];
       });
-    apiClient
-      .get("/picture_sets")
-      .then((res) => {
-        sets.value = Array.isArray(res.data)
-          ? res.data.filter((s) => s?.name !== "reference_pictures")
+    listPictureSets()
+      .then((rows) => {
+        sets.value = Array.isArray(rows)
+          ? rows.filter((s) => s?.name !== "reference_pictures")
           : [];
       })
       .catch(() => {
         sets.value = [];
       });
-    apiClient
-      .get("/characters")
-      .then((res) => {
-        characters.value = Array.isArray(res.data) ? res.data : [];
+    listCharacters()
+      .then((rows) => {
+        characters.value = Array.isArray(rows) ? rows : [];
       })
       .catch(() => {
         characters.value = [];
@@ -626,10 +642,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     regionInFlight.add(key);
     regionLoading.value = { ...regionLoading.value, [key]: true };
     try {
-      const res = await apiClient.get(`/pictures/${pictureId}/anomaly_region`, {
-        params: { tag },
-      });
-      const data = res.data ?? null;
+      const data = (await getAnomalyRegion(pictureId, tag)) ?? null;
       anomalyRegions.value = { ...anomalyRegions.value, [key]: data };
       return data;
     } catch {
@@ -800,8 +813,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       if (characterId != null && characterId !== "")
         body.character_id = String(characterId);
       if (includeReviewed) body.include_reviewed = true;
-      const res = await apiClient.post("/reviews", body);
-      const review = res.data;
+      const review = await postReview(body);
       await fetchSessions();
       if (review?.id != null) {
         openSession(review.id);
@@ -830,7 +842,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
       // "new" — reopen/refill can resurface them; count them as known too.
       for (const entry of undoStacks.value[id] || [])
         prevIds.add(entry.item.id);
-      await apiClient.post(`/reviews/${id}/refresh`);
+      await refreshReview(id);
       await Promise.all([
         fetchSessions(),
         fetchDetail(id),
@@ -843,7 +855,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
 
   async function archiveSession(id) {
     try {
-      await apiClient.post(`/reviews/${id}/archive`);
+      await archiveReview(id);
       sessions.value = sessions.value.filter((s) => s.id !== id);
       if (view.value.type === "session" && view.value.id === id) showBoard();
       fetchArchived();
@@ -857,7 +869,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // on each card).
   async function abortSession(id) {
     try {
-      await apiClient.post(`/reviews/${id}/abort`);
+      await abortReview(id);
       sessions.value = sessions.value.filter((s) => s.id !== id);
       if (view.value.type === "session" && view.value.id === id) showBoard();
       fetchSessions();
@@ -871,7 +883,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // changes and are never bulk-undone.
   async function undoChangesAndAbort(id) {
     try {
-      await apiClient.post("/tag_suggestions/bulk-reopen", { review_id: id });
+      await bulkReopenTagSuggestions(id);
     } catch (e) {
       error.value = e?.message || "Failed to undo the review's changes";
       return;
@@ -885,7 +897,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // its receipt is the current view, fall back to the board.
   async function deleteArchived(id) {
     try {
-      await apiClient.delete(`/reviews/${id}`);
+      await deleteReview(id);
       archived.value = archived.value.filter((a) => a.id !== id);
       if (view.value.type === "archived" && view.value.id === id) showBoard();
     } catch (e) {
@@ -897,7 +909,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   // backend pins to ARCHIVED so this can never touch an open review.
   async function clearArchived() {
     try {
-      await apiClient.delete("/reviews", { params: { status: "ARCHIVED" } });
+      await deleteReviewsByStatus("ARCHIVED");
       archived.value = [];
       if (view.value.type === "archived") showBoard();
     } catch (e) {
@@ -956,7 +968,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     // sticker back — the schedule is about the act of deciding).
     noteDecision(s.tag);
     try {
-      await apiClient.post(`/tag_suggestions/${item.id}/${action}`);
+      await resolveTagSuggestion(item.id, action);
       undoStacks.value = {
         ...undoStacks.value,
         [id]: [...(undoStacks.value[id] || []), { item, action, delta, votes }],
@@ -1019,7 +1031,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     bumpTally(id, { skipped: 1 });
     bumpProgress(id, { pending: -1, skipped: 1 });
     try {
-      await apiClient.post(`/tag_suggestions/${item.id}/skip`);
+      await skipTagSuggestion(item.id);
       undoStacks.value = {
         ...undoStacks.value,
         [id]: [
@@ -1053,7 +1065,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     // leaves the skip stack; a hard failure keeps its entry so it can be
     // retried.
     const results = await Promise.allSettled(
-      skips.map((e) => apiClient.post(`/tag_suggestions/${e.item.id}/reopen`)),
+      skips.map((e) => reopenTagSuggestion(e.item.id)),
     );
     const reopened = []; // fulfilled → put back in the queue
     const settled = new Set(); // reopened OR already-gone (404) → drop from stack
@@ -1103,7 +1115,7 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     const last = stack[stack.length - 1];
     if (!last) return;
     try {
-      await apiClient.post(`/tag_suggestions/${last.item.id}/reopen`);
+      await reopenTagSuggestion(last.item.id);
     } catch (e) {
       error.value = e?.message || "Failed to undo";
       return;
