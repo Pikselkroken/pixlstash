@@ -15,6 +15,7 @@ import {
   previewRestoreBatch,
   executeRestore,
   executeRestoreBatch,
+  hashCompareSnapshot,
 } from "./snapshots";
 
 beforeEach(() => {
@@ -90,6 +91,15 @@ describe("api/snapshots", () => {
       "/snapshots/5/restore/preview/batch",
       { resources },
     );
+  });
+
+  it("hashCompareSnapshot POSTs the picture ids", async () => {
+    apiClient.post.mockResolvedValue({ data: { identical_ids: [1] } });
+    const result = await hashCompareSnapshot(5, [1, 2]);
+    expect(apiClient.post).toHaveBeenCalledWith("/snapshots/5/hash-compare", {
+      picture_ids: [1, 2],
+    });
+    expect(result).toEqual({ identical_ids: [1] });
   });
 
   it("executeRestore POSTs an empty body for a whole-vault restore", async () => {

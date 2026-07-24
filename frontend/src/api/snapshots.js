@@ -89,6 +89,25 @@ export async function previewRestoreBatch(id, resources) {
 }
 
 /**
+ * Ask which of the given pictures are byte-identical to their copies in a
+ * snapshot.
+ *
+ * Used to grey out snapshots that would restore nothing for the current
+ * selection.
+ *
+ * @param {number|string} id
+ * @param {Array<number|string>} pictureIds
+ * @returns {Promise<Object>} the response body, whose `identical_ids` lists
+ *   the unchanged pictures.
+ */
+export async function hashCompareSnapshot(id, pictureIds) {
+  const res = await apiClient.post(`${SNAPSHOTS_URL}/${id}/hash-compare`, {
+    picture_ids: pictureIds,
+  });
+  return res.data;
+}
+
+/**
  * Restore an ENTIRE snapshot over the current vault.
  * @param {number|string} id
  * @returns {Promise<Object>} the response body (the started restore job).

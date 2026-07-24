@@ -11,7 +11,7 @@
  *   - Label-thresholds preview (for pixlstash_tagger only)
  */
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { getLabelThresholds } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 
@@ -88,10 +88,7 @@ async function fetchLabelThresholds() {
   try {
     // Preview the offset currently in the form, even before it is saved.
     const offset = formParams.value?.threshold_offset;
-    const res = await apiClient.get("/tagger/label-thresholds", {
-      params: offset != null ? { offset } : {},
-    });
-    labelThresholdsData.value = res.data;
+    labelThresholdsData.value = await getLabelThresholds(offset);
   } catch {
     labelThresholdsData.value = [];
   } finally {
