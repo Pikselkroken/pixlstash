@@ -168,35 +168,6 @@ export async function extractSupportedImportFilesFromDataTransfer(
   return Array.from(unique.values());
 }
 
-export function dataTransferHasSupportedMedia(dataTransfer) {
-  if (!dataTransfer) return false;
-  const items = dataTransfer.items ? Array.from(dataTransfer.items) : [];
-  for (let i = 0; i < Math.min(items.length, 10); i++) {
-    const item = items[i];
-    if (!item || item.kind !== 'file') continue;
-    const mime = item.type || '';
-    if (typeof mime === 'string' &&
-        (mime.startsWith('image/') || mime.startsWith('video/') ||
-         mime === 'application/zip' ||
-         mime === 'application/x-zip-compressed')) {
-      return true;
-    }
-    if (!mime && typeof item.getAsFile === 'function') {
-      const file = item.getAsFile();
-      if (file && isSupportedImportFile(file)) {
-        return true;
-      }
-    }
-  }
-  if (items.length === 0) {
-    const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-    if (types.includes('Files')) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export function MediaFormat(source) {
   if (!source) return '';
   if (typeof source === 'string') {

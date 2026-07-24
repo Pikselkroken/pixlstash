@@ -195,7 +195,7 @@ const projectSelection = computed({
   },
 });
 
-const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
+const emit = defineEmits(["close", "refresh-sidebar"]);
 
 // Tooltip on every field disabled by the lock. The set editor is set-scoped, so
 // this reason is about the set (the store's picture-scoped lockReason is for
