@@ -25,7 +25,9 @@ import tempfile
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DOCS_FILE = os.path.join(REPO_ROOT, "docs", "backend_architecture.md")
-SERVER_PY = os.path.join(REPO_ROOT, "pixlstash", "server.py")
+# _should_send_ws_update moved out of server.py into ws/broadcaster.py in the
+# Phase 2 refactor; parse it where it actually lives.
+BROADCASTER_PY = os.path.join(REPO_ROOT, "pixlstash", "ws", "broadcaster.py")
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +163,9 @@ def _generate_route_table() -> str:
 
 
 def _extract_broadcast_set() -> frozenset[str]:
-    """Parse server.py with AST and return the EventType names broadcast to WS clients."""
-    with open(SERVER_PY, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=SERVER_PY)
+    """Parse ws/broadcaster.py with AST and return the EventType names broadcast to WS clients."""
+    with open(BROADCASTER_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=BROADCASTER_PY)
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
@@ -187,7 +189,13 @@ def _extract_broadcast_set() -> frozenset[str]:
             if names:
                 return frozenset(names)
 
-    return frozenset()
+    # Fail loud rather than silently returning an empty set — an empty set would
+    # (wrongly) classify every event as internal and ship a false doc. If
+    # _should_send_ws_update moves again or changes shape, surface it here.
+    raise RuntimeError(
+        "Could not extract the broadcast EventType set from "
+        f"_should_send_ws_update in {BROADCASTER_PY}. Did it move or change shape?"
+    )
 
 
 def _generate_event_table() -> str:
