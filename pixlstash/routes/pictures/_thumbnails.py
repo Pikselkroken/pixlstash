@@ -37,6 +37,15 @@ from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_i
 logger = get_logger(__name__)
 
 
+# Thumbnails are served under content-addressed URLs (the ?v=WxH token changes
+# whenever the bitmap is regenerated), so browsers may cache them briefly but must
+# revalidate afterwards — that keeps reference-folder source swaps (same URL, new
+# bytes) from serving stale forever, which the previous header-less heuristic
+# caching allowed. `private` stops shared proxies caching access-controlled
+# thumbnails. FileResponse still emits ETag/Last-Modified for cheap 304s.
+_THUMBNAIL_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600, must-revalidate"}
+
+
 # Dedicated, bounded pool for on-the-fly thumbnail generation (full-resolution
 # decode + resize + encode). Kept separate from asyncio's default executor so a
 # large import job (which runs on the default executor via run_in_executor) can
@@ -150,7 +159,11 @@ def register_routes(router, server):
                     thumb_path,
                     elapsed_ms,
                 )
-                return FileResponse(thumb_path, media_type="image/webp")
+                return FileResponse(
+                    thumb_path,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
         cached_bytes = get_cached_thumbnail_bytes(id)
         if cached_bytes:
@@ -160,7 +173,11 @@ def register_routes(router, server):
                 id,
                 elapsed_ms,
             )
-            return Response(content=cached_bytes, media_type="image/webp")
+            return Response(
+                content=cached_bytes,
+                media_type="image/webp",
+                headers=_THUMBNAIL_CACHE_HEADERS,
+            )
 
         lock = get_thumbnail_lock(id)
         async with lock:
@@ -199,7 +216,11 @@ def register_routes(router, server):
                         thumb_path,
                         elapsed_ms,
                     )
-                    return FileResponse(thumb_path, media_type="image/webp")
+                    return FileResponse(
+                    thumb_path,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
@@ -209,7 +230,11 @@ def register_routes(router, server):
                     id,
                     elapsed_ms,
                 )
-                return Response(content=cached_bytes, media_type="image/webp")
+                return Response(
+                    content=cached_bytes,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             def build_thumbnail_blocking() -> tuple[
                 str, str | None, bytes | None, str | None
@@ -257,7 +282,11 @@ def register_routes(router, server):
                     resolved_path,
                     elapsed_ms,
                 )
-                return FileResponse(saved_thumb, media_type="image/webp")
+                return FileResponse(
+                    saved_thumb,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             if status == "memory-only" and thumbnail_bytes:
                 cache_thumbnail_bytes(id, thumbnail_bytes)
@@ -268,7 +297,11 @@ def register_routes(router, server):
                     resolved_path,
                     elapsed_ms,
                 )
-                return Response(content=thumbnail_bytes, media_type="image/webp")
+                return Response(
+                    content=thumbnail_bytes,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             if status == "missing-source":
                 logger.warning(
@@ -505,8 +538,16 @@ def register_routes(router, server):
                     mapped_bbox, _mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     detection_data.append({**entry, "bbox": mapped_bbox})
 
-                imported_at = getattr(pic, "imported_at", None)
-                v = int(imported_at.timestamp()) if imported_at is not None else 0
+                # Cache-buster keyed on the thumbnail bitmap itself. Regeneration
+                # (the square-crop -> AR-bitmap rebuild on upgrade, or any later
+                # rebuild) repopulates these dimensions, so the URL changes and the
+                # browser refetches instead of serving the stale cached image. The
+                # old key was imported_at, which never changed on regen -> the
+                # browser kept painting the pre-upgrade square bitmap into the
+                # justified layout's AR cell -> squashed thumbnails.
+                tw = getattr(pic, "thumbnail_width", None)
+                th = getattr(pic, "thumbnail_height", None)
+                v = f"{tw}x{th}" if tw and th else "0"
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 # Whole-frame AR-bitmap dimensions and the face-weighted square-crop
                 # rectangle (bitmap pixel space). All are NULL until the picture is
