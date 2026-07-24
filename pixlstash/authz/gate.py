@@ -19,12 +19,14 @@ object the enumeration yielded (verified: dependency-time identity matches
 enumeration identity), so ``id(route)`` is a stable, correct key. A request-time
 route object not present in the map resolves to **deny**, never allow.
 
-**Report-only shipped default (``AUTHZ_GATE_ENFORCING = False``).** At the shipped
-default the gate denies nothing at runtime and the startup enumeration only
-*prints* the undeclared-route backlog; the inline handler checks remain the live
-enforcement. The single boolean is the per-release rollback switch of plan §6 — a
-code constant, not runtime config — and stays ``False`` through Steps 3-5, flipping
-fail-closed only at Step 6 under the adversarial sign-off.
+**Enforcing shipped state (``AUTHZ_GATE_ENFORCING = True``; Step 6 flipped
+2026-07-21).** The gate is the sole object-authorization chokepoint: an undeclared
+route is denied at runtime, the startup enumeration fails closed on the backlog,
+and the redundant inline handler checks were removed in Step 5. The single boolean
+is the per-release rollback switch of plan §6 — a code constant, not runtime
+config — held ``False`` through Steps 3-5 (report-only) and flipped fail-closed at
+Step 6 under the adversarial sign-off; set it back to ``False`` to revert both
+object-enforcement and unknown-route fail-closed in one line.
 
 **Step-3 owner-class enforcement (behind the flag; principal ruling 2026-07-21).**
 The enforcement *code* for the non-id-resolution classes lands now:
