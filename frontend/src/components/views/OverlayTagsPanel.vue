@@ -477,6 +477,18 @@ watch(
 
 // ── Computed prediction helpers ─────────────────────────────────────────────
 
+// A `model_version === "manual"` row is not a tagger prediction: the human-label
+// ledger synthesises it to hold a manual POS/NEG decision when no real prediction
+// exists, hard-coding confidence to 1.0 (POS) / 0.0 (NEG) as a placeholder (see
+// backend label_ledger.record_human_label). Surfacing its confidence as a model
+// score is the bug: a manually-added penalised tag reads "100%", and after removal
+// the same synthetic row (now REJECTED, still confidence 1.0) lingers in Rejected
+// Tags at 100%. Only genuine tagger rows carry a meaningful confidence, so the
+// confidence UI must ignore synthetic manual rows entirely.
+const modelPredictions = computed(() =>
+  tagPredictions.value.filter((p) => p.model_version !== "manual"),
+);
+
 const confirmedTagNames = computed(() => {
   const names = new Set();
   for (const tag of allImageTags.value) {
@@ -487,7 +499,7 @@ const confirmedTagNames = computed(() => {
 });
 
 const nearMissPredictions = computed(() => {
-  return tagPredictions.value.filter(
+  return modelPredictions.value.filter(
     (p) =>
       p.status === "REJECTED" &&
       p.confidence >= 0.3 &&
@@ -497,7 +509,7 @@ const nearMissPredictions = computed(() => {
 
 const pendingPredictionMap = computed(() => {
   const map = new Map();
-  for (const p of tagPredictions.value) {
+  for (const p of modelPredictions.value) {
     map.set(p.tag.trim().toLowerCase(), p);
   }
   return map;
