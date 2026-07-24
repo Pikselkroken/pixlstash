@@ -1,6 +1,10 @@
 <script setup>
 import { ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import {
+  createProject,
+  updateProject,
+  deleteProject as deleteProjectRequest,
+} from "../../api/projects";
 import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -50,17 +54,24 @@ async function save() {
   error.value = null;
   try {
     if (props.project?.id) {
-      await apiClient.put(`${props.backendUrl}/projects/${props.project.id}`, {
-        name: name.value.trim(),
-        description: description.value.trim() || null,
-      });
+      await updateProject(
+        props.project.id,
+        {
+          name: name.value.trim(),
+          description: description.value.trim() || null,
+        },
+        { baseUrl: props.backendUrl },
+      );
       emit("saved", null);
     } else {
-      const res = await apiClient.post(`${props.backendUrl}/projects`, {
-        name: name.value.trim(),
-        description: description.value.trim() || null,
-      });
-      emit("saved", res.data?.id ?? null);
+      const created = await createProject(
+        {
+          name: name.value.trim(),
+          description: description.value.trim() || null,
+        },
+        { baseUrl: props.backendUrl },
+      );
+      emit("saved", created?.id ?? null);
     }
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || "Save failed.";
@@ -81,7 +92,9 @@ async function deleteProject() {
   deleting.value = true;
   error.value = null;
   try {
-    await apiClient.delete(`${props.backendUrl}/projects/${props.project.id}`);
+    await deleteProjectRequest(props.project.id, {
+      baseUrl: props.backendUrl,
+    });
     emit("deleted", props.project.id);
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || "Delete failed.";

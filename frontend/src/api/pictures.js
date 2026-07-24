@@ -7,6 +7,25 @@
 import { apiClient } from "../utils/apiClient";
 
 /**
+ * Fetch a specific set of pictures by id.
+ *
+ * The ids go out as a repeated `id` query param, and the server is free to
+ * return them in any order (and to omit ones the caller may not see), so
+ * callers that need the requested order re-index the result themselves.
+ *
+ * @param {Array<number|string>} ids
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the pictures (the response body).
+ */
+export async function listPicturesByIds(ids, { baseUrl = "" } = {}) {
+  const params = new URLSearchParams();
+  ids.forEach((id) => params.append("id", String(id)));
+  const res = await apiClient.get(`${baseUrl}/pictures?${params.toString()}`);
+  return res.data;
+}
+
+/**
  * Read the region of a picture that explains an anomalous tag.
  *
  * Rejects with the raw Axios error for a tag outside the tagger vocabulary
