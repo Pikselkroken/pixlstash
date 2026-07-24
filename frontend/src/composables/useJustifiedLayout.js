@@ -191,9 +191,39 @@ export function packJustifiedRows({
     const ar = normalizeAspectRatio(aspectRatios[i]);
     rowAspects.push(ar);
     naturalWidth += ar * targetRowHeight;
+    const count = rowAspects.length;
     // Include inter-item gaps when testing against the container.
-    if (naturalWidth + rowGap * (rowAspects.length - 1) >= width) {
-      closeRow(true);
+    if (naturalWidth + rowGap * (count - 1) >= width) {
+      // Overflow: close the row at whichever break — keeping this last item or
+      // leaving it for the next row — yields a full-row height closest to the
+      // target. A plain greedy break (always keep the overflowing item) makes a
+      // full row's height a function of its item count alone: two size levels
+      // that happen to pack the same count then render identically (the reported
+      // "changing size does nothing to the first row"). Biasing toward the
+      // target lets the size control actually resize full rows.
+      let excludeLast = false;
+      if (count > 1) {
+        let sumWith = 0;
+        for (const a of rowAspects) sumWith += a;
+        const hWith = Math.max(1, width - rowGap * (count - 1)) / sumWith;
+        const hWithout =
+          Math.max(1, width - rowGap * (count - 2)) / (sumWith - ar);
+        excludeLast =
+          Math.abs(hWithout - targetRowHeight) <
+          Math.abs(hWith - targetRowHeight);
+      }
+      if (excludeLast) {
+        // Remove the overflowing item, close the rest as a full row, then seed
+        // the next row with it (a lone panorama may itself already overflow).
+        rowAspects.pop();
+        naturalWidth -= ar * targetRowHeight;
+        closeRow(true);
+        rowAspects.push(ar);
+        naturalWidth = ar * targetRowHeight;
+        if (naturalWidth >= width) closeRow(true);
+      } else {
+        closeRow(true);
+      }
     }
   }
   if (rowAspects.length > 0) closeRow(false);
