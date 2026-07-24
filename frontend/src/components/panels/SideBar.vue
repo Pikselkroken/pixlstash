@@ -284,6 +284,12 @@ const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
 const sidebarCtxScrapheap = ref(false); // true when ctx opened from the Scrapheap row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
+// Right-click on a section HEADER (not an item): 'people' | 'sets' |
+// 'reference-folders' | 'import-folders', or null. Offers the "create/add" action.
+const sidebarCtxHeader = ref(null);
+// Right-click on empty/uncovered sidebar space: offers the view toggles
+// (auto-hide, dock mode).
+const sidebarCtxEmpty = ref(false);
 
 // Computed style for the main context menu — opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
@@ -1985,6 +1991,29 @@ function openSidebarCtxMenu(type, item, event) {
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
+  // Same treatment for the header/empty targets — reset up front so the legacy
+  // per-item branches below never have to clear them.
+  sidebarCtxHeader.value = null;
+  sidebarCtxEmpty.value = false;
+  // A right-click on a section header ('people' | 'sets' | 'reference-folders' |
+  // 'import-folders') or on empty sidebar space is not tied to a specific item,
+  // so clear every item target and short-circuit.
+  if (type === "header" || type === "empty") {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = null;
+    sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
+    sidebarCtxImportFolder.value = null;
+    sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
+    sidebarCtxDeleteIds.value = [];
+    if (type === "header") sidebarCtxHeader.value = item;
+    else sidebarCtxEmpty.value = true;
+    sidebarCtxX.value = event.clientX;
+    sidebarCtxY.value = event.clientY;
+    sidebarCtxVisible.value = true;
+    return;
+  }
   if (type === "scrapheap") {
     sidebarCtxCharacter.value = null;
     sidebarCtxSet.value = null;
@@ -3855,13 +3884,20 @@ defineExpose({
     ></div>
     <!-- On the desktop shell the brand (logo + name + update alert) lives in
          the title bar, so this row collapses to just the dock toggle. -->
-    <div v-if="!isDesktop" class="sidebar-brand">
+    <div
+      v-if="!isDesktop"
+      class="sidebar-brand"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <div class="sidebar-brand-left">
+        <!-- The logo is a real outbound link — let its native right-click menu
+             (copy/open link) through and don't open the sidebar's view menu. -->
         <a
           href="https://pikselkroken.github.io/pixlstash/"
           target="_blank"
           rel="noopener noreferrer"
           class="sidebar-brand-logo-link"
+          @contextmenu.stop
         >
           <img
             src="/Logo.png"
@@ -3881,6 +3917,7 @@ defineExpose({
               rel="noopener noreferrer"
               :class="securityUpdateClass"
               :title="securityUpdateTitle"
+              @contextmenu.stop
               >&#x2191; v{{ latestVersion
               }}{{
                 latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
@@ -3900,6 +3937,7 @@ defineExpose({
       v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
     >
       <div
         class="sidebar-collapsed-row sidebar-collapsed-row--has-flyout sidebar-collapsed-row--project"
@@ -4117,7 +4155,11 @@ defineExpose({
         </div>
       </Teleport>
     </div>
-    <div v-else-if="!scopedResourceType" class="sidebar-view-header">
+    <div
+      v-else-if="!scopedResourceType"
+      class="sidebar-view-header"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
           <button
@@ -4155,9 +4197,20 @@ defineExpose({
         </div>
       </div>
     </div>
-    <div class="sidebar-scroll" ref="dockedScrollRef">
+    <div
+      class="sidebar-scroll"
+      ref="dockedScrollRef"
+      @contextmenu.self.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <template v-if="props.docked">
-        <div class="sidebar-collapsed-list">
+        <!-- Catch-all: any right-click that reaches the list (blank gaps, the
+             margins beside the centered rows, the spacer) opens the view menu.
+             Item rows below use `.stop` on their own context menus so they never
+             fall through to this. -->
+        <div
+          class="sidebar-collapsed-list"
+          @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+        >
           <div
             v-if="sidebarPrimaryTab !== 'folders'"
             :class="[
@@ -4172,6 +4225,9 @@ defineExpose({
               ]"
               title="All Pictures"
               @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('all-pictures', null, $event)
+              "
             >
               <v-icon>mdi-image-multiple</v-icon>
             </div>
@@ -4214,7 +4270,7 @@ defineExpose({
                 @click="
                   selectCharacter(char.id, char.name || 'Character', $event)
                 "
-                @contextmenu.prevent="
+                @contextmenu.prevent.stop="
                   openSidebarCtxMenu('character', char, $event)
                 "
               >
@@ -4257,6 +4313,9 @@ defineExpose({
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
               title="Add person"
               @click="createCharacter()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'people', $event)
+              "
             >
               <i
                 class="mdi mdi-account sidebar-collapsed-item--add-bg-icon"
@@ -4317,7 +4376,12 @@ defineExpose({
                 left: collapsedCharMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">
+              <div
+                class="sidebar-collapsed-flyout-header"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'people', $event)
+                "
+              >
                 <span>People</span>
                 <v-icon
                   v-if="!isReadOnly"
@@ -4422,7 +4486,9 @@ defineExpose({
                 ]"
                 :title="pset.name || 'Picture Set'"
                 @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
-                @contextmenu.prevent="openSidebarCtxMenu('set', pset, $event)"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('set', pset, $event)
+                "
               >
                 <v-icon
                   v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
@@ -4486,6 +4552,9 @@ defineExpose({
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
               title="Add picture set"
               @click="createSet()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'sets', $event)
+              "
             >
               <i
                 class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon"
@@ -4562,7 +4631,12 @@ defineExpose({
                 left: collapsedSetMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">
+              <div
+                class="sidebar-collapsed-flyout-header"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'sets', $event)
+                "
+              >
                 <span>Picture Sets</span>
                 <v-icon
                   v-if="!isReadOnly"
@@ -4650,7 +4724,9 @@ defineExpose({
             </div>
           </Teleport>
 
-          <!-- Scrap Heap at bottom of dock -->
+          <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
+               of the dock's blank space; its right-clicks bubble to the list's
+               catch-all handler, so it needs no handler of its own. -->
           <div v-if="!isReadOnly" class="sidebar-collapsed-spacer"></div>
           <div
             v-if="!isReadOnly"
@@ -4675,6 +4751,9 @@ defineExpose({
               ]"
               title="Scrapheap"
               @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('scrapheap', null, $event)
+              "
             >
               <v-icon>mdi-trash-can-outline</v-icon>
             </div>
@@ -4733,6 +4812,9 @@ defineExpose({
               v-if="referenceFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--ref"
               @click="referenceFoldersCollapsed = !referenceFoldersCollapsed"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'reference-folders', $event)
+              "
             >
               <div class="sidebar-folder-section-title">Reference folders</div>
               <v-icon
@@ -4947,6 +5029,9 @@ defineExpose({
               v-if="importFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--import"
               @click="importFoldersCollapsed = !importFoldersCollapsed"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'import-folders', $event)
+              "
             >
               <div class="sidebar-folder-section-title">Import folders</div>
               <v-icon
@@ -5084,6 +5169,9 @@ defineExpose({
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
                 @click.stop="peopleSectionCollapsed = !peopleSectionCollapsed"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'people', $event)
+                "
               >
                 <v-icon class="sidebar-section-chevron" size="16">{{
                   peopleSectionCollapsed
@@ -5259,6 +5347,9 @@ defineExpose({
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
                 @click.stop="setsSectionCollapsed = !setsSectionCollapsed"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'sets', $event)
+                "
               >
                 <v-icon class="sidebar-section-chevron" size="16">{{
                   setsSectionCollapsed
@@ -6005,7 +6096,9 @@ defineExpose({
       @mousedown.stop
     >
       <!-- ── Read-only indicator ───────────────────────────────── -->
-      <div v-if="isReadOnly" class="ctx-readonly-header">
+      <!-- Suppressed for the empty-space menu: its view toggles (auto-hide,
+           dock) are not content edits and stay enabled in read-only. -->
+      <div v-if="isReadOnly && !sidebarCtxEmpty" class="ctx-readonly-header">
         <span class="ctx-readonly-pill">
           <v-icon size="10">mdi-lock-outline</v-icon>
           Read only
@@ -6444,6 +6537,96 @@ defineExpose({
             >mdi-trash-can-outline</v-icon
           >
           Remove
+        </button>
+      </template>
+      <!-- ── Section-header menus (right-click a section's title) ── -->
+      <template v-if="sidebarCtxHeader === 'people'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createCharacter();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-account-plus-outline</v-icon
+          >
+          Create person
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'sets'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createSet();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-image-album</v-icon>
+          Create set
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'reference-folders'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            openReferenceFolderEditor();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-plus-outline</v-icon
+          >
+          Add folder
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'import-folders'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            openImportFolderEditor();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-plus-outline</v-icon
+          >
+          Add folder
+        </button>
+      </template>
+      <!-- ── Empty-space menu (right-click uncovered sidebar area) ── -->
+      <template v-if="sidebarCtxEmpty">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            sidebarStore.setSidebarPinned(!sidebarStore.sidebarPinned);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            sidebarStore.sidebarPinned
+              ? "mdi-checkbox-blank-outline"
+              : "mdi-checkbox-marked-outline"
+          }}</v-icon>
+          Auto hide sidebar
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            sidebarStore.setSidebarDocked(!sidebarStore.sidebarDocked);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            sidebarStore.sidebarDocked
+              ? "mdi-checkbox-marked-outline"
+              : "mdi-checkbox-blank-outline"
+          }}</v-icon>
+          Dock mode
         </button>
       </template>
     </div>

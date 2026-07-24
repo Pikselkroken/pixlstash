@@ -111,10 +111,12 @@ const themeModeModel = computed({
 });
 
 // Bound straight to the sidebar store (like the Sidebar Width toggle above);
-// App.vue watches sidebarStore.sidebarPinned and persists the change.
-const sidebarPinnedModel = computed({
-  get: () => sidebarStore.sidebarPinned,
-  set: (value) => sidebarStore.setSidebarPinned(!!value),
+// App.vue watches sidebarStore.sidebarPinned and persists the change. The switch
+// is phrased as "Auto hide sidebar" (the inverse of pinned) — the underlying
+// store/persistence key stays `sidebarPinned`, so this is a label inversion only.
+const sidebarAutoHideModel = computed({
+  get: () => !sidebarStore.sidebarPinned,
+  set: (value) => sidebarStore.setSidebarPinned(!value),
 });
 
 const showKeyboardHintModel = computed({
@@ -274,21 +276,6 @@ async function clearGuestSession() {
       </div>
     </SettingsSection>
 
-    <SettingsSection
-      title="Sidebar Visibility"
-      desc="Keep the sidebar pinned open, or let it auto-hide and slide in when you hover the edge."
-    >
-      <div class="appearance-switch">
-        <v-switch
-          v-model="sidebarPinnedModel"
-          color="accent"
-          density="compact"
-          hide-details
-          label="Keep sidebar pinned open"
-        />
-      </div>
-    </SettingsSection>
-
     <div class="appearance-selects">
       <AppSelect
         v-model="themeModeModel"
@@ -302,13 +289,20 @@ async function clearGuestSession() {
       />
     </div>
 
-    <div class="appearance-switch">
+    <div class="appearance-switch-row">
+      <v-switch
+        v-model="sidebarAutoHideModel"
+        color="accent"
+        density="compact"
+        hide-details
+        label="Auto hide sidebar"
+      />
       <v-switch
         v-model="showKeyboardHintModel"
         color="accent"
         density="compact"
         hide-details
-        label="Show keyboard shortcut (F1) indicator"
+        label="Show keyboard shortcut indicator"
       />
     </div>
 
@@ -345,6 +339,17 @@ async function clearGuestSession() {
   padding-top: var(--space-5);
 }
 
+/* Two switches side by side (auto-hide + keyboard hint), mirroring the
+   Theme / Date Format two-column row above — one row instead of two sections. */
+.appearance-switch-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3) var(--space-5);
+  align-items: center;
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  padding-top: var(--space-5);
+}
+
 .appearance-note {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
@@ -371,11 +376,10 @@ async function clearGuestSession() {
 .thumb-layout-opt {
   flex: 1;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -395,8 +399,8 @@ async function clearGuestSession() {
 /* Mini layout illustration: an even grid (square) vs uneven justified rows.
    currentColor → accent when the option is active (mirrors the Sidebar Width .swi). */
 .tli {
-  width: 78px;
-  height: 50px;
+  width: 64px;
+  height: 40px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
@@ -479,11 +483,10 @@ async function clearGuestSession() {
 .sidebar-width-opt {
   flex: 1;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -510,8 +513,8 @@ async function clearGuestSession() {
    the option is active. */
 .swi {
   display: flex;
-  width: 78px;
-  height: 50px;
+  width: 64px;
+  height: 40px;
   flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
@@ -523,10 +526,10 @@ async function clearGuestSession() {
   flex-shrink: 0;
 }
 .swi--full .swi-rail {
-  width: 26px;
+  width: 20px;
 }
 .swi--dock .swi-rail {
-  width: 11px;
+  width: 9px;
 }
 .swi-content {
   flex: 1;
