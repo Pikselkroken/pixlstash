@@ -794,7 +794,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/config.js` | `GET`/`PATCH /users/me/config`, the per-user config blob |
 | `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots) |
 | `api/users.js` | `/users/me/*`: the owner account, its tokens and share links, the watermark |
-| `api/session.js` | `/session/context`, what the current credential is allowed to do |
+| `api/session.js` | `/session/context` and `/sort_mechanisms` |
 | `api/workers.js` | `/workers/progress`, the background-worker poll |
 | `api/snapshots.js` | `/snapshots` and its restore/preview sub-resources |
 | `api/reviews.js` | `/reviews`, tag-review session bookkeeping |

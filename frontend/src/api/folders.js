@@ -123,3 +123,47 @@ export async function createFilesystemFolder(path) {
   const res = await apiClient.post("/filesystem/folders", { path });
   return res.data;
 }
+
+/**
+ * Move a reference folder's contents to a new location on disk.
+ *
+ * The server moves the files AND rewrites the stored picture paths, so the
+ * library keeps pointing at them; the response reports both counts.
+ *
+ * @param {number|string} id
+ * @param {string} destinationFolder
+ * @returns {Promise<Object>} the response body: `moved_picture_ids`,
+ *   `moved_entry_count`, `rewritten_count`.
+ */
+export async function relocateReferenceFolder(id, destinationFolder) {
+  const res = await apiClient.post(
+    `${FOLDER_URLS.reference}/${id}/relocate`,
+    { destination_folder: destinationFolder },
+  );
+  return res.data;
+}
+
+/**
+ * Move specific pictures into a reference folder.
+ *
+ * @param {number|string} id
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [options]
+ * @param {string} [options.destinationSubpath] - a folder beneath the
+ *   reference root; omitted to drop them at the root.
+ * @returns {Promise<Object>} the response body, whose `moved_picture_ids` are
+ *   the pictures that actually moved.
+ */
+export async function movePicturesToReferenceFolder(
+  id,
+  pictureIds,
+  { destinationSubpath } = {},
+) {
+  const body = { picture_ids: pictureIds };
+  if (destinationSubpath) body.destination_subpath = destinationSubpath;
+  const res = await apiClient.post(
+    `${FOLDER_URLS.reference}/${id}/move-pictures`,
+    body,
+  );
+  return res.data;
+}
