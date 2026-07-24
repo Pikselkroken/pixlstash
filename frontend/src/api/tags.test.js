@@ -5,7 +5,16 @@ vi.mock("../utils/apiClient", () => ({
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { listTags, addPictureTag, removePictureTag } from "./tags";
+import {
+  listTags,
+  addPictureTag,
+  removePictureTag,
+  bulkFetchTags,
+  removeTagEverywhere,
+  listTagPredictions,
+  confirmTagPrediction,
+  rejectTagPrediction,
+} from "./tags";
 
 beforeEach(() => {
   apiClient.get.mockReset();
@@ -44,5 +53,56 @@ describe("api/tags", () => {
     apiClient.delete.mockResolvedValue({ data: {} });
     await removePictureTag(42, 7);
     expect(apiClient.delete).toHaveBeenCalledWith("/pictures/42/tags/7");
+  });
+
+  it("bulkFetchTags POSTs the picture ids", async () => {
+    apiClient.post.mockResolvedValue({ data: [] });
+    await bulkFetchTags([1, 2]);
+    expect(apiClient.post).toHaveBeenCalledWith("/pictures/tags/bulk_fetch", {
+      picture_ids: [1, 2],
+    });
+  });
+
+  // Library-wide removal by NAME, unlike removePictureTag: the picture id only
+  // scopes the request, so the tag must go in the body.
+  it("removeTagEverywhere sends the tag name in the body", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await removeTagEverywhere(42, "hat");
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/pictures/42/tags/remove_all",
+      { tag: "hat" },
+    );
+  });
+
+  it("listTagPredictions asks for meta by default", async () => {
+    apiClient.get.mockResolvedValue({ data: [] });
+    await listTagPredictions(42);
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/pictures/42/tag_predictions?include_meta=1",
+    );
+  });
+
+  it("listTagPredictions filters by status when asked", async () => {
+    apiClient.get.mockResolvedValue({ data: [] });
+    await listTagPredictions(42, { status: "REJECTED" });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/pictures/42/tag_predictions?status=REJECTED&include_meta=1",
+    );
+  });
+
+  it("confirmTagPrediction URL-encodes the tag", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await confirmTagPrediction(42, "red car");
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/pictures/42/tag_predictions/red%20car/confirm",
+    );
+  });
+
+  it("rejectTagPrediction URL-encodes the tag", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await rejectTagPrediction(42, "red/car");
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/pictures/42/tag_predictions/red%2Fcar/reject",
+    );
   });
 });

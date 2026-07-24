@@ -132,7 +132,12 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from "vue";
 import { VProgressCircular } from "vuetify/components";
-import { apiClient } from "../../utils/apiClient";
+import {
+  listProjectAttachments,
+  uploadProjectAttachment,
+  addProjectAttachmentUrl,
+  deleteProjectAttachment,
+} from "../../api/projects";
 
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -153,11 +158,11 @@ let dragLeaveTimer = null;
 
 async function fetchFiles() {
   try {
-    const resp = await apiClient.get(
-      `/projects/${props.projectId}/attachments`,
-    );
-    files.value = resp.data;
-  } catch {
+    files.value = await listProjectAttachments(props.projectId);
+  } catch (e) {
+    // The panel renders empty rather than broken; log so a failing fetch is
+    // not indistinguishable from a project with no files.
+    console.warn("Failed to load the project's attachments", e);
     files.value = [];
   }
 }
@@ -203,11 +208,12 @@ async function onDrop(e) {
     uploadError.value = null;
     try {
       for (const url of droppedUrls) {
-        const resp = await apiClient.post(
-          `/projects/${props.projectId}/attachments/url`,
-          { url, title: url },
+        const created = await addProjectAttachmentUrl(
+          props.projectId,
+          url,
+          url,
         );
-        files.value.push(resp.data);
+        files.value.push(created);
       }
     } catch (err) {
       uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
@@ -223,15 +229,7 @@ async function onDrop(e) {
   uploading.value = true;
   try {
     for (const file of droppedFiles) {
-      const formData = new FormData();
-      formData.append("file", file);
-      await apiClient.post(
-        `/projects/${props.projectId}/attachments`,
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-        },
-      );
+      await uploadProjectAttachment(props.projectId, file);
     }
     await fetchFiles();
   } catch (err) {
@@ -261,11 +259,10 @@ function downloadFile(file) {
 async function deleteFile(file) {
   if (!window.confirm(`Remove "${file.original_filename}"?`)) return;
   try {
-    await apiClient.delete(
-      `/projects/${props.projectId}/attachments/${file.id}`,
-    );
+    await deleteProjectAttachment(props.projectId, file.id);
     files.value = files.value.filter((f) => f.id !== file.id);
-  } catch {
+  } catch (e) {
+    console.error("Failed to delete the project attachment", e);
     uploadError.value = "Could not delete file. Please try again.";
   }
 }
@@ -276,11 +273,12 @@ async function addUrl() {
   const title = urlTitle.value.trim() || url;
   uploadError.value = null;
   try {
-    const resp = await apiClient.post(
-      `/projects/${props.projectId}/attachments/url`,
-      { url, title },
+    const created = await addProjectAttachmentUrl(
+      props.projectId,
+      url,
+      title,
     );
-    files.value.push(resp.data);
+    files.value.push(created);
     urlInput.value = "";
     urlTitle.value = "";
     showUrlForm.value = false;

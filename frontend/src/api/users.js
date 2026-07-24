@@ -187,3 +187,18 @@ export async function deleteWatermark() {
   const res = await apiClient.delete(`${ME_URL}/watermark`);
   return res.data;
 }
+
+/**
+ * Read the user's penalised-tag list under a READ-scoped share token.
+ *
+ * A share session cannot read the full user config, so the smart-score
+ * penalised tags are exposed on their own here; owner sessions read the same
+ * data from the config blob instead.
+ *
+ * @returns {Promise<Object>} the response body, whose
+ *   `smart_score_penalised_tags` is an array or a tag→weight map.
+ */
+export async function getPenalisedTags() {
+  const res = await apiClient.get(`${ME_URL}/penalised-tags`);
+  return res.data;
+}
