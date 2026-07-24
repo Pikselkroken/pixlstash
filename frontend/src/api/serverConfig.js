@@ -13,6 +13,33 @@ import { apiClient } from "../utils/apiClient";
 /** The scrapheap-retention topic of the server config (GET + PATCH). */
 const SCRAPHEAP_RETENTION_URL = "/server-config/scrapheap-retention";
 
+/** The snapshots topic of the server config (GET + PATCH). */
+const SNAPSHOTS_URL = "/server-config/snapshots";
+
+/**
+ * Read the snapshot scheduling configuration.
+ *
+ * @returns {Promise<Object>} the response body, whose `daily_snapshots` says
+ *   whether the server takes an automatic snapshot once a day.
+ */
+export async function getSnapshotSettings() {
+  const res = await apiClient.get(SNAPSHOTS_URL);
+  return res.data;
+}
+
+/**
+ * Turn the daily automatic snapshot on or off.
+ *
+ * @param {boolean} enabled
+ * @returns {Promise<Object>} the updated snapshot settings (the response body).
+ */
+export async function setDailySnapshotsEnabled(enabled) {
+  const res = await apiClient.patch(SNAPSHOTS_URL, {
+    daily_snapshots: enabled,
+  });
+  return res.data;
+}
+
 /** Response/request key carrying the retention window. */
 export const SCRAPHEAP_RETENTION_FIELD = "scrapheap_retention_days";
 
