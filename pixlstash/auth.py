@@ -150,17 +150,24 @@ def get_real_client_ip(request: Request, trusted_proxies: list[str]) -> str:
     return direct_ip
 
 
+# FastAPI's in-process ``TestClient`` presents this non-IP host string. It is the
+# ONE unparseable value the locality predicates admit; every other unparseable host
+# (e.g. a bogus ``X-Forwarded-For`` hop) fails closed (CSO review, finding 3).
+_TESTCLIENT_HOST = "testclient"
+
+
 def is_local_ip(ip: str) -> bool:
     """Return True if *ip* is a loopback or RFC 1918 private address.
 
-    Non-parseable strings (e.g. ``"testclient"`` from FastAPI's in-process
-    ``TestClient``) are treated as local so that unit tests are not blocked.
+    A non-parseable host fails closed (returns ``False``), except the in-process
+    ``TestClient`` sentinel (:data:`_TESTCLIENT_HOST`), which stays local so the
+    unit suite is not blocked.
     """
     try:
         addr = ipaddress.ip_address(ip)
         return addr.is_loopback or addr.is_private
     except ValueError:
-        return True
+        return ip == _TESTCLIENT_HOST
 
 
 # Tailscale addresses an owner's own devices out of the CGNAT / shared-address
@@ -214,13 +221,14 @@ def is_loopback_ip(ip: str) -> bool:
     talks to the backend over 127.0.0.1, so pinning to loopback loses nothing
     while closing the LAN to those paths.
 
-    Non-parseable strings (e.g. ``"testclient"`` from FastAPI's in-process
-    ``TestClient``) are treated as loopback so that unit tests are not blocked.
+    A non-parseable host fails closed (returns ``False``), except the in-process
+    ``TestClient`` sentinel (:data:`_TESTCLIENT_HOST`), which stays loopback so the
+    unit suite is not blocked.
     """
     try:
         return ipaddress.ip_address(ip).is_loopback
     except ValueError:
-        return True
+        return ip == _TESTCLIENT_HOST
 
 
 @dataclass
