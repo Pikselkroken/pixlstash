@@ -204,6 +204,55 @@ body {
     transition-duration: var(--dur-2) !important;
   }
 }
+/* Click-outside scrim for the auto-hide sidebar: dims the shell behind the
+   drawer and gives touch users something to tap to dismiss it. (A mouse user
+   gets the shell's own `mouseleave`; a keyboard/AT user gets Escape.) */
+.sidebar-backdrop {
+  /* Same absolute containing block as the drawer (`.file-manager`), so the
+     scrim covers exactly the shell area and never the title bar or the
+     app-level status strip mounted above it. A `fixed` + `--titlebar-h` version
+     would re-introduce the bug the drawer itself was just moved off. */
+  position: absolute;
+  inset: 0;
+  /* Wedged directly under the drawer (150) and above the hover trigger (140),
+     which the drawer already uses as a local micro-ladder between --z-sticky
+     (100) and --z-floating (200). The named rungs cannot express "just below
+     the drawer": the only rung above 100 is 200, which would paint the scrim
+     OVER the panel it dismisses, and lifting the panel to --z-drawer (1000) to
+     make room would change its stacking against every piece of grid chrome.
+     Keeping the wedge is the smaller, reversible choice. */
+  z-index: 145;
+  background: var(--scrim-drawer);
+}
+/* Same duration and curve as the panel's slide. The scrim's opacity is a proxy
+   for the panel's presence, so the two must not diverge; the panel uses
+   --ease-decelerate in both directions, so this does too. No accelerate-out: on
+   a pure opacity ramp the curve is imperceptible, and a faster leave would
+   strand the panel mid-slide over undimmed content. */
+.backdrop-fade-enter-active,
+.backdrop-fade-leave-active {
+  transition: opacity var(--dur-2) var(--ease-decelerate);
+}
+.backdrop-fade-enter-from,
+.backdrop-fade-leave-to {
+  opacity: 0;
+}
+/* Reduced-motion exception, matching .sidebar-shell.sidebar-overlay above, and
+   it must match, because the scrim and the panel are one object. If the panel
+   keeps its 200ms slide while the scrim snaps, a full-shell dim appears
+   instantly with no visible cause and then waits 200ms for the panel to catch
+   up: a bare luminance jump over the whole grid, worse under reduce than the
+   ramp it replaced. Reduced motion targets travel and parallax; a cross-fade is
+   what that guidance recommends as the *substitute* for motion, not something
+   to strip. Class specificity (0,1,0) beats the universal `*` reset (0,0,0)
+   though both are !important; only the duration needs restoring, the property
+   and easing come from the rule above. */
+@media (prefers-reduced-motion: reduce) {
+  .backdrop-fade-enter-active,
+  .backdrop-fade-leave-active {
+    transition-duration: var(--dur-2) !important;
+  }
+}
 /* Visible "there's a sidebar here" band shown while the sidebar is auto-hidden;
    hovering (or tapping) it reveals the sidebar. A centered handle with an expand
    arrow makes it obvious it's interactive. */

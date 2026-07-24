@@ -96,6 +96,18 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  /* A full-surface dim under a TRANSIENT floating panel (the auto-hide sidebar
+     drawer), not a modal. Two jobs: a depth cue that the panel floats over the
+     grid, and a tap target for touch dismissal. Deliberately light, because
+     this panel is dismissed by moving the mouse: it must not read as blocking.
+     Sits a clear step below `--scrim-photo` (0.55, a legibility backing sized
+     for glyph contrast) and well below the modal scrim (0.8 x 0.9 opacity in
+     App.css). One value for both themes: `scrim` is #000 in both, and what this
+     dims is the photo grid, which is bright regardless of theme. Do NOT deepen
+     it for dark: a black scrim cannot lighten, and a heavier one there just
+     muddies (visual-language.md §7); in dark the panel's --elevation-4 carries
+     the edge and the scrim is the supporting cue. */
+  --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
      COMPONENT DIMENSIONS — fixed component sizes (badges, action bars) that were

@@ -1613,6 +1613,22 @@ function handleGlobalKeydown(e) {
     tag === "textarea" ||
     document.activeElement?.isContentEditable;
 
+  // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
+  // "Content on Hover or Focus" applies: it must be dismissible without moving
+  // the pointer. Escape is that mechanism, and for a touch user it is the only
+  // dismissal besides the scrim itself. Deliberately not preventDefault-ed, and
+  // skipped while typing, so the other Escape owners keep theirs. The sidebar
+  // context menu stops propagation from a capture-phase listener and never
+  // reaches here at all.
+  if (
+    e.key === "Escape" &&
+    !isEditable &&
+    sidebarStore.sidebarOverlay &&
+    sidebarStore.sidebarVisible
+  ) {
+    sidebarStore.hideAutoSidebar();
+  }
+
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key) && !isEditable) {
     // These keys drive grid scrolling only. Prevent the browser's default
@@ -2176,10 +2192,14 @@ defineExpose({
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
         </div>
+        <!-- Click-outside scrim for the auto-hide sidebar. Purely a dimming
+             surface and a tap target, so it is hidden from assistive tech; the
+             keyboard/AT equivalent of clicking it is Escape (handleGlobalKeydown). -->
         <Transition name="backdrop-fade">
           <div
             v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
             class="sidebar-backdrop"
+            aria-hidden="true"
             @click="sidebarStore.hideAutoSidebar()"
           ></div>
         </Transition>
