@@ -32,6 +32,7 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
+import { useNoticeStore } from "./stores/useNoticeStore";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -65,6 +66,7 @@ const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
+const noticeStore = useNoticeStore();
 const lockedSetsStore = useLockedSetsStore();
 
 // --- Router ---
@@ -91,6 +93,7 @@ const theme = useTheme();
 // --- Component & DOM refs ---
 const gridContainer = ref(null);
 const sidebarRef = ref(null);
+const statsSidebarRef = ref(null);
 const toolbarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
@@ -115,6 +118,7 @@ const configSnapshot = ref({});
 const config = reactive({
   sort: "",
   thumbnail: 256,
+  thumbnail_mode: "square",
   sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
@@ -1311,6 +1315,50 @@ function handleUpdateSidebarThumbnailSize(value) {
   userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
+// The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
+// already switched the view to the scrapheap; defer to the next tick so the grid
+// is showing that view before we open its existing consent-gated empty-forever
+// confirm (whose post-confirm refetch then reconciles the right view).
+function handleEmptyScrapheapFromSidebar() {
+  nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
+}
+
+function handleUpdateThumbnailMode(value) {
+  if (value !== "square" && value !== "justified") return;
+  const previous = gridStore.thumbnailMode;
+  if (value === previous) return;
+  // Apply immediately: the justified layout is computed from each picture's
+  // stored width/height, so the grid re-lays-out at once — the persist watch
+  // below saves it. The radiogroup's aria-checked change is what a screen
+  // reader announces (ui-ux-expert decision 9); no extra live region needed.
+  gridStore.thumbnailMode = value;
+
+  // Either switch re-crops thumbnails in the background (to justified:
+  // aspect-ratio-preserving; back to square: face-weighted square crops). The
+  // layout is correct instantly and the bitmaps sharpen as the task runs
+  // (visible in the Tasks tab). Surface that as one notice, on both directions,
+  // because the backend regenerates on any mode change.
+  //
+  // NOTE: the trigger is the mode transition, which matches the backend
+  // contract (a mode switch always queues regeneration). If the backend is ever
+  // optimised to skip regeneration in some direction, key the notice off an
+  // explicit "regeneration pending" signal instead (ui-ux-expert decision 5).
+  const body =
+    value === "justified"
+      ? "Sharpening thumbnails for the justified layout — images refine as they finish."
+      : "Restoring square thumbnails — images refine as they finish.";
+  noticeStore.info(body, {
+    key: "thumbnail-regen",
+    action: {
+      label: "View progress",
+      handler: () => {
+        sidebarStore.statsOpen = true;
+        nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
+      },
+    },
+  });
+}
+
 function handleUpdateSidebarWidth(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
@@ -1379,6 +1427,12 @@ async function fetchConfig() {
     if (typeof res.data.columns === "number") {
       gridStore.columns = res.data.columns;
     }
+    if (
+      res.data.thumbnail_mode === "square" ||
+      res.data.thumbnail_mode === "justified"
+    ) {
+      gridStore.thumbnailMode = res.data.thumbnail_mode;
+    }
     if (typeof res.data.sidebar_thumbnail_size === "number") {
       userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
     }
@@ -1391,6 +1445,7 @@ async function fetchConfig() {
     config.sort_order = sortValue || sortStore.selectedSort;
     config.descending = sortStore.selectedDescending;
     config.columns = gridStore.columns;
+    config.thumbnail_mode = gridStore.thumbnailMode;
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
     config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
@@ -1538,6 +1593,12 @@ async function patchConfigUIOptions() {
   }
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
+  }
+  if (
+    gridStore.thumbnailMode === "square" ||
+    gridStore.thumbnailMode === "justified"
+  ) {
+    patch.thumbnail_mode = gridStore.thumbnailMode;
   }
   if (typeof sidebarStore.sidebarDocked === "boolean") {
     patch.sidebar_docked = sidebarStore.sidebarDocked;
@@ -1896,6 +1957,14 @@ watch(
 );
 
 watch(
+  () => gridStore.thumbnailMode,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
   () => sidebarStore.sidebarDocked,
   () => {
     if (!configLoaded.value) return;
@@ -2136,6 +2205,9 @@ defineExpose({
             :installType="installType"
             :dockerVariant="dockerVariant"
             :showKeyboardHint="userPrefsStore.showKeyboardHint"
+            :thumbnailMode="gridStore.thumbnailMode"
+            @update:thumbnail-mode="handleUpdateThumbnailMode"
+            @empty-scrapheap="handleEmptyScrapheapFromSidebar"
             @update:show-keyboard-hint="
               userPrefsStore.showKeyboardHint = $event
             "
@@ -2323,6 +2395,7 @@ defineExpose({
                 :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
                 :columns="gridStore.columns"
+                :thumbnailMode="gridStore.thumbnailMode"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
@@ -2372,6 +2445,7 @@ defineExpose({
               />
             </div>
             <StatsSidebar
+              ref="statsSidebarRef"
               :open="sidebarStore.statsOpen"
               :backendUrl="BACKEND_URL"
               :selectedCharacter="selectionStore.selectedCharacter"

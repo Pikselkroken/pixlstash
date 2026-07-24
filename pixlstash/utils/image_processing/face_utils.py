@@ -37,126 +37,91 @@ class FaceUtils:
         return crop
 
     @staticmethod
-    def generate_face_weighted_thumbnail_bytes(
-        img,
-        face_bboxes: List[List[int]],
-        min_side: int = 256,
-        output_size: tuple = (256, 256),
-    ) -> Optional[bytes]:
-        """
-        Generate a face-weighted square thumbnail and return the bytes.
+    def _clamp_face_bboxes(face_bboxes, w, h):
+        """Clamp face bboxes to image bounds and return per-box geometry tuples.
 
-        Wraps :meth:`generate_face_weighted_thumbnail_with_crop` and discards
-        the crop metadata.
+        Returns a list of ``(x1, y1, x2, y2, area, cx, cy)`` for every valid,
+        non-degenerate box, or an empty list.
         """
-        thumbnail_bytes, _ = FaceUtils.generate_face_weighted_thumbnail_with_crop(
-            img,
-            face_bboxes,
-            min_side=min_side,
-            output_size=output_size,
-        )
-        return thumbnail_bytes
+        clamped = []
+        for bbox in face_bboxes:
+            if not bbox or len(bbox) != 4:
+                continue
+            x1, y1, x2, y2 = [int(round(v)) for v in bbox]
+            x1 = max(0, min(w, x1))
+            x2 = max(0, min(w, x2))
+            y1 = max(0, min(h, y1))
+            y2 = max(0, min(h, y2))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            area = float((x2 - x1) * (y2 - y1))
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            clamped.append((x1, y1, x2, y2, area, cx, cy))
+        return clamped
 
     @staticmethod
-    def generate_face_weighted_thumbnail_with_crop(
-        img,
-        face_bboxes: List[List[int]],
-        min_side: int = 256,
-        output_size: tuple = (256, 256),
+    def square_crop_rect(
+        bitmap_w: int,
+        bitmap_h: int,
+        face_bboxes: Optional[List[List[float]]] = None,
     ) -> tuple:
+        """Compute the face-weighted square-crop rectangle within an AR bitmap.
+
+        The bitmap is the whole-frame thumbnail; this returns the square window a
+        client should crop for a square cell. Coordinates are in BITMAP pixel
+        space (origin top-left).
+
+        ``face_bboxes`` are ``[x1, y1, x2, y2]`` boxes already expressed in bitmap
+        space (optional). With faces the square is centred on their area-weighted
+        centroid and clamped so it contains them where possible; without faces it
+        is landscape-centred (wide images) or top-anchored (tall images), matching
+        the historical framing.
+
+        Returns ``(x, y, side)`` with ``side == min(bitmap_w, bitmap_h)``. For a
+        landscape bitmap only ``x`` varies (``y == 0``); for a portrait bitmap
+        only ``y`` varies (``x == 0``).
         """
-        Generate a face-weighted square thumbnail, returning ``(bytes, crop_dict)``.
+        side = min(bitmap_w, bitmap_h)
+        clamped = FaceUtils._clamp_face_bboxes(face_bboxes or [], bitmap_w, bitmap_h)
+        if not clamped:
+            if bitmap_h > bitmap_w:
+                # Portrait: top-anchored.
+                return 0, 0, side
+            # Landscape / square: horizontally centred.
+            return int(round((bitmap_w - side) / 2.0)), 0, side
 
-        The crop is centred on the area-weighted centroid of all face bounding boxes.
-        Returns ``(None, None)`` on failure.
-        """
-        from pixlstash.utils.image_processing.image_utils import ImageUtils
+        min_x = min(b[0] for b in clamped)
+        min_y = min(b[1] for b in clamped)
+        max_x = max(b[2] for b in clamped)
+        max_y = max(b[3] for b in clamped)
 
-        if img is None or not face_bboxes:
-            return None, None
-        try:
-            if isinstance(img, Image.Image):
-                pil_img = img.copy()
-            else:
-                pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        total_weight = sum(b[4] ** 0.5 for b in clamped)
+        if total_weight > 0:
+            cx = sum(b[4] ** 0.5 * b[5] for b in clamped) / total_weight
+            cy = sum(b[4] ** 0.5 * b[6] for b in clamped) / total_weight
+        else:
+            cx = (min_x + max_x) / 2.0
+            cy = (min_y + max_y) / 2.0
 
-            w, h = pil_img.size
-            side_max = min(w, h)
-            if side_max <= 0:
-                return None, None
+        span_x = max_x - min_x
+        span_y = max_y - min_y
 
-            clamped = []
-            for bbox in face_bboxes:
-                if not bbox or len(bbox) != 4:
-                    continue
-                x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-                x1 = max(0, min(w, x1))
-                x2 = max(0, min(w, x2))
-                y1 = max(0, min(h, y1))
-                y2 = max(0, min(h, y2))
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                area = float((x2 - x1) * (y2 - y1))
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                clamped.append((x1, y1, x2, y2, area, cx, cy))
+        # Move the window along the long axis to sit over the faces, clamped so it
+        # still encloses them when they fit. On the short axis side == that edge,
+        # so the clamp below pins it to 0 automatically.
+        if span_x <= side:
+            left = min(max(cx - side / 2.0, max_x - side), min_x)
+        else:
+            left = cx - side / 2.0
+        if span_y <= side:
+            top = min(max(cy - side / 2.0, max_y - side), min_y)
+        else:
+            top = cy - side / 2.0
 
-            if not clamped:
-                return None, None
-
-            min_x = min(b[0] for b in clamped)
-            min_y = min(b[1] for b in clamped)
-            max_x = max(b[2] for b in clamped)
-            max_y = max(b[3] for b in clamped)
-
-            total_weight = sum(b[4] ** 0.5 for b in clamped)
-            if total_weight > 0:
-                cx = sum(b[4] ** 0.5 * b[5] for b in clamped) / total_weight
-                cy = sum(b[4] ** 0.5 * b[6] for b in clamped) / total_weight
-            else:
-                cx = (min_x + max_x) / 2.0
-                cy = (min_y + max_y) / 2.0
-
-            side = side_max
-
-            span_x = max_x - min_x
-            span_y = max_y - min_y
-            lower_left = max_x - side
-            upper_left = min_x
-            lower_top = max_y - side
-            upper_top = min_y
-
-            if span_x <= side:
-                left = min(max(cx - side / 2.0, lower_left), upper_left)
-            else:
-                left = cx - side / 2.0
-            if span_y <= side:
-                top = min(max(cy - side / 2.0, lower_top), upper_top)
-            else:
-                top = cy - side / 2.0
-
-            left = max(0, min(w - side, left))
-            top = max(0, min(h - side, top))
-
-            left = int(round(left))
-            top = int(round(top))
-            side = int(round(side))
-
-            square_img = pil_img.crop((left, top, left + side, top + side))
-            if output_size and square_img.size != output_size:
-                square_img = square_img.resize(output_size, resample=Image.LANCZOS)
-            crop = {
-                "left": left,
-                "top": top,
-                "side": side,
-            }
-            thumbnail_bytes = ImageUtils._encode_thumbnail(square_img)
-            if thumbnail_bytes is None:
-                return None, None
-            return thumbnail_bytes, crop
-        except Exception as e:
-            logger.error(f"Error generating face-weighted thumbnail: {e}")
-            return None, None
+        left = int(round(max(0, min(bitmap_w - side, left))))
+        top = int(round(max(0, min(bitmap_h - side, top))))
+        return left, top, side
 
     @staticmethod
     def load_and_crop_square_image_with_face(file_path, bbox):

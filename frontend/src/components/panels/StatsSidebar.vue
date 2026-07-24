@@ -870,6 +870,14 @@ function handleResolutionBarClick(label) {
     emit("update:resolutionBucketFilter", key);
   }
 }
+
+// Let a caller (e.g. the "View progress" action on the justified-layout
+// regeneration notice) deep-link to the Tasks tab. Opening the panel itself is
+// the parent's job (it owns `statsOpen`); this only selects the tab.
+function focusTasksTab() {
+  activeTab.value = "tasks";
+}
+defineExpose({ focusTasksTab });
 </script>
 
 <template>

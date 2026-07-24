@@ -31,6 +31,7 @@
     @set-project="handleSetProjectForSelected"
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
+    @request-context-menu="handleOverlayContextMenuRequest"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -144,6 +145,33 @@
       @remove-picture-shares="openRevokeSharesDialog"
       @reverse-image-search="handleReverseImageSearch"
       @find-similar-faces="handleFindSimilarFaces"
+    />
+
+    <!-- ── Overlay (lightbox) context menu ─────────────────────
+         A second, dedicated instance so grid-menu and overlay-menu state stay
+         cleanly separated. It runs in overlay-mode (restricted action set +
+         dark skin) and every action is scoped to the single overlay picture via
+         overlay-specific handlers — never the grid selection. -->
+    <ImageGridContextMenu
+      overlay-mode
+      :visible="overlayCtxVisible"
+      :x="overlayCtxX"
+      :y="overlayCtxY"
+      :selected-image-ids="overlayCtxSelectedIds"
+      :selected-character="String(props.selectedCharacter)"
+      :all-pictures-id="String(props.allPicturesId)"
+      :unassigned-pictures-id="String(props.unassignedPicturesId)"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :lock-reason="overlayCtxLockReason"
+      :context-image="overlayCtxImage"
+      @close="overlayCtxVisible = false"
+      @share-picture="handleOverlayShare"
+      @find-similar-faces="handleFindSimilarFaces"
+      @reverse-image-search="handleOverlayReverseImageSearch"
+      @segment="openOverlaySegmentDialog"
+      @delete-selected="handleOverlayDelete"
+      @remove-from-group="handleOverlayScrapheapRestore"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -450,29 +478,28 @@
           {
             'compact-mode': props.compactMode,
             'touch-select-mode': touchSelectMode,
+            'image-grid--justified': isJustifiedMode,
           },
         ]"
-        :style="{
-          gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
-          position: 'relative',
-          ...badgeCssVars,
-        }"
+        :style="gridContainerStyle"
         ref="gridContainer"
         data-testid="image-grid"
         @click="handleGridBackgroundClick"
       >
-        <!-- Top spacer for virtual scroll alignment -->
+        <!-- Top spacer for virtual scroll alignment (width 100% makes it a
+             full flex line in justified mode; harmless in grid mode) -->
         <div
           v-if="topSpacerHeight > 0"
           :style="{
             gridColumn: '1 / -1',
+            width: '100%',
             height: `${topSpacerHeight}px`,
           }"
         ></div>
         <div
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
-          :style="getStackCardStyle(img)"
+          :style="[getStackCardStyle(img), getJustifiedCardStyle(img, idx)]"
           :class="[
             'image-card',
             {
@@ -510,8 +537,13 @@
             <div
               :class="[
                 'thumbnail-container',
-                { 'thumbnail-container-drag-source': isDragSourceImage(img) },
+                {
+                  'thumbnail-container-drag-source': isDragSourceImage(img),
+                  'thumbnail-container--justified': isJustifiedMode,
+                  'thumbnail-container--cropped': isSquareCropActive(img),
+                },
               ]"
+              :style="getJustifiedThumbStyle(img, idx)"
               :ref="(el) => setThumbnailContainerRef(img.id, el)"
               draggable="true"
               @dragstart.capture="handleContainerDragStart(img, $event)"
@@ -649,6 +681,7 @@
                 <img
                   :src="getThumbnailSrc(img)"
                   class="thumbnail-img"
+                  :style="getSquareCropImgStyle(img)"
                   :ref="(el) => setThumbnailRef(img.id, el)"
                   loading="eager"
                   fetchpriority="high"
@@ -822,6 +855,7 @@
           v-if="bottomSpacerHeight > 0"
           :style="{
             gridColumn: '1 / -1',
+            width: '100%',
             height: `${bottomSpacerHeight}px`,
           }"
         ></div>
@@ -991,6 +1025,12 @@ import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import {
+  squareCropParams,
+  squareCropImgStyle,
+  squareCropBboxRect,
+  coverBboxRect,
+} from "../../utils/squareCrop.js";
+import {
   isSupportedImageFile,
   isSupportedVideoFile,
   isVideo,
@@ -1044,6 +1084,10 @@ import {
   stackBadgeTitle,
 } from "../../utils/stack.js";
 import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
+import {
+  rowOfIndex,
+  JUSTIFIED_ROW_GAP,
+} from "../../composables/useJustifiedLayout.js";
 import { useMultiSelect } from "../../composables/useMultiSelect.js";
 import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
 import { useStackOrdering } from "../../composables/useStackOrdering.js";
@@ -1099,6 +1143,9 @@ const props = defineProps({
   penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
   compactMode: { type: Boolean, default: false },
+  // 'square' (uniform grid) or 'justified' (Google-Photos-style rows of
+  // variable-width thumbnails sharing a common row height).
+  thumbnailMode: { type: String, default: "square" },
   themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
@@ -1249,6 +1296,23 @@ const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
 const contextMenuClickedFace = ref(null);
+// ── Overlay (lightbox) context menu — state kept separate from the grid menu.
+// The image object arrives in the request payload from ImageOverlay (it owns
+// the currently-displayed picture + its loaded faces), so this never depends on
+// the grid selection.
+const overlayCtxVisible = ref(false);
+const overlayCtxX = ref(0);
+const overlayCtxY = ref(0);
+const overlayCtxImage = ref(null);
+// The overlay menu acts on exactly one picture: the one on screen.
+const overlayCtxSelectedIds = computed(() =>
+  overlayCtxImage.value?.id != null ? [overlayCtxImage.value.id] : [],
+);
+const overlayCtxLockReason = computed(() =>
+  overlayCtxImage.value?.id != null
+    ? lockedSetsStore.lockReason(overlayCtxImage.value.id)
+    : null,
+);
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
 const sharedPictureIds = ref(new Set());
@@ -1259,6 +1323,10 @@ const sharePicDialogOpen = ref(false);
 // Segment (object detection) dialog
 const segmentDialogOpen = ref(false);
 const segmentPrompt = ref("");
+// When set, confirmSegment targets these ids instead of the grid selection.
+// Used by the overlay context menu to scope segmentation to the single picture
+// on screen. Null → fall back to the grid selection (the normal grid path).
+const segmentTargetIds = ref(null);
 
 // ============================================================
 // GRID DATA STATE
@@ -2303,7 +2371,28 @@ function getVideoThumbnailSrc(img) {
 // selectedFaceIds, isFaceSelected, toggleFaceSelection, clearFaceSelection,
 // onFaceBboxDragStart — moved to useMultiSelect composable.
 
-// Helper to calculate face bbox overlay style using object-fit: cover logic
+// Square-crop render helpers (thumbnail v2). Square mode sprite-crops the whole
+// AR bitmap to the stored face-weighted rectangle; justified mode shows the
+// whole bitmap. Videos keep object-fit:cover (the crop rectangle describes the
+// still bitmap, not the video frames), and a picture whose crop fields have not
+// yet been populated falls back to cover centring until they arrive.
+function isSquareCropActive(img) {
+  return (
+    !isJustifiedMode.value &&
+    !isVideo(img) &&
+    squareCropParams(img) !== null
+  );
+}
+
+// Inline <img> style for the sprite crop, or null → CSS object-fit:cover.
+function getSquareCropImgStyle(img) {
+  if (isJustifiedMode.value || isVideo(img)) return null;
+  return squareCropImgStyle(img);
+}
+
+// Helper to calculate face/detection bbox overlay style. Square-crop mode maps
+// the bitmap-space bbox through the stored crop; otherwise it mirrors the
+// object-fit:cover render (justified whole-bitmap, or the square-mode fallback).
 function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   if (!el) return { display: "none" };
   const container = el.parentElement;
@@ -2312,19 +2401,17 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   const containerHeight = container.clientHeight;
   const naturalWidth = img.thumbnail_width || img.width || 1;
   const naturalHeight = img.thumbnail_height || img.height || 1;
-  // Calculate scale and offset for object-fit: cover
-  const scale = Math.max(
-    containerWidth / naturalWidth,
-    containerHeight / naturalHeight,
-  );
-  const displayWidth = naturalWidth * scale;
-  const offsetX = (containerWidth - displayWidth) / 2;
-  const offsetY = 0;
-  // Transform bbox
-  const left = offsetX + bbox[0] * scale;
-  const top = offsetY + bbox[1] * scale;
-  const width = (bbox[2] - bbox[0]) * scale;
-  const height = (bbox[3] - bbox[1]) * scale;
+  const cropParams = isSquareCropActive(img) ? squareCropParams(img) : null;
+  const rect = cropParams
+    ? squareCropBboxRect(bbox, cropParams, containerWidth)
+    : coverBboxRect(
+        bbox,
+        naturalWidth,
+        naturalHeight,
+        containerWidth,
+        containerHeight,
+      );
+  const { left, top, width, height } = rect;
   const borderColor = faceBoxColor(idx);
   return {
     position: "absolute",
@@ -3315,8 +3402,15 @@ function showLockedDeleteNotice(message) {
   lockedDeleteNotice.arm();
 }
 
-async function deleteSelected() {
-  if (!selectedImageIds.value.length) return;
+// `idsOverride` scopes the delete to an explicit picture list (the overlay
+// context menu passes `[overlayImageId]`). When set, the grid selection is
+// neither read for the target NOR mutated as a side effect — the overlay owns
+// its own post-delete cleanup (it closes the lightbox). Default (null) is the
+// grid path: act on, and update, `selectedImageIds`.
+async function deleteSelected(idsOverride = null) {
+  const scoped = Array.isArray(idsOverride) && idsOverride.length > 0;
+  const baseIds = scoped ? idsOverride : selectedImageIds.value;
+  if (!baseIds.length) return;
   const isScrapheapSelection = isScrapheapView.value;
 
   // For non-scrapheap deletions, expand collapsed stacks to all their members
@@ -3336,7 +3430,7 @@ async function deleteSelected() {
     const resolved = new Set();
     const collapsedStackIds = new Set();
 
-    for (const id of selectedImageIds.value) {
+    for (const id of baseIds) {
       const img = imageById.get(String(id));
       const stackId = getPictureStackId(img);
       if (!stackId || expandedStackIds.value.has(stackId)) {
@@ -3368,8 +3462,8 @@ async function deleteSelected() {
           "Failed to fetch stack members for delete, falling back to selected ids:",
           e,
         );
-        // Fallback: delete the originally-selected picture(s) from this stack.
-        for (const id of selectedImageIds.value) {
+        // Fallback: delete the originally-targeted picture(s) from this stack.
+        for (const id of baseIds) {
           const img = imageById.get(String(id));
           if (getPictureStackId(img) === stackId) resolved.add(id);
         }
@@ -3378,14 +3472,14 @@ async function deleteSelected() {
 
     idsToRemove = [...resolved];
   } else {
-    idsToRemove = selectedImageIds.value.slice();
+    idsToRemove = baseIds.slice();
   }
 
   if (isScrapheapSelection) {
     // Destructive & irreversible: route through the tokenized Delete-forever
     // confirm, which names any reference-folder ORIGINALS being destroyed. The
     // scrapheap purge runs on @confirm (runScrapheapSelectionPurge).
-    openDeleteForeverForSelection(idsToRemove);
+    openDeleteForeverForSelection(idsToRemove, scoped);
     return;
   }
 
@@ -3437,16 +3531,21 @@ async function deleteSelected() {
       (id) => !skippedLocked.has(String(id)),
     );
     removeImagesById(removedIds);
-    // Keep the frozen pictures selected: they are still there, and the user's
-    // next move (after unlocking the set) is to delete exactly them.
-    selectedImageIds.value = selectedImageIds.value.filter((id) =>
-      skippedLocked.has(String(id)),
-    );
-    // Drop the range-selection anchor unless it is one of the survivors —
-    // otherwise a later shift-click would anchor on a deleted picture.
-    const stillSelected = new Set(selectedImageIds.value.map(String));
-    if (!stillSelected.has(String(lastSelectedImageId.value))) {
-      lastSelectedImageId.value = null;
+    // Overlay path: don't touch the grid selection. removeImagesById already
+    // drops any deleted id from it (a no-op when the overlay picture wasn't
+    // grid-selected), so the user's grid selection is left exactly as it was.
+    if (!scoped) {
+      // Keep the frozen pictures selected: they are still there, and the user's
+      // next move (after unlocking the set) is to delete exactly them.
+      selectedImageIds.value = selectedImageIds.value.filter((id) =>
+        skippedLocked.has(String(id)),
+      );
+      // Drop the range-selection anchor unless it is one of the survivors —
+      // otherwise a later shift-click would anchor on a deleted picture.
+      const stillSelected = new Set(selectedImageIds.value.map(String));
+      if (!stillSelected.has(String(lastSelectedImageId.value))) {
+        lastSelectedImageId.value = null;
+      }
     }
     if (deletedExpandedStackLeader) {
       // Repopulate so the promoted stack leader and remaining members reappear
@@ -3920,15 +4019,20 @@ const deleteForeverProtectedPaths = ref([]);
 const deleteForeverLockedCount = ref(0);
 const deleteForeverMode = ref("selection"); // "selection" | "all"
 const deleteForeverIds = ref([]);
+// True when the pending purge was scoped to an explicit id list by the overlay
+// context menu, so runScrapheapSelectionPurge must not mutate the grid selection.
+const deleteForeverScoped = ref(false);
 
-function openDeleteForeverForSelection(ids) {
+function openDeleteForeverForSelection(ids, scoped = false) {
   deleteForeverMode.value = "selection";
+  deleteForeverScoped.value = scoped;
   deleteForeverIds.value = ids.slice();
   loadDeletePreview(ids.slice());
 }
 
 function openDeleteForeverForAll() {
   deleteForeverMode.value = "all";
+  deleteForeverScoped.value = false;
   deleteForeverIds.value = [];
   loadDeletePreview(null);
 }
@@ -4034,13 +4138,16 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
     }
-    // Keep the frozen pictures selected so the user can retry after unlocking.
-    selectedImageIds.value = selectedImageIds.value.filter((id) =>
-      skippedLocked.has(String(id)),
-    );
-    const stillSelected = new Set(selectedImageIds.value.map(String));
-    if (!stillSelected.has(String(lastSelectedImageId.value))) {
-      lastSelectedImageId.value = null;
+    // Grid path only: keep the frozen pictures selected so the user can retry
+    // after unlocking. The overlay-scoped path leaves the grid selection alone.
+    if (!deleteForeverScoped.value) {
+      selectedImageIds.value = selectedImageIds.value.filter((id) =>
+        skippedLocked.has(String(id)),
+      );
+      const stillSelected = new Set(selectedImageIds.value.map(String));
+      if (!stillSelected.has(String(lastSelectedImageId.value))) {
+        lastSelectedImageId.value = null;
+      }
     }
     updateVisibleThumbnails();
     emit("refresh-sidebar");
@@ -4392,6 +4499,29 @@ const lockedDeleteNotice = useScopedNotice(
 // ============================================================
 const allGridImagesLength = computed(() => allGridImages.value?.length ?? 0);
 
+// Aspect ratio for every grid item (present for ALL images from the base grid
+// listing, not just fetched thumbnails). Missing/zero dimensions (unimported
+// pictures, unprobed videos) fall back to square so justified packing never
+// divides by zero.
+function getGridImageAspectRatio(img) {
+  if (!img) return 1;
+  const tw = Number(img.thumbnail_width);
+  const th = Number(img.thumbnail_height);
+  if (Number.isFinite(tw) && tw > 0 && Number.isFinite(th) && th > 0) {
+    return tw / th;
+  }
+  const w = Number(img.width);
+  const h = Number(img.height);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+    return w / h;
+  }
+  return 1;
+}
+
+const gridAspectRatios = computed(() =>
+  (allGridImages.value || []).map(getGridImageAspectRatio),
+);
+
 const {
   initialRender,
   divisibleViewWindow,
@@ -4408,9 +4538,70 @@ const {
   recalculateVisibleRange,
   onGridScroll,
   scrollCursorIntoView,
+  isJustifiedMode,
+  justifiedLayout,
 } = useVirtualScroll(scrollWrapper, gridContainer, props, allGridImagesLength, {
   onVisibleRangeChange: () => updateVisibleThumbnails(),
   afterRowHeightUpdate: () => refreshAllThumbnailInfoDisplays(),
+  getAspectRatios: () => gridAspectRatios.value,
+});
+
+// ---- Justified-mode card geometry ----
+// Each card carries an exact inline width/height from the packed layout so the
+// flex-wrap lines break exactly where useJustifiedLayout computed the rows —
+// the invariant the spacer/fetch arithmetic depends on.
+const justifiedInfoRowExtra = computed(() =>
+  props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+);
+
+function _justifiedItemGeometry(img, localIdx) {
+  if (!isJustifiedMode.value) return null;
+  const layout = justifiedLayout.value;
+  if (!layout || !layout.rowHeights.length) return null;
+  const globalIdx = Number.isFinite(img?.idx)
+    ? img.idx
+    : renderStart.value + localIdx;
+  if (globalIdx < 0 || globalIdx >= layout.itemScaledWidths.length) return null;
+  const row = rowOfIndex(layout.rowStarts, globalIdx);
+  return {
+    width: layout.itemScaledWidths[globalIdx],
+    cardHeight: layout.rowHeights[row],
+  };
+}
+
+function getJustifiedCardStyle(img, localIdx) {
+  const geo = _justifiedItemGeometry(img, localIdx);
+  if (!geo) return null;
+  return {
+    width: `${geo.width}px`,
+    height: `${geo.cardHeight}px`,
+    flex: "0 0 auto",
+  };
+}
+
+function getJustifiedThumbStyle(img, localIdx) {
+  const geo = _justifiedItemGeometry(img, localIdx);
+  if (!geo) return null;
+  // The thumbnail box is the card minus the (non-scaling) info row.
+  return { height: `${geo.cardHeight - justifiedInfoRowExtra.value}px` };
+}
+
+// Container style for the two layout modes. Square keeps the original CSS
+// grid; justified switches to flex-wrap (via the class) with the packing gap
+// bound inline so JS arithmetic and CSS can never drift.
+const gridContainerStyle = computed(() => {
+  const base = { position: "relative", ...badgeCssVars.value };
+  if (isJustifiedMode.value) {
+    return {
+      ...base,
+      columnGap: `${JUSTIFIED_ROW_GAP}px`,
+      rowGap: `${JUSTIFIED_ROW_GAP}px`,
+    };
+  }
+  return {
+    ...base,
+    gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
+  };
 });
 
 // ============================================================
@@ -4904,6 +5095,8 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isSetOverlapView,
     hoveredImageIdx,
     toolbarSelectionMenuOpen,
+    isJustifiedMode,
+    justifiedLayout,
   },
   props,
   emit,
@@ -5854,6 +6047,25 @@ watch(
   },
 );
 
+// Switching square <-> justified changes the whole row model (uniform grid vs
+// packed rows), so the geometry must be recomputed at once — otherwise the mode
+// only takes effect after an unrelated relayout (a resize, or the full refresh
+// the maintainer hit). Mirror the columns watch: re-measure row height, re-pack,
+// recompute the visible range, and refetch the now-visible thumbnails.
+watch(
+  () => props.thumbnailMode,
+  async () => {
+    updateRowHeightFromGrid();
+    recalculateVisibleRange();
+    updateVisibleThumbnails();
+    await nextTick();
+    triggerFaceOverlayRedraw();
+    requestAnimationFrame(() => {
+      triggerFaceOverlayRedraw();
+    });
+  },
+);
+
 // ============================================================
 // THUMBNAIL TRACKING STATE
 // ============================================================
@@ -6150,6 +6362,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         : [],
       thumbnail_width: img?.thumbnail_width,
       thumbnail_height: img?.thumbnail_height,
+      square_crop_x: img?.square_crop_x,
+      square_crop_y: img?.square_crop_y,
+      square_crop_side: img?.square_crop_side,
     }));
     // Synchronously pre-fill thumbnail URLs from imported_at so <img> elements
     // render immediately without waiting for the POST round trip. The POST
@@ -6239,6 +6454,29 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           if (!Number.isNaN(thumbHeight) && thumbHeight > 0) {
             gridImg.thumbnail_height = thumbHeight;
           }
+          // Face-weighted square-crop rectangle (bitmap pixel space). Nullable
+          // while a picture is still (re)processing — leave undefined so the
+          // square render path falls back to object-fit:cover centring until
+          // the finder populates them, then upgrades reactively on the next
+          // thumbnails fetch.
+          // Guard null/undefined explicitly first: Number(null) is 0, which
+          // would masquerade as a valid crop origin instead of falling back.
+          const cropX =
+            thumbObj.square_crop_x == null
+              ? NaN
+              : Number(thumbObj.square_crop_x);
+          const cropY =
+            thumbObj.square_crop_y == null
+              ? NaN
+              : Number(thumbObj.square_crop_y);
+          const cropSide =
+            thumbObj.square_crop_side == null
+              ? NaN
+              : Number(thumbObj.square_crop_side);
+          gridImg.square_crop_x = Number.isFinite(cropX) ? cropX : undefined;
+          gridImg.square_crop_y = Number.isFinite(cropY) ? cropY : undefined;
+          gridImg.square_crop_side =
+            Number.isFinite(cropSide) && cropSide > 0 ? cropSide : undefined;
         }
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
@@ -6295,11 +6533,12 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
 // SCROLL + VIEWPORT UPDATE
 // ============================================================
 function updateVisibleThumbnails() {
-  let start = Math.max(0, visibleStart.value - renderBuffer.value);
-  let end = Math.min(
-    allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value,
-  );
+  // Fetch exactly the render window. In square mode renderStart/renderEnd are
+  // identical to visibleStart/End ± renderBuffer; in justified mode they are
+  // additionally snapped outward to row boundaries, so fetching them keeps the
+  // fetch window equal to what is actually painted (anti-blank-tile).
+  let start = Math.max(0, renderStart.value);
+  let end = Math.min(allGridImages.value.length, renderEnd.value);
   if (shouldSuppressVisibleWindowFetch(start, end)) {
     return;
   }
@@ -6452,6 +6691,81 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuVisible.value = true;
 }
 
+// ── Overlay (lightbox) context menu ─────────────────────────────────────────
+// The overlay emits `request-context-menu` (media-area right-click or the
+// Shift+F10 / ContextMenu key) with the currently-displayed image object and a
+// screen position. Every action below is scoped to THIS one picture — the grid
+// selection is never read or persistently mutated.
+
+function handleOverlayContextMenuRequest(payload) {
+  const img = payload?.image;
+  if (!img?.id) return;
+  overlayCtxImage.value = img;
+  overlayCtxX.value = payload.clientX ?? 0;
+  overlayCtxY.value = payload.clientY ?? 0;
+  overlayCtxVisible.value = true;
+}
+
+function handleOverlayShare() {
+  const img = overlayCtxImage.value;
+  if (!img?.id || !img?.format) return;
+  // ShareDialog reads `contextMenuImage`; point it at the overlay picture. The
+  // grid menu is closed, so this does not affect any grid interaction.
+  contextMenuImage.value = img;
+  sharePicDialogOpen.value = true;
+}
+
+function handleOverlayReverseImageSearch() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  faceLikenessSearchFaceId.value = null;
+  reverseImageSearchPictureIds.value = [id];
+  // Reveal the results behind the lightbox and clear any text search.
+  closeOverlay();
+  emit("clear-search", "");
+}
+
+function openOverlaySegmentDialog() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null || isReadOnly.value) return;
+  segmentTargetIds.value = [id];
+  segmentPrompt.value = "";
+  segmentDialogOpen.value = true;
+}
+
+async function handleOverlayDelete() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  // Scope the shared delete flow to just this picture (idsOverride). For the
+  // scrapheap this opens the Delete-forever confirm; for a normal view it
+  // soft-deletes immediately. Either way, close the lightbox so it never shows
+  // a picture that has just left the current view.
+  await deleteSelected([id]);
+  closeOverlay();
+}
+
+async function handleOverlayScrapheapRestore() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  try {
+    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/restore`, {
+      picture_ids: [id],
+    });
+  } catch (err) {
+    console.error("Failed to restore picture from the scrapheap", err);
+    noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
+      key: "scrapheap-restore-overlay",
+    });
+  }
+  removeImagesById([id]);
+  closeOverlay();
+  emit("refresh-sidebar");
+  fetchAllGridImages().then(() => {
+    loadedRanges.value = [];
+    updateVisibleThumbnails();
+  });
+}
+
 function handleContextMenuOpenTagPanel() {
   selectionBarRef.value?.openTagInput();
 }
@@ -6466,15 +6780,20 @@ function handleContextMenuOpenComfyuiPanel() {
 
 function openSegmentDialog() {
   if (!selectedImageIds.value.length || isReadOnly.value) return;
+  segmentTargetIds.value = null;
   segmentPrompt.value = "";
   segmentDialogOpen.value = true;
 }
 
 async function confirmSegment() {
-  const ids = selectedImageIds.value
+  const source = Array.isArray(segmentTargetIds.value)
+    ? segmentTargetIds.value
+    : selectedImageIds.value;
+  const ids = source
     .map((id) => Number(getPictureId(id)))
     .filter((id) => Number.isFinite(id) && id > 0);
   segmentDialogOpen.value = false;
+  segmentTargetIds.value = null;
   if (!ids.length || !props.backendUrl) return;
   // Detection runs as a background GPU task. The grid card refreshes in place
   // on the resulting CHANGED_PICTURES event (detections is a card-content
@@ -6683,6 +7002,12 @@ watch(
     // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
       updateRowHeightFromGrid();
+      if (isJustifiedMode.value) {
+        // Justified rows don't follow the uniform cols/rowHeight arithmetic
+        // below — let the virtualizer derive the range from the packed model.
+        recalculateVisibleRange();
+        return;
+      }
       const el = scrollWrapper.value;
       if (!el) return;
       let cardHeight = rowHeight.value;
@@ -6722,6 +7047,10 @@ defineExpose({
   clearFaceSelection,
   runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
+  // Lets the sidebar's Scrapheap context menu reach the same consent-gated
+  // empty-scrapheap flow the empty-state placeholder uses. The caller navigates
+  // to the scrapheap view first, so the post-confirm grid refetch is correct.
+  confirmEmptyScrapheap,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -7433,6 +7762,28 @@ function handleEmptyStateReset() {
   padding-top: 0 !important;
   gap: 0px;
 }
+/* Justified (Google-Photos-style) mode: the grid becomes a flex-wrap row
+   layout. Every card carries an exact inline width/height from the packed
+   model (useJustifiedLayout), and the inline column/row gap on the container
+   mirrors the packing gap, so flex line breaks land exactly on the packed row
+   boundaries — the invariant the virtual-scroll spacer arithmetic relies on. */
+.image-grid.image-grid--justified {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.image-grid--justified .image-card {
+  flex: 0 0 auto;
+  width: auto;
+}
+/* The packing gap is the only spacing between cards; the square-mode padding
+   would shrink thumbnails inside their packed boxes. */
+.image-grid--justified .thumbnail-card {
+  padding: 0;
+  height: 100%;
+}
 .grid-scroll-wrapper::-webkit-scrollbar {
   width: 8px;
 }
@@ -7576,6 +7927,34 @@ function handleEmptyStateReset() {
   height: 100%;
   position: relative;
   aspect-ratio: 1 / 1;
+}
+/* Justified mode: width/height come from the packed layout's inline styles;
+   the square aspect ratio must not fight them. object-fit: cover stays on the
+   image so existing square-cropped thumbnails still fill the variable-width
+   boxes until AR-preserving thumbnails are regenerated backend-side. */
+.thumbnail-container--justified,
+.thumbnail-container--justified .thumbnail-img {
+  aspect-ratio: auto;
+}
+/* Square-crop mode (thumbnail v2): the AR bitmap is sprite-cropped to the stored
+   face-weighted rectangle. The oversized, translated <img> is clipped to the
+   square cell, so the rounded corners and the card drop shadow move onto the
+   container (the img's own radius/shadow would sit off-screen and get clipped).
+   Face/detection overlays outside the crop are clipped at the cell edge here. */
+.thumbnail-container--cropped {
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
+  transition: box-shadow 0.18s;
+}
+.thumbnail-container--cropped .thumbnail-img {
+  border-radius: 0;
+  box-shadow: none;
+  object-position: top center;
+}
+.compact-mode .thumbnail-container--cropped {
+  border-radius: 0;
+  box-shadow: none;
 }
 .thumbnail-container::after {
   content: "";

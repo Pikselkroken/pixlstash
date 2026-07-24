@@ -359,20 +359,37 @@ def register_routes(router, server):
                     penalised_tag_map[pic_id].append(tag)
 
         def map_bbox_to_thumbnail(bbox, picture):
+            # Map a picture-space (source pixel) bbox into AR-BITMAP pixel space
+            # (0..thumbnail_width × 0..thumbnail_height, origin top-left). The
+            # bitmap is a uniform resize of the WHOLE frame, so the scale is
+            # ``thumbnail_width / source_width``. The source dimensions are the
+            # picture's, but ``picture.width``/``height`` are stored un-rotated:
+            # for an EXIF-rotated (90°/270°) image the bitmap swaps them, so pick
+            # whichever orientation shares the bitmap's aspect ratio.
             if not bbox or len(bbox) != 4:
                 return bbox, False
-            left = getattr(picture, "thumbnail_left", None)
-            top = getattr(picture, "thumbnail_top", None)
-            side = getattr(picture, "thumbnail_side", None)
-            if left is None or top is None or side in (None, 0):
+            out_w = getattr(picture, "thumbnail_width", None)
+            out_h = getattr(picture, "thumbnail_height", None)
+            pic_w = getattr(picture, "width", None)
+            pic_h = getattr(picture, "height", None)
+            if not out_w or not out_h or not pic_w or not pic_h:
                 return bbox, False
             try:
-                scale = 256.0 / float(side)
+                target_ar = out_w / float(out_h)
+                if abs((pic_w / float(pic_h)) - target_ar) <= abs(
+                    (pic_h / float(pic_w)) - target_ar
+                ):
+                    src_w, src_h = float(pic_w), float(pic_h)
+                else:
+                    # EXIF 90°/270°: the stored dims are swapped vs the bitmap.
+                    src_w, src_h = float(pic_h), float(pic_w)
+                sx = out_w / src_w
+                sy = out_h / src_h
                 x1, y1, x2, y2 = bbox
-                x1 = max(0.0, min(256.0, (x1 - left) * scale))
-                y1 = max(0.0, min(256.0, (y1 - top) * scale))
-                x2 = max(0.0, min(256.0, (x2 - left) * scale))
-                y2 = max(0.0, min(256.0, (y2 - top) * scale))
+                x1 = max(0.0, min(float(out_w), x1 * sx))
+                y1 = max(0.0, min(float(out_h), y1 * sy))
+                x2 = max(0.0, min(float(out_w), x2 * sx))
+                y2 = max(0.0, min(float(out_h), y2 * sy))
                 return (
                     [
                         int(round(x1)),
@@ -394,9 +411,13 @@ def register_routes(router, server):
                     "file_path",
                     "faces",
                     "detections",
-                    "thumbnail_left",
-                    "thumbnail_top",
-                    "thumbnail_side",
+                    "width",
+                    "height",
+                    "thumbnail_width",
+                    "thumbnail_height",
+                    "square_crop_x",
+                    "square_crop_y",
+                    "square_crop_side",
                     "imported_at",
                 ],
                 include_deleted=True,
@@ -432,7 +453,6 @@ def register_routes(router, server):
         for pic in pics:
             try:
                 face_entries = []
-                mapped_any = False
                 raw_face_bboxes = []
                 for face in getattr(pic, "faces", []):
                     bbox = None
@@ -457,12 +477,11 @@ def register_routes(router, server):
                         )
                 face_data = []
                 for entry in face_entries:
-                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
-                    mapped_any = mapped_any or mapped
+                    mapped_bbox, _mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     face_data.append({**entry, "bbox": mapped_bbox})
 
-                # Object detections, mapped into thumbnail-crop space exactly
-                # like faces so the grid overlay renders them identically.
+                # Object detections, mapped into AR-bitmap space exactly like
+                # faces so the grid overlay renders them identically.
                 detection_entries = []
                 for det in getattr(pic, "detections", []):
                     bbox = getattr(det, "bbox", None)
@@ -483,19 +502,24 @@ def register_routes(router, server):
                         )
                 detection_data = []
                 for entry in detection_entries:
-                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
-                    mapped_any = mapped_any or mapped
+                    mapped_bbox, _mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     detection_data.append({**entry, "bbox": mapped_bbox})
 
                 imported_at = getattr(pic, "imported_at", None)
                 v = int(imported_at.timestamp()) if imported_at is not None else 0
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
+                # Whole-frame AR-bitmap dimensions and the face-weighted square-crop
+                # rectangle (bitmap pixel space). All are NULL until the picture is
+                # processed; the frontend falls back to object-fit until then.
                 results[pic.id] = {
                     "thumbnail": thumbnail_url,
                     "faces": face_data,
                     "detections": detection_data,
-                    "thumbnail_width": 256 if mapped_any else None,
-                    "thumbnail_height": 256 if mapped_any else None,
+                    "thumbnail_width": getattr(pic, "thumbnail_width", None),
+                    "thumbnail_height": getattr(pic, "thumbnail_height", None),
+                    "square_crop_x": getattr(pic, "square_crop_x", None),
+                    "square_crop_y": getattr(pic, "square_crop_y", None),
+                    "square_crop_side": getattr(pic, "square_crop_side", None),
                     "penalised_tags": list(
                         dict.fromkeys(penalised_tag_map.get(pic.id, []))
                     ),

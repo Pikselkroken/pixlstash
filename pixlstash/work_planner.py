@@ -61,6 +61,7 @@ class WorkPlanner:
             ReferenceFolderScanFinder,
         )
         from pixlstash.tasks.missing_text_score_finder import MissingTextScoreFinder
+        from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
 
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -122,6 +123,9 @@ class WorkPlanner:
                 path_mapper=effective_path_mapper,
             ),
             TaskType.TEXT_SCORE: MissingTextScoreFinder(
+                database=database,
+            ),
+            TaskType.THUMBNAIL_GENERATION: MissingThumbnailFinder(
                 database=database,
             ),
         }

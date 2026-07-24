@@ -598,12 +598,23 @@ class ReferenceFolderScanTask(BaseTask):
         width = height = None
         img_format = None
         thumbnail_bytes = None
+        # AR-bitmap dims + faceless square crop; faces refine the crop later.
+        thumb_cols: dict = {}
 
         try:
             with Image.open(io.BytesIO(image_bytes)) as img:
                 img_format = img.format or "PNG"
                 width, height = img.size
-                thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(img)
+                rendered = ImageUtils.render_thumbnail(img)
+                if rendered is not None:
+                    thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                    thumb_cols = {
+                        "thumbnail_width": bmp_w,
+                        "thumbnail_height": bmp_h,
+                        "square_crop_x": crop["x"],
+                        "square_crop_y": crop["y"],
+                        "square_crop_side": crop["side"],
+                    }
         except Exception:
             logger.warning(
                 "Failed to process image file %s for reference folder scan.",
@@ -629,6 +640,7 @@ class ReferenceFolderScanTask(BaseTask):
             size_bytes=size_bytes,
             imported_at=datetime.now(timezone.utc),
             original_file_name=os.path.basename(file_path),
+            **thumb_cols,
         )
         if created_at:
             pic.created_at = created_at

@@ -59,7 +59,8 @@ frontend/src/
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
-│   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid
+│   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid (uniform 'square' grid + packed 'justified' rows)
+│   ├── useJustifiedLayout.js    # Pure justified-row (Google-Photos-style) packing arithmetic used by useVirtualScroll (+ *.test.js)
 │   ├── useMultiSelect.js        # Image multi-selection (shift-click, range, touch mode)
 │   ├── useGridDragDrop.js       # Drag-and-drop reordering and import in ImageGrid
 │   ├── useStackOrdering.js      # Stack expand/collapse, reorder, visual mapping in ImageGrid

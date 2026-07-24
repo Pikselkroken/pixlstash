@@ -190,9 +190,21 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("perceptual_hash", String, default=None, nullable=True),
     )
-    thumbnail_left: Optional[int] = Field(default=None)
-    thumbnail_top: Optional[int] = Field(default=None)
-    thumbnail_side: Optional[int] = Field(default=None)
+    # A thumbnail is ONE aspect-ratio-preserving bitmap of the whole frame.
+    # ``thumbnail_width`` / ``thumbnail_height`` are its stored pixel dimensions
+    # on disk; the frontend lays out a justified grid from them and the
+    # batch-thumbnail endpoint maps face/detection overlays into this bitmap
+    # space. NULL until the picture is processed.
+    thumbnail_width: Optional[int] = Field(default=None)
+    thumbnail_height: Optional[int] = Field(default=None)
+    # The face-weighted SQUARE crop rectangle WITHIN the bitmap, in bitmap
+    # pixels (origin top-left). ``square_crop_side == min(thumbnail_width,
+    # thumbnail_height)`` except for extreme panoramas. The frontend crops the
+    # bitmap to this rectangle to render a square cell, so mode switching is
+    # instant and never re-generates the bitmap.
+    square_crop_x: Optional[int] = Field(default=None)
+    square_crop_y: Optional[int] = Field(default=None)
+    square_crop_side: Optional[int] = Field(default=None)
     score: Optional[int] = None
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)

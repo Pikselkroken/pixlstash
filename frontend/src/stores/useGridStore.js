@@ -5,6 +5,11 @@ import { isReadOnly } from "../utils/apiClient";
 export const useGridStore = defineStore("grid", () => {
   const columns = ref(isReadOnly.value ? 5 : 4);
   const thumbnailSize = ref(256);
+  // 'square' (uniform grid) or 'justified' (Google-Photos row layout). A
+  // display preference persisted like `columns`; the justified path is driven
+  // by useJustifiedLayout + useVirtualScroll and consumed by ImageGrid's
+  // `thumbnailMode` prop.
+  const thumbnailMode = ref("square");
   const compactMode = ref(isReadOnly.value);
   const showStars = ref(!isReadOnly.value);
   const showFaceBboxes = ref(false);
@@ -30,6 +35,7 @@ export const useGridStore = defineStore("grid", () => {
   return {
     columns,
     thumbnailSize,
+    thumbnailMode,
     compactMode,
     showStars,
     showFaceBboxes,

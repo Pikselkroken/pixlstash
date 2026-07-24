@@ -15,6 +15,7 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
@@ -22,7 +23,33 @@ const emit = defineEmits([
   "update:theme-mode",
   "update:date-format",
   "update:show-keyboard-hint",
+  "update:thumbnail-mode",
 ]);
+
+// Thumbnail layout: 'square' (uniform grid) vs 'justified' (variable-width rows).
+// A two-option radiogroup, not a switch — both layouts are peers of a binary
+// visual choice (ui-ux-expert decision). Arrow keys move between the options;
+// Space/Enter selects the focused one.
+const THUMBNAIL_MODES = ["square", "justified"];
+function setThumbnailMode(next) {
+  if (!THUMBNAIL_MODES.includes(next)) return;
+  if (next === (props.thumbnailMode ?? "square")) return;
+  emit("update:thumbnail-mode", next);
+}
+function onThumbnailModeKeydown(event) {
+  const cur = THUMBNAIL_MODES.indexOf(props.thumbnailMode ?? "square");
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    event.preventDefault();
+    setThumbnailMode(THUMBNAIL_MODES[(cur + 1) % THUMBNAIL_MODES.length]);
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    event.preventDefault();
+    setThumbnailMode(
+      THUMBNAIL_MODES[
+        (cur - 1 + THUMBNAIL_MODES.length) % THUMBNAIL_MODES.length
+      ],
+    );
+  }
+}
 
 const sidebarThumbnailSizeModel = computed({
   get: () => props.sidebarThumbnailSize ?? 32,
@@ -126,6 +153,48 @@ async function clearGuestSession() {
         :step="4"
         suffix="px"
       />
+    </SettingsSection>
+
+    <SettingsSection title="Image Grid">
+      <div class="thumb-layout-row">
+        <span id="thumb-layout-label" class="thumb-layout-label"
+          >Thumbnail layout</span
+        >
+        <div
+          class="thumb-layout-toggle"
+          role="radiogroup"
+          aria-labelledby="thumb-layout-label"
+          @keydown="onThumbnailModeKeydown"
+        >
+          <button
+            class="thumb-layout-opt"
+            :class="{ active: (props.thumbnailMode ?? 'square') === 'square' }"
+            type="button"
+            role="radio"
+            :aria-checked="(props.thumbnailMode ?? 'square') === 'square'"
+            :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
+            @click="setThumbnailMode('square')"
+          >
+            Square
+          </button>
+          <button
+            class="thumb-layout-opt"
+            :class="{ active: props.thumbnailMode === 'justified' }"
+            type="button"
+            role="radio"
+            :aria-checked="props.thumbnailMode === 'justified'"
+            :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
+            @click="setThumbnailMode('justified')"
+          >
+            Justified
+          </button>
+        </div>
+        <p class="thumb-layout-desc">
+          Choose how photos fill the grid. <strong>Justified</strong> sizes each
+          thumbnail to the photo's own shape for an edge-to-edge wall;
+          <strong>Square</strong> keeps every thumbnail uniform for a tidy grid.
+        </p>
+      </div>
     </SettingsSection>
 
     <SettingsSection
@@ -235,6 +304,58 @@ async function clearGuestSession() {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.5);
   margin-top: var(--space-2);
+}
+
+/* Thumbnail-layout radiogroup: a two-option segmented control mirroring the
+   Sidebar Width toggle's token treatment (accent border + wash when active),
+   built as a real radiogroup for keyboard/AT. */
+.thumb-layout-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.thumb-layout-label {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+.thumb-layout-toggle {
+  display: flex;
+  gap: var(--space-3);
+}
+.thumb-layout-opt {
+  flex: 1;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s,
+    color 0.12s;
+}
+.thumb-layout-opt:hover {
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+.thumb-layout-opt.active {
+  border-color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.1);
+  color: rgb(var(--v-theme-accent));
+}
+.thumb-layout-opt:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.thumb-layout-desc {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  margin: 0;
+  line-height: var(--leading-snug);
 }
 
 .sidebar-width-toggle {

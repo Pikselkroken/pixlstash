@@ -109,6 +109,9 @@ export function useStackOrdering(
       faces: Array.isArray(existing?.faces) ? existing.faces : [],
       thumbnail_width: existing?.thumbnail_width ?? img?.thumbnail_width,
       thumbnail_height: existing?.thumbnail_height ?? img?.thumbnail_height,
+      square_crop_x: existing?.square_crop_x ?? img?.square_crop_x,
+      square_crop_y: existing?.square_crop_y ?? img?.square_crop_y,
+      square_crop_side: existing?.square_crop_side ?? img?.square_crop_side,
     };
   }
 

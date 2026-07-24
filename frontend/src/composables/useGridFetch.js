@@ -772,6 +772,9 @@ export function useGridFetch(
                 penalised_tags: existing?.penalised_tags ?? [],
                 thumbnail_width: pic.thumbnail_width ?? existing?.thumbnail_width,
                 thumbnail_height: pic.thumbnail_height ?? existing?.thumbnail_height,
+                square_crop_x: pic.square_crop_x ?? existing?.square_crop_x,
+                square_crop_y: pic.square_crop_y ?? existing?.square_crop_y,
+                square_crop_side: pic.square_crop_side ?? existing?.square_crop_side,
               };
             }
           }

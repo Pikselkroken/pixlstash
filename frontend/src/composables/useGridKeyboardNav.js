@@ -1,10 +1,24 @@
 import { getPictureId } from "../utils/media.js";
 import { isReadOnly } from "../utils/apiClient";
+import {
+  rowAtOffset,
+  rowOfIndex,
+  verticalNeighborIndex,
+  JUSTIFIED_ROW_GAP,
+} from "./useJustifiedLayout.js";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
  *
- * @param {Object} deps - Reactive refs from other composables / ImageGrid
+ * Vertical navigation is layout-aware: in the uniform 'square' grid Up/Down is
+ * `index ± columns` (unchanged); in 'justified' mode rows hold varying item
+ * counts, so Up/Down moves to the item in the adjacent visual row whose
+ * horizontal center is nearest the current item's center, and paging moves by
+ * visual rows derived from the packed row offsets.
+ *
+ * @param {Object} deps - Reactive refs from other composables / ImageGrid.
+ *   `isJustifiedMode` / `justifiedLayout` (from useVirtualScroll) are optional;
+ *   when absent or false/null the uniform square-grid arithmetic is used.
  * @param {Object} props - Component props
  * @param {Function} emit - Component emit function
  * @param {Object} callbacks - Functions provided by ImageGrid
@@ -25,6 +39,8 @@ export function useGridKeyboardNav(
     isSetOverlapView,
     hoveredImageIdx,
     toolbarSelectionMenuOpen,
+    isJustifiedMode,
+    justifiedLayout,
   },
   props,
   emit,
@@ -39,13 +55,25 @@ export function useGridKeyboardNav(
     setScore,
   },
 ) {
-  function onGlobalKeyPress(key, event) {
+  // The packed justified layout when active, else null (→ uniform grid math).
+  function activeJustifiedLayout() {
+    if (!isJustifiedMode?.value) return null;
+    const layout = justifiedLayout?.value;
+    return layout && layout.rowHeights.length > 0 ? layout : null;
+  }
+
+  function onGlobalKeyPress(key, _event) {
     if (scrollWrapper.value) {
       let newScrollTop = scrollWrapper.value.scrollTop;
       const total = allGridImages.value.length;
       const cols = Math.max(1, props.columns || 1);
       const totalRows = Math.ceil(total / cols);
-      const totalHeight = totalRows * rowHeight.value;
+      // Justified rows don't follow cols × rowHeight; use the packed model's
+      // exact pixel height so End/PageDown reach the true bottom.
+      const packedLayout = activeJustifiedLayout();
+      const totalHeight = packedLayout
+        ? packedLayout.totalHeight
+        : totalRows * rowHeight.value;
       const maxScroll = Math.max(
         0,
         totalHeight - scrollWrapper.value.clientHeight,
@@ -139,9 +167,26 @@ export function useGridKeyboardNav(
           newIdx = 0;
         }
       } else {
+        const packedLayout = activeJustifiedLayout();
         if (event.key === "ArrowLeft") newIdx = Math.max(0, newIdx - 1);
         else if (event.key === "ArrowRight")
           newIdx = Math.min(total - 1, newIdx + 1);
+        else if (packedLayout && event.key === "ArrowUp")
+          // Justified rows hold varying item counts: move to the item in the
+          // previous visual row whose center is nearest the current center.
+          newIdx = verticalNeighborIndex(
+            packedLayout,
+            JUSTIFIED_ROW_GAP,
+            newIdx,
+            -1,
+          );
+        else if (packedLayout && event.key === "ArrowDown")
+          newIdx = verticalNeighborIndex(
+            packedLayout,
+            JUSTIFIED_ROW_GAP,
+            newIdx,
+            1,
+          );
         else if (event.key === "ArrowUp") newIdx = Math.max(0, newIdx - cols);
         else if (event.key === "ArrowDown")
           newIdx = Math.min(total - 1, newIdx + cols);
@@ -181,17 +226,50 @@ export function useGridKeyboardNav(
       const total = allGridImages.value.length;
       if (total === 0) return;
       const cols = Math.max(1, props.columns || 1);
-      const rowsPerPage = scrollWrapper.value
-        ? Math.max(
-            1,
-            Math.floor(scrollWrapper.value.clientHeight / rowHeight.value),
-          )
-        : 5;
-      const delta = rowsPerPage * cols;
-      const newIdx =
-        event.key === "PageDown"
-          ? Math.min(total - 1, cursorIdx.value + delta)
-          : Math.max(0, cursorIdx.value - delta);
+      const packedLayout = activeJustifiedLayout();
+      let newIdx;
+      if (packedLayout) {
+        // Page by VISUAL rows: find the packed row one viewport height away
+        // from the cursor's row via the exact row offsets, then land on the
+        // nearest-center item of that row (rowsPerPage × cols is meaningless
+        // when items-per-row varies).
+        const direction = event.key === "PageDown" ? 1 : -1;
+        const viewportHeight = scrollWrapper.value?.clientHeight || 0;
+        const currentRow = rowOfIndex(packedLayout.rowStarts, cursorIdx.value);
+        let rowDelta;
+        if (viewportHeight > 0) {
+          const targetY =
+            packedLayout.rowOffsets[currentRow] + direction * viewportHeight;
+          const targetRow = rowAtOffset(
+            packedLayout.rowOffsets,
+            Math.max(0, targetY),
+          );
+          rowDelta = targetRow - currentRow;
+          // A viewport shorter than one row must still move.
+          if (rowDelta === 0) rowDelta = direction;
+        } else {
+          // No measurable viewport: same 5-row fallback as the square path.
+          rowDelta = direction * 5;
+        }
+        newIdx = verticalNeighborIndex(
+          packedLayout,
+          JUSTIFIED_ROW_GAP,
+          cursorIdx.value,
+          rowDelta,
+        );
+      } else {
+        const rowsPerPage = scrollWrapper.value
+          ? Math.max(
+              1,
+              Math.floor(scrollWrapper.value.clientHeight / rowHeight.value),
+            )
+          : 5;
+        const delta = rowsPerPage * cols;
+        newIdx =
+          event.key === "PageDown"
+            ? Math.min(total - 1, cursorIdx.value + delta)
+            : Math.max(0, cursorIdx.value - delta);
+      }
       cursorIdx.value = newIdx;
       const anchorIndex =
         lastSelectedImageId != null
