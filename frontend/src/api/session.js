@@ -14,3 +14,16 @@ export async function getSessionContext() {
   const res = await apiClient.get("/session/context");
   return res.data;
 }
+
+/**
+ * List the sort mechanisms this server offers.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object|Array<Object>>} the response body: either a bare
+ *   array or an object nesting the list under `sort_mechanisms`/`options`,
+ *   depending on server version.
+ */
+export async function listSortMechanisms({ baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}/sort_mechanisms`);
+  return res.data;
+}
