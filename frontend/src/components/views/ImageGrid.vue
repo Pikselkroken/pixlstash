@@ -1051,7 +1051,43 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
-import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  listPicturesByIds,
+  getPictureMetadata,
+  getThumbnails,
+  deletePictures,
+  setPicturesProject,
+  previewScrapheapDelete,
+  purgeScrapheap,
+  restoreScrapheap,
+  openPictureLocation,
+  detectPictures,
+  listPicturePlugins,
+  runPicturePlugin,
+  resetPictureTags,
+  resetPictureDescription,
+  clearImpossibleTags,
+  restoreImpossibleTags,
+  applyScores,
+  getGuestScores,
+  submitGuestScores,
+  startExport,
+  getExportStatus,
+  downloadExport,
+} from "../../api/pictures";
+import { addPictureTag, removePictureTag } from "../../api/tags";
+import { getStack, removeStackMembers } from "../../api/stacks";
+import {
+  getCharacter,
+  addCharacterFaces,
+  removeCharacterFaces,
+  removeCharacterFacesByFaceId,
+} from "../../api/characters";
+import { getPictureSet, addPictureToSet, removePictureFromSet } from "../../api/pictureSets";
+import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
+import { listTaggers } from "../../api/taggers";
+import { runTextToImage } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -1381,13 +1417,11 @@ async function handleClearImpossibleTags() {
   }
   clearingImpossibleTags.value = true;
   try {
-    const res = await apiClient.post(
-      `${props.backendUrl}/pictures/impossible-tags/clear`,
-      { picture_ids: pictureIds, filters },
-    );
-    const removed = Array.isArray(res.data?.removed) ? res.data.removed : [];
-    const count =
-      typeof res.data?.count === "number" ? res.data.count : removed.length;
+    const body = await clearImpossibleTags(pictureIds, filters, {
+      baseUrl: props.backendUrl,
+    });
+    const removed = Array.isArray(body?.removed) ? body.removed : [];
+    const count = typeof body?.count === "number" ? body.count : removed.length;
     lastImpossibleRemoved.value = removed;
     impossibleSnackbarText.value =
       count > 0
@@ -1409,9 +1443,7 @@ async function handleUndoImpossibleTags() {
   const pairs = lastImpossibleRemoved.value;
   if (!Array.isArray(pairs) || !pairs.length) return;
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/impossible-tags/restore`, {
-      pairs,
-    });
+    await restoreImpossibleTags(pairs, { baseUrl: props.backendUrl });
     impossibleSnackbarVisible.value = false;
     lastImpossibleRemoved.value = [];
     debouncedFetchAllGridImages({ force: true });
@@ -1489,8 +1521,8 @@ async function fetchAvailablePlugins() {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl}/pictures/plugins`);
-    const plugins = Array.isArray(res.data?.plugins) ? res.data.plugins : [];
+    const body = await listPicturePlugins({ baseUrl: props.backendUrl });
+    const plugins = Array.isArray(body?.plugins) ? body.plugins : [];
     availablePlugins.value = plugins.filter((plugin) => plugin && plugin.name);
   } catch (err) {
     console.warn("Failed to load image plugins:", err);
@@ -1509,8 +1541,8 @@ const captionerPlugins = computed(() =>
 async function fetchTaggerPlugins() {
   if (!props.backendUrl) return;
   try {
-    const res = await apiClient.get(`${props.backendUrl}/taggers`);
-    allTaggerPlugins.value = res.data?.plugins ?? [];
+    const body = await listTaggers({ baseUrl: props.backendUrl });
+    allTaggerPlugins.value = body?.plugins ?? [];
   } catch (err) {
     console.warn("Failed to load tagger plugins:", err);
     allTaggerPlugins.value = [];
@@ -1526,7 +1558,7 @@ async function handleAutoTag({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`, body),
+        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1544,10 +1576,7 @@ async function handleGenerateDescription({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/pictures/${id}/reset_description`,
-          body,
-        ),
+        resetPictureDescription(id, body, { baseUrl: props.backendUrl }),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1591,17 +1620,18 @@ async function runPluginWithParameters(
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
-    const res = await apiClient.post(
-      `${props.backendUrl}/pictures/plugins/${encodeURIComponent(pluginName)}`,
+    const res = await runPicturePlugin(
+      pluginName,
       {
         picture_ids: pictureIds,
         parameters: parameters || {},
         captions: Array.isArray(captions) ? captions : undefined,
         stack,
       },
+      { baseUrl: props.backendUrl },
     );
-    const createdIds = Array.isArray(res.data?.created_picture_ids)
-      ? res.data.created_picture_ids
+    const createdIds = Array.isArray(res?.created_picture_ids)
+      ? res.created_picture_ids
       : [];
     if (createdIds.length) {
       const newIds = createdIds
@@ -1762,11 +1792,8 @@ async function runComfyuiOnGridImages({
       project_id: contextProjectId,
       character_id: contextCharacterId,
     };
-    const res = await apiClient.post(
-      `${props.backendUrl}/comfyui/run_t2i`,
-      payload,
-    );
-    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    const body = await runTextToImage(payload, { baseUrl: props.backendUrl });
+    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     handleComfyuiRun({ prompts });
   } catch (err) {
     console.error("ComfyUI T2I run failed:", err);
@@ -2914,10 +2941,7 @@ async function removeFromGroup() {
       clearFaceSelection();
       return;
     }
-    apiClient
-      .post(`${backendUrl}/pictures/scrapheap/restore`, {
-        picture_ids: pictureIds,
-      })
+    restoreScrapheap(pictureIds, { baseUrl: backendUrl })
       .catch((err) => {
         console.error("Failed to restore pictures from the scrapheap", err);
         noticeStore.error(
@@ -2950,22 +2974,16 @@ async function removeFromGroup() {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        apiClient.delete(
-          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
-          {
-            data: { picture_ids: pictureIds },
-          },
-        ),
+        removeCharacterFaces(props.selectedCharacter, pictureIds, {
+          baseUrl: backendUrl,
+        }),
       );
     }
     if (faceIds.length) {
       requests.push(
-        apiClient.delete(
-          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
-          {
-            data: { face_ids: faceIds },
-          },
-        ),
+        removeCharacterFacesByFaceId(props.selectedCharacter, faceIds, {
+          baseUrl: backendUrl,
+        }),
       );
     }
     if (!requests.length) return;
@@ -3049,8 +3067,8 @@ async function removeFromGroup() {
         memberIds = cached.ids;
       } else {
         try {
-          const res = await apiClient.get(`${backendUrl}/stacks/${stackId}`);
-          memberIds = res.data?.picture_ids ?? [];
+          const stack = await getStack(stackId, { baseUrl: backendUrl });
+          memberIds = stack?.picture_ids ?? [];
         } catch (err) {
           // Fallback: only remove the originally-selected picture(s). That is a
           // narrower result than the user asked for (a collapsed stack tile
@@ -3075,13 +3093,17 @@ async function removeFromGroup() {
     try {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
-        [...idsToRemoveFromSet].map(
-          (id) =>
-            apiClient
-              .delete(
-                `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
-              )
-              .catch(() => {}), // silently ignore if picture not in set
+        [...idsToRemoveFromSet].map((id) =>
+          removePictureFromSet(props.selectedSet, id, {
+            baseUrl: backendUrl,
+          }).catch((err) => {
+            // Expected when the picture was not in the set (the selection can
+            // span sets); log rather than drop it so a real failure is visible.
+            console.debug(
+              `Could not remove picture ${id} from set ${props.selectedSet}`,
+              err,
+            );
+          }),
         ),
       );
 
@@ -3090,13 +3112,9 @@ async function removeFromGroup() {
       if (stackRemovalsForExpanded.size) {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
-            apiClient
-              .delete(`${backendUrl}/stacks/${stackId}/members`, {
-                data: { picture_ids: ids },
-              })
-              .catch((err) =>
-                console.error("Failed to remove from stack:", err),
-              ),
+            removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
+              (err) => console.error("Failed to remove from stack:", err),
+            ),
           ),
         );
       }
@@ -3325,10 +3343,8 @@ async function deleteSelected(idsOverride = null) {
 
     for (const stackId of collapsedStackIds) {
       try {
-        const res = await apiClient.get(
-          `${props.backendUrl}/stacks/${stackId}`,
-        );
-        const memberIds = res.data?.picture_ids;
+        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const memberIds = stack?.picture_ids;
         if (Array.isArray(memberIds) && memberIds.length) {
           for (const mid of memberIds) resolved.add(mid);
         }
@@ -3390,10 +3406,8 @@ async function deleteSelected(idsOverride = null) {
     const skippedLocked = new Set();
     for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
       const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-      const resp = await apiClient.delete(`${backendUrl}/pictures`, {
-        data: { picture_ids: chunk },
-      });
-      const skipped = resp?.data?.skipped_locked;
+      const resp = await deletePictures(chunk, { baseUrl: backendUrl });
+      const skipped = resp?.skipped_locked;
       if (Array.isArray(skipped)) {
         for (const id of skipped) skippedLocked.add(String(id));
       }
@@ -3484,21 +3498,18 @@ async function handleSetProjectForSelected(payload) {
       if (nextProjectId === null) {
         return;
       }
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
         mode: "remove",
+        baseUrl: props.backendUrl,
       });
     } else if (action === "added") {
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
         mode: "add",
+        baseUrl: props.backendUrl,
       });
     } else {
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
+        baseUrl: props.backendUrl,
       });
     }
 
@@ -3918,11 +3929,10 @@ async function loadDeletePreview(ids) {
   if (deleteForeverLoading.value) return;
   deleteForeverLoading.value = true;
   try {
-    const resp = await apiClient.post(
-      `${props.backendUrl}/pictures/scrapheap/delete-preview`,
-      { ids: ids ?? null },
-    );
-    const d = resp?.data ?? {};
+    const d =
+      (await previewScrapheapDelete(ids ?? null, {
+        baseUrl: props.backendUrl,
+      })) ?? {};
     deleteForeverTotalCount.value = Number(d.total_count) || 0;
     deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
     deleteForeverUnprotectedCount.value = Number(d.unprotected_count) || 0;
@@ -3988,8 +3998,10 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
   const backendUrl = props.backendUrl;
   deleteForeverBusy.value = true;
   try {
-    const resp = await apiClient.delete(`${backendUrl}/pictures/scrapheap`, {
-      data: { picture_ids: idsToRemove, include_protected: includeProtected },
+    const resp = await purgeScrapheap({
+      pictureIds: idsToRemove,
+      includeProtected,
+      baseUrl: backendUrl,
     });
     // Locked pictures survive a purge too, and this endpoint reports them under
     // the same `skipped_locked` name as the bulk soft-delete. Same rule as
@@ -4067,10 +4079,10 @@ async function runEmptyScrapheap(includeProtected) {
   scrapheapEmptying.value = true;
   deleteForeverBusy.value = true;
   try {
-    const resp = await apiClient.delete(
-      `${props.backendUrl}/pictures/scrapheap`,
-      { data: { include_protected: includeProtected } },
-    );
+    const resp = await purgeScrapheap({
+      includeProtected,
+      baseUrl: props.backendUrl,
+    });
     // Clear + refetch reconciles either case: when only the unprotected subset
     // was purged, the refetch brings the kept protected originals back.
     allGridImages.value = [];
@@ -4103,7 +4115,7 @@ async function confirmRestoreScrapheap() {
   if (!confirmed) return;
   scrapheapRestoring.value = true;
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/restore`);
+    await restoreScrapheap(undefined, { baseUrl: props.backendUrl });
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -4125,7 +4137,7 @@ async function confirmRestoreScrapheap() {
 
 async function openReferenceLocation(picId) {
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/${picId}/open-location`);
+    await openPictureLocation(picId, { baseUrl: props.backendUrl });
   } catch (err) {
     // Was a silent ignore ("the OS might not support it"), which left a click
     // doing nothing with no explanation. The cause is worth stating: it is
@@ -4168,16 +4180,15 @@ async function handleImagesUploaded(payload) {
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
           pictureIds.map((id) =>
-            apiClient.post(
-              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`,
-            ),
+            addPictureToSet(selectedSetId, id, {
+              baseUrl: props.backendUrl,
+            }),
           ),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
-        await apiClient.post(
-          `${props.backendUrl}/characters/${selectedCharacterId}/faces`,
-          { picture_ids: pictureIds },
-        );
+        await addCharacterFaces(selectedCharacterId, pictureIds, {
+          baseUrl: props.backendUrl,
+        });
       }
     } catch (e) {
       console.error("Failed to associate imported pictures:", e);
@@ -4894,10 +4905,9 @@ async function updateSelectedGroupName() {
     props.selectedCharacter !== `${props.scrapheapPicturesId}`
   ) {
     try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedCharacter}`,
-      );
-      const char = res.data;
+      const char = await getCharacter(props.selectedCharacter, {
+        baseUrl: props.backendUrl,
+      });
       name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
@@ -4908,10 +4918,9 @@ async function updateSelectedGroupName() {
       return;
     }
     try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}`,
-      );
-      const set = res.data;
+      const set = await getPictureSet(primarySelectedSetId.value, {
+        baseUrl: props.backendUrl,
+      });
       name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
@@ -4974,20 +4983,11 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
 // ============================================================
 async function fetchImageInfo(imageId, options = {}) {
   try {
-    const params = new URLSearchParams();
-    if (options.smartScore) {
-      params.set("smart_score", "true");
-    }
-    if (options.force) {
-      params.set("cb", String(Date.now()));
-    }
-    const query = params.toString();
-    const url = query
-      ? `${props.backendUrl}/pictures/${imageId}/metadata?${query}`
-      : `${props.backendUrl}/pictures/${imageId}/metadata`;
-    const res = await apiClient.get(url);
-    const data = await res.data;
-    return data;
+    return await getPictureMetadata(imageId, {
+      smartScore: !!options.smartScore,
+      cacheBuster: options.force ? Date.now() : undefined,
+      baseUrl: props.backendUrl,
+    });
   } catch (e) {
     console.error("Tag fetch failed:", e);
     return [];
@@ -5189,7 +5189,7 @@ function _getOrCreateGuestSessionId() {
 async function _submitGuestScores(scores, setCookie) {
   const sid = _getOrCreateGuestSessionId();
   const payload = { session_id: sid, set_cookie: setCookie, scores };
-  await apiClient.post(`${props.backendUrl}/pictures/guest-scores`, payload);
+  await submitGuestScores(payload, { baseUrl: props.backendUrl });
 }
 
 function setGuestScore(img, n) {
@@ -5263,10 +5263,8 @@ async function fetchGuestScores() {
   // Kept only as a fallback / explicit refresh. The main listing
   // (GET /pictures) now overlays guest scores onto img.score server-side.
   try {
-    const resp = await apiClient.get(
-      `${props.backendUrl}/pictures/guest-scores`,
-    );
-    const scores = resp?.data?.scores ?? {};
+    const resp = await getGuestScores({ baseUrl: props.backendUrl });
+    const scores = resp?.scores ?? {};
     const map = new Map();
     for (const [k, v] of Object.entries(scores)) {
       map.set(Number(k), v);
@@ -5560,13 +5558,11 @@ async function insertGridImagesById(ids) {
 
   let fetched;
   try {
-    const params = new URLSearchParams();
-    toFetch.forEach((id) => params.append("id", id));
-    params.append("fields", "grid");
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures?${params.toString()}`,
-    );
-    fetched = Array.isArray(res.data) ? res.data : [];
+    const rows = await listPicturesByIds(toFetch, {
+      fields: "grid",
+      baseUrl: props.backendUrl,
+    });
+    fetched = Array.isArray(rows) ? rows : [];
   } catch (e) {
     console.error("insertGridImagesById: grid metadata fetch failed", {
       ids: toFetch,
@@ -5645,10 +5641,7 @@ async function applyScoresByEntries(entries, options = {}) {
     scoresPayload[String(id)] = Number(score);
   }
 
-  await apiClient.post(`${props.backendUrl}/pictures/apply-scores`, {
-    scores: scoresPayload,
-    only_unscored: false,
-  });
+  await applyScores(scoresPayload, { baseUrl: props.backendUrl });
 
   const scoreMap = new Map(
     entries.map(([id, score]) => [String(id), Number(score)]),
@@ -6255,11 +6248,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     );
     let overlayNeedsRedraw = false;
     if (ids.length) {
-      const thumbRes = await apiClient.post(
-        `${props.backendUrl}/pictures/thumbnails`,
-        JSON.stringify({ ids }),
-      );
-      const thumbData = await thumbRes.data;
+      const thumbData = await getThumbnails(ids, {
+        baseUrl: props.backendUrl,
+      });
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -6599,9 +6590,7 @@ async function handleOverlayScrapheapRestore() {
   const id = overlayCtxImage.value?.id;
   if (id == null) return;
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/restore`, {
-      picture_ids: [id],
-    });
+    await restoreScrapheap([id], { baseUrl: props.backendUrl });
   } catch (err) {
     console.error("Failed to restore picture from the scrapheap", err);
     noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
@@ -6650,9 +6639,8 @@ async function confirmSegment() {
   // on the resulting CHANGED_PICTURES event (detections is a card-content
   // field), and the overlay reconciles too if open.
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/detect`, {
-      picture_ids: ids,
-      prompt: segmentPrompt.value.trim(),
+    await detectPictures(ids, segmentPrompt.value.trim(), {
+      baseUrl: props.backendUrl,
     });
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
@@ -6691,11 +6679,10 @@ function scheduleSharedPictureFetch() {
     const ids = visibleSlice.map((img) => img.id).filter(Boolean);
     if (!ids.length) return;
     try {
-      const res = await apiClient.post(
-        `${props.backendUrl}/users/me/shared-picture-ids/batch`,
-        { picture_ids: ids },
-      );
-      const shared = new Set(res.data?.shared_ids ?? []);
+      const body = await getSharedPictureIds(ids, {
+        baseUrl: props.backendUrl,
+      });
+      const shared = new Set(body?.shared_ids ?? []);
       // Update: remove any id from the queried batch that is no longer shared,
       // and add any that are now shared. This keeps the set accurate when
       // tokens are later revoked.
@@ -6708,8 +6695,10 @@ function scheduleSharedPictureFetch() {
         }
       }
       sharedPictureIds.value = nextShared;
-    } catch {
-      // Non-critical — silently ignore
+    } catch (e) {
+      // Non-critical: the shared badge just stays as it was. Log it so a
+      // persistently failing batch is visible rather than invisible.
+      console.debug("Failed to refresh the shared-picture badges", e);
     }
   }, 300);
 }
@@ -6727,9 +6716,9 @@ async function confirmRevokePictureShares() {
   revokeSharesPending.value = null;
   if (!pending?.pictureId) return;
   try {
-    await apiClient.delete(
-      `${props.backendUrl}/users/me/tokens/by-resource?resource_type=picture&resource_id=${pending.pictureId}`,
-    );
+    await revokeTokensByResource("picture", pending.pictureId, {
+      baseUrl: props.backendUrl,
+    });
     const next = new Set(sharedPictureIds.value);
     next.delete(pending.pictureId);
     sharedPictureIds.value = next;
@@ -6794,9 +6783,7 @@ async function removeTagFromImage(imageId, tag) {
       return;
     }
     const tagKey = String(tagId);
-    await apiClient.delete(
-      `${props.backendUrl}/pictures/${imageId}/tags/${tagKey}`,
-    );
+    await removePictureTag(imageId, tagKey, { baseUrl: props.backendUrl });
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
@@ -6812,13 +6799,10 @@ async function removeTagFromImage(imageId, tag) {
 
 async function addTagToImage(imageId, tag) {
   try {
-    const response = await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tags`,
-      {
-        tag: tag,
-      },
-    );
-    const responseTags = getTagList(response?.data?.tags);
+    const response = await addPictureTag(imageId, tag, {
+      baseUrl: props.backendUrl,
+    });
+    const responseTags = getTagList(response?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
@@ -6965,7 +6949,6 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let url = `${props.backendUrl}/pictures/export`;
   let params;
   const selectedIds = selectedImageIds.value;
   if (selectedIds && selectedIds.length > 0) {
@@ -7000,14 +6983,7 @@ async function exportCurrentViewToZip(options = {}) {
     extraParams.append("bbox_mode", bboxMode);
   }
   const extraParamString = extraParams.toString();
-  if (params) {
-    url += `?${params}`;
-    if (extraParamString) {
-      url += `&${extraParamString}`;
-    }
-  } else if (extraParamString) {
-    url += `?${extraParamString}`;
-  }
+  const exportQuery = [params, extraParamString].filter(Boolean).join("&");
 
   try {
     exportProgress.visible = true;
@@ -7017,8 +6993,10 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.message = "Preparing export...";
     exportProgress.cancelRequested = false;
 
-    const startRes = await apiClient.get(url);
-    const taskId = startRes?.data?.task_id;
+    const startBody = await startExport(exportQuery, {
+      baseUrl: props.backendUrl,
+    });
+    const taskId = startBody?.task_id;
     if (!taskId) {
       throw new Error("Missing task_id from export response.");
     }
@@ -7032,20 +7010,19 @@ async function exportCurrentViewToZip(options = {}) {
         exportProgress.visible = false;
         return;
       }
-      const statusRes = await apiClient.get(
-        `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: taskId } },
-      );
-      const status = statusRes?.data?.status;
+      const statusBody = await getExportStatus(taskId, {
+        baseUrl: props.backendUrl,
+      });
+      const status = statusBody?.status;
       exportProgress.status = status || "in_progress";
-      exportProgress.processed = statusRes?.data?.processed || 0;
-      exportProgress.total = statusRes?.data?.total || 0;
+      exportProgress.processed = statusBody?.processed || 0;
+      exportProgress.total = statusBody?.total || 0;
       exportProgress.message =
         status === "completed"
           ? "Finalizing download..."
           : "Exporting images...";
       if (status === "completed") {
-        downloadUrl = statusRes?.data?.download_url;
+        downloadUrl = statusBody?.download_url;
         break;
       }
       if (status === "failed") {
@@ -7065,19 +7042,12 @@ async function exportCurrentViewToZip(options = {}) {
       throw new Error("Export timed out waiting for ZIP.");
     }
 
-    const fileRes = await apiClient.get(`${props.backendUrl}${downloadUrl}`, {
-      responseType: "blob",
+    const { blob, filename } = await downloadExport(downloadUrl, {
+      baseUrl: props.backendUrl,
     });
 
-    let filename = "pixlstash_export.zip";
-    const disposition = fileRes.headers["content-disposition"];
-    if (disposition) {
-      const match = disposition.match(/filename="?([^";]+)"?/);
-      if (match) filename = match[1];
-    }
-
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(fileRes.data);
+    link.href = URL.createObjectURL(blob);
     link.download = filename;
     document.body.appendChild(link);
     link.click();
