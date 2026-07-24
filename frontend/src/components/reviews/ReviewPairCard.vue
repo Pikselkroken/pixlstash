@@ -177,8 +177,6 @@ function openZoom(id, ext) {
   flex-direction: column;
   gap: 12px;
   width: 100%;
-  max-width: 1100px;
-  margin: 0 auto;
 }
 
 .rs-pair-banner {
