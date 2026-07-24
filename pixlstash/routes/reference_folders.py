@@ -64,6 +64,46 @@ def _validate_sidecar_suffix(suffix: str) -> None:
         )
 
 
+def _rollback_relocation(
+    rollback_moves: list[tuple[str, str]],
+    destination_existed: bool,
+    new_root: str,
+) -> None:
+    """Undo the filesystem side of a failed reference-folder relocation.
+
+    Moves every already-relocated entry back to its original path and, when the
+    destination root was freshly created for this relocation, removes the now-empty
+    root. Best-effort per entry: a move or rmdir that fails is logged with context
+    rather than raised, so a single failure cannot abort the rest of the rollback.
+
+    Args:
+        rollback_moves: (destination, source) pairs recorded as each entry moved,
+            replayed in reverse to walk entries back to their origin.
+        destination_existed: Whether ``new_root`` predated this relocation. When
+            False the empty root is removed as part of the rollback.
+        new_root: The relocation destination root.
+    """
+    for destination, source in reversed(rollback_moves):
+        if os.path.exists(destination):
+            try:
+                shutil.move(destination, source)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to roll back relocation move %s: %s",
+                    destination,
+                    exc,
+                )
+    if not destination_existed and os.path.isdir(new_root):
+        try:
+            os.rmdir(new_root)
+        except OSError as exc:
+            logger.debug(
+                "Failed to remove destination root %s during relocation rollback: %s",
+                new_root,
+                exc,
+            )
+
+
 class ReferenceFolderCreateRequest(BaseModel):
     folder: str
     label: Optional[str] = None
@@ -964,44 +1004,21 @@ def create_router(server) -> APIRouter:
                 apply_relocation, priority=DBPriority.IMMEDIATE
             )
         except HTTPException:
-            for destination, source in reversed(rollback_moves):
-                if os.path.exists(destination):
-                    try:
-                        shutil.move(destination, source)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to roll back relocation move %s: %s",
-                            destination,
-                            exc,
-                        )
-            if not destination_existed and os.path.isdir(new_root):
-                try:
-                    os.rmdir(new_root)
-                except OSError:
-                    pass
+            _rollback_relocation(rollback_moves, destination_existed, new_root)
             raise
         except Exception as exc:
-            for destination, source in reversed(rollback_moves):
-                if os.path.exists(destination):
-                    try:
-                        shutil.move(destination, source)
-                    except Exception as rollback_exc:
-                        logger.warning(
-                            "Failed to roll back relocation move %s: %s",
-                            destination,
-                            rollback_exc,
-                        )
-            if not destination_existed and os.path.isdir(new_root):
-                try:
-                    os.rmdir(new_root)
-                except OSError:
-                    pass
+            _rollback_relocation(rollback_moves, destination_existed, new_root)
             raise HTTPException(status_code=500, detail=f"Relocation failed: {exc}")
 
         try:
             os.rmdir(old_root)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning(
+                "Failed to remove old reference-folder root %s after relocation "
+                "(leftover directory): %s",
+                old_root,
+                exc,
+            )
 
         server.vault.unwatch_reference_folder(folder_id)
         server.vault.watch_reference_folder(folder_id, new_root)

@@ -183,7 +183,12 @@ class ListenersMixin:
                 except NotImplementedError:
                     # Windows asyncio loops don't support add_signal_handler;
                     # the desktop shell force-kills the process tree there.
-                    pass
+                    logger.debug(
+                        "add_signal_handler unsupported on this event loop; "
+                        "skipping handler for %s (Windows fallback: the desktop "
+                        "shell force-kills the process tree).",
+                        sig,
+                    )
 
             async def _serve_one(server, label):
                 # Wrap each listener so a bind failure (e.g. the external

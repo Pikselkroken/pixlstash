@@ -688,6 +688,50 @@ def test_relocate_reference_folder_rejects_non_empty_destination(
     assert os.path.isfile(old_root / "cat.png")
 
 
+def test_relocate_reference_folder_rolls_back_on_apply_failure(
+    server, tmp_path, monkeypatch
+):
+    """A failure while applying the DB rewrite must move every entry back and
+    remove the freshly-created destination root, and surface a 500."""
+    monkeypatch.setattr(server, "running_in_docker", lambda: False)
+    client = _login_client(server)
+    old_root = tmp_path / "old"
+    new_root = tmp_path / "new"
+    sub = old_root / "sub"
+    sub.mkdir(parents=True)
+    folder_id = _make_folder(server, str(old_root))
+    img = _make_image(str(sub), "bird.png")
+    (old_root / "notes.md").write_text("keep me", encoding="utf-8")
+    _index_picture(server, folder_id, img, tags=["bird"])
+
+    original_run_task = server.vault.db.run_task
+
+    def failing_run_task(func, *args, **kwargs):
+        # Files have already been moved by the time apply_relocation runs; make
+        # it raise a non-HTTPException to exercise the generic rollback branch.
+        if getattr(func, "__name__", "") == "apply_relocation":
+            raise RuntimeError("boom during apply_relocation")
+        return original_run_task(func, *args, **kwargs)
+
+    monkeypatch.setattr(server.vault.db, "run_task", failing_run_task)
+
+    resp = client.post(
+        f"/reference-folders/{folder_id}/relocate",
+        json={"destination_folder": str(new_root)},
+    )
+    assert resp.status_code == 500
+    assert "Relocation failed" in resp.text
+
+    # Every entry is moved back to the original root.
+    assert os.path.isfile(img)
+    assert (old_root / "notes.md").read_text(encoding="utf-8") == "keep me"
+    # The freshly-created destination root is removed during rollback.
+    assert not new_root.exists()
+    # The folder row is untouched (never committed to the new path).
+    folder = server.vault.db.run_task(lambda s: s.get(ReferenceFolder, folder_id))
+    assert folder.folder == str(old_root)
+
+
 def test_reference_folder_file_operations_reject_read_tokens(server, tmp_path):
     owner_client = _login_client(server)
     token_client = TestClient(server.api)

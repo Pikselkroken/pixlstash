@@ -55,8 +55,6 @@ class Quality(SQLModel, table=True):
         Given two lists of facial feature arrays (np.ndarray), compute cosine similarity for each pair.
         Returns a numpy array of likeness scores (shape: [len(features_a)]).
         """
-        import numpy as np
-
         X_a = np.stack(features_a, axis=0)
         X_b = np.stack(features_b, axis=0)
         norms_a = np.linalg.norm(X_a, axis=1, keepdims=True)
