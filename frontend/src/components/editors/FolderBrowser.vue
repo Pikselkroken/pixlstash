@@ -111,7 +111,10 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import {
+  browseFilesystem,
+  createFilesystemFolder,
+} from "../../api/folders";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -182,11 +185,11 @@ async function browseDir(path) {
   browseLoading.value = true;
   browseError.value = "";
   try {
-    const res = await apiClient.get("/filesystem/browse", {
-      params: { path: path ?? undefined, show_hidden: browseShowHidden.value },
+    const listing = await browseFilesystem(path, {
+      showHidden: browseShowHidden.value,
     });
-    browseEntries.value = res.data?.entries ?? [];
-    browsePath.value = res.data?.path ?? path ?? "/";
+    browseEntries.value = listing?.entries ?? [];
+    browsePath.value = listing?.path ?? path ?? "/";
   } catch (error) {
     browseError.value =
       error?.response?.data?.detail || "Cannot browse this directory.";
@@ -258,12 +261,10 @@ async function createFolder() {
   createFolderError.value = "";
   try {
     const target = joinChildPath(browsePath.value, name);
-    const { data } = await apiClient.post("/filesystem/folders", {
-      path: target,
-    });
+    const created = await createFilesystemFolder(target);
     creatingFolder.value = false;
     newFolderName.value = "";
-    await browseDir(data?.path || target);
+    await browseDir(created?.path || target);
   } catch (error) {
     createFolderError.value =
       error?.response?.data?.detail || "Could not create folder.";
