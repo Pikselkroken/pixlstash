@@ -17,7 +17,13 @@ import {
   shiftRangesForDelta,
 } from "../utils/utils.js";
 import { getPictureId } from "../utils/media.js";
-import { apiClient } from "../utils/apiClient";
+import {
+  getStack,
+  listStackPictures,
+  createStack,
+  setStackOrder,
+  removeStackMembers,
+} from "../api/stacks";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
@@ -584,24 +590,14 @@ export function useStackOrdering(
       nextLoading.add(stackId);
       expandedStackLoading.value = nextLoading;
       try {
-        const stackUrl = new URL(
-          `${props.backendUrl}/stacks/${stackId}/pictures`,
-        );
-        stackUrl.searchParams.set("fields", "grid");
         const activeSort = props.selectedSort ?? "";
         const isStackSort =
           !activeSort || activeSort === LIKENESS_GROUPS_SORT_KEY;
-        if (activeSort) {
-          stackUrl.searchParams.set("sort", activeSort);
-        }
-        if (typeof props.selectedDescending === "boolean") {
-          stackUrl.searchParams.set(
-            "descending",
-            props.selectedDescending ? "true" : "false",
-          );
-        }
-        const picsRes = await apiClient.get(stackUrl.toString());
-        const picsData = await picsRes.data;
+        const picsData = await listStackPictures(stackId, {
+          sort: activeSort || undefined,
+          descending: props.selectedDescending,
+          baseUrl: props.backendUrl,
+        });
         const pics = Array.isArray(picsData) ? picsData : [];
         const sorted = isStackSort ? sortStackMembers(pics) : pics;
         const ordered = sorted
@@ -954,9 +950,11 @@ export function useStackOrdering(
   async function persistStackOrder(stackId, orderedIds, previousIds) {
     if (!stackId || !orderedIds.length) return;
     try {
-      await apiClient.patch(`${props.backendUrl}/stacks/${stackId}/order`, {
-        picture_ids: orderedIds.map((id) => Number(id)).filter(Number.isFinite),
-      });
+      await setStackOrder(
+        stackId,
+        orderedIds.map((id) => Number(id)).filter(Number.isFinite),
+        { baseUrl: props.backendUrl },
+      );
     } catch (err) {
       console.error(`Failed to save the order of stack ${stackId}`, err);
       noticeStore.error(
@@ -1037,9 +1035,7 @@ export function useStackOrdering(
       return ia - ib;
     });
     try {
-      await apiClient.post(`${props.backendUrl}/stacks`, {
-        picture_ids: sortedIds,
-      });
+      await createStack(sortedIds, { baseUrl: props.backendUrl });
       clearSelection();
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
@@ -1056,18 +1052,21 @@ export function useStackOrdering(
         stackIds.map(async (stackId) => {
           let idsToRemove;
           try {
-            const res = await apiClient.get(
-              `${props.backendUrl}/stacks/${stackId}`,
+            const stack = await getStack(stackId, {
+              baseUrl: props.backendUrl,
+            });
+            idsToRemove = stack?.picture_ids;
+          } catch (e) {
+            console.error(
+              `Failed to read the members of stack ${stackId}; skipping it`,
+              e,
             );
-            idsToRemove = res.data?.picture_ids;
-          } catch {
             idsToRemove = null;
           }
           if (!Array.isArray(idsToRemove) || !idsToRemove.length) return;
-          await apiClient.delete(
-            `${props.backendUrl}/stacks/${stackId}/members`,
-            { data: { picture_ids: idsToRemove } },
-          );
+          await removeStackMembers(stackId, idsToRemove, {
+            baseUrl: props.backendUrl,
+          });
           const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
           allGridImages.value = allGridImages.value.map((img) => {
             if (!img || !removed.has(getPictureId(img.id))) return img;
@@ -1108,10 +1107,8 @@ export function useStackOrdering(
     let idsToRemove = ids;
     if (!expandedStackIds.value.has(stackId)) {
       try {
-        const stackRes = await apiClient.get(
-          `${props.backendUrl}/stacks/${stackId}`,
-        );
-        const allMemberIds = stackRes.data?.picture_ids;
+        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const allMemberIds = stack?.picture_ids;
         if (Array.isArray(allMemberIds) && allMemberIds.length) {
           idsToRemove = allMemberIds;
         }
@@ -1124,10 +1121,9 @@ export function useStackOrdering(
     }
 
     try {
-      await apiClient.delete(
-        `${props.backendUrl}/stacks/${stackId}/members`,
-        { data: { picture_ids: idsToRemove } },
-      );
+      await removeStackMembers(stackId, idsToRemove, {
+        baseUrl: props.backendUrl,
+      });
       const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
       allGridImages.value = allGridImages.value.map((img) => {
         if (!img || !removed.has(getPictureId(img.id))) {
@@ -1250,9 +1246,7 @@ export function useStackOrdering(
 
     try {
       for (const memberIds of groupsToStack) {
-        await apiClient.post(`${props.backendUrl}/stacks`, {
-          picture_ids: memberIds,
-        });
+        await createStack(memberIds, { baseUrl: props.backendUrl });
       }
       if (skippedGroups.length) {
         // Partial outcome: the rest succeeded, so this is a warning, not an error.

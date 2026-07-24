@@ -72,6 +72,26 @@ export async function deleteProject(id, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Read a project's summary counts.
+ *
+ * `"UNASSIGNED"` is accepted as the id for the pictures in no project.
+ *
+ * @param {number|string} id
+ * @param {Object} [params] - optional scope params such as `apply_tag_filter`.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, whose `image_count` is the
+ *   number of pictures in scope.
+ */
+export async function getProjectSummary(id, params, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(
+    projectsUrl(`/${id}/summary`, baseUrl),
+    params ? { params } : undefined,
+  );
+  return res.data;
+}
+
+/**
  * Ask which project each of the given pictures belongs to.
  *
  * @param {Array<number|string>} pictureIds
