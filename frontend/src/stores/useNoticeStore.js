@@ -1,10 +1,9 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
-// Central notice/snackbar queue (frontend_refactoring_plan.md §3 Phase 2;
-// issue #459 alignment rule 2). One store owns every transient notice so
-// failures surface consistently instead of vanishing into per-component catch
-// blocks (per the repo's "no silent failures" rule).
+// Central notice/snackbar queue (issue #459 alignment rule 2). One store owns
+// every transient notice so failures surface consistently instead of vanishing
+// into per-component catch blocks (per the repo's "no silent failures" rule).
 //
 // The visible host is `components/widgets/NoticeHost.vue`, built to
 // `docs/design/notice-surface.md`. This file implements §9 of that spec:
