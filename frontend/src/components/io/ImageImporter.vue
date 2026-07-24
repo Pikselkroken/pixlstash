@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { isReadOnly } from "../../utils/apiClient";
+import { sleep } from "../../utils/utils";
 import { useTasksStore } from "../../stores/useTasksStore";
 import {
   cancelStaging,
@@ -185,7 +186,10 @@ function finalizeCancelled() {
   importError.value = null;
   cancelImport.value = false;
   currentImportController.value = null;
-  if (importRunId) tasksStore.clearImportRun(importRunId);
+  if (importRunId) {
+    tasksStore.clearImportRun(importRunId);
+    tasksStore.unregisterImportAbort(importRunId);
+  }
   // Discard the not-yet-committed staging session (best-effort) so its streamed
   // files are cleaned up server-side.
   if (currentStagingId) {
@@ -234,9 +238,17 @@ function finalizeError(message) {
   importError.value = message;
   cancelImport.value = false;
   currentImportController.value = null;
+  if (importRunId) tasksStore.unregisterImportAbort(importRunId);
   emit("import-error", { message });
 }
 
+// The single client-side abort path, shared by the dialog's Cancel button and
+// the Tasks-tab cancel affordance (via tasksStore.abortImportRun → this handler,
+// registered in startImport). It stops the in-flight upload by aborting the
+// active request controller; the batch loop's cancel checks then unwind cleanly
+// through finalizeCancelled (no error toast). This can only stop the PRE-COMMIT
+// upload — once committed, the import is a background server task the client
+// cannot stop (see the abortable notes in startImport / useTasksStore).
 function handleCancelImport() {
   if (!importActive.value) return;
   cancelImport.value = true;
@@ -253,10 +265,6 @@ function dismissError() {
   clearHideTimer();
   dialogVisible.value = false;
   importPhase.value = "";
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function logImportTrace(message, details = null) {
@@ -398,7 +406,15 @@ async function startImport(files, options = {}) {
   cancelImport.value = false;
   transitioned = false;
   currentStagingId = null;
+  // Drop any lingering handler from a previous run before minting a new id.
+  if (importRunId) tasksStore.unregisterImportAbort(importRunId);
   importRunId = `import-${(crypto?.randomUUID?.() ?? Date.now().toString(36))}`;
+  // Make the (otherwise dead) import-abort subsystem live: register the real
+  // client-side abort so tasksStore.abortImportRun(runId) actually stops the
+  // in-flight upload. Mirrors ComfyUiRunner's registerComfyuiAbort. Unregistered
+  // on every terminal path (finalizeCancelled / finalizeError / completion) and
+  // on unmount.
+  tasksStore.registerImportAbort(importRunId, () => handleCancelImport());
   importActive.value = true;
   dialogVisible.value = true;
   dialogLeaving.value = false;
@@ -707,6 +723,7 @@ async function startImport(files, options = {}) {
       label: "Importing pictures",
     });
     const finishedRunId = importRunId;
+    tasksStore.unregisterImportAbort(finishedRunId);
     setTimeout(() => tasksStore.clearImportRun(finishedRunId), 2600);
 
     // The public emit contract is unchanged, but the streaming-staging contract
@@ -735,6 +752,7 @@ onBeforeUnmount(() => {
   disarmGuard();
   clearHideTimer();
   _stopStallTimer();
+  if (importRunId) tasksStore.unregisterImportAbort(importRunId);
 });
 
 defineExpose({ startImport });

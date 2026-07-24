@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, computed, onMounted, onUnmounted } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
@@ -1743,6 +1743,19 @@ defineExpose({ focusTasksTab });
                 <span v-if="entry.run.total > 0" class="tm-worker-progress">
                   {{ entry.run.current }} / {{ entry.run.total }}
                 </span>
+                <!-- Cancel is offered only while the import is genuinely
+                     client-abortable (the pre-commit upload window, run.abortable).
+                     A committed server-side import cannot be stopped from the
+                     client, so no cancel control is shown for it. -->
+                <button
+                  v-if="entry.run.abortable && !isReadOnly"
+                  class="tm-comfy-abort"
+                  type="button"
+                  title="Cancel import"
+                  @click="tasksStore.abortImportRun(entry.key)"
+                >
+                  ✕
+                </button>
               </div>
               <div class="tm-comfy-bar">
                 <div
