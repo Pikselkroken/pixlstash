@@ -1,27 +1,56 @@
-/* ── PixlStash shared stylesheet ── */
+/* ── PixlStash shared stylesheet — "The Quiet Darkroom" ──
+   Dark-led, warm neutrals, one amber safelight accent. Unified brand palette:
+   the accent/olive/raspberry/teal + status are the same in both themes; only the
+   neutrals switch under [data-theme="light"]. Matches frontend/DESIGN.md. */
 
 /* ── Design tokens ── */
 :root {
-  --bg: #d3d5d7;
-  --bg-2: #d3d5d7;
-  --panel: rgba(255, 255, 255, 0.94);
-  --panel-strong: rgba(225, 229, 235, 0.9);
-  --text: #393f46;
-  --muted: rgba(57, 63, 70, 0.7);
-  --accent: #8ea604;
-  --accent-2: #7f8f1a;
-  --accent-3: #2f8b5f;
-  /* Brand orange — the logo accent, used for the "Stash" half of the wordmark.
-     Matches --logo-accent in the desktop/web app theme. */
-  --logo-accent: #f28f3b;
-  --warning: #c4942f;
-  --shadow: rgba(17, 20, 26, 0.18);
-  --toolbar: #696f76;
-  --toolbar-text: #f2f5fa;
+  color-scheme: dark;
+  /* neutrals (dark, default) */
+  --bg: #1b1f24;
+  --bg-2: #1b1f24;
+  --panel: #23282f;
+  --panel-strong: #2b3138;
+  --border: #363d45;
+  --divider: #2c323a;
+  --text: #f2e5da;
+  --muted: rgba(242, 229, 218, 0.6);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --toolbar: #23282f;
+  --toolbar-text: #f2e5da;
+  --hover-wash: rgba(196, 122, 30, 0.12);
+  /* brand + status (unified across both themes) */
+  --accent: #c47a1e; /* amber — the one safelight */
+  --accent-2: #e08a2a; /* brighter amber — glow / gradient end */
+  --accent-3: #2a7d3e; /* success (e.g. "Copied") */
+  --on-accent: #f7f1ea; /* warm-white label on any brand fill */
+  --primary: #567309; /* olive — commit / go */
+  --secondary: #bb3566; /* raspberry — category */
+  --tertiary: #46707a; /* teal — quiet category */
+  --logo-accent: #c47a1e; /* "Stash" wordmark = accent */
+  --warning: #e8912f;
+  /* type + shape */
   --mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
-  --sans: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
-  --radius-lg: 22px;
-  --radius-md: 14px;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --display: "Space Grotesk", var(--sans);
+  --radius-lg: 16px;
+  --radius-md: 10px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #faf9f7;
+  --bg-2: #faf9f7;
+  --panel: #ffffff;
+  --panel-strong: #efede9;
+  --border: #d8d3c8;
+  --divider: #e8e4dc;
+  --text: #23211d;
+  --muted: rgba(35, 33, 29, 0.6);
+  --shadow: rgba(28, 22, 12, 0.18);
+  --toolbar: #f0ede9;
+  --toolbar-text: #23211d;
+  --hover-wash: rgba(196, 122, 30, 0.1);
 }
 
 * {
@@ -32,15 +61,26 @@ body {
   margin: 0;
   font-family: var(--sans);
   color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  /* Warm canvas with one faint amber safelight glow — no cool greens. */
   background:
     radial-gradient(
-      circle at 15% 10%,
-      rgba(159, 177, 31, 0.18),
-      transparent 45%
+      circle at 15% -5%,
+      color-mix(in srgb, var(--accent) 14%, transparent),
+      transparent 42%
     ),
-    radial-gradient(circle at 85% 0%, rgba(47, 139, 95, 0.16), transparent 40%),
-    linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
-  min-height: 100vh;
+    radial-gradient(
+      circle at 92% 3%,
+      color-mix(in srgb, var(--accent) 8%, transparent),
+      transparent 40%
+    ),
+    var(--bg);
+}
+
+h1,
+h2 {
+  font-family: var(--display);
 }
 
 a {
@@ -55,17 +95,21 @@ a {
   padding: 8px 16px 80px;
 }
 
-/* ── Nav ── */
+/* ── Nav ──
+   DOM order (nav.js): brand, Home (direct child), .nav-links (the rest),
+   .nav-actions. Desktop packs left after the brand, actions pushed right.
+   Mobile: brand + Home + actions on row 1; the rest scroll on row 2. */
 .nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  gap: 8px 16px;
   background: var(--toolbar);
   color: var(--toolbar-text);
+  border: 1px solid var(--border);
   padding: 10px 14px;
-  border-radius: 16px;
-  box-shadow: 0 16px 34px rgba(17, 20, 26, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 10px var(--shadow);
 }
 
 .brand {
@@ -75,22 +119,23 @@ a {
   font-weight: 600;
   font-size: 1.1rem;
   color: var(--toolbar-text);
+  flex-shrink: 0;
 }
 
 .brand img {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   object-fit: contain;
 }
 
 .brand-name {
   font-family: "Tiny5", monospace;
-  font-size: 2.2rem;
+  font-size: 2rem;
   letter-spacing: 0.02em;
   color: var(--toolbar-text);
 }
 
-/* "Stash" half of the wordmark in the brand orange. */
+/* "Stash" half of the wordmark in the amber accent. */
 .brand-stash {
   color: var(--logo-accent);
 }
@@ -98,72 +143,130 @@ a {
 .nav-links {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   font-size: 0.95rem;
   color: var(--toolbar-text);
 }
 
+.nav-link,
 .nav-links a {
-  padding: 4px 8px;
+  padding: 6px 10px;
   border-radius: 8px;
+  color: var(--muted);
+  white-space: nowrap;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
 }
 
+.nav-link:hover,
 .nav-links a:hover {
-  color: var(--accent);
+  color: var(--text);
+  background: var(--hover-wash);
 }
 
 .nav-link--whatsnew {
-  color: var(--warning) !important;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.nav-link--whatsnew:hover {
-  color: #e0aa3a !important;
-}
-
-.nav-link--whatsnew.nav-link--active {
-  color: var(--warning) !important;
-  background: rgba(196, 148, 47, 0.15);
+/* Small amber dot promotes the release link without a second loud color. */
+.nav-link--whatsnew::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 
 .nav-link--active {
   color: var(--accent) !important;
-  background: rgba(159, 177, 31, 0.14);
+  background: var(--hover-wash);
 }
 
 .nav-actions {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+/* Theme toggle: compact icon button; moon in dark, sun in light. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease,
+    border-color 0.14s ease;
+}
+.theme-toggle:hover {
+  background: var(--hover-wash);
+  color: var(--text);
+  border-color: var(--muted);
+}
+.theme-toggle svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.theme-toggle .ic-sun {
+  display: none;
+}
+.theme-toggle.is-light .ic-sun {
+  display: block;
+}
+.theme-toggle.is-light .ic-moon {
+  display: none;
+}
+
 .demo-btn,
 .download-btn {
-  display: inline-block;
-  padding: 8px 12px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
   font-size: 0.9rem;
   font-weight: 600;
-  color: #ffffff;
   text-decoration: none;
-  border: none;
-  transition: background 0.15s ease;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
+/* Secondary: neutral ghost, so amber stays "the thing to do". */
 .demo-btn {
-  background: #0e7fa8;
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
 }
-
 .demo-btn:hover {
-  background: #0a6a8e;
+  background: var(--hover-wash);
+  border-color: var(--muted);
 }
 
+/* Primary: the one amber safelight action. */
 .download-btn {
-  background: linear-gradient(130deg, var(--accent), var(--accent-2));
+  background: var(--accent);
+  color: var(--on-accent);
 }
-
 .download-btn:hover {
-  background: linear-gradient(130deg, var(--accent-2), #6a7815);
+  background: var(--accent-2);
 }
 
 /* ── Page hero (inner pages) ── */
@@ -177,6 +280,7 @@ a {
   font-size: clamp(2rem, 4vw, 3.2rem);
   margin: 0 0 14px;
   line-height: 1.1;
+  letter-spacing: -0.01em;
 }
 
 .page-hero p {
@@ -220,9 +324,9 @@ a {
   align-items: flex-start;
   gap: 8px;
   background: var(--panel-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 12px 14px;
-  border: 1px solid rgba(34, 38, 44, 0.1);
+  border: 1px solid var(--border);
 }
 
 .cmd-block code {
@@ -251,7 +355,7 @@ a {
 }
 
 .copy-btn:hover {
-  background: rgba(142, 166, 4, 0.1);
+  background: var(--hover-wash);
 }
 
 .copy-btn.copied {
@@ -267,7 +371,7 @@ a {
 
 .step-note a,
 .step-note code {
-  color: var(--accent-2);
+  color: var(--accent);
 }
 
 .step-note a {
@@ -276,7 +380,7 @@ a {
 }
 
 .step-note a:hover {
-  color: var(--accent);
+  color: var(--accent-2);
 }
 
 .step-note code {
@@ -289,33 +393,33 @@ a {
 
 /* ── Callout boxes ── */
 .method-warning {
-  background: rgba(196, 148, 47, 0.1);
-  border: 1px solid rgba(196, 148, 47, 0.28);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: var(--radius-md);
   padding: 12px 16px;
   font-size: 0.85rem;
-  color: #7a5a18;
+  color: var(--text);
   line-height: 1.55;
 }
 
 .method-warning a {
-  color: #8a5f00;
+  color: var(--warning);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .method-warning a:hover {
-  color: #6f4d00;
+  color: var(--accent-2);
 }
 
 .method-info {
-  background: rgba(47, 139, 95, 0.08);
-  border: 1px solid rgba(47, 139, 95, 0.22);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--tertiary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tertiary) 38%, transparent);
+  border-radius: var(--radius-md);
   padding: 12px 16px;
   font-size: 0.85rem;
-  color: #1e5c3a;
+  color: var(--text);
   line-height: 1.55;
 }
 
@@ -328,7 +432,7 @@ a {
 }
 
 .page-footer a {
-  color: var(--accent-2);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -392,7 +496,7 @@ a {
 .video-card {
   background: var(--panel);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(34, 38, 44, 0.11);
+  border: 1px solid var(--border);
   box-shadow: 0 16px 48px var(--shadow);
   overflow: hidden;
   position: relative;
@@ -411,20 +515,30 @@ a {
 }
 
 /* ── Responsive base ── */
-@media (max-width: 700px) {
+@media (max-width: 760px) {
   .shell {
     padding: 8px 12px 60px;
   }
 
-  .nav {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-
+  /* Keep the header to two rows: brand + Home + actions on row 1, the rest of
+     the links scroll on row 2. */
   .nav-links {
-    flex-wrap: wrap;
-    gap: 12px;
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    gap: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--divider);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-actions {
+    order: 2;
   }
 }
 
@@ -435,5 +549,11 @@ a {
 
   .feature--reverse {
     direction: ltr;
+  }
+}
+
+@media (max-width: 480px) {
+  .brand-name {
+    font-size: 1.6rem;
   }
 }

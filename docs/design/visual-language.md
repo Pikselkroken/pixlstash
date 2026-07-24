@@ -1,5 +1,17 @@
 # PixlStash Visual Language
 
+> **⚠️ Colors superseded (2026-07-24).** The color system moved to the unified
+> "Camp B" palette: ONE brand palette shared by both themes with warm-white
+> `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`), primary/olive
+> `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`. The canonical
+> color sources are now **`frontend/DESIGN.md`** and the design-system
+> `tokens/colors.css`; the running values live in the Vuetify themes in
+> **`frontend/src/main.js`**. The color hexes, contrast tables, and per-theme
+> accent values in the sections below describe the *previous* (white-label,
+> theme-dependent) system and are kept only as history — do not build against
+> them. Everything non-color here (type, spacing, radius, elevation, motion,
+> layout rules) is still current.
+
 This is what PixlStash looks like. Not a mood board, a spec. Every value here is a
 token you can build against, and every rule has a reason. Follow it and the product
 reads as one considered thing on every screen. Ignore it and you get the drift this

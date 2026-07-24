@@ -7843,7 +7843,8 @@ function handleEmptyStateReset() {
 .selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--v-theme-info), 0.38);
+  /* Amber "safelight" selection (was cold-blue info) — the brighter glow token. */
+  background: rgba(var(--v-theme-accent-bright), 0.38);
   pointer-events: none;
   z-index: 25;
   border-radius: 8px;
@@ -7874,8 +7875,8 @@ function handleEmptyStateReset() {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: rgb(var(--v-theme-info));
-  color: rgb(var(--v-theme-on-info));
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   font-size: 16px;
   font-weight: 700;
   display: flex;
