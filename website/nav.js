@@ -93,5 +93,21 @@
       paint(next);
     });
     paint(root.getAttribute("data-theme") === "light" ? "light" : "dark");
+
+    // Consolidate the theme across open tabs: when another tab writes the
+    // shared localStorage key, this tab's `storage` event fires — apply it live
+    // so every tab (and every page) stays on one setting. Uses web storage, no
+    // cookies. (localStorage is shared per-origin; sessionStorage is per-tab and
+    // would do the opposite, so it is deliberately not used here.)
+    window.addEventListener("storage", (e) => {
+      if (e.key !== "pixlstash-theme") return;
+      const light = e.newValue === "light";
+      if (light) {
+        root.setAttribute("data-theme", "light");
+      } else {
+        root.removeAttribute("data-theme");
+      }
+      paint(light ? "light" : "dark");
+    });
   }
 })();
