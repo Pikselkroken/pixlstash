@@ -579,8 +579,13 @@ class SnapshotService:
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "SnapshotService: failed to close snapshot connection %s: %s",
+                    abs_snapshot,
+                    exc,
+                    exc_info=True,
+                )
 
     def _build_manifest(self, session) -> tuple[dict, dict]:
         """Build the manifest dict and the per-picture hash map.
