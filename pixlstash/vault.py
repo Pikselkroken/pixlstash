@@ -540,6 +540,16 @@ class Vault:
         """When the retention window was last lowered, or None."""
         return self._scrapheap_retention_reduced_at
 
+    @property
+    def unprocessable_images(self):
+        """Registry of pictures whose image file cannot be decoded (issue #585).
+
+        Lives on the database so task threads (which mark decode failures) and
+        finder threads (which suppress them) reach the same instance via their
+        ``self._db``; exposed here for discoverability.
+        """
+        return self.db.unprocessable_images
+
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory
         self._keep_models_in_memory = bool(keep_models_in_memory)
@@ -1456,9 +1466,13 @@ class Vault:
             return result[0]
         return result or 0
 
-    @staticmethod
-    def _count_missing_image_embeddings(session: Session) -> int:
-        return ImageEmbeddingTask.count_remaining(session)
+    def _count_missing_image_embeddings(self, session: Session) -> int:
+        # Exclude undecodable pictures (issue #585) so "remaining" can reach 0
+        # instead of stalling on files that can never produce an embedding.
+        suppressed_ids = self.db.unprocessable_images.active_suppressed_ids()
+        return ImageEmbeddingTask.count_remaining(
+            session, suppressed_ids=suppressed_ids
+        )
 
     @staticmethod
     def _count_pending_likeness_parameters(session: Session) -> int:
