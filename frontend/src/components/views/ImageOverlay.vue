@@ -3569,13 +3569,22 @@ watch(
   },
 );
 
-// A smart_score recompute landed for some pictures (after a tag edit or a
-// penalised-tag settings change). If the open card is one of them, re-fetch its
-// metadata so the panel shows the freshly-committed score. Matches on picture id
-// (never origin), so it fires for both the editing tab's own interactive edits
-// and the origin-less bulk settings drain. fetchOverlayMetadata keeps the old
-// value if the recompute hasn't committed yet (transient NULL), so a
-// still-pending recompute never flashes "unscored".
+// A smart_score recompute landed somewhere (after a tag edit or a penalised-tag
+// settings change). Re-fetch the open card's metadata so the panel shows the
+// freshly-committed score. Deliberately NOT gated on the open card's id being in
+// payload.pictureIds: unlike the tag/description watchers (whose events name the
+// exact pictures they touched), a smart_score signal can legitimately omit the
+// open card even when that card WAS rescored —
+//   • the bulk-drain event carries a whole task batch's ids (vault.py, the
+//     remaining==0 emit), which need not contain the open card;
+//   • an interactive rescore that overflowed the registry is demoted onto that
+//     same bulk path (smart_score_invalidation.py), losing its origin/id;
+//   • Vue coalesces two signals written before the watcher flushes into the
+//     latest value, dropping an intermediate one that named the open card.
+// Any of those left the score stale until a full reload. Re-fetching on every
+// distinct signal is safe and cheap: fetchOverlayMetadata is requestId-deduped
+// and keeps the current value on a still-null read (recompute pending), so a
+// redundant fetch for an unrelated batch neither flickers nor hammers.
 watch(
   () => smartScoreUpdate.value,
   (payload) => {
@@ -3584,11 +3593,6 @@ watch(
     if (!nextKey || nextKey === lastSmartScoreUpdateKey.value) return;
     lastSmartScoreUpdateKey.value = nextKey;
     if (!open.value || !image.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    const currentId = String(image.value.id);
-    if (pictureIds.length && !pictureIds.includes(currentId)) return;
     fetchOverlayMetadata(image.value.id);
   },
 );

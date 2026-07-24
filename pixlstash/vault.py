@@ -832,9 +832,11 @@ class Vault:
                 # _persist_scores skipped (still NULL) is never announced as rescored.
                 # Ids that were never registered (background-only rescores, or interactive
                 # ids demoted when the registry was full) are left to the bulk drain emit.
+                announced_ids: set[int] = set()
                 for origin, ids in self.interactive_rescore_registry.consume(
                     persisted_ids
                 ).items():
+                    announced_ids.update(ids)
                     self.notify(
                         EventType.CHANGED_PICTURES,
                         {
@@ -847,13 +849,29 @@ class Vault:
                     self.db.run_immediate_read_task(SmartScoreTask.count_remaining) or 0
                 )
                 if remaining == 0:
-                    # Tag the event with the changed field so the SPA only
-                    # reloads the grid when it is actually sorting/filtering by
-                    # smart_score; under any other sort this change is invisible.
-                    self.notify(
-                        EventType.CHANGED_PICTURES,
-                        {"picture_ids": picture_ids, "fields": ["smart_score"]},
-                    )
+                    # Exclude ids already announced origin-stamped above: re-announcing
+                    # them origin-less here would raise the "view changed externally" pill
+                    # on the very tab that made the edit (a self-pill). Unregistered
+                    # ids — genuine background rescores, or interactive ids demoted when
+                    # the registry was full — still ride this bulk emit so their cards
+                    # refresh; over-suppressing them would strand real external changes.
+                    drain_ids = [
+                        pid for pid in picture_ids if int(pid) not in announced_ids
+                    ]
+                    if drain_ids:
+                        # Tag the event with the changed field so the SPA only
+                        # reloads the grid when it is actually sorting/filtering by
+                        # smart_score; under any other sort this change is invisible.
+                        self.notify(
+                            EventType.CHANGED_PICTURES,
+                            {"picture_ids": drain_ids, "fields": ["smart_score"]},
+                        )
+                    else:
+                        logger.debug(
+                            "SmartScoreTask drained with all %s rescored id(s) announced "
+                            "origin-stamped; no origin-less drain event emitted.",
+                            len(announced_ids),
+                        )
                 else:
                     logger.debug(
                         "SmartScoreTask updated %s pictures; deferring CHANGED_PICTURES event with %s smart scores remaining.",

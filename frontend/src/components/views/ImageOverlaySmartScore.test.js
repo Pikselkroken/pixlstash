@@ -2,15 +2,46 @@
 // freshly-recomputed smart score after a tag edit or a penalised-tag settings
 // change, without a full page reload.
 //
-// ImageOverlay.vue (~4.9k lines) is impractical to mount, so — following the
-// same convention as ImageGridSmartScoreSort.test.js — this test exercises the
-// exact decision rules the fix relies on, copied verbatim from three call
-// sites. Keep them in sync with the source:
-//   1. fetchOverlayMetadata's smart-score merge (ImageOverlay.vue).
-//   2. App.vue's smart_score-signal field gate (the `pictures_changed` handler).
-//   3. ImageOverlay's smartScoreUpdate watcher id-match guard.
+// Two layers of coverage:
+//   A. Isolated decision rules copied verbatim from the source call sites (fast,
+//      no component mount). Keep them in sync with the source:
+//        1. fetchOverlayMetadata's smart-score merge (ImageOverlay.vue).
+//        2. App.vue's smart_score-signal field gate (`pictures_changed` handler).
+//        3. ImageOverlay's smartScoreUpdate watcher trigger rule.
+//   B. A mounted-component regression that drives the ACTUAL ImageOverlay through
+//      the real signal sequence — this is what catches the coalescing / bulk-drain
+//      batch / registry-demotion cases the isolated copies cannot model.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mount } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+
+// ---- Mounted-component harness (layer B) -----------------------------------
+// A controllable /pictures/{id}/metadata?smart_score=true response.
+let metadataSmartScore = 0.42;
+const getMock = vi.fn(async (url) => {
+  if (typeof url === "string" && url.includes("/metadata")) {
+    return { data: { id: 7, smartScore: metadataSmartScore, tags: [] } };
+  }
+  if (typeof url === "string" && url.includes("/workflow")) {
+    const e = new Error("no workflow");
+    e.response = { status: 404 };
+    throw e;
+  }
+  return { data: [] };
+});
+
+vi.mock("../../utils/apiClient", () => ({
+  apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
+  appendShareToken: (u) => u,
+  isReadOnly: { value: false },
+}));
+
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
 
 // (1) Verbatim copy of fetchOverlayMetadata's smart-score merge. `data` is the
 // authoritative /pictures/{id}/metadata?smart_score=true response; `image` is
@@ -41,14 +72,15 @@ function touchesSmartScore(fields) {
   return changedFields.length === 0 || changedFields.includes("smart_score");
 }
 
-// (3) Verbatim copy of the overlay watcher's id-match guard. Returns whether the
-// open card (currentId) should re-fetch for this event's picture ids. Matches on
-// id only — origin is deliberately not considered here.
-function watcherShouldRefetch(payloadPictureIds, currentId) {
-  const pictureIds = Array.isArray(payloadPictureIds)
-    ? payloadPictureIds.map((id) => String(id))
-    : [];
-  if (pictureIds.length && !pictureIds.includes(String(currentId))) return false;
+// (3) The overlay watcher's trigger rule. A distinct smart_score signal re-fetches
+// the open card REGARDLESS of whether the payload's pictureIds names it: a
+// bulk-drain event batches a whole task's ids (and can omit the open card), a
+// registry-demoted interactive rescore rides that same bulk path, and Vue
+// coalesces rapid signals — so the payload cannot be trusted to always name the
+// open card. Fires only when the signal key advances and a card is open.
+function watcherShouldRefetch(nextKey, lastKey, open, currentId) {
+  if (!nextKey || nextKey === lastKey) return false;
+  if (!open || currentId == null) return false;
   return true;
 }
 
@@ -122,20 +154,157 @@ describe("App.vue smart_score signal field gate", () => {
   });
 });
 
-describe("overlay smartScoreUpdate watcher id match", () => {
-  it("re-fetches when the open card is in the event's picture ids", () => {
-    expect(watcherShouldRefetch([5, 7, 9], 7)).toBe(true);
+describe("overlay smartScoreUpdate watcher trigger", () => {
+  it("re-fetches when the signal key advances and a card is open", () => {
+    expect(watcherShouldRefetch(2, 1, true, 7)).toBe(true);
   });
 
-  it("re-fetches regardless of id type (string vs number)", () => {
-    expect(watcherShouldRefetch(["7"], 7)).toBe(true);
+  it("re-fetches even when the payload's ids omit the open card", () => {
+    // The regression: bulk-drain batch / registry-demoted rescore / coalesced
+    // signal that names other pictures. The open card must still refresh.
+    expect(watcherShouldRefetch(5, 4, true, 7)).toBe(true);
   });
 
-  it("skips when the open card is not among the changed ids", () => {
-    expect(watcherShouldRefetch([5, 9], 7)).toBe(false);
+  it("skips a repeated key (already processed)", () => {
+    expect(watcherShouldRefetch(3, 3, true, 7)).toBe(false);
   });
 
-  it("re-fetches on an empty id list (treated as broad change)", () => {
-    expect(watcherShouldRefetch([], 7)).toBe(true);
+  it("skips the zero/absent key", () => {
+    expect(watcherShouldRefetch(0, 0, true, 7)).toBe(false);
+  });
+
+  it("skips when the overlay is closed", () => {
+    expect(watcherShouldRefetch(2, 1, false, 7)).toBe(false);
+  });
+
+  it("skips when no card is loaded", () => {
+    expect(watcherShouldRefetch(2, 1, true, null)).toBe(false);
+  });
+});
+
+// ---- Layer B: mounted-component regression ---------------------------------
+// Drives the real ImageOverlay through the signal sequence. The bug: after a
+// penalised-tag edit the overlay panel kept the stale score until a full reload
+// whenever the smart_score signal that landed did not name the open card.
+describe("ImageOverlay mounted smart-score refresh", () => {
+  const STUBS = {
+    OverlayTagsPanel: true,
+    OverlayFilmstrip: true,
+    OverlayDescriptionPanel: true,
+    AddToEntityControl: true,
+    StarRatingOverlay: true,
+    PluginParametersUI: true,
+    ComfyUiRunner: true,
+    ProgressOverlay: true,
+    // Real-but-thin panel so we can read the `image` prop it renders from.
+    OverlayMetadataPanel: {
+      name: "OverlayMetadataPanel",
+      props: [
+        "image",
+        "comfyMetadata",
+        "dateFormat",
+        "backendUrl",
+        "videoDuration",
+      ],
+      template: "<div class='meta'></div>",
+    },
+  };
+
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  async function openOverlayOnCard7() {
+    // Imported lazily so the vi.mock above is in place first.
+    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: false,
+        initialImageId: 7,
+        allImages: [{ id: 7, smartScore: 0.42, tags: [] }],
+        backendUrl: "http://test",
+        tagUpdate: { key: 0, pictureIds: [] },
+        descriptionUpdate: { key: 0, pictureIds: [] },
+        smartScoreUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+    });
+    await wrapper.setProps({ open: true });
+    await flush();
+    await flush();
+    return wrapper;
+  }
+
+  const scoreOf = (wrapper) =>
+    wrapper
+      .findComponent({ name: "OverlayMetadataPanel" })
+      .props("image").smartScore;
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    metadataSmartScore = 0.42;
+    getMock.mockClear();
+  });
+
+  it("updates the panel when the signal names the open card", async () => {
+    const wrapper = await openOverlayOnCard7();
+    expect(scoreOf(wrapper)).toBe(0.42);
+
+    metadataSmartScore = 0.81;
+    await wrapper.setProps({ smartScoreUpdate: { key: 1, pictureIds: [7] } });
+    await flush();
+    await flush();
+
+    expect(scoreOf(wrapper)).toBe(0.81);
+    wrapper.unmount();
+  });
+
+  it("keeps the old score during the transient NULL, then adopts the committed value", async () => {
+    const wrapper = await openOverlayOnCard7();
+
+    // Tag edit: metadata read while the recompute is still pending -> NULL.
+    metadataSmartScore = null;
+    await wrapper.setProps({ tagUpdate: { key: 1, pictureIds: [7] } });
+    await flush();
+    await flush();
+    expect(scoreOf(wrapper)).toBe(0.42); // no "unscored" flash
+
+    // Recompute commits; the signal arrives.
+    metadataSmartScore = 0.81;
+    await wrapper.setProps({ smartScoreUpdate: { key: 1, pictureIds: [7] } });
+    await flush();
+    await flush();
+    expect(scoreOf(wrapper)).toBe(0.81);
+    wrapper.unmount();
+  });
+
+  it("updates the open card even when the signal's pictureIds omit it (bulk-drain batch / registry demotion)", async () => {
+    const wrapper = await openOverlayOnCard7();
+    expect(scoreOf(wrapper)).toBe(0.42);
+
+    // Card 7 was rescored in the DB, but the drain event carries a different
+    // batch's ids. Pre-fix this skipped the re-fetch and left the panel stale.
+    metadataSmartScore = 0.81;
+    await wrapper.setProps({
+      smartScoreUpdate: { key: 1, pictureIds: [101, 102, 103] },
+    });
+    await flush();
+    await flush();
+
+    expect(scoreOf(wrapper)).toBe(0.81);
+    wrapper.unmount();
+  });
+
+  it("survives Vue watcher coalescing (a later signal for other pictures overwrites the one that named the card)", async () => {
+    const wrapper = await openOverlayOnCard7();
+    expect(scoreOf(wrapper)).toBe(0.42);
+
+    metadataSmartScore = 0.81;
+    // Two writes before a flush -> Vue coalesces to the latest ([99]).
+    wrapper.setProps({ smartScoreUpdate: { key: 1, pictureIds: [7] } });
+    await wrapper.setProps({ smartScoreUpdate: { key: 2, pictureIds: [99] } });
+    await flush();
+    await flush();
+
+    expect(scoreOf(wrapper)).toBe(0.81);
+    wrapper.unmount();
   });
 });
