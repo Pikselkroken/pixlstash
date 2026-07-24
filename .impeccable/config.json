@@ -39,6 +39,33 @@
         "value": "roboto",
         "createdAt": "2026-07-24T12:48:29.664Z",
         "reason": "Roboto is a system-ui stack fallback (Android system font), not a chosen face"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "website/features.html"
+        ],
+        "createdAt": "2026-07-24T12:56:34.564Z",
+        "reason": "JS-populated lightbox <img>, filled on click (same pattern as index.html)"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "website/comfyui.html"
+        ],
+        "createdAt": "2026-07-24T13:09:01.038Z",
+        "reason": "JS-populated lightbox <img>"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "website/whatsnew.html"
+        ],
+        "createdAt": "2026-07-24T13:09:01.088Z",
+        "reason": "JS-populated lightbox <img>"
       }
     ]
   }

@@ -51,7 +51,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
       }
 
       .feature-card h3 {
@@ -74,12 +74,8 @@
       .shot {
         border-radius: var(--radius-lg);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.12);
-        background: linear-gradient(
-          135deg,
-          rgba(255, 255, 255, 0.92),
-          rgba(235, 239, 244, 0.7)
-        );
+        border: 1px solid var(--border);
+        background: var(--panel);
         position: relative;
         overflow: hidden;
       }
@@ -90,8 +86,7 @@
         border-radius: 14px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 18px 40px rgba(17, 20, 26, 0.2);
+        border: 1px solid var(--border);
       }
 
       .shot-image-btn {
@@ -203,15 +198,15 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: rgba(185, 193, 202, 0.65);
-        border: 1px solid rgba(14, 127, 168, 0.25);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .demo-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .demo-teaser-wrap {
@@ -227,18 +222,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.18),
-          rgba(10, 95, 126, 0.1)
-        );
+        background: color-mix(in srgb, var(--tertiary) 12%, transparent);
       }
 
       .demo-teaser-label {
         font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -258,7 +249,7 @@
       .demo-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .demo-teaser-media img {
