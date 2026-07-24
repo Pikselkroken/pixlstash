@@ -13,11 +13,11 @@ import { onMounted, ref } from "vue";
 import { RouterView } from "vue-router";
 import {
   activateShareToken,
-  apiClient,
   checkSession,
   isAuthenticated,
   sessionContext,
 } from "./utils/apiClient";
+import { getSessionContext } from "./api/session";
 import LoginScreen from "./components/views/LoginScreen.vue";
 
 const isChecking = ref(true);
@@ -29,8 +29,7 @@ onMounted(async () => {
   if (token) {
     activateShareToken(token);
     try {
-      const ctx = await apiClient.get("/session/context");
-      sessionContext.value = ctx.data;
+      sessionContext.value = await getSessionContext();
       isAuthenticated.value = true;
       isChecking.value = false;
       return;

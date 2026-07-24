@@ -2,6 +2,7 @@
 import { onUnmounted, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { getUserConfig, patchUserConfig } from "../../api/config";
+import { getWorkerProgress } from "../../api/workers";
 import { VSlider, VSwitch } from "vuetify/components";
 import TagPluginsTable from "../widgets/TagPluginsTable.vue";
 import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
@@ -58,8 +59,8 @@ function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
 
 async function fetchVramSliderBounds() {
   try {
-    const res = await apiClient.get("/workers/progress");
-    const processData = res.data?.process || res.data?.system || {};
+    const progress = await getWorkerProgress();
+    const processData = progress?.process || progress?.system || {};
     const totalVramGb =
       processData.vram_total_gb ??
       processData.vramTotalGb ??
