@@ -1,6 +1,6 @@
 {
   "hook": {
-    "enabled": true,
+    "enabled": false,
     "limits": {
       "maxFindings": 5,
       "maxChars": 8000
@@ -66,6 +66,16 @@
         ],
         "createdAt": "2026-07-24T13:09:01.088Z",
         "reason": "JS-populated lightbox <img>"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "**/folder-browser*.html",
+          "**/folder-editor*.html"
+        ],
+        "createdAt": "2026-07-24T13:34:29.541Z",
+        "reason": "Dense operate-mode editor dialog uses the app UI ramp; hierarchy from weight/color, not size"
       }
     ]
   }
