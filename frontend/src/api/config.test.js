@@ -29,4 +29,15 @@ describe("api/config", () => {
     expect(apiClient.patch).toHaveBeenCalledWith("/users/me/config", partial);
     expect(result).toEqual({ ok: true });
   });
+
+  it("both calls accept an explicit backend base", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    apiClient.patch.mockResolvedValue({ data: {} });
+    await getUserConfig({ baseUrl: "/be" });
+    await patchUserConfig({ a: 1 }, { baseUrl: "/be" });
+    expect(apiClient.get).toHaveBeenCalledWith("/be/users/me/config");
+    expect(apiClient.patch).toHaveBeenCalledWith("/be/users/me/config", {
+      a: 1,
+    });
+  });
 });
