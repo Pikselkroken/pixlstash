@@ -25,6 +25,7 @@ import {
   isReadOnly,
   sessionContext,
 } from "../../utils/apiClient";
+import { deleteCharacter as apiDeleteCharacter } from "../../api/characters";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
   SET_ICONS,
@@ -1821,7 +1822,7 @@ async function deleteCharacter() {
   if (!props.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
   try {
-    await apiClient.delete(`/characters/${props.selectedCharacter}`);
+    await apiDeleteCharacter(props.selectedCharacter);
 
     // Remove the deleted character from the characters array
     characters.value = characters.value.filter(
@@ -1845,7 +1846,7 @@ async function deleteCharactersByIds(ids) {
     : `Delete ${ids.length} characters?`;
   if (!window.confirm(msg)) return;
   try {
-    await Promise.all(ids.map((id) => apiClient.delete(`/characters/${id}`)));
+    await Promise.all(ids.map((id) => apiDeleteCharacter(id)));
     characters.value = characters.value.filter(
       (c) => !ids.includes(Number(c.id)),
     );
