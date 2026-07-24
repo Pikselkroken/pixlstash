@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       html {
@@ -65,7 +66,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
       }
 
       .feature-card h3 {
@@ -107,15 +108,15 @@
       }
 
       .node-tag--write {
-        background: rgba(196, 148, 47, 0.16);
-        color: #7a5a18;
-        border: 1px solid rgba(196, 148, 47, 0.32);
+        background: color-mix(in srgb, var(--warning) 16%, transparent);
+        color: var(--warning);
+        border: 1px solid color-mix(in srgb, var(--warning) 38%, transparent);
       }
 
       .node-tag--read {
-        background: rgba(47, 139, 95, 0.12);
-        color: #1e5c3a;
-        border: 1px solid rgba(47, 139, 95, 0.28);
+        background: color-mix(in srgb, var(--success) 14%, transparent);
+        color: var(--success);
+        border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
       }
 
       .node-req {
@@ -134,12 +135,8 @@
       .shot {
         border-radius: var(--radius-lg);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.12);
-        background: linear-gradient(
-          135deg,
-          rgba(255, 255, 255, 0.92),
-          rgba(235, 239, 244, 0.7)
-        );
+        border: 1px solid var(--border);
+        background: var(--panel);
         position: relative;
         overflow: hidden;
         display: flex;
@@ -152,8 +149,7 @@
         border-radius: 14px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 18px 40px rgba(17, 20, 26, 0.2);
+        border: 1px solid var(--border);
         background: #1c1f24;
       }
 
@@ -220,7 +216,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         overflow: hidden;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
         font-size: 0.92rem;
       }
 
@@ -228,7 +224,7 @@
       .config-table td {
         text-align: left;
         padding: 12px 16px;
-        border-bottom: 1px solid rgba(34, 38, 44, 0.08);
+        border-bottom: 1px solid var(--border);
         line-height: 1.5;
       }
 
@@ -265,8 +261,8 @@
         background: var(--panel);
         border-radius: var(--radius-lg);
         padding: 22px;
-        border: 1px solid rgba(34, 38, 44, 0.11);
-        box-shadow: 0 16px 48px var(--shadow);
+        border: 1px solid var(--border);
+        box-shadow: 0 4px 16px var(--shadow);
       }
 
       .install-card h3 {
@@ -280,8 +276,7 @@
         border-radius: 12px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 12px 28px rgba(17, 20, 26, 0.18);
+        border: 1px solid var(--border);
         cursor: zoom-in;
         background: #1c1f24;
       }

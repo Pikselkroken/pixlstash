@@ -205,7 +205,10 @@ async function clearGuestSession() {
             :tabindex="(props.thumbnailMode ?? 'square') === 'square' ? 0 : -1"
             @click="setThumbnailMode('square')"
           >
-            Square
+            <span class="tli tli--square" aria-hidden="true"
+              ><i></i><i></i><i></i><i></i><i></i><i></i
+            ></span>
+            <span class="thumb-layout-optlabel">Square</span>
           </button>
           <button
             class="thumb-layout-opt"
@@ -222,7 +225,10 @@ async function clearGuestSession() {
             :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
             @click="setThumbnailMode('justified')"
           >
-            Justified
+            <span class="tli tli--just" aria-hidden="true"
+              ><span class="tli-row"><i></i><i></i><i></i></span
+              ><span class="tli-row"><i></i><i></i></span></span>
+            <span class="thumb-layout-optlabel">Justified</span>
           </button>
         </div>
         <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
@@ -364,7 +370,12 @@ async function clearGuestSession() {
 }
 .thumb-layout-opt {
   flex: 1;
-  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -377,6 +388,62 @@ async function clearGuestSession() {
     border-color 0.12s,
     background 0.12s,
     color 0.12s;
+}
+.thumb-layout-optlabel {
+  font-weight: var(--weight-semibold);
+}
+/* Mini layout illustration: an even grid (square) vs uneven justified rows.
+   currentColor → accent when the option is active (mirrors the Sidebar Width .swi). */
+.tli {
+  width: 78px;
+  height: 50px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid currentColor;
+  overflow: hidden;
+  opacity: 0.85;
+  padding: 3px;
+}
+.tli--square {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 3px;
+}
+.tli--square i {
+  background: currentColor;
+  opacity: 0.5;
+  border-radius: 1px;
+}
+.tli--just {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tli-row {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+.tli-row i {
+  background: currentColor;
+  opacity: 0.5;
+  border-radius: 1px;
+}
+.tli--just .tli-row:first-child i:nth-child(1) {
+  flex: 2;
+}
+.tli--just .tli-row:first-child i:nth-child(2) {
+  flex: 3;
+}
+.tli--just .tli-row:first-child i:nth-child(3) {
+  flex: 2;
+}
+.tli--just .tli-row:last-child i:nth-child(1) {
+  flex: 3;
+}
+.tli--just .tli-row:last-child i:nth-child(2) {
+  flex: 2;
 }
 .thumb-layout-opt:hover {
   background: rgba(var(--v-theme-on-surface), 0.08);
@@ -412,10 +479,11 @@ async function clearGuestSession() {
 .sidebar-width-opt {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   background: rgba(var(--v-theme-on-surface), 0.04);
@@ -444,6 +512,7 @@ async function clearGuestSession() {
   display: flex;
   width: 78px;
   height: 50px;
+  flex-shrink: 0;
   border-radius: var(--radius-sm);
   border: 1.5px solid currentColor;
   overflow: hidden;

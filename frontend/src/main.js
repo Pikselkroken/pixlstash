@@ -54,10 +54,9 @@ const pixlStashLight = {
     "sidebar-text": "#25231e",
     toolbar: "#f0ede9",
     "toolbar-text": "#25231e",
-    // `sidebar-hover` is the accent duplicated, so it moves with it. White on
-    // the new value measures 4.75:1 (was 3.94:1).
-    "sidebar-hover": "#9e6727",
-    "on-sidebar-hover": "#ffffff",
+    // `sidebar-hover` is the accent duplicated, so it moves with it.
+    "sidebar-hover": "#c47a1e",
+    "on-sidebar-hover": "#f7f1ea",
     // Raised controls: inputs and buttons sit above the canvas, pure/near white.
     "input-background": "#ffffff",
     "input-text": "#23211d",
@@ -87,21 +86,23 @@ const pixlStashLight = {
     "on-surface": "#23211d",
     background: "#faf9f7",
     "on-background": "#23211d",
-    // ── The action-fill tier ────────────────────────────────────────────────
-    // The foreground on all four is #ffffff in BOTH themes, always: one label
-    // colour on every branded fill, and no `on-*` pair that can silently
-    // disagree with its fill. A white label fixes the fill's lightness at
-    // L <= 0.1833; see visual-language.md §4 for the arithmetic.
-    // Consequence: these four are NEVER small body text on a canvas (4.49-4.60:1
-    // light, 3.53-3.61:1 dark) — icons, borders, rails, >=18px or >=14px bold.
-    accent: "#9e6727", // white 4.75:1 (was #b0732b, 3.94:1)
-    "on-accent": "#ffffff",
-    primary: "#5c7c0a", // white 4.84:1 — unchanged
-    "on-primary": "#ffffff",
-    secondary: "#cb3a72", // white 4.79:1 — unchanged
-    "on-secondary": "#ffffff",
-    tertiary: "#557982", // white 4.73:1 (was #5f8790, 3.92:1)
-    "on-tertiary": "#ffffff",
+    // ── The action-fill tier (unified Camp B palette) ───────────────────────
+    // ONE brand palette shared by both themes (design-system parity, 2026-07-24):
+    // the same four brand hues in light and dark, each carrying the warm near-white
+    // label #f7f1ea (never pure #fff). Label contrast: primary 4.86:1, secondary
+    // 4.91:1, tertiary 4.85:1 — all AA. The amber `accent` was brightened to a
+    // warmer, more-orange #c47a1e and now sits at 3.04:1: enough for the semibold
+    // button label (AA large), so these fills stay label-only (buttons, chips,
+    // rails, icons — never small body text on a canvas).
+    accent: "#c47a1e", // warm-white 3.04:1 (brightened from #9e6727)
+    "on-accent": "#f7f1ea",
+    "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
+    primary: "#567309", // warm-white 4.86:1 (olive)
+    "on-primary": "#f7f1ea",
+    secondary: "#bb3566", // warm-white 4.91:1 (raspberry)
+    "on-secondary": "#f7f1ea",
+    tertiary: "#46707a", // warm-white 4.85:1 (teal)
+    "on-tertiary": "#f7f1ea",
     // Warm, low-contrast borders: a visible-but-soft divider and a subtler line.
     border: "#d8d3c8",
     divider: "#e8e4dc",
@@ -134,10 +135,9 @@ const pixlStashDark = {
     "sidebar-text": "#d8d0c8",
     toolbar: "#23282f",
     "toolbar-text": "#d8d0c8",
-    // Was #f28f3b + #f2e5da = 1.94:1 — the worst pair in either theme. Now the
-    // accent value with a white label: 4.59:1.
-    "sidebar-hover": "#b85c0c",
-    "on-sidebar-hover": "#ffffff",
+    // `sidebar-hover` is the accent duplicated, so it moves with it.
+    "sidebar-hover": "#c47a1e",
+    "on-sidebar-hover": "#f7f1ea",
     "input-background": "#2b3138",
     "input-text": "#f2e5da",
     "cancel-button": "#3a4047",
@@ -158,21 +158,20 @@ const pixlStashDark = {
     "on-surface": "#f2e5da",
     background: "#1b1f24",
     "on-background": "#f2e5da",
-    // ── The action-fill tier ────────────────────────────────────────────────
-    // White labels are the invariant (see the light theme above), so the FILLS
-    // moved rather than the labels. Every dark action fill sits in the window
-    // L in [0.1624, 0.1833]: bright enough to clear 3:1 on the dark canvas,
-    // dark enough to carry white at 4.5:1. Hue is untouched (H28/H69/H345/H191);
-    // only lightness moves. These sit at the bright end of the legal window, so
-    // there is no value that is both brighter and legal.
-    accent: "#b85c0c", // white 4.59:1 (was #f28f3b + #1b1b1b, 2.40:1)
-    "on-accent": "#ffffff",
-    primary: "#6b7d04", // white 4.60:1 (was #8EA604 + #111111, 2.76:1)
-    "on-primary": "#ffffff",
-    secondary: "#d13a5f", // white 4.69:1 (was #DA4167, 4.26:1)
-    "on-secondary": "#ffffff",
-    tertiary: "#547b84", // white 4.62:1 (was #77A0A9 + #0f1418, 2.84:1)
-    "on-tertiary": "#ffffff",
+    // ── The action-fill tier (unified Camp B palette) ───────────────────────
+    // Identical to the light theme by design — one brand palette in both themes
+    // (design-system parity, 2026-07-24). Same warm-white #f7f1ea label, same
+    // contrast (primary 4.86:1, secondary 4.91:1, tertiary 4.85:1; accent
+    // #c47a1e 3.04:1, AA-large for the semibold button label).
+    accent: "#c47a1e", // warm-white 3.04:1 (brightened, more orange)
+    "on-accent": "#f7f1ea",
+    "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
+    primary: "#567309", // warm-white 4.86:1 (olive)
+    "on-primary": "#f7f1ea",
+    secondary: "#bb3566", // warm-white 4.91:1 (raspberry)
+    "on-secondary": "#f7f1ea",
+    tertiary: "#46707a", // warm-white 4.85:1 (teal)
+    "on-tertiary": "#f7f1ea",
     border: "#363d45",
     divider: "#2c323a",
     overlay: "#00000066",

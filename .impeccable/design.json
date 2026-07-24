@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-24T00:00:00Z",
+  "title": "Design System: PixlStash",
+  "extensions": {
+    "colorMeta": {
+      "amber":           { "role": "primary",  "displayName": "Amber (accent)",    "canonical": "#c47a1e", "tonalRamp": ["oklch(22% 0.05 65)","oklch(32% 0.07 65)","oklch(42% 0.09 65)","oklch(52% 0.11 65)","oklch(60% 0.13 65)","oklch(72% 0.11 65)","oklch(84% 0.07 65)","oklch(95% 0.03 65)"] },
+      "amber-glow":      { "role": "primary",  "displayName": "Amber Glow (selection / focus)", "canonical": "#e08a2a", "tonalRamp": ["oklch(25% 0.06 63)","oklch(35% 0.08 63)","oklch(45% 0.10 63)","oklch(55% 0.13 63)","oklch(66% 0.14 63)","oklch(76% 0.12 63)","oklch(86% 0.07 63)","oklch(95% 0.03 63)"] },
+      "olive":           { "role": "primary",  "displayName": "Olive (commit / go)", "canonical": "#567309", "tonalRamp": ["oklch(20% 0.05 118)","oklch(30% 0.07 118)","oklch(40% 0.10 118)","oklch(50% 0.12 118)","oklch(58% 0.13 118)","oklch(70% 0.14 118)","oklch(83% 0.10 118)","oklch(95% 0.05 118)"] },
+      "raspberry":       { "role": "secondary","displayName": "Raspberry (category)", "canonical": "#bb3566", "tonalRamp": ["oklch(20% 0.08 0)","oklch(30% 0.12 0)","oklch(40% 0.16 0)","oklch(50% 0.19 0)","oklch(58% 0.20 0)","oklch(70% 0.16 0)","oklch(83% 0.09 0)","oklch(95% 0.04 0)"] },
+      "teal":            { "role": "tertiary", "displayName": "Teal (quiet category)", "canonical": "#46707a", "tonalRamp": ["oklch(20% 0.02 220)","oklch(30% 0.03 220)","oklch(40% 0.04 220)","oklch(50% 0.05 220)","oklch(60% 0.05 220)","oklch(72% 0.05 220)","oklch(84% 0.03 220)","oklch(95% 0.01 220)"] },
+      "warm-near-black": { "role": "neutral",  "displayName": "Warm Near-Black (text)", "canonical": "#23211d", "dark": "#f2e5da", "tonalRamp": ["oklch(18% 0.008 80)","oklch(28% 0.008 80)","oklch(40% 0.008 80)","oklch(52% 0.007 80)","oklch(64% 0.006 80)","oklch(76% 0.006 80)","oklch(88% 0.006 80)","oklch(97% 0.005 80)"] },
+      "warm-near-white": { "role": "neutral",  "displayName": "Warm Near-White (canvas)", "canonical": "#faf9f7", "dark": "#1b1f24", "tonalRamp": ["oklch(18% 0.008 80)","oklch(28% 0.008 80)","oklch(40% 0.007 80)","oklch(55% 0.006 80)","oklch(68% 0.005 80)","oklch(80% 0.005 80)","oklch(90% 0.005 80)","oklch(98% 0.004 80)"] },
+      "warm-tinted-grey":{ "role": "neutral",  "displayName": "Warm Tinted Grey (chrome)", "canonical": "#f0ede9", "dark": "#23282f", "tonalRamp": ["oklch(20% 0.006 80)","oklch(30% 0.006 80)","oklch(42% 0.006 80)","oklch(55% 0.005 80)","oklch(68% 0.005 80)","oklch(80% 0.005 80)","oklch(90% 0.005 80)","oklch(96% 0.004 80)"] },
+      "on-fill":         { "role": "neutral",  "displayName": "Warm-White Label",  "canonical": "#f7f1ea", "tonalRamp": ["oklch(20% 0.008 70)","oklch(32% 0.008 70)","oklch(45% 0.008 70)","oklch(58% 0.007 70)","oklch(70% 0.006 70)","oklch(82% 0.006 70)","oklch(92% 0.006 70)","oklch(97% 0.006 70)"] },
+      "error":           { "role": "neutral",  "displayName": "Error (warm brick)", "canonical": "#b0392b", "tonalRamp": ["oklch(25% 0.08 28)","oklch(35% 0.12 28)","oklch(45% 0.16 28)","oklch(52% 0.17 28)","oklch(63% 0.16 28)","oklch(74% 0.13 28)","oklch(85% 0.08 28)","oklch(95% 0.04 28)"] },
+      "warning":         { "role": "neutral",  "displayName": "Warning (dark text)", "canonical": "#e8912f", "tonalRamp": ["oklch(25% 0.05 70)","oklch(35% 0.07 70)","oklch(45% 0.10 70)","oklch(55% 0.12 70)","oklch(66% 0.14 70)","oklch(76% 0.12 70)","oklch(86% 0.07 70)","oklch(95% 0.03 70)"] },
+      "success":         { "role": "neutral",  "displayName": "Success (forest)",   "canonical": "#2a7d3e", "tonalRamp": ["oklch(25% 0.06 150)","oklch(35% 0.09 150)","oklch(45% 0.11 150)","oklch(52% 0.12 150)","oklch(64% 0.13 150)","oklch(75% 0.11 150)","oklch(85% 0.07 150)","oklch(95% 0.03 150)"] },
+      "info":            { "role": "neutral",  "displayName": "Info (slate-blue)",  "canonical": "#2f6690", "tonalRamp": ["oklch(25% 0.06 250)","oklch(35% 0.09 250)","oklch(45% 0.11 250)","oklch(52% 0.12 250)","oklch(64% 0.11 250)","oklch(75% 0.09 250)","oklch(86% 0.05 250)","oklch(95% 0.02 250)"] }
+    },
+    "typographyMeta": {
+      "display":  { "displayName": "Display",  "purpose": "Login, startup, and empty-state headlines. The largest type in the product." },
+      "headline": { "displayName": "Headline", "purpose": "View titles." },
+      "title":    { "displayName": "Title",    "purpose": "Card titles and dialog headings." },
+      "body":     { "displayName": "Body",     "purpose": "Default 14px body and controls; measure under ~75ch." },
+      "label":    { "displayName": "Section Label", "purpose": "Recurring uppercase section label (.section-label). 11px, 600, 0.06em tracking." }
+    },
+    "shadows": [
+      { "name": "elevation-1", "value": "0 1px 2px rgba(var(--v-theme-shadow), 0.12)", "purpose": "Resting cards, hovered grid tiles." },
+      { "name": "elevation-2", "value": "0 2px 6px rgba(var(--v-theme-shadow), 0.18)", "purpose": "Menus, dropdowns, raised controls." },
+      { "name": "elevation-3", "value": "0 4px 16px rgba(var(--v-theme-shadow), 0.22)", "purpose": "Popovers, floating panels." },
+      { "name": "elevation-4", "value": "0 8px 28px rgba(var(--v-theme-shadow), 0.30)", "purpose": "Dialogs, lightbox chrome." },
+      { "name": "focus-ring", "value": "0 0 0 3px rgba(var(--v-theme-accent), 0.55)", "purpose": "The one focus ring, on every focusable element." }
+    ],
+    "motion": [
+      { "name": "dur-1", "value": "150ms", "purpose": "Hover, press, micro-feedback." },
+      { "name": "dur-2", "value": "200ms", "purpose": "Panels, expand/collapse — the default." },
+      { "name": "dur-3", "value": "250ms", "purpose": "Overlays, dialog enter/leave. Nothing routine slower than this." },
+      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Default easing for state transitions." },
+      { "name": "ease-decelerate", "value": "cubic-bezier(0, 0, 0.2, 1)", "purpose": "Elements entering the screen." }
+    ],
+    "breakpoints": [
+      { "name": "note", "value": "Desktop-first via Vuetify's breakpoint system; mobile web is a secondary, degrade-acceptably target, not a first-class layout." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button (Amber)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one amber 'safelight' primary action. Warm-white label at ~3:1 (AA large) — semibold button label only; for small text on amber use olive or dark text.",
+      "html": "<button class=\"ds-btn-primary\">Install now</button>",
+      "css": ".ds-btn-primary { background:#c47a1e; color:#f7f1ea; font:600 0.875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; padding:8px 16px; border:none; border-radius:4px; cursor:pointer; transition:filter 150ms cubic-bezier(0.4,0,0.2,1), box-shadow 150ms; } .ds-btn-primary:hover { filter:brightness(1.06); box-shadow:0 1px 2px rgba(28,22,12,0.18); } .ds-btn-primary:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(196,122,30,0.55); } .ds-btn-primary:active { filter:brightness(0.96); }"
+    },
+    {
+      "name": "Commit Button (Olive)",
+      "kind": "button",
+      "refersTo": "button-commit",
+      "description": "Olive 'commit / go' action (Create, Apply, Save changes). Warm-white label clears AA at 4.86:1 — the safe choice when the label is small.",
+      "html": "<button class=\"ds-btn-commit\">Apply score</button>",
+      "css": ".ds-btn-commit { background:#567309; color:#f7f1ea; font:600 0.875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; padding:8px 16px; border:none; border-radius:4px; cursor:pointer; transition:filter 150ms cubic-bezier(0.4,0,0.2,1), box-shadow 150ms; } .ds-btn-commit:hover { filter:brightness(1.06); box-shadow:0 1px 2px rgba(28,22,12,0.18); } .ds-btn-commit:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(196,122,30,0.55); } .ds-btn-commit:active { filter:brightness(0.96); }"
+    },
+    {
+      "name": "Cancel Button",
+      "kind": "button",
+      "refersTo": "button-cancel",
+      "description": "Warm neutral secondary/cancel action.",
+      "html": "<button class=\"ds-btn-cancel\">Cancel</button>",
+      "css": ".ds-btn-cancel { background:#e6e1d8; color:#23211d; font:500 0.875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; padding:8px 16px; border:none; border-radius:4px; cursor:pointer; transition:background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-cancel:hover { background:#dcd6ca; } .ds-btn-cancel:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(196,122,30,0.55); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Raised-white field with warm border and amber focus ring.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Filter by tag…\" />",
+      "css": ".ds-input { background:#fff; color:#23211d; font:400 0.875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; padding:8px 12px; border:1px solid #d8d3c8; border-radius:8px; outline:none; transition:border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color:rgba(35,33,29,0.5); } .ds-input:focus-visible { border-color:#c47a1e; box-shadow:0 0 0 3px rgba(196,122,30,0.55); }"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Warm tag/metadata chip on the grid/sidebar canvas.",
+      "html": "<span class=\"ds-chip\">portrait</span>",
+      "css": ".ds-chip { display:inline-flex; align-items:center; background:#f0ede9; color:#23211d; font:500 0.75rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; padding:4px 8px; border-radius:4px; }"
+    },
+    {
+      "name": "Section Label",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "The recurring uppercase section label (.section-label). Reuse it; do not re-roll.",
+      "html": "<div class=\"ds-section-label\">Filters</div>",
+      "css": ".ds-section-label { font:600 0.6875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; text-transform:uppercase; letter-spacing:0.06em; color:rgba(35,33,29,0.5); }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Raised-white container at rest elevation.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Character: Aria</div><div class=\"ds-card-meta\">128 pictures · avg score 7.4</div></div>",
+      "css": ".ds-card { background:#fff; color:#23211d; padding:16px; border-radius:8px; border:1px solid #e8e4dc; box-shadow:0 1px 2px rgba(28,22,12,0.12); font:400 0.875rem system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif; } .ds-card-title { font:600 1.125rem system-ui,sans-serif; margin-bottom:4px; } .ds-card-meta { font-size:0.8125rem; color:rgba(35,33,29,0.6); }"
+    },
+    {
+      "name": "Image Grid Tile (selected)",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Signature component. Uniform tile with designed hover / selected / focus states; selected shows the amber active wash + the brighter amber-glow active bar.",
+      "html": "<div class=\"ds-tile ds-tile--selected\" tabindex=\"0\"><div class=\"ds-tile-photo\"></div><span class=\"ds-tile-badge\">★ 8</span></div>",
+      "css": ".ds-tile { position:relative; width:160px; height:160px; border-radius:8px; border:1px solid #d8d3c8; overflow:hidden; cursor:pointer; transition:box-shadow 150ms cubic-bezier(0.4,0,0.2,1), transform 150ms; } .ds-tile-photo { position:absolute; inset:0; background:linear-gradient(135deg,#8a94a3,#5f6b7a); } .ds-tile:hover { box-shadow:0 1px 2px rgba(28,22,12,0.18); } .ds-tile:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(196,122,30,0.55); } .ds-tile--selected { box-shadow:inset 0 0 0 9999px rgba(196,122,30,0.20); } .ds-tile--selected::after { content:\"\"; position:absolute; left:0; top:0; bottom:0; width:3px; background:#e08a2a; } .ds-tile-badge { position:absolute; left:6px; bottom:6px; background:rgba(255,255,255,0.55); color:#23211d; font:600 0.6875rem system-ui,sans-serif; padding:2px 6px; border-radius:4px; backdrop-filter:blur(2px); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Darkroom",
+    "overview": "PixlStash is a self-hosted library where people who generate AI images at volume triage, score, and organize thousands of frames. The screen is mostly a dense grid of the user's own pictures, so the design works like a darkroom: the chrome dims to a warm safelight and the photos are the only thing that glows. The single amber accent is the safelight — used on the primary action and the key state, and almost nowhere else. The system is warm, quiet, and pixel-honest: warm neutrals (never cold grey or pure black/white), one amber accent spent sparingly, and a pixel-art padlock + Tiny5 pixel face that appear only in brand moments, never in working UI. The palette is unified across both themes — the four brand hues and four status colors are a single value shared by dark and light, each deep enough to carry the warm-white label; only the neutrals switch. Both themes are first-class and every decision must hold in both, but the design is led from dark, where volume review actually happens.",
+    "keyCharacteristics": [
+      "The photos are the color; the chrome is a warm, dim frame around them.",
+      "One amber accent, spent sparingly, on primary action and key state.",
+      "Warm neutrals only — near-black on near-white, never cold grey or pure black/white.",
+      "Dense by design (14px base), but density is earned by the grid, not the controls.",
+      "Polish lives in designed focus / hover / selected / empty / loading states.",
+      "Every value comes from a token; a new value is a design decision, not an inline tweak."
+    ],
+    "rules": [
+      { "name": "The One Safelight Rule", "body": "Amber marks intent, not decoration. One amber action per view, ≤~10% of a screen. Its rarity is the point.", "section": "colors" },
+      { "name": "The Unified-Palette Rule", "body": "Brand and status colors are the same hex in both themes; only neutrals flip. A theme-specific brand color is drift.", "section": "colors" },
+      { "name": "The Warm-White-Label Rule", "body": "Text on any deep brand/status fill is the warm-white on-fill (#f7f1ea), never pure #fff. The one exception is Warning, whose bright orange takes dark text (#1b1b1b) — the hazard convention.", "section": "colors" },
+      { "name": "The Status-Is-Not-Color-Alone Rule", "body": "Error/warning/success/info always pair color with an icon or text; color never carries meaning by itself, and status colors never appear as decoration.", "section": "colors" },
+      { "name": "The Categorizers-Label-Not-Act Rule", "body": "Raspberry and teal identify and group; they never sit on a button.", "section": "colors" },
+      { "name": "The No-Hex Rule", "body": "A hex literal in a component is drift. Every color is a token; if the color you want isn't one, you want the nearest one.", "section": "colors" },
+      { "name": "The Warmth Rule", "body": "Never cold grey, never pure #000/#fff; text, canvas, borders, and shadows all stay warm.", "section": "colors" },
+      { "name": "The rem-Only Rule", "body": "Size type in rem, from the ramp. Never em (it compounds with its parent and is the main reason nested labels drift), never a raw px one-off. This is the single biggest typographic drift to hold the line on.", "section": "typography" },
+      { "name": "The 600-Not-700 Rule", "body": "Headings are weight 600. 700 reads heavy against the warm near-black and is reserved for rare true emphasis. Hierarchy comes from weight, color, and space at least as much as from size.", "section": "typography" },
+      { "name": "The Tiny5-Is-Brand-Only Rule", "body": "The pixel face never sets a label, button, menu item, or any reading text — it is gorgeous as a mark and illegible as body. Brand moments only.", "section": "typography" },
+      { "name": "The Warm-Shadow Rule", "body": "Every shadow is built on --v-theme-shadow. Never hardcode a shadow color; a cold shadow on a warm canvas is an instant tell.", "section": "elevation" },
+      { "name": "The Dark-Leans-On-Lightness Rule", "body": "In dark mode, convey elevation by making the surface lighter, not by stacking a heavier shadow (which just muddies).", "section": "elevation" },
+      { "name": "The Consistent-Radius Rule", "body": "Radii stay consistent within a component family. An 8px card with a 4px button inside it is correct; an 8px card beside a 6px sibling card is drift.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do reach for a token before typing a value — color as rgb(var(--v-theme-*)), everything else from --space-* / --radius-* / --text-* / --elevation-* / --dur-*. A genuinely new value is a design decision, raised with the lead designer, not an inline tweak.",
+      "Do size type from the ramp, in rem, at 14px base; headings at weight 600.",
+      "Do design focus, hover, selected, empty, and loading states for anything interactive — that is where polish lives.",
+      "Do validate both themes on every change, and lead from dark since that is where review happens; keep light fully first-class.",
+      "Do align to the grid and to the 48px shell band — same row shares a baseline, columns share a left edge.",
+      "Do use --focus-ring on every focusable element; keyboard flow is a product requirement here, not a nicety."
+    ],
+    "donts": [
+      "Don't hardcode a hex color, a rgba(0,0,0,…) shadow/scrim, or an off-grid size/radius — those are exactly the size/alignment/color drift to eliminate.",
+      "Don't size text in em, or introduce a point size outside the ramp.",
+      "Don't set UI, labels, or body text in Tiny5 — brand moments only — and don't reintroduce PressStart2P.",
+      "Don't spend the amber accent broadly; one safelight, used sparingly.",
+      "Don't pull in a second icon set — Material Design Icons only in the chrome.",
+      "Don't let chrome compete with the photos; when in doubt, make the chrome quieter."
+    ]
+  }
+}

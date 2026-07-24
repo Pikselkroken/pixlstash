@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── index.html page-specific ── */
@@ -41,20 +42,29 @@
       }
 
       .btn-primary {
-        background: linear-gradient(130deg, var(--accent), var(--accent-2));
-        color: #ffffff;
-        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+        background: var(--accent);
+        color: var(--on-accent);
+        box-shadow: 0 12px 30px var(--shadow);
+      }
+
+      .btn-primary:hover {
+        background: color-mix(in srgb, var(--accent) 86%, #000);
       }
 
       .btn-secondary {
-        background: rgba(34, 38, 44, 0.06);
+        background: transparent;
         color: var(--text);
-        border-color: rgba(34, 38, 44, 0.16);
+        border-color: var(--border);
+      }
+
+      .btn-secondary:hover {
+        background: var(--hover-wash);
+        border-color: var(--muted);
       }
 
       .btn:hover {
         transform: translateY(-2px);
-        box-shadow: 0 12px 26px rgba(142, 166, 4, 0.28);
+        box-shadow: 0 12px 26px var(--shadow);
       }
 
       .hero-badges {
@@ -79,10 +89,10 @@
         border-radius: var(--radius-lg);
         background: linear-gradient(
           120deg,
-          rgba(159, 177, 31, 0.18),
-          rgba(47, 139, 95, 0.18)
+          color-mix(in srgb, var(--accent) 16%, var(--panel)),
+          var(--panel)
         );
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         display: flex;
         flex-wrap: wrap;
         gap: 20px;
@@ -95,15 +105,14 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: rgba(185, 193, 202, 0.65);
-        border: 1px solid rgba(14, 127, 168, 0.25);
-        border-radius: var(--radius-lg);
+        background: var(--panel);
+        border: 1px solid var(--border);        border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .demo-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .demo-teaser-wrap {
@@ -119,18 +128,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.08),
-          rgba(10, 95, 126, 0.04)
-        );
+        background: color-mix(in srgb, var(--tertiary) 10%, transparent);
       }
 
       .demo-teaser-label {
         font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -150,7 +155,7 @@
       .demo-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .demo-teaser-media img {
@@ -163,9 +168,8 @@
 
       .whatsnew-teaser {
         margin: 6px auto 16px;
-        background: var(--panel-strong);
-        border: 1px solid rgba(34, 38, 44, 0.12);
-        border-radius: var(--radius-lg);
+        background: var(--panel);
+        border: 1px solid var(--border);        border-radius: var(--radius-lg);
         overflow: hidden;
       }
 
@@ -182,11 +186,7 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(159, 177, 31, 0.1),
-          rgba(47, 139, 95, 0.07)
-        );
+        background: color-mix(in srgb, var(--secondary) 9%, transparent);
       }
 
       .whatsnew-label {
@@ -213,7 +213,7 @@
       .whatsnew-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: var(--accent-2);
+        color: var(--secondary);
       }
 
       .whatsnew-teaser-media img {
@@ -229,15 +229,14 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: var(--panel-strong);
-        border: 1px solid rgba(14, 127, 168, 0.25);
-        border-radius: var(--radius-lg);
+        background: var(--panel);
+        border: 1px solid var(--border);        border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .comfy-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .comfy-teaser-wrap {
@@ -253,18 +252,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.12),
-          rgba(10, 95, 126, 0.06)
-        );
+        background: color-mix(in srgb, var(--tertiary) 10%, transparent);
       }
 
       .comfy-teaser-label {
         font-size: 0.74rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -284,7 +279,7 @@
       .comfy-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .comfy-teaser-media img {
