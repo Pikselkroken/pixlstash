@@ -20,12 +20,46 @@ import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
-  apiClient,
   appendShareToken,
   isReadOnly,
   sessionContext,
 } from "../../utils/apiClient";
-import { deleteCharacter as apiDeleteCharacter } from "../../api/characters";
+import {
+  listCharacters,
+  patchCharacter,
+  getCharacterSummary,
+  getCharacterThumbnail,
+  addCharacterFaces,
+  addCharacterFacesByFaceId,
+  deleteCharacter as apiDeleteCharacter,
+} from "../../api/characters";
+import {
+  listPictureSets,
+  patchPictureSet,
+  deletePictureSet,
+  addPictureToSet,
+} from "../../api/pictureSets";
+import {
+  listProjects,
+  getProjectSummary,
+  deleteProject,
+} from "../../api/projects";
+import {
+  listReferenceFolders,
+  listImportFolders,
+  deleteFolder,
+  browseFilesystem,
+  // Aliased: this component's own click handler is also called
+  // relocateReferenceFolder.
+  relocateReferenceFolder as requestFolderRelocate,
+  movePicturesToReferenceFolder,
+} from "../../api/folders";
+import { setPicturesProject } from "../../api/pictures";
+import {
+  getSharedResourceIds,
+  revokeTokensByResource,
+} from "../../api/users";
+import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
   SET_ICONS,
@@ -478,10 +512,7 @@ async function relocateReferenceFolder() {
   referenceFolderRelocateError.value = "";
   referenceFolderRelocateResult.value = "";
   try {
-    const { data } = await apiClient.post(
-      `/reference-folders/${folder.id}/relocate`,
-      { destination_folder: destination },
-    );
+    const data = await requestFolderRelocate(folder.id, destination);
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
     for (const rf of referenceFolders.value) {
@@ -689,11 +720,11 @@ const collapsedProjectBtnTitle = computed(() => {
 async function fetchReferenceFolders() {
   referenceFoldersLoading.value = true;
   try {
-    const res = await apiClient.get("/reference-folders");
-    referenceFolders.value = res.data?.folders ?? [];
+    const body = await listReferenceFolders();
+    referenceFolders.value = body?.folders ?? [];
     entityNames.mergeRefFolderLabels(referenceFolders.value);
-    inDocker.value = Boolean(res.data?.in_docker);
-    referenceFoldersImageRoot.value = res.data?.image_root ?? null;
+    inDocker.value = Boolean(body?.in_docker);
+    referenceFoldersImageRoot.value = body?.image_root ?? null;
     // In non-Docker mode we eagerly browse roots so we know which have
     // subdirectories (controls whether the expand chevron is shown).
     if (!inDocker.value) {
@@ -713,8 +744,8 @@ async function fetchReferenceFolders() {
 async function fetchImportFolders() {
   importFoldersLoading.value = true;
   try {
-    const res = await apiClient.get("/import-folders");
-    importFolders.value = res.data?.folders ?? [];
+    const body = await listImportFolders();
+    importFolders.value = body?.folders ?? [];
     entityNames.mergeImportFolderLabels(importFolders.value);
     if (sidebarPrimaryTab.value === "folders") {
       _startFolderStatusPoll();
@@ -756,11 +787,9 @@ async function browseFolderPath(path, prefetchChildren = false) {
     [path]: { entries: [], loading: true, image_count: null },
   };
   try {
-    const res = await apiClient.get(
-      `/filesystem/browse?path=${encodeURIComponent(path)}`,
-    );
-    const entries = res.data?.entries ?? [];
-    const imageCount = Number(res.data?.image_count);
+    const listing = await browseFilesystem(path);
+    const entries = listing?.entries ?? [];
+    const imageCount = Number(listing?.image_count);
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
       [path]: {
@@ -846,12 +875,12 @@ function _anyFolderNeedsPolling() {
 
 async function _pollFolderStatus() {
   try {
-    const [referenceRes, importRes] = await Promise.all([
-      apiClient.get("/reference-folders"),
-      apiClient.get("/import-folders"),
+    const [referenceBody, importBody] = await Promise.all([
+      listReferenceFolders(),
+      listImportFolders(),
     ]);
-    const folders = referenceRes.data?.folders ?? [];
-    const updatedImportFolders = importRes.data?.folders ?? [];
+    const folders = referenceBody?.folders ?? [];
+    const updatedImportFolders = importBody?.folders ?? [];
     // Detect folders whose first scan just completed so we can refresh
     // the browse cache (image counts were zero before).
     const justScanned = referenceFolders.value.filter((rf) => {
@@ -1222,7 +1251,7 @@ async function deleteProjectById(project) {
   )
     return;
   try {
-    await apiClient.delete(`${props.backendUrl}/projects/${project.id}`);
+    await deleteProject(project.id, { baseUrl: props.backendUrl });
     await projectDeleted(project.id);
   } catch (e) {
     console.error("Failed to delete project", e);
@@ -1866,7 +1895,7 @@ async function deleteSetById(id) {
   )
     return;
   try {
-    await apiClient.delete(`${props.backendUrl}/picture_sets/${id}`);
+    await deletePictureSet(id, { baseUrl: props.backendUrl });
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -1898,7 +1927,7 @@ async function deleteSetsByIds(ids) {
   try {
     await Promise.all(
       normalizedIds.map((id) =>
-        apiClient.delete(`${props.backendUrl}/picture_sets/${id}`),
+        deletePictureSet(id, { baseUrl: props.backendUrl }),
       ),
     );
     emit("select-set", null);
@@ -1918,7 +1947,7 @@ async function deleteReferenceFolderById(id) {
   const folderLabel = folder.label || folder.folder;
   if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
   try {
-    await apiClient.delete(`/reference-folders/${id}`);
+    await deleteFolder("reference", id);
     if (selectedFolderKey.value === `rf-${id}`) {
       selectedFolderKey.value = null;
       emit("select-folder", null);
@@ -1939,7 +1968,7 @@ async function deleteImportFolderById(id) {
   const folderLabel = folder.label || folder.folder;
   if (!window.confirm(`Remove import folder "${folderLabel}"?`)) return;
   try {
-    await apiClient.delete(`/import-folders/${id}`);
+    await deleteFolder("import", id);
     if (selectedFolderKey.value === `if-${id}`) {
       selectedFolderKey.value = null;
       selectedFolderReferenceId.value = null;
@@ -2150,7 +2179,7 @@ async function applySetAppearance(setId, icon, color) {
   if (icon !== null) payload.set_icon = icon;
   if (color !== null) payload.set_color = color;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, payload);
+    await patchPictureSet(setId, payload, { baseUrl: props.backendUrl });
     refreshSidebar();
   } catch (e) {
     console.error("Failed to update set appearance", e);
@@ -2166,9 +2195,11 @@ async function toggleSetLock(set) {
   closeSidebarCtxMenu();
   if (!set?.id) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${set.id}`, {
-      locked: !set.locked,
-    });
+    await patchPictureSet(
+      set.id,
+      { locked: !set.locked },
+      { baseUrl: props.backendUrl },
+    );
     refreshSidebar();
     lockedSetsStore.fetch();
   } catch (e) {
@@ -2338,31 +2369,39 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const resAll = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
-    );
-    const data = await resAll.data;
+    const data = await getCharacterSummary(props.allPicturesId, undefined, {
+      baseUrl: props.backendUrl,
+    });
     setCategoryCount(props.allPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
   try {
     // Unassigned images summary
-    const unassignedSummaryUrl =
+    const unassignedParams =
       projectViewMode.value === "project"
-        ? `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${selectedProjectId.value != null ? selectedProjectId.value : "UNASSIGNED"}`
-        : `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
-    const resUnassigned = await apiClient.get(unassignedSummaryUrl);
-    const data = await resUnassigned.data;
+        ? {
+            project_id:
+              selectedProjectId.value != null
+                ? selectedProjectId.value
+                : "UNASSIGNED",
+          }
+        : undefined;
+    const data = await getCharacterSummary(
+      props.unassignedPicturesId,
+      unassignedParams,
+      { baseUrl: props.backendUrl },
+    );
     setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const resScrapheap = await apiClient.get(
-      `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`,
+    const data = await getCharacterSummary(
+      props.scrapheapPicturesId,
+      undefined,
+      { baseUrl: props.backendUrl },
     );
-    const data = await resScrapheap.data;
     setCategoryCount(props.scrapheapPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
@@ -2377,13 +2416,11 @@ async function fetchSidebarData() {
                   char.project_id != null ? char.project_id : "UNASSIGNED",
               }
             : null;
-        const res = await apiClient.get(
-          `${props.backendUrl}/characters/${char.id}/summary`,
-          characterSummaryParams
-            ? { params: characterSummaryParams }
-            : undefined,
+        const data = await getCharacterSummary(
+          char.id,
+          characterSummaryParams ?? undefined,
+          { baseUrl: props.backendUrl },
         );
-        const data = await res.data;
         setCategoryCount(char.id, data.image_count, shouldFlash);
       } catch (e) {
         console.warn("Error fetching character images summary:", e);
@@ -2393,17 +2430,17 @@ async function fetchSidebarData() {
   // Fetch counts for each project and the unassigned bucket
   try {
     const countRequests = [
-      apiClient
-        .get(`${props.backendUrl}/projects/UNASSIGNED/summary`)
-        .then((r) => {
-          projectCounts.value[UNASSIGNED_PROJECT_KEY] = r.data.image_count;
-        }),
+      getProjectSummary("UNASSIGNED", undefined, {
+        baseUrl: props.backendUrl,
+      }).then((body) => {
+        projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
+      }),
       ...projects.value.map((p) =>
-        apiClient
-          .get(`${props.backendUrl}/projects/${p.id}/summary`)
-          .then((r) => {
-            projectCounts.value[p.id] = r.data.image_count;
-          }),
+        getProjectSummary(p.id, undefined, {
+          baseUrl: props.backendUrl,
+        }).then((body) => {
+          projectCounts.value[p.id] = body.image_count;
+        }),
       ),
     ];
     await Promise.all(countRequests);
@@ -2417,8 +2454,7 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const res = await apiClient.get(`${props.backendUrl}/characters`);
-    const chars = await res.data;
+    const chars = await listCharacters({ baseUrl: props.backendUrl });
     const nextCharacters = Array.isArray(chars) ? chars : [];
     if (!Array.isArray(chars)) {
       console.warn(
@@ -2451,12 +2487,12 @@ function refreshSidebar(options = {}) {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    const cacheBuster = Date.now();
-    const thumbUrl = `/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
-    const res = await apiClient.get(thumbUrl, { responseType: "blob" });
+    const blob = await getCharacterThumbnail(characterId, {
+      cacheBuster: Date.now(),
+    });
 
     // Create an object URL for the blob
-    const blobUrl = URL.createObjectURL(res.data);
+    const blobUrl = URL.createObjectURL(blob);
     characterThumbnails.value[characterId] = blobUrl;
   } catch (e) {
     console.error(`Failed to fetch thumbnail for character ${characterId}:`, e);
@@ -2467,9 +2503,8 @@ async function fetchCharacterThumbnail(characterId) {
 // --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
-    const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
+    const payload = await listSortMechanisms({ baseUrl: props.backendUrl });
 
-    const payload = res.data;
     const options = Array.isArray(payload)
       ? payload
       : Array.isArray(payload?.sort_mechanisms)
@@ -2518,8 +2553,8 @@ async function fetchProjects() {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl}/projects`);
-    projects.value = Array.isArray(res.data) ? res.data : [];
+    const rows = await listProjects({ baseUrl: props.backendUrl });
+    projects.value = Array.isArray(rows) ? rows : [];
     entityNames.mergeProjectNames(projects.value);
   } catch (e) {
     console.error("Error fetching projects:", e);
@@ -2531,10 +2566,7 @@ async function fetchPictureSets() {
   try {
     // Always fetch all sets — in the flat project tree each project filters
     // its own sets client-side, so we must not scope this call to a single project.
-    const setUrl = `${props.backendUrl}/picture_sets`;
-    const res = await apiClient.get(setUrl);
-
-    const sets = await res.data; // Axios responses use `data` for the payload
+    const sets = await listPictureSets({ baseUrl: props.backendUrl });
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
     entityNames.mergeSetNames(pictureSets.value);
     await updateSetThumbnails(pictureSets.value);
@@ -2547,14 +2579,14 @@ async function fetchPictureSets() {
 async function fetchSharedIds() {
   if (isReadOnly.value) return; // only owner can query tokens
   try {
-    const [charRes, setRes, projRes] = await Promise.all([
-      apiClient.get("/users/me/shared-resource-ids?resource_type=character"),
-      apiClient.get("/users/me/shared-resource-ids?resource_type=picture_set"),
-      apiClient.get("/users/me/shared-resource-ids?resource_type=project"),
+    const [charBody, setBody, projBody] = await Promise.all([
+      getSharedResourceIds("character"),
+      getSharedResourceIds("picture_set"),
+      getSharedResourceIds("project"),
     ]);
-    sharedCharacterIds.value = new Set(charRes.data?.ids ?? []);
-    sharedSetIds.value = new Set(setRes.data?.ids ?? []);
-    sharedProjectIds.value = new Set(projRes.data?.ids ?? []);
+    sharedCharacterIds.value = new Set(charBody?.ids ?? []);
+    sharedSetIds.value = new Set(setBody?.ids ?? []);
+    sharedProjectIds.value = new Set(projBody?.ids ?? []);
   } catch (e) {
     console.warn("[SideBar] fetchSharedIds error:", e);
   }
@@ -2562,9 +2594,7 @@ async function fetchSharedIds() {
 
 async function revokeAllShares(resourceType, resourceId) {
   try {
-    await apiClient.delete(
-      `/users/me/tokens/by-resource?resource_type=${encodeURIComponent(resourceType)}&resource_id=${encodeURIComponent(resourceId)}`,
-    );
+    await revokeTokensByResource(resourceType, resourceId);
     // Remove from local set so icon disappears immediately
     if (resourceType === "character")
       sharedCharacterIds.value.delete(resourceId);
@@ -2766,9 +2796,7 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      await apiClient.post(
-        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
-      );
+      await addPictureToSet(setId, picId, { baseUrl: props.backendUrl });
     });
 
     await Promise.all(addPromises);
@@ -2852,12 +2880,9 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
   const imageIds = readDraggedImageIds(event);
   if (!imageIds.length) return;
   try {
-    const body = { picture_ids: imageIds };
-    if (scopePath) body.destination_subpath = scopePath;
-    const { data } = await apiClient.post(
-      `/reference-folders/${folderId}/move-pictures`,
-      body,
-    );
+    const data = await movePicturesToReferenceFolder(folderId, imageIds, {
+      destinationSubpath: scopePath,
+    });
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
     for (const rf of referenceFolders.value) {
@@ -2916,10 +2941,9 @@ async function onProjectDrop(projectId, event) {
     // created via the batch /pictures/project endpoint with mode "add".
     // (Patching a picture's direct project_id column does NOT create the
     // membership the project view queries — that returns 200 but shows nothing.)
-    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-      picture_ids: imageIds,
-      project_id: projectId,
+    await setPicturesProject(imageIds, projectId, {
       mode: "add",
+      baseUrl: props.backendUrl,
     });
     emit("images-moved", { imageIds });
   } catch (e) {
@@ -2993,11 +3017,9 @@ async function onCharacterDrop(characterId, event) {
   if (dragType === "face-bbox" && faceIds.length > 0) {
     // Assign faces to character
     try {
-      const body = { face_ids: faceIds };
-      await apiClient.post(
-        `${props.backendUrl}/characters/${characterId}/faces`,
-        body,
-      );
+      await addCharacterFacesByFaceId(characterId, faceIds, {
+        baseUrl: props.backendUrl,
+      });
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
@@ -3017,11 +3039,9 @@ async function onCharacterDrop(characterId, event) {
 
   try {
     // Fallback: assign images to character
-    const body = { picture_ids: imageIds };
-    await apiClient.post(
-      `${props.backendUrl}/characters/${characterId}/faces`,
-      body,
-    );
+    await addCharacterFaces(characterId, imageIds, {
+      baseUrl: props.backendUrl,
+    });
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("images-assigned-to-character", { characterId, imageIds });
@@ -3398,9 +3418,11 @@ async function toggleCharacterProjectMembership(charId) {
       ? null
       : selectedProjectId.value;
   try {
-    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
-      project_id: newProjectId,
-    });
+    await patchCharacter(
+      charId,
+      { project_id: newProjectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = {
@@ -3422,9 +3444,11 @@ async function toggleSetProjectMembership(setId) {
       ? null
       : selectedProjectId.value;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
-      project_id: newProjectId,
-    });
+    await patchPictureSet(
+      setId,
+      { project_id: newProjectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = {
@@ -3471,9 +3495,11 @@ async function moveCharacterToProject(charId, projectId) {
   const char = characters.value.find((c) => c.id === charId);
   if (!char || char.project_id === projectId) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
-      project_id: projectId,
-    });
+    await patchCharacter(
+      charId,
+      { project_id: projectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = {
@@ -3495,9 +3521,11 @@ async function moveSetToProject(setId, projectId) {
   const set = pictureSets.value.find((s) => s.id === setId);
   if (!set || set.project_id === projectId) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
-      project_id: projectId,
-    });
+    await patchPictureSet(
+      setId,
+      { project_id: projectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = {

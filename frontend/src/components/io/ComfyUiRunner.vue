@@ -49,8 +49,8 @@
  *   progress                           - Reactive progress object { visible, status, percent, message }.
  */
 import { ref, reactive, onUnmounted, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
 import { abortRun } from "../../api/comfyui";
+import { getPictureMetadata } from "../../api/pictures";
 import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -315,10 +315,10 @@ function hasComfyuiRefreshRetry(pictureId) {
 async function fetchStackIdForPicture(pictureId) {
   if (!pictureId || !props.backendUrl) return null;
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${pictureId}/metadata`,
-    );
-    const stackId = res.data?.stack_id ?? res.data?.stackId ?? null;
+    const data = await getPictureMetadata(pictureId, {
+      baseUrl: props.backendUrl,
+    });
+    const stackId = data?.stack_id ?? data?.stackId ?? null;
     return stackId != null ? String(stackId) : null;
   } catch (err) {
     logComfyuiDebug("stack-id-fetch-failed", {
