@@ -80,6 +80,7 @@ frontend/src/
 │   ├── reviews.js               # /reviews — tag-review session bookkeeping
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
+│   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters
 │   ├── projects.js              # /projects
 │   ├── pictureSets.js           # /picture_sets
@@ -792,6 +793,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/reviews.js` | `/reviews`, tag-review session bookkeeping |
 | `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
 | `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
+| `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
 | `api/characters.js` | `/characters` list and delete |
 | `api/projects.js` | `/projects` |
 | `api/pictureSets.js` | `/picture_sets` |

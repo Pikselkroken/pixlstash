@@ -4,7 +4,8 @@ import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
 } from "../../utils/media.js";
-import { apiClient } from "../../utils/apiClient.js";
+import { listProjects } from "../../api/projects.js";
+import { listImportFolders } from "../../api/folders.js";
 import ProjectEditor from "../editors/ProjectEditor.vue";
 
 const props = defineProps({
@@ -69,8 +70,8 @@ watch(
 
 async function fetchProjects() {
   try {
-    const res = await apiClient.get("/projects");
-    projects.value = Array.isArray(res.data) ? res.data : [];
+    const rows = await listProjects();
+    projects.value = Array.isArray(rows) ? rows : [];
   } catch {
     projects.value = [];
   }
@@ -160,8 +161,8 @@ async function fetchWatchFolders({ force = false } = {}) {
   importFoldersLoading.value = true;
   importFoldersError.value = "";
   try {
-    const response = await apiClient.get("/import-folders");
-    importFolders.value = response?.data?.folders || [];
+    const body = await listImportFolders();
+    importFolders.value = body?.folders || [];
     importFoldersLoaded.value = true;
   } catch {
     importFoldersError.value =
