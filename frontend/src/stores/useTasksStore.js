@@ -83,7 +83,14 @@ export const useTasksStore = defineStore("tasks", () => {
   // determinate task row, mirroring the ComfyUI run pattern: the two-phase
   // dialog auto-hides at the safe transition and the import continues as just
   // another entry in the Tasks tab. runId → { status, percent, message, label,
-  // current, total }.
+  // current, total, abortable }.
+  //
+  // `abortable` is the honest gate for the Tasks-tab cancel affordance: it is
+  // true ONLY while a client-side abort can genuinely act (the pre-commit upload
+  // window, where aborting the in-flight request stops sending remaining bytes).
+  // Once the staging session is committed the import is a background server task
+  // that the client cannot stop without a backend cancel endpoint, so the run is
+  // marked non-abortable and no cancel control is offered. See ImageImporter.vue.
   const importRuns = reactive({});
   const importAbortHandlers = new Map();
 
@@ -98,6 +105,7 @@ export const useTasksStore = defineStore("tasks", () => {
       label: run?.label || "Importing pictures",
       current: Number.isFinite(current) ? current : 0,
       total: Number.isFinite(total) ? total : 0,
+      abortable: Boolean(run?.abortable),
     };
   }
 
@@ -177,11 +185,6 @@ export const useTasksStore = defineStore("tasks", () => {
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
   // ── Rate helpers (read by the Tasks tab for sparklines / "/s" labels) ──────
-  function getMaxRate(key) {
-    const samples = series.value[key] || [];
-    return samples.length ? Math.max(...samples.map((s) => s.rate || 0)) : 0;
-  }
-
   function getLatestRate(key) {
     const samples = series.value[key] || [];
     if (!samples.length) return 0;
@@ -354,7 +357,6 @@ export const useTasksStore = defineStore("tasks", () => {
     activeCount,
     hasActiveTasks,
     // rate helpers
-    getMaxRate,
     getLatestRate,
     // polling lifecycle
     tasksTabOpen,
