@@ -46,6 +46,7 @@ def serialize_user_config(user) -> dict:
         "sidebar_thumbnail_size",
         "sidebar_width",
         "thumbnail_mode",
+        "thumbnail_size_level",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -157,6 +158,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "sidebar_thumbnail_size",
         "sidebar_width",
         "thumbnail_mode",
+        "thumbnail_size_level",
         "show_stars",
         "show_face_bboxes",
         "show_hand_bboxes",
@@ -383,6 +385,20 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 )
             if user.thumbnail_mode != new_value:
                 user.thumbnail_mode = new_value
+                updated = True
+            continue
+        if key == "thumbnail_size_level":
+            if value in ("", None, "null"):
+                # A blank patch resets to the default (Medium) rather than
+                # persisting an empty size.
+                new_value = 3
+            else:
+                new_value = int(value)
+            # Clamp to the supported 0..6 range instead of rejecting, mirroring
+            # how the sidebar sizes snap to their allowed set.
+            new_value = max(0, min(6, new_value))
+            if user.thumbnail_size_level != new_value:
+                user.thumbnail_size_level = new_value
                 updated = True
             continue
         if key == "sidebar_docked":

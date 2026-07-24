@@ -1,9 +1,21 @@
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { defineStore } from "pinia";
 import { isReadOnly } from "../utils/apiClient";
+import {
+  DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  columnsForSizeLevel,
+  nearestSizeLevelForColumns,
+} from "../utils/thumbnailSizes";
 
 export const useGridStore = defineStore("grid", () => {
-  const columns = ref(isReadOnly.value ? 5 : 4);
+  // User-facing thumbnail size as a level 0..6 (Tiny … Huge). This is the
+  // single control that drives BOTH layouts: the square grid derives its
+  // column count from it (see `columns` below) and the justified layout derives
+  // its target row height from it. Persisted server-side as
+  // `thumbnail_size_level`. Read-only starts one notch denser (~5 columns).
+  const sizeLevel = ref(
+    isReadOnly.value ? nearestSizeLevelForColumns(5) : DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  );
   const thumbnailSize = ref(256);
   // 'square' (uniform grid) or 'justified' (Google-Photos row layout). A
   // display preference persisted like `columns`; the justified path is driven
@@ -28,12 +40,24 @@ export const useGridStore = defineStore("grid", () => {
   const minColumns = ref(6);
   const maxColumns = ref(12);
 
+  // Square-grid column count, derived from the size level. Clamped DOWN to
+  // maxColumns (the viewport's column ceiling, so tiles never shrink below the
+  // usable minimum on narrow screens) but NOT up to minColumns: the larger size
+  // levels intentionally mean few columns / big tiles, even past the 384px
+  // source width. Read-only — change `sizeLevel` to resize. Kept as a getter
+  // named `columns` so every existing square-grid consumer works unchanged.
+  const columns = computed(() => {
+    const desired = columnsForSizeLevel(sizeLevel.value);
+    return Math.max(1, Math.min(maxColumns.value, desired));
+  });
+
   function refreshGridVersion() {
     gridVersion.value++;
   }
 
   return {
     columns,
+    sizeLevel,
     thumbnailSize,
     thumbnailMode,
     compactMode,

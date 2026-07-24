@@ -98,6 +98,13 @@ def create_router(server) -> APIRouter:
         sort_order: Optional[str] = None
         descending: Optional[bool] = None
         columns: Optional[int] = None
+        thumbnail_size_level: Optional[int] = Field(
+            default=None,
+            description=(
+                "Unified grid thumbnail size index (0..6, larger index means "
+                "fewer/larger thumbnails). Default 3 = Medium."
+            ),
+        )
         sidebar_thumbnail_size: Optional[int] = None
         sidebar_width: Optional[int] = None
         thumbnail_mode: Optional[str] = Field(

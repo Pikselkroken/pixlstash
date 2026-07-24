@@ -1146,6 +1146,9 @@ const props = defineProps({
   // 'square' (uniform grid) or 'justified' (Google-Photos-style rows of
   // variable-width thumbnails sharing a common row height).
   thumbnailMode: { type: String, default: "square" },
+  // Shared thumbnail-size level (0..6). Drives square column count (via
+  // gridStore.columns) and, in justified mode, the target row height.
+  sizeLevel: { type: Number, default: 3 },
   themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   allPicturesId: String,

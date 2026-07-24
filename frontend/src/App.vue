@@ -46,6 +46,10 @@ import NoticeHost from "./components/widgets/NoticeHost.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
 import { isInternalImageDrag } from "./utils/media.js";
+import {
+  clampSizeLevel,
+  nearestSizeLevelForColumns,
+} from "./utils/thumbnailSizes";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -637,21 +641,14 @@ function updateIsMobile() {
   updateMaxColumns();
 }
 
-function clampColumnsToBounds() {
-  if (gridStore.columns > gridStore.maxColumns) {
-    gridStore.columns = gridStore.maxColumns;
-  }
-  if (gridStore.columns < gridStore.minColumns) {
-    gridStore.columns = gridStore.minColumns;
-  }
-}
-
 function updateMaxColumns() {
+  // Maintain the responsive column bounds. gridStore.columns is derived from
+  // the size level and clamps itself to these bounds, so there is nothing to
+  // write back here — updating the bounds re-evaluates the derived count.
   const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
   if (!width) {
     gridStore.minColumns = MIN_COLUMNS;
     gridStore.maxColumns = MAX_COLUMNS;
-    clampColumnsToBounds();
     return;
   }
   const availableWidth = Math.max(0, width - 8);
@@ -665,7 +662,6 @@ function updateMaxColumns() {
   );
   gridStore.minColumns = Math.max(MIN_COLUMNS, computedMin);
   gridStore.maxColumns = Math.min(MAX_COLUMNS, computedMax);
-  clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
@@ -1405,8 +1401,12 @@ async function fetchConfig() {
     if (typeof res.data.descending === "boolean") {
       sortStore.selectedDescending = res.data.descending;
     }
-    if (typeof res.data.columns === "number") {
-      gridStore.columns = res.data.columns;
+    if (typeof res.data.thumbnail_size_level === "number") {
+      gridStore.sizeLevel = clampSizeLevel(res.data.thumbnail_size_level);
+    } else if (typeof res.data.columns === "number") {
+      // Legacy config predating the size ladder: derive the nearest level so
+      // an old install keeps roughly the same tile size after upgrading.
+      gridStore.sizeLevel = nearestSizeLevelForColumns(res.data.columns);
     }
     if (
       res.data.thumbnail_mode === "square" ||
@@ -1554,6 +1554,9 @@ async function patchConfigUIOptions() {
   const patch = {};
   if (sortStore.selectedSort) patch.sort = sortStore.selectedSort;
   patch.descending = sortStore.selectedDescending;
+  patch.thumbnail_size_level = gridStore.sizeLevel;
+  // Keep the legacy `columns` field in sync with the derived count so older
+  // clients (and anything still reading `columns`) stay consistent.
   if (gridStore.columns) patch.columns = gridStore.columns;
   if (userPrefsStore.sidebarThumbnailSize) {
     patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
@@ -1930,7 +1933,7 @@ watch(
 );
 
 watch(
-  () => gridStore.columns,
+  () => gridStore.sizeLevel,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -2377,6 +2380,7 @@ defineExpose({
                 :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
                 :columns="gridStore.columns"
+                :sizeLevel="gridStore.sizeLevel"
                 :thumbnailMode="gridStore.thumbnailMode"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"

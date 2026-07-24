@@ -25,6 +25,9 @@ class User(SQLModel, table=True):
     # Grid thumbnail shape: "square" (force-crop to a square cell) or
     # "justified" (aspect-ratio-preserving thumbnails for a justified grid).
     thumbnail_mode: Optional[str] = Field(default="square")
+    # Unified grid thumbnail size index (0..6, larger index = fewer/larger
+    # thumbnails). Default 3 = Medium.
+    thumbnail_size_level: Optional[int] = Field(default=3)
     sidebar_width: Optional[int] = Field(default=240)
     show_stars: bool = Field(default=True)
     show_face_bboxes: Optional[bool] = Field(default=False)

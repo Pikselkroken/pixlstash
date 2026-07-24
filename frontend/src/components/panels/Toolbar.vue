@@ -249,22 +249,23 @@
               </button>
             </div>
 
-            <div class="tbm-section gb-columns-row">
-              <span class="gb-columns-label"
-                >Columns: <b class="tbm-mono">{{ gbPendingColumns }}</b></span
-              >
-              <v-slider
-                class="gb-columns-slider"
-                v-model="gbPendingColumns"
-                :min="gridStore.minColumns ?? 2"
-                :max="gridStore.maxColumns ?? 14"
-                :step="1"
-                density="compact"
-                hide-details
-                color="primary"
-                thumb-color="primary"
-                @end="gbCommitColumns"
-              />
+            <div class="tbm-section gb-size-section">
+              <div class="gb-size-controls">
+                <span class="gb-columns-label">Size</span>
+                <v-slider
+                  class="gb-columns-slider"
+                  v-model="gbPendingSize"
+                  :min="0"
+                  :max="gbMaxSizeLevel"
+                  :step="1"
+                  density="compact"
+                  hide-details
+                  color="primary"
+                  thumb-color="primary"
+                  @end="gbCommitSize"
+                />
+              </div>
+              <span class="gb-size-value">{{ gbSizeLabel }}</span>
             </div>
 
             <div class="tbm-section">
@@ -538,6 +539,11 @@ import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useProjectStore } from "../../stores/useProjectStore";
+import {
+  MAX_THUMBNAIL_SIZE_LEVEL,
+  DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  sizeLabelForLevel,
+} from "../../utils/thumbnailSizes";
 import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
@@ -835,21 +841,24 @@ const gbFilterMenuOpen = ref(false);
 
 // ── Grid Bar: View ─────────────────────────────────────────────────────────────
 const gbViewMenuOpen = ref(false);
-const gbPendingColumns = ref(gridStore.columns ?? 4);
+const gbMaxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
+const gbPendingSize = ref(gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL);
+const gbSizeLabel = computed(() => sizeLabelForLevel(gbPendingSize.value));
 
 watch(
-  () => gridStore.columns,
+  () => gridStore.sizeLevel,
   (v) => {
-    if (!gbViewMenuOpen.value) gbPendingColumns.value = v ?? 4;
+    if (!gbViewMenuOpen.value)
+      gbPendingSize.value = v ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
   },
 );
 
 watch(gbViewMenuOpen, (isOpen) => {
-  if (isOpen) gbPendingColumns.value = gridStore.columns ?? 4;
+  if (isOpen) gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
 });
 
-function gbCommitColumns() {
-  gridStore.columns = gbPendingColumns.value;
+function gbCommitSize() {
+  gridStore.sizeLevel = gbPendingSize.value;
 }
 
 const gbCompactModeModel = computed({
@@ -1311,7 +1320,12 @@ const gbCollapseAllStacksDisabled = computed(
   max-width: 92vw;
 }
 
-.gb-columns-row {
+.gb-size-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.gb-size-controls {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -1327,6 +1341,14 @@ const gbCollapseAllStacksDisabled = computed(
   flex: 1;
   min-width: 0;
   margin-bottom: 0;
+}
+
+/* Current size name, right-aligned under the slider. */
+.gb-size-value {
+  align-self: flex-end;
+  font-size: var(--text-sm);
+  opacity: 0.6;
+  white-space: nowrap;
 }
 
 @media (hover: none) and (pointer: coarse) {

@@ -3,11 +3,9 @@ import {
   packJustifiedRows,
   rowAtOffset,
   rowOfIndex,
-  JUSTIFIED_TARGET_ROW_HEIGHT,
   JUSTIFIED_ROW_GAP,
-  JUSTIFIED_MIN_ROW_HEIGHT,
-  JUSTIFIED_MAX_ROW_HEIGHT,
 } from "./useJustifiedLayout";
+import { rowHeightForSizeLevel } from "../utils/thumbnailSizes";
 
 // Constants shared with ImageGrid.vue
 const MIN_THUMBNAIL_SIZE = 128;
@@ -91,14 +89,19 @@ export function useVirtualScroll(
     if (!(containerWidth > 0)) return null;
     const aspectRatios = getAspectRatios();
     if (!Array.isArray(aspectRatios) || aspectRatios.length === 0) return null;
+    // Target row height comes from the shared size level so the size slider
+    // resizes justified rows exactly as it resizes square columns. The min/max
+    // bounds flex around the target so leftover rows can still stretch/shrink
+    // to fill the container width without jumping to a fixed global size.
+    const targetRowHeight = rowHeightForSizeLevel(props.sizeLevel);
     return packJustifiedRows({
       aspectRatios,
       containerWidth,
-      targetRowHeight: JUSTIFIED_TARGET_ROW_HEIGHT,
+      targetRowHeight,
       gap: JUSTIFIED_ROW_GAP,
       rowExtraHeight: props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
-      minRowHeight: JUSTIFIED_MIN_ROW_HEIGHT,
-      maxRowHeight: JUSTIFIED_MAX_ROW_HEIGHT,
+      minRowHeight: Math.round(targetRowHeight * 0.7),
+      maxRowHeight: Math.round(targetRowHeight * 1.4),
     });
   });
 
