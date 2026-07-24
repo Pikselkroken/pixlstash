@@ -12,6 +12,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 
 const props = defineProps({
@@ -66,7 +67,7 @@ async function save() {
   saving.value = true;
   saveError.value = "";
   try {
-    await apiClient.patch("/users/me/config", {
+    await patchUserConfig({
       tagger_settings: {
         plugins: {
           [props.plugin.name]: { params: { ...formParams.value } },

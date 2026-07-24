@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../utils/apiClient";
+import { patchUserConfig } from "../api/config";
 
 export const useUserPrefsStore = defineStore("userPrefs", () => {
   const dateFormat = ref("locale");
@@ -16,7 +17,7 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   const publicUrl = ref(null);
   const embedWatermark = ref(false);
   // Dismissal of the "deleted pictures still in snapshots" warning shown after
-  // a purge. Persisted server-side per user (hydrated from /users/me/config in
+  // a purge. Persisted server-side per user (hydrated from the user config in
   // App.vue), so it follows the account across devices/browsers.
   const hidePurgeSnapshotWarning = ref(false);
 
@@ -28,9 +29,7 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     // purge flow that shows this dialog), so skip the request for them.
     if (isReadOnly.value) return;
     try {
-      await apiClient.patch("/users/me/config", {
-        hide_purge_snapshot_warning: next,
-      });
+      await patchUserConfig({ hide_purge_snapshot_warning: next });
     } catch (e) {
       console.error("Failed to persist hide_purge_snapshot_warning:", e);
     }

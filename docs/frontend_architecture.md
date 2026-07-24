@@ -71,6 +71,11 @@ frontend/src/
 │   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
 │   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │
+├── api/                         # Backend resource modules: the only place URL strings live (see §8)
+│   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config (+ *.test.js)
+│   ├── serverConfig.js          # Server-wide config topics under /server-config/ (+ *.test.js)
+│   └── characters.js            # /characters list + delete (+ *.test.js)
+│
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
 │   ├── clipboard.js             # Cross-browser clipboard write helper
@@ -760,6 +765,31 @@ The Axios request interceptor rewrites all relative URLs:
 ### `appendShareToken(url)`
 
 For `<img :src="...">` bindings and similar direct browser requests that bypass Axios, call `appendShareToken()` to add `?token=` manually.
+
+### The `src/api/` resource layer
+
+`utils/apiClient.js` is the *transport*; `src/api/` is the *contract*. Backend URL strings belong in `src/api/` and nowhere else. Components, stores, and composables import named functions from a resource module instead of calling `apiClient.<verb>('/some/url')` inline, so a contract change is a one-line edit in one file rather than a hunt across the tree.
+
+**Layout:** one module per backend resource, named after the resource, with a co-located `<module>.test.js`.
+
+| Module | Resource |
+|---|---|
+| `api/config.js` | `GET`/`PATCH /users/me/config`, the per-user config blob |
+| `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots, watch folders) |
+| `api/characters.js` | `/characters` list and delete |
+
+**Rules for modules in this directory:**
+
+- **URL strings exist only here.** No `apiClient.<verb>('/url')` outside `src/api/**`. A `no-restricted-imports` ESLint rule forbidding the `apiClient` named import is being widened per-directory as each area migrates.
+- **Reuse the `apiClient` singleton; never import `axios` directly.** All the cross-cutting behaviour above (the `/api/v1` prefix, share-token injection, `X-Client-Id`, global 401 → logout) lives in the singleton's interceptors, so a module that re-creates an Axios instance silently loses every one of them.
+- **Every function returns `response.data`,** not the Axios envelope. Where a caller genuinely needs response metadata (e.g. the `content-disposition` filename on an export download), the module parses it and returns a structured value such as `{ blob, filename }`, so the envelope still does not escape the layer.
+- **Modules are pure transport:** no Pinia imports, no Vue reactivity, no notice/snackbar side effects. Callers own state and error presentation.
+- **Non-JSON responses stay explicit:** blob endpoints (thumbnails, overlays, exports) forward `{ responseType: "blob" }` from inside the module.
+- **Failures propagate.** A module never swallows an error into a benign-looking empty value. This is the natural home for the integration-§13 error-shape normalisation once it lands.
+
+**Testing:** each module gets a co-located `.test.js` that mocks `../utils/apiClient` and asserts verb, URL, params/body, and that the function returns the body rather than the envelope. `api/config.test.js` is the pattern.
+
+**Barrel:** there is no `src/api` barrel to import from. Import the concrete module (`import { getUserConfig } from "@/api/config"`), which keeps imports tree-shakeable and matches the co-located-test convention.
 
 ---
 
