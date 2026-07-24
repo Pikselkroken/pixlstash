@@ -131,6 +131,28 @@ export async function removeCharacterFaces(
 }
 
 /**
+ * Read a character's summary counts.
+ *
+ * The sidebar's pseudo-characters (all pictures, unassigned, scrapheap) are
+ * addressed the same way, by passing their sentinel id.
+ *
+ * @param {number|string} id
+ * @param {Object} [params] - optional scope params such as `project_id` or
+ *   `apply_tag_filter`.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, whose `image_count` is the
+ *   number of pictures in scope.
+ */
+export async function getCharacterSummary(id, params, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(
+    charactersUrl(`/${id}/summary`, baseUrl),
+    params ? { params } : undefined,
+  );
+  return res.data;
+}
+
+/**
  * List the picture ids chosen as a character's reference pictures.
  * @param {number|string} id
  * @param {Object} [options]

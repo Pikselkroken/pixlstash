@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, computed, onMounted, onUnmounted } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
@@ -79,10 +80,7 @@ async function fetchPicStats() {
   const qs = buildQueryParams();
   picStatsLoading.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=picture`,
-    );
-    picStats.value = res.data;
+    picStats.value = await getPictureStats(qs, { include: "picture" });
     picStatsLoaded.value = true;
   } catch {
     picStats.value = null;
@@ -110,10 +108,10 @@ async function fetchTagConfidence(tag) {
   const qs = buildQueryParams();
   confTagLoading.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=conf&confidence_tag=${encodeURIComponent(tag)}`,
-    );
-    confTagData.value = res.data;
+    confTagData.value = await getPictureStats(qs, {
+      include: "conf",
+      confidence_tag: tag,
+    });
   } catch {
     confTagData.value = null;
   } finally {
@@ -256,8 +254,8 @@ async function fetchStats() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await apiClient.get(`/pictures/stats${qs ? `?${qs}` : ""}`);
-    stats.value = { ...res.data, regular_tags: prevRegularTags };
+    const body = await getPictureStats(qs);
+    stats.value = { ...body, regular_tags: prevRegularTags };
   } catch {
     error.value = "Failed to load stats";
     stats.value = null;
@@ -283,31 +281,29 @@ const loadingPenalisedBoth = ref(false);
 async function fetchCooc() {
   const qs = buildQueryParams();
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=cooc`,
-    );
+    const body = await getPictureStats(qs, { include: "cooc" });
     if (stats.value)
       stats.value = {
         ...stats.value,
-        top_cooccurrences: res.data.top_cooccurrences,
+        top_cooccurrences: body.top_cooccurrences,
       };
     coocLoaded.value = true;
-  } catch {
-    // silently fail — cooc stays empty
+  } catch (e) {
+    // Non-fatal: the co-occurrence section stays empty and the rest of the
+    // panel still renders. Log it so it is not an invisible failure.
+    console.warn("Failed to load tag co-occurrence stats:", e);
   }
 }
 
 async function fetchConf() {
   const qs = buildQueryParams();
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=conf`,
-    );
+    const body = await getPictureStats(qs, { include: "conf" });
     if (stats.value)
       stats.value = {
         ...stats.value,
-        confidence_histogram: res.data.confidence_histogram,
-        regular_tags: res.data.regular_tags,
+        confidence_histogram: body.confidence_histogram,
+        regular_tags: body.regular_tags,
       };
     confLoaded.value = true;
   } catch {
@@ -685,10 +681,10 @@ async function fetchStatsPenalised() {
   const qs = buildQueryParams();
   loadingPenalised.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}only_penalised=1&include=cooc`,
-    );
-    statsPenalised.value = res.data;
+    statsPenalised.value = await getPictureStats(qs, {
+      only_penalised: 1,
+      include: "cooc",
+    });
   } catch {
     statsPenalised.value = null;
   } finally {
@@ -700,10 +696,10 @@ async function fetchStatsPenalisedBoth() {
   const qs = buildQueryParams();
   loadingPenalisedBoth.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}only_penalised=both&include=cooc`,
-    );
-    statsPenalisedBoth.value = res.data;
+    statsPenalisedBoth.value = await getPictureStats(qs, {
+      only_penalised: "both",
+      include: "cooc",
+    });
   } catch {
     statsPenalisedBoth.value = null;
   } finally {
