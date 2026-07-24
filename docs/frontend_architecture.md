@@ -87,7 +87,8 @@ frontend/src/
 │   ├── characters.js            # /characters + faces + reference pictures
 │   ├── projects.js              # /projects + membership
 │   ├── pictureSets.js           # /picture_sets + membership + locked members
-│   ├── tags.js                  # /tags + /pictures/{id}/tags
+│   ├── tags.js                  # /tags, /pictures/{id}/tags, tag predictions
+│   ├── pictureImport.js         # streaming-staging import session (was useImportService)
 │   ├── stacks.js                # /stacks — create, order, members
 │   └── pictures.js              # /pictures — reads, count, stream, searches, stats
 │                                # every module has a co-located *.test.js
@@ -805,7 +806,8 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/characters.js` | `/characters`, including face membership and reference pictures |
 | `api/projects.js` | `/projects` and project membership |
 | `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
-| `api/tags.js` | `/tags` vocabulary and per-picture tag edits |
+| `api/tags.js` | `/tags` vocabulary, per-picture tag edits, and tag predictions |
+| `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
 | `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 

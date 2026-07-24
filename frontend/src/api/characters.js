@@ -143,6 +143,68 @@ export async function getCharacter(id, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Read just a character's name.
+ *
+ * A deliberately narrow read: the overlay resolves a name per detected face
+ * and does not need the rest of the record.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, whose `name` is the name.
+ */
+export async function getCharacterName(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(charactersUrl(`/${id}/name`, baseUrl));
+  return res.data;
+}
+
+/**
+ * Fetch a character's thumbnail image.
+ *
+ * A binary read: the module forwards `responseType: "blob"` so the caller gets
+ * a Blob it can turn into an object URL, not a mangled string.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string|number} [options.cacheBuster] - forces a fresh image past the
+ *   HTTP cache after the thumbnail has been regenerated.
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Blob>} the image data.
+ */
+export async function getCharacterThumbnail(
+  id,
+  { cacheBuster, baseUrl = "" } = {},
+) {
+  const path =
+    cacheBuster != null
+      ? `/${id}/thumbnail?cb=${cacheBuster}`
+      : `/${id}/thumbnail`;
+  const res = await apiClient.get(charactersUrl(path, baseUrl), {
+    responseType: "blob",
+  });
+  return res.data;
+}
+
+/**
+ * Assign a character to specific FACES (rather than to whole pictures).
+ * @param {number|string} id
+ * @param {Array<number|string>} faceIds
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function addCharacterFacesByFaceId(
+  id,
+  faceIds,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.post(charactersUrl(`/${id}/faces`, baseUrl), {
+    face_ids: faceIds,
+  });
+  return res.data;
+}
+
+/**
  * Read a character's summary counts.
  *
  * The sidebar's pseudo-characters (all pictures, unassigned, scrapheap) are

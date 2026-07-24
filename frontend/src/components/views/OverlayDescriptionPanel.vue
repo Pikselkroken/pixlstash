@@ -140,7 +140,11 @@
 
 <script setup>
 import { ref, computed, nextTick, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  patchPicture,
+  resetPictureDescription,
+} from "../../api/pictures";
 import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -228,10 +232,9 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    await apiClient.patch(
-      `${props.backendUrl}/pictures/${capturedImageId}`,
-      payload,
-    );
+    await patchPicture(capturedImageId, payload, {
+      baseUrl: props.backendUrl,
+    });
     emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
   } catch (err) {
@@ -294,14 +297,17 @@ async function refreshDescription(model = null) {
   const capturedImageId = props.image.id;
   try {
     if (model) {
-      await apiClient.post(
-        `${props.backendUrl}/pictures/${capturedImageId}/reset_description`,
+      await resetPictureDescription(
+        capturedImageId,
         { model },
+        { baseUrl: props.backendUrl },
       );
     } else {
-      await apiClient.patch(`${props.backendUrl}/pictures/${capturedImageId}`, {
-        description: null,
-      });
+      await patchPicture(
+        capturedImageId,
+        { description: null },
+        { baseUrl: props.backendUrl },
+      );
     }
     emit("update-description", capturedImageId, null);
     cancelEditDescription();

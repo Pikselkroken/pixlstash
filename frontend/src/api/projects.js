@@ -106,3 +106,79 @@ export async function getProjectMembership(pictureIds, { baseUrl = "" } = {}) {
   });
   return res.data;
 }
+
+/**
+ * List a project's attachments (uploaded files and saved links).
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the attachments (the response body).
+ */
+export async function listProjectAttachments(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(projectsUrl(`/${id}/attachments`, baseUrl));
+  return res.data;
+}
+
+/**
+ * Upload a file as a project attachment.
+ *
+ * Sent as multipart, so the content type is set explicitly rather than left to
+ * the JSON default.
+ *
+ * @param {number|string} id
+ * @param {File|Blob} file
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the created attachment (the response body).
+ */
+export async function uploadProjectAttachment(id, file, { baseUrl = "" } = {}) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await apiClient.post(
+    projectsUrl(`/${id}/attachments`, baseUrl),
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return res.data;
+}
+
+/**
+ * Save a link as a project attachment.
+ * @param {number|string} id
+ * @param {string} url
+ * @param {string} title
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the created attachment (the response body).
+ */
+export async function addProjectAttachmentUrl(
+  id,
+  url,
+  title,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.post(
+    projectsUrl(`/${id}/attachments/url`, baseUrl),
+    { url, title },
+  );
+  return res.data;
+}
+
+/**
+ * Remove one project attachment.
+ * @param {number|string} id
+ * @param {number|string} attachmentId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function deleteProjectAttachment(
+  id,
+  attachmentId,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.delete(
+    projectsUrl(`/${id}/attachments/${attachmentId}`, baseUrl),
+  );
+  return res.data;
+}
