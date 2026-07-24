@@ -542,7 +542,9 @@
 
 <script setup>
 import { ref, computed, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { listTags } from "../../api/tags";
+import { listComfyuiModels, listComfyuiLoras } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 
@@ -772,8 +774,8 @@ async function gbLoadTagFilterSuggestions(input) {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl ?? ""}/tags`);
-    const all = Array.isArray(res.data) ? res.data : [];
+    const rows = await listTags({ baseUrl: props.backendUrl ?? "" });
+    const all = Array.isArray(rows) ? rows : [];
     const q = input.toLowerCase();
     gbTagFilterSuggestions.value = all
       .filter(
@@ -840,8 +842,8 @@ async function gbLoadConfidenceTagSuggestions(input) {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl ?? ""}/tags`);
-    const all = Array.isArray(res.data) ? res.data : [];
+    const rows = await listTags({ baseUrl: props.backendUrl ?? "" });
+    const all = Array.isArray(rows) ? rows : [];
     const q = input.toLowerCase();
     gbConfidenceTagSuggestions.value = all
       .filter((t) => t.tag.toLowerCase().includes(q))
@@ -933,15 +935,11 @@ watch(
       ) {
         try {
           const [mRes, lRes] = await Promise.all([
-            apiClient.get(`${backendUrl}/pictures/comfyui_models`),
-            apiClient.get(`${backendUrl}/pictures/comfyui_loras`),
+            listComfyuiModels({ baseUrl: backendUrl }),
+            listComfyuiLoras({ baseUrl: backendUrl }),
           ]);
-          gbComfyuiModelOptions.value = Array.isArray(mRes.data)
-            ? mRes.data
-            : [];
-          gbComfyuiLoraOptions.value = Array.isArray(lRes.data)
-            ? lRes.data
-            : [];
+          gbComfyuiModelOptions.value = Array.isArray(mRes) ? mRes : [];
+          gbComfyuiLoraOptions.value = Array.isArray(lRes) ? lRes : [];
         } catch (err) {
           // Non-fatal: the ComfyUI model/LoRA filters just stay empty if the
           // metadata endpoints are unavailable. Log so it is not silent.

@@ -91,6 +91,25 @@ export async function runImageToImage(body, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Read the ComfyUI workflow embedded in a generated picture.
+ *
+ * Rejects with a 404 when the picture carries no workflow, which is the normal
+ * case for imported photos rather than an error.
+ *
+ * @param {number|string} pictureId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body: the graph plus its summary,
+ *   prompt, models and LoRAs.
+ */
+export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(
+    comfyUrl(`/pictures/${pictureId}/workflow`, baseUrl),
+  );
+  return res.data;
+}
+
+/**
  * Run a text-to-image workflow.
  *
  * @param {Object} body - the prompt, workflow name, and the view context

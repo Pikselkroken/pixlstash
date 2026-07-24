@@ -549,7 +549,9 @@ import {
   ref,
   watch,
 } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { hashCompareSnapshot } from "../../api/snapshots";
+import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
@@ -648,15 +650,10 @@ watch(restoreSubmenuOpen, async (isOpen) => {
   await Promise.all(
     recentSnapshots.value.map(async (cp) => {
       try {
-        const res = await apiClient.post(
-          `/api/v1/snapshots/${cp.id}/hash-compare`,
-          {
-            picture_ids: pictureIds,
-          },
-        );
+        const body = await hashCompareSnapshot(cp.id, pictureIds);
         // Bail on stale apply — a newer run has superseded this one.
         if (token !== _hashCompareRunToken) return;
-        const identicalSet = new Set(res.data.identical_ids);
+        const identicalSet = new Set(body.identical_ids);
         const allIdentical = pictureIds.every((id) => identicalSet.has(id));
         if (allIdentical) {
           matchedIds.add(cp.id);
@@ -724,14 +721,20 @@ async function loadFaceCharacterNames() {
   await Promise.all(
     pending.map(async (face) => {
       try {
-        const res = await apiClient.get(
-          `${props.backendUrl}/characters/${face.character_id}/name`,
-        );
+        const body = await getCharacterName(face.character_id, {
+          baseUrl: props.backendUrl,
+        });
         faceCharacterNames.value = {
           ...faceCharacterNames.value,
-          [face.id]: res.data?.name || null,
+          [face.id]: body?.name || null,
         };
-      } catch {
+      } catch (e) {
+        // Non-fatal: the menu entry just shows no name. Log it so a
+        // systematically failing lookup is visible.
+        console.debug(
+          `Failed to resolve the name of character ${face.character_id}`,
+          e,
+        );
         faceCharacterNames.value = {
           ...faceCharacterNames.value,
           [face.id]: null,
