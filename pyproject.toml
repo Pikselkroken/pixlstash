@@ -91,7 +91,11 @@ test = [
     "psutil"
 ]
 dev = [
-    "ruff"
+    # Pinned < 0.16: ruff 0.16 greatly expanded its default rule set (UP045,
+    # BLE001, I001, ...), flagging thousands of pre-existing lines and the
+    # deliberate logged `except Exception` handlers. Add an explicit [tool.ruff]
+    # config that locks the intended rules before bumping this.
+    "ruff<0.16"
 ]
 
 [project.scripts]
