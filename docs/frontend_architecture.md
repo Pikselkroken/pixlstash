@@ -83,9 +83,9 @@ frontend/src/
 │   ├── comfyui.js               # /comfyui/* — workflows, run, abort
 │   ├── taggers.js               # /taggers, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
-│   ├── characters.js            # /characters
-│   ├── projects.js              # /projects
-│   ├── pictureSets.js           # /picture_sets
+│   ├── characters.js            # /characters + faces + reference pictures
+│   ├── projects.js              # /projects + membership
+│   ├── pictureSets.js           # /picture_sets + membership + locked members
 │   └── pictures.js              # /pictures (largest resource; migration in progress)
 │                                # every module has a co-located *.test.js
 │
@@ -798,9 +798,9 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/comfyui.js` | `/comfyui/*`, PixlStash's own ComfyUI proxy routes |
 | `api/taggers.js` | `/taggers` and `/tagger/label-thresholds` |
 | `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
-| `api/characters.js` | `/characters` list and delete |
-| `api/projects.js` | `/projects` |
-| `api/pictureSets.js` | `/picture_sets` |
+| `api/characters.js` | `/characters`, including face membership and reference pictures |
+| `api/projects.js` | `/projects` and project membership |
+| `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
 | `api/pictures.js` | `/pictures`, the largest resource; still mostly unmigrated |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
