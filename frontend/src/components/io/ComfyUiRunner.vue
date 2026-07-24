@@ -51,6 +51,7 @@
 import { ref, reactive, onUnmounted, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { abortRun } from "../../api/comfyui";
+import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
@@ -331,11 +332,10 @@ async function fetchStackIdForPicture(pictureId) {
 async function fetchStackMembersForOverlay(stackId) {
   if (!stackId || !props.backendUrl) return [];
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/stacks/${stackId}/pictures`,
-      { params: { fields: "grid" } },
-    );
-    return Array.isArray(res.data) ? res.data : [];
+    const rows = await listStackPictures(stackId, {
+      baseUrl: props.backendUrl,
+    });
+    return Array.isArray(rows) ? rows : [];
   } catch (err) {
     logComfyuiDebug("stack-members-fetch-failed", {
       stackId,

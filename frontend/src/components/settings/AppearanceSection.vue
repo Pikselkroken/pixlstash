@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { clearGuestScoreSession } from "../../api/pictures";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { VSwitch } from "vuetify/components";
@@ -161,7 +162,7 @@ const hasGuestSessionCookie = computed(() =>
 async function clearGuestSession() {
   clearingGuestSession.value = true;
   try {
-    await apiClient.delete("/pictures/guest-scores/session");
+    await clearGuestScoreSession();
   } catch (err) {
     console.error("Failed to clear guest session:", err);
   } finally {

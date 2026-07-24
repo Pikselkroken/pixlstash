@@ -87,7 +87,8 @@ frontend/src/
 │   ├── characters.js            # /characters + faces + reference pictures
 │   ├── projects.js              # /projects + membership
 │   ├── pictureSets.js           # /picture_sets + membership + locked members
-│   └── pictures.js              # /pictures (largest resource; migration in progress)
+│   ├── stacks.js                # /stacks — create, order, members
+│   └── pictures.js              # /pictures — reads, count, stream, searches, stats
 │                                # every module has a co-located *.test.js
 │
 ├── utils/
@@ -805,7 +806,8 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/characters.js` | `/characters`, including face membership and reference pictures |
 | `api/projects.js` | `/projects` and project membership |
 | `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
-| `api/pictures.js` | `/pictures`, the largest resource; still mostly unmigrated |
+| `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
+| `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
 
