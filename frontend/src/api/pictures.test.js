@@ -16,6 +16,15 @@ import {
   searchPictures,
   getPictureStats,
   clearGuestScoreSession,
+  getPictureMetadata,
+  getThumbnails,
+  deletePictures,
+  setPicturesProject,
+  purgeScrapheap,
+  restoreScrapheap,
+  startExport,
+  getExportStatus,
+  downloadExport,
 } from "./pictures";
 
 beforeEach(() => {
@@ -134,6 +143,132 @@ describe("api/pictures", () => {
     expect(apiClient.delete).toHaveBeenCalledWith(
       "/pictures/guest-scores/session",
     );
+  });
+
+  it("getPictureMetadata omits the query when nothing is asked for", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    await getPictureMetadata(42);
+    expect(apiClient.get).toHaveBeenCalledWith("/pictures/42/metadata");
+  });
+
+  it("getPictureMetadata adds the smart-score and cache-buster params", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    await getPictureMetadata(42, { smartScore: true, cacheBuster: 99 });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/pictures/42/metadata?smart_score=true&cb=99",
+    );
+  });
+
+  it("getThumbnails POSTs the id batch", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await getThumbnails(["1", "2"]);
+    expect(apiClient.post).toHaveBeenCalledWith("/pictures/thumbnails", {
+      ids: ["1", "2"],
+    });
+  });
+
+  it("deletePictures sends the ids as the DELETE body", async () => {
+    apiClient.delete.mockResolvedValue({ data: { skipped_locked: [] } });
+    await deletePictures([1, 2]);
+    expect(apiClient.delete).toHaveBeenCalledWith("/pictures", {
+      data: { picture_ids: [1, 2] },
+    });
+  });
+
+  // No mode means SET the project; sending mode:undefined would be a different
+  // request shape, so the key must be absent entirely.
+  it("setPicturesProject omits the mode when setting", async () => {
+    apiClient.patch = vi.fn().mockResolvedValue({ data: {} });
+    await setPicturesProject([1], 5);
+    expect(apiClient.patch).toHaveBeenCalledWith("/pictures/project", {
+      picture_ids: [1],
+      project_id: 5,
+    });
+  });
+
+  it("setPicturesProject includes the mode when adding or removing", async () => {
+    apiClient.patch = vi.fn().mockResolvedValue({ data: {} });
+    await setPicturesProject([1], 5, { mode: "remove" });
+    expect(apiClient.patch).toHaveBeenCalledWith("/pictures/project", {
+      picture_ids: [1],
+      project_id: 5,
+      mode: "remove",
+    });
+  });
+
+  // Omitting the ids means "empty the whole heap", so the key must not appear
+  // as undefined and accidentally scope the purge to nothing.
+  it("purgeScrapheap omits picture_ids when emptying everything", async () => {
+    apiClient.delete.mockResolvedValue({ data: {} });
+    await purgeScrapheap({ includeProtected: true });
+    expect(apiClient.delete).toHaveBeenCalledWith("/pictures/scrapheap", {
+      data: { include_protected: true },
+    });
+  });
+
+  it("purgeScrapheap scopes to the given ids when they are supplied", async () => {
+    apiClient.delete.mockResolvedValue({ data: {} });
+    await purgeScrapheap({ pictureIds: [3] });
+    expect(apiClient.delete).toHaveBeenCalledWith("/pictures/scrapheap", {
+      data: { include_protected: false, picture_ids: [3] },
+    });
+  });
+
+  it("restoreScrapheap sends no body when restoring everything", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await restoreScrapheap();
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/pictures/scrapheap/restore",
+      undefined,
+    );
+  });
+
+  it("restoreScrapheap scopes to the given ids", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await restoreScrapheap([3]);
+    expect(apiClient.post).toHaveBeenCalledWith("/pictures/scrapheap/restore", {
+      picture_ids: [3],
+    });
+  });
+
+  it("startExport appends the selection query", async () => {
+    apiClient.get.mockResolvedValue({ data: { task_id: "t1" } });
+    const result = await startExport("id=1&export_type=full");
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/pictures/export?id=1&export_type=full",
+    );
+    expect(result.task_id).toBe("t1");
+  });
+
+  it("getExportStatus polls by task id", async () => {
+    apiClient.get.mockResolvedValue({ data: { status: "in_progress" } });
+    await getExportStatus("t1");
+    expect(apiClient.get).toHaveBeenCalledWith("/pictures/export/status", {
+      params: { task_id: "t1" },
+    });
+  });
+
+  // The ZIP name lives in a response HEADER: a body-only return would rename
+  // every download to the fallback, so the module parses it here.
+  it("downloadExport returns the blob and the server's filename", async () => {
+    const blob = new Blob(["zip"]);
+    apiClient.get.mockResolvedValue({
+      data: blob,
+      headers: { "content-disposition": 'attachment; filename="trip.zip"' },
+    });
+    const result = await downloadExport("/pictures/export/download/t1");
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/pictures/export/download/t1",
+      { responseType: "blob" },
+    );
+    expect(result).toEqual({ blob, filename: "trip.zip" });
+  });
+
+  it("downloadExport falls back to a default name without the header", async () => {
+    const blob = new Blob(["zip"]);
+    apiClient.get.mockResolvedValue({ data: blob, headers: {} });
+    const result = await downloadExport("/dl");
+    expect(result.filename).toBe("pixlstash_export.zip");
   });
 
   it("getAnomalyRegion passes the tag as a query param", async () => {

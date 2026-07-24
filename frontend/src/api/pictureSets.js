@@ -39,6 +39,19 @@ export async function listPictureSets({ baseUrl = "", params } = {}) {
 }
 
 /**
+ * Read one picture set.
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, which nests the set itself
+ *   under `set` alongside its membership details.
+ */
+export async function getPictureSet(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(setsUrl(`/${id}`, baseUrl));
+  return res.data;
+}
+
+/**
  * Create a picture set.
  * @param {Object} body - the set's fields (name, icon, colour, ...).
  * @param {Object} [options]

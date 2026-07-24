@@ -91,6 +91,21 @@ export async function runImageToImage(body, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Run a text-to-image workflow.
+ *
+ * @param {Object} body - the prompt, workflow name, and the view context
+ *   (`set_id`, `project_id`, `character_id`) the outputs should land in.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, whose `prompts` are the queued
+ *   ComfyUI prompt ids.
+ */
+export async function runTextToImage(body, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(comfyUrl("/run_t2i", baseUrl), body);
+  return res.data;
+}
+
+/**
  * Ask the backend to abort the in-flight ComfyUI run.
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
