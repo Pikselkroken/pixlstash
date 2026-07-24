@@ -1,6 +1,7 @@
 <script setup>
 import { onUnmounted, ref, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
+import { getUserConfig, patchUserConfig } from "../../api/config";
 import { VSlider, VSwitch } from "vuetify/components";
 import TagPluginsTable from "../widgets/TagPluginsTable.vue";
 import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
@@ -101,7 +102,7 @@ async function saveMaxVramGb() {
     return;
   }
   try {
-    await apiClient.patch("/users/me/config", { max_vram_gb: nextValue });
+    await patchUserConfig({ max_vram_gb: nextValue });
     maxVramGbSavedValue.value = nextValue;
     maxVramGbValue.value = nextValue;
     maxVramGbSuccess.value = "Saved.";
@@ -121,15 +122,15 @@ async function saveMaxVramGb() {
 async function fetchBehaviourSettings() {
   keepModelsInMemoryError.value = "";
   try {
-    const res = await apiClient.get("/users/me/config");
-    if (typeof res.data?.keep_models_in_memory === "boolean") {
-      keepModelsInMemory.value = res.data.keep_models_in_memory;
+    const cfg = await getUserConfig();
+    if (typeof cfg?.keep_models_in_memory === "boolean") {
+      keepModelsInMemory.value = cfg.keep_models_in_memory;
     } else {
       keepModelsInMemory.value = true;
     }
     await fetchVramSliderBounds();
     maxVramGbHydrating.value = true;
-    const parsedMaxVram = Number(res.data?.max_vram_gb);
+    const parsedMaxVram = Number(cfg?.max_vram_gb);
     const initialValue =
       Number.isFinite(parsedMaxVram) && parsedMaxVram > 0
         ? parsedMaxVram
@@ -154,9 +155,7 @@ async function setKeepModelsInMemory(value) {
   keepModelsInMemoryError.value = "";
   try {
     const nextValue = Boolean(value);
-    await apiClient.patch("/users/me/config", {
-      keep_models_in_memory: nextValue,
-    });
+    await patchUserConfig({ keep_models_in_memory: nextValue });
     keepModelsInMemory.value = nextValue;
   } catch (e) {
     keepModelsInMemoryError.value =

@@ -1,9 +1,9 @@
 // Characters (people) resource.
 //
-// The entity-resource shape (list / remove) that Phase 4's `useEntityList`
-// composable will be parameterised by (frontend_refactoring_plan.md §3 Phase 4):
-// the sidebar's four parallel fetch/delete stacks collapse onto one generic
-// lifecycle driven by modules like this one.
+// The entity-resource shape (list / remove) that a future `useEntityList`
+// composable can be parameterised by: the sidebar's four parallel fetch/delete
+// stacks collapse onto one generic lifecycle driven by modules like this one.
+// See docs/frontend_architecture.md §8 ("The `src/api/` resource layer").
 
 import { apiClient } from "../utils/apiClient";
 

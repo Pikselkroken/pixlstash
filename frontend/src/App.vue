@@ -12,12 +12,12 @@ import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import {
-  apiClient,
   API_BASE_URL,
   appendShareToken,
   isReadOnly,
   sessionContext,
 } from "./utils/apiClient";
+import { getUserConfig, patchUserConfig } from "./api/config";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useSortStore } from "./stores/useSortStore";
@@ -1283,7 +1283,7 @@ function handleUpdateThemeMode(value) {
 async function handleUpdateCheckForUpdates(value) {
   userPrefsStore.checkForUpdates = value;
   try {
-    await apiClient.patch("/users/me/config", { check_for_updates: value });
+    await patchUserConfig({ check_for_updates: value });
   } catch (e) {
     console.error("Failed to save check_for_updates preference:", e);
   }
@@ -1340,63 +1340,60 @@ async function fetchConfig() {
   configLoading.value = true;
   configApplying.value = true;
   try {
-    const res = await apiClient.get("/users/me/config");
-    const sortValue = res.data.sort_order ?? res.data.sort;
+    const cfg = await getUserConfig();
+    const sortValue = cfg.sort_order ?? cfg.sort;
     if (typeof sortValue === "string" && sortValue) {
       sortStore.selectedSort = sortValue;
     }
-    if (typeof res.data.show_keyboard_hint === "boolean")
-      userPrefsStore.showKeyboardHint = res.data.show_keyboard_hint;
-    if (typeof res.data.show_face_bboxes === "boolean") {
-      gridStore.showFaceBboxes = res.data.show_face_bboxes;
+    if (typeof cfg.show_keyboard_hint === "boolean")
+      userPrefsStore.showKeyboardHint = cfg.show_keyboard_hint;
+    if (typeof cfg.show_face_bboxes === "boolean") {
+      gridStore.showFaceBboxes = cfg.show_face_bboxes;
     }
-    if (typeof res.data.show_problem_icon === "boolean") {
-      gridStore.showProblemIcon = res.data.show_problem_icon;
+    if (typeof cfg.show_problem_icon === "boolean") {
+      gridStore.showProblemIcon = cfg.show_problem_icon;
     }
-    if (typeof res.data.expand_all_stacks === "boolean") {
-      gridStore.showStacks = res.data.expand_all_stacks;
-    } else if (typeof res.data.show_stacks === "boolean") {
-      gridStore.showStacks = res.data.show_stacks;
+    if (typeof cfg.expand_all_stacks === "boolean") {
+      gridStore.showStacks = cfg.expand_all_stacks;
+    } else if (typeof cfg.show_stacks === "boolean") {
+      gridStore.showStacks = cfg.show_stacks;
     }
-    if (typeof res.data.compact_mode === "boolean") {
-      gridStore.compactMode = res.data.compact_mode;
+    if (typeof cfg.compact_mode === "boolean") {
+      gridStore.compactMode = cfg.compact_mode;
     }
-    if (typeof res.data.sidebar_docked === "boolean") {
-      sidebarStore.setSidebarDocked(res.data.sidebar_docked);
+    if (typeof cfg.sidebar_docked === "boolean") {
+      sidebarStore.setSidebarDocked(cfg.sidebar_docked);
     }
-    if (typeof res.data.sidebar_pinned === "boolean") {
-      sidebarStore.setSidebarPinned(res.data.sidebar_pinned);
+    if (typeof cfg.sidebar_pinned === "boolean") {
+      sidebarStore.setSidebarPinned(cfg.sidebar_pinned);
     }
-    if (typeof res.data.date_format === "string" && res.data.date_format) {
-      userPrefsStore.dateFormat = res.data.date_format;
+    if (typeof cfg.date_format === "string" && cfg.date_format) {
+      userPrefsStore.dateFormat = cfg.date_format;
     }
-    if (typeof res.data.theme_mode === "string" && res.data.theme_mode) {
-      userPrefsStore.themeMode = res.data.theme_mode;
+    if (typeof cfg.theme_mode === "string" && cfg.theme_mode) {
+      userPrefsStore.themeMode = cfg.theme_mode;
     }
-    if (typeof res.data.descending === "boolean") {
-      sortStore.selectedDescending = res.data.descending;
+    if (typeof cfg.descending === "boolean") {
+      sortStore.selectedDescending = cfg.descending;
     }
-    if (typeof res.data.thumbnail_size_level === "number") {
-      gridStore.sizeLevel = clampSizeLevel(res.data.thumbnail_size_level);
-    } else if (typeof res.data.columns === "number") {
+    if (typeof cfg.thumbnail_size_level === "number") {
+      gridStore.sizeLevel = clampSizeLevel(cfg.thumbnail_size_level);
+    } else if (typeof cfg.columns === "number") {
       // Legacy config predating the size ladder: derive the nearest level so
       // an old install keeps roughly the same tile size after upgrading.
-      gridStore.sizeLevel = nearestSizeLevelForColumns(res.data.columns);
+      gridStore.sizeLevel = nearestSizeLevelForColumns(cfg.columns);
     }
-    if (
-      res.data.thumbnail_mode === "square" ||
-      res.data.thumbnail_mode === "justified"
-    ) {
-      gridStore.thumbnailMode = res.data.thumbnail_mode;
+    if (cfg.thumbnail_mode === "square" || cfg.thumbnail_mode === "justified") {
+      gridStore.thumbnailMode = cfg.thumbnail_mode;
     }
-    if (typeof res.data.sidebar_thumbnail_size === "number") {
-      userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
+    if (typeof cfg.sidebar_thumbnail_size === "number") {
+      userPrefsStore.sidebarThumbnailSize = cfg.sidebar_thumbnail_size;
     }
-    if (typeof res.data.sidebar_width === "number") {
-      userPrefsStore.sidebarWidth = res.data.sidebar_width;
+    if (typeof cfg.sidebar_width === "number") {
+      userPrefsStore.sidebarWidth = cfg.sidebar_width;
     }
-    if (res.data.stack_strictness != null) {
-      sortStore.stackThreshold = String(res.data.stack_strictness);
+    if (cfg.stack_strictness != null) {
+      sortStore.stackThreshold = String(cfg.stack_strictness);
     }
     config.sort_order = sortValue || sortStore.selectedSort;
     config.descending = sortStore.selectedDescending;
@@ -1405,47 +1402,47 @@ async function fetchConfig() {
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
     config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
-      typeof res.data.show_stars === "boolean"
-        ? res.data.show_stars
+      typeof cfg.show_stars === "boolean"
+        ? cfg.show_stars
         : gridStore.showStars;
     config.show_face_bboxes =
-      typeof res.data.show_face_bboxes === "boolean"
-        ? res.data.show_face_bboxes
+      typeof cfg.show_face_bboxes === "boolean"
+        ? cfg.show_face_bboxes
         : gridStore.showFaceBboxes;
     config.show_problem_icon =
-      typeof res.data.show_problem_icon === "boolean"
-        ? res.data.show_problem_icon
+      typeof cfg.show_problem_icon === "boolean"
+        ? cfg.show_problem_icon
         : gridStore.showProblemIcon;
     config.expand_all_stacks =
-      typeof res.data.expand_all_stacks === "boolean"
-        ? res.data.expand_all_stacks
-        : typeof res.data.show_stacks === "boolean"
-          ? res.data.show_stacks
+      typeof cfg.expand_all_stacks === "boolean"
+        ? cfg.expand_all_stacks
+        : typeof cfg.show_stacks === "boolean"
+          ? cfg.show_stacks
           : gridStore.showStacks;
     config.compact_mode =
-      typeof res.data.compact_mode === "boolean"
-        ? res.data.compact_mode
+      typeof cfg.compact_mode === "boolean"
+        ? cfg.compact_mode
         : gridStore.compactMode;
     config.sidebar_docked =
-      typeof res.data.sidebar_docked === "boolean"
-        ? res.data.sidebar_docked
+      typeof cfg.sidebar_docked === "boolean"
+        ? cfg.sidebar_docked
         : sidebarStore.sidebarDocked;
     config.sidebar_pinned =
-      typeof res.data.sidebar_pinned === "boolean"
-        ? res.data.sidebar_pinned
+      typeof cfg.sidebar_pinned === "boolean"
+        ? cfg.sidebar_pinned
         : sidebarStore.sidebarPinned;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
-      res.data.stack_strictness != null
-        ? res.data.stack_strictness
+      cfg.stack_strictness != null
+        ? cfg.stack_strictness
         : config.stack_strictness;
     const similarityValue =
-      res.data.similarity_character ?? res.data.selected_similarity_character;
+      cfg.similarity_character ?? cfg.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    const newHiddenTags = Array.isArray(res.data.hidden_tags)
-      ? res.data.hidden_tags
+    const newHiddenTags = Array.isArray(cfg.hidden_tags)
+      ? cfg.hidden_tags
       : [];
     if (
       userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
@@ -1453,8 +1450,8 @@ async function fetchConfig() {
     ) {
       userPrefsStore.hiddenTags = newHiddenTags;
     }
-    userPrefsStore.applyTagFilter = Boolean(res.data.apply_tag_filter);
-    const rawPt = res.data.smart_score_penalised_tags;
+    userPrefsStore.applyTagFilter = Boolean(cfg.apply_tag_filter);
+    const rawPt = cfg.smart_score_penalised_tags;
     if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
       userPrefsStore.penalisedTagWeights = Object.fromEntries(
         Object.entries(rawPt).map(([k, v]) => [
@@ -1494,28 +1491,28 @@ async function fetchConfig() {
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
-        res.data.stack_strictness != null
-          ? Number(res.data.stack_strictness)
+        cfg.stack_strictness != null
+          ? Number(cfg.stack_strictness)
           : null,
       hidden_tags: userPrefsStore.hiddenTags,
       apply_tag_filter: userPrefsStore.applyTagFilter,
     };
-    filterStore.comfyuiConfigured = Boolean(res.data?.comfyui_url);
-    if (typeof res.data?.public_url === "string" && res.data.public_url) {
-      userPrefsStore.publicUrl = res.data.public_url;
+    filterStore.comfyuiConfigured = Boolean(cfg?.comfyui_url);
+    if (typeof cfg?.public_url === "string" && cfg.public_url) {
+      userPrefsStore.publicUrl = cfg.public_url;
     }
-    userPrefsStore.embedWatermark = Boolean(res.data?.embed_watermark);
+    userPrefsStore.embedWatermark = Boolean(cfg?.embed_watermark);
     userPrefsStore.hidePurgeSnapshotWarning = Boolean(
-      res.data?.hide_purge_snapshot_warning,
+      cfg?.hide_purge_snapshot_warning,
     );
-    const cfu = res.data?.check_for_updates;
+    const cfu = cfg?.check_for_updates;
     userPrefsStore.checkForUpdates =
       cfu === true ? true : cfu === false ? false : null;
     if (userPrefsStore.checkForUpdates === null) {
       updateCheckDialogOpen.value = true;
     }
   } catch (e) {
-    console.error("Failed to fetch /users/me/config:", e);
+    console.error("Failed to fetch user config:", e);
   } finally {
     configApplying.value = false;
     configLoading.value = false;
@@ -1596,10 +1593,10 @@ async function patchConfigUIOptions() {
   }
 
   try {
-    await apiClient.patch("/users/me/config", changed);
+    await patchUserConfig(changed);
     configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
-    console.error("Error patching /users/me/config:", e);
+    console.error("Error patching user config:", e);
   }
 }
 

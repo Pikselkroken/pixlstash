@@ -1,8 +1,8 @@
 import { readonly, ref } from "vue";
 
-// Promise-based confirm dialog (frontend_refactoring_plan.md §3 Phase 2). One
-// `confirm()` call replaces the five hand-rolled "Are you sure" dialogs (and the
-// scattered `window.confirm` calls) with a single awaited promise.
+// Promise-based confirm dialog. One `confirm()` call replaces the five
+// hand-rolled "Are you sure" dialogs (and the scattered `window.confirm` calls)
+// with a single awaited promise.
 //
 // SCAFFOLD STATUS: this is the request/resolve state machine plus the host-facing
 // API a future `ConfirmDialog.vue` will consume. The visible dialog surface is
