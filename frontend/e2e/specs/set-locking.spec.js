@@ -35,7 +35,7 @@ test.describe('picture-set locking', () => {
     await grid.goto()
 
     // A non-empty set so the grid it filters to actually has pictures to badge.
-    expect(await sidebar.setItems.count()).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => sidebar.setItems.count()).toBeGreaterThanOrEqual(1)
     const set = await sidebar.firstNonEmpty(sidebar.setItems)
 
     // Navigate the grid to the set and wait for its thumbnails to render.

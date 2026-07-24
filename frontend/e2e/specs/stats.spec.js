@@ -14,7 +14,7 @@ test.describe('statistics sidebar', () => {
     if ((await grid.statsContent.count()) === 0) await grid.statsToggle.click()
     await expect(grid.statsContent).toBeVisible()
     // It renders its tabbed sections (Tags / Pictures / Tasks).
-    expect(await grid.statsTabs.count()).toBeGreaterThanOrEqual(2)
+    await expect.poll(() => grid.statsTabs.count()).toBeGreaterThanOrEqual(2)
 
     // Toggling hides it, and toggling again brings it back.
     await grid.statsToggle.click()

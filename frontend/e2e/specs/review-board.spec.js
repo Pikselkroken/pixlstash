@@ -34,7 +34,7 @@ test.describe('review sessions — tag health board', () => {
     await expect(reviews.boardHeadRow).toContainText('Mismatch')
     await expect(reviews.boardHeadRow).toContainText('Why it ranks here')
     // At least one tag row rendered.
-    expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+    await expect.poll(() => reviews.boardRows.count()).toBeGreaterThan(0)
   })
 
   test('the persistent rebuild control is visible in the header (Spec B)', async ({
@@ -99,14 +99,14 @@ test.describe('review sessions — tag health board', () => {
     await wrongHdr.click()
     await expect(wrongHdr).toHaveClass(/rs-board-hdr--active/)
     // The rows still render after re-sorting.
-    expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+    await expect.poll(() => reviews.boardRows.count()).toBeGreaterThan(0)
   })
 
   test('the sort dropdown re-orders without emptying the board', async ({ reviews }) => {
     await reviews.sortSelect.selectOption('tag')
-    expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+    await expect.poll(() => reviews.boardRows.count()).toBeGreaterThan(0)
     await reviews.sortSelect.selectOption('missing')
-    expect(await reviews.boardRows.count()).toBeGreaterThan(0)
+    await expect.poll(() => reviews.boardRows.count()).toBeGreaterThan(0)
   })
 
   test('a row with a mismatch signal shows Start review', async ({ reviews }) => {

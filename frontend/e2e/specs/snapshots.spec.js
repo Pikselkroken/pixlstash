@@ -11,7 +11,7 @@ test.describe('snapshots', () => {
     await settings.open()
     await settings.openSnapshotsTab()
 
-    expect(await settings.snapshotRows.count()).toBeGreaterThan(0)
+    await expect.poll(() => settings.snapshotRows.count()).toBeGreaterThan(0)
 
     const firstRow = settings.snapshotRows.first()
     await expect(firstRow).toBeVisible()
