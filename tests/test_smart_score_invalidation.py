@@ -265,6 +265,61 @@ def test_confirm_penalised_prediction_invalidates():
         temp_dir.cleanup()
 
 
+def test_confirm_registers_origin_stamped_rescore_refresh():
+    """The user's primary path: confirming a model anomaly prediction with an editing tab
+    must origin-stamp the eventual smart_score refresh so that tab updates the visible score
+    in place, rather than routing to the deferred "view changed externally" bulk path.
+
+    Proves the registry wiring end-to-end: the confirm records the id under the editing tab,
+    and the background recompute completion emits an immediate origin-stamped
+    ``{fields:["smart_score"], origin_client_id}`` event for just that card — independent of
+    the backfill drain gate (a second unscored picture keeps ``count_remaining() > 0``).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        pending = _upload_picture(client, "Bad2.png")  # keeps the backfill in flight
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pending)  # embedding + NULL score
+
+        _seed_prediction(server, edited, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, edited, 0.5)
+
+        # Confirm as the editing tab "tab-a".
+        resp = client.post(
+            f"/pictures/{edited}/tag_predictions/{PENALISED_TAG}/confirm",
+            headers={"X-Client-Id": "tab-a"},
+        )
+        assert resp.status_code == 200
+        # The cached score is NULLed and the id is registered under the editing tab.
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score; completion emits the refresh.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # Drain gate NOT reached, yet the card refreshed immediately, origin-stamped.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) > 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        assert edited not in server.vault.interactive_rescore_registry.snapshot()
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_reject_penalised_prediction_invalidates():
     """Rejecting folds the anomaly probability to 0.0 — the cached score is stale."""
     temp_dir, client, server = _setup()
@@ -294,6 +349,52 @@ def test_confirm_content_prediction_does_not_invalidate():
         assert resp.status_code == 200
 
         assert _get_smart_score(server, pic_id) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_delete_anomaly_prediction_invalidates():
+    """Deleting an anomaly prediction drops its probability — the cached score is stale.
+
+    ``POST /pictures/{id}/tag_predictions/delete`` bulk-removes the model's predictions so
+    the background tagger treats the picture as never seen. Dropping an anomaly-vocabulary
+    prediction removes its penalty input, so the stored ``smart_score`` must be NULLed for
+    recompute — the confirmed invalidation gap this fix closes.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_delete_content_prediction_does_not_invalidate():
+    """Deleting a pure content prediction is outside the anomaly vocabulary — score stands.
+
+    Guards the intended narrow scope: over-invalidating here re-scores the whole library on
+    a routine prediction reset.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, CONTENT_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
