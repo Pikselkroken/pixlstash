@@ -131,6 +131,18 @@ export async function removeCharacterFaces(
 }
 
 /**
+ * Read one character.
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the character (the response body).
+ */
+export async function getCharacter(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(charactersUrl(`/${id}`, baseUrl));
+  return res.data;
+}
+
+/**
  * Read a character's summary counts.
  *
  * The sidebar's pseudo-characters (all pictures, unassigned, scrapheap) are
@@ -149,6 +161,30 @@ export async function getCharacterSummary(id, params, { baseUrl = "" } = {}) {
     charactersUrl(`/${id}/summary`, baseUrl),
     params ? { params } : undefined,
   );
+  return res.data;
+}
+
+/**
+ * Unassign a character from specific FACES.
+ *
+ * The picture-scoped sibling above clears every face in those pictures; this
+ * one targets individual detections, which is what the grid's face selection
+ * operates on.
+ *
+ * @param {number|string} id
+ * @param {Array<number|string>} faceIds
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function removeCharacterFacesByFaceId(
+  id,
+  faceIds,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.delete(charactersUrl(`/${id}/faces`, baseUrl), {
+    data: { face_ids: faceIds },
+  });
   return res.data;
 }
 

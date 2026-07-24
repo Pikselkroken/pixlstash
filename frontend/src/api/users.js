@@ -88,6 +88,80 @@ export async function deleteToken(id) {
 }
 
 /**
+ * Ask which of the given pictures are currently shared by some token.
+ *
+ * Drives the "shared" badge, so it is re-asked as the grid scrolls: a revoked
+ * token must clear the badge, not just a new share set it.
+ *
+ * @param {Array<number|string>} pictureIds
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body, whose `shared_ids` is the
+ *   shared subset of the ids asked about.
+ */
+export async function getSharedPictureIds(pictureIds, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(`${baseUrl}${ME_URL}/shared-picture-ids/batch`, {
+    picture_ids: pictureIds,
+  });
+  return res.data;
+}
+
+/**
+ * List the resource ids of one type that this user has shared.
+ * @param {string} resourceType - e.g. `"character"`, `"picture_set"`.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function getSharedResourceIds(
+  resourceType,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.get(`${baseUrl}${ME_URL}/shared-resource-ids`, {
+    params: { resource_type: resourceType },
+  });
+  return res.data;
+}
+
+/**
+ * List the tokens sharing one specific resource.
+ * @param {string} resourceType
+ * @param {number|string} resourceId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the tokens (the response body).
+ */
+export async function listTokensByResource(
+  resourceType,
+  resourceId,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.get(`${baseUrl}${ME_URL}/tokens/by-resource`, {
+    params: { resource_type: resourceType, resource_id: resourceId },
+  });
+  return res.data;
+}
+
+/**
+ * Revoke every token sharing one specific resource.
+ * @param {string} resourceType
+ * @param {number|string} resourceId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function revokeTokensByResource(
+  resourceType,
+  resourceId,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.delete(`${baseUrl}${ME_URL}/tokens/by-resource`, {
+    params: { resource_type: resourceType, resource_id: resourceId },
+  });
+  return res.data;
+}
+
+/**
  * Upload the watermark image stamped onto shared pictures.
  *
  * Sent as multipart, so this is one of the few places the content type is set
