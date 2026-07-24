@@ -99,7 +99,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { apiClient, appendShareToken } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -269,9 +269,9 @@ async function saveCharacter(charData) {
       : `${props.backendUrl}/characters/${charData.id}`;
 
     if (isNew) {
-      const res = await apiClient.post(url, JSON.stringify(charData));
+      await apiClient.post(url, JSON.stringify(charData));
     } else {
-      const res = await apiClient.patch(url, JSON.stringify(charData));
+      await apiClient.patch(url, JSON.stringify(charData));
     }
     emit("saved");
   } catch (e) {
@@ -294,6 +294,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>

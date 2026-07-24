@@ -152,12 +152,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
 import { apiClient } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
-  SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
@@ -330,6 +329,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>
