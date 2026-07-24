@@ -447,12 +447,16 @@
         :style="filmstripStyleVars"
       >
         <div
+          ref="overlayCanvasRef"
           class="overlay-canvas"
+          tabindex="0"
+          aria-label="Image — right-click or press the menu key for actions"
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
           @dblclick="toggleZoom"
           @wheel.prevent="onWheelZoom"
+          @contextmenu="handleMediaContextMenu"
         >
           <div
             class="overlay-media"
@@ -1006,6 +1010,7 @@ const emit = defineEmits([
   "set-project",
   "comfyui-run",
   "run-plugin",
+  "request-context-menu",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -2010,6 +2015,25 @@ function handleKeydown(e) {
   // keypress (e.g. Escape) after the overlay has already handled it.
   e.stopImmediatePropagation();
 
+  // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
+  // available regardless of chrome visibility. Suppressed while typing so the
+  // native menu (paste / spellcheck) still works in the tag and description
+  // fields.
+  if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    const t = e.target;
+    const typing =
+      t instanceof HTMLElement &&
+      (t.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) ||
+        t.getAttribute("role") === "textbox");
+    if (!typing) {
+      e.preventDefault();
+      handleUserActivity();
+      openContextMenuFromKeyboard();
+      return;
+    }
+  }
+
   // When chrome is hidden, only Space and Escape reveal it — other keys still
   // navigate/act but don't bring the chrome back.
   if (chromeHidden.value) {
@@ -2235,7 +2259,54 @@ function showSwipeHint() {
 }
 
 function handleBackdropClick() {
+  // A right-click context menu open over the lightbox is dismissed by this same
+  // click. Swallow it so click-away closes the MENU ONLY, never the lightbox.
+  // The menu was still in the DOM at pointerdown time (captured in
+  // handleOverlayPointerDown), even though it removes itself before this click.
+  if (menuWasOpenOnPointerDown) {
+    menuWasOpenOnPointerDown = false;
+    return;
+  }
   emit("close");
+}
+
+// ── Media context menu (right-click / keyboard) ────────────────────────────
+// Right-click over the media surface opens the custom overlay context menu
+// (owned by ImageGrid, which scopes every action to this one picture). The
+// sidebar panels and filmstrip are siblings of `.overlay-canvas`, so a
+// right-click there is never seen here and keeps the native menu (copy / paste
+// / spellcheck in the description and tag fields).
+function buildContextMenuImage() {
+  if (!image.value?.id) return null;
+  return {
+    ...image.value,
+    format: getOverlayFormat(image.value),
+    faces: Array.isArray(faceBboxes.value) ? faceBboxes.value : [],
+  };
+}
+
+function handleMediaContextMenu(event) {
+  const ctxImage = buildContextMenuImage();
+  if (!ctxImage) return; // no image loaded → fall through to the native menu
+  event.preventDefault();
+  emit("request-context-menu", {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    image: ctxImage,
+  });
+}
+
+function openContextMenuFromKeyboard() {
+  const ctxImage = buildContextMenuImage();
+  if (!ctxImage) return;
+  // Focus the canvas first so the menu captures it as the invoker and returns
+  // focus here on Escape. Anchor the menu over the centre of the media.
+  const el = overlayCanvasRef.value;
+  el?.focus();
+  const rect = el?.getBoundingClientRect();
+  const x = rect ? Math.round(rect.left + rect.width / 2) : 0;
+  const y = rect ? Math.round(rect.top + rect.height / 2) : 0;
+  emit("request-context-menu", { clientX: x, clientY: y, image: ctxImage });
 }
 
 function handleUserActivity() {
@@ -2261,7 +2332,10 @@ function handleOverlayPointerDown() {
   menuWasOpenOnPointerDown = !!(
     document.querySelector(".v-overlay--active") ||
     document.querySelector(".add-to-set.open") ||
-    document.querySelector(".add-to-project.open")
+    document.querySelector(".add-to-project.open") ||
+    // Our own right-click context menu (teleported to <body>). It closes itself
+    // on this pointerdown, so it must be detected now, not at click time.
+    document.querySelector(".image-ctx-menu")
   );
 }
 
@@ -2650,6 +2724,7 @@ function clearDrawMode() {
 
 const imgRef = ref(null);
 const videoRef = ref(null);
+const overlayCanvasRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video

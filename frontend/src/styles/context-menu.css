@@ -106,3 +106,33 @@
   opacity: 0.9;
   white-space: nowrap;
 }
+
+/* ── Dark-surface skin (lightbox / overlay context menu) ────────────────
+   The menu root carries `.image-ctx-menu--on-dark` (see ImageGridContextMenu
+   scoped style); the teleported items keep the plain `.ctx-*` classes, so these
+   item/separator overrides are matched here in the global sheet. The
+   `dark-surface` tokens stay dark in both the light and dark themes. */
+.image-ctx-menu--on-dark .ctx-item {
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.image-ctx-menu--on-dark .ctx-item:hover:not(:disabled) {
+  background: rgba(var(--v-theme-on-dark-surface), 0.08);
+}
+
+.image-ctx-menu--on-dark .ctx-sep {
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+}
+
+.image-ctx-menu--on-dark .ctx-item--danger {
+  color: rgb(var(--v-theme-dark-surface-error));
+}
+
+.image-ctx-menu--on-dark .ctx-submenu {
+  background: rgb(var(--v-theme-dark-surface));
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.14);
+}
+
+.image-ctx-menu--on-dark .ctx-default-pill {
+  background: rgba(var(--v-theme-on-dark-surface), 0.12);
+}
