@@ -217,10 +217,10 @@ def register_routes(router, server):
                         elapsed_ms,
                     )
                     return FileResponse(
-                    thumb_path,
-                    media_type="image/webp",
-                    headers=_THUMBNAIL_CACHE_HEADERS,
-                )
+                        thumb_path,
+                        media_type="image/webp",
+                        headers=_THUMBNAIL_CACHE_HEADERS,
+                    )
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:

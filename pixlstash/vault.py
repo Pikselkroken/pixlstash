@@ -1314,8 +1314,7 @@ class Vault:
                 # the v1.8.0 upgrade this counts the entire library, which is what
                 # the in-app "Upgrading thumbnails" progress bar reads.
                 missing = int(
-                    self.db.run_immediate_read_task(self._count_missing_thumbnails)
-                    or 0
+                    self.db.run_immediate_read_task(self._count_missing_thumbnails) or 0
                 )
                 label = "thumbnails_generated"
             else:
