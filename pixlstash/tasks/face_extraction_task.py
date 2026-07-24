@@ -4,6 +4,7 @@ import platform
 import threading
 import time
 import warnings
+import weakref
 import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
@@ -64,6 +65,15 @@ class FaceExtractionTask(BaseTask):
     _global_insightface_app = None
     _global_cpu_insightface_app = None
     _cpu_insightface_lock = threading.Lock()
+    # Live task instances that hold a reference to an InsightFace app. The app is
+    # an onnxruntime session whose VRAM lives in ORT's own CUDA arena (torch's
+    # empty_cache cannot free it) — the arena is only returned to the driver when
+    # the last reference to the session is dropped and it is garbage-collected.
+    # Nulling only the class globals is not enough: each running task also holds
+    # self._insightface_app pointing at the same object, so release must clear
+    # those too or nvidia-smi never moves. WeakSet so we never keep a task alive.
+    _app_instances: "weakref.WeakSet" = weakref.WeakSet()
+    _app_instances_lock = threading.Lock()
     # Number of FaceExtractionTask instances currently executing _run_task.
     # Models are only released when this drops to zero so paired tasks
     # (submitted together by the planner) do not pay a reload cost.
@@ -270,7 +280,16 @@ class FaceExtractionTask(BaseTask):
 
     @classmethod
     def release_detection_models(cls):
+        # Drop the class globals AND every live task's per-instance reference.
+        # ORT frees the CUDA arena only when the session is garbage-collected,
+        # so a single surviving reference keeps the VRAM resident and makes the
+        # "keep models in memory" toggle appear to do nothing in nvidia-smi.
         cls._global_insightface_app = None
+        cls._global_cpu_insightface_app = None
+        with cls._app_instances_lock:
+            for inst in list(cls._app_instances):
+                inst._insightface_app = None
+            cls._app_instances.clear()
 
         gc.collect()
         if torch.cuda.is_available():
@@ -372,6 +391,10 @@ class FaceExtractionTask(BaseTask):
         self._insightface_app = FaceExtractionTask.get_or_init_insightface(
             self._engine, cpu_spillover=self._cpu_spillover_enabled
         )
+        # Track this holder so release_detection_models can drop every reference
+        # to the ORT session, not just the class global.
+        with FaceExtractionTask._app_instances_lock:
+            FaceExtractionTask._app_instances.add(self)
 
     @staticmethod
     def _get_loaded_relationship(obj, name):
