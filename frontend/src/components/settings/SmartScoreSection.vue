@@ -178,7 +178,7 @@ async function fetchData() {
     emit("update:hidden-tags", hiddenTags.value);
     applyTagFilter.value = Boolean(config?.apply_tag_filter);
     emit("update:apply-tag-filter", applyTagFilter.value);
-  } catch (_) {
+  } catch {
     smartScoreTagsError.value = "Failed to load smart score settings.";
   } finally {
     smartScoreTagsLoading.value = false;

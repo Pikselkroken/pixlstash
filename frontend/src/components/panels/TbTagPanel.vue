@@ -842,7 +842,7 @@ async function fetchTagsSB() {
       allTagsSB.value = res.data;
       allTagsFetchedAt = now;
     }
-  } catch (_e) {
+  } catch {
     // non-critical
   }
 }

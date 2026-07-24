@@ -118,7 +118,7 @@ export function useGridDragDrop(
     if (event.pointerType === "mouse" && event.button !== 0) return;
   }
 
-  function handleThumbnailPointerRelease(event) {
+  function handleThumbnailPointerRelease() {
     if (dragSource.value === "grid") return;
   }
 
@@ -147,7 +147,7 @@ export function useGridDragDrop(
     e.preventDefault();
   }
 
-  function handleGridDragLeave(e) {
+  function handleGridDragLeave() {
     dragOverlayDepth.value = Math.max(0, dragOverlayDepth.value - 1);
     if (dragOverlayDepth.value === 0) {
       dragOverlayVisible.value = false;

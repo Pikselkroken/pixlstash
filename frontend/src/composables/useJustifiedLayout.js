@@ -216,7 +216,6 @@ export function packJustifiedRows({
         // Remove the overflowing item, close the rest as a full row, then seed
         // the next row with it (a lone panorama may itself already overflow).
         rowAspects.pop();
-        naturalWidth -= ar * targetRowHeight;
         closeRow(true);
         rowAspects.push(ar);
         naturalWidth = ar * targetRowHeight;

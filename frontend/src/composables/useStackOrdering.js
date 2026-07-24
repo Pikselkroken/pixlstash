@@ -856,7 +856,7 @@ export function useStackOrdering(
         const ids = Array.isArray(payload.imageIds) ? payload.imageIds : [];
         if (ids.length === 1) return String(ids[0]);
       }
-    } catch (err) {
+    } catch {
       return null;
     }
     return null;
@@ -1227,7 +1227,7 @@ export function useStackOrdering(
         continue;
       }
       if (membersByStack.size === 1) {
-        const [sId, stackedMembers] = Array.from(
+        const [, stackedMembers] = Array.from(
           membersByStack.entries(),
         )[0];
         const stackedAnchorId = stackedMembers?.[0]?.id;

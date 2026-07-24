@@ -2,8 +2,6 @@ import { computed, ref } from "vue";
 import { defineStore } from "pinia";
 
 const ALL_PICTURES_ID = "ALL";
-const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
-const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
 function loadMultiMode(key, fallback) {
   try {
