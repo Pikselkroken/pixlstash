@@ -1068,6 +1068,8 @@ class Vault:
                 try:
                     return len(value or []) > 0, value
                 except Exception:
+                    # Relationship-length guard: a non-lenable value is simply
+                    # "not populated"; (False, value) IS the answer.
                     return False, value
             return value is not None, value
 
@@ -1312,8 +1314,7 @@ class Vault:
                 # the v1.8.0 upgrade this counts the entire library, which is what
                 # the in-app "Upgrading thumbnails" progress bar reads.
                 missing = int(
-                    self.db.run_immediate_read_task(self._count_missing_thumbnails)
-                    or 0
+                    self.db.run_immediate_read_task(self._count_missing_thumbnails) or 0
                 )
                 label = "thumbnails_generated"
             else:

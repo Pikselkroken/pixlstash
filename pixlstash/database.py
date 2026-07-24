@@ -495,6 +495,9 @@ def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
             return 0.0
         return float((weights * sims).sum() / denom)
     except Exception:
+        # Best-effort per-row SQL scalar: any decode/maths failure means "no
+        # likeness" for this face, and 0.0 IS the ranking answer. This fires once
+        # per candidate row, so logging would flood (allowlisted in the guardrail).
         return 0.0
 
 

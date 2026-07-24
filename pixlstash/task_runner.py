@@ -133,6 +133,8 @@ class TaskRunner:
                 totals.append(int(float(value)))
             return sum(totals)
         except Exception:
+            # nvidia-smi absent/failing is normal on CPU-only hosts; 0 (no VRAM)
+            # IS the documented answer, so logging it would be routine noise.
             return 0
 
     @classmethod
@@ -174,6 +176,7 @@ class TaskRunner:
                     line_pid = int(parts[0])
                     line_used_mb = int(float(parts[1]))
                 except Exception:
+                    # Per-line parse guard: skip an unparseable nvidia-smi row.
                     continue
                 if line_pid == pid:
                     used_mb += line_used_mb

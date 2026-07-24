@@ -148,7 +148,13 @@ class ImageEmbeddingTask(BaseTask):
             return 0
         try:
             return max(0, self._clip_workflow.estimated_vram_mb(len(self._batch)))
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "ImageEmbeddingTask: VRAM estimate failed for %d image(s); "
+                "assuming 0: %s",
+                len(self._batch),
+                exc,
+            )
             return 0
 
     @classmethod
@@ -237,7 +243,8 @@ class ImageEmbeddingTask(BaseTask):
             for bit in bits:
                 value = (value << 1) | int(bit)
             return f"{value:0{hash_size * hash_size // 4}x}"
-        except Exception:
+        except Exception as exc:
+            logger.debug("ImageEmbeddingTask: dhash computation failed: %s", exc)
             return None
 
     def _ensure_clip_ready(self) -> bool:

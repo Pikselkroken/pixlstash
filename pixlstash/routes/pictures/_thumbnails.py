@@ -217,10 +217,10 @@ def register_routes(router, server):
                         elapsed_ms,
                     )
                     return FileResponse(
-                    thumb_path,
-                    media_type="image/webp",
-                    headers=_THUMBNAIL_CACHE_HEADERS,
-                )
+                        thumb_path,
+                        media_type="image/webp",
+                        headers=_THUMBNAIL_CACHE_HEADERS,
+                    )
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
@@ -432,7 +432,13 @@ def register_routes(router, server):
                     ],
                     True,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Could not map bbox to thumbnail for picture %s (%s); "
+                    "returning unscaled bbox.",
+                    getattr(picture, "id", None),
+                    exc,
+                )
                 return bbox, False
 
         pics = server.vault.db.run_task(

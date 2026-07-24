@@ -58,7 +58,12 @@ def _get_exif_bbox_transform(
             file_w, file_h = img.size
             exif = img.getexif()
             orientation = int(exif.get(_EXIF_ORIENTATION_TAG, 1)) if exif else 1
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Could not read EXIF orientation for %s (%s); using no transform.",
+            file_path,
+            exc,
+        )
         return None, src_w, src_h
 
     # Use actual file dimensions for all transform maths.

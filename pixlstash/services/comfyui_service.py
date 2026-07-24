@@ -87,6 +87,9 @@ def _extract_text_from_value(value) -> str:
         try:
             return json.dumps(value, ensure_ascii=True)
         except Exception:
+            # Deliberate best-effort fallback (allowlisted in the except-hygiene
+            # guardrail): a non-JSON-serialisable value is normal here, and
+            # str(value) IS the intended result, not an error path to log.
             return str(value)
     return str(value)
 

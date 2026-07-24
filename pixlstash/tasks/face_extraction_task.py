@@ -274,7 +274,10 @@ class FaceExtractionTask(BaseTask):
         if callable(fn):
             try:
                 return max(0, int(fn()))
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "FaceExtractionTask: VRAM estimate failed; assuming 0: %s", exc
+                )
                 return 0
         return 0
 
@@ -401,6 +404,9 @@ class FaceExtractionTask(BaseTask):
         try:
             state = sa_inspect(obj)
         except Exception:
+            # Deliberate best-effort probe (allowlisted in the except-hygiene
+            # guardrail): a non-inspectable object simply is not a loaded
+            # relationship, so (False, None) IS the answer, not an error to log.
             return False, None
         attr = state.attrs.get(name)
         if attr is None:
@@ -864,7 +870,13 @@ class FaceExtractionTask(BaseTask):
             ) in pending_thumb_work:
                 try:
                     loaded_h, loaded_w = img.shape[:2]
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "FaceExtractionTask: skipping square-crop update for "
+                        "picture %s; unreadable image array: %s",
+                        pic_id,
+                        exc,
+                    )
                     continue
                 if loaded_w <= 0 or loaded_h <= 0:
                     continue

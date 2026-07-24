@@ -423,14 +423,16 @@ def prepare_smart_score_inputs(good_anchors, bad_anchors, candidates):
         if not isinstance(blob, (bytes, bytearray)):
             try:
                 blob = bytes(blob)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not coerce embedding blob to bytes (%s).", exc)
                 return None
         try:
             arr = np.frombuffer(blob, dtype=np.float32)
             if arr.ndim != 1 or arr.size == 0:
                 return None
             return arr.copy()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Could not decode embedding blob to float32 vector (%s).", exc)
             return None
 
     def process_list(items):

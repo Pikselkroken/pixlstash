@@ -146,6 +146,8 @@ def create_router(server) -> APIRouter:
                     try:
                         return (face.width or 0) * (face.height or 0)
                     except Exception:
+                        # Sort-key guard: a face missing usable dimensions sorts
+                        # as zero area; 0 IS the answer, not an error.
                         return 0
 
                 for pic_id in picture_ids:
