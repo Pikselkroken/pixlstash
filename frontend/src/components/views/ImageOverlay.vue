@@ -755,7 +755,26 @@ import {
   mediaMimeType,
   safeDownloadName,
 } from "../../utils/media.js";
-import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import { appendShareToken, isReadOnly } from "../../utils/apiClient";
+import {
+  getPictureMetadata,
+  listPictureFaces,
+  listPictureDetections,
+  addPictureFace,
+} from "../../api/pictures";
+import {
+  listCharacters,
+  getCharacterName,
+  getCharacterThumbnail,
+  addCharacterFacesByFaceId,
+  removeCharacterFacesByFaceId,
+} from "../../api/characters";
+import { listStackPictures } from "../../api/stacks";
+import {
+  listWorkflows,
+  runImageToImage,
+  getPictureWorkflow,
+} from "../../api/comfyui";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -1295,8 +1314,8 @@ async function fetchComfyWorkflows() {
   comfyuiWorkflowLoading.value = true;
   comfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get("/comfyui/workflows");
-    const workflows = res.data?.workflows;
+    const body = await listWorkflows();
+    const workflows = body?.workflows;
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
@@ -1320,15 +1339,12 @@ async function runComfyWorkflow() {
       client_id: comfyuiClientId.value || undefined,
       stack: stackI2IOutputs.value,
     };
-    const res = await apiClient.post(
-      `${backendUrl.value}/comfyui/run_i2i`,
-      payload,
-    );
-    const promptCount = Array.isArray(res.data?.prompts)
-      ? res.data.prompts.length
-      : 0;
+    const body = await runImageToImage(payload, {
+      baseUrl: backendUrl.value,
+    });
+    const promptCount = Array.isArray(body?.prompts) ? body.prompts.length : 0;
     emit("comfyui-run", {
-      prompts: Array.isArray(res.data?.prompts) ? res.data.prompts : [],
+      prompts: Array.isArray(body?.prompts) ? body.prompts : [],
       pictureId: payload.picture_id ?? null,
     });
     comfyuiRunSuccess.value = promptCount
@@ -1721,10 +1737,9 @@ async function ensureOverlayStackMembersLoaded(
   nextLoading.add(stackId);
   overlayExpandedStackLoading.value = nextLoading;
   try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/stacks/${stackId}/pictures?fields=grid`,
-    );
-    const data = res.data;
+    const data = await listStackPictures(stackId, {
+      baseUrl: backendUrl.value,
+    });
     const images = Array.isArray(data) ? data : [];
     const ordered = normalizeOverlayStackMembersForStack(stackId, images);
     const ids = ordered
@@ -2840,10 +2855,9 @@ async function onDrawEnd(event) {
   const payload = { bbox: [x1, y1, x2, y2], frame_index: 0 };
   try {
     if (drawMode.value === "face") {
-      await apiClient.post(
-        `${capturedBackendUrl}/pictures/${capturedImageId}/face`,
-        payload,
-      );
+      await addPictureFace(capturedImageId, payload, {
+        baseUrl: capturedBackendUrl,
+      });
       await fetchFaceBboxes(capturedImageId);
       emit("overlay-change", {
         imageId: capturedImageId,
@@ -3081,12 +3095,11 @@ async function fetchComfyWorkflow(imageId) {
   const requestId = (comfyWorkflowRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/comfyui/pictures/${imageId}/workflow`,
-    );
+    const data = await getPictureWorkflow(imageId, {
+      baseUrl: backendUrl.value,
+    });
     if (comfyWorkflowRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
-    const data = res.data;
     comfyMetadata.value = data
       ? {
           workflow: data.workflow,
@@ -3111,12 +3124,12 @@ async function fetchOverlayMetadata(imageId) {
   if (!imageId || !backendUrl.value) return;
   const requestId = (metadataRequestId += 1);
   try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/metadata?smart_score=true`,
-    );
+    const data = await getPictureMetadata(imageId, {
+      smartScore: true,
+      baseUrl: backendUrl.value,
+    });
     if (metadataRequestId !== requestId) return;
     if (!image.value || image.value.id !== imageId) return;
-    const data = res.data;
     if (!data || Array.isArray(data)) return;
     const merged = { ...data, ...image.value };
     const existingSmartScore =
@@ -3174,10 +3187,9 @@ async function fetchFaceBboxes(imageId) {
   const requestId = (faceBboxesRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/faces`,
-    );
-    const faces = res.data;
+    const faces = await listPictureFaces(imageId, {
+      baseUrl: backendUrl.value,
+    });
     if (faceBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     const faceArray = Array.isArray(faces) ? faces : faces.faces;
@@ -3193,12 +3205,17 @@ async function fetchFaceBboxes(imageId) {
       firstFrameFaces.map(async (face) => {
         if (face.character_id) {
           try {
-            const res = await apiClient.get(
-              `${backendUrl.value}/characters/${face.character_id}/name`,
-            );
-            const data = res.data;
+            const data = await getCharacterName(face.character_id, {
+              baseUrl: backendUrl.value,
+            });
             face.character_name = data.name || null;
-          } catch {
+          } catch (e) {
+            // Non-fatal: the box still renders, just without a name. Log it so
+            // a systematically failing lookup is not invisible.
+            console.debug(
+              `Failed to resolve the name of character ${face.character_id}`,
+              e,
+            );
             face.character_name = null;
           }
         } else {
@@ -3224,13 +3241,13 @@ async function fetchDetections(imageId) {
   const requestId = (detectionBboxesRequestId += 1);
   const requestedImageId = imageId;
   try {
-    const res = await apiClient.get(
-      `${backendUrl.value}/pictures/${imageId}/detections`,
-    );
+    const rows = await listPictureDetections(imageId, {
+      baseUrl: backendUrl.value,
+    });
     if (detectionBboxesRequestId !== requestId) return;
     if (!image.value || image.value.id !== requestedImageId) return;
     // The endpoint returns a bare array of detection rows.
-    const detections = Array.isArray(res.data) ? res.data : [];
+    const detections = Array.isArray(rows) ? rows : [];
     detectionBboxes.value = dedupeDetections(detections).filter(
       (d) =>
         d.frame_index === 0 && Array.isArray(d.bbox) && d.bbox.length === 4,
@@ -3263,8 +3280,7 @@ async function fetchCharacters() {
   charactersLoading.value = true;
   const requestEpoch = (characterThumbnailEpoch += 1);
   try {
-    const res = await apiClient.get(`${backendUrl.value}/characters`);
-    const data = res.data;
+    const data = await listCharacters({ baseUrl: backendUrl.value });
     const list = Array.isArray(data) ? data : [];
     characters.value = list;
     await Promise.all(
@@ -3283,13 +3299,12 @@ async function fetchCharacters() {
 async function fetchCharacterThumbnail(characterId, requestEpoch) {
   if (!characterId || !backendUrl.value) return;
   try {
-    const cacheBuster = Date.now();
-    const res = await apiClient.get(
-      `${backendUrl.value}/characters/${characterId}/thumbnail?cb=${cacheBuster}`,
-      { responseType: "blob" },
-    );
+    const blob = await getCharacterThumbnail(characterId, {
+      cacheBuster: Date.now(),
+      baseUrl: backendUrl.value,
+    });
     if (requestEpoch !== characterThumbnailEpoch) return;
-    const blobUrl = URL.createObjectURL(res.data);
+    const blobUrl = URL.createObjectURL(blob);
     const existing = characterThumbnails.value[characterId];
     if (existing) {
       URL.revokeObjectURL(existing);
@@ -3369,10 +3384,9 @@ async function assignFaceToCharacter(face, character) {
   // Store imageId before the await in case image.value changes or is nulled during the async operation
   const capturedImageId = image.value?.id ?? null;
   try {
-    await apiClient.post(
-      `${backendUrl.value}/characters/${character.id}/faces`,
-      { face_ids: [face.id] },
-    );
+    await addCharacterFacesByFaceId(character.id, [face.id], {
+      baseUrl: backendUrl.value,
+    });
     if (Array.isArray(faceBboxes.value)) {
       faceBboxes.value = faceBboxes.value.map((entry) => {
         if (entry?.id === face.id) {
@@ -3405,10 +3419,9 @@ async function unassignFaceCharacter(face) {
   // Store imageId before the await in case image.value changes or is nulled during the async operation
   const capturedImageId = image.value?.id ?? null;
   try {
-    await apiClient.delete(
-      `${backendUrl.value}/characters/${face.character_id}/faces`,
-      { data: { face_ids: [face.id] } },
-    );
+    await removeCharacterFacesByFaceId(face.character_id, [face.id], {
+      baseUrl: backendUrl.value,
+    });
     if (Array.isArray(faceBboxes.value)) {
       faceBboxes.value = faceBboxes.value.map((entry) => {
         if (entry?.id === face.id) {

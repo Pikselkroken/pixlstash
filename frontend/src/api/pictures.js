@@ -175,6 +175,80 @@ export async function getPictureMetadata(
 }
 
 /**
+ * List the faces detected in a picture.
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>|Object>} the response body: either a bare
+ *   array of faces or an object nesting them under `faces`, depending on
+ *   server version.
+ */
+export async function listPictureFaces(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}/pictures/${id}/faces`);
+  return res.data;
+}
+
+/**
+ * List the object detections on a picture.
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the detection rows (the response body).
+ */
+export async function listPictureDetections(id, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}/pictures/${id}/detections`);
+  return res.data;
+}
+
+/**
+ * Add a hand-drawn face box to a picture.
+ * @param {number|string} id
+ * @param {Object} body - `{ bbox: [x1, y1, x2, y2], frame_index }`.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body.
+ */
+export async function addPictureFace(id, body, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(`${baseUrl}/pictures/${id}/face`, body);
+  return res.data;
+}
+
+/**
+ * Patch one picture's editable fields.
+ * @param {number|string} id
+ * @param {Object} body - only the keys to change.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the updated picture (the response body).
+ */
+export async function patchPicture(id, body, { baseUrl = "" } = {}) {
+  const res = await apiClient.patch(`${baseUrl}/pictures/${id}`, body);
+  return res.data;
+}
+
+/**
+ * List the ComfyUI models referenced by pictures in the library.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the response body.
+ */
+export async function listComfyuiModels({ baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}/pictures/comfyui_models`);
+  return res.data;
+}
+
+/**
+ * List the ComfyUI LoRAs referenced by pictures in the library.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} the response body.
+ */
+export async function listComfyuiLoras({ baseUrl = "" } = {}) {
+  const res = await apiClient.get(`${baseUrl}/pictures/comfyui_loras`);
+  return res.data;
+}
+
+/**
  * Resolve thumbnail URLs for a batch of pictures.
  * @param {Array<number|string>} ids
  * @param {Object} [options]

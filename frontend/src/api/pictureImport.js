@@ -1,12 +1,13 @@
 import { apiClient } from "../utils/apiClient";
 
 /**
- * Async streaming-staging import adapter (#459).
+ * Picture import resource — the async streaming-staging session (#459).
  *
  * This module is the SINGLE seam between the async-import UI and the backend.
  * Every network call the import flow makes lives here, so the UI (the two-phase
  * dialog, the task-store run, the StatsSidebar row) never talks to `apiClient`
- * directly.
+ * directly. It predates the rest of `src/api/` and was written to the same
+ * rules, so it moved here unchanged rather than being rewritten.
  *
  * TWO PHASES (mirrors the v1.8.0 design, docs/design/v1.8.0-preview.html) mapped
  * onto the finalised streaming-staging session contract:

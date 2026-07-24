@@ -256,7 +256,18 @@
  *   refetchPredictions(id) - Re-fetch predictions after parent metadata refresh.
  */
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  listTags,
+  removeTagEverywhere,
+  listTagPredictions,
+  confirmTagPrediction,
+  rejectTagPrediction,
+} from "../../api/tags";
+import { resetPictureTags } from "../../api/pictures";
+import { listTaggers } from "../../api/taggers";
+import { getUserConfig } from "../../api/config";
+import { getPenalisedTags } from "../../api/users";
 import {
   dedupeTagList,
   getTagLabel as tagLabel,
@@ -342,18 +353,19 @@ async function fetchPenalisedTags() {
   if (penalisedTagsLoading.value) return;
   penalisedTagsLoading.value = true;
   try {
-    const endpoint = isReadOnly.value
-      ? "/users/me/penalised-tags"
-      : "/users/me/config";
-    const res = await apiClient.get(endpoint);
+    // A READ share session cannot read the whole config blob, so the same
+    // data comes from a narrower endpoint for those sessions.
+    const body = isReadOnly.value
+      ? await getPenalisedTags()
+      : await getUserConfig();
     let list = [];
-    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
-      list = res.data.smart_score_penalised_tags;
+    if (Array.isArray(body?.smart_score_penalised_tags)) {
+      list = body.smart_score_penalised_tags;
     } else if (
-      res.data?.smart_score_penalised_tags &&
-      typeof res.data.smart_score_penalised_tags === "object"
+      body?.smart_score_penalised_tags &&
+      typeof body.smart_score_penalised_tags === "object"
     ) {
-      list = Object.keys(res.data.smart_score_penalised_tags);
+      list = Object.keys(body.smart_score_penalised_tags);
     }
     const d = list
       .map((tag) =>
@@ -436,11 +448,10 @@ function normalizeTagKey(tag) {
 async function fetchTagPredictions(imageId) {
   if (!imageId || !props.backendUrl) return;
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions?include_meta=1`,
-    );
+    const payload = await listTagPredictions(imageId, {
+      baseUrl: props.backendUrl,
+    });
     if (!props.image || props.image.id !== imageId) return;
-    const payload = res.data;
     const predictions = Array.isArray(payload)
       ? payload
       : Array.isArray(payload?.tag_predictions)
@@ -584,14 +595,15 @@ async function fetchAllAvailableTags() {
   const now = Date.now();
   if (now - allAvailableTagsFetchedAt < 30_000) return;
   try {
-    const res = await apiClient.get(`${props.backendUrl}/tags`);
-    const data = res.data;
-    if (Array.isArray(data)) {
-      allAvailableTags.value = data;
+    const rows = await listTags({ baseUrl: props.backendUrl });
+    if (Array.isArray(rows)) {
+      allAvailableTags.value = rows;
       allAvailableTagsFetchedAt = now;
     }
-  } catch {
-    // Non-critical — autocomplete just stays empty
+  } catch (e) {
+    // Non-critical: autocomplete just stays empty. Log it so a persistently
+    // failing fetch is visible.
+    console.debug("Failed to refresh the tag autocomplete list", e);
   }
 }
 
@@ -824,10 +836,9 @@ async function removeAllTag(tag) {
   const capturedImageId = props.image?.id ?? null;
   if (capturedImageId && props.backendUrl) {
     try {
-      await apiClient.post(
-        `${props.backendUrl}/pictures/${capturedImageId}/tags/remove_all`,
-        { tag: label },
-      );
+      await removeTagEverywhere(capturedImageId, label, {
+        baseUrl: props.backendUrl,
+      });
     } catch (err) {
       console.warn("Failed to remove tag everywhere:", err);
     }
@@ -872,9 +883,7 @@ async function confirmPrediction(tag) {
   }
 
   try {
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/confirm`,
-    );
+    await confirmTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
     void fetchTagPredictions(imageId);
   } catch (e) {
     emit("update-tags", prevTags);
@@ -888,14 +897,14 @@ async function rejectPrediction(tag) {
   const imageId = props.image.id;
   const key = String(tag).trim().toLowerCase();
   try {
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
-    );
+    await rejectTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
     tagPredictions.value = tagPredictions.value.map((p) =>
       p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
     );
-  } catch {
-    // Network error — fall through to ensure local entry below.
+  } catch (e) {
+    // Network error: fall through to ensure the local entry below so the chip
+    // still reflects the user's decision. Log it rather than drop it.
+    console.debug(`Failed to reject the prediction "${tag}" server-side`, e);
   }
   if (
     !tagPredictions.value.some(
@@ -918,8 +927,8 @@ async function fetchTagPlugins() {
   if (tagPluginsLoading.value || tagPlugins.value.length) return;
   tagPluginsLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    tagPlugins.value = (res.data?.plugins ?? []).filter((p) => p.supports_tags);
+    const body = await listTaggers();
+    tagPlugins.value = (body?.plugins ?? []).filter((p) => p.supports_tags);
   } catch {
     tagPlugins.value = [];
   } finally {
@@ -935,10 +944,9 @@ async function refreshPictureTags(model = null) {
   isTagsRefreshing.value = true;
   try {
     const body = model ? { model } : {};
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${capturedImageId}/reset_tags`,
-      body,
-    );
+    await resetPictureTags(capturedImageId, body, {
+      baseUrl: props.backendUrl,
+    });
     tagPredictions.value = [];
     emit("update-tags", []);
     emit("overlay-change", {

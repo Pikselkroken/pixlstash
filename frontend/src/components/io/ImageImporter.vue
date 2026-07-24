@@ -10,7 +10,7 @@ import {
   fetchStagingStatus,
   openStagingSession,
   stageFiles,
-} from "../../composables/useImportService";
+} from "../../api/pictureImport";
 
 // ── Async streaming-staging import (#459) ────────────────────────────────────
 // This component owns the two-phase import experience over the finalised
@@ -27,7 +27,7 @@ import {
 //     task row (useTasksStore import run) counting server-side progress polled
 //     BY staging id. Refresh is harmless. The grid refreshes off the backend's
 //     CHANGED_PICTURES / PICTURE_IMPORTED WS broadcast (no results payload).
-// ALL backend calls are isolated behind ../../composables/useImportService.js.
+// ALL backend calls are isolated behind ../../api/pictureImport.js.
 // The public API (startImport + the four emits) is unchanged so existing call
 // sites keep working. Drop-target association (project / set / character) is
 // passed through startImport options into openStagingSession and applied

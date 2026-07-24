@@ -310,7 +310,19 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  listTags,
+  addPictureTag,
+  removePictureTag,
+  bulkFetchTags,
+  listTagPredictions,
+  confirmTagPrediction,
+  rejectTagPrediction,
+} from "../../api/tags";
+import { resetPictureTags } from "../../api/pictures";
+import { listTaggers } from "../../api/taggers";
+import { getUserConfig } from "../../api/config";
 import { isSentinelTag, formatSentinelTag } from "../../utils/tags.js";
 
 const MAX_TAG_FETCH = 100;
@@ -434,11 +446,8 @@ async function fetchSelectedImageTags() {
   }
   if (!fetchedTagData.value.length) tagDataLoading.value = true;
   try {
-    const res = await apiClient.post(
-      `${props.backendUrl}/pictures/tags/bulk_fetch`,
-      { picture_ids: toFetch },
-    );
-    fetchedTagData.value = Array.isArray(res.data) ? res.data : [];
+    const rows = await bulkFetchTags(toFetch, { baseUrl: props.backendUrl });
+    fetchedTagData.value = Array.isArray(rows) ? rows : [];
   } catch {
     fetchedTagData.value = [];
   } finally {
@@ -461,12 +470,11 @@ async function fetchSelectedImagePredictions() {
   try {
     const results = await Promise.all(
       ids.map((id) =>
-        apiClient
-          .get(
-            `${props.backendUrl}/pictures/${id}/tag_predictions?status=REJECTED&include_meta=1`,
-          )
-          .then((r) => {
-            const payload = r.data;
+        listTagPredictions(id, {
+          status: "REJECTED",
+          baseUrl: props.backendUrl,
+        })
+          .then((payload) => {
             const predictions = Array.isArray(payload)
               ? payload
               : Array.isArray(payload?.tag_predictions)
@@ -589,9 +597,9 @@ async function confirmPredictionOnAll(predEntry) {
   try {
     await Promise.all(
       predEntry.ids.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/pictures/${id}/tag_predictions/${encodeURIComponent(predEntry.tag)}/confirm`,
-        ),
+        confirmTagPrediction(id, predEntry.tag, {
+          baseUrl: props.backendUrl,
+        }),
       ),
     );
     emit("tags-applied", {
@@ -631,9 +639,7 @@ async function removeTagFromAll(tagEntry) {
       [...tagEntry.tagsByImageId.entries()]
         .filter(([, tagId]) => tagId != null)
         .map(([imgId, tagId]) =>
-          apiClient.delete(
-            `${props.backendUrl}/pictures/${imgId}/tags/${tagId}`,
-          ),
+          removePictureTag(imgId, tagId, { baseUrl: props.backendUrl }),
         ),
     );
     emit("tags-applied", {
@@ -661,9 +667,7 @@ async function addTagToRemaining(tagEntry) {
   try {
     await Promise.all(
       missingIds.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/tags`, {
-          tag: tagEntry.name,
-        }),
+        addPictureTag(id, tagEntry.name, { baseUrl: props.backendUrl }),
       ),
     );
     emit("tags-applied", {
@@ -685,10 +689,8 @@ async function fetchTaggerPlugins() {
   if (taggerPluginsLoading.value || taggerPlugins.value.length) return;
   taggerPluginsLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    taggerPlugins.value = (res.data?.plugins ?? []).filter(
-      (p) => p.supports_tags,
-    );
+    const body = await listTaggers();
+    taggerPlugins.value = (body?.plugins ?? []).filter((p) => p.supports_tags);
   } catch {
     taggerPlugins.value = [];
   } finally {
@@ -710,7 +712,7 @@ async function generateTagsForAll(model = null) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`, body),
+        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
       ),
     );
     const suffix = model ? ` with ${model}` : "";
@@ -799,15 +801,15 @@ async function fetchPenalisedTagsSB() {
   const now = Date.now();
   if (now - penalisedTagsFetchedAt < 60_000) return;
   try {
-    const res = await apiClient.get("/users/me/config");
+    const cfg = await getUserConfig();
     let list = [];
-    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
-      list = res.data.smart_score_penalised_tags;
+    if (Array.isArray(cfg?.smart_score_penalised_tags)) {
+      list = cfg.smart_score_penalised_tags;
     } else if (
-      res.data?.smart_score_penalised_tags &&
-      typeof res.data.smart_score_penalised_tags === "object"
+      cfg?.smart_score_penalised_tags &&
+      typeof cfg.smart_score_penalised_tags === "object"
     ) {
-      list = Object.keys(res.data.smart_score_penalised_tags);
+      list = Object.keys(cfg.smart_score_penalised_tags);
     }
     penalisedTagsSB.value = new Set(
       list
@@ -837,13 +839,15 @@ async function fetchTagsSB() {
   const now = Date.now();
   if (now - allTagsFetchedAt < 30_000) return;
   try {
-    const res = await apiClient.get(`${props.backendUrl}/tags`);
-    if (Array.isArray(res.data)) {
-      allTagsSB.value = res.data;
+    const rows = await listTags({ baseUrl: props.backendUrl });
+    if (Array.isArray(rows)) {
+      allTagsSB.value = rows;
       allTagsFetchedAt = now;
     }
-  } catch {
-    // non-critical
+  } catch (e) {
+    // Non-critical: the suggestion list just stays as it was. Log it so a
+    // persistently failing fetch is visible.
+    console.debug("Failed to refresh the tag suggestion list", e);
   }
 }
 
@@ -907,9 +911,7 @@ async function applyTag() {
   tagSuccess.value = "";
   try {
     await Promise.all(
-      ids.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/tags`, { tag }),
-      ),
+      ids.map((id) => addPictureTag(id, tag, { baseUrl: props.backendUrl })),
     );
     tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with "${tag}"`;
     tagInput.value = "";
@@ -962,9 +964,7 @@ async function rejectTagOnAll(tagEntry) {
   try {
     await Promise.all(
       imageIds.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/pictures/${id}/tag_predictions/${encodeURIComponent(tagEntry.name)}/reject`,
-        ),
+        rejectTagPrediction(id, tagEntry.name, { baseUrl: props.backendUrl }),
       ),
     );
     await fetchSelectedImagePredictions();
