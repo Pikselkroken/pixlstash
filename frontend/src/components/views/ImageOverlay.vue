@@ -787,6 +787,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
+  smartScoreUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -810,6 +811,7 @@ const {
   backendUrl,
   tagUpdate,
   descriptionUpdate,
+  smartScoreUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1031,6 +1033,7 @@ const descriptionTeaser = computed(() => {
 
 const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
+const lastSmartScoreUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -3146,11 +3149,20 @@ async function fetchOverlayMetadata(imageId) {
           ? image.value.smart_score
           : null;
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
-      // Keep Smart Score consistent with the grid/list payload when already
-      // present there; metadata endpoint currently computes a different
-      // single-candidate value for some images.
+      // Prefer the server's freshly-committed value. After a tag or penalised-tag
+      // settings edit the backend NULLs the cached score and recomputes, so an
+      // authoritative NON-NULL fetch is the corrected number and MUST replace the
+      // stale value currently shown (the panel used to keep the old value here,
+      // which is why the score stayed stale until a full reload).
+      // Only fall back to the currently-displayed value when the fetch returns
+      // null/absent: the brief post-invalidation window before the recompute
+      // lands, and grid-sourced images that don't carry a smartScore at all — so
+      // we never flash "unscored" during the transient.
+      const freshSmartScore = data.smartScore;
       merged.smartScore =
-        existingSmartScore !== null ? existingSmartScore : data.smartScore;
+        freshSmartScore !== null && freshSmartScore !== undefined
+          ? freshSmartScore
+          : existingSmartScore;
     }
     const dataTags = getTagList(data.tags);
     if (data.tags !== undefined) {
@@ -3553,6 +3565,34 @@ watch(
       : [];
     const currentId = String(image.value.id);
     if (pictureIds.length && !pictureIds.includes(currentId)) return;
+    fetchOverlayMetadata(image.value.id);
+  },
+);
+
+// A smart_score recompute landed somewhere (after a tag edit or a penalised-tag
+// settings change). Re-fetch the open card's metadata so the panel shows the
+// freshly-committed score. Deliberately NOT gated on the open card's id being in
+// payload.pictureIds: unlike the tag/description watchers (whose events name the
+// exact pictures they touched), a smart_score signal can legitimately omit the
+// open card even when that card WAS rescored —
+//   • the bulk-drain event carries a whole task batch's ids (vault.py, the
+//     remaining==0 emit), which need not contain the open card;
+//   • an interactive rescore that overflowed the registry is demoted onto that
+//     same bulk path (smart_score_invalidation.py), losing its origin/id;
+//   • Vue coalesces two signals written before the watcher flushes into the
+//     latest value, dropping an intermediate one that named the open card.
+// Any of those left the score stale until a full reload. Re-fetching on every
+// distinct signal is safe and cheap: fetchOverlayMetadata is requestId-deduped
+// and keeps the current value on a still-null read (recompute pending), so a
+// redundant fetch for an unrelated batch neither flickers nor hammers.
+watch(
+  () => smartScoreUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastSmartScoreUpdateKey.value) return;
+    lastSmartScoreUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
     fetchOverlayMetadata(image.value.id);
   },
 );

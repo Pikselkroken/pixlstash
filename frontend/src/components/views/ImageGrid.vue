@@ -7,6 +7,7 @@
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
     :descriptionUpdate="props.wsDescriptionUpdate"
+    :smartScoreUpdate="props.wsSmartScoreUpdate"
     :hiddenTags="props.hiddenTags"
     :applyTagFilter="props.applyTagFilter"
     :dateFormat="props.dateFormat"
@@ -1161,6 +1162,10 @@ const props = defineProps({
     default: () => ({ key: 0, pictureIds: [] }),
   },
   wsDescriptionUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
+  wsSmartScoreUpdate: {
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
   },
