@@ -11,7 +11,7 @@ column count). To preserve each user's chosen density, the new column is
 backfilled by mapping every row's ``columns`` value to the NEAREST canonical
 size index using the representative square column counts::
 
-    size_index -> columns:  0:12, 1:9, 2:6, 3:4, 4:3, 5:2, 6:1
+    size_index -> columns:  0:12, 1:10, 2:8, 3:6, 4:5, 5:4, 6:3
 
 Ties break toward the LARGER column count (the smaller size index). Rows whose
 ``columns`` is NULL fall back to the default ``3``.
@@ -40,7 +40,7 @@ depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 # Canonical size index -> representative square column count.
-_SIZE_TO_COLUMNS = {0: 12, 1: 9, 2: 6, 3: 4, 4: 3, 5: 2, 6: 1}
+_SIZE_TO_COLUMNS = {0: 12, 1: 10, 2: 8, 3: 6, 4: 5, 5: 4, 6: 3}
 _DEFAULT_SIZE = 3
 
 

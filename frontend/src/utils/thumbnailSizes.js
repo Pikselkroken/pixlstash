@@ -7,14 +7,19 @@
 // users from their old `columns` value). This table is the frontend source of
 // truth and MUST stay in sync with the backend backfill mapping (the `columns`
 // value per level).
+// Column counts step DOWN gently toward the large end (…6,5,4,3) and never
+// reach 1–2, where a square tile would balloon to a half- or full-width image.
+// The perceptual jump between few-column layouts is large (tile width scales as
+// 1/columns), so the steps shrink (2,2,2,1,1,1) rather than grow as the tiles
+// get bigger. Justified row heights are a separate, smoother scale.
 export const THUMBNAIL_SIZE_STEPS = [
   { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150 },
-  { key: "very_small", label: "Very Small", columns: 9, rowHeight: 180 },
-  { key: "small", label: "Small", columns: 6, rowHeight: 210 },
-  { key: "medium", label: "Medium", columns: 4, rowHeight: 245 },
-  { key: "large", label: "Large", columns: 3, rowHeight: 285 },
-  { key: "very_large", label: "Very Large", columns: 2, rowHeight: 330 },
-  { key: "huge", label: "Huge", columns: 1, rowHeight: 375 },
+  { key: "very_small", label: "Very Small", columns: 10, rowHeight: 180 },
+  { key: "small", label: "Small", columns: 8, rowHeight: 210 },
+  { key: "medium", label: "Medium", columns: 6, rowHeight: 245 },
+  { key: "large", label: "Large", columns: 5, rowHeight: 285 },
+  { key: "very_large", label: "Very Large", columns: 4, rowHeight: 330 },
+  { key: "huge", label: "Huge", columns: 3, rowHeight: 375 },
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium
