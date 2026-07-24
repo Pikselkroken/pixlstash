@@ -311,7 +311,8 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { listWorkflows, runImageToImage } from "../../api/comfyui";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
@@ -585,8 +586,8 @@ async function fetchComfyWorkflows() {
   comfyuiWorkflowLoading.value = true;
   comfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get("/comfyui/workflows");
-    const workflows = res.data?.workflows;
+    const body = await listWorkflows();
+    const workflows = body?.workflows;
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
@@ -617,11 +618,10 @@ async function runSelectedComfyWorkflow() {
       client_id: props.comfyuiClientId || undefined,
       stack: stackI2IOutputs.value,
     };
-    const res = await apiClient.post(
-      `${props.backendUrl}/comfyui/run_i2i`,
-      payload,
-    );
-    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    const body = await runImageToImage(payload, {
+      baseUrl: props.backendUrl,
+    });
+    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("comfyui-run", {
       prompts,
       pictureIds,

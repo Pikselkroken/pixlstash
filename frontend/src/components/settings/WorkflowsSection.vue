@@ -1,6 +1,11 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  listWorkflows,
+  deleteWorkflow as deleteWorkflowRequest,
+  importWorkflow,
+} from "../../api/comfyui";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -176,10 +181,8 @@ async function fetchWorkflowList() {
   workflowListLoading.value = true;
   workflowListError.value = "";
   try {
-    const res = await apiClient.get("/comfyui/workflows");
-    workflowList.value = Array.isArray(res.data?.workflows)
-      ? res.data.workflows
-      : [];
+    const body = await listWorkflows();
+    workflowList.value = Array.isArray(body?.workflows) ? body.workflows : [];
   } catch {
     workflowListError.value = "Failed to load workflows.";
   } finally {
@@ -194,9 +197,7 @@ async function deleteWorkflow(workflow) {
   );
   if (!confirmed) return;
   try {
-    await apiClient.delete(
-      `/comfyui/workflows/${encodeURIComponent(workflow.name)}`,
-    );
+    await deleteWorkflowRequest(workflow.name);
     await fetchWorkflowList();
   } catch (e) {
     workflowListError.value =
@@ -569,9 +570,9 @@ async function confirmWorkflowImport() {
   workflowImportSaving.value = true;
   workflowImportError.value = "";
   try {
-    const listRes = await apiClient.get("/comfyui/workflows");
-    const existing = Array.isArray(listRes.data?.workflows)
-      ? listRes.data.workflows
+    const listBody = await listWorkflows();
+    const existing = Array.isArray(listBody?.workflows)
+      ? listBody.workflows
       : [];
     const exists = existing.some(
       (workflow) =>
@@ -598,7 +599,7 @@ async function confirmWorkflowImport() {
       updated,
       outputTargets,
     );
-    await apiClient.post("/comfyui/workflows/import", {
+    await importWorkflow({
       name,
       workflow: updatedWithOutputs,
       overwrite,
