@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { VSwitch } from "vuetify/components";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -31,24 +32,52 @@ const emit = defineEmits([
 // visual choice (ui-ux-expert decision). Arrow keys move between the options;
 // Space/Enter selects the focused one.
 const THUMBNAIL_MODES = ["square", "justified"];
+
+// Justified needs the whole-frame aspect-ratio thumbnails. After the v1.8.0
+// upgrade those regenerate in the background; until that finishes, justified
+// would render old square crops stretched into variable-width slots — worse than
+// square. So the Justified option is gated on the thumbnail-regeneration worker
+// (the same signal the "Upgrading thumbnails" bar reads): disabled while any
+// pictures still await regeneration. Reading the shared worker snapshot keeps
+// this in lockstep with the progress bar and the Tasks tab.
+const tasksStore = useTasksStore();
+const thumbnailRegen = computed(() => {
+  const s = tasksStore.workerSnapshots?.["ThumbnailGenerationTask"];
+  const remaining = Number(s?.remaining) || 0;
+  const total = Number(s?.total) || 0;
+  const current = Number(s?.current) || 0;
+  return { active: remaining > 0, remaining, total, current };
+});
+
+// Don't disable the option the user is already on (a disabled-but-checked radio
+// is a dead end); the gate only blocks SWITCHING to justified mid-regeneration.
+const justifiedDisabled = computed(
+  () =>
+    thumbnailRegen.value.active &&
+    (props.thumbnailMode ?? "square") !== "justified",
+);
+
 function setThumbnailMode(next) {
   if (!THUMBNAIL_MODES.includes(next)) return;
+  if (next === "justified" && justifiedDisabled.value) return;
   if (next === (props.thumbnailMode ?? "square")) return;
   emit("update:thumbnail-mode", next);
 }
 function onThumbnailModeKeydown(event) {
   const cur = THUMBNAIL_MODES.indexOf(props.thumbnailMode ?? "square");
+  let nextIdx = null;
   if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    event.preventDefault();
-    setThumbnailMode(THUMBNAIL_MODES[(cur + 1) % THUMBNAIL_MODES.length]);
+    nextIdx = (cur + 1) % THUMBNAIL_MODES.length;
   } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    event.preventDefault();
-    setThumbnailMode(
-      THUMBNAIL_MODES[
-        (cur - 1 + THUMBNAIL_MODES.length) % THUMBNAIL_MODES.length
-      ],
-    );
+    nextIdx = (cur - 1 + THUMBNAIL_MODES.length) % THUMBNAIL_MODES.length;
   }
+  if (nextIdx === null) return;
+  event.preventDefault();
+  // Skip past the disabled option rather than landing focus on a dead target.
+  if (THUMBNAIL_MODES[nextIdx] === "justified" && justifiedDisabled.value) {
+    return;
+  }
+  setThumbnailMode(THUMBNAIL_MODES[nextIdx]);
 }
 
 const sidebarThumbnailSizeModel = computed({
@@ -179,16 +208,28 @@ async function clearGuestSession() {
           </button>
           <button
             class="thumb-layout-opt"
-            :class="{ active: props.thumbnailMode === 'justified' }"
+            :class="{
+              active: props.thumbnailMode === 'justified',
+              disabled: justifiedDisabled,
+            }"
             type="button"
             role="radio"
             :aria-checked="props.thumbnailMode === 'justified'"
+            :aria-disabled="justifiedDisabled"
+            :disabled="justifiedDisabled"
             :tabindex="props.thumbnailMode === 'justified' ? 0 : -1"
             @click="setThumbnailMode('justified')"
           >
             Justified
           </button>
         </div>
+        <p v-if="justifiedDisabled" class="thumb-layout-notice" role="status">
+          Justified layout becomes available once thumbnails finish updating
+          <template v-if="thumbnailRegen.total">
+            ({{ thumbnailRegen.current.toLocaleString() }} of
+            {{ thumbnailRegen.total.toLocaleString() }} done)</template
+          >. This runs in the background — the grid stays usable meanwhile.
+        </p>
         <p class="thumb-layout-desc">
           Choose how photos fill the grid. <strong>Justified</strong> sizes each
           thumbnail to the photo's own shape for an edge-to-edge wall;
@@ -350,6 +391,20 @@ async function clearGuestSession() {
 .thumb-layout-opt:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+.thumb-layout-opt.disabled,
+.thumb-layout-opt:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border-color: rgba(var(--v-theme-on-surface), 0.16);
+  color: rgb(var(--v-theme-on-surface));
+}
+.thumb-layout-notice {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  line-height: var(--leading-snug);
 }
 .thumb-layout-desc {
   font-size: var(--text-xs);
