@@ -96,6 +96,18 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  /* A full-surface dim under a TRANSIENT floating panel (the auto-hide sidebar
+     drawer), not a modal. Two jobs: a depth cue that the panel floats over the
+     grid, and a tap target for touch dismissal. Deliberately light, because
+     this panel is dismissed by moving the mouse: it must not read as blocking.
+     Sits a clear step below `--scrim-photo` (0.55, a legibility backing sized
+     for glyph contrast) and well below the modal scrim (0.8 x 0.9 opacity in
+     App.css). One value for both themes: `scrim` is #000 in both, and what this
+     dims is the photo grid, which is bright regardless of theme. Do NOT deepen
+     it for dark: a black scrim cannot lighten, and a heavier one there just
+     muddies (visual-language.md §7); in dark the panel's --elevation-4 carries
+     the edge and the scrim is the supporting cue. */
+  --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
      COMPONENT DIMENSIONS — fixed component sizes (badges, action bars) that were
@@ -105,6 +117,11 @@
   --badge-size: 16px; /* min height/width of a count pill (was an ad-hoc 15px) */
   --badge-size-dot: 8px; /* the no-count activity dot (was an ad-hoc 7px) */
   --bar-height: 48px; /* contextual action-bar / toolbar band height */
+  /* The right-hand stats rail's fixed column width. Not invented: it is already
+     the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in
+     `.shortcuts-fab--stats-open` (right: 296px = 288 + --space-3). Naming it
+     stops a fifth call site picking a fifth number. */
+  --stats-panel-w: 288px;
   /* Notice surface (notice-surface.md §11). `--notice-max-w` is not invented:
      it is already the de-facto width of LockedDeleteNoticeDialog (420) and
      .plugin-menu-panel (420px); naming it stops the next floating card picking

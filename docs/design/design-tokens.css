@@ -118,9 +118,16 @@
      (dark glyph on it); `--scrim-photo` is a dark chip over an arbitrary photo
      (light glyph on it), on the theme `scrim` token so it stays reliably dark in
      both themes and clears contrast on any image underneath.
+     `--scrim-drawer` is the odd one out: not a chip backing but a full-surface
+     dim under a TRANSIENT floating panel (the auto-hide sidebar drawer). It is
+     deliberately lighter than both, because that panel is dismissed by moving
+     the mouse and must not read as a modal block. One value for both themes; a
+     black scrim cannot lighten, and deepening it for dark would only muddy
+     (§7), where the panel's --elevation-4 already carries the edge.
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
      COMPONENT DIMENSIONS — a small set of fixed component sizes that are neither
@@ -140,6 +147,12 @@
      overlay top bar). One height so these bands align. Desktop chrome compresses
      it (see `--titlebar-h` and the desktop overrides in style.css). */
   --bar-height: 48px;
+
+  /* The right-hand stats rail's fixed column width. Not invented: it is already
+     the de-facto constant in `.stats-sidebar` and in the shortcuts FAB's offset
+     (296px = 288 + --space-3). Naming it stops a fifth call site picking a
+     fifth number. */
+  --stats-panel-w: 288px;
 
   /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
      de-facto width already used by LockedDeleteNoticeDialog and

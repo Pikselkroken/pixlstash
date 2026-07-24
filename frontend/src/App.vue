@@ -1613,6 +1613,22 @@ function handleGlobalKeydown(e) {
     tag === "textarea" ||
     document.activeElement?.isContentEditable;
 
+  // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
+  // "Content on Hover or Focus" applies: it must be dismissible without moving
+  // the pointer. Escape is that mechanism, and for a touch user it is the only
+  // dismissal besides the scrim itself. Deliberately not preventDefault-ed, and
+  // skipped while typing, so the other Escape owners keep theirs. The sidebar
+  // context menu stops propagation from a capture-phase listener and never
+  // reaches here at all.
+  if (
+    e.key === "Escape" &&
+    !isEditable &&
+    sidebarStore.sidebarOverlay &&
+    sidebarStore.sidebarVisible
+  ) {
+    sidebarStore.hideAutoSidebar();
+  }
+
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key) && !isEditable) {
     // These keys drive grid scrolling only. Prevent the browser's default
@@ -2082,6 +2098,12 @@ defineExpose({
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
       />
+      <!-- App-level status strip: spans the whole shell above BOTH rails and the
+           grid. Thumbnail regeneration repaints grid tiles, sidebar thumbnails
+           and the Tasks row alike, so it is not a property of the grid column;
+           mounting it inside `.main-area` used to push the stats rail down while
+           leaving the left rail alone. -->
+      <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
       <div class="file-manager">
         <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
              sidebar overlay on hover (or tap, on touch). -->
@@ -2170,10 +2192,14 @@ defineExpose({
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
         </div>
+        <!-- Click-outside scrim for the auto-hide sidebar. Purely a dimming
+             surface and a tap target, so it is hidden from assistive tech; the
+             keyboard/AT equivalent of clicking it is Escape (handleGlobalKeydown). -->
         <Transition name="backdrop-fade">
           <div
             v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
             class="sidebar-backdrop"
+            aria-hidden="true"
             @click="sidebarStore.hideAutoSidebar()"
           ></div>
         </Transition>
@@ -2236,13 +2262,11 @@ defineExpose({
           @confirmed="onRestoreConfirmed"
         />
         <main :class="['main-area']" ref="mainAreaRef">
-          <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
           <div
             :class="[
               'main-content',
               selectionStore.selectedCharacter ? 'accent-border' : '',
             ]"
-            style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
             <div
               ref="gridWrapperRef"
@@ -2377,110 +2401,113 @@ defineExpose({
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
-            <StatsSidebar
-              ref="statsSidebarRef"
-              :open="sidebarStore.statsOpen"
-              :backendUrl="BACKEND_URL"
-              :selectedCharacter="selectionStore.selectedCharacter"
-              :selectedCharacterIds="selectionStore.selectedCharacterIds"
-              :characterMode="selectionStore.characterMultiMode"
-              :selectedSet="selectionStore.selectedSet"
-              :selectedSetIds="selectionStore.selectedSetIds"
-              :setMode="selectionStore.setMultiMode"
-              :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-              :projectViewMode="projectStore.projectViewMode"
-              :selectedProjectId="projectStore.selectedProjectId"
-              :tagFilter="filterStore.tagFilter"
-              :tagRejectedFilter="filterStore.tagRejectedFilter"
-              :mediaTypeFilter="filterStore.mediaTypeFilter"
-              :minScoreFilter="filterStore.minScoreFilter"
-              :maxScoreFilter="filterStore.maxScoreFilter"
-              :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
-              :resolutionBucketFilter="filterStore.resolutionBucketFilter"
-              :faceBboxFilter="filterStore.faceBboxFilter"
-              :sharedOnlyFilter="filterStore.sharedOnlyFilter"
-              :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
-              :filePathPrefixFilter="
-                selectionStore.selectedFolderFilter?.pathPrefix ?? null
-              "
-              :importSourceFolderFilter="
-                selectionStore.selectedFolderFilter?.importSourceFolder ?? null
-              "
-              :allPicturesId="ALL_PICTURES_ID"
-              :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-              :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-              :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
-              :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
-              :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
-              :wsTagUpdate="wsStore.wsTagUpdate"
-              @filter-tag="
-                (tag) => {
-                  if (filterStore.tagFilter.includes(tag))
-                    filterStore.tagFilter = filterStore.tagFilter.filter(
-                      (t) => t !== tag,
-                    );
-                  else filterStore.tagFilter = [...filterStore.tagFilter, tag];
-                }
-              "
-              @filter-tags="
-                (tags) => {
-                  const allPresent = tags.every((t) =>
-                    filterStore.tagFilter.includes(t),
+          </div>
+        </main>
+        <!-- Peer of the left sidebar, NOT nested in the grid column: both rails
+             then span the full height of `.file-manager` and nothing stacked in
+             the main area can push one rail down without the other. -->
+          <StatsSidebar
+            ref="statsSidebarRef"
+            :open="sidebarStore.statsOpen"
+            :backendUrl="BACKEND_URL"
+            :selectedCharacter="selectionStore.selectedCharacter"
+            :selectedCharacterIds="selectionStore.selectedCharacterIds"
+            :characterMode="selectionStore.characterMultiMode"
+            :selectedSet="selectionStore.selectedSet"
+            :selectedSetIds="selectionStore.selectedSetIds"
+            :setMode="selectionStore.setMultiMode"
+            :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+            :projectViewMode="projectStore.projectViewMode"
+            :selectedProjectId="projectStore.selectedProjectId"
+            :tagFilter="filterStore.tagFilter"
+            :tagRejectedFilter="filterStore.tagRejectedFilter"
+            :mediaTypeFilter="filterStore.mediaTypeFilter"
+            :minScoreFilter="filterStore.minScoreFilter"
+            :maxScoreFilter="filterStore.maxScoreFilter"
+            :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+            :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+            :faceBboxFilter="filterStore.faceBboxFilter"
+            :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+            :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+            :filePathPrefixFilter="
+              selectionStore.selectedFolderFilter?.pathPrefix ?? null
+            "
+            :importSourceFolderFilter="
+              selectionStore.selectedFolderFilter?.importSourceFolder ?? null
+            "
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+            :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+            :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+            :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+            :wsTagUpdate="wsStore.wsTagUpdate"
+            @filter-tag="
+              (tag) => {
+                if (filterStore.tagFilter.includes(tag))
+                  filterStore.tagFilter = filterStore.tagFilter.filter(
+                    (t) => t !== tag,
                   );
-                  if (allPresent)
-                    filterStore.tagFilter = filterStore.tagFilter.filter(
-                      (t) => !tags.includes(t),
-                    );
-                  else
-                    filterStore.tagFilter = [
-                      ...new Set([...filterStore.tagFilter, ...tags]),
-                    ];
-                }
-              "
-              @filter-confidence-above="
-                (entry) => {
-                  if (filterStore.tagConfidenceAboveFilter.includes(entry))
-                    filterStore.tagConfidenceAboveFilter =
-                      filterStore.tagConfidenceAboveFilter.filter(
-                        (e) => e !== entry,
-                      );
-                  else
-                    filterStore.tagConfidenceAboveFilter = [
-                      ...filterStore.tagConfidenceAboveFilter,
-                      entry,
-                    ];
-                }
-              "
-              @clear-tag-filter="
-                (tags) => {
+                else filterStore.tagFilter = [...filterStore.tagFilter, tag];
+              }
+            "
+            @filter-tags="
+              (tags) => {
+                const allPresent = tags.every((t) =>
+                  filterStore.tagFilter.includes(t),
+                );
+                if (allPresent)
                   filterStore.tagFilter = filterStore.tagFilter.filter(
                     (t) => !tags.includes(t),
                   );
-                }
-              "
-              @clear-confidence-filter="
-                (entries) => {
+                else
+                  filterStore.tagFilter = [
+                    ...new Set([...filterStore.tagFilter, ...tags]),
+                  ];
+              }
+            "
+            @filter-confidence-above="
+              (entry) => {
+                if (filterStore.tagConfidenceAboveFilter.includes(entry))
                   filterStore.tagConfidenceAboveFilter =
                     filterStore.tagConfidenceAboveFilter.filter(
-                      (e) => !entries.includes(e),
+                      (e) => e !== entry,
                     );
-                }
-              "
-              @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
-              @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
-              @update:smartScoreBucketFilter="
-                (v) => (filterStore.smartScoreBucketFilter = v)
-              "
-              @update:resolutionBucketFilter="
-                (v) => (filterStore.resolutionBucketFilter = v)
-              "
-              @toggle="
-                sidebarStore.toggleStats();
-                updateIsMobile();
-              "
-            />
-          </div>
-        </main>
+                else
+                  filterStore.tagConfidenceAboveFilter = [
+                    ...filterStore.tagConfidenceAboveFilter,
+                    entry,
+                  ];
+              }
+            "
+            @clear-tag-filter="
+              (tags) => {
+                filterStore.tagFilter = filterStore.tagFilter.filter(
+                  (t) => !tags.includes(t),
+                );
+              }
+            "
+            @clear-confidence-filter="
+              (entries) => {
+                filterStore.tagConfidenceAboveFilter =
+                  filterStore.tagConfidenceAboveFilter.filter(
+                    (e) => !entries.includes(e),
+                  );
+              }
+            "
+            @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
+            @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
+            @update:smartScoreBucketFilter="
+              (v) => (filterStore.smartScoreBucketFilter = v)
+            "
+            @update:resolutionBucketFilter="
+              (v) => (filterStore.resolutionBucketFilter = v)
+            "
+            @toggle="
+              sidebarStore.toggleStats();
+              updateIsMobile();
+            "
+          />
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"

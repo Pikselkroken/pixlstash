@@ -1814,18 +1814,17 @@ defineExpose({ focusTasksTab });
 <style scoped>
 .stats-sidebar {
   position: relative;
-  width: 288px;
-  min-width: 288px;
-  max-width: 288px;
+  width: var(--stats-panel-w);
+  min-width: var(--stats-panel-w);
+  max-width: var(--stats-panel-w);
   height: 100%;
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  /* No left divider in the docked layout: the panel uses the sidebar's chrome
-     colour so the left sidebar and right stats panel frame the grid symmetrically;
-     the grid's images provide the separation. The mobile drawer re-adds an edge
-     (see the max-width: 1339px block). */
-  border-left: 1px solid transparent;
+  /* Mirrors `.sidebar`'s border-right exactly, so the two rails present the
+     same edge onto the grid canvas. Was `transparent`, which reserved the pixel
+     but painted nothing while the left rail carried a visible hairline. */
+  border-left: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
   transition:
     width 0.15s,
@@ -1834,60 +1833,27 @@ defineExpose({ focusTasksTab });
   overflow: hidden;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar {
-    position: fixed;
-    right: 0;
-    top: calc(var(--titlebar-h, 0px) + 36px);
-    bottom: 0;
-    height: auto;
-    z-index: 150;
-    transform: translateX(0);
-    transition: transform 0.3s ease;
-    border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  }
-
-  .stats-sidebar.collapsed {
-    transform: translateX(100%);
-    width: 288px;
-    min-width: 288px;
-    max-width: 288px;
-    border-left-color: rgba(var(--v-theme-on-surface), 0.1);
-    overflow: hidden;
-    background: rgba(var(--v-theme-surface), 1);
-  }
-}
-
+/* The panel is DOCKED at every width and is never taken out of flow. A
+   `max-width: 1339px` block used to turn it into a fixed overlay drawer
+   (z-index 150, anchored below the 36px header band). That drawer opened
+   directly on top of the toolbar's own stats toggle — the only control that
+   closes it — because the toggle sits in the band *below* that anchor. It also
+   hid the title row, and its close button was never wired up, so on any
+   viewport at or under 1339px an opened panel could not be dismissed at all.
+   Docking removes the collision by construction: the toolbar ends where the
+   panel begins. If a floating stats panel is ever wanted it should be a user
+   preference like the left sidebar's (`.sidebar-overlay` in App.css), not a
+   width breakpoint. */
 .stats-sidebar.collapsed {
   width: 0;
   min-width: 0;
   max-width: 0;
   border-left-color: transparent;
-  overflow: visible;
+  /* Was `visible` so the edge-toggle button could hang outside the collapsed
+     panel; that button no longer exists, and a zero-width panel must not let
+     its content bleed over the grid. */
+  overflow: hidden;
   background: transparent;
-}
-
-.stats-sidebar-edge-toggle {
-  position: absolute;
-  left: -28px;
-  top: 8px;
-  width: 28px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-surface), 1);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  z-index: 1;
-}
-
-.stats-sidebar-edge-toggle:hover {
-  color: rgb(var(--v-theme-primary));
-  background: rgba(var(--v-theme-surface), 1);
 }
 
 .stats-sidebar-close-btn {
@@ -1930,26 +1896,12 @@ defineExpose({ focusTasksTab });
   flex-shrink: 0;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar-header {
-    height: auto;
-    border-bottom: none;
-    margin-bottom: 0;
-  }
-}
-
 .stats-sidebar-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex: 1;
   padding: 0 var(--space-2) 0 var(--space-3);
-}
-
-@media (max-width: 1339px) {
-  .stats-sidebar-title-row {
-    display: none;
-  }
 }
 
 .stats-sidebar-title,
