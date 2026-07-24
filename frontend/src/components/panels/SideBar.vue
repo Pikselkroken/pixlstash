@@ -7513,7 +7513,9 @@ defineExpose({
   overflow: hidden;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
-  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  /* One rule for "chrome rail meets the grid canvas", shared with
+     `.stats-sidebar`'s border-left so both rails present the same edge. */
+  border-right: 1px solid rgb(var(--v-theme-border));
 }
 
 /* Drag-to-resize grip on the sidebar's right edge (expanded mode only). Sits over

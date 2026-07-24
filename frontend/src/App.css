@@ -168,11 +168,16 @@ body {
 /* Auto-hide / drawer: the unpinned sidebar floats over the grid and slides in.
    Driven by the .sidebar-overlay class, so it works at any width. */
 .sidebar-shell.sidebar-overlay {
-  position: fixed;
+  /* Absolute inside `.file-manager` (position: relative), which already begins
+     below the title bar AND below the app-level status strip. Anchoring to the
+     shell structurally keeps this correct in every combination; the old
+     `fixed` + manual `--titlebar-h` offset silently painted over anything else
+     mounted above `.file-manager`. */
+  position: absolute;
   left: 0;
   /* Same top as the in-flow (pinned) sidebar so toggling pin/auto doesn't shift
      it. The dock/full header band keeps the content below the toolbar. */
-  top: var(--titlebar-h, 0px);
+  top: 0;
   bottom: 0;
   z-index: 150;
   transform: translateX(-100%);
@@ -203,9 +208,10 @@ body {
    hovering (or tapping) it reveals the sidebar. A centered handle with an expand
    arrow makes it obvious it's interactive. */
 .sidebar-hover-trigger {
-  position: fixed;
+  /* Absolute for the same reason as `.sidebar-shell.sidebar-overlay` above. */
+  position: absolute;
   left: 0;
-  top: calc(var(--titlebar-h, 0px) + 36px);
+  top: 36px;
   bottom: 0;
   width: 8px;
   z-index: 140;
@@ -355,9 +361,9 @@ button:focus:not(:focus-visible) {
 .shortcuts-fab--above-bar {
   bottom: 44px;
 }
-/* Shift left of the 288px stats sidebar so the FAB stays over the grid. */
+/* Shift left of the stats rail so the FAB stays over the grid. */
 .shortcuts-fab--stats-open {
-  right: 296px;
+  right: calc(var(--stats-panel-w) + var(--space-3));
 }
 
 /* Keyboard shortcuts dialog */

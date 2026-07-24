@@ -141,6 +141,12 @@
      it (see `--titlebar-h` and the desktop overrides in style.css). */
   --bar-height: 48px;
 
+  /* The right-hand stats rail's fixed column width. Not invented: it is already
+     the de-facto constant in `.stats-sidebar` and in the shortcuts FAB's offset
+     (296px = 288 + --space-3). Naming it stops a fifth call site picking a
+     fifth number. */
+  --stats-panel-w: 288px;
+
   /* Notice surface (see notice-surface.md §11). `--notice-max-w` matches the
      de-facto width already used by LockedDeleteNoticeDialog and
      .plugin-menu-panel, so the surface does not introduce a fifth floating-card

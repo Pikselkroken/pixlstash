@@ -1814,17 +1814,17 @@ defineExpose({ focusTasksTab });
 <style scoped>
 .stats-sidebar {
   position: relative;
-  width: 288px;
-  min-width: 288px;
-  max-width: 288px;
+  width: var(--stats-panel-w);
+  min-width: var(--stats-panel-w);
+  max-width: var(--stats-panel-w);
   height: 100%;
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  /* No left divider: the panel uses the sidebar's chrome colour so the left
-     sidebar and right stats panel frame the grid symmetrically; the grid's
-     images provide the separation. */
-  border-left: 1px solid transparent;
+  /* Mirrors `.sidebar`'s border-right exactly, so the two rails present the
+     same edge onto the grid canvas. Was `transparent`, which reserved the pixel
+     but painted nothing while the left rail carried a visible hairline. */
+  border-left: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
   transition:
     width 0.15s,
