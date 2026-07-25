@@ -125,7 +125,7 @@ def test_585_corrupt_image_is_suppressed_after_failed_decode(tmp_path):
         _run_failed_decode(vault, pic_id, corrupt_path)
 
         registry = vault.db.unprocessable_images
-        assert registry.is_suppressed(pic_id, corrupt_path)
+        assert registry.is_suppressed(pic_id)
         suppressed = registry.active_suppressed_ids()
         assert suppressed == {pic_id}
 
@@ -167,7 +167,7 @@ def test_585_suppression_lifts_when_file_is_modified(tmp_path):
             corrupt_path, payload=_CORRUPT_JPEG_BYTES + b" now a different length"
         )
 
-        assert not registry.is_suppressed(pic_id, corrupt_path)
+        assert not registry.is_suppressed(pic_id)
         suppressed = registry.active_suppressed_ids()
         assert suppressed == set()
 
@@ -186,3 +186,34 @@ def test_585_suppression_lifts_when_file_is_modified(tmp_path):
         )
         assert pic_id in _fetch_work_ids(vault, suppressed_ids=suppressed)
         assert _count_remaining(vault, suppressed_ids=suppressed) == 1
+
+
+def test_585_filter_and_claim_never_reads_file_path(tmp_path):
+    """#585 regression: ``_filter_and_claim`` must not touch ``picture.file_path``.
+
+    The CI failure was a ``DetachedInstanceError``: some finders' candidate
+    queries return detached ``Picture`` objects whose ``file_path`` is deferred,
+    and the suppression check used to read it while claiming, crashing the
+    WorkPlanner thread. Suppression now looks the picture up by id against the
+    registry's own stored path, so ``file_path`` is never accessed here.
+    """
+
+    class _FilePathExplodes:
+        """Stands in for a detached Picture whose file_path would lazy-load."""
+
+        def __init__(self, pid: int):
+            self.id = pid
+
+        @property
+        def file_path(self):
+            raise AssertionError(
+                "_filter_and_claim must not access picture.file_path (#585)"
+            )
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        finder = MissingImageEmbeddingFinder(
+            database=vault.db, engine_getter=lambda: None
+        )
+        candidates = [_FilePathExplodes(1), _FilePathExplodes(2)]
+        selected = finder._filter_and_claim(candidates, batch_limit=10)
+        assert [c.id for c in selected] == [1, 2]

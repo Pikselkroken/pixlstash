@@ -126,23 +126,29 @@ class UnprocessableImageRegistry:
         )
         return True
 
-    def is_suppressed(self, picture_id: "int | None", file_path: "str | None") -> bool:
-        """Return whether *picture_id* is currently suppressed for *file_path*.
+    def is_suppressed(self, picture_id: "int | None") -> bool:
+        """Return whether *picture_id* is currently suppressed.
 
-        ``True`` only if the picture is recorded and *file_path*'s current
+        ``True`` only if the picture is recorded and its stored file's current
         ``(mtime_ns, size)`` still match the marked signature. If the file changed
         or can no longer be stat'd the stale entry is pruned and ``False`` is
         returned, so the picture is retried.
+
+        The signature is re-checked against the registry's OWN stored path, so
+        callers never read ``Picture.file_path``: that ORM attribute is often
+        deferred and the candidate pictures are detached by the time a finder
+        claims, so touching it there raised ``DetachedInstanceError`` (issue #585).
         """
-        if picture_id is None or not file_path:
+        if picture_id is None:
             return False
         pid = int(picture_id)
         with self._lock:
             existing = self._entries.get(pid)
             if existing is None:
                 return False
-            signature = self._stat_signature(file_path)
-            if signature is not None and (existing[1], existing[2]) == signature:
+            path, mtime_ns, size = existing
+            signature = self._stat_signature(path)
+            if signature is not None and signature == (mtime_ns, size):
                 return True
             # File vanished or was rewritten since we marked it — retry it.
             self._entries.pop(pid, None)
