@@ -33,7 +33,7 @@
           :disabled="disabled"
           @click="$emit('empty-scrapheap')"
         >
-          Empty Scrap Heap
+          Empty Scrapheap
         </button>
       </div>
     </div>
