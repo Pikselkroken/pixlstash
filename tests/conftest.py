@@ -5,6 +5,7 @@ Pytest configuration and fixtures for test suite.
 import gc
 import socket
 
+from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
@@ -82,6 +83,62 @@ def pytest_addoption(parser):
         help="InsightFace model pack applied to all Server instances "
         "(e.g. 'buffalo_l' or 'auraface'). Overrides the persisted config value.",
     )
+    parser.addoption(
+        "--ci-shard",
+        type=str,
+        default=None,
+        metavar="INDEX/TOTAL",
+        help="Run only the INDEX-th of TOTAL equal slices of the collected "
+        "tests (1-based, e.g. '2/6'). Used by the CI matrix to split the "
+        "suite across runners. The union of all TOTAL shards is exactly the "
+        "collected suite, so coverage never depends on a hand-written list.",
+    )
+
+
+def _parse_ci_shard(spec: str) -> tuple[int, int]:
+    """Parse an ``INDEX/TOTAL`` shard spec into zero-based (index, total)."""
+    try:
+        index_text, total_text = spec.split("/", 1)
+        index = int(index_text)
+        total = int(total_text)
+    except ValueError as exc:
+        raise UsageError(
+            f"--ci-shard expects INDEX/TOTAL (e.g. '2/6'), got {spec!r}"
+        ) from exc
+    if total < 1 or not (1 <= index <= total):
+        raise UsageError(
+            f"--ci-shard index must be within 1..TOTAL and TOTAL >= 1, got {spec!r}"
+        )
+    return index - 1, total
+
+
+def pytest_collection_modifyitems(config, items):
+    """Keep only the tests belonging to this ``--ci-shard`` slice.
+
+    Sharding is applied to whatever pytest *collected*, so the CI matrix never
+    names test files: adding ``tests/test_new_thing.py`` puts it in a shard
+    automatically. That makes "every test is gated" a property of collection
+    rather than of a hand-maintained allowlist, which is the failure mode that
+    previously left most of ``tests/`` running only in the non-blocking
+    release-prep sweep.
+
+    Assignment is round-robin over the deterministic collection order, so each
+    file's tests are dealt evenly across shards (a single very slow file cannot
+    become one shard's critical path) and shard sizes differ by at most one.
+    """
+    spec = config.getoption("--ci-shard")
+    if not spec:
+        return
+    index, total = _parse_ci_shard(spec)
+    if total == 1:
+        return
+    kept = []
+    deselected = []
+    for position, item in enumerate(items):
+        (kept if position % total == index else deselected).append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+    items[:] = kept
 
 
 def pytest_configure(config):

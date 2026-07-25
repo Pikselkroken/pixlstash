@@ -88,6 +88,11 @@ Changelog = "https://github.com/pikselkroken/pixlstash/releases"
 test = [
     "pytest",
     "pytest-cov",
+    # Local parallelism: `-n auto` runs the suite in a fraction of the wall
+    # clock. NOT used by CI, which parallelises across runners instead — see
+    # the `backend` job in .github/workflows/ci.yml for why (native ML
+    # teardown aborts under multiple workers).
+    "pytest-xdist",
     "psutil"
 ]
 dev = [
