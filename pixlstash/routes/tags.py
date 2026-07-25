@@ -447,8 +447,11 @@ def create_router(server) -> APIRouter:
             if not pic_list:
                 raise HTTPException(status_code=404, detail="Picture not found")
             pic = pic_list[0]
-            # Clearing tags leaves the prediction ledger intact, so the scorer's
-            # anomaly inputs usually do not move; the guard no-ops when they don't.
+            # Clearing tags leaves the prediction ledger intact, but an applied Tag row
+            # is itself an input to the anomaly penalty (a model prediction is only
+            # charged when the defect is visible in the tag list), so dropping an anomaly
+            # tag here does move the scorer's inputs. The guard still no-ops for a picture
+            # that carried no anomaly tag.
             with invalidate_on_anomaly_change(
                 session,
                 [pic_id],

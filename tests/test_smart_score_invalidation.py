@@ -118,6 +118,21 @@ def _seed_human_prediction(server, pic_id, tag, label_state, confidence=0.9):
     server.vault.db.run_task(insert)
 
 
+def _seed_tag(server, pic_id, tag):
+    """Apply *tag* to the picture directly, bypassing the route's ledger side-effects.
+
+    The scorer charges a model prediction only when the defect is visible in the tag
+    list, so a test asserting the *model* path needs a real ``Tag`` row without the human
+    NEG/POS the tag routes would also record.
+    """
+
+    def insert(session):
+        session.add(Tag(picture_id=pic_id, tag=tag))
+        session.commit()
+
+    server.vault.db.run_task(insert)
+
+
 def _wait_for(predicate, timeout=10.0):
     """Poll *predicate* until true; the config-change invalidation runs on the LOW queue."""
     deadline = time.time() + timeout
@@ -365,6 +380,9 @@ def test_delete_anomaly_prediction_invalidates():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        # The tag is applied so the prediction is genuinely a scorer input: the scorer
+        # only charges a model prediction whose defect is visible in the tag list.
+        _seed_tag(server, pic_id, PENALISED_TAG)
         _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.8)
         _set_smart_score(server, pic_id, 0.5)
 
@@ -418,12 +436,21 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
 
         # Two pictures get a fresh anomaly confidence; the third only a content tag,
         # so its anomaly signature — and its cached score — must be untouched.
+        # The anomaly tag is applied to the first two because the scorer only reads a
+        # model prediction whose defect is visible in the tag list; without the Tag row
+        # the prediction write would (correctly) move nothing.
+        for pid in pic_ids[:2]:
+            _seed_tag(server, pid, PENALISED_TAG)
         label_scores = {
             pic_ids[0]: {PENALISED_TAG: 0.7},
             pic_ids[1]: {PENALISED_TAG: 0.4},
             pic_ids[2]: {CONTENT_TAG: 0.9},
         }
-        tags_by_pic = {pid: set() for pid in pic_ids}
+        tags_by_pic = {
+            pic_ids[0]: {PENALISED_TAG},
+            pic_ids[1]: {PENALISED_TAG},
+            pic_ids[2]: set(),
+        }
 
         executed: list[str] = []
 
@@ -465,12 +492,15 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
         temp_dir.cleanup()
 
 
-# --------------------------------------------------------- confidence-gated penalty
+# ------------------------------------------------ applied-tag + confidence-gated penalty
 #
-# A model prediction below the tagger's apply threshold never became a visible ``Tag``,
-# so it must not push the score down. Human decisions are exempt in both directions —
-# which is why the gate lives in ``fetch_anomaly_confidences`` rather than being replaced
-# by a read of the ``Tag`` table, which would silently drop human POS/NEG rows.
+# A model prediction is charged only when the defect is genuinely visible in the picture's
+# tag list: it must clear the tagger's apply threshold **and** have a matching ``Tag`` row.
+# Confidence alone used to stand in for both, but ``TagPredictionBackfillTask`` writes
+# predictions without ever writing a ``Tag`` row, so a high-confidence backfilled row
+# penalised pictures for defects the user could not see. Human decisions stay exempt in
+# both directions, which is why the gate lives in ``fetch_anomaly_confidences`` rather
+# than being replaced wholesale by a read of the ``Tag`` table.
 
 _THRESHOLDS = {"watermark": 0.6, "bad anatomy": 0.62}
 
@@ -486,6 +516,8 @@ def test_sub_threshold_model_prediction_is_not_scored():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        # Tag applied, so the *only* thing keeping it out of the score is the threshold.
+        _seed_tag(server, pic_id, "watermark")
         _seed_prediction(server, pic_id, "watermark", confidence=0.4)  # < 0.6
 
         probs, human = _probs(server, pic_id)
@@ -515,6 +547,7 @@ def test_above_threshold_model_prediction_is_scored():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
         _seed_prediction(server, pic_id, "watermark", confidence=0.8)  # > 0.6
 
         probs, human = _probs(server, pic_id)
@@ -533,7 +566,11 @@ def test_above_threshold_model_prediction_is_scored():
 
 
 def test_human_positive_below_threshold_still_counts():
-    """A human said the defect is there; its model confidence is irrelevant."""
+    """A human said the defect is there; confidence *and* tag membership are irrelevant.
+
+    No ``Tag`` row is seeded on purpose: the applied-tag requirement covers model
+    predictions only, so a human POS must still be charged without one.
+    """
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -554,10 +591,15 @@ def test_human_positive_below_threshold_still_counts():
 
 
 def test_human_negative_suppresses_even_above_threshold():
-    """A human said the defect is absent; a confident model must not override that."""
+    """A human said the defect is absent; a confident model must not override that.
+
+    The tag is left applied so this asserts the harder direction: a human NEG suppresses
+    even while the ``Tag`` row that would otherwise admit the prediction is still there.
+    """
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
         _seed_human_prediction(server, pic_id, "watermark", NEG, confidence=0.99)
 
         probs, human = _probs(server, pic_id)
@@ -571,6 +613,136 @@ def test_human_negative_suppresses_even_above_threshold():
             )
             == 0.0
         )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_unapplied_model_prediction_is_not_scored():
+    """The backfill regression: a confident prediction with no ``Tag`` row costs nothing.
+
+    ``TagPredictionBackfillTask`` writes predictions against a picture's existing tag set
+    and never writes a ``Tag`` row, so this state is reachable for any picture tagged by
+    a different engine; it penalised ~12k pictures for defects invisible in the UI.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # Well above the 0.6 threshold, but the defect is nowhere in the tag list.
+        _seed_prediction(
+            server, pic_id, "watermark", confidence=0.99, status="REJECTED"
+        )
+
+        probs, human = _probs(server, pic_id)
+        assert "watermark" not in probs.get(pic_id, {})
+        assert (
+            anomaly_penalty(
+                probs.get(pic_id, {}),
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
+        )
+
+        # Applying the tag admits the very same prediction, proving the missing Tag row
+        # is what removed it, not the threshold or a missing prediction row.
+        _seed_tag(server, pic_id, "watermark")
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.99)
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            > 0.0
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_unapplied_prediction_is_dropped_from_the_ungated_signature_too():
+    """The applied-tag check must not hide behind ``apply_thresholds``.
+
+    ``anomaly_state_signature`` reads with ``apply_thresholds=None``. If the tag check
+    were inside the threshold branch, tag membership would be invisible to the signature
+    and adding or removing an anomaly tag would leave the cached score stale.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "watermark", confidence=0.99)
+
+        raw, _ = server.vault.db.run_task(
+            lambda s: fetch_anomaly_confidences(s, [pic_id])
+        )
+        assert "watermark" not in raw.get(pic_id, {})
+
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id])
+        )
+        _seed_tag(server, pic_id, "watermark")
+        after = server.vault.db.run_task(lambda s: anomaly_state_signature(s, [pic_id]))
+        assert before[pic_id] != after[pic_id]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_tagger_rewrite_dropping_anomaly_tag_invalidates_cached_score():
+    """A re-tag that drops an anomaly tag must clear the cached score.
+
+    ``_add_tags_bulk`` commits its ``Tag`` rewrite in its own DB task, *before*
+    ``_write_predictions_from_tags`` takes its anomaly snapshot. Now that an applied tag
+    is a scorer input, the rewrite has to guard its own mutation or the score change goes
+    unobserved. Without the ``invalidate_on_anomaly_change`` wrapper in ``_add_tags_bulk``
+    this test fails.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, PENALISED_TAG)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
+        _set_smart_score(server, pic_id, 0.5)
+        assert _get_smart_score(server, pic_id) == 0.5
+
+        # The fresh pass no longer finds the defect, so the rewrite drops the tag.
+        server.vault.db.run_task(
+            lambda s: TagTask._add_tags_bulk(
+                s, [{"pic_id": pic_id, "tags": [CONTENT_TAG]}]
+            )
+        )
+
+        remaining = server.vault.db.run_task(
+            lambda s: sorted(
+                s.exec(select(Tag.tag).where(Tag.picture_id == pic_id)).all()
+            )
+        )
+        assert remaining == [CONTENT_TAG]
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_tagger_rewrite_without_anomaly_change_keeps_cached_score():
+    """The other direction: a content-only rewrite must not re-score the picture."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, CONTENT_TAG)
+        _set_smart_score(server, pic_id, 0.5)
+
+        server.vault.db.run_task(
+            lambda s: TagTask._add_tags_bulk(
+                s, [{"pic_id": pic_id, "tags": [CONTENT_TAG, "sunrise"]}]
+            )
+        )
+
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -910,7 +1082,9 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
         )
 
         # A concurrent tag edit lands after compute but before persist, moving the
-        # anomaly signature (adds a penalised prediction).
+        # anomaly signature. Both the tag and the prediction are needed, because the
+        # scorer only reads a model prediction whose defect is in the tag list.
+        _seed_tag(server, pic_id, PENALISED_TAG)
         _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
 
         # The task now tries to persist a score computed from the now-stale inputs.

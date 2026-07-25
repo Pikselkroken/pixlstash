@@ -22,6 +22,7 @@ from pixlstash.db_models import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
     Picture,
     Quality,
+    Tag,
     TagPrediction,
     User,
 )
@@ -105,6 +106,35 @@ def get_smart_score_penalised_tags_from_request(server, request):
     )
 
 
+def fetch_applied_anomaly_tags(session: Session, picture_ids) -> dict:
+    """Return ``{picture_id: {lowercase anomaly tag, ...}}`` actually applied to each picture.
+
+    Only the anomaly vocabulary is read, so this stays a narrow indexed lookup
+    (``ix_tag_picture_id``) rather than pulling a picture's whole tag list.
+
+    Args:
+        session: Active DB session.
+        picture_ids: Pictures to read applied tags for.
+
+    Returns:
+        Mapping of picture id to the set of anomaly tags present in its ``Tag`` rows.
+        Pictures with no anomaly tag are absent from the mapping.
+    """
+    applied: dict = defaultdict(set)
+    if not picture_ids:
+        return applied
+    rows = session.exec(
+        select(Tag.picture_id, Tag.tag).where(
+            Tag.picture_id.in_(picture_ids),
+            func.lower(Tag.tag).in_(ANOMALY_PENALTY_TAGS),
+        )
+    ).all()
+    for picture_id, tag in rows:
+        if tag:
+            applied[picture_id].add(tag.strip().lower())
+    return applied
+
+
 def fetch_anomaly_confidences(
     session: Session, picture_ids, apply_thresholds: dict | None = None
 ) -> tuple[dict, dict]:
@@ -114,18 +144,33 @@ def fetch_anomaly_confidences(
     label ledger overrides the model: a human POS folds to probability 1.0 (and is
     flagged so the penalty bypasses the precision floor), a human NEG folds to 0.0.
 
+    A **model** prediction is charged only when the defect is actually visible in the
+    picture's tag list; it must have a matching :class:`Tag` row. Confidence clearing
+    the tagger's acceptance threshold used to stand in for that, but the proxy is not
+    sound: :class:`~pixlstash.tasks.tag_prediction_backfill_task.TagPredictionBackfillTask`
+    writes predictions against a picture's *existing* tag set and deliberately never
+    writes a ``Tag`` row, so a high-confidence backfilled prediction penalised a picture
+    for a defect the user could not see anywhere in the UI. Both conditions are now
+    required. Human decisions remain exempt in both directions: a human POS counts even
+    with no ``Tag`` row (a human said the defect is there), and a human NEG suppresses
+    even while the tag is still applied.
+
+    Note the tag check is applied *unconditionally*, independent of *apply_thresholds*.
+    :func:`~pixlstash.utils.service.smart_score_invalidation.anomaly_state_signature`
+    calls this function with ``apply_thresholds=None`` to build its change signature, so
+    keeping the check outside that branch is what makes tag membership part of the
+    signature, and therefore makes adding or removing an anomaly tag invalidate the
+    cached score for free.
+
     Args:
         session: Active DB session.
         picture_ids: Pictures to read predictions for.
         apply_thresholds: ``{tag: minimum confidence}`` from
             :func:`~pixlstash.utils.service.anomaly_thresholds.resolve_anomaly_apply_thresholds`.
-            A **model** prediction below its tag's threshold never became a visible
-            ``Tag``, so it is dropped rather than silently penalising the picture.
-            Human decisions are exempt in both directions: a human POS under threshold
-            still counts, a human NEG still suppresses — which is precisely why this
-            gate is applied here and not by reading the ``Tag`` table instead.
-            ``None`` disables gating (used for change-detection signatures, which want
-            the raw prediction state).
+            A **model** prediction below its tag's threshold is dropped rather than
+            silently penalising the picture. ``None`` disables *confidence* gating (used
+            for change-detection signatures, which want the raw prediction state); it
+            does not disable the applied-tag requirement above.
 
     Returns:
         ``(probs_map, human_map)`` where ``probs_map`` is
@@ -136,6 +181,8 @@ def fetch_anomaly_confidences(
     human_map: dict = defaultdict(set)
     if not picture_ids:
         return probs_map, human_map
+
+    applied_tags = fetch_applied_anomaly_tags(session, picture_ids)
 
     rows = session.exec(
         select(
@@ -151,6 +198,7 @@ def fetch_anomaly_confidences(
     ).all()
 
     below_threshold = 0
+    not_applied = 0
     for picture_id, tag, confidence, label_state, label_source in rows:
         if not tag:
             continue
@@ -161,6 +209,9 @@ def fetch_anomaly_confidences(
         elif label_source == HUMAN and label_state == NEG:
             probs_map[picture_id][key] = 0.0
         else:
+            if key not in applied_tags.get(picture_id, ()):
+                not_applied += 1
+                continue
             value = float(confidence) if confidence is not None else 0.0
             if apply_thresholds is not None:
                 threshold = apply_thresholds.get(key)
@@ -169,11 +220,12 @@ def fetch_anomaly_confidences(
                     continue
             probs_map[picture_id][key] = value
 
-    if below_threshold:
+    if below_threshold or not_applied:
         logger.debug(
-            "Anomaly penalty inputs: dropped %d sub-threshold model prediction(s) "
-            "across %d picture(s); they never became applied tags.",
+            "Anomaly penalty inputs: dropped %d sub-threshold and %d not-applied model "
+            "prediction(s) across %d picture(s); neither is visible in the tag list.",
             below_threshold,
+            not_applied,
             len(picture_ids),
         )
 

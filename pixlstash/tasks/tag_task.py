@@ -24,6 +24,7 @@ from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
 from pixlstash.utils.service.smart_score_invalidation import (
     anomaly_state_signature,
     invalidate_changed_anomaly_scores,
+    invalidate_on_anomaly_change,
 )
 from pixlstash.utils.service.tag_prediction_utils import PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
@@ -369,12 +370,24 @@ class TagTask(BaseTask):
             return updated_ids
 
         # Bulk delete old tags and insert new ones in a single transaction.
+        #
+        # The rewrite is wrapped in invalidate_on_anomaly_change because an applied Tag
+        # row is now an *input* to the scorer's anomaly penalty
+        # (fetch_anomaly_confidences charges a model prediction only when the defect is
+        # visible in the tag list). This method commits its tag write in its own DB task,
+        # before _write_predictions_from_tags runs and takes its snapshot, so without a
+        # guard here a re-tag that adds or drops an anomaly tag would move the score with
+        # nothing observing it and the cached value would stay stale. update_pic_ids is
+        # already lock-filtered above, so frozen pictures are never invalidated.
         update_pic_ids = [pid for pid, _ in pics_to_update]
         try:
-            session.exec(delete(Tag).where(Tag.picture_id.in_(update_pic_ids)))
-            for pic_id, effective_tags in pics_to_update:
-                for tag_value in effective_tags:
-                    session.add(Tag(picture_id=pic_id, tag=tag_value))
+            with invalidate_on_anomaly_change(
+                session, update_pic_ids, context="tagger tag rewrite"
+            ):
+                session.exec(delete(Tag).where(Tag.picture_id.in_(update_pic_ids)))
+                for pic_id, effective_tags in pics_to_update:
+                    for tag_value in effective_tags:
+                        session.add(Tag(picture_id=pic_id, tag=tag_value))
             session.commit()
             updated_ids.extend(update_pic_ids)
         except IntegrityError as exc:
@@ -386,9 +399,12 @@ class TagTask(BaseTask):
             )
             for pic_id, effective_tags in pics_to_update:
                 try:
-                    session.exec(delete(Tag).where(Tag.picture_id == pic_id))
-                    for tag_value in effective_tags:
-                        session.add(Tag(picture_id=pic_id, tag=tag_value))
+                    with invalidate_on_anomaly_change(
+                        session, [pic_id], context="tagger tag rewrite (per-picture)"
+                    ):
+                        session.exec(delete(Tag).where(Tag.picture_id == pic_id))
+                        for tag_value in effective_tags:
+                            session.add(Tag(picture_id=pic_id, tag=tag_value))
                     session.commit()
                     updated_ids.append(pic_id)
                 except IntegrityError as inner_exc:
