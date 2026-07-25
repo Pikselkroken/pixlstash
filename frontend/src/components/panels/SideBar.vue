@@ -2117,7 +2117,7 @@ function closeSidebarCtxMenu() {
 // The sidebar row already owns this count, so we read it here rather than reach
 // into the grid's `scrapheapEmptyDisabled`.
 const scrapheapIsEmpty = computed(
-  () => !categoryCounts[props.scrapheapPicturesId],
+  () => !categoryCounts.value[props.scrapheapPicturesId],
 );
 
 // Empty Scrapheap from the sidebar context menu. Navigate into the scrapheap
