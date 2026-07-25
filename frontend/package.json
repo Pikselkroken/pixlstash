@@ -41,5 +41,9 @@
     "vite": "^8.0.16",
     "vitest": "^4.1.2",
     "vue-eslint-parser": "^10.4.0"
+  },
+  "overrides": {
+    "brace-expansion@5": "5.0.8",
+    "js-beautify": "^2.0.3"
   }
 }
