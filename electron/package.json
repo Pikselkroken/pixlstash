@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "fzstd": "^0.1.1",
-    "tar": "^7.5.16"
+    "tar": "^7.5.22"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -36,6 +36,10 @@
     "electron": "^42.3.3",
     "electron-builder": "^26.15.2",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "brace-expansion@5": "5.0.8",
+    "fast-uri": "^3.1.4"
   },
   "build": {
     "appId": "dev.pixlstash.desktop",
