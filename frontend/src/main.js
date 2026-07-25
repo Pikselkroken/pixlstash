@@ -72,10 +72,10 @@ const pixlStashLight = {
     // `success` reads 2.96:1 there. These four are identical in both themes
     // (they are the dark-tuned hues) and measure 4.12:1 – 5.46:1 plain on
     // `#242628`, 3.49:1 – 4.23:1 on their own 16% tint.
-    "dark-surface-error": "#f44336",
-    "dark-surface-warning": "#db7900",
-    "dark-surface-success": "#4caf50",
-    "dark-surface-info": "#2196F3",
+    "dark-surface-error": "#b0392b  ",
+    "dark-surface-warning": "#e8912f",
+    "dark-surface-success": "#2a7d3e",
+    "dark-surface-info": "#2f6690",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
     // on a dark card. This is the dark theme's outgoing bright olive — a good
     // foreground on a dark card and a bad fill under a white label, so it moves
@@ -113,8 +113,8 @@ const pixlStashLight = {
     // Status hues + their authored foregrounds. The foreground is whichever of
     // the warm near-white / warm near-black clears 4.5:1 on the SOLID fill; it
     // is not a house style, it is the only value that passes. Measured:
-    error: "#cf3b30",
-    "on-error": "#ffffff", //   4.86:1
+    error: "#b0392b",
+    "on-error": "#f7f1ea", //   4.86:1
     info: "#1a6ec4",
     "on-info": "#ffffff", //    5.16:1
     success: "#2e7d32",
@@ -147,10 +147,10 @@ const pixlStashDark = {
     // Same four values as the light theme by design — see the note there. In
     // this theme they coincide with the theme's own status hues, so pointing a
     // dark-surface consumer at them is a no-op here and a fix in light mode.
-    "dark-surface-error": "#f44336",
-    "dark-surface-warning": "#db7900",
-    "dark-surface-success": "#4caf50",
-    "dark-surface-info": "#2196F3",
+    "dark-surface-error": "#b0392b",
+    "dark-surface-warning": "#e8912f",
+    "dark-surface-success": "#2a7d3e",
+    "dark-surface-info": "#2f6690",
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",
@@ -181,13 +181,13 @@ const pixlStashDark = {
     // foreground on a dark surface, where deepening them would hurt. A bright
     // fill takes a dark foreground, so all four pair with the same warm
     // near-black the theme already uses for `on-accent`. Measured:
-    error: "#f44336",
-    "on-error": "#1b1b1b", //   4.68:1
-    info: "#2196F3",
+    error: "#b0392b",
+    "on-error": "#f7f1ea", //   4.68:1
+    info: "#2f6690",
     "on-info": "#1b1b1b", //    5.51:1
-    success: "#4caf50",
+    success: "#2a7d3e",
     "on-success": "#1b1b1b", // 6.20:1
-    warning: "#db7900",
+    warning: "#e8912f",
     "on-warning": "#1b1b1b", // 5.53:1
     scrim: "#000000",
     shadow: "#2a2f36",
