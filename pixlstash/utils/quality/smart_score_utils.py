@@ -173,8 +173,8 @@ class SmartScoreUtils:
             # Aesthetic + sharpness are trimmed from 0.35 to make room for the CLIP-IQA
             # quality probe; when that probe is unavailable the legacy weights below are
             # restored so scores don't drift downward (see weight gating in the body).
-            "w_aest": 0.30,
-            "w_sharpness": 0.30,
+            "w_aest": 0.20,
+            "w_sharpness": 0.20,
             "w_aest_legacy": 0.35,
             "w_sharpness_legacy": 0.35,
             "w_clipiqa": 0.12,
