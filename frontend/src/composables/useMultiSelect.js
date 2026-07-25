@@ -32,7 +32,7 @@ export function useMultiSelect() {
   let longPressMoved = false;
   let touchStartPayload = null;
 
-  function handleTouchStart(img, idx, event) {
+  function handleTouchStart(img, idx) {
     if (!img.id) return;
     lastPointerWasTouch.value = true;
     longPressMoved = false;
@@ -127,7 +127,7 @@ export function useMultiSelect() {
 
   function onFaceBboxDragStart(event, img, faceIdx, faceId) {
     // If this face is selected, drag all selected faces; else, drag just this one
-    let facesToDrag = [];
+    let facesToDrag;
     if (isFaceSelected(img.id, faceIdx) && selectedFaceIds.value.length > 0) {
       facesToDrag = selectedFaceIds.value.map((f) => ({
         imageId: f.imageId,

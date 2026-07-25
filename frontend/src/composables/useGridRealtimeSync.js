@@ -35,15 +35,6 @@ const IGNORED = "ignored";
 // accumulates >50 distinct ids escalates to one reload.
 const MAX_TARGETED_UPDATE = 50;
 
-// Coalescing window for incoming grid-driving WS events. A burst (e.g. a bulk
-// tag accept that fires one frame per picture, or a foreign tab scoring a
-// folder) arrives as many frames back-to-back; we accumulate them and apply
-// once per window. 200ms is long enough to swallow a tight burst yet short
-// enough that a single real event still feels immediate. It sits between the
-// sidebar picture-count debounce (150ms) and the gridVersion throttle (1200ms),
-// consistent with the existing WS throttles.
-const COALESCE_WINDOW_MS = 200;
-
 // Server-computed sort fields whose value the originating tab can only guess
 // optimistically; even an own-origin echo for these needs a single-card
 // reconcile under the matching sort so the optimistic guess can't diverge from
@@ -526,11 +517,3 @@ export function useGridRealtimeSync(deps) {
     flushNow: flushCoalesced,
   };
 }
-
-export const __testing = {
-  normaliseSource,
-  resolveChangeKind,
-  asPictureIds,
-  COALESCE_WINDOW_MS,
-  MAX_TARGETED_UPDATE,
-};

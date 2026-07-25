@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* -- whatsnew.html page-specific -- */
@@ -24,18 +25,18 @@
         background:
           radial-gradient(
             circle at 15% 10%,
-            rgba(159, 177, 31, 0.2),
-            rgba(159, 177, 31, 0) 52%
+            rgba(196, 122, 30, 0.18),
+            rgba(196, 122, 30, 0) 52%
           ),
           radial-gradient(
             circle at 88% 0%,
-            rgba(47, 139, 95, 0.24),
-            rgba(47, 139, 95, 0) 48%
+            rgba(196, 122, 30, 0.12),
+            rgba(196, 122, 30, 0) 48%
           ),
           var(--panel);
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
-        box-shadow: 0 16px 38px var(--shadow);
+        box-shadow: 0 4px 16px var(--shadow);
         overflow: hidden;
       }
 
@@ -62,7 +63,7 @@
         gap: 8px;
         padding: 4px 10px;
         border-radius: 999px;
-        background: rgba(57, 63, 70, 0.08);
+        background: color-mix(in srgb, var(--text) 8%, transparent);
         font-size: 0.74rem;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -119,7 +120,7 @@
 
       .update-card {
         background: var(--panel);
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         border-radius: 18px;
         overflow: hidden;
         box-shadow: 0 10px 24px var(--shadow);
@@ -138,11 +139,11 @@
 
       .stats-card-media {
         padding: 12px;
-        border-right: 1px solid rgba(34, 38, 44, 0.1);
+        border-right: 1px solid var(--border);
         background: linear-gradient(
           145deg,
-          rgba(159, 177, 31, 0.08),
-          rgba(47, 139, 95, 0.1)
+          rgba(196, 122, 30, 0.08),
+          rgba(196, 122, 30, 0.09)
         );
         display: flex;
         align-items: center;
@@ -240,11 +241,11 @@
         margin-top: 24px;
         padding: 22px;
         border-radius: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         background: linear-gradient(
           125deg,
-          rgba(159, 177, 31, 0.14),
-          rgba(47, 139, 95, 0.12)
+          rgba(196, 122, 30, 0.14),
+          rgba(196, 122, 30, 0.1)
         );
         display: flex;
         flex-wrap: wrap;
@@ -283,13 +284,13 @@
       .release-btn-primary {
         color: #ffffff;
         background: linear-gradient(130deg, var(--accent), var(--accent-2));
-        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+        box-shadow: 0 12px 30px var(--shadow);
       }
 
       .release-btn-secondary {
         color: var(--text);
-        background: rgba(34, 38, 44, 0.06);
-        border-color: rgba(34, 38, 44, 0.16);
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+        border-color: var(--border);
       }
 
       .release-btn:hover {
@@ -303,7 +304,7 @@
       .prev-release {
         margin-top: 56px;
         padding-top: 40px;
-        border-top: 1px solid rgba(34, 38, 44, 0.14);
+        border-top: 1px solid var(--border);
       }
 
       .prev-release-label {
@@ -321,7 +322,7 @@
       .api-block {
         margin-top: 24px;
         background: var(--panel);
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         border-radius: 18px;
         box-shadow: 0 10px 24px var(--shadow);
         overflow: hidden;
@@ -347,8 +348,8 @@
         margin: 16px 26px 0;
         padding: 10px 14px;
         border-radius: 10px;
-        background: rgba(57, 63, 70, 0.06);
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+        border: 1px solid var(--border);
         font-size: 0.86rem;
         color: var(--muted);
       }
@@ -365,10 +366,10 @@
       }
 
       .endpoint {
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         border-radius: 14px;
         overflow: hidden;
-        background: rgba(255, 255, 255, 0.5);
+        background: var(--panel);
       }
 
       .endpoint-head {
@@ -390,15 +391,15 @@
       }
 
       .method--get {
-        background: #2f8b5f;
+        background: var(--success);
       }
 
       .method--post {
-        background: #2563eb;
+        background: var(--info);
       }
 
       .method--delete {
-        background: #c0392b;
+        background: var(--error);
       }
 
       .endpoint-path {
@@ -511,7 +512,7 @@
 
         .stats-card-media {
           border-right: none;
-          border-bottom: 1px solid rgba(34, 38, 44, 0.1);
+          border-bottom: 1px solid var(--border);
         }
 
         .release-cta {

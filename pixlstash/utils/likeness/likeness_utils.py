@@ -519,14 +519,16 @@ class LikenessUtils:
         if not isinstance(blob, (bytes, bytearray)):
             try:
                 blob = bytes(blob)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not coerce embedding blob to bytes (%s).", exc)
                 return None
         try:
             arr = np.frombuffer(blob, dtype=np.float32)
             if arr.size == 0:
                 return None
             return arr.copy()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Could not decode embedding blob to float32 vector (%s).", exc)
             return None
 
     @staticmethod
@@ -552,7 +554,13 @@ class LikenessUtils:
         try:
             int_a = int(hash_a, 16)
             int_b = int(hash_b, 16)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Could not parse perceptual hash pair (%r, %r): %s.",
+                hash_a,
+                hash_b,
+                exc,
+            )
             return 0.0
         distance = (int_a ^ int_b).bit_count()
         return 1.0 - (distance / float(cls.PHASH_BITS))

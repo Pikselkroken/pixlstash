@@ -477,6 +477,18 @@ watch(
 
 // ── Computed prediction helpers ─────────────────────────────────────────────
 
+// A `model_version === "manual"` row is not a tagger prediction: the human-label
+// ledger synthesises it to hold a manual POS/NEG decision when no real prediction
+// exists, hard-coding confidence to 1.0 (POS) / 0.0 (NEG) as a placeholder (see
+// backend label_ledger.record_human_label). Surfacing its confidence as a model
+// score is the bug: a manually-added penalised tag reads "100%", and after removal
+// the same synthetic row (now REJECTED, still confidence 1.0) lingers in Rejected
+// Tags at 100%. Only genuine tagger rows carry a meaningful confidence, so the
+// confidence UI must ignore synthetic manual rows entirely.
+const modelPredictions = computed(() =>
+  tagPredictions.value.filter((p) => p.model_version !== "manual"),
+);
+
 const confirmedTagNames = computed(() => {
   const names = new Set();
   for (const tag of allImageTags.value) {
@@ -487,7 +499,7 @@ const confirmedTagNames = computed(() => {
 });
 
 const nearMissPredictions = computed(() => {
-  return tagPredictions.value.filter(
+  return modelPredictions.value.filter(
     (p) =>
       p.status === "REJECTED" &&
       p.confidence >= 0.3 &&
@@ -497,7 +509,7 @@ const nearMissPredictions = computed(() => {
 
 const pendingPredictionMap = computed(() => {
   const map = new Map();
-  for (const p of tagPredictions.value) {
+  for (const p of modelPredictions.value) {
     map.set(p.tag.trim().toLowerCase(), p);
   }
   return map;
@@ -1040,11 +1052,11 @@ defineExpose({
 }
 
 .overlay-tag--penalised {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   line-height: 1.2;
-  border: 1px solid rgba(var(--v-theme-error), 0.6);
-  background: rgba(var(--v-theme-error), 0.15);
+  border: 1px solid rgba(var(--v-theme-dark-surface-error), 0.6);
+  background: rgba(var(--v-theme-dark-surface-error), 0.15);
 }
 
 .overlay-tag--sentinel {
@@ -1061,17 +1073,17 @@ defineExpose({
   color: color-mix(
     in srgb,
     rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
-    rgb(var(--v-theme-error)) calc(var(--ac) * 100%)
+    rgb(var(--v-theme-dark-surface-error)) calc(var(--ac) * 100%)
   );
   border-color: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.2) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.7) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.7) calc(var(--ac) * 100%)
   );
   background: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.05) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.2) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.2) calc(var(--ac) * 100%)
   );
 }
 
@@ -1125,11 +1137,11 @@ defineExpose({
 }
 
 .tag-pred-btn--confirm:hover {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 
 .tag-pred-btn--reject:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 .tag-drop-zone {

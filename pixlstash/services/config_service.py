@@ -105,7 +105,13 @@ def _set_vram_payload(payload: dict, used_bytes: int, total_bytes: int) -> bool:
         payload["vram_used_gb"] = round(used / (1024**3), 2)
         payload["vram_percent"] = round((used / total) * 100.0, 1)
         return True
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "Failed to build VRAM payload from used=%r total=%r: %s",
+            used_bytes,
+            total_bytes,
+            exc,
+        )
         return False
 
 
@@ -136,7 +142,8 @@ def collect_vram_from_torch(payload: dict) -> bool:
             except Exception as exc:
                 logger.debug("Failed to read CUDA memory for device %d: %s", index, exc)
         return _set_vram_payload(payload, used_bytes, total_bytes)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to collect VRAM via torch: %s", exc)
         return False
 
 
@@ -157,7 +164,8 @@ def parse_nvidia_smi_values(command: list[str]) -> list[int]:
             continue
         try:
             values.append(int(float(value)))
-        except Exception:
+        except Exception as exc:
+            logger.debug("Skipping unparseable nvidia-smi value %r: %s", value, exc)
             continue
     return values
 
@@ -201,7 +209,12 @@ def collect_vram_from_nvidia_smi(payload: dict) -> bool:
                     continue
                 try:
                     entry_pid = int(parts[0])
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Skipping nvidia-smi row with unparseable pid %r: %s",
+                        parts[0],
+                        exc,
+                    )
                     continue
                 if entry_pid != pid:
                     continue
@@ -210,14 +223,20 @@ def collect_vram_from_nvidia_smi(payload: dict) -> bool:
                     continue
                 try:
                     used_mib += int(float(value))
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Skipping unparseable nvidia-smi memory value %r: %s",
+                        value,
+                        exc,
+                    )
                     continue
         except Exception:
             used_mib = 0
 
         used_bytes = used_mib * 1024 * 1024
         return _set_vram_payload(payload, used_bytes, total_bytes)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to collect VRAM via nvidia-smi: %s", exc)
         return False
 
 

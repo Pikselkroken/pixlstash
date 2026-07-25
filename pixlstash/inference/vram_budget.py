@@ -62,15 +62,16 @@ class VramBudget:
         if requested_mb <= 0:
             self._max_vram_usage_mb = None
             return
-        self._max_vram_usage_mb = requested_mb
         total_mb = query_total_vram_mb()
         if total_mb > 0 and requested_mb > total_mb:
             logger.warning(
                 "Configured VRAM budget %.2f GB exceeds detected GPU total %.2f GB; "
-                "keeping configured budget as requested.",
+                "clamping to the installed total.",
                 requested_mb / 1024.0,
                 total_mb / 1024.0,
             )
+            requested_mb = total_mb
+        self._max_vram_usage_mb = requested_mb
         try:
             free_bytes, _ = torch.cuda.mem_get_info()
             free_gb = free_bytes / 1024**3

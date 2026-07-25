@@ -152,11 +152,11 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { VIcon } from "vuetify/components";
 import { apiClient } from "../../utils/apiClient";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
-  SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
   ICON_CARDS,
@@ -167,6 +167,10 @@ import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -191,7 +195,7 @@ const projectSelection = computed({
   },
 });
 
-const emit = defineEmits(["close", "saved", "refresh-sidebar"]);
+const emit = defineEmits(["close", "refresh-sidebar"]);
 
 // Tooltip on every field disabled by the lock. The set editor is set-scoped, so
 // this reason is about the set (the store's picture-scoped lockReason is for
@@ -306,7 +310,11 @@ async function saveSetFromEditor(setData) {
     emit("close");
     emit("refresh-sidebar");
   } catch (e) {
-    alert("Failed to save picture set: " + (e.message || e));
+    console.error("Failed to save picture set", e);
+    noticeStore.error(
+      `Couldn't save that set. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "set-save" },
+    );
   }
 }
 
@@ -321,6 +329,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>

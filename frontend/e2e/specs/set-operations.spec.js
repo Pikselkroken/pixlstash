@@ -8,7 +8,7 @@ import { test, expect } from '../fixtures/test.js'
 test.describe('boolean set operations', () => {
   test('combines multiple sets via the multi-select toolbar', async ({ grid, sidebar }) => {
     await grid.goto()
-    expect(await sidebar.setItems.count()).toBeGreaterThanOrEqual(2)
+    await expect.poll(() => sidebar.setItems.count()).toBeGreaterThanOrEqual(2)
 
     // First click selects a single set; Ctrl-click adds a second → multi-select.
     await sidebar.setItems.nth(0).click()

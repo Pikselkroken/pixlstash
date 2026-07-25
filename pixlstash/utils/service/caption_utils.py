@@ -134,6 +134,7 @@ def normalize_hidden_tags(value):
         try:
             tags = json.loads(value)
         except Exception:
+            # Documented parse-reject: unparseable input yields None (see docstring).
             return None
     else:
         tags = value

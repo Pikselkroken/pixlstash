@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
 import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { listCharacters } from "../../api/characters";
 import { copyText } from "../../utils/clipboard";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -94,7 +95,7 @@ async function fetchSettingsAuth() {
     const res = await apiClient.get("/users/me/auth");
     settingsUsername.value = res.data?.username || "";
     settingsHasPassword.value = Boolean(res.data?.has_password);
-  } catch (e) {
+  } catch {
     settingsError.value = "Failed to load account settings.";
   } finally {
     settingsLoading.value = false;
@@ -107,7 +108,7 @@ async function fetchUserTokens() {
   try {
     const res = await apiClient.get("/users/me/token");
     tokens.value = Array.isArray(res.data) ? res.data : [];
-  } catch (e) {
+  } catch {
     tokensError.value = "Failed to load tokens.";
   } finally {
     tokensLoading.value = false;
@@ -119,7 +120,7 @@ async function fetchPublicUrl() {
   try {
     const res = await apiClient.get("/users/me/config");
     publicUrlValue.value = res.data?.public_url || "";
-  } catch (_) {
+  } catch {
     /* silent */
   } finally {
     publicUrlLoading.value = false;
@@ -145,7 +146,7 @@ async function savePublicUrl() {
     setTimeout(() => {
       publicUrlSuccess.value = "";
     }, 2500);
-  } catch (_) {
+  } catch {
     publicUrlError.value = "Failed to save.";
   } finally {
     publicUrlLoading.value = false;
@@ -164,7 +165,7 @@ async function handleWatermarkUpload(event) {
       headers: { "Content-Type": "multipart/form-data" },
     });
     refreshWatermarkPreview();
-  } catch (_) {
+  } catch {
     watermarkUploadError.value = "Upload failed.";
   } finally {
     watermarkUploading.value = false;
@@ -178,7 +179,7 @@ async function clearWatermark() {
   try {
     await apiClient.delete("/users/me/watermark");
     refreshWatermarkPreview();
-  } catch (_) {
+  } catch {
     watermarkUploadError.value = "Failed to remove watermark.";
   } finally {
     watermarkUploading.value = false;
@@ -230,8 +231,8 @@ async function loadShareResourceOptions(type) {
       const res = await apiClient.get("/picture_sets");
       items = (res.data || []).map((s) => ({ id: s.id, label: s.name }));
     } else if (type === "character") {
-      const res = await apiClient.get("/characters");
-      items = (res.data || []).map((c) => ({ id: c.id, label: c.name }));
+      const chars = await listCharacters();
+      items = (chars || []).map((c) => ({ id: c.id, label: c.name }));
     } else if (type === "project") {
       const res = await apiClient.get("/projects");
       items = (res.data || []).map((p) => ({ id: p.id, label: p.name }));

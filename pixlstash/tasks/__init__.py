@@ -19,6 +19,7 @@ from .tag_prediction_backfill_task import TagPredictionBackfillTask
 from .missing_watch_folder_import_finder import MissingWatchFolderImportFinder
 from .missing_comfyui_extraction_finder import MissingComfyUIExtractionFinder
 from .comfyui_extraction_task import ComfyUIExtractionTask
+from .picture_import_task import PictureImportTask
 from .tag_task import TagTask
 from .text_embedding_task import TextEmbeddingTask
 from .likeness_parameters_task import LikenessParametersTask
@@ -35,6 +36,10 @@ from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
 from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
 from .tag_health_auto_rebuild_finder import TagHealthAutoRebuildFinder
+from .scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
+from .scrapheap_retention_purge_finder import ScrapheapRetentionPurgeFinder
+from .thumbnail_generation_task import ThumbnailGenerationTask
+from .missing_thumbnail_finder import MissingThumbnailFinder
 
 __all__ = [
     "TaskType",
@@ -59,6 +64,7 @@ __all__ = [
     "MissingWatchFolderImportFinder",
     "MissingComfyUIExtractionFinder",
     "ComfyUIExtractionTask",
+    "PictureImportTask",
     "TagTask",
     "TextEmbeddingTask",
     "LikenessParametersTask",
@@ -73,4 +79,8 @@ __all__ = [
     "EnsureGfsSnapshotTask",
     "TagHealthAutoRebuildTask",
     "TagHealthAutoRebuildFinder",
+    "ScrapheapRetentionPurgeTask",
+    "ScrapheapRetentionPurgeFinder",
+    "ThumbnailGenerationTask",
+    "MissingThumbnailFinder",
 ]

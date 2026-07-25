@@ -193,7 +193,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         snapshots = server.vault.snapshot_service.list_snapshots()
         live_schema = server.vault.snapshot_service.get_live_schema_version()
         result = []
@@ -214,7 +213,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         return {"active_job": server.vault.restore_service.get_active_job()}
 
     # ------------------------------------------------------------------
@@ -230,7 +228,6 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns the new snapshot record.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             cp = server.vault.snapshot_service.create_snapshot(
                 kind="MANUAL", label=label
@@ -256,7 +253,6 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Works for all snapshot kinds.
         """
-        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.rename_snapshot(snapshot_id, label)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -278,7 +274,6 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.
         """
-        server.auth.require_unscoped_owner(request)
         cp = server.vault.snapshot_service.get_snapshot(snapshot_id)
         if cp is None:
             raise HTTPException(status_code=404, detail="Snapshot not found.")
@@ -309,7 +304,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_full(snapshot_id)
         except ValueError as exc:
@@ -347,7 +341,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_resource(
                 snapshot_id, resource_type, resource_id
@@ -390,7 +383,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             preview = server.vault.restore_service.preview_batch(snapshot_id, resources)
         except ValueError as exc:
@@ -436,7 +428,6 @@ def create_router(server) -> APIRouter:
               412 rather than silently leave the user with no recovery
               point.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_full(
                 snapshot_id,
@@ -494,7 +485,6 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.  Returns a combined RestoreReport.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_batch(
                 snapshot_id,
@@ -556,7 +546,6 @@ def create_router(server) -> APIRouter:
 
         Requires owner-level (full, unscoped) access.
         """
-        server.auth.require_unscoped_owner(request)
         if len(picture_ids) > _HASH_COMPARE_PICTURE_LIMIT:
             raise HTTPException(
                 status_code=400,
@@ -611,7 +600,6 @@ def create_router(server) -> APIRouter:
 
         Authentication is required.
         """
-        server.auth.require_unscoped_owner(request)
         try:
             report = server.vault.restore_service.restore_resource(
                 snapshot_id,

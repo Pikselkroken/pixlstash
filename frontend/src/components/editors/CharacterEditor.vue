@@ -99,14 +99,19 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { apiClient, appendShareToken } from "../../utils/apiClient";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -264,13 +269,17 @@ async function saveCharacter(charData) {
       : `${props.backendUrl}/characters/${charData.id}`;
 
     if (isNew) {
-      const res = await apiClient.post(url, JSON.stringify(charData));
+      await apiClient.post(url, JSON.stringify(charData));
     } else {
-      const res = await apiClient.patch(url, JSON.stringify(charData));
+      await apiClient.patch(url, JSON.stringify(charData));
     }
     emit("saved");
   } catch (e) {
-    alert("Failed to save character: " + (e.message || e));
+    console.error("Failed to save character", e);
+    noticeStore.error(
+      `Couldn't save that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "character-save" },
+    );
   }
 }
 
@@ -285,6 +294,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 </script>
 
 <style scoped>

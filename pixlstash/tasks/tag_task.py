@@ -216,7 +216,12 @@ class TagTask(BaseTask):
                     len(self._pictures)
                 ),
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "TagTask: VRAM estimate failed for %d picture(s); assuming 0: %s",
+                len(self._pictures),
+                exc,
+            )
             return 0
 
     @property

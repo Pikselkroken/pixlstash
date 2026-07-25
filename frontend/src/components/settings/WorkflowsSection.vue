@@ -66,7 +66,7 @@ function parseComfyuiUrl(value) {
     const host = parsed.hostname || "127.0.0.1";
     const port = parsed.port || "8188";
     return { host, port };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -85,7 +85,7 @@ async function fetchComfyuiUrl() {
     }
     comfyuiHost.value = "";
     comfyuiPort.value = "";
-  } catch (e) {
+  } catch {
     // Leave state untouched on failure.
   }
 }
@@ -179,7 +179,7 @@ async function fetchWorkflowList() {
     workflowList.value = Array.isArray(res.data?.workflows)
       ? res.data.workflows
       : [];
-  } catch (e) {
+  } catch {
     workflowListError.value = "Failed to load workflows.";
   } finally {
     workflowListLoading.value = false;
@@ -241,7 +241,7 @@ async function handleWorkflowFileChange(event) {
       outputs,
     );
     workflowImportDialogOpen.value = true;
-  } catch (e) {
+  } catch {
     workflowImportError.value = "Failed to parse workflow JSON.";
   } finally {
     event.target.value = "";

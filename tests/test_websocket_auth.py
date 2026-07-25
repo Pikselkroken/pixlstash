@@ -358,3 +358,35 @@ def test_comfyui_proxy_rejects_anonymous(server):
     with pytest.raises(WebSocketDisconnect):
         with anon.websocket_connect(WS_COMFYUI):
             pass
+
+
+# ---------------------------------------------------------------------------
+# The HTTP authz gate must NEVER run on a WebSocket route
+# ---------------------------------------------------------------------------
+
+
+def test_authz_gate_noops_on_websocket_scope():
+    """Regression: the HTTP authz gate must no-op on a WebSocket connection.
+
+    The gate is mounted router-wide (``dependencies=[Depends(self.authz)]``), so
+    FastAPI also attaches it to ``@router.websocket`` routes in those routers.
+    WS routes are out of the HTTP gate by design (their chokepoint is
+    ``authenticate_websocket``). The gate must therefore resolve harmlessly and
+    enforce nothing on a WS scope: it must not crash the handshake (the old
+    ``request: Request`` param did — ``TypeError: missing 'request'``) and, even
+    when ENFORCING against an empty registry (which 403s any *HTTP* route as an
+    undeclared miss), a WS connection must return ``None`` before that lookup.
+    """
+    from starlette.websockets import WebSocket
+
+    from pixlstash.authz.gate import AuthzGate
+
+    # enforcing=True + empty registry: an HTTP route with no declaration would be
+    # denied 403 here. A WS connection must short-circuit before that.
+    gate = AuthzGate(registry={}, enforcing=True)
+    ws = WebSocket(
+        {"type": "websocket", "path": "/api/v1/ws/comfyui", "headers": []},
+        receive=None,
+        send=None,
+    )
+    assert asyncio.run(gate(ws)) is None

@@ -329,13 +329,13 @@ onUnmounted(() => {
   background: color-mix(in srgb, rgb(var(--v-theme-primary)) 12%, transparent);
 }
 .rs-decide-btn--no {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-error)) 45%, transparent);
+  border-color: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 45%, transparent);
 }
 .rs-decide-btn--no .rs-decide-verb {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-decide-btn--no:hover:not(:disabled) {
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 12%, transparent);
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 12%, transparent);
 }
 
 .rs-decide-sep {

@@ -31,7 +31,7 @@ from pixlstash.picture_scoring import (
     prepare_smart_score_inputs,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
 from pixlstash.utils.service.picture_stats import (
     PictureStatsParams,

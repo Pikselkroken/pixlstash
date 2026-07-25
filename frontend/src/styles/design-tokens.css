@@ -35,9 +35,9 @@
   /* ---------------------------------------------------------------------------
      RADIUS — four steps and a pill.
      --------------------------------------------------------------------------- */
-  --radius-sm: 4px;     /* dense controls: chips, small buttons, tight inputs */
-  --radius-md: 8px;     /* default: cards, inputs, menus, image tiles */
-  --radius-lg: 12px;    /* dialogs, panels, popovers */
+  --radius-sm: 4px; /* dense controls: chips, small buttons, tight inputs */
+  --radius-md: 8px; /* default: cards, inputs, menus, image tiles */
+  --radius-lg: 12px; /* dialogs, panels, popovers */
   --radius-pill: 999px; /* toggles, status pills, avatar ring */
 
   /* ---------------------------------------------------------------------------
@@ -45,25 +45,26 @@
      and only in rem. Never `em` for body text (it compounds with the parent).
      --------------------------------------------------------------------------- */
   --text-2xs: 0.6875rem; /* 11px */
-  --text-xs:  0.75rem;   /* 12px */
-  --text-sm:  0.8125rem; /* 13px */
-  --text-base:0.875rem;  /* 14px — DEFAULT */
-  --text-md:  1rem;      /* 16px */
-  --text-lg:  1.125rem;  /* 18px */
-  --text-xl:  1.375rem;  /* 22px */
-  --text-2xl: 1.75rem;   /* 28px */
+  --text-xs: 0.75rem; /* 12px */
+  --text-sm: 0.8125rem; /* 13px */
+  --text-base: 0.875rem; /* 14px — DEFAULT */
+  --text-md: 1rem; /* 16px */
+  --text-lg: 1.125rem; /* 18px */
+  --text-xl: 1.375rem; /* 22px */
+  --text-2xl: 1.75rem; /* 28px */
 
   --leading-tight: 1.2;
-  --leading-snug:  1.35;
-  --leading-body:  1.5;
+  --leading-snug: 1.35;
+  --leading-body: 1.5;
 
   /* Headings are 600, not 700. 700 is reserved. */
   --weight-regular: 400;
-  --weight-medium:  500;
-  --weight-semibold:600;
-  --weight-bold:    700;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
 
-  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-ui:
+    system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-pixel: "Tiny5", monospace;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 
@@ -76,9 +77,14 @@
   --elevation-1: 0 1px 2px rgba(var(--v-theme-shadow), 0.12);
   --elevation-2: 0 2px 6px rgba(var(--v-theme-shadow), 0.18);
   --elevation-3: 0 4px 16px rgba(var(--v-theme-shadow), 0.22);
-  --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.30);
+  --elevation-4: 0 8px 28px rgba(var(--v-theme-shadow), 0.3);
 
-  --focus-ring: 0 0 0 3px rgba(var(--v-theme-accent), 0.55);
+  /* SOLID, not an alpha. `rgba(accent, .55)` was already failing before the
+     accent deepen — 1.96:1 on the light canvas, 3.01:1 on the dark one, against
+     the 3:1 floor of WCAG 1.4.11 / 2.4.11 — i.e. every focus indicator in the
+     app. At full opacity: light 4.51 (background) / 4.75 (surface) / 4.07
+     (sidebar); dark 3.61 / 3.23 / 3.76 (dark-surface). Width stays 3px. */
+  --focus-ring: 0 0 0 3px rgb(var(--v-theme-accent));
 
   /* ---------------------------------------------------------------------------
      SCRIMS — translucent legibility backings for corner badges/chips that sit
@@ -90,15 +96,91 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  /* A full-surface dim under a TRANSIENT floating panel (the auto-hide sidebar
+     drawer), not a modal. Two jobs: a depth cue that the panel floats over the
+     grid, and a tap target for touch dismissal. Deliberately light, because
+     this panel is dismissed by moving the mouse: it must not read as blocking.
+     Sits a clear step below `--scrim-photo` (0.55, a legibility backing sized
+     for glyph contrast) and well below the modal scrim (0.8 x 0.9 opacity in
+     App.css). One value for both themes: `scrim` is #000 in both, and what this
+     dims is the photo grid, which is bright regardless of theme. Do NOT deepen
+     it for dark: a black scrim cannot lighten, and a heavier one there just
+     muddies (visual-language.md §7); in dark the panel's --elevation-4 carries
+     the edge and the scrim is the supporting cue. */
+  --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
-     MOTION — three durations, one easing. Motion is feedback, not decoration.
+     COMPONENT DIMENSIONS — fixed component sizes (badges, action bars) that were
+     drifting as raw one-offs. Count pills use `primary`/`on-primary` (contrast-
+     safe); accent is for the dot/glow only. See visual-language.md §13.
+     --------------------------------------------------------------------------- */
+  --badge-size: 16px; /* min height/width of a count pill (was an ad-hoc 15px) */
+  --badge-size-dot: 8px; /* the no-count activity dot (was an ad-hoc 7px) */
+  --bar-height: 48px; /* contextual action-bar / toolbar band height */
+  /* The right-hand stats rail's fixed column width. Not invented: it is already
+     the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in
+     `.shortcuts-fab--stats-open` (right: 296px = 288 + --space-3). Naming it
+     stops a fifth call site picking a fifth number. */
+  --stats-panel-w: 288px;
+  /* Notice surface (notice-surface.md §11). `--notice-max-w` is not invented:
+     it is already the de-facto width of LockedDeleteNoticeDialog (420) and
+     .plugin-menu-panel (420px); naming it stops the next floating card picking
+     a fifth number. */
+  --notice-max-w: 420px;
+
+  /* ---------------------------------------------------------------------------
+     LAYERS (`--z-*`) — the stacking ladder. See visual-language.md §14.
+     There was no scale: 40+ raw values from 0 to 99999, two `!important`. A new
+     floating layer picks a NAME, not a number. Steps are 10× apart so a
+     component can always be wedged between two strata. A raw z-index is drift;
+     migrating the existing call sites is opportunistic (touch a rule, move it),
+     not a big-bang rewrite, because each move is pixel-visible somewhere else.
+
+     The whole ladder lives inside ONE stacking context: `.app-viewport` is
+     `position: fixed; z-index: 0`, so these values only ever compete with each
+     other, and a raw z-index nested inside the lightbox (`.image-overlay`,
+     z 1000) or the review overlay (`.rs-overlay`, z 4000) is trapped at its
+     parent's rung no matter how large it is. Vuetify's teleported overlays sit
+     outside that context at ~2000 in the root; they are kept off the title
+     strip by anchoring to `--titlebar-h`, not by z-index.
+     --------------------------------------------------------------------------- */
+  --z-base: 0; /* in-flow content; the grid itself */
+  --z-raised: 10; /* lifted over an immediate sibling: tile badge, hover scrim */
+  --z-sticky: 100; /* sticky headers/toolbars inside a scroll container */
+  --z-floating: 200; /* chrome anchored to the content area: selection pill, breadcrumb */
+  --z-dropdown: 300; /* menus, popovers, tooltips anchored to a control */
+  --z-drawer: 1000; /* full-panel overlays inside the shell: the lightbox */
+  --z-overlay: 2000; /* app-level overlays and context menus */
+  --z-modal: 4000; /* modal dialogs and their scrims */
+  /* CLOSED RUNG, one member: TitleBar.vue. The desktop title strip owns the
+     window drag region and the window controls, so no in-app overlay may ever
+     paint over it — occluding it costs the user the ability to move or close
+     the window. `--z-modal` is not sufficient: ReviewSessionsOverlay is itself
+     a 4000 stacking context, and TitleBar is the FIRST child of .app-viewport
+     while that overlay is a later sibling, so a tie at 4000 is resolved by DOM
+     order in the overlay's favour and its full-viewport sub-scrims
+     (`.rs-keys-backdrop`, inset: 0) would cover the strip. A sticky toolbar is
+     NOT a title bar; it belongs on `--z-sticky`. */
+  --z-titlebar: 4500;
+  /* CLOSED RUNG, one member: NoticeHost.vue. Above everything, including a
+     modal and the title bar: an error about a failed background job has to be
+     readable while a dialog is open, and must clear the chrome BY VALUE — it
+     must not depend on being a later sibling in .app-viewport to be seen. */
+  --z-notice: 5000;
+
+  /* ---------------------------------------------------------------------------
+     MOTION — durations and easings. Motion is feedback, not decoration.
+     --dur-1..3 are the routine ceiling; --dur-4 is an expressive ONE-SHOT for
+     delight (FLIP flight, badge/sticker landing), never routine interaction.
      --------------------------------------------------------------------------- */
   --dur-1: 150ms;
   --dur-2: 200ms;
   --dur-3: 250ms;
+  --dur-4: 420ms; /* expressive one-shot: flight/landing (delight only) */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1); /* entering */
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1); /* leaving */
+  --ease-spring: cubic-bezier(0.2, 1.4, 0.4, 1); /* landing with overshoot */
 }
 
 /* Honour the OS "reduce motion" setting everywhere. Non-negotiable. */

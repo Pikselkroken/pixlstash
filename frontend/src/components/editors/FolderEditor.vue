@@ -636,7 +636,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch, onUnmounted } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import {
@@ -1155,6 +1155,9 @@ watch(
     }
   },
 );
+
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
 
 // --- API actions ---
 

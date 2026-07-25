@@ -47,9 +47,8 @@
  *   maybeRefreshOverlayForComfyui()    - Call after each grid fetch to update overlay.
  *   clientId                           - Ref<string|null> with the current client id.
  *   progress                           - Reactive progress object { visible, status, percent, message }.
- *   progressPercent                    - Computed clamped percentage (0-100).
  */
-import { ref, reactive, computed, onUnmounted, watch } from "vue";
+import { ref, reactive, onUnmounted, watch } from "vue";
 import { apiClient } from "../../utils/apiClient";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -137,15 +136,6 @@ let comfyuiWs = null;
 let comfyuiHideTimer = null;
 let comfyuiWatchdogTimer = null;
 const comfyuiRefreshRetryTimers = new Map();
-
-// ---------------------------------------------------------------------------
-// Computed
-// ---------------------------------------------------------------------------
-
-const progressPercent = computed(() => {
-  const percent = Number(progress.percent) || 0;
-  return Math.min(100, Math.max(0, Math.round(percent)));
-});
 
 // ---------------------------------------------------------------------------
 // Debug helpers
@@ -1032,9 +1022,7 @@ defineExpose({
   maybeRefreshOverlayForComfyui,
   clientId,
   progress,
-  progressPercent,
   comfyuiPendingOverlayRefresh,
-  abortComfyui,
 });
 </script>
 

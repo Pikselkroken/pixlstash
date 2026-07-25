@@ -90,7 +90,7 @@ function formatWhen(iso) {
   gap: 10px;
 }
 .rs-archived-check {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-archived-title {
   font-size: 16px;
@@ -111,13 +111,13 @@ function formatWhen(iso) {
   font-size: var(--text-sm);
 }
 .rs-archived-removed {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-archived-added {
-  color: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-dark-surface-primary));
 }
 .rs-archived-kept {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 .rs-archived-back {
   align-self: flex-start;

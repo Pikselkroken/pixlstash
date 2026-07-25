@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, computed, onMounted, onUnmounted } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { apiClient, isReadOnly } from "../../utils/apiClient";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
@@ -66,7 +66,6 @@ const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "avi", "mkv", "m4v"];
 const topTagsOpen = ref(true);
 const coocOpen = ref(false);
 const confHistOpen = ref(false);
-const tagCountHistOpen = ref(false);
 
 // Tab state
 const activeTab = ref("tags");
@@ -259,7 +258,7 @@ async function fetchStats() {
   try {
     const res = await apiClient.get(`/pictures/stats${qs ? `?${qs}` : ""}`);
     stats.value = { ...res.data, regular_tags: prevRegularTags };
-  } catch (e) {
+  } catch {
     error.value = "Failed to load stats";
     stats.value = null;
   } finally {
@@ -652,7 +651,6 @@ const donutUntaggedDash = computed(() => {
   if (!stats.value || stats.value.total === 0)
     return DONUT_CIRCUMFERENCE + " " + DONUT_CIRCUMFERENCE;
   const fraction = stats.value.untagged / stats.value.total;
-  const taggedFraction = stats.value.tagged / stats.value.total;
   return `${fraction * DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`;
 });
 
@@ -793,13 +791,6 @@ const confHistBuckets = computed(() => {
 const confHistMax = computed(() =>
   Math.max(1, ...confHistBuckets.value.map((b) => b.count)),
 );
-const tagCountBuckets = computed(
-  () => stats.value?.anomaly_tag_count_histogram ?? [],
-);
-const tagCountHistMax = computed(() =>
-  Math.max(1, ...tagCountBuckets.value.map((b) => b.count)),
-);
-
 function histBarWidth(count, maxCount) {
   return Math.max(count > 0 ? 2 : 0, (count / maxCount) * 208);
 }
@@ -870,6 +861,14 @@ function handleResolutionBarClick(label) {
     emit("update:resolutionBucketFilter", key);
   }
 }
+
+// Let a caller (e.g. the "View progress" action on the justified-layout
+// regeneration notice) deep-link to the Tasks tab. Opening the panel itself is
+// the parent's job (it owns `statsOpen`); this only selects the tab.
+function focusTasksTab() {
+  activeTab.value = "tasks";
+}
+defineExpose({ focusTasksTab });
 </script>
 
 <template>
@@ -1726,6 +1725,48 @@ function handleResolutionBarClick(label) {
               </div>
               <div class="tm-comfy-message">{{ entry.run.message }}</div>
             </div>
+            <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+                 transition and the import lands here as a determinate task row.
+                 data-import-task-row is the FLIP flight target the import dialog
+                 flies its count chip into. -->
+            <div
+              v-else-if="entry.kind === 'import'"
+              class="tm-worker-row tm-import-row"
+              :data-import-task-row="entry.key"
+            >
+              <div class="tm-worker-row-top">
+                <span
+                  class="tm-status-dot"
+                  :class="{ 'tm-status-dot--running': entry.run.status === 'running' }"
+                ></span>
+                <span class="tm-worker-label">{{ entry.run.label }}</span>
+                <span v-if="entry.run.total > 0" class="tm-worker-progress">
+                  {{ entry.run.current }} / {{ entry.run.total }}
+                </span>
+                <!-- Cancel is offered only while the import is genuinely
+                     client-abortable (the pre-commit upload window, run.abortable).
+                     A committed server-side import cannot be stopped from the
+                     client, so no cancel control is shown for it. -->
+                <button
+                  v-if="entry.run.abortable && !isReadOnly"
+                  class="tm-comfy-abort"
+                  type="button"
+                  title="Cancel import"
+                  @click="tasksStore.abortImportRun(entry.key)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="tm-comfy-bar">
+                <div
+                  class="tm-comfy-fill"
+                  :style="{
+                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                  }"
+                ></div>
+              </div>
+              <div class="tm-comfy-message">{{ entry.run.message }}</div>
+            </div>
             <!-- Backend worker: throughput sparkline + rate -->
             <div v-else class="tm-worker-row">
               <div class="tm-worker-row-top">
@@ -1773,18 +1814,17 @@ function handleResolutionBarClick(label) {
 <style scoped>
 .stats-sidebar {
   position: relative;
-  width: 288px;
-  min-width: 288px;
-  max-width: 288px;
+  width: var(--stats-panel-w);
+  min-width: var(--stats-panel-w);
+  max-width: var(--stats-panel-w);
   height: 100%;
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  /* No left divider in the docked layout: the panel uses the sidebar's chrome
-     colour so the left sidebar and right stats panel frame the grid symmetrically;
-     the grid's images provide the separation. The mobile drawer re-adds an edge
-     (see the max-width: 1339px block). */
-  border-left: 1px solid transparent;
+  /* Mirrors `.sidebar`'s border-right exactly, so the two rails present the
+     same edge onto the grid canvas. Was `transparent`, which reserved the pixel
+     but painted nothing while the left rail carried a visible hairline. */
+  border-left: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
   transition:
     width 0.15s,
@@ -1793,60 +1833,27 @@ function handleResolutionBarClick(label) {
   overflow: hidden;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar {
-    position: fixed;
-    right: 0;
-    top: calc(var(--titlebar-h, 0px) + 36px);
-    bottom: 0;
-    height: auto;
-    z-index: 150;
-    transform: translateX(0);
-    transition: transform 0.3s ease;
-    border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  }
-
-  .stats-sidebar.collapsed {
-    transform: translateX(100%);
-    width: 288px;
-    min-width: 288px;
-    max-width: 288px;
-    border-left-color: rgba(var(--v-theme-on-surface), 0.1);
-    overflow: hidden;
-    background: rgba(var(--v-theme-surface), 1);
-  }
-}
-
+/* The panel is DOCKED at every width and is never taken out of flow. A
+   `max-width: 1339px` block used to turn it into a fixed overlay drawer
+   (z-index 150, anchored below the 36px header band). That drawer opened
+   directly on top of the toolbar's own stats toggle — the only control that
+   closes it — because the toggle sits in the band *below* that anchor. It also
+   hid the title row, and its close button was never wired up, so on any
+   viewport at or under 1339px an opened panel could not be dismissed at all.
+   Docking removes the collision by construction: the toolbar ends where the
+   panel begins. If a floating stats panel is ever wanted it should be a user
+   preference like the left sidebar's (`.sidebar-overlay` in App.css), not a
+   width breakpoint. */
 .stats-sidebar.collapsed {
   width: 0;
   min-width: 0;
   max-width: 0;
   border-left-color: transparent;
-  overflow: visible;
+  /* Was `visible` so the edge-toggle button could hang outside the collapsed
+     panel; that button no longer exists, and a zero-width panel must not let
+     its content bleed over the grid. */
+  overflow: hidden;
   background: transparent;
-}
-
-.stats-sidebar-edge-toggle {
-  position: absolute;
-  left: -28px;
-  top: 8px;
-  width: 28px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-surface), 1);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  z-index: 1;
-}
-
-.stats-sidebar-edge-toggle:hover {
-  color: rgb(var(--v-theme-primary));
-  background: rgba(var(--v-theme-surface), 1);
 }
 
 .stats-sidebar-close-btn {
@@ -1889,26 +1896,12 @@ function handleResolutionBarClick(label) {
   flex-shrink: 0;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar-header {
-    height: auto;
-    border-bottom: none;
-    margin-bottom: 0;
-  }
-}
-
 .stats-sidebar-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex: 1;
   padding: 0 var(--space-2) 0 var(--space-3);
-}
-
-@media (max-width: 1339px) {
-  .stats-sidebar-title-row {
-    display: none;
-  }
 }
 
 .stats-sidebar-title,
@@ -2527,6 +2520,46 @@ function handleResolutionBarClick(label) {
   .tm-status-dot--running,
   .tm-tab-icon--busy,
   .tm-tab-pulse {
+    animation: none;
+  }
+}
+
+/* Landing punctuation for the async import (#459): a one-shot spring-pop + accent
+   glow-and-settle when the FLIP flight from the import dialog lands the chip on
+   this row (mirrors the gridNewPulse landing-pulse pattern, visual-language §10).
+   One-shot `both` so it plays once on the row's first render, then rests. */
+.tm-import-row {
+  animation:
+    tm-import-pop var(--dur-4) var(--ease-spring) both,
+    tm-import-glow 2.2s ease-out both;
+}
+
+@keyframes tm-import-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes tm-import-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5);
+    border-color: rgba(var(--v-theme-primary), 0.6);
+  }
+  35% {
+    box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18);
+    border-color: rgba(var(--v-theme-primary), 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0);
+    border-color: rgba(var(--v-theme-on-surface), 0.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-import-row {
     animation: none;
   }
 }

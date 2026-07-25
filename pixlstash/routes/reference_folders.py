@@ -35,7 +35,7 @@ from pixlstash.utils.reference_folder_validator import (
     validate_reference_folder_accessible,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 from sqlmodel import Session, delete, select
 
 logger = get_logger(__name__)
@@ -62,6 +62,46 @@ def _validate_sidecar_suffix(suffix: str) -> None:
                 "'-' (no path separators or '..')."
             ),
         )
+
+
+def _rollback_relocation(
+    rollback_moves: list[tuple[str, str]],
+    destination_existed: bool,
+    new_root: str,
+) -> None:
+    """Undo the filesystem side of a failed reference-folder relocation.
+
+    Moves every already-relocated entry back to its original path and, when the
+    destination root was freshly created for this relocation, removes the now-empty
+    root. Best-effort per entry: a move or rmdir that fails is logged with context
+    rather than raised, so a single failure cannot abort the rest of the rollback.
+
+    Args:
+        rollback_moves: (destination, source) pairs recorded as each entry moved,
+            replayed in reverse to walk entries back to their origin.
+        destination_existed: Whether ``new_root`` predated this relocation. When
+            False the empty root is removed as part of the rollback.
+        new_root: The relocation destination root.
+    """
+    for destination, source in reversed(rollback_moves):
+        if os.path.exists(destination):
+            try:
+                shutil.move(destination, source)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to roll back relocation move %s: %s",
+                    destination,
+                    exc,
+                )
+    if not destination_existed and os.path.isdir(new_root):
+        try:
+            os.rmdir(new_root)
+        except OSError as exc:
+            logger.debug(
+                "Failed to remove destination root %s during relocation rollback: %s",
+                new_root,
+                exc,
+            )
 
 
 class ReferenceFolderCreateRequest(BaseModel):
@@ -189,17 +229,10 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter()
 
-    # -------------------------------------------------------------------------
-    # Helper
-    # -------------------------------------------------------------------------
-
-    def _require_owner_request(request: Request) -> None:
-        server.auth.require_user_id(request)
-        if getattr(request.state, "token_scope", None) is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="This folder operation is only available to the owner.",
-            )
+    # Owner identity + locality for every reference-folder host operation
+    # (LOCAL_OWNER_ONLY, and the LOOPBACK_OWNER_ONLY red-line routes /open and
+    # /server/restart) are enforced by the centralised authz gate before the
+    # handler runs — no inline owner check lives here (backend refactor plan Step 5).
 
     def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -564,7 +597,6 @@ def create_router(server) -> APIRouter:
         tags=["folders"],
     )
     def detect_reference_folder_sidecars(request: Request, path: str):
-        _require_owner_request(request)
         folder = os.path.normpath(path)
         error = validate_reference_folder_path(folder)
         if error:
@@ -596,7 +628,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderCreateRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         folder = os.path.normpath(payload.folder)
         host_path = _normalize_optional_host_path(payload.host_path)
@@ -644,6 +675,14 @@ def create_router(server) -> APIRouter:
                 description_suffix=_normalize_suffix(payload.description_suffix),
                 tags_suffix=_normalize_suffix(payload.tags_suffix),
                 status=initial_status,
+                # This is the sole deliberate folder (re-)add path, so mark it
+                # for an explicit re-import: the first scan to complete will
+                # override the permanent-deletion ledger for files found on disk
+                # (re-importing removed-but-kept files and clearing their
+                # deleted_file_log rows) and then clear this flag. No routine
+                # path (update/rename/relocate/mount-recovery/periodic re-scan)
+                # sets it, so a routine scan can never trigger the override.
+                pending_reimport=True,
             )
             session.add(rf)
             session.commit()
@@ -687,7 +726,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderUpdateRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         def update(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -868,7 +906,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: RelocateReferenceFolderRequest = Body(...),
     ):
-        _require_owner_request(request)
 
         def fetch_and_validate(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -967,44 +1004,21 @@ def create_router(server) -> APIRouter:
                 apply_relocation, priority=DBPriority.IMMEDIATE
             )
         except HTTPException:
-            for destination, source in reversed(rollback_moves):
-                if os.path.exists(destination):
-                    try:
-                        shutil.move(destination, source)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to roll back relocation move %s: %s",
-                            destination,
-                            exc,
-                        )
-            if not destination_existed and os.path.isdir(new_root):
-                try:
-                    os.rmdir(new_root)
-                except OSError:
-                    pass
+            _rollback_relocation(rollback_moves, destination_existed, new_root)
             raise
         except Exception as exc:
-            for destination, source in reversed(rollback_moves):
-                if os.path.exists(destination):
-                    try:
-                        shutil.move(destination, source)
-                    except Exception as rollback_exc:
-                        logger.warning(
-                            "Failed to roll back relocation move %s: %s",
-                            destination,
-                            rollback_exc,
-                        )
-            if not destination_existed and os.path.isdir(new_root):
-                try:
-                    os.rmdir(new_root)
-                except OSError:
-                    pass
+            _rollback_relocation(rollback_moves, destination_existed, new_root)
             raise HTTPException(status_code=500, detail=f"Relocation failed: {exc}")
 
         try:
             os.rmdir(old_root)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning(
+                "Failed to remove old reference-folder root %s after relocation "
+                "(leftover directory): %s",
+                old_root,
+                exc,
+            )
 
         server.vault.unwatch_reference_folder(folder_id)
         server.vault.watch_reference_folder(folder_id, new_root)
@@ -1046,7 +1060,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: MoveReferencePicturesRequest = Body(...),
     ):
-        _require_owner_request(request)
         if not payload.picture_ids:
             raise HTTPException(
                 status_code=400, detail="picture_ids must be a non-empty list."
@@ -1305,7 +1318,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def export_metadata(session: Session):
@@ -1403,7 +1415,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ReferenceFolderMetadataRequest = Body(...),
     ):
-        _require_owner_request(request)
         requested_types = _metadata_types(payload.types)
 
         def import_metadata(session: Session):
@@ -1516,7 +1527,6 @@ def create_router(server) -> APIRouter:
         response_model=ReferenceFolderDeleteResponse,
     )
     def delete_reference_folder(folder_id: int, request: Request):
-        _require_owner_request(request)
 
         def remove(session: Session):
             rf = session.get(ReferenceFolder, folder_id)
@@ -1586,7 +1596,6 @@ def create_router(server) -> APIRouter:
         response_model=ServerRestartResponse,
     )
     def restart_server(request: Request):
-        _require_owner_request(request)
         logger.info("Server restart requested via API.")
         # Re-exec this process with the same arguments.
         # Use os.execve to carry forward PYTHONPATH so the pixlstash package
@@ -1615,7 +1624,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         subpath: Optional[str] = None,
     ):
-        _require_owner_request(request)
 
         def get_folder(session: Session):
             rf = session.get(ReferenceFolder, folder_id)

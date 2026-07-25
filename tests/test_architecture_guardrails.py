@@ -7,10 +7,15 @@ codebase migrates.
 """
 
 import ast
+import gc
+import json
+import os
 import re
 import tempfile
 import warnings
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 ROUTES_DIR = REPO_ROOT / "pixlstash" / "routes"
@@ -77,18 +82,22 @@ _DB_CALL_PATTERN = re.compile(r"vault\.db\.run_(task|immediate_read_task)")
 # Remove each file from this set once it is migrated to a service function.
 _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/characters.py",
+    "pixlstash/routes/characters_faces.py",
     "pixlstash/routes/comfyui.py",
     "pixlstash/routes/config.py",
     "pixlstash/routes/guest_scores.py",
     "pixlstash/routes/import_folders.py",
     "pixlstash/routes/picture_sets.py",
+    "pixlstash/routes/pictures/_character_likeness.py",
     "pixlstash/routes/pictures/_crud.py",
     "pixlstash/routes/pictures/_export.py",
+    "pixlstash/routes/pictures/_faces.py",
     "pixlstash/routes/pictures/_helpers.py",
     "pixlstash/routes/pictures/_import.py",
     "pixlstash/routes/pictures/_listing.py",
     "pixlstash/routes/pictures/_misc.py",
     "pixlstash/routes/pictures/_search.py",
+    "pixlstash/routes/pictures/_serving.py",
     "pixlstash/routes/pictures/_thumbnails.py",
     "pixlstash/routes/projects.py",
     "pixlstash/routes/reference_folders.py",
@@ -139,7 +148,13 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/review_service.py",  # vault-injection pattern; orchestrates scan + review lifecycle
         "pixlstash/services/tag_health_service.py",  # vault-injection pattern; background cache rebuild dispatch
         "pixlstash/services/snapshot_service.py",  # vault-injection pattern; owns snapshot lifecycle
-        "pixlstash/services/restore_service.py",  # vault-injection pattern; owns DB-swap lifecycle
+        # restore_service.py was decomposed into the restore/ package (plan §4.4);
+        # the DB-swap / upsert / preview modules keep the vault-injection pattern.
+        "pixlstash/services/restore/full_restore.py",  # vault-injection pattern; owns DB-swap lifecycle
+        "pixlstash/services/restore/resource_restore.py",  # vault-injection pattern; per-resource upsert
+        "pixlstash/services/restore/preview.py",  # vault-injection pattern; restore previews + hash compare
+        "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
+        "pixlstash/services/scrapheap_service.py",  # vault-injection pattern; thin wrappers around the *_in_session purge/retention functions
     }
 
     violations = []
@@ -381,11 +396,15 @@ _LABEL_SINK_EXEMPT = {
     ("pixlstash/routes/pictures/_import.py", "apply_sidecar_tags"): (
         "applies sidecar tags to freshly-imported pictures (new pics)"
     ),
-    ("pixlstash/routes/comfyui.py", "import_task"): (
+    ("pixlstash/services/comfyui_service.py", "import_task"): (
         "sentinel Tag on freshly-imported ComfyUI pictures (new pics)"
     ),
     ("pixlstash/tasks/watch_folder_import_task.py", "insert_pictures"): (
         "watch-folder import of NEW pictures"
+    ),
+    ("pixlstash/tasks/picture_import_task.py", "insert_pictures"): (
+        "async staging import of NEW pictures (#459) — sentinel Tag on freshly "
+        "created rows that cannot yet be in a locked set"
     ),
     ("pixlstash/tasks/watch_folder_import_task.py", "_run_task"): (
         "watch-folder import of NEW pictures (sidecar description)"
@@ -397,7 +416,7 @@ _LABEL_SINK_EXEMPT = {
         "logo / default-data import (new pictures)"
     ),
     # --- Whole-DB snapshot restore rebuilds every row (CSO-named exempt) ---
-    ("pixlstash/services/restore_service.py", "_upsert_rows"): (
+    ("pixlstash/services/restore/resource_restore.py", "_upsert_rows"): (
         "whole-DB snapshot restore rebuilds all rows; a locked set is itself "
         "restored from the snapshot, not mutated in place"
     ),
@@ -608,3 +627,504 @@ def test_workers_not_started_at_vault_init():
             assert vault._work_planner.is_running(), (
                 "WorkPlanner must be running after Vault.start()"
             )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail 8: Every mounted route is inventoried (authz-declaration scaffolding)
+#
+# Phase 0 of the backend authorization refactor (see the backend refactor plan
+# §3.4/§6 and docs/backend_architecture.md §16.2). This is the safety net Phase 1
+# builds on: it enumerates every ``(method, path_template)`` HTTP endpoint the
+# built app actually exposes — the ground truth for the coverage matrix — and
+# checks it against a declaration set. Today the declaration set is EMPTY (the
+# ``authz`` registry does not exist yet), so this runs in AUDIT MODE with the
+# full current-route allowlist below: it denies nothing and enforces no access
+# policy — it only observes the route inventory. In Phase 1 the registry becomes
+# the declaration set and entries burn down out of this allowlist as each route
+# is declared, exactly like the direct-DB-call allowlist above.
+#
+# The enumeration uses pixlstash.route_inventory, which flattens FastAPI's lazy
+# router inclusion via the framework's own resolver. Two fail-loud tests below
+# guarantee the enumeration cannot silently under-count (which would fake
+# "complete coverage") if a FastAPI upgrade changes the internal route model.
+# ---------------------------------------------------------------------------
+
+# The audit-mode allowlist of routes not yet declared in the authz registry.
+# Phase 1 Step 2 back-filled ALL mounted routes into ``ROUTE_POLICIES``
+# (pixlstash/authz/registry.py), so this set has burned down to EMPTY: the
+# registry is now the sole coverage matrix. A newly added data route must be
+# declared in the registry (no longer parked here); the two assertions below then
+# keep the matrix arithmetic — an undeclared route can't merge, and a stale
+# allowlist entry can't rot. Do NOT re-populate this to silence a new route:
+# declare it in the registry instead.
+_CURRENT_ROUTE_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
+
+
+# The route modules that must each contribute at least one endpoint. This is the
+# decisive cross-check that a whole router has not silently disappeared behind a
+# FastAPI internal change — it is independent of the endpoint total. (test_hooks
+# is intentionally absent: it is mounted only when enable_test_hooks=True.)
+_EXPECTED_ROUTE_MODULES = frozenset(
+    {
+        "pixlstash.routes.characters",
+        "pixlstash.routes.characters_faces",
+        "pixlstash.routes.comfyui",
+        "pixlstash.routes.config",
+        "pixlstash.routes.filesystem",
+        "pixlstash.routes.guest_scores",
+        "pixlstash.routes.import_folders",
+        "pixlstash.routes.picture_sets",
+        "pixlstash.routes.pictures._anomaly",
+        "pixlstash.routes.pictures._character_likeness",
+        "pixlstash.routes.pictures._crud",
+        "pixlstash.routes.pictures._export",
+        "pixlstash.routes.pictures._faces",
+        "pixlstash.routes.pictures._face_search",
+        "pixlstash.routes.pictures._import",
+        "pixlstash.routes.pictures._likeness_search",
+        "pixlstash.routes.pictures._listing",
+        "pixlstash.routes.pictures._misc",
+        "pixlstash.routes.pictures._search",
+        "pixlstash.routes.pictures._serving",
+        "pixlstash.routes.pictures._thumbnails",
+        "pixlstash.routes.projects",
+        "pixlstash.routes.reference_folders",
+        "pixlstash.routes.reviews",
+        "pixlstash.routes.share",
+        "pixlstash.routes.snapshots",
+        "pixlstash.routes.stacks",
+        "pixlstash.routes.tag_health",
+        "pixlstash.routes.tag_predictions",
+        "pixlstash.routes.tag_suggestions",
+        "pixlstash.routes.tagger_runs",
+        "pixlstash.routes.taggers",
+        "pixlstash.routes.tags",
+    }
+)
+
+# WebSocket routes are acknowledged in the coverage matrix but are NOT covered by
+# the HTTP authz gate — their chokepoint is authenticate_websocket (plan §6). The
+# included WS route's effective prefix is not resolved by the FastAPI resolver,
+# so its declared (unprefixed) path is recorded. Keyed by handler name so the
+# entry is stable regardless of that prefix-resolution quirk.
+_KNOWN_WEBSOCKET_ROUTES = frozenset(
+    {
+        ("comfyui_progress_proxy", "/ws/comfyui"),
+        ("websocket_updates", "/api/v1/ws/updates"),
+    }
+)
+
+# Floor for the HTTP endpoint count. Well below the current total (207); its only
+# job is to trip LOUD if the enumeration mechanism regresses and collapses to the
+# ~14 app-level routes (which would fake "complete coverage"). Bump deliberately.
+_EXPECTED_MIN_ENDPOINTS = 190
+
+
+@pytest.fixture(scope="module")
+def built_app():
+    """Build the real Server app once for the route-inventory guardrails.
+
+    Mirrors the construction used across the API test suite (see
+    tests/test_api_coverage.py::_setup): a temp image root + minimal server
+    config. Module-scoped so the (heavier) app build happens once.
+    """
+    from pixlstash.server import Server
+
+    temp_dir = tempfile.TemporaryDirectory()
+    image_root = os.path.join(temp_dir.name, "images")
+    os.makedirs(image_root, exist_ok=True)
+    server_config_path = os.path.join(temp_dir.name, "server-config.json")
+    with open(server_config_path, "w") as fh:
+        fh.write(json.dumps({"port": 8000}))
+    server = Server(server_config_path)
+    try:
+        yield server.api
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_all_routes_declare_access_policy(built_app):
+    """AUDIT MODE: every mounted route is inventoried against a declaration set.
+
+    Phase 0 has no authz registry, so the declaration set is empty and the full
+    current route set lives in _CURRENT_ROUTE_ALLOWLIST — this test denies
+    nothing and enforces no access policy. It is the scaffolding Phase 1 grows
+    into: when the registry lands, ``declared`` becomes the registry's keys and
+    each declared route burns down out of the allowlist. Failing in EITHER
+    direction keeps the coverage matrix arithmetic (docs/backend_architecture.md
+    §16.2): a new undeclared route can't merge unnoticed, and a stale allowlist
+    entry can't rot.
+    """
+    from pixlstash.authz.registry import ROUTE_POLICIES
+    from pixlstash.route_inventory import api_endpoint_set
+
+    # Phase 1 wires ``declared`` to the authz registry's declared (method, path)
+    # keys. It is empty in Step 1 (the registry back-fill is Step 2), so the full
+    # current route set still lives in _CURRENT_ROUTE_ALLOWLIST; as Step 2 fills
+    # ROUTE_POLICIES each declared route burns down out of the allowlist.
+    declared: frozenset[tuple[str, str]] = frozenset(ROUTE_POLICIES)
+
+    live = api_endpoint_set(built_app)
+
+    undeclared = live - declared - _CURRENT_ROUTE_ALLOWLIST
+    assert not undeclared, (
+        "Mounted route(s) are neither declared in the authz registry nor in the "
+        "Phase-0 audit allowlist. A new data route must declare an access policy "
+        "(Phase 1) or, during Phase 0, be added to _CURRENT_ROUTE_ALLOWLIST as a "
+        "reviewed coverage-matrix change:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(undeclared))
+    )
+
+    stale = _CURRENT_ROUTE_ALLOWLIST - live - declared
+    assert not stale, (
+        "Allowlist entr(y/ies) no longer correspond to any mounted route (route "
+        "removed/renamed, or already declared in the registry). Prune them so the "
+        "allowlist keeps shrinking honestly:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(stale))
+    )
+
+
+def test_route_enumeration_is_not_silently_undercounting(built_app):
+    """FAIL-LOUD: the enumeration cannot collapse and fake complete coverage.
+
+    The security value of the whole authz phase rests on the inventory being
+    COMPLETE. The installed FastAPI resolves lazily-included routers through an
+    internal helper; a future upgrade could change that model and make a naive
+    walk under-count silently. These two independent tripwires make that loud:
+    an absolute floor on the endpoint count, and — the decisive one — a check
+    that every expected route module still contributes at least one endpoint.
+    """
+    from pixlstash.route_inventory import api_endpoint_set, route_module_names
+
+    live = api_endpoint_set(built_app)
+    assert len(live) >= _EXPECTED_MIN_ENDPOINTS, (
+        f"Route enumeration returned only {len(live)} endpoints "
+        f"(floor {_EXPECTED_MIN_ENDPOINTS}). The flattening of lazily-included "
+        "routers has likely regressed (FastAPI upgrade?). Fix "
+        "pixlstash/route_inventory.py before trusting any coverage claim."
+    )
+
+    live_modules = route_module_names(built_app)
+    missing_modules = _EXPECTED_ROUTE_MODULES - live_modules
+    assert not missing_modules, (
+        "Route module(s) contribute ZERO endpoints to the inventory — a whole "
+        "router has silently vanished from the enumeration (or was unmounted). "
+        "This is exactly the false-coverage failure the inventory must catch:\n"
+        + "\n".join(f"  {m}" for m in sorted(missing_modules))
+    )
+
+
+def test_websocket_routes_are_acknowledged(built_app):
+    """WebSocket routes are recorded in the matrix but gated by their own path.
+
+    WS is outside the HTTP authz gate (plan §6 — authenticate_websocket is the
+    chokepoint). Enumerating them explicitly stops the registry from implying a
+    false sense of WS coverage. A new WS route must be consciously acknowledged
+    here, which prompts confirming its own auth path.
+    """
+    from pixlstash.route_inventory import websocket_endpoint_set
+
+    live_ws = websocket_endpoint_set(built_app)
+    assert live_ws == _KNOWN_WEBSOCKET_ROUTES, (
+        "WebSocket route inventory changed. Update _KNOWN_WEBSOCKET_ROUTES and "
+        "confirm each WS route authenticates via authenticate_websocket (the WS "
+        "chokepoint — the HTTP authz gate does not cover WebSockets).\n"
+        f"  added:   {sorted(live_ws - _KNOWN_WEBSOCKET_ROUTES)}\n"
+        f"  removed: {sorted(_KNOWN_WEBSOCKET_ROUTES - live_ws)}"
+    )
+
+
+def test_matched_route_path_is_prefix_stripped(built_app):
+    """Lock in the Phase-1 gate-keying fact: scope['route'].path is UNPREFIXED.
+
+    OBSERVATION-ONLY (no authz code). Under the installed FastAPI, the effective
+    (prefixed) path from the inventory, e.g. /api/v1/pictures/{id}/metadata, is
+    NOT the same string as the underlying route object's own path
+    (/pictures/{id}/metadata) — the one exposed at request time via
+    request.scope['route'].path. They differ on the vast majority of routes.
+    Phase 1's gate must therefore key on route-object IDENTITY, not on the
+    prefixed template string, or it would fail to match (fail-open) every
+    included route. This test documents and pins that fact so nobody keys the
+    gate on the wrong path by reflex. See the principal-engineer decision memo.
+    """
+    from fastapi.routing import iter_route_contexts
+
+    diverging = 0
+    checked = 0
+    for ctx in iter_route_contexts(built_app.routes):
+        own_path = getattr(ctx.original_route, "path", None)
+        if not (ctx.methods and own_path and ctx.path):
+            continue
+        if ctx.path.startswith("/api/v1/"):
+            checked += 1
+            if ctx.path != own_path:
+                diverging += 1
+
+    assert checked > 0, "expected to inspect at least one /api/v1 route"
+    assert diverging > 0, (
+        "Expected the effective (prefixed) path to differ from the route "
+        "object's own path for included routes — if they now match, FastAPI's "
+        "inclusion model changed and the Phase-1 gate-keying assumption "
+        "(key by route identity, not prefixed path) must be re-verified."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail 9: The authz gate is deny-by-default (Phase 1 Step 1)
+#
+# Step 6 (2026-07-21) flipped the SHIPPED default to ENFORCING
+# (AUTHZ_GATE_ENFORCING=True): at runtime an undeclared route is a hard 403 and a
+# boot failure. Report-only remains reachable as the one-line rollback (flip the
+# constant back to False), and is still proven below via an explicitly
+# enforcing=False gate. The fail-closed machinery is CSO acceptance criterion (b):
+# an undeclared route must 403 at request time AND boot-fail at startup when the
+# flag is enforcing. Correct route-identity keying (criterion a) is necessary but
+# NOT sufficient for fail-closed; these decoy tests are the load-bearing proof.
+# See the backend refactor plan §3.5 and docs/backend_architecture.md §16.2.
+#
+# Criterion (c) — SCOPED_LIST / body_ids list-and-batch filtering — is Step 4
+# work and is deliberately absent here; nothing below implies the gate covers it.
+# ---------------------------------------------------------------------------
+
+# The decoy router is mounted under this prefix, so effective paths are stable
+# and the declaring registry can be built statically (no chicken-and-egg with the
+# app build). The route object's OWN path is the unprefixed suffix — proving that
+# identity keying, not path-string keying, is what matches at request time.
+#
+# NB: the prefix lives under /api/v1 on purpose — tests/conftest.py globally
+# rewrites any TestClient path that does not already start with /api/v1 (adding
+# the prefix), so a decoy under a different root would 404 before reaching the
+# gate. The route object's OWN path is still the prefix-stripped suffix
+# (/declared), preserving the identity-vs-string-keying divergence this exercises.
+_DECOY_PREFIX = "/api/v1/authz-decoy-test"
+_DECOY_ROUTE_SUFFIX = "/declared"
+_DECOY_DECLARED_PATH = f"{_DECOY_PREFIX}/declared"
+_DECOY_UNDECLARED_PATH = f"{_DECOY_PREFIX}/undeclared"
+
+
+def _build_decoy_app(gate):
+    """Build a minimal app whose included router carries the gate dependency."""
+    from fastapi import APIRouter, Depends, FastAPI
+
+    router = APIRouter()
+
+    @router.get("/declared")
+    async def _declared():
+        return {"ok": "declared"}
+
+    @router.get("/undeclared")
+    async def _undeclared():
+        return {"ok": "undeclared"}
+
+    app = FastAPI()
+    app.include_router(router, prefix=_DECOY_PREFIX, dependencies=[Depends(gate)])
+    return app
+
+
+def _declared_only_registry():
+    """A registry declaring exactly the 'declared' decoy route (the rest a miss)."""
+    from pixlstash.authz.policy import AccessPolicy, RoutePolicy
+
+    return {
+        ("GET", _DECOY_DECLARED_PATH): RoutePolicy(
+            AccessPolicy.PUBLIC, justification="decoy declared route (test)"
+        )
+    }
+
+
+def test_authz_gate_denies_undeclared_route_when_enforcing():
+    """CSO (b) runtime half: with the flag enforcing, a miss is a hard 403 and a
+    declared route (matched by route-object identity) still passes (200)."""
+    from starlette.testclient import TestClient
+
+    from pixlstash.authz.gate import AuthzGate
+
+    gate = AuthzGate(registry=_declared_only_registry(), enforcing=True)
+    app = _build_decoy_app(gate)
+    # Build the id-keyed map WITHOUT the enforcing boot check (that is tested
+    # separately below); resolve_routes never raises.
+    gate.resolve_routes(app)
+
+    client = TestClient(app)
+    declared = client.get(_DECOY_DECLARED_PATH)
+    undeclared = client.get(_DECOY_UNDECLARED_PATH)
+
+    assert declared.status_code == 200, (
+        "a DECLARED route must pass the enforcing gate (over-blocking is a "
+        f"regression); got {declared.status_code}"
+    )
+    assert undeclared.status_code == 403, (
+        "an UNDECLARED route must be denied 403 by the enforcing gate "
+        f"(deny-by-default); got {undeclared.status_code}"
+    )
+
+
+def test_authz_startup_boot_fails_on_undeclared_route_when_enforcing():
+    """CSO (b) startup half: with the flag enforcing, enforce_startup aborts boot
+    when any mounted route is undeclared."""
+    from pixlstash.authz.gate import AuthzGate
+
+    gate = AuthzGate(registry=_declared_only_registry(), enforcing=True)
+    app = _build_decoy_app(
+        gate
+    )  # mounts the undeclared decoy alongside the declared one
+
+    with pytest.raises(RuntimeError, match="coverage matrix is incomplete"):
+        gate.enforce_startup(app)
+
+
+def test_authz_gate_report_only_denies_nothing():
+    """Report-only mode (the one-line rollback, plan §6) denies nothing: an
+    explicitly report-only gate with an empty registry lets every route through and
+    boot proceeds even though every route is a miss.
+
+    Step 6 (2026-07-21) flipped the SHIPPED default to enforcing, so
+    ``AUTHZ_GATE_ENFORCING`` is now True; report-only is no longer the default but
+    remains available as the single-boolean rollback (flip the constant back to
+    False to restore this behaviour everywhere)."""
+    from starlette.testclient import TestClient
+
+    from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
+
+    assert AUTHZ_GATE_ENFORCING is True, (
+        "Step 6 ships the gate ENFORCING; AUTHZ_GATE_ENFORCING must default to "
+        "True. Report-only stays reachable as the one-line rollback (flip the "
+        "constant back to False), which this test exercises via enforcing=False."
+    )
+
+    gate = AuthzGate(registry={}, enforcing=False)
+    app = _build_decoy_app(gate)
+    gate.enforce_startup(app)  # report-only: logs the backlog, must NOT raise
+
+    client = TestClient(app)
+    # Every route is undeclared, but report-only denies nothing.
+    assert client.get(_DECOY_DECLARED_PATH).status_code == 200
+    assert client.get(_DECOY_UNDECLARED_PATH).status_code == 200
+
+
+def test_authz_gate_keys_by_request_time_route_identity():
+    """CSO (a): request-time scope['route'] IS the enumerated route object, so
+    id() keying matches — even though the effective (prefixed) path differs from
+    the route object's own (prefix-stripped) path, which is why string keying
+    would fail open. Proven end-to-end: a route declared under its EFFECTIVE path
+    is matched at request time via identity and passes the enforcing gate."""
+    from starlette.testclient import TestClient
+
+    from pixlstash.authz.gate import AuthzGate
+    from pixlstash.route_inventory import iter_api_route_contexts
+
+    gate = AuthzGate(registry=_declared_only_registry(), enforcing=True)
+    app = _build_decoy_app(gate)
+
+    # The declaration is keyed by the EFFECTIVE (prefixed) path; the route
+    # object's own path is the UNPREFIXED suffix — string keying on scope['route']
+    # .path would miss it, identity keying does not.
+    ctxs = {path: route for _method, path, route in iter_api_route_contexts(app)}
+    assert _DECOY_DECLARED_PATH in ctxs
+    assert ctxs[_DECOY_DECLARED_PATH].path == _DECOY_ROUTE_SUFFIX, (
+        "the route object's own path must be prefix-stripped (identity keying is "
+        "required); if this now equals the effective path, re-verify the gate."
+    )
+
+    gate.resolve_routes(app)
+    client = TestClient(app)
+    assert client.get(_DECOY_DECLARED_PATH).status_code == 200, (
+        "identity keying must match the declared route at request time"
+    )
+    assert client.get(_DECOY_UNDECLARED_PATH).status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Dependency pin consistency
+# ---------------------------------------------------------------------------
+# CI installs with ``pip install .[test,dev]`` on a fresh runner, which resolves
+# every pyproject specifier to the newest compatible release. It therefore NEVER
+# exercises the pinned set in requirements.txt, and cannot notice when a pin sits
+# below the floor the code actually needs.
+#
+# That is not hypothetical: requirements.txt pinned ``fastapi==0.135.1`` while
+# pixlstash/route_inventory.py required ``iter_route_contexts`` (added in
+# 0.138.0). CI was green throughout; every workstation installed from
+# requirements.txt failed to start the server at all.
+
+
+def _parse_requirements_pins() -> dict:
+    """``{canonical name: pinned version}`` for every ``==`` line."""
+    from packaging.utils import canonicalize_name
+
+    pins = {}
+    text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "==" not in line:
+            continue
+        name, _, version = line.partition("==")
+        # Drop any extras marker: ``uvicorn[standard]`` pins the same project.
+        name = name.split("[", 1)[0].strip()
+        pins[canonicalize_name(name)] = version.strip()
+    return pins
+
+
+def _parse_pyproject_specifiers() -> dict:
+    """``{canonical name: SpecifierSet}`` for every runtime dependency."""
+    import tomli
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    data = tomli.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    specs = {}
+    for entry in data["project"]["dependencies"]:
+        req = Requirement(entry)
+        specs[canonicalize_name(req.name)] = req.specifier
+    return specs
+
+
+def test_requirements_pins_satisfy_pyproject_specifiers():
+    """Every pinned version must satisfy pyproject's declared range.
+
+    Both files are hand-maintained, so they drift. When they drift *downward*
+    the failure lands on a developer's machine at import time, long after CI
+    said the branch was fine.
+    """
+    pins = _parse_requirements_pins()
+    specs = _parse_pyproject_specifiers()
+
+    violations = []
+    for name, pinned in sorted(pins.items()):
+        specifier = specs.get(name)
+        if specifier is None:
+            continue  # test-only or transitive pin; pyproject makes no claim.
+        if not specifier.contains(pinned, prereleases=True):
+            violations.append(
+                f"{name}: requirements.txt pins {pinned}, pyproject requires {specifier}"
+            )
+
+    assert not violations, (
+        "requirements.txt pins conflict with pyproject.toml:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_fastapi_floor_covers_route_inventory_dependency():
+    """The declared FastAPI floor must include ``iter_route_contexts``.
+
+    Pinned explicitly because the requirement is invisible in the specifier
+    itself: nothing about ``fastapi>=0.138.0`` says why, and a future tidy-up
+    that "relaxes" it would silently break startup for anyone who resolves
+    lower. See pixlstash/route_inventory.py.
+    """
+    from packaging.version import Version
+
+    specs = _parse_pyproject_specifiers()
+    floors = [
+        Version(spec.version)
+        for spec in specs["fastapi"]
+        if spec.operator in (">=", "==", "~=")
+    ]
+    assert floors, "fastapi must declare a lower bound in pyproject.toml"
+    assert min(floors) >= Version("0.138.0"), (
+        "fastapi.routing.iter_route_contexts (required by "
+        "pixlstash/route_inventory.py) first appears in 0.138.0"
+    )

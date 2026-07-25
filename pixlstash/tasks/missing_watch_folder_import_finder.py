@@ -6,10 +6,13 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.import_folder import ImportFolder
+from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 
 from .base_task_finder import BaseTaskFinder
 from .watch_folder_import_task import WatchFolderImportTask
+
+logger = get_logger(__name__)
 
 
 class MissingWatchFolderImportFinder(BaseTaskFinder):
@@ -68,7 +71,12 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
 
         try:
             folders = self._db.run_task(fetch, priority=DBPriority.IMMEDIATE)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "MissingWatchFolderImportFinder: failed to read watch folders "
+                "from DB this cycle; skipping: %s",
+                exc,
+            )
             return []
         return list(folders or [])
 

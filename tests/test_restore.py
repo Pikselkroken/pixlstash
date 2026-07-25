@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 import shutil
 import tempfile
 from contextlib import closing
@@ -18,6 +19,7 @@ from pixlstash.db_models import (
     PictureSet,
     PictureSetMember,
     Project,
+    ReferenceFolder,
 )
 from pixlstash.db_models.picture_likeness import (
     PictureLikeness,
@@ -28,6 +30,7 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.services import scrapheap_service
 
 
 @pytest.fixture(scope="module")
@@ -62,6 +65,7 @@ def clean_db(server):
         session.exec(delete(Tag))
         session.exec(delete(DeletedFileLog))
         session.exec(delete(Picture))
+        session.exec(delete(ReferenceFolder))
         session.exec(delete(PictureSet))
         session.exec(delete(Project))
         session.exec(delete(Character))
@@ -81,9 +85,16 @@ def clean_db(server):
 # ---------------------------------------------------------------------------
 
 
-def _add_picture(server, filename="test.jpg", description=None) -> Picture:
+def _add_picture(
+    server, filename="test.jpg", description=None, pixel_sha=None
+) -> Picture:
     def _do(session):
-        pic = Picture(file_path=filename, filename=filename, description=description)
+        pic = Picture(
+            file_path=filename,
+            filename=filename,
+            description=description,
+            pixel_sha=pixel_sha,
+        )
         session.add(pic)
         session.commit()
         session.refresh(pic)
@@ -108,8 +119,20 @@ def _remove_file(server, relative_path: str):
     os.remove(os.path.join(server.vault.image_root, relative_path))
 
 
-def _add_deleted_log(server, file_path: str, pixel_sha: str | None = None):
-    """Record a permanent deletion in deleted_file_log (path stored hashed)."""
+def _add_deleted_log(
+    server,
+    file_path: str,
+    pixel_sha: str | None = None,
+    file_removed: bool = True,
+):
+    """Record a deletion in deleted_file_log (path stored hashed).
+
+    ``file_removed=True`` (default) is a genuine permanent deletion — the file
+    was removed from disk and restore must never resurrect it. ``file_removed=
+    False`` records a picture removed from the library whose file was KEPT on
+    disk (a protected reference-folder picture): restore must NOT treat it as a
+    permanent deletion.
+    """
     from datetime import datetime, timezone
 
     def _do(session):
@@ -118,6 +141,7 @@ def _add_deleted_log(server, file_path: str, pixel_sha: str | None = None):
                 path_sha=DeletedFileLog.hash_path(file_path),
                 pixel_sha=pixel_sha,
                 deleted_at=datetime.now(timezone.utc),
+                file_removed=file_removed,
             )
         )
         session.commit()
@@ -1852,6 +1876,620 @@ def test_full_restore_skips_permanently_deleted_picture(server):
     )
 
 
+def test_full_restore_keeps_live_reference_picture_in_ledger(server):
+    """A reference-folder picture that is ALIVE (deleted=False) with its file on
+    disk must survive restore even when its path is in deleted_file_log from an
+    earlier scrapheap purge.
+
+    Regression for ~145 reference-folder rows vanishing on a
+    snapshot->immediate-restore: their absolute paths were in the ledger (a
+    protected-folder purge logged the path but kept the file), the pictures were
+    later re-indexed and alive again, and restore's permanent-deletion
+    cross-check dropped them by path_sha even though the user was actively using
+    them. The live-active cross-check must keep them."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        # File lives OUTSIDE image_root, referenced by its absolute path — the
+        # real reference-folder shape.
+        abs_path = os.path.join(ref_dir, "reference.png")
+        open(abs_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                label="ref",
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            pic = Picture(
+                file_path=abs_path,
+                filename="reference.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return rf.id, pic.id
+
+        folder_id, pic_id = server.vault.db.run_task(_setup)
+
+        # Brand-new snapshot captures the reference picture ALIVE.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Its absolute path was recorded in the ledger by an earlier protected
+        # purge (file kept on disk, path logged).
+        _add_deleted_log(server, abs_path)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.permanently_deleted_count == 0, (
+            "A live, actively-used reference picture must not be counted as "
+            f"permanently deleted: {report.permanently_deleted_count}"
+        )
+        restored = _get_picture(server, pic_id)
+        assert restored is not None, (
+            "Live reference-folder picture with its file on disk must survive "
+            "restore even though its path is in deleted_file_log."
+        )
+        assert restored.reference_folder_id == folder_id, (
+            "reference_folder_id link must be intact after restore."
+        )
+        assert not restored.deleted
+
+
+def test_full_restore_ledger_drops_purged_but_keeps_reindexed(server):
+    """The live-active cross-check must distinguish a genuinely purged path
+    (still dropped) from one re-indexed and alive again (kept), even when both
+    share the ledger — guarding the rescue from over-keeping (the ledger's
+    'never resurrect' guarantee must still hold for content the user really
+    deleted)."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        alive_path = os.path.join(ref_dir, "alive.png")
+        purged_path = os.path.join(ref_dir, "purged.png")
+        open(alive_path, "wb").close()
+        open(purged_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            alive = Picture(
+                file_path=alive_path,
+                filename="alive.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            purged = Picture(
+                file_path=purged_path,
+                filename="purged.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(alive)
+            session.add(purged)
+            session.commit()
+            session.refresh(alive)
+            session.refresh(purged)
+            return alive.id, purged.id
+
+        alive_id, purged_id = server.vault.db.run_task(_setup)
+
+        # Snapshot captures BOTH alive.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Both paths are logged; the "purged" one is ALSO removed from the live
+        # DB (a genuine permanent deletion — file lingers because protected).
+        _add_deleted_log(server, alive_path)
+        _add_deleted_log(server, purged_path)
+
+        def _drop_purged(session):
+            session.delete(session.get(Picture, purged_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop_purged)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert _get_picture(server, alive_id) is not None, (
+            "Re-indexed, live reference picture must be kept."
+        )
+        assert _get_picture(server, purged_id) is None, (
+            "A genuinely purged path with no live active picture must still be "
+            "dropped by the ledger."
+        )
+        assert report.permanently_deleted_count == 1, (
+            f"Exactly one (the purged) should count: {report.permanently_deleted_count}"
+        )
+
+
+def test_full_restore_keeps_kept_file_reference_picture_not_in_live_db(server):
+    """Root-cause test: a ledger entry with ``file_removed=False`` (file kept on
+    disk) must NEVER count as a permanent deletion, even for a snapshot picture
+    that is NOT present in the live DB — so the content-aware live-active rescue
+    net (which only saves pictures alive in the live DB) does not apply.
+
+    This isolates the ``_load_deleted_file_index`` ``file_removed`` filter from
+    the secondary rescue net: the picture was removed from the library but its
+    file kept (protected reference folder), a snapshot captured it ALIVE, and on
+    rollback restore must bring it back because its content is not gone. With the
+    old ledger (path-only, no ``file_removed``) this row would be dropped as a
+    permanent deletion — the ~139-picture data-loss class."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = os.path.join(ref_dir, "kept.png")
+        open(abs_path, "wb").close()
+
+        def _setup(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                label="ref",
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            pic = Picture(
+                file_path=abs_path,
+                filename="kept.png",
+                reference_folder_id=rf.id,
+                deleted=False,
+            )
+            session.add(pic)
+            session.commit()
+            session.refresh(pic)
+            return rf.id, pic.id
+
+        folder_id, pic_id = server.vault.db.run_task(_setup)
+
+        # Snapshot captures the reference picture ALIVE.
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Now it is removed from the LIVE library (protected purge: file kept,
+        # logged with file_removed=False). It is NOT in the live DB anymore, so
+        # the live-active rescue net cannot save it — only the ledger filter can.
+        def _drop(session):
+            session.delete(session.get(Picture, pic_id))
+            session.commit()
+
+        server.vault.db.run_task(_drop)
+        _add_deleted_log(server, abs_path, file_removed=False)
+
+        report = server.vault.restore_service.restore_full(cp.id)
+
+        assert report.missing_files_count == 0, "File is on disk — not missing."
+        assert report.permanently_deleted_count == 0, (
+            "A file_removed=False ledger entry must never count as a permanent "
+            f"deletion: {report.permanently_deleted_count}"
+        )
+        restored = _get_picture(server, pic_id)
+        assert restored is not None, (
+            "Reference picture whose file was KEPT must be restored from the "
+            "snapshot that captured it alive — its content is not gone."
+        )
+        assert restored.reference_folder_id == folder_id
+        assert not restored.deleted
+        assert os.path.isfile(abs_path), "The kept file must be untouched."
+
+
+def test_full_restore_file_removed_true_still_drops_and_not_resurrected(server):
+    """The other direction: a ``file_removed=True`` ledger entry (genuine purge,
+    file gone) must STILL be dropped on restore and never resurrected — the
+    never-resurrect guarantee holds after the meaning split."""
+    _create_file(server, "gone.jpg")
+    pic = _add_picture(server, filename="gone.jpg", description="doomed")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Genuine permanent purge after the snapshot: row dropped, file logged as
+    # actually removed. (File left on disk here to prove the drop comes from the
+    # ledger's file_removed=True flag, not the missing-file check.)
+    def _del(session):
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_del)
+    _add_deleted_log(server, "gone.jpg", file_removed=True)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert report.missing_files_count == 0, "File is on disk — not missing."
+    assert report.permanently_deleted_count == 1, report.permanently_deleted_count
+    assert _get_picture(server, pic.id) is None, (
+        "A genuinely purged (file_removed=True) picture must not be resurrected."
+    )
+
+
+def test_explicit_reimport_never_resurfaces_genuinely_gone_file(server):
+    """Invariant (Change 2 safety): an explicit reference-folder re-import only
+    resurfaces files PRESENT on disk. A genuinely-gone file (absent on disk,
+    logged file_removed=True) must NOT be re-imported by the fresh-folder scan,
+    its ledger entry must survive, and a restore must still drop it and never
+    resurrect it."""
+    from pixlstash.db_models.reference_folder import (
+        ReferenceFolder,
+        ReferenceFolderStatus,
+    )
+    from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        # This path is never created on disk — the content is genuinely gone.
+        gone_path = os.path.join(ref_dir, "gone.png")
+
+        pic = _add_picture(server, filename=gone_path, pixel_sha="sha_gone")
+        cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+        # Genuine permanent purge after the snapshot: row dropped, file absent,
+        # logged as actually removed.
+        def _drop(session):
+            session.delete(session.get(Picture, pic.id))
+            session.commit()
+
+        server.vault.db.run_task(_drop)
+        _add_deleted_log(server, gone_path, pixel_sha="sha_gone", file_removed=True)
+
+        # Explicit re-add of the folder (pending_reimport=True — the strongest
+        # override signal). Because the gone file is absent from disk it is never
+        # in disk_paths, so even the explicit override cannot touch its ledger
+        # entry.
+        def _add_folder(session):
+            rf = ReferenceFolder(
+                folder=ref_dir,
+                label="ref",
+                allow_delete_file=False,
+                status=ReferenceFolderStatus.ACTIVE,
+                last_scanned=None,
+                pending_reimport=True,
+            )
+            session.add(rf)
+            session.commit()
+            session.refresh(rf)
+            return rf.id
+
+        folder_id = server.vault.db.run_task(_add_folder)
+        result = ReferenceFolderScanTask(
+            database=server.vault.db,
+            folder_id=folder_id,
+            folder_path=ref_dir,
+            resolved_path=ref_dir,
+        )._run_task()
+        assert result["new_count"] == 0, (
+            f"A genuinely-gone file must never be re-imported: {result}"
+        )
+        assert _count_deleted_log(server, gone_path) == 1, (
+            "The ledger must still guard the genuinely-gone file after re-import."
+        )
+
+        # Restore still drops it and never resurrects it.
+        report = server.vault.restore_service.restore_full(cp.id)
+        assert report.permanently_deleted_count >= 1, report.permanently_deleted_count
+        assert _get_picture(server, pic.id) is None, (
+            "A genuinely-gone (file_removed=True) file must never be resurrected."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Change 2: an EXPLICIT reference-folder re-import (the dedicated one-shot
+# `pending_reimport` flag, set only by the deliberate folder-add endpoint)
+# overrides the ledger; a routine sync scan does not. Driven with background
+# workers off (module fixture) so the scan runs deterministically.
+# ---------------------------------------------------------------------------
+
+
+def _ref_ledger_flags(server, file_path):
+    path_sha = DeletedFileLog.hash_path(file_path)
+    return server.vault.db.run_immediate_read_task(
+        lambda s: [
+            r.file_removed
+            for r in s.exec(
+                select(DeletedFileLog).where(DeletedFileLog.path_sha == path_sha)
+            ).all()
+        ]
+    )
+
+
+def _make_ref_image(folder_dir, file_name):
+    from PIL import Image
+
+    os.makedirs(folder_dir, exist_ok=True)
+    path = os.path.join(folder_dir, file_name)
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(path, format="PNG")
+    return path
+
+
+def _add_ref_folder(server, folder_dir, *, pending_reimport=False, last_scanned=None):
+    from pixlstash.db_models.reference_folder import ReferenceFolderStatus
+
+    def _insert(session):
+        rf = ReferenceFolder(
+            folder=folder_dir,
+            label="refs",
+            allow_delete_file=False,
+            status=ReferenceFolderStatus.ACTIVE,
+            last_scanned=last_scanned,
+            pending_reimport=pending_reimport,
+        )
+        session.add(rf)
+        session.commit()
+        session.refresh(rf)
+        return rf.id
+
+    return server.vault.db.run_task(_insert)
+
+
+def _ref_pending_reimport(server, folder_id):
+    return server.vault.db.run_immediate_read_task(
+        lambda s: s.get(ReferenceFolder, folder_id).pending_reimport
+    )
+
+
+def _index_ref_picture(server, folder_id, file_path):
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
+
+    def _insert(session):
+        pic = Picture(
+            file_path=file_path,
+            reference_folder_id=folder_id,
+            pixel_sha=pixel_sha,
+            original_file_name=os.path.basename(file_path),
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return pic.id
+
+    return server.vault.db.run_task(_insert)
+
+
+def _run_ref_scan(server, folder_id, folder_dir):
+    from pixlstash.tasks.reference_folder_scan_task import ReferenceFolderScanTask
+
+    return ReferenceFolderScanTask(
+        database=server.vault.db,
+        folder_id=folder_id,
+        folder_path=folder_dir,
+        resolved_path=folder_dir,
+    )._run_task()
+
+
+def test_reference_folder_explicit_reimport_overrides_ledger(server):
+    """A deliberate folder (re-)add (pending_reimport=True) must re-import a
+    removed-but-kept file present on disk, clear its ledger entry so restore can
+    resurface it, and clear the one-shot flag once consumed."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = _make_ref_image(ref_dir, "resurfaced.png")
+        pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
+        _add_deleted_log(server, abs_path, pixel_sha=pixel_sha, file_removed=False)
+
+        folder_id = _add_ref_folder(server, ref_dir, pending_reimport=True)
+        result = _run_ref_scan(server, folder_id, ref_dir)
+
+        assert result["new_count"] == 1, (
+            f"Explicit re-import must re-import the present-on-disk file: {result}"
+        )
+        imported = server.vault.db.run_task(
+            lambda s: s.exec(
+                select(Picture).where(Picture.reference_folder_id == folder_id)
+            ).all()
+        )
+        assert len(imported) == 1 and imported[0].file_path == abs_path
+        assert _ref_ledger_flags(server, abs_path) == [], (
+            "The ledger entry for the resurfaced file must be cleared."
+        )
+        assert _ref_pending_reimport(server, folder_id) is False, (
+            "The one-shot pending_reimport flag must be cleared after the scan."
+        )
+
+
+def test_reference_folder_reimport_flag_is_one_shot(server):
+    """Once a scan consumes pending_reimport, a subsequent scan is a routine scan
+    and does NOT override the ledger — the override cannot recur without a fresh
+    deliberate add."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = _make_ref_image(ref_dir, "once.png")
+        pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
+
+        folder_id = _add_ref_folder(server, ref_dir, pending_reimport=True)
+        # First scan consumes the flag and imports the file.
+        _run_ref_scan(server, folder_id, ref_dir)
+        assert _ref_pending_reimport(server, folder_id) is False
+
+        # A new removed-but-kept ledger entry appears for that path (e.g. the
+        # picture is scrapheaped-and-purged while protected). A second, routine
+        # scan must NOT resurface it — the flag is already spent.
+        server.vault.db.run_task(
+            lambda s: s.exec(delete(Picture).where(Picture.file_path == abs_path))
+        )
+        _add_deleted_log(server, abs_path, pixel_sha=pixel_sha, file_removed=False)
+
+        result = _run_ref_scan(server, folder_id, ref_dir)
+        assert result["new_count"] == 0, (
+            f"A spent flag must not override the ledger again: {result}"
+        )
+        assert _ref_ledger_flags(server, abs_path) == [False], (
+            "A routine second scan must leave the ledger entry intact."
+        )
+
+
+def test_reference_folder_routine_rescan_does_not_reimport(server):
+    """A routine re-scan of an existing folder (pending_reimport=False) must NOT
+    auto re-import a removed-but-kept file and must leave its ledger intact."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        abs_path = _make_ref_image(ref_dir, "kept.png")
+        pixel_sha = ImageUtils.calculate_hash_from_file_path(abs_path)
+        _add_deleted_log(server, abs_path, pixel_sha=pixel_sha, file_removed=False)
+
+        import time as _time
+
+        folder_id = _add_ref_folder(
+            server, ref_dir, pending_reimport=False, last_scanned=_time.time()
+        )
+        result = _run_ref_scan(server, folder_id, ref_dir)
+
+        assert result["new_count"] == 0, (
+            f"Routine re-scan must not auto re-import a removed-but-kept file: {result}"
+        )
+        assert (
+            server.vault.db.run_task(
+                lambda s: s.exec(
+                    select(Picture).where(Picture.reference_folder_id == folder_id)
+                ).all()
+            )
+            == []
+        )
+        assert _ref_ledger_flags(server, abs_path) == [False], (
+            "Routine re-scan must leave the ledger entry intact."
+        )
+
+
+def test_reference_folder_emptied_then_last_scanned_reset_no_override(server):
+    """Edge closed by the dedicated flag: an already-emptied folder (zero indexed
+    pictures) whose last_scanned is reset to None by a sync-toggle / rename /
+    mount-recovery is NOT an explicit re-import (pending_reimport stays False), so
+    a removed-but-kept file present on disk must NOT resurface and its ledger
+    entry must be retained. Under the old last_scanned heuristic this would have
+    wrongly fired."""
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+
+    with tempfile.TemporaryDirectory() as ref_dir:
+        kept_path = _make_ref_image(ref_dir, "kept.png")
+        kept_sha = ImageUtils.calculate_hash_from_file_path(kept_path)
+        _add_deleted_log(server, kept_path, pixel_sha=kept_sha, file_removed=False)
+
+        # Zero indexed pictures AND last_scanned reset to None — the exact shape
+        # that the removed heuristic misread as a fresh re-add.
+        folder_id = _add_ref_folder(
+            server, ref_dir, pending_reimport=False, last_scanned=None
+        )
+        result = _run_ref_scan(server, folder_id, ref_dir)
+
+        assert result["new_count"] == 0, (
+            f"An emptied folder with reset last_scanned must not re-import: {result}"
+        )
+        assert _ref_ledger_flags(server, kept_path) == [False], (
+            "The ledger entry must be retained — this is not an explicit re-import."
+        )
+        assert (
+            server.vault.db.run_task(
+                lambda s: s.exec(
+                    select(Picture).where(Picture.file_path == kept_path)
+                ).all()
+            )
+            == []
+        ), "Removed-but-kept file must not resurface without a deliberate re-add."
+
+
+def test_full_restore_ledger_rescue_drops_when_content_differs(server):
+    """CSO purge-evasion: a ledger-matched snapshot row must NOT be rescued when
+    DIFFERENT content now sits at the same path.
+
+    Content C1 was purged (its path AND pixel_sha are in the ledger); different
+    content C2 (different pixel_sha) is alive at the same path. The path-only
+    rescue would keep C1's stale row on the strength of the path collision; the
+    content-aware rescue must leave it dropped because the two shas are known
+    and differ.
+    """
+    _create_file(server, "evasion.jpg")
+    c1 = _add_picture(server, filename="evasion.jpg", pixel_sha="C1_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: C1 is purged (row dropped + logged by path AND content)
+    # and DIFFERENT content C2 is indexed alive at the same path.
+    _drop_picture_row(server, c1.id)
+    _add_deleted_log(server, "evasion.jpg", pixel_sha="C1_sha")
+    _add_picture(server, filename="evasion.jpg", pixel_sha="C2_sha")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, c1.id) is None, (
+        "stale purged content (C1) must NOT be resurrected when different live "
+        "content (C2) sits at the same path — this is the purge-evasion vector"
+    )
+    assert report.permanently_deleted_count == 1, (
+        f"C1 must still count as permanently deleted: {report.permanently_deleted_count}"
+    )
+
+
+def test_full_restore_ledger_rescue_keeps_when_content_matches(server):
+    """A ledger-matched row whose live content MATCHES (same file re-indexed →
+    same pixel_sha) must be rescued and survive restore."""
+    _create_file(server, "match.jpg")
+    pic = _add_picture(server, filename="match.jpg", pixel_sha="M_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Its path was logged by an earlier protected-folder purge, but the SAME
+    # content is alive and in active use (pixel_sha unchanged).
+    _add_deleted_log(server, "match.jpg", pixel_sha="OTHER_sha")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, pic.id) is not None, (
+        "a ledger-matched picture whose live content matches must be rescued"
+    )
+    assert report.permanently_deleted_count == 0, (
+        f"matching live content must not count as purged: {report.permanently_deleted_count}"
+    )
+
+
+def test_full_restore_ledger_rescue_keeps_when_live_sha_null(server):
+    """NULL fallback: a ledger-matched row must be rescued when the live-active
+    picture at its path is not yet hashed (pixel_sha=NULL).
+
+    This is the not-yet-hashed reference-folder picture — the maintainer's
+    explicit non-strict choice: unconfirmable content must be kept, never
+    re-dropped.
+    """
+    _create_file(server, "nullref.jpg")
+    snap_pic = _add_picture(server, filename="nullref.jpg", pixel_sha="N_sha")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the path is logged, the old row dropped, and the file
+    # re-indexed as a NEW alive picture that has not been hashed yet.
+    _drop_picture_row(server, snap_pic.id)
+    _add_deleted_log(server, "nullref.jpg")
+    _add_picture(server, filename="nullref.jpg", pixel_sha=None)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+
+    assert _get_picture(server, snap_pic.id) is not None, (
+        "a ledger-matched row must be rescued when the live picture is not yet "
+        "hashed (NULL pixel_sha) — the non-strict NULL fallback"
+    )
+    assert report.permanently_deleted_count == 0, (
+        f"unconfirmable content must not count as purged: {report.permanently_deleted_count}"
+    )
+
+
 def test_restore_resource_refuses_permanently_deleted_picture(server):
     """Per-resource restore must skip a picture matched by content hash in
     deleted_file_log (sha match, with a different recorded path)."""
@@ -2151,4 +2789,434 @@ def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(serve
         engine.dispose()
     assert stored is not None, (
         "backfill must fill the NULL metadata_hash in the repaired snapshot"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data-loss regression: restore must not resurrect a scrapheap "ghost" that
+# shadows a file re-added after the snapshot, or emptying the scrapheap would
+# hard-delete that live file.
+# ---------------------------------------------------------------------------
+
+
+def _add_scrapheap_picture(server, filename, pixel_sha=None):
+    """Insert a soft-deleted (scrapheap) picture and return its id."""
+
+    def _do(session):
+        pic = Picture(
+            file_path=filename,
+            filename=filename,
+            deleted=True,
+            pixel_sha=pixel_sha,
+        )
+        session.add(pic)
+        session.commit()
+        session.refresh(pic)
+        return pic.id
+
+    return server.vault.db.run_task(_do)
+
+
+def _drop_picture_row(server, pic_id):
+    def _do(session):
+        pic = session.get(Picture, pic_id)
+        if pic is not None:
+            session.delete(pic)
+            session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def _empty_scrapheap_via_http(server):
+    """Drive the real DELETE /pictures/scrapheap endpoint as the owner."""
+    from fastapi.testclient import TestClient
+
+    client = TestClient(server.api, raise_server_exceptions=True)
+    login = client.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    resp = client.request("DELETE", "/api/v1/pictures/scrapheap")
+    assert resp.status_code == 200, resp.text
+    # The endpoint deletes files in a FastAPI BackgroundTask; TestClient runs
+    # those synchronously before returning, so the filesystem is settled here.
+    return resp.json()
+
+
+def test_full_restore_does_not_hard_delete_file_readded_after_snapshot(server):
+    """A scrapheap row in the snapshot must not delete a live re-added file.
+
+    Reproduces the live-instance data loss: a picture is soft-deleted at
+    ``shared.jpg`` before the snapshot; after the snapshot the same path is
+    re-used by a NEW active picture (content added after the snapshot, and NOT
+    recorded in deleted_file_log). Restoring the snapshot must not resurrect the
+    stale scrapheap row on top of the live file, because emptying the scrapheap
+    would then hard-delete a file the user legitimately added after the
+    snapshot.
+    """
+    shared = _create_file(server, "shared.jpg")
+    with open(shared, "wb") as fh:
+        fh.write(b"OLD-DELETED-CONTENT")
+    # Snapshot captures the picture as a scrapheap (deleted=True) row.
+    _add_scrapheap_picture(server, "shared.jpg", pixel_sha="sha_old")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the path is re-used by a new ACTIVE picture whose file
+    # content differs (added after the snapshot). The old scrapheap row is gone
+    # from the live DB.
+    with open(shared, "wb") as fh:
+        fh.write(b"NEW-LIVE-CONTENT-ADDED-AFTER-SNAPSHOT")
+    _add_picture(server, filename="shared.jpg")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    # The file must still exist immediately after restore (restore never
+    # touches image files) ...
+    assert os.path.isfile(shared), "restore itself must never delete image files"
+
+    # ... and the dangerous scrapheap ghost must NOT have been resurrected, so
+    # emptying the scrapheap cannot target the live file.
+    scrapheap_ids = server.vault.db.run_immediate_read_task(
+        lambda s: [
+            p.id for p in s.exec(select(Picture).where(Picture.deleted.is_(True))).all()
+        ]
+    )
+    assert scrapheap_ids == [], (
+        "restore resurrected a scrapheap ghost shadowing a live re-added file; "
+        "emptying the scrapheap would hard-delete that file"
+    )
+
+    result = _empty_scrapheap_via_http(server)
+    assert result["deleted_count"] == 0, result
+
+    assert os.path.isfile(shared), (
+        "FILE LOSS: a file added after the snapshot was hard-deleted by the "
+        "restore -> empty-scrapheap cycle"
+    )
+    # The live file must not have been recorded as permanently deleted.
+    assert _count_deleted_log(server, "shared.jpg") == 0, (
+        "the added-after file was logged in deleted_file_log — it was purged"
+    )
+
+
+def test_full_restore_preserves_genuine_scrapheap_picture(server):
+    """The fix must not over-drop: a real scrapheap entry still round-trips.
+
+    A picture soft-deleted before the snapshot whose file is NOT re-used by any
+    live active picture must still be resurrected by restore (so it remains
+    recoverable / purgeable as before).
+    """
+    trashed = _create_file(server, "trashed.jpg")
+    with open(trashed, "wb") as fh:
+        fh.write(b"TRASHED-CONTENT")
+    pic_id = _add_scrapheap_picture(server, "trashed.jpg", pixel_sha="sha_trash")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Mutate the live DB so the restore has something to revert, but do NOT
+    # re-use trashed.jpg for any active picture.
+    _drop_picture_row(server, pic_id)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = server.vault.db.run_immediate_read_task(
+        lambda s: s.exec(
+            select(Picture).where(Picture.file_path == "trashed.jpg")
+        ).first()
+    )
+    assert restored is not None and restored.deleted, (
+        "a genuine scrapheap picture (no live shadow) must survive restore"
+    )
+
+
+@pytest.mark.parametrize("ghost_path_kind", ["absolute", "dot_slash", "double_slash"])
+def test_full_restore_ghost_path_drift_does_not_delete_live_file(
+    server, ghost_path_kind
+):
+    """Ghost/live path-string drift must not defeat the guard.
+
+    The scrapheap deleter removes ``resolve_picture_path(image_root, file_path)``,
+    so the guard must match on the RESOLVED path too — otherwise a ghost whose
+    stored path differs as a STRING but resolves to the same on-disk file (the
+    reference-folder ABSOLUTE vs imported RELATIVE collision, plus ``./`` /
+    ``//`` drift) survives restore and is hard-deleted on the next empty of the
+    scrapheap. One file on disk is referenced by the snapshot ghost via a
+    drifted path and by the live active picture via the plain relative path;
+    after restore + empty-scrapheap the live file must still exist.
+    """
+    root = server.vault.image_root
+    rel = "drift.jpg"
+    abs_path = _create_file(server, rel)
+    with open(abs_path, "wb") as fh:
+        fh.write(b"OLD-DELETED-CONTENT")
+
+    if ghost_path_kind == "absolute":
+        ghost_path = os.path.join(root, rel)
+    elif ghost_path_kind == "dot_slash":
+        ghost_path = "./" + rel
+    else:  # double_slash: an absolute path with a doubled separator
+        ghost_path = os.path.join(root, "") + "/" + rel
+
+    # Snapshot captures the scrapheap ghost referencing the file via the drifted
+    # path string.
+    _add_scrapheap_picture(server, ghost_path, pixel_sha="sha_old")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # After the snapshot: the same on-disk file is re-used by a NEW active
+    # picture stored under the plain RELATIVE path (imported/managed
+    # convention), with different content.
+    with open(abs_path, "wb") as fh:
+        fh.write(b"NEW-LIVE-CONTENT-ADDED-AFTER-SNAPSHOT")
+    _add_picture(server, filename=rel)
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert os.path.isfile(abs_path), "restore itself must never delete image files"
+
+    scrapheap_ids = server.vault.db.run_immediate_read_task(
+        lambda s: [
+            p.id for p in s.exec(select(Picture).where(Picture.deleted.is_(True))).all()
+        ]
+    )
+    assert scrapheap_ids == [], (
+        f"ghost with {ghost_path_kind} path drift was resurrected and shadows "
+        "the live file; emptying the scrapheap would hard-delete it"
+    )
+
+    result = _empty_scrapheap_via_http(server)
+    assert result["deleted_count"] == 0, result
+    assert os.path.isfile(abs_path), (
+        f"FILE LOSS via {ghost_path_kind} path drift: a file added after the "
+        "snapshot was hard-deleted by the restore -> empty-scrapheap cycle"
+    )
+    assert _count_deleted_log(server, rel) == 0
+
+
+# ---------------------------------------------------------------------------
+# Restore must not arm the scrapheap retention auto-purge (v1.8.0)
+# ---------------------------------------------------------------------------
+
+
+def _set_deleted(server, pic_id, deleted_at):
+    def _do(session):
+        p = session.get(Picture, pic_id)
+        p.deleted = True
+        p.deleted_at = deleted_at
+        session.add(p)
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+
+def test_full_restore_rearms_the_scrapheap_retention_clock(server):
+    """A restored scrapheap must get a FULL retention window, not the snapshot's.
+
+    The snapshot DB carries each scrapheap row's ORIGINAL ``deleted_at``. For any
+    snapshot older than the window that deadline is already expired, so the first
+    sweep after the restore would permanently destroy the very scrapheap the user
+    just restored — and write ``file_removed=True``, so a second restore could
+    not bring it back. Same failure family as the logged restore data-loss
+    incident.
+    """
+    from pixlstash.services import scrapheap_service
+
+    _create_file(server, "scrapheaped.jpg")
+    pic = _add_picture(server, filename="scrapheaped.jpg")
+    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    _set_deleted(server, pic.id, ancient)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored is not None, "the scrapheap row must survive the restore"
+    assert restored.deleted is True, "restore must not silently un-delete it"
+    stamped = restored.deleted_at
+    assert stamped is not None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    assert stamped > datetime.now(timezone.utc) - timedelta(minutes=5), (
+        f"deleted_at must be re-stamped to the restore time, got {stamped}"
+    )
+
+    # The concrete consequence: it is no longer due for auto-purge.
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault, datetime.now(timezone.utc), 30, None, 100
+        )
+        == []
+    ), "a just-restored scrapheap picture must not be immediately purgeable"
+
+
+def test_full_restore_leaves_live_pictures_deleted_at_alone(server):
+    """The other direction: re-arming must not touch non-deleted rows."""
+    _create_file(server, "alive.jpg")
+    pic = _add_picture(server, filename="alive.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored.deleted is False
+    assert restored.deleted_at is None, (
+        "A live picture must never be given a scrapheap deadline by a restore"
+    )
+
+
+def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
+    """The per-resource upsert path merges snapshot rows verbatim, so it needs
+    the same re-stamp as the full restore."""
+    from pixlstash.services import scrapheap_service
+
+    _create_file(server, "res_scrapheaped.jpg")
+    pic = _add_picture(server, filename="res_scrapheaped.jpg")
+    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    _set_deleted(server, pic.id, ancient)
+
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Move the clock forward live, then restore the resource from the snapshot.
+    def _bump(session):
+        p = session.get(Picture, pic.id)
+        p.description = "mutated"
+        session.commit()
+
+    server.vault.db.run_task(_bump)
+
+    report = server.vault.restore_service.restore_resource(cp.id, "picture", pic.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    restored = _get_picture(server, pic.id)
+    assert restored.deleted is True
+    stamped = restored.deleted_at
+    assert stamped is not None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    assert stamped > datetime.now(timezone.utc) - timedelta(minutes=5), (
+        f"deleted_at must be re-stamped by the resource restore, got {stamped}"
+    )
+    assert (
+        scrapheap_service.find_due_retention_picture_ids(
+            server.vault, datetime.now(timezone.utc), 30, None, 100
+        )
+        == []
+    )
+
+
+def test_restore_can_resurrect_a_picture_whose_file_removal_failed(server):
+    """F5 — a ledger corrected to file_removed=False must NOT block restore.
+
+    ``file_removed=True`` is written before the file is touched, so a failed
+    ``os.remove`` would otherwise leave the ledger permanently asserting a
+    deletion that never happened — and restore, which trusts the ledger, would
+    drop the picture forever even though its file is sitting right there.
+    """
+    _create_file(server, "kept_by_accident.jpg")
+    pic = _add_picture(server, filename="kept_by_accident.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # The purge ran, the row went away, but the file removal failed — so the
+    # ledger was corrected to "removed from library, file kept".
+    def _simulate_failed_purge(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("kept_by_accident.jpg"),
+                pixel_sha=None,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=False,
+            )
+        )
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_simulate_failed_purge)
+    assert _get_picture(server, pic.id) is None
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id) is not None, (
+        "a file_removed=False ledger row means the file was KEPT, so restore "
+        "must be able to bring the picture back"
+    )
+
+
+def test_restore_still_refuses_a_genuinely_purged_picture(server):
+    """The other direction: the F5 correction must not weaken the real guard."""
+    _create_file(server, "genuinely_gone.jpg")
+    pic = _add_picture(server, filename="genuinely_gone.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _simulate_real_purge(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("genuinely_gone.jpg"),
+                pixel_sha=None,
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=True,
+            )
+        )
+        session.delete(session.get(Picture, pic.id))
+        session.commit()
+
+    server.vault.db.run_task(_simulate_real_purge)
+    os.remove(os.path.join(server.vault.image_root, "genuinely_gone.jpg"))
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic.id) is None, (
+        "a genuine permanent deletion must never be resurrected"
+    )
+
+
+def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collision(
+    server,
+):
+    """The consequence the write-ownership bound protects.
+
+    Reviewer's variant 2: picture A's content was genuinely destroyed at path P
+    and logged file_removed=True. Different content is later written at P and
+    purged with a failing os.remove. If that second purge were allowed to
+    downgrade A's row to False, restore would resurrect A — bound to the WRONG
+    file. The purge now only corrects rows it wrote, so A's row stays True and
+    restore keeps refusing.
+    """
+    _create_file(server, "collision.jpg")
+    pic_a = _add_picture(server, filename="collision.jpg", pixel_sha="sha-C1")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    # Purge A: content C1 genuinely destroyed at this path.
+    def _purge_a(session):
+        session.add(
+            DeletedFileLog(
+                path_sha=DeletedFileLog.hash_path("collision.jpg"),
+                pixel_sha="sha-C1",
+                deleted_at=datetime.now(timezone.utc),
+                file_removed=True,
+            )
+        )
+        session.delete(session.get(Picture, pic_a.id))
+        session.commit()
+
+    server.vault.db.run_task(_purge_a)
+    os.remove(os.path.join(server.vault.image_root, "collision.jpg"))
+
+    # Different content C2 now occupies the same path (the file exists again).
+    _create_file(server, "collision.jpg")
+
+    # A second purge at that path fails its removal. With the ownership bound it
+    # does NOT own A's row, so the row stays True.
+    unconfirmed = [DeletedFileLog.hash_path("collision.jpg")]
+    corrected = server.vault.db.run_task(
+        scrapheap_service.mark_files_kept_in_session, unconfirmed, set()
+    )
+    assert corrected == 0, "a row this purge did not write must not be corrected"
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+    assert _get_picture(server, pic_a.id) is None, (
+        "picture A's content was genuinely destroyed; restore must never "
+        "resurrect it and bind it to whatever now occupies that path"
     )

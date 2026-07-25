@@ -24,6 +24,12 @@ It provides:
 
 PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 
+## How is this different from Immich?
+
+Immich is a very good home photo server. If that's what you need, use it! PixlStash does a different job.
+
+PixlStash is a tool for working with images rather than just storing them, though it works as a home server too. It adds a tag review queue so auto-tags are verified, segmentation and selectable taggers, a choice of GPU or CPU backends, and two-way ComfyUI integration: control ComfyUI from PixlStash, or call its nodes from your own workflows. Generated images return tagged, with People, Picture Set, and Project associations attached.
+
 ## Install or try PixlStash
 
 <p align="center">

@@ -10,7 +10,7 @@ test.describe('grid browsing', () => {
   })
 
   test('renders seeded thumbnails', async ({ grid }) => {
-    expect(await grid.thumbnails.count()).toBeGreaterThan(0)
+    await expect.poll(() => grid.thumbnails.count()).toBeGreaterThan(0)
   })
 
   test('lists sort options and reorders when direction flips (§3.2)', async ({ page, grid }) => {
@@ -69,6 +69,6 @@ test.describe('grid browsing', () => {
     await grid.searchInput.fill('')
     await page.keyboard.press('Enter')
     await expect(grid.thumbnails.first()).toBeVisible()
-    expect(await grid.thumbnails.count()).toBeGreaterThan(0)
+    await expect.poll(() => grid.thumbnails.count()).toBeGreaterThan(0)
   })
 })

@@ -11,7 +11,6 @@ from pixlstash.utils.service.anomaly_thresholds import (
     load_raw_label_thresholds,
 )
 from pixlstash.utils.service.caption_utils import sync_picture_sidecar
-from pixlstash.routes.pictures._helpers import enforce_picture_scope
 
 logger = get_logger(__name__)
 
@@ -122,10 +121,6 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped READ share token may only read
-        # tag predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         predictions = tag_prediction_service.get_predictions(
             server.vault, pic_id, status
         )
@@ -162,22 +157,21 @@ def create_router(server) -> APIRouter:
         response_model=ConfirmTagPredictionResponse,
     )
     def confirm_tag_prediction(id: int, tag: str, request: Request):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
         try:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         try:
-            tag_prediction_service.confirm_tag_prediction(server.vault, pic_id, tag)
+            tag_prediction_service.confirm_tag_prediction(
+                server.vault, pic_id, tag, origin_client_id=origin_client_id
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail="Prediction not found")
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
-            {"picture_ids": [pic_id]},
+            {"picture_ids": [pic_id], "origin_client_id": origin_client_id},
         )
         sync_picture_sidecar(server, pic_id)
         return {"status": "confirmed", "tag": tag}
@@ -195,11 +189,9 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
-        tag_prediction_service.reject_tag_prediction(server.vault, pic_id, tag)
+        tag_prediction_service.reject_tag_prediction(
+            server.vault, pic_id, tag, origin_client_id=origin_client_id
+        )
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
             {
@@ -227,11 +219,9 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
-        count = tag_prediction_service.delete_tag_predictions(server.vault, pic_id)
+        count = tag_prediction_service.delete_tag_predictions(
+            server.vault, pic_id, origin_client_id=origin_client_id
+        )
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
             {
@@ -264,13 +254,9 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
-
         model = payload.model if payload else None
         tag_prediction_service.reset_picture_tags(
-            server.vault, pic_id, engine_name=model
+            server.vault, pic_id, engine_name=model, origin_client_id=origin_client_id
         )
         server.vault.notify(
             EventType.CHANGED_TAGS,
@@ -301,10 +287,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-
-        # Scope guard (BOLA): a resource-scoped token may only mutate tag
-        # predictions for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
 
         model = payload.model if payload else None
         found = server.vault.reset_description_interactive(

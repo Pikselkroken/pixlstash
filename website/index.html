@@ -15,6 +15,12 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>
+      try {
+        if (localStorage.getItem("pixlstash-theme") === "light")
+          document.documentElement.setAttribute("data-theme", "light");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── index.html page-specific ── */
@@ -41,20 +47,29 @@
       }
 
       .btn-primary {
-        background: linear-gradient(130deg, var(--accent), var(--accent-2));
-        color: #ffffff;
-        box-shadow: 0 12px 30px rgba(97, 117, 12, 0.25);
+        background: var(--accent);
+        color: var(--on-accent);
+        box-shadow: 0 12px 30px var(--shadow);
+      }
+
+      .btn-primary:hover {
+        background: color-mix(in srgb, var(--accent) 86%, #000);
       }
 
       .btn-secondary {
-        background: rgba(34, 38, 44, 0.06);
+        background: transparent;
         color: var(--text);
-        border-color: rgba(34, 38, 44, 0.16);
+        border-color: var(--border);
+      }
+
+      .btn-secondary:hover {
+        background: var(--hover-wash);
+        border-color: var(--muted);
       }
 
       .btn:hover {
         transform: translateY(-2px);
-        box-shadow: 0 12px 26px rgba(142, 166, 4, 0.28);
+        box-shadow: 0 12px 26px var(--shadow);
       }
 
       .hero-badges {
@@ -73,16 +88,59 @@
         white-space: nowrap;
       }
 
+      .immich {
+        margin: 6px auto 16px;
+        padding: 24px 26px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .immich-inner {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .immich-lead {
+        margin: 0;
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.5;
+        color: var(--text);
+      }
+
+      .immich-body {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 0.96rem;
+      }
+
+      .immich-list {
+        margin: 4px 0 0;
+        padding-left: 1.15em;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .immich-list li {
+        color: var(--muted);
+        line-height: 1.6;
+        font-size: 0.94rem;
+      }
+
       .cta-banner {
         margin-top: 20px;
         padding: 28px;
         border-radius: var(--radius-lg);
         background: linear-gradient(
           120deg,
-          rgba(159, 177, 31, 0.18),
-          rgba(47, 139, 95, 0.18)
+          color-mix(in srgb, var(--accent) 16%, var(--panel)),
+          var(--panel)
         );
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        border: 1px solid var(--border);
         display: flex;
         flex-wrap: wrap;
         gap: 20px;
@@ -95,15 +153,15 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: rgba(185, 193, 202, 0.65);
-        border: 1px solid rgba(14, 127, 168, 0.25);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .demo-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .demo-teaser-wrap {
@@ -119,18 +177,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.08),
-          rgba(10, 95, 126, 0.04)
-        );
+        background: color-mix(in srgb, var(--tertiary) 10%, transparent);
       }
 
       .demo-teaser-label {
         font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -150,7 +204,7 @@
       .demo-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .demo-teaser-media img {
@@ -162,9 +216,10 @@
       }
 
       .whatsnew-teaser {
+        display: block;
         margin: 6px auto 16px;
-        background: var(--panel-strong);
-        border: 1px solid rgba(34, 38, 44, 0.12);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         overflow: hidden;
       }
@@ -182,11 +237,7 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(159, 177, 31, 0.1),
-          rgba(47, 139, 95, 0.07)
-        );
+        background: color-mix(in srgb, var(--secondary) 9%, transparent);
       }
 
       .whatsnew-label {
@@ -213,7 +264,7 @@
       .whatsnew-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: var(--accent-2);
+        color: var(--secondary);
       }
 
       .whatsnew-teaser-media img {
@@ -229,15 +280,15 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: var(--panel-strong);
-        border: 1px solid rgba(14, 127, 168, 0.25);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .comfy-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .comfy-teaser-wrap {
@@ -253,18 +304,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.12),
-          rgba(10, 95, 126, 0.06)
-        );
+        background: color-mix(in srgb, var(--tertiary) 10%, transparent);
       }
 
       .comfy-teaser-label {
         font-size: 0.74rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -284,7 +331,7 @@
       .comfy-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .comfy-teaser-media img {
@@ -506,9 +553,9 @@
             <h2>PixlStash 1.7: clean up your tags with the new review queue</h2>
             <p>
               A ranked review queue finds the tags most likely to be wrong or
-              missing and lets you fix them one decision at a time. This
-              release also adds lockable picture sets, object detection with
-              COCO export, a smarter Smart Score, and a refreshed design.
+              missing and lets you fix them one decision at a time. This release
+              also adds lockable picture sets, object detection with COCO
+              export, a smarter Smart Score, and a refreshed design.
             </p>
             <span class="whatsnew-link">See the full update →</span>
           </div>
@@ -541,6 +588,46 @@
           </div>
         </div>
       </a>
+
+      <section class="immich">
+        <div class="immich-inner">
+          <span class="feature-number">Coming from Immich?</span>
+          <p class="immich-lead">
+            Immich is great! If you want a self-hosted home for your photos, use
+            it. PixlStash does a different job.
+          </p>
+          <p class="immich-body">
+            PixlStash is a tool for working with images, not just storing them:
+            sorting photos, maintaining tags, prepping a dataset, and running
+            images through generation tools. It also works as a home server,
+            though if that is all you need, Immich is simply better.
+          </p>
+          <p class="immich-lead">With PixlStash you get:</p>
+          <ul class="immich-list">
+            <li>
+              A tag review queue, so auto-tags are verified before they're
+              trusted.
+            </li>
+            <li>
+              Segmentation, selectable taggers, and a choice of GPU or CPU
+              backend.
+            </li>
+            <li>
+              Two-way ComfyUI integration: control ComfyUI from PixlStash, or
+              call PixlStash's nodes from your own workflows. Generated images
+              return tagged, with People, Picture Set, and Project associations
+              attached.
+            </li>
+            <li>
+              <a
+                style="color: var(--accent-2); text-decoration: underline"
+                href="features.html"
+                >And a whole host of other work features</a
+              >
+            </li>
+          </ul>
+        </div>
+      </section>
 
       <section class="cta-banner">
         <div>

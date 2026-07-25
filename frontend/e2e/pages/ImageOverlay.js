@@ -73,8 +73,17 @@ export class ImageOverlay {
   /** Open the overlay by clicking a grid thumbnail (first by default). */
   async openFromGrid(cardLocator) {
     const target = cardLocator ?? this.page.locator('.thumbnail-card').first()
-    await target.click()
-    await expect(this.root).toBeVisible()
+    // The grid re-renders on picture websocket events, and the e2e backend runs
+    // a thumbnail-upgrade job that emits a steady stream of them for the whole
+    // run. That can swap the card element out between Playwright's actionability
+    // check and the click itself, so the click lands on a detached node and is
+    // silently swallowed — the overlay never opens and the next assertion times
+    // out. Retry the click until the overlay is actually up, rather than
+    // asserting once on a click that may never have registered.
+    await expect(async () => {
+      await target.click()
+      await expect(this.root).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 30_000 })
   }
 
   async close() {

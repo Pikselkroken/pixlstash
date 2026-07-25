@@ -8,6 +8,7 @@ import {
   normalizeStackIdValue,
   sortStackMembers,
 } from "../utils/stack.js";
+import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   applyStackBackgroundAlpha,
   arraysEqualByString,
@@ -60,6 +61,11 @@ export function useStackOrdering(
     setPendingRanges,
   },
 ) {
+  // Stack-ordering failures report through the notice surface rather than a
+  // blocking native alert() (docs/design/notice-surface.md §1). Called during
+  // the host component's setup, so Pinia is active.
+  const noticeStore = useNoticeStore();
+
   // ── Stack expand/collapse state ───────────────────────────────────────────
   const expandedStackIds = ref(new Set());
   const expandedStackMembers = ref(new Map());
@@ -103,6 +109,9 @@ export function useStackOrdering(
       faces: Array.isArray(existing?.faces) ? existing.faces : [],
       thumbnail_width: existing?.thumbnail_width ?? img?.thumbnail_width,
       thumbnail_height: existing?.thumbnail_height ?? img?.thumbnail_height,
+      square_crop_x: existing?.square_crop_x ?? img?.square_crop_x,
+      square_crop_y: existing?.square_crop_y ?? img?.square_crop_y,
+      square_crop_side: existing?.square_crop_side ?? img?.square_crop_side,
     };
   }
 
@@ -847,7 +856,7 @@ export function useStackOrdering(
         const ids = Array.isArray(payload.imageIds) ? payload.imageIds : [];
         if (ids.length === 1) return String(ids[0]);
       }
-    } catch (err) {
+    } catch {
       return null;
     }
     return null;
@@ -949,7 +958,11 @@ export function useStackOrdering(
         picture_ids: orderedIds.map((id) => Number(id)).filter(Number.isFinite),
       });
     } catch (err) {
-      alert(`Failed to save stack order: ${err?.message || err}`);
+      console.error(`Failed to save the order of stack ${stackId}`, err);
+      noticeStore.error(
+        `Couldn't save the stack order. ${err?.response?.data?.detail || err?.message || "The previous order was restored."}`,
+        { key: "stack-order-save" },
+      );
       if (Array.isArray(previousIds) && previousIds.length) {
         applyStackOrderLocal(stackId, previousIds);
       }
@@ -1214,7 +1227,7 @@ export function useStackOrdering(
         continue;
       }
       if (membersByStack.size === 1) {
-        const [sId, stackedMembers] = Array.from(
+        const [, stackedMembers] = Array.from(
           membersByStack.entries(),
         )[0];
         const stackedAnchorId = stackedMembers?.[0]?.id;
@@ -1242,8 +1255,10 @@ export function useStackOrdering(
         });
       }
       if (skippedGroups.length) {
-        alert(
-          `Skipped ${skippedGroups.length} group(s) containing multiple stacks.`,
+        // Partial outcome: the rest succeeded, so this is a warning, not an error.
+        noticeStore.warning(
+          `Skipped ${skippedGroups.length} group${skippedGroups.length === 1 ? "" : "s"} that already contain multiple stacks.`,
+          { key: "stacks-from-groups-skipped" },
         );
       }
       clearSelection();

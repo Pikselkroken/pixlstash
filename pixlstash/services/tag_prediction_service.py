@@ -57,13 +57,21 @@ def get_predictions(
     return vault.db.run_immediate_read_task(_fetch)
 
 
-def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
+def confirm_tag_prediction(
+    vault: "Vault", pic_id: int, tag: str, origin_client_id: str | None = None
+) -> None:
     """Mark a prediction as CONFIRMED and ensure the Tag row exists.
 
     Args:
         vault: Application vault, used for DB task dispatch.
         pic_id: Picture ID owning the prediction.
         tag: Tag value to confirm.
+        origin_client_id: The originating tab's ``X-Client-Id``. When confirming an
+            anomaly tag moves the scorer's inputs, the invalidated id is recorded in the
+            vault's interactive rescore registry so the background recompute emits an
+            immediate, origin-stamped ``smart_score`` grid refresh for that card — the
+            user's primary "confirm-driven" workflow, where the visible score must drop in
+            place rather than routing to the deferred "view changed" pill.
 
     Raises:
         KeyError: If no prediction with the given tag exists for the picture.
@@ -87,7 +95,11 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         # Confirming an anomaly tag folds its probability to 1.0 in the scorer's
         # inputs, so the cached smart score must be dropped for recompute.
         with invalidate_on_anomaly_change(
-            session, [pic_id], context="confirm tag prediction"
+            session,
+            [pic_id],
+            context="confirm tag prediction",
+            registry=vault.interactive_rescore_registry,
+            origin_client_id=origin_client_id,
         ):
             # Record the human acceptance, snapshotting the tagger version/confidence the
             # reviewer agreed with (frozen in label_model_version/label_confidence).
@@ -106,13 +118,20 @@ def confirm_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     vault.db.run_task(_confirm)
 
 
-def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
+def reject_tag_prediction(
+    vault: "Vault", pic_id: int, tag: str, origin_client_id: str | None = None
+) -> None:
     """Mark a prediction as REJECTED (or create a synthetic REJECTED row).
 
     Args:
         vault: Application vault, used for DB task dispatch.
         pic_id: Picture ID owning the prediction.
         tag: Tag value to reject.
+        origin_client_id: The originating tab's ``X-Client-Id``. When rejecting an anomaly
+            tag moves the scorer's inputs, the invalidated id is recorded in the vault's
+            interactive rescore registry so the background recompute emits an immediate,
+            origin-stamped ``smart_score`` grid refresh for that card instead of the
+            deferred bulk-drain path.
     """
 
     def _reject(session: Session) -> None:
@@ -124,7 +143,11 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
         # Rejecting an anomaly tag folds its probability to 0.0 in the scorer's
         # inputs, so the cached smart score must be dropped for recompute.
         with invalidate_on_anomaly_change(
-            session, [pic_id], context="reject tag prediction"
+            session,
+            [pic_id],
+            context="reject tag prediction",
+            registry=vault.interactive_rescore_registry,
+            origin_client_id=origin_client_id,
         ):
             # Record the human rejection as durable NEG supervision (snapshotting the
             # tagger version/confidence overruled). Creates a synthetic 'manual' row if
@@ -137,34 +160,59 @@ def reject_tag_prediction(vault: "Vault", pic_id: int, tag: str) -> None:
     vault.db.run_task(_reject)
 
 
-def delete_tag_predictions(vault: "Vault", pic_id: int) -> int:
+def delete_tag_predictions(
+    vault: "Vault", pic_id: int, origin_client_id: str | None = None
+) -> int:
     """Delete all non-manual TagPrediction rows for the picture.
 
     Uses a direct bulk DELETE to avoid ORM cascade side-effects.
 
+    Dropping the model's anomaly prediction rows removes their probabilities from the
+    scorer's inputs (:func:`pixlstash.picture_scoring.fetch_anomaly_confidences` reads
+    ``TagPrediction`` rows in the anomaly vocabulary), so the cached ``Picture.smart_score``
+    goes stale and must be NULLed for the background ``SmartScoreTask`` to recompute it.
+    Wrapping the delete in :func:`invalidate_on_anomaly_change` mirrors the sibling
+    :func:`reset_picture_tags` path — without it, deleting a ``malformed nipples`` /
+    ``watermark`` prediction leaves the stored score frozen with the old penalty baked in.
+
     Args:
         vault: Application vault, used for DB task dispatch.
         pic_id: Picture ID whose predictions are to be deleted.
+        origin_client_id: The originating tab's ``X-Client-Id``. When the delete moves the
+            anomaly signature, the invalidated id is recorded in the vault's interactive
+            rescore registry so the background recompute emits an immediate, origin-stamped
+            grid refresh for that card instead of waiting for the whole backfill to drain.
 
     Returns:
         Number of rows deleted.
     """
 
     def _delete(session: Session) -> int:
-        stmt = (
-            delete(TagPrediction)
-            .where(TagPrediction.picture_id == pic_id)
-            .where(not_human_labeled())
-        )
-        result = session.exec(stmt)
+        with invalidate_on_anomaly_change(
+            session,
+            [pic_id],
+            context="delete tag predictions",
+            registry=vault.interactive_rescore_registry,
+            origin_client_id=origin_client_id,
+        ):
+            stmt = (
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id == pic_id)
+                .where(not_human_labeled())
+            )
+            result = session.exec(stmt)
+            rowcount = result.rowcount
         session.commit()
-        return result.rowcount
+        return rowcount
 
     return vault.db.run_task(_delete)
 
 
 def reset_picture_tags(
-    vault: "Vault", pic_id: int, engine_name: str | None = None
+    vault: "Vault",
+    pic_id: int,
+    engine_name: str | None = None,
+    origin_client_id: str | None = None,
 ) -> None:
     """Atomically delete all non-manual predictions and all tags, then restore the sentinel.
 
@@ -174,6 +222,11 @@ def reset_picture_tags(
         engine_name: Optional engine/plugin name to embed in the sentinel so the
             background tagger uses that specific engine for this picture.  Pass
             ``None`` to use the default ``active_tag_plugin`` setting.
+        origin_client_id: The originating tab's ``X-Client-Id``. When dropping the
+            picture's prediction rows moves the scorer's inputs, the invalidated id is
+            recorded in the vault's interactive rescore registry so the background
+            recompute emits an immediate, origin-stamped ``smart_score`` grid refresh for
+            that card instead of the deferred bulk-drain path.
     """
 
     def _reset(session: Session) -> None:
@@ -183,7 +236,11 @@ def reset_picture_tags(
         # Dropping the model's prediction rows removes their anomaly probabilities
         # from the scorer's inputs, so the cached smart score goes stale.
         with invalidate_on_anomaly_change(
-            session, [pic_id], context="reset picture tags"
+            session,
+            [pic_id],
+            context="reset picture tags",
+            registry=vault.interactive_rescore_registry,
+            origin_client_id=origin_client_id,
         ):
             session.exec(
                 delete(TagPrediction)

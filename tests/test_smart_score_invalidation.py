@@ -265,6 +265,61 @@ def test_confirm_penalised_prediction_invalidates():
         temp_dir.cleanup()
 
 
+def test_confirm_registers_origin_stamped_rescore_refresh():
+    """The user's primary path: confirming a model anomaly prediction with an editing tab
+    must origin-stamp the eventual smart_score refresh so that tab updates the visible score
+    in place, rather than routing to the deferred "view changed externally" bulk path.
+
+    Proves the registry wiring end-to-end: the confirm records the id under the editing tab,
+    and the background recompute completion emits an immediate origin-stamped
+    ``{fields:["smart_score"], origin_client_id}`` event for just that card — independent of
+    the backfill drain gate (a second unscored picture keeps ``count_remaining() > 0``).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        pending = _upload_picture(client, "Bad2.png")  # keeps the backfill in flight
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pending)  # embedding + NULL score
+
+        _seed_prediction(server, edited, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, edited, 0.5)
+
+        # Confirm as the editing tab "tab-a".
+        resp = client.post(
+            f"/pictures/{edited}/tag_predictions/{PENALISED_TAG}/confirm",
+            headers={"X-Client-Id": "tab-a"},
+        )
+        assert resp.status_code == 200
+        # The cached score is NULLed and the id is registered under the editing tab.
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score; completion emits the refresh.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # Drain gate NOT reached, yet the card refreshed immediately, origin-stamped.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) > 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        assert edited not in server.vault.interactive_rescore_registry.snapshot()
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_reject_penalised_prediction_invalidates():
     """Rejecting folds the anomaly probability to 0.0 — the cached score is stale."""
     temp_dir, client, server = _setup()
@@ -294,6 +349,52 @@ def test_confirm_content_prediction_does_not_invalidate():
         assert resp.status_code == 200
 
         assert _get_smart_score(server, pic_id) == 0.5
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_delete_anomaly_prediction_invalidates():
+    """Deleting an anomaly prediction drops its probability — the cached score is stale.
+
+    ``POST /pictures/{id}/tag_predictions/delete`` bulk-removes the model's predictions so
+    the background tagger treats the picture as never seen. Dropping an anomaly-vocabulary
+    prediction removes its penalty input, so the stored ``smart_score`` must be NULLed for
+    recompute — the confirmed invalidation gap this fix closes.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_delete_content_prediction_does_not_invalidate():
+    """Deleting a pure content prediction is outside the anomaly vocabulary — score stands.
+
+    Guards the intended narrow scope: over-invalidating here re-scores the whole library on
+    a routine prediction reset.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, CONTENT_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -977,6 +1078,123 @@ def test_full_backfill_emits_once_at_drain_not_per_batch():
         temp_dir.cleanup()
 
 
+# --------------------------------------------- own-origin edit must not self-pill at drain
+#
+# Regression (#self-pill): when a user's own anomaly-tag edit is the LAST unscored picture
+# in the vault, its rescore completion reaches the drain gate (``count_remaining() == 0``).
+# The completion first emits an origin-stamped ``smart_score`` refresh for that id (slick
+# in-place update on the editing tab), then emitted an ADDITIONAL origin-less drain event
+# for the WHOLE batch — re-announcing the very same id with no origin. The editing tab
+# therefore also raised the "view changed externally" pill for its own edit. The drain must
+# exclude ids already announced origin-stamped via the interactive registry in this batch,
+# while STILL firing for genuinely unregistered (background) ids — over-suppression is its
+# own regression.
+
+
+def test_own_origin_edit_does_not_also_pill_on_drain():
+    """The editing tab's own edit, even when it drains the vault, gets exactly one
+    origin-stamped refresh and NO origin-less drain event for that id."""
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        # Stop the planner so no background task races us; this edit is the only work.
+        server.vault._work_planner.stop()
+
+        # Score, then a real add-penalised-tag from tab "tab-a" NULLs and registers it.
+        _set_smart_score(server, edited, 0.5)
+        assert (
+            client.post(
+                f"/pictures/{edited}/tags",
+                json={"tag": PENALISED_TAG},
+                headers={"X-Client-Id": "tab-a"},
+            ).status_code
+            == 200
+        )
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score; this batch drains the vault.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # Drain gate IS reached, yet only the single origin-stamped refresh fired — the
+        # editing tab reconciles in place and never sees its own change as external.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) == 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        # No origin-less event mentioning the edited id was emitted.
+        assert not [
+            e
+            for e in events
+            if "origin_client_id" not in e and edited in e["picture_ids"]
+        ]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_drain_still_fires_for_unregistered_ids_alongside_own_origin():
+    """Over-suppression guard: in a draining batch mixing a registered (own-origin) id and
+    an unregistered (background) id, the origin-stamped refresh covers only the registered
+    id and the origin-less drain covers only the background id."""
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")  # registered under tab-a
+        background = _upload_picture(client, "Bad2.png")  # never registered
+        server.vault._work_planner.stop()
+
+        _set_smart_score(server, edited, 0.5)
+        assert (
+            client.post(
+                f"/pictures/{edited}/tags",
+                json={"tag": PENALISED_TAG},
+                headers={"X-Client-Id": "tab-a"},
+            ).status_code
+            == 200
+        )
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+        # background is rescored in the same batch but was never interactively registered.
+        assert not server.vault.interactive_rescore_registry.snapshot().get(background)
+
+        events = _capture_smart_score_events(server)
+
+        # Both persist in the one batch that drains the vault (remaining == 0).
+        _set_smart_score(server, edited, 0.7)
+        _set_smart_score(server, background, 0.6)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited, background], [edited, background]),
+            None,
+        )
+
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) == 0
+        # The registered id got its immediate origin-stamped refresh.
+        assert {
+            "picture_ids": [edited],
+            "fields": ["smart_score"],
+            "origin_client_id": "tab-a",
+        } in events
+        # The origin-less drain fired for the background id ONLY — the edited id is not
+        # re-announced origin-less (no self-pill), and the background id is not dropped.
+        bulk = [e for e in events if "origin_client_id" not in e]
+        assert bulk == [{"picture_ids": [background], "fields": ["smart_score"]}]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_cas_skipped_id_is_not_announced_and_stays_registered():
     """A picture skipped by _persist_scores' CAS is still NULL — never announced rescored."""
     temp_dir, client, server = _setup()
@@ -1067,8 +1285,10 @@ def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
             "origin_client_id": "tab-a",
         } in events
         # The demoted id was NOT dropped: it rides the single origin-less bulk drain emit.
+        # The recorded id, already announced origin-stamped, is excluded from that drain
+        # so its editing tab is not self-pilled.
         bulk = [e for e in events if "origin_client_id" not in e]
-        assert bulk == [{"picture_ids": [recorded, demoted], "fields": ["smart_score"]}]
+        assert bulk == [{"picture_ids": [demoted], "fields": ["smart_score"]}]
     finally:
         server.vault.close()
         temp_dir.cleanup()

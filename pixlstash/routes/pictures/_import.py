@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from fastapi import (
+    Body,
     File,
     Form,
     HTTPException,
@@ -18,8 +19,10 @@ from sqlalchemy import (
     delete,
 )
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import select
+from sqlmodel import select, Session
 from typing import Optional
+
+from pixlstash.database import DBPriority
 
 from pixlstash.db_models import (
     Picture,
@@ -29,12 +32,18 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks import TaskType
+from pixlstash.tasks.picture_import_task import PictureImportTask
 from pixlstash.db_models.tag import (
     TAG_PENDING_SENTINEL,
     is_tag_sentinel,
     TAG_SENTINEL_LIKE_PATTERN,
     TAG_SENTINEL_ESCAPE_CHAR,
 )
+
+from pixlstash.db_models.character import Character
+from pixlstash.db_models.picture_set import PictureSet
+from pixlstash.db_models.project import Project
+from pixlstash.services.set_lock_service import locked_set_ids
 
 from ._helpers import (
     _create_picture_imports,
@@ -44,6 +53,182 @@ from ._helpers import (
 
 
 logger = get_logger(__name__)
+
+# Media extensions accepted by both the one-shot upload import and the async
+# streaming-staging import (#459). Kept module-level so both paths agree.
+STAGING_ALLOWED_MEDIA_EXTS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".mp4",
+    ".webm",
+    ".mov",
+    ".avi",
+    ".mkv",
+}
+
+# Caption sidecar extension (mirrors the one-shot import's allowed_caption_exts).
+STAGING_ALLOWED_CAPTION_EXTS = {".txt"}
+
+# Bounds for a single staging session, mirroring the one-shot import limits.
+_STAGING_MAX_FILES = 50_000
+_STAGING_MAX_FILE_BYTES = 20 * 1024**3  # 20 GB per streamed file / zip
+_STAGING_MAX_ZIP_ENTRIES = 50_000  # max files inside a single zip
+_STAGING_MAX_ZIP_DECOMPRESSED_BYTES = 50 * 1024**3  # 50 GB total decompressed
+
+# Reaper bounds. An opened-but-never-committed session leaks its .staging/ dir
+# and memory; a finished session is never popped otherwise. The reaper (run
+# opportunistically from the staging routes) evicts both.
+_STAGING_SESSION_TTL_S = 3600  # evict a session with no activity for this long
+_STAGING_TERMINAL_GRACE_S = 300  # keep a finished session briefly for a last poll
+
+
+def _reap_staging_sessions(server, now_ms: Optional[int] = None) -> None:
+    """Evict stale/finished staging sessions and remove their staging dirs.
+
+    * A session whose background import is still running is never touched.
+    * A finished (completed/failed/cancelled) session is popped once it has been
+      idle past ``_STAGING_TERMINAL_GRACE_S`` (leaving a window for a final
+      status poll).
+    * Any other session (e.g. opened but never committed) is popped once idle
+      past ``_STAGING_SESSION_TTL_S``.
+
+    Called opportunistically from the staging routes, so no background thread is
+    needed. Safe to call frequently — it only touches disk when it evicts.
+    """
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    for staging_id, session in list(server.staging_sessions.items()):
+        task = session.get("task")
+        status_value = (
+            getattr(getattr(task, "status", None), "value", None)
+            if task is not None
+            else None
+        )
+        if status_value in ("pending", "running"):
+            # Active import — never reap it out from under the running task.
+            continue
+        idle_ms = now_ms - int(session.get("last_update_epoch_ms") or 0)
+        terminal = status_value in ("completed", "failed", "cancelled")
+        if terminal and idle_ms > _STAGING_TERMINAL_GRACE_S * 1000:
+            reason = f"finished import (status={status_value})"
+        elif idle_ms > _STAGING_SESSION_TTL_S * 1000:
+            reason = "idle TTL exceeded"
+        else:
+            continue
+        staging_dir = session.get("staging_dir")
+        if staging_dir and os.path.isdir(staging_dir):
+            try:
+                shutil.rmtree(staging_dir)
+            except OSError as exc:
+                logger.warning(
+                    "Staging reaper: failed to remove dir %s for session %s: %s",
+                    staging_dir,
+                    staging_id,
+                    exc,
+                )
+        server.staging_sessions.pop(staging_id, None)
+        logger.info(
+            "Staging reaper: evicted session %s (%s, idle=%.0fs)",
+            staging_id,
+            reason,
+            idle_ms / 1000.0,
+        )
+
+
+class StagingOpenRequest(BaseModel):
+    """Body for opening an async-import staging session."""
+
+    model_config = ConfigDict(extra="allow")
+
+    project_id: Optional[int] = None
+    """Optional project every imported picture is added to on commit."""
+
+    set_id: Optional[int] = None
+    """Optional picture set every imported picture is added to on commit
+    (a drop-to-set target). Independent of ``character_id``."""
+
+    character_id: Optional[int] = None
+    """Optional character every imported picture is associated with on commit
+    (a drop-to-character target; deferred via ``pending_character_id`` until face
+    extraction runs). Independent of ``set_id``."""
+
+    total_files: Optional[int] = None
+    """Client-declared file count (a hint for the progress UI / safe threshold);
+    the actual import uses whatever was streamed before commit."""
+
+
+class StagingOpenResponse(BaseModel):
+    """Response for a newly-opened staging session."""
+
+    model_config = ConfigDict(extra="allow")
+
+    staging_id: str
+    """Opaque id for the staging session; used on every subsequent call."""
+
+    safe_threshold: int
+    """The declared file count at which the client may hand off to the safe
+    (background) window; ``0`` when the client did not declare a total."""
+
+
+class StagingFilesResponse(BaseModel):
+    """Response after streaming one batch of files into a staging session."""
+
+    model_config = ConfigDict(extra="allow")
+
+    staging_id: str
+    staged: int
+    """Total files staged in this session so far."""
+
+    received: list[str]
+    """Original filenames accepted in this request (media files staged, zips
+    extracted, and caption sidecars stored)."""
+
+    skipped: list[str]
+    """Filenames rejected in this request (unsupported extension / empty /
+    unreadable)."""
+
+    sidecars: int
+    """Total ``.txt`` caption sidecars stored in this session so far."""
+
+
+class StagingCommitResponse(BaseModel):
+    """Response for the safe handoff to the background import task."""
+
+    model_config = ConfigDict(extra="allow")
+
+    staging_id: str
+    task_id: str
+    """Id of the background ``PictureImportTask`` finishing the import."""
+
+    staged_count: int
+
+
+class StagingStatusResponse(BaseModel):
+    """Progress/status for a staging session and its background import."""
+
+    model_config = ConfigDict(extra="allow")
+
+    staging_id: str
+    stage: str
+    """One of ``staging`` / ``importing`` / ``completed`` / ``failed`` /
+    ``cancelled``."""
+
+    staged: int
+    total: int
+    processed: int
+    task_id: Optional[str] = None
+    imported_count: Optional[int] = None
+    duplicate_count: Optional[int] = None
+    failed_count: Optional[int] = None
+    error: Optional[str] = None
 
 
 class ImportStartResponse(BaseModel):
@@ -652,3 +837,637 @@ def register_routes(router, server):
         if task["status"] == "failed":
             payload["error"] = task.get("error")
         return payload
+
+    # ------------------------------------------------------------------ #
+    # Async streaming-staging import (#459)                               #
+    #                                                                     #
+    # Phase A (unsafe, tab must stay open): open a staging session, then  #
+    # stream files into it. Phase B (safe, tab may close): commit hands   #
+    # off to a background PictureImportTask on the shared TaskRunner,      #
+    # whose progress surfaces in the task manager. All four mutating      #
+    # routes are OWNER_ONLY (streaming client-provided bytes into the      #
+    # vault — NOT a host-filesystem read), mirroring POST /pictures/import.#
+    # ------------------------------------------------------------------ #
+
+    def _staging_base_dir() -> str:
+        return os.path.join(server.vault.image_root, ".staging")
+
+    def _get_session_or_404(staging_id: str) -> dict:
+        session = server.staging_sessions.get(staging_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Staging session not found")
+        return session
+
+    def _validate_association_targets(set_id, character_id, project_id) -> None:
+        """Fail fast if a drop-to-set / -character / -project target is invalid.
+
+        A nonexistent set/character/project must error rather than silently
+        no-op (or fail downstream after pictures are already imported), and a
+        locked set must refuse new members (the same lock rule the add-to-set
+        route enforces). Runs at open (on the drop) and again at commit.
+        """
+
+        def _check(session: Session):
+            if set_id is not None:
+                picture_set = session.get(PictureSet, set_id)
+                if picture_set is None:
+                    return ("set_missing", None)
+                if set_id in locked_set_ids(session, [set_id]):
+                    return ("set_locked", picture_set.name)
+            if character_id is not None:
+                if session.get(Character, character_id) is None:
+                    return ("character_missing", None)
+            if project_id is not None:
+                if session.get(Project, project_id) is None:
+                    return ("project_missing", None)
+            return None
+
+        outcome = server.vault.db.run_task(_check, priority=DBPriority.IMMEDIATE)
+        if outcome is None:
+            return
+        kind, name = outcome
+        if kind == "set_missing":
+            raise HTTPException(
+                status_code=404, detail=f"Picture set {set_id} not found"
+            )
+        if kind == "set_locked":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Picture set '{name}' is locked and cannot take new members",
+            )
+        if kind == "character_missing":
+            raise HTTPException(
+                status_code=404, detail=f"Character {character_id} not found"
+            )
+        if kind == "project_missing":
+            raise HTTPException(
+                status_code=404, detail=f"Project {project_id} not found"
+            )
+
+    @router.post(
+        "/pictures/import/staging",
+        summary="Open an async import staging session",
+        description=(
+            "Opens a staging session for the async streaming import (#459). "
+            "Stream files into it with POST "
+            "/pictures/import/staging/{staging_id}/files while the tab stays "
+            "open, then hand off to the background import with "
+            "POST /pictures/import/staging/{staging_id}/commit."
+        ),
+        response_model=StagingOpenResponse,
+    )
+    def open_staging_session(
+        request: Request,
+        payload: StagingOpenRequest = Body(default_factory=StagingOpenRequest),
+    ):
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+        # Opportunistically evict stale/finished sessions before opening a new
+        # one, so abandoned staging dirs never accumulate.
+        _reap_staging_sessions(server)
+        # Reject an invalid drop target up front (on the drop), before any files
+        # are streamed — a nonexistent set/character/project must not silently
+        # no-op or fail downstream after import.
+        _validate_association_targets(
+            payload.set_id, payload.character_id, payload.project_id
+        )
+
+        staging_id = str(uuid.uuid4())
+        staging_dir = os.path.join(_staging_base_dir(), staging_id)
+        try:
+            os.makedirs(staging_dir, exist_ok=True)
+        except OSError as exc:
+            logger.error("Failed to create staging dir %s: %s", staging_dir, exc)
+            raise HTTPException(
+                status_code=500, detail="Could not create staging directory"
+            ) from exc
+
+        declared_total = int(payload.total_files or 0)
+        now_ms = int(time.time() * 1000)
+        server.staging_sessions[staging_id] = {
+            "staging_id": staging_id,
+            "stage": "staging",
+            "staging_dir": staging_dir,
+            "project_id": payload.project_id,
+            "set_id": payload.set_id,
+            "character_id": payload.character_id,
+            "declared_total": declared_total,
+            "staged_files": [],
+            # stem -> raw sidecar text, from .txt uploads and zip .txt entries.
+            "sidecar_text_by_stem": {},
+            "task": None,
+            "task_id": None,
+            "origin_client_id": origin_client_id,
+            "error": None,
+            "created_epoch_ms": now_ms,
+            "last_update_epoch_ms": now_ms,
+        }
+        logger.info(
+            "Staging session opened: staging_id=%s declared_total=%d project_id=%s "
+            "set_id=%s character_id=%s",
+            staging_id,
+            declared_total,
+            payload.project_id,
+            payload.set_id,
+            payload.character_id,
+        )
+        return {"staging_id": staging_id, "safe_threshold": declared_total}
+
+    @router.post(
+        "/pictures/import/staging/{staging_id}/files",
+        summary="Stream files into a staging session",
+        description=(
+            "Streams one batch of media files into an open staging session. "
+            "May be called repeatedly during the unsafe (tab-open) window. "
+            "Unsupported or empty files are skipped and reported."
+        ),
+        response_model=StagingFilesResponse,
+    )
+    async def stage_files(
+        staging_id: str,
+        file: list[UploadFile] = File(None),
+    ):
+        session = _get_session_or_404(staging_id)
+        if session["stage"] != "staging":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Staging session is no longer accepting files "
+                    f"(stage={session['stage']})"
+                ),
+            )
+        if not file:
+            raise HTTPException(status_code=400, detail="No files provided")
+
+        staging_dir = session["staging_dir"]
+        staged_files: list[dict] = session["staged_files"]
+        sidecar_text_by_stem: dict[str, str] = session["sidecar_text_by_stem"]
+        received: list[str] = []
+        skipped: list[str] = []
+
+        def _stage_media_bytes(data: bytes, ext: str, original_name: str) -> bool:
+            """Write already-read media bytes into the staging dir (zip entries)."""
+            if not data:
+                return False
+            if len(staged_files) >= _STAGING_MAX_FILES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Staging session exceeds the maximum of "
+                        f"{_STAGING_MAX_FILES:,} files"
+                    ),
+                )
+            dest_path = os.path.join(staging_dir, f"{uuid.uuid4()}{ext}")
+            try:
+                with open(dest_path, "wb") as out:
+                    out.write(data)
+            except OSError as exc:
+                logger.error(
+                    "Staging %s: failed to write extracted file %s: %s",
+                    staging_id,
+                    original_name,
+                    exc,
+                )
+                return False
+            staged_files.append(
+                {
+                    "file_path": dest_path,
+                    "original_file_name": os.path.basename(original_name),
+                }
+            )
+            return True
+
+        for upload in file:
+            if not upload.filename:
+                continue
+            ext = os.path.splitext(upload.filename)[1].lower()
+
+            # --- Caption sidecar (.txt): stored by stem, matched to an image at
+            # commit; mirrors the one-shot import's sidecar_text_by_stem. ---
+            if ext in STAGING_ALLOWED_CAPTION_EXTS:
+                try:
+                    await upload.seek(0)
+                    raw = await upload.read()
+                    sidecar_text_by_stem.setdefault(
+                        _normalise_sidecar_stem(upload.filename),
+                        raw.decode("utf-8", errors="ignore"),
+                    )
+                    received.append(upload.filename)
+                except Exception as exc:
+                    logger.warning(
+                        "Staging %s: failed to read sidecar %s: %s",
+                        staging_id,
+                        upload.filename,
+                        exc,
+                    )
+                    skipped.append(upload.filename)
+                continue
+
+            # --- Zip archive: extract server-side into the staging area,
+            # mirroring the one-shot import's zip handling (media entries staged,
+            # .txt entries stored as sidecars, same entry/size guards). ---
+            if ext == ".zip":
+                try:
+                    await upload.seek(0)
+                    upload_file = upload.file
+                    upload_file.seek(0, 2)
+                    upload_size = upload_file.tell()
+                    upload_file.seek(0)
+                    if upload_size == 0:
+                        skipped.append(upload.filename)
+                        continue
+                    if upload_size > _STAGING_MAX_FILE_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"Zip '{upload.filename}' exceeds the "
+                                f"{_STAGING_MAX_FILE_BYTES // 1024**3} GB limit"
+                            ),
+                        )
+                    with zipfile.ZipFile(upload_file) as zip_file:
+                        entries = [i for i in zip_file.infolist() if not i.is_dir()]
+                        if len(entries) > _STAGING_MAX_ZIP_ENTRIES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=(
+                                    f"Zip '{upload.filename}' contains too many "
+                                    f"files (max {_STAGING_MAX_ZIP_ENTRIES:,})."
+                                ),
+                            )
+                        if (
+                            sum(i.file_size for i in entries)
+                            > _STAGING_MAX_ZIP_DECOMPRESSED_BYTES
+                        ):
+                            raise HTTPException(
+                                status_code=413,
+                                detail=(
+                                    f"Zip '{upload.filename}' decompressed size "
+                                    f"exceeds the "
+                                    f"{_STAGING_MAX_ZIP_DECOMPRESSED_BYTES // 1024**3}"
+                                    " GB limit."
+                                ),
+                            )
+                        added = 0
+                        for info in entries:
+                            inner_ext = os.path.splitext(info.filename)[1].lower()
+                            base_name = os.path.basename(info.filename)
+                            if inner_ext in STAGING_ALLOWED_CAPTION_EXTS:
+                                with zip_file.open(info) as handle:
+                                    data = handle.read()
+                                if data:
+                                    sidecar_text_by_stem.setdefault(
+                                        _normalise_sidecar_stem(base_name),
+                                        data.decode("utf-8", errors="ignore"),
+                                    )
+                                continue
+                            if inner_ext not in STAGING_ALLOWED_MEDIA_EXTS:
+                                continue
+                            with zip_file.open(info) as handle:
+                                data = handle.read()
+                            if _stage_media_bytes(data, inner_ext, base_name):
+                                added += 1
+                        if added:
+                            received.append(upload.filename)
+                        else:
+                            logger.warning(
+                                "Staging %s: no valid media in zip %s",
+                                staging_id,
+                                upload.filename,
+                            )
+                            skipped.append(upload.filename)
+                except HTTPException:
+                    raise
+                except zipfile.BadZipFile:
+                    logger.error(
+                        "Staging %s: invalid zip file %s",
+                        staging_id,
+                        upload.filename,
+                    )
+                    skipped.append(upload.filename)
+                continue
+
+            # --- Plain media: stream to disk to avoid buffering a large file. ---
+            if ext not in STAGING_ALLOWED_MEDIA_EXTS:
+                logger.warning(
+                    "Staging %s: skipping unsupported file %s",
+                    staging_id,
+                    upload.filename,
+                )
+                skipped.append(upload.filename)
+                continue
+            if len(staged_files) >= _STAGING_MAX_FILES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Staging session exceeds the maximum of "
+                        f"{_STAGING_MAX_FILES:,} files"
+                    ),
+                )
+            dest_name = f"{uuid.uuid4()}{ext}"
+            dest_path = os.path.join(staging_dir, dest_name)
+            written = 0
+            try:
+                await upload.seek(0)
+                with open(dest_path, "wb") as out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > _STAGING_MAX_FILE_BYTES:
+                            raise HTTPException(
+                                status_code=413,
+                                detail=(
+                                    f"File '{upload.filename}' exceeds the "
+                                    f"{_STAGING_MAX_FILE_BYTES // 1024**3} GB limit"
+                                ),
+                            )
+                        out.write(chunk)
+            except HTTPException:
+                if os.path.isfile(dest_path):
+                    try:
+                        os.remove(dest_path)
+                    except OSError as exc:
+                        logger.warning(
+                            "Staging %s: failed to clean up rejected file %s: %s",
+                            staging_id,
+                            dest_path,
+                            exc,
+                        )
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Staging %s: failed to write %s to %s: %s",
+                    staging_id,
+                    upload.filename,
+                    dest_path,
+                    exc,
+                )
+                skipped.append(upload.filename)
+                if os.path.isfile(dest_path):
+                    try:
+                        os.remove(dest_path)
+                    except OSError as cleanup_exc:
+                        logger.warning(
+                            "Staging %s: failed to clean up partial file %s: %s",
+                            staging_id,
+                            dest_path,
+                            cleanup_exc,
+                        )
+                continue
+            if written == 0:
+                skipped.append(upload.filename)
+                if os.path.isfile(dest_path):
+                    try:
+                        os.remove(dest_path)
+                    except OSError as exc:
+                        logger.warning(
+                            "Staging %s: failed to remove empty file %s: %s",
+                            staging_id,
+                            dest_path,
+                            exc,
+                        )
+                continue
+            staged_files.append(
+                {
+                    "file_path": dest_path,
+                    "original_file_name": os.path.basename(upload.filename),
+                }
+            )
+            received.append(upload.filename)
+
+        session["last_update_epoch_ms"] = int(time.time() * 1000)
+        logger.debug(
+            "Staging %s: received %d, skipped %d, total staged %d, sidecars %d",
+            staging_id,
+            len(received),
+            len(skipped),
+            len(staged_files),
+            len(sidecar_text_by_stem),
+        )
+        return {
+            "staging_id": staging_id,
+            "staged": len(staged_files),
+            "received": received,
+            "skipped": skipped,
+            "sidecars": len(sidecar_text_by_stem),
+        }
+
+    @router.post(
+        "/pictures/import/staging/{staging_id}/commit",
+        summary="Hand off a staging session to the background import",
+        description=(
+            "Closes the unsafe window and hands the staged files off to a "
+            "background PictureImportTask on the shared task runner. The import "
+            "completes server-side (the safe window); the tab may now close. "
+            "Progress is reported via GET "
+            "/pictures/import/staging/{staging_id}/status and the task manager."
+        ),
+        response_model=StagingCommitResponse,
+    )
+    def commit_staging_session(staging_id: str):
+        session = _get_session_or_404(staging_id)
+        if session["stage"] != "staging":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Staging session already handed off (stage={session['stage']})",
+            )
+        staged_files: list[dict] = session["staged_files"]
+        if not staged_files:
+            raise HTTPException(status_code=400, detail="No staged files to import")
+        if not server.vault.is_worker_running(TaskType.FACE_EXTRACTION):
+            raise HTTPException(
+                status_code=400,
+                detail="Face worker is not running. Start it before import.",
+            )
+
+        # Re-validate the drop target at handoff (it may have been deleted/locked
+        # since open); still fail loudly rather than silently skip association.
+        _validate_association_targets(
+            session["set_id"], session["character_id"], session["project_id"]
+        )
+
+        # Resolve caption sidecars to their images by basename stem, parsing each
+        # via the one-shot import's tag rule (comma-separated tag lists). Orphan
+        # sidecars (no matching staged image) are logged and skipped, not applied.
+        sidecar_text_by_stem: dict[str, str] = session["sidecar_text_by_stem"]
+        sidecar_tags_by_stem: dict[str, list[str]] = {}
+        if sidecar_text_by_stem:
+            media_stems = {
+                _normalise_sidecar_stem(entry.get("original_file_name") or "")
+                for entry in staged_files
+            }
+            for stem, raw_text in sidecar_text_by_stem.items():
+                if stem not in media_stems:
+                    logger.info(
+                        "Staging %s: caption sidecar '%s' has no matching image; "
+                        "skipping",
+                        staging_id,
+                        stem,
+                    )
+                    continue
+                parsed = _parse_sidecar_tags(raw_text)
+                if parsed:
+                    sidecar_tags_by_stem[stem] = parsed
+
+        # Guard against committing more than the vault can hold: the background
+        # import copies each staged file into the canonical vault location before
+        # the staging dir is removed, so it briefly needs room for both.
+        try:
+            staged_bytes = sum(
+                os.path.getsize(entry["file_path"])
+                for entry in staged_files
+                if entry.get("file_path") and os.path.isfile(entry["file_path"])
+            )
+            free_bytes = shutil.disk_usage(server.vault.image_root).free
+            if int(staged_bytes * 1.1) > free_bytes:
+                raise HTTPException(
+                    status_code=507,
+                    detail=(
+                        "Not enough disk space to finish the import "
+                        f"({staged_bytes / 1024**3:.2f} GB staged, "
+                        f"{free_bytes / 1024**3:.2f} GB free)."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except OSError as exc:
+            logger.warning(
+                "Staging %s: disk-space check failed (proceeding): %s",
+                staging_id,
+                exc,
+            )
+
+        task = PictureImportTask(
+            server.vault.db,
+            list(staged_files),
+            project_id=session["project_id"],
+            set_id=session["set_id"],
+            character_id=session["character_id"],
+            sidecar_tags_by_stem=sidecar_tags_by_stem,
+            staging_id=staging_id,
+            staging_dir=session["staging_dir"],
+            origin_client_id=session["origin_client_id"],
+        )
+        task_id = server.vault.submit_task(task)
+        if task_id is None:
+            raise HTTPException(status_code=503, detail="Task runner is not available")
+        session["task"] = task
+        session["task_id"] = task_id
+        session["stage"] = "importing"
+        session["last_update_epoch_ms"] = int(time.time() * 1000)
+        logger.info(
+            "Staging session committed: staging_id=%s task_id=%s staged_count=%d",
+            staging_id,
+            task_id,
+            len(staged_files),
+        )
+        return {
+            "staging_id": staging_id,
+            "task_id": task_id,
+            "staged_count": len(staged_files),
+        }
+
+    @router.delete(
+        "/pictures/import/staging/{staging_id}",
+        summary="Cancel a staging session",
+        description=(
+            "Cancels an async import staging session that has not yet been "
+            "committed, discarding its streamed files. After commit the import "
+            "runs to completion in the background and cannot be cancelled here."
+        ),
+        response_model=StagingStatusResponse,
+    )
+    def cancel_staging_session(staging_id: str):
+        session = _get_session_or_404(staging_id)
+        if session["stage"] not in ("staging",):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Cannot cancel a committed staging session "
+                    f"(stage={session['stage']})"
+                ),
+            )
+        staging_dir = session.get("staging_dir")
+        if staging_dir and os.path.isdir(staging_dir):
+            try:
+                shutil.rmtree(staging_dir)
+            except OSError as exc:
+                logger.warning(
+                    "Staging %s: failed to remove staging dir %s on cancel: %s",
+                    staging_id,
+                    staging_dir,
+                    exc,
+                )
+        session["stage"] = "cancelled"
+        session["last_update_epoch_ms"] = int(time.time() * 1000)
+        server.staging_sessions.pop(staging_id, None)
+        logger.info("Staging session cancelled: staging_id=%s", staging_id)
+        return {
+            "staging_id": staging_id,
+            "stage": "cancelled",
+            "staged": len(session.get("staged_files") or []),
+            "total": len(session.get("staged_files") or []),
+            "processed": 0,
+        }
+
+    @router.get(
+        "/pictures/import/staging/{staging_id}/status",
+        summary="Get async import staging status",
+        description=(
+            "Returns the stage and live progress of a staging session and its "
+            "background import task."
+        ),
+        response_model=StagingStatusResponse,
+    )
+    def staging_status(staging_id: str):
+        session = _get_session_or_404(staging_id)
+        staged_files: list[dict] = session.get("staged_files") or []
+        task = session.get("task")
+        stage = session["stage"]
+        processed = 0
+        total = len(staged_files)
+        imported_count = duplicate_count = failed_count = None
+        error = session.get("error")
+
+        if task is not None:
+            total = int(getattr(task, "_total_count", total) or total)
+            processed = int(getattr(task, "_processed_count", 0) or 0)
+            status = getattr(task, "status", None)
+            status_value = getattr(status, "value", status)
+            if status_value == "completed":
+                stage = "completed"
+                result = task.result if isinstance(task.result, dict) else {}
+                imported_count = result.get("imported_count")
+                duplicate_count = result.get("duplicate_count")
+                failed_count = result.get("failed_count")
+                # Terminal: drop the retained task/dir reference so the session
+                # record no longer pins the finished task object.
+                session["stage"] = "completed"
+            elif status_value == "failed":
+                stage = "failed"
+                error = str(getattr(task, "error", None) or "Import failed")
+                session["stage"] = "failed"
+                session["error"] = error
+            elif status_value == "cancelled":
+                stage = "cancelled"
+                session["stage"] = "cancelled"
+            else:
+                stage = "importing"
+            if status_value in ("completed", "failed", "cancelled"):
+                # Keep the reaper's terminal grace window counting from the last
+                # poll, so an actively-polled finished session survives and a
+                # forgotten one ages out.
+                session["last_update_epoch_ms"] = int(time.time() * 1000)
+
+        return {
+            "staging_id": staging_id,
+            "stage": stage,
+            "staged": len(staged_files),
+            "total": total,
+            "processed": processed,
+            "task_id": session.get("task_id"),
+            "imported_count": imported_count,
+            "duplicate_count": duplicate_count,
+            "failed_count": failed_count,
+            "error": error,
+        }

@@ -1,24 +1,29 @@
 """Object-scope (BOLA / CWE-639) tests for tag-PREDICTION mutation handlers.
 
-Closes issue #504: the five mutating tag-prediction handlers (confirm, reject,
-delete, reset_tags, reset_description) enforced no object-level scope, so a
-resource-scoped token could confirm, reject, delete, or reset tag predictions
-and descriptions on pictures outside its grant. Each now calls the deny-by-default
-chokepoint ``enforce_picture_scope`` immediately after parsing the id and before
-any DB read/branch/return. This is the same read-BOLA class as the 1.5.1
-incidents; the vulnerable handlers shipped in 1.6.x.
+Issue #504: the five mutating tag-prediction handlers (confirm, reject, delete,
+reset_tags, reset_description) must never let a resource-scoped share token
+confirm, reject, delete, or reset tag predictions / descriptions on pictures
+outside its grant.
 
-These tests assert both directions per CLAUDE.md:
-- a scoped token (simulated by patching the scope helper to allow only one
-  picture id, exactly as ``test_picture_mutation_scope.py`` does) is **denied**
-  (403) when the target picture is outside its grant;
-- an owner / unscoped token (scope helper returns ``None``) still **succeeds**,
-  so the guards do not over-block (that would be its own regression).
+**Post-refactor enforcement (backend refactor plan Steps 4-6).** The inline
+``enforce_picture_scope`` calls these handlers used were removed in Step 5; object
+authorization now lives in the centralised authz gate. Two facts make these routes
+safe, both asserted / referenced here:
 
-Patching ``enforce_picture_scope`` in the ``tag_predictions`` module namespace
-exercises the handler's guard directly, independent of how a scoped token reaches
-the handler (the middleware only populates ``token_scope`` for non-ALL tokens --
-see ``docs/backend_architecture.md`` §16.2).
+* **Live guard (asserted end-to-end below).** Every resource-scoped share token is
+  a READ token, and these POST routes are NOT in ``READ_SAFE_POST_PATHS``, so the
+  auth middleware blocks a scoped token from all of them (403) before any handler
+  or DB work runs. A share token therefore cannot mutate tag predictions at all —
+  in-scope or out.
+* **Latent object-scope (proven elsewhere).** The routes are declared
+  ``PICTURE_SCOPED`` in ``pixlstash/authz/registry.py``; the gate's per-object
+  membership contract (a scoped principal reaching only its own pictures) is proven
+  in ``tests/test_authz_gate_step4.py``.
+
+Both directions per CLAUDE.md: a resource-scoped token is denied (403) and the
+owner still succeeds (200) — over-blocking the owner would be its own regression.
+The destructive handlers additionally assert fail-closed: the 403 leaves the
+out-of-scope data intact.
 """
 
 import gc
@@ -30,7 +35,6 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-import pixlstash.routes.tag_predictions as tag_predictions_module
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
@@ -40,7 +44,8 @@ PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures", "good")
 
 @pytest.fixture
 def env():
-    """A live server with two imported pictures (in-scope + out-of-scope)."""
+    """A live server with two imported pictures, the owner client, a cookie-less
+    ``anon`` client, and a real resource-scoped READ (share) token."""
     temp_dir = tempfile.TemporaryDirectory()
     config_path = os.path.join(temp_dir.name, "server-config.json")
     with open(config_path, "w") as fh:
@@ -66,11 +71,35 @@ def env():
         picture_ids = [p["id"] for p in r.json()]
         assert len(picture_ids) >= 2, "Need two pictures for the scope test"
 
-        yield server, client, picture_ids
+        # A real resource-scoped READ share token. create_token does not require
+        # the resource to exist — the point is exercising the scoped-token path
+        # through the middleware, which blocks it on every non-READ_SAFE POST.
+        r = client.post(
+            "/users/me/token",
+            json={
+                "description": "set share",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert r.status_code == 200, r.text
+        scoped_token = r.json()["token"]
+
+        # The auth middleware prefers a cookie session over a Bearer token, so a
+        # Bearer request on the logged-in owner client would authenticate as the
+        # owner. ``anon`` never logs in, so its Bearer token is the scoped token.
+        anon = TestClient(server.api)
+
+        yield server, client, anon, picture_ids, scoped_token
     finally:
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def _bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _seed_prediction(server, pic_id, tag, confidence=0.9, status="PENDING"):
@@ -109,115 +138,92 @@ def _prediction_exists(server, pic_id, tag):
     return server.vault.db.run_immediate_read_task(query)
 
 
-def _scope_to(monkeypatch, allowed_ids):
-    """Patch ``enforce_picture_scope`` to simulate a token scoped to *allowed_ids*.
-
-    ``allowed_ids`` of ``None`` means owner/unscoped (no filtering). A set means
-    only those picture ids are in scope; everything else is denied 403 -- the same
-    technique ``test_picture_mutation_scope.py`` uses.
-    """
-
-    def fake_enforce(server, request, picture_id):
-        if allowed_ids is None:
-            return
-        if int(picture_id) not in set(allowed_ids):
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-
-    monkeypatch.setattr(tag_predictions_module, "enforce_picture_scope", fake_enforce)
-
-
 # ---------------------------------------------------------------------------
-# Out-of-scope denied (403) AND in-scope still works (200) -- both directions.
+# A resource-scoped share token is denied (403) AND the owner still succeeds (200).
 # ---------------------------------------------------------------------------
 
 
-def test_confirm_prediction_scope(env, monkeypatch):
-    server, client, picture_ids = env
-    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    _seed_prediction(server, in_scope, "sunny")
-    _scope_to(monkeypatch, {in_scope})
+def test_confirm_prediction_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    target = picture_ids[0]
+    _seed_prediction(server, target, "sunny")
 
-    r_out = client.post(f"/pictures/{out_of_scope}/tag_predictions/sunny/confirm")
-    assert r_out.status_code == 403, r_out.text
-    r_in = client.post(f"/pictures/{in_scope}/tag_predictions/sunny/confirm")
-    assert r_in.status_code == 200, r_in.text
-
-
-def test_reject_prediction_scope(env, monkeypatch):
-    server, client, picture_ids = env
-    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    _seed_prediction(server, in_scope, "rainy")
-    _scope_to(monkeypatch, {in_scope})
-
-    r_out = client.post(f"/pictures/{out_of_scope}/tag_predictions/rainy/reject")
-    assert r_out.status_code == 403, r_out.text
-    r_in = client.post(f"/pictures/{in_scope}/tag_predictions/rainy/reject")
-    assert r_in.status_code == 200, r_in.text
-
-
-def test_delete_tag_predictions_scope(env, monkeypatch):
-    server, client, picture_ids = env
-    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    # Seed a deletable prediction on the OUT-of-scope picture so we can prove the
-    # 403 is fail-closed: the guard must run BEFORE the destructive delete.
-    _seed_prediction(server, out_of_scope, "storm")
-    _scope_to(monkeypatch, {in_scope})
-
-    r_out = client.post(f"/pictures/{out_of_scope}/tag_predictions/delete")
-    assert r_out.status_code == 403, r_out.text
-    # Fail-closed: the out-of-scope prediction must still exist. If the guard were
-    # placed after the service call, the row would be gone despite the 403.
-    assert _prediction_exists(server, out_of_scope, "storm"), (
-        "delete ran before the scope guard -- out-of-scope data was destroyed"
+    r = anon.post(
+        f"/pictures/{target}/tag_predictions/sunny/confirm", headers=_bearer(scoped)
     )
-    r_in = client.post(f"/pictures/{in_scope}/tag_predictions/delete")
-    assert r_in.status_code == 200, r_in.text
+    assert r.status_code == 403, r.text
+    r = client.post(f"/pictures/{target}/tag_predictions/sunny/confirm")
+    assert r.status_code == 200, r.text
 
 
-def test_reset_tags_scope(env, monkeypatch):
-    server, client, picture_ids = env
-    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    # Seed a prediction on the OUT-of-scope picture; reset_tags deletes non-manual
-    # predictions, so a fail-open guard would wipe it despite the 403.
-    _seed_prediction(server, out_of_scope, "gale")
-    _scope_to(monkeypatch, {in_scope})
+def test_reject_prediction_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    target = picture_ids[0]
+    _seed_prediction(server, target, "rainy")
 
-    r_out = client.post(f"/pictures/{out_of_scope}/reset_tags")
-    assert r_out.status_code == 403, r_out.text
-    assert _prediction_exists(server, out_of_scope, "gale"), (
-        "reset_tags ran before the scope guard -- out-of-scope data was destroyed"
+    r = anon.post(
+        f"/pictures/{target}/tag_predictions/rainy/reject", headers=_bearer(scoped)
     )
-    r_in = client.post(f"/pictures/{in_scope}/reset_tags")
-    assert r_in.status_code == 200, r_in.text
+    assert r.status_code == 403, r.text
+    r = client.post(f"/pictures/{target}/tag_predictions/rainy/reject")
+    assert r.status_code == 200, r.text
 
 
-def test_reset_description_scope(env, monkeypatch):
-    server, client, picture_ids = env
-    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
-    _scope_to(monkeypatch, {in_scope})
+def test_delete_tag_predictions_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    target = picture_ids[1]
+    # Seed a deletable prediction, then prove the scoped 403 is fail-closed: the
+    # destructive delete must not run for a share token.
+    _seed_prediction(server, target, "storm")
 
-    r_out = client.post(f"/pictures/{out_of_scope}/reset_description")
-    assert r_out.status_code == 403, r_out.text
-    r_in = client.post(f"/pictures/{in_scope}/reset_description")
-    assert r_in.status_code == 200, r_in.text
+    r = anon.post(f"/pictures/{target}/tag_predictions/delete", headers=_bearer(scoped))
+    assert r.status_code == 403, r.text
+    assert _prediction_exists(server, target, "storm"), (
+        "a scoped token's blocked delete must not destroy tag-prediction data"
+    )
+    r = client.post(f"/pictures/{target}/tag_predictions/delete")
+    assert r.status_code == 200, r.text
+
+
+def test_reset_tags_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    target = picture_ids[1]
+    _seed_prediction(server, target, "gale")
+
+    r = anon.post(f"/pictures/{target}/reset_tags", headers=_bearer(scoped))
+    assert r.status_code == 403, r.text
+    assert _prediction_exists(server, target, "gale"), (
+        "a scoped token's blocked reset_tags must not destroy tag-prediction data"
+    )
+    r = client.post(f"/pictures/{target}/reset_tags")
+    assert r.status_code == 200, r.text
+
+
+def test_reset_description_scope(env):
+    server, client, anon, picture_ids, scoped = env
+    target = picture_ids[0]
+
+    r = anon.post(f"/pictures/{target}/reset_description", headers=_bearer(scoped))
+    assert r.status_code == 403, r.text
+    r = client.post(f"/pictures/{target}/reset_description")
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------
-# Owner / unscoped token is not blocked by any of the five guards (no over-block).
+# GET /pictures/{id}/tag_predictions is PICTURE_SCOPED and READ-reachable: a
+# scoped token reaching its own picture would be allowed and an out-of-scope one
+# 403'd by the gate. That object-scope contract is proven end-to-end in
+# tests/test_detections_scope.py / test_authz_gate_step4.py; here we only assert
+# the owner keeps full read access (no over-block).
 # ---------------------------------------------------------------------------
 
 
-def test_owner_unscoped_not_blocked(env, monkeypatch):
-    server, client, picture_ids = env
+def test_owner_reads_and_mutates_not_blocked(env):
+    server, client, anon, picture_ids, scoped = env
     target = picture_ids[1]
     _seed_prediction(server, target, "clouds")
-    _scope_to(monkeypatch, None)
 
+    assert client.get(f"/pictures/{target}/tag_predictions").status_code == 200
     assert (
         client.post(f"/pictures/{target}/tag_predictions/clouds/confirm").status_code
         == 200

@@ -1,6 +1,6 @@
 [project]
 name = "pixlstash"
-version = "1.7.1"
+version = "1.8.0-dev.1"
 description = "Self-hosted picture library with AI tagging, semantic search, and a clean web UI"
 readme = "README.md"
 license = "GPL-3.0-only AND MIT"
@@ -20,7 +20,7 @@ keywords = [
     "comfyui",
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -34,7 +34,9 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "open_clip_torch>=3.3.0",
-    "fastapi>=0.135.1",
+    # Hard floor: route_inventory.py needs fastapi.routing.iter_route_contexts,
+    # added in 0.138.0. Below that the server fails to import at startup.
+    "fastapi>=0.138.0",
     "uvicorn>=0.41.0",
     "uvicorn[standard]>=0.41.0",
     "setuptools>=42",
@@ -89,7 +91,11 @@ test = [
     "psutil"
 ]
 dev = [
-    "ruff"
+    # Pinned < 0.16: ruff 0.16 greatly expanded its default rule set (UP045,
+    # BLE001, I001, ...), flagging thousands of pre-existing lines and the
+    # deliberate logged `except Exception` handlers. Add an explicit [tool.ruff]
+    # config that locks the intended rules before bumping this.
+    "ruff<0.16"
 ]
 
 [project.scripts]

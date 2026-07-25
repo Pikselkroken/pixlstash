@@ -190,15 +190,36 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("perceptual_hash", String, default=None, nullable=True),
     )
-    thumbnail_left: Optional[int] = Field(default=None)
-    thumbnail_top: Optional[int] = Field(default=None)
-    thumbnail_side: Optional[int] = Field(default=None)
+    # A thumbnail is ONE aspect-ratio-preserving bitmap of the whole frame.
+    # ``thumbnail_width`` / ``thumbnail_height`` are its stored pixel dimensions
+    # on disk; the frontend lays out a justified grid from them and the
+    # batch-thumbnail endpoint maps face/detection overlays into this bitmap
+    # space. NULL until the picture is processed.
+    thumbnail_width: Optional[int] = Field(default=None)
+    thumbnail_height: Optional[int] = Field(default=None)
+    # The face-weighted SQUARE crop rectangle WITHIN the bitmap, in bitmap
+    # pixels (origin top-left). ``square_crop_side == min(thumbnail_width,
+    # thumbnail_height)`` except for extreme panoramas. The frontend crops the
+    # bitmap to this rectangle to render a square cell, so mode switching is
+    # instant and never re-generates the bitmap.
+    square_crop_x: Optional[int] = Field(default=None)
+    square_crop_y: Optional[int] = Field(default=None)
+    square_crop_side: Optional[int] = Field(default=None)
     score: Optional[int] = None
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)
     text_score: Optional[float] = Field(default=None, index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted: bool = Field(default=False, index=True)
+    # When the picture was soft-deleted to the scrapheap (UTC). Stamped on the
+    # False -> True transition and cleared on restore, so it always describes the
+    # CURRENT stay in the scrapheap. It is the clock the retention auto-purge
+    # runs on (see pixlstash/services/scrapheap_service.py); a soft-deleted row
+    # with deleted_at IS NULL is never auto-purged (fail-closed).
+    deleted_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column("deleted_at", type_=DateTime, nullable=True, index=True),
+    )
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True
     )

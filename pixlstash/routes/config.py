@@ -2,9 +2,9 @@ import os
 import sys
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session
@@ -18,7 +18,7 @@ from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import config_service
+from pixlstash.services import config_service, scrapheap_service
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
@@ -98,8 +98,26 @@ def create_router(server) -> APIRouter:
         sort_order: Optional[str] = None
         descending: Optional[bool] = None
         columns: Optional[int] = None
+        thumbnail_size_level: Optional[int] = Field(
+            default=None,
+            description=(
+                "Unified grid thumbnail size index (0..6, larger index means "
+                "fewer/larger thumbnails). Default 3 = Medium."
+            ),
+        )
         sidebar_thumbnail_size: Optional[int] = None
         sidebar_width: Optional[int] = None
+        thumbnail_mode: Optional[str] = Field(
+            default=None,
+            description=(
+                "Grid thumbnail shape preference: 'square' renders a square cell "
+                "cropped to the stored face-weighted rectangle; 'justified' lays "
+                "out the full aspect-ratio-preserving thumbnail. This is a "
+                "DISPLAY-ONLY preference — the frontend applies it instantly from "
+                "the single stored bitmap; the backend never regenerates "
+                "thumbnails when it changes."
+            ),
+        )
         show_stars: Optional[bool] = None
         show_face_bboxes: Optional[bool] = None
         show_hand_bboxes: Optional[bool] = None
@@ -259,6 +277,102 @@ def create_router(server) -> APIRouter:
         status: str
         daily_snapshots: bool
 
+    class ScrapheapRetentionConfigResponse(BaseModel):
+        """The scrapheap auto-purge retention window currently in effect."""
+
+        model_config = ConfigDict(
+            extra="allow",
+            json_schema_extra={
+                "example": {
+                    "status": "success",
+                    "scrapheap_retention_days": 30,
+                    "scrapheap_retention_reduced_at": "2026-07-22T09:15:00+00:00",
+                    "scrapheap_retention_choices": [30, 60, 90, 120],
+                    "scrapheap_retention_grace_days": 1,
+                }
+            },
+        )
+
+        status: str
+        scrapheap_retention_days: Optional[int] = Field(
+            default=None,
+            description=(
+                "Days an UNPROTECTED (managed) picture stays in the scrapheap "
+                "before it is permanently purged. `null` means Never — "
+                "auto-purge is disabled entirely. Protected reference-folder "
+                "originals (allow_delete_file=false) are exempt from this "
+                "timer at any value and are only ever destroyed by the manual, "
+                "consent-gated delete-forever."
+            ),
+            examples=[30],
+        )
+        scrapheap_retention_reduced_at: Optional[str] = Field(
+            default=None,
+            description=(
+                "ISO 8601 UTC instant at which the window was last LOWERED, or "
+                "null if it never was. A picture soft-deleted before this "
+                "instant gets `scrapheap_retention_grace_days` extra day(s), so "
+                "shortening the window is never retroactively instantaneous. "
+                "Untouched when the window is raised, set for the first time, "
+                "or re-saved unchanged."
+            ),
+            examples=["2026-07-22T09:15:00+00:00"],
+        )
+        scrapheap_retention_choices: list[int] = Field(
+            default=[],
+            description=(
+                "The day values this server accepts, in ascending order. Any "
+                "other integer is rejected with 422; `null` (Never) is always "
+                "accepted and is not listed here."
+            ),
+            examples=[[30, 60, 90, 120]],
+        )
+        scrapheap_retention_grace_days: int = Field(
+            default=0,
+            description=(
+                "Extra days granted to pictures that were already in the "
+                "scrapheap when the window was last lowered."
+            ),
+            examples=[1],
+        )
+
+    class ScrapheapRetentionImpactResponse(BaseModel):
+        """What lowering the retention window to a candidate value would destroy."""
+
+        model_config = ConfigDict(
+            extra="allow",
+            json_schema_extra={
+                "example": {
+                    "would_purge_count": 412,
+                    "first_purge_at": "2026-07-23T09:15:00+00:00",
+                }
+            },
+        )
+
+        would_purge_count: int = Field(
+            description=(
+                "How many scrapheap pictures the auto-purge would permanently "
+                "destroy under the candidate window, counted at the moment the "
+                "change would first bite (see `first_purge_at`) so it can never "
+                "understate the consequence. EXCLUDES protected reference-folder "
+                "originals and locked-set members, which the sweep never "
+                "destroys. `0` when the candidate window is not a REDUCTION "
+                "(raising it, setting it for the first time, or re-saving the "
+                "same value destroys nothing new) — show no confirmation then."
+            ),
+            examples=[412],
+        )
+        first_purge_at: Optional[str] = Field(
+            default=None,
+            description=(
+                "ISO 8601 UTC instant at which those deletions would begin, i.e. "
+                "when the reduction's grace floor elapses if the change were "
+                "applied now. Nothing is destroyed before this. `null` when "
+                "`would_purge_count` is 0."
+            ),
+            examples=["2026-07-23T09:15:00+00:00"],
+        )
+
     class OpenServerConfigResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
 
@@ -295,7 +409,9 @@ def create_router(server) -> APIRouter:
     )
     async def patch_me_config(request: Request):
         _ensure_secure_when_required(request)
-        user_id = server.auth.require_unscoped_owner(request)
+        # The authz gate enforces OWNER_ONLY on this route before the handler runs;
+        # require_user_id here only fetches the (owner) user id the update needs.
+        user_id = server.auth.require_user_id(request)
 
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
@@ -636,7 +752,6 @@ def create_router(server) -> APIRouter:
     )
     def get_watch_folders(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_unscoped_owner(request)
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(
                 status_code=403,
@@ -660,7 +775,6 @@ def create_router(server) -> APIRouter:
     )
     def get_filesystem_roots(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_unscoped_owner(request)
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(
                 status_code=403,
@@ -681,7 +795,6 @@ def create_router(server) -> APIRouter:
     )
     def get_snapshot_config(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_unscoped_owner(request)
         return {
             "status": "success",
             "daily_snapshots": server._server_config.get("daily_snapshots", True),
@@ -698,13 +811,166 @@ def create_router(server) -> APIRouter:
     )
     def patch_snapshot_config(request: Request, body: SnapshotConfigPatch):
         _ensure_secure_when_required(request)
-        server.auth.require_unscoped_owner(request)
         server._server_config["daily_snapshots"] = body.daily_snapshots
         server.vault.set_daily_snapshots_enabled(body.daily_snapshots)
         config_path = getattr(server, "_server_config_path", None)
         if config_path:
             write_json_atomic(config_path, server._server_config)
         return {"status": "success", "daily_snapshots": body.daily_snapshots}
+
+    def _scrapheap_retention_payload() -> dict:
+        """Build the scrapheap-retention response from server-config."""
+        reduced_at = scrapheap_service.read_retention_reduced_at(server._server_config)
+        return {
+            "status": "success",
+            "scrapheap_retention_days": scrapheap_service.read_retention_days(
+                server._server_config
+            ),
+            "scrapheap_retention_reduced_at": (
+                reduced_at.isoformat() if reduced_at else None
+            ),
+            "scrapheap_retention_choices": list(
+                scrapheap_service.RETENTION_DAY_CHOICES
+            ),
+            "scrapheap_retention_grace_days": scrapheap_service.REDUCTION_GRACE_DAYS,
+        }
+
+    @router.get(
+        "/server-config/scrapheap-retention",
+        summary="Get scrapheap retention configuration",
+        response_model=ScrapheapRetentionConfigResponse,
+        description=(
+            "Returns the scrapheap auto-purge retention window. An UNPROTECTED "
+            "(managed) picture left in the scrapheap longer than "
+            "`scrapheap_retention_days` is permanently deleted by a background "
+            "task; `null` means Never (auto-purge disabled). Protected "
+            "reference-folder originals are exempt from the timer entirely."
+        ),
+    )
+    def get_scrapheap_retention_config(request: Request):
+        _ensure_secure_when_required(request)
+        return _scrapheap_retention_payload()
+
+    class ScrapheapRetentionConfigPatch(BaseModel):
+        model_config = ConfigDict(
+            json_schema_extra={"example": {"scrapheap_retention_days": 60}}
+        )
+
+        scrapheap_retention_days: Optional[int] = Field(
+            default=None,
+            description=(
+                "New retention window in days — one of 30, 60, 90, 120 — or "
+                "`null` for Never (disables auto-purge). Any other value is a "
+                "422. Saving NEVER purges anything: the change takes effect on "
+                "the next scheduled sweep."
+            ),
+            examples=[60],
+        )
+
+    @router.patch(
+        "/server-config/scrapheap-retention",
+        summary="Update scrapheap retention configuration",
+        response_model=ScrapheapRetentionConfigResponse,
+        description=(
+            "Sets the scrapheap auto-purge window (one of 30/60/90/120 days, or "
+            "null for Never) and persists it to server-config.json. Saving does "
+            "NOT purge anything synchronously — the background retention task is "
+            "the only thing that ever deletes, and it never touches protected "
+            "reference-folder originals. Lowering the window stamps "
+            "`scrapheap_retention_reduced_at`, which puts a floor of one grace "
+            "day under EVERY picture's deadline — so even a 400-day-old "
+            "scrapheap item survives at least a day after a 120 -> 30 or "
+            "Never -> 30 change. Raising it, setting it for the first time, or "
+            "saving the same value leaves that stamp untouched."
+        ),
+        responses={
+            422: {
+                "description": "scrapheap_retention_days is not 30/60/90/120 or null."
+            }
+        },
+    )
+    def patch_scrapheap_retention_config(
+        request: Request, body: ScrapheapRetentionConfigPatch
+    ):
+        _ensure_secure_when_required(request)
+        new_days = body.scrapheap_retention_days
+        if (
+            new_days is not None
+            and int(new_days) not in scrapheap_service.RETENTION_DAY_CHOICES
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "scrapheap_retention_days must be one of "
+                    f"{list(scrapheap_service.RETENTION_DAY_CHOICES)} or null "
+                    "(Never)."
+                ),
+            )
+        # Config write only. No purge is triggered here, by design: an automatic
+        # file-destruction path must never fire inside a settings save.
+        effective_days, reduced_at = scrapheap_service.apply_retention_config(
+            server._server_config, new_days
+        )
+        server.vault.set_scrapheap_retention(effective_days, reduced_at)
+        config_path = getattr(server, "_server_config_path", None)
+        if config_path:
+            write_json_atomic(config_path, server._server_config)
+        return _scrapheap_retention_payload()
+
+    @router.get(
+        "/server-config/scrapheap-retention/impact",
+        summary="Preview the impact of a scrapheap retention change",
+        response_model=ScrapheapRetentionImpactResponse,
+        description=(
+            "Reports what LOWERING the scrapheap retention window to `days` "
+            "would permanently destroy, so the UI can confirm before applying a "
+            "reduction instead of silently wiping a long-lived scrapheap on a "
+            "dropdown change.\n\n"
+            "**Pure read.** It applies nothing, stamps no "
+            "`scrapheap_retention_reduced_at`, and schedules no purge; call "
+            "`PATCH /server-config/scrapheap-retention` to actually apply the "
+            "value.\n\n"
+            "`would_purge_count` is computed with the same helpers the sweep "
+            "itself uses, so it cannot drift from reality, and excludes the "
+            "pictures the sweep never touches (protected reference-folder "
+            "originals and locked-set members). It is evaluated at "
+            "`first_purge_at` — the instant the reduction's grace floor "
+            "elapses — rather than at now, so pictures that expire during the "
+            "grace day are counted rather than omitted.\n\n"
+            "Returns `{would_purge_count: 0, first_purge_at: null}` when `days` "
+            "is not lower than the current window."
+        ),
+        responses={
+            422: {"description": "days is not one of 30/60/90/120."},
+        },
+    )
+    def get_scrapheap_retention_impact(
+        request: Request,
+        days: int = Query(
+            ...,
+            description=(
+                "Candidate retention window in days — one of 30, 60, 90, 120. "
+                "Any other value is a 422. ('Never' is never a reduction, so "
+                "there is nothing to preview for it.)"
+            ),
+            examples=[30],
+        ),
+    ):
+        _ensure_secure_when_required(request)
+        if int(days) not in scrapheap_service.RETENTION_DAY_CHOICES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "days must be one of "
+                    f"{list(scrapheap_service.RETENTION_DAY_CHOICES)}."
+                ),
+            )
+        return scrapheap_service.retention_impact(
+            server.vault,
+            datetime.now(timezone.utc),
+            int(days),
+            scrapheap_service.read_retention_days(server._server_config),
+        )
 
     @router.post(
         "/server-config/open",
@@ -714,7 +980,6 @@ def create_router(server) -> APIRouter:
     )
     def open_server_config(request: Request):
         _ensure_secure_when_required(request)
-        server.auth.require_unscoped_owner(request)
         config_path = getattr(server, "_server_config_path", None)
         opened = _open_in_os(config_path)
         return {"status": "success" if opened else "failed"}

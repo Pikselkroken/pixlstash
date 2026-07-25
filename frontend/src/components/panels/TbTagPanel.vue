@@ -552,6 +552,11 @@ const aggregatedPredictions = computed(() => {
     for (const p of predictions) {
       const key = p.tag.toLowerCase();
       if (confirmedAll.has(key)) continue;
+      // Skip synthetic `manual` rows: these are human-label ledger entries with a
+      // placeholder confidence (1.0/0.0), not tagger predictions. A manually
+      // removed tag would otherwise resurface here as a high-confidence "suggested
+      // tag to confirm" (see backend label_ledger.record_human_label).
+      if (p.model_version === "manual") continue;
       if (!freq.has(key))
         freq.set(key, { tag: p.tag, count: 0, totalConf: 0, ids: [] });
       const e = freq.get(key);
@@ -837,7 +842,7 @@ async function fetchTagsSB() {
       allTagsSB.value = res.data;
       allTagsFetchedAt = now;
     }
-  } catch (_e) {
+  } catch {
     // non-critical
   }
 }

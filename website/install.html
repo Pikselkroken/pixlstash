@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── install.html page-specific ── */
@@ -25,7 +26,7 @@
         gap: 6px;
         flex-wrap: wrap;
         margin-bottom: 0;
-        border-bottom: 2px solid rgba(34, 38, 44, 0.1);
+        border-bottom: 2px solid var(--border);
         padding-bottom: 0;
       }
 
@@ -33,8 +34,8 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        background: rgba(255, 255, 255, 0.35);
-        border: 1px solid rgba(34, 38, 44, 0.15);
+        background: var(--panel-strong);
+        border: 1px solid var(--border);
         border-bottom: 3px solid transparent;
         margin-bottom: -2px;
         padding: 10px 18px;
@@ -52,16 +53,16 @@
       }
 
       .tab-btn:hover {
-        background: rgba(255, 255, 255, 0.6);
+        background: var(--panel);
         opacity: 0.85;
       }
 
       .tab-btn.active {
         color: var(--text);
         opacity: 1;
-        border-color: rgba(34, 38, 44, 0.15);
+        border-color: var(--border);
         border-bottom-color: var(--accent);
-        background: rgba(255, 255, 255, 0.92);
+        background: var(--panel);
       }
 
       .tab-icon {
@@ -75,9 +76,9 @@
       .tab-panels {
         background: var(--panel);
         border-radius: 0 var(--radius-lg) var(--radius-lg) var(--radius-lg);
-        border: 1px solid rgba(34, 38, 44, 0.11);
+        border: 1px solid var(--border);
         border-top: none;
-        box-shadow: 0 8px 32px var(--shadow);
+        box-shadow: 0 4px 16px var(--shadow);
         padding: 36px 32px;
       }
 
@@ -104,7 +105,7 @@
 
       .divider {
         height: 1px;
-        background: rgba(34, 38, 44, 0.1);
+        background: var(--border);
         margin: 28px 0;
       }
 
@@ -141,7 +142,7 @@
         max-width: 420px;
         width: 100%;
         border-radius: 10px;
-        border: 1px solid rgba(34, 38, 44, 0.14);
+        border: 1px solid var(--border);
         box-shadow: 0 6px 20px var(--shadow);
         margin-top: 10px;
       }

@@ -29,7 +29,6 @@ from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
-from pixlstash.routes.pictures._helpers import enforce_picture_scope
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.impossible_tag_clear_service import (
     VALID_FILTERS,
@@ -163,9 +162,6 @@ def create_router(server) -> APIRouter:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
-            # Scope guard (BOLA): a write-capable resource-scoped token may only
-            # mutate tags for pictures within its granted resource.
-            enforce_picture_scope(server, request, pic_id)
             tag = payload.get("tag")
             if not tag:
                 raise HTTPException(status_code=400, detail="Tag is required")
@@ -255,9 +251,6 @@ def create_router(server) -> APIRouter:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
-            # Scope guard (BOLA): a resource-scoped READ share token may only
-            # read tags for pictures within its granted resource.
-            enforce_picture_scope(server, request, pic_id)
             pic_list = server.vault.db.run_task(
                 lambda session: Picture.find(
                     session,
@@ -295,9 +288,6 @@ def create_router(server) -> APIRouter:
                 pic_id = int(id)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="Invalid picture id")
-            # Scope guard (BOLA): a write-capable resource-scoped token may only
-            # mutate tags for pictures within its granted resource.
-            enforce_picture_scope(server, request, pic_id)
             if not tag_id.isdigit():
                 raise HTTPException(status_code=400, detail="tag_id must be numeric")
             tag_id_int = int(tag_id)
@@ -376,9 +366,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-        # Scope guard (BOLA): a write-capable resource-scoped token may only
-        # mutate tags for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
         tag_value = (payload or {}).get("tag")
         if not tag_value:
             raise HTTPException(status_code=400, detail="Tag is required")
@@ -444,9 +431,6 @@ def create_router(server) -> APIRouter:
             pic_id = int(id)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
-        # Scope guard (BOLA): a write-capable resource-scoped token may only
-        # mutate tags for pictures within its granted resource.
-        enforce_picture_scope(server, request, pic_id)
 
         def do_clear(session: Session, pic_id: int):
             # A picture frozen by a locked set has read-only label data.

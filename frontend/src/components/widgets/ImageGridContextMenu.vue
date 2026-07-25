@@ -4,9 +4,12 @@
       v-if="visible"
       ref="menuRef"
       class="image-ctx-menu"
-      :class="{ 'ctx-flip-sub': submenusFlip }"
+      :class="{ 'ctx-flip-sub': submenusFlip, 'image-ctx-menu--on-dark': onDark }"
       :style="menuStyle"
+      role="menu"
+      aria-orientation="vertical"
       tabindex="-1"
+      @keydown="onMenuKeydown"
     >
       <!-- ── Read-only indicator ───────────────────────────────────── -->
       <div v-if="isReadOnly" class="ctx-readonly-header">
@@ -16,6 +19,184 @@
         </span>
       </div>
 
+      <!-- ════════════════════════════════════════════════════════════
+           OVERLAY (lightbox) MODE — a restricted, dark-surface action
+           set that strictly COMPLEMENTS the overlay chrome. Everything
+           else the grid menu offers is already reachable from the
+           lightbox chrome or is multi-select-only, so it is hidden here.
+           ════════════════════════════════════════════════════════════ -->
+      <template v-if="overlayMode">
+        <template v-if="!isScrapheapView">
+          <!-- 1. Share -->
+          <button
+            v-if="contextImage?.id"
+            class="ctx-item"
+            role="menuitem"
+            :disabled="isReadOnly"
+            @click="onAction('share-picture')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-link-variant</v-icon>
+            Share picture
+          </button>
+          <!-- 2. Find similar faces -->
+          <template v-if="contextImage?.id && contextImageFaces.length">
+            <button
+              v-if="contextClickedFace || contextImageFaces.length === 1"
+              class="ctx-item"
+              role="menuitem"
+              title="Find pictures with similar faces"
+              @click="
+                onAction(
+                  'find-similar-faces',
+                  (contextClickedFace ?? contextImageFaces[0]).id,
+                )
+              "
+            >
+              <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
+              Find similar faces
+            </button>
+            <div
+              v-else
+              class="ctx-submenu-wrap"
+              @mouseenter="openFaceSubmenu"
+              @mouseleave="findFacesSubmenuOpen = false"
+              @focusin="openFaceSubmenu"
+            >
+              <button class="ctx-item" role="menuitem" aria-haspopup="menu">
+                <v-icon class="ctx-icon" size="15">mdi-face-recognition</v-icon>
+                Find similar faces
+                <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+              </button>
+              <div
+                v-if="findFacesSubmenuOpen"
+                class="ctx-submenu ctx-face-submenu"
+                role="menu"
+              >
+                <button
+                  v-for="(face, idx) in contextImageFaces"
+                  :key="face.id ?? idx"
+                  class="ctx-item ctx-face-item"
+                  role="menuitem"
+                  @click="onAction('find-similar-faces', face.id)"
+                >
+                  <div
+                    class="ctx-face-thumb"
+                    :style="getFaceThumbStyle(face, idx)"
+                  />
+                  <span>{{ faceLabel(face, idx) }}</span>
+                </button>
+              </div>
+            </div>
+          </template>
+          <!-- 3. Reverse image search -->
+          <button
+            v-if="contextImage?.id"
+            class="ctx-item"
+            role="menuitem"
+            title="Find visually similar images"
+            @click="onAction('reverse-image-search')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
+            Reverse image search
+          </button>
+          <!-- 4. Segment -->
+          <button
+            class="ctx-item"
+            role="menuitem"
+            title="Detect objects and store bounding boxes"
+            :disabled="!selectedImageIds.length || isReadOnly"
+            @click="onAction('segment')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+            Segment
+          </button>
+          <!-- 5. Restore from snapshot -->
+          <div
+            v-if="!isReadOnly && selectedImageIds.length >= 1"
+            class="ctx-submenu-wrap"
+            @mouseenter="restoreSubmenuOpen = true"
+            @mouseleave="restoreSubmenuOpen = false"
+            @focusin="restoreSubmenuOpen = true"
+          >
+            <button
+              class="ctx-item"
+              role="menuitem"
+              aria-haspopup="menu"
+              :disabled="!selectedImageIds.length || isReadOnly"
+            >
+              <v-icon class="ctx-icon" size="15">mdi-restore</v-icon>
+              Restore from snapshot
+              <v-icon class="ctx-arrow" size="14">mdi-chevron-right</v-icon>
+            </button>
+            <div v-if="restoreSubmenuOpen" class="ctx-submenu" role="menu">
+              <button
+                v-for="cp in recentSnapshots"
+                :key="cp.id"
+                class="ctx-item"
+                role="menuitem"
+                :disabled="identicalSnapshotIds.has(cp.id)"
+                :title="
+                  identicalSnapshotIds.has(cp.id)
+                    ? 'Selection is identical to this snapshot'
+                    : undefined
+                "
+                @click="handleRestoreFromSnapshot(cp.id)"
+              >
+                <v-icon class="ctx-icon" size="14">mdi-camera-outline</v-icon>
+                {{ cp.label || cp.kind }}
+                <span class="ctx-default-pill">{{
+                  cp.created_at ? formatSnapshotDate(cp.created_at) : ""
+                }}</span>
+              </button>
+              <button class="ctx-item" role="menuitem" @click="handleRestoreMore">
+                <v-icon class="ctx-icon" size="14">mdi-dots-horizontal</v-icon>
+                More…
+              </button>
+            </div>
+          </div>
+          <div class="ctx-sep" role="separator" />
+          <!-- 6. Delete (soft-delete → scrapheap; NOT permanent) -->
+          <button
+            class="ctx-item ctx-item--danger"
+            role="menuitem"
+            :disabled="!selectedImageIds.length || isReadOnly || !!lockReason"
+            :title="lockReason || 'Move to the scrapheap'"
+            @click="onAction('delete-selected')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
+            Delete
+          </button>
+        </template>
+        <!-- Scrapheap overlay: Restore / Delete forever -->
+        <template v-else>
+          <button
+            class="ctx-item"
+            role="menuitem"
+            :disabled="!selectedImageIds.length || isReadOnly"
+            title="Restore this picture to the library"
+            @click="onAction('remove-from-group')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-backup-restore</v-icon>
+            Restore
+          </button>
+          <div class="ctx-sep" role="separator" />
+          <button
+            class="ctx-item ctx-item--danger"
+            role="menuitem"
+            :disabled="!selectedImageIds.length || isReadOnly"
+            title="Permanently delete — this cannot be undone"
+            @click="onAction('delete-selected')"
+          >
+            <v-icon class="ctx-icon" size="15">mdi-delete-forever</v-icon>
+            Delete forever
+          </button>
+        </template>
+      </template>
+
+      <!-- ════════════════════════════════════════════════════════════
+           GRID MODE — the full context menu for grid cells (unchanged).
+           ════════════════════════════════════════════════════════════ -->
+      <template v-else>
       <!-- ── Set / Character / Project ─────────────────────────────── -->
       <template v-if="!isScrapheapView">
         <AddToEntityControl
@@ -354,6 +535,7 @@
         <v-icon class="ctx-icon" size="15">mdi-delete</v-icon>
         {{ deleteButtonLabel }}
       </button>
+      </template>
     </div>
   </Teleport>
 </template>
@@ -405,7 +587,15 @@ const props = defineProps({
   contextImage: { type: Object, default: null },
   contextClickedFace: { type: Object, default: null },
   isShared: { type: Boolean, default: false },
+  // Overlay (lightbox) mode: renders the restricted overlay action set,
+  // applies the dark-surface skin, and enables keyboard focus management
+  // (auto-focus first item, arrow roving, focus-return to the invoker on close).
+  overlayMode: { type: Boolean, default: false },
 });
+
+// The dark-surface skin is tied to overlay invocation — the menu renders over
+// the dark lightbox there and nowhere else.
+const onDark = computed(() => props.overlayMode);
 
 const emit = defineEmits([
   "close",
@@ -615,12 +805,77 @@ async function clampPosition() {
   submenusFlip.value = newX + rect.width + 185 > window.innerWidth - 8;
 }
 
+// Element focused before the menu opened, so Escape / an action can return
+// focus to the invoker (e.g. the lightbox media) instead of dropping it to
+// document.body. Only tracked in overlay mode (grid right-click keeps its
+// mouse-driven, focus-neutral behaviour).
+let previouslyFocused = null;
+
+function focusFirstItem() {
+  const first = menuRef.value?.querySelector(".ctx-item:not([disabled])");
+  first?.focus();
+}
+
 watch(
   () => props.visible,
   (val) => {
-    if (val) clampPosition();
+    if (val) {
+      clampPosition();
+      if (props.overlayMode) {
+        previouslyFocused =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        nextTick(focusFirstItem);
+      }
+    } else {
+      // Reset transient submenu state so a reopen starts clean.
+      autoTagSubmenuOpen.value = false;
+      descriptionSubmenuOpen.value = false;
+      findFacesSubmenuOpen.value = false;
+      restoreSubmenuOpen.value = false;
+      if (props.overlayMode && previouslyFocused) {
+        try {
+          previouslyFocused.focus();
+        } catch {
+          // Invoker may have been unmounted (e.g. lightbox closed) — nothing
+          // to return focus to; the browser keeps it on <body>.
+        }
+        previouslyFocused = null;
+      }
+    }
   },
 );
+
+// Roving focus for keyboard users: Up/Down move between enabled items, Home/End
+// jump to the ends. Only fires while focus is inside the menu, so the grid menu
+// (never auto-focused) is unaffected. Every keystroke handled here also stops
+// bubbling so it never reaches the overlay's window-level key handler — which
+// would otherwise navigate prev/next on arrows or toggle chrome on Space while
+// the user is driving the menu. (Escape is intercepted earlier, in the
+// capture-phase document handler.)
+function onMenuKeydown(event) {
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    const items = Array.from(
+      menuRef.value?.querySelectorAll(".ctx-item:not([disabled])") || [],
+    );
+    if (items.length) {
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement);
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (event.key === "ArrowDown")
+        next = current < 0 ? 0 : (current + 1) % items.length;
+      else next = current <= 0 ? items.length - 1 : current - 1;
+      items[next]?.focus();
+    }
+  }
+  // Keep menu keystrokes from leaking to global (overlay) handlers. Native
+  // button activation (Enter / Space → click) is a default action, unaffected
+  // by stopping propagation.
+  event.stopPropagation();
+}
 
 watch([() => props.x, () => props.y], () => {
   adjustedX.value = props.x;
@@ -642,18 +897,6 @@ const isScrapheapView = computed(() => {
     props.scrapheapPicturesId || "SCRAPHEAP",
   ).toUpperCase();
   return String(props.selectedCharacter || "").toUpperCase() === scrapId;
-});
-
-const normalizedSelectedCharacter = computed(() => {
-  const raw = String(props.selectedCharacter ?? "")
-    .trim()
-    .toUpperCase();
-  return !raw || raw === "NULL" || raw === "UNDEFINED" ? "" : raw;
-});
-
-const hasSetSelectionContext = computed(() => {
-  const setId = Number(props.selectedSet);
-  return Number.isFinite(setId) && setId > 0;
 });
 
 const showRemoveButton = computed(() => {
@@ -759,7 +1002,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .image-ctx-menu {
   position: fixed;
-  z-index: 2000;
+  z-index: var(--z-overlay);
   background: rgb(var(--v-theme-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   border-radius: var(--radius-md);
@@ -769,6 +1012,15 @@ onBeforeUnmount(() => {
   max-width: 260px;
   user-select: none;
   outline: none;
+}
+
+/* Dark-surface skin used when the menu is invoked from the lightbox, which
+   sits on a dark backdrop in both themes. Item/separator overrides live in the
+   global styles/context-menu.css because the teleported node carries the plain
+   .ctx-* classes and this modifier as a global ancestor. */
+.image-ctx-menu--on-dark {
+  background: rgb(var(--v-theme-dark-surface));
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
 .ctx-face-submenu {

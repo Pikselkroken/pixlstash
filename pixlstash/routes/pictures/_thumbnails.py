@@ -31,11 +31,19 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
-from ._helpers import enforce_picture_scope
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 
 logger = get_logger(__name__)
+
+
+# Thumbnails are served under content-addressed URLs (the ?v=WxH token changes
+# whenever the bitmap is regenerated), so browsers may cache them briefly but must
+# revalidate afterwards — that keeps reference-folder source swaps (same URL, new
+# bytes) from serving stale forever, which the previous header-less heuristic
+# caching allowed. `private` stops shared proxies caching access-controlled
+# thumbnails. FileResponse still emits ETag/Last-Modified for cheap 304s.
+_THUMBNAIL_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600, must-revalidate"}
 
 
 # Dedicated, bounded pool for on-the-fly thumbnail generation (full-resolution
@@ -105,7 +113,6 @@ def register_routes(router, server):
         pic = server.vault.db.run_immediate_read_task(fetch_picture, id)
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
-        enforce_picture_scope(server, request, id)
 
         thumb_path = ImageUtils.get_thumbnail_path(
             server.vault.image_root, pic.file_path
@@ -152,7 +159,11 @@ def register_routes(router, server):
                     thumb_path,
                     elapsed_ms,
                 )
-                return FileResponse(thumb_path, media_type="image/webp")
+                return FileResponse(
+                    thumb_path,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
         cached_bytes = get_cached_thumbnail_bytes(id)
         if cached_bytes:
@@ -162,7 +173,11 @@ def register_routes(router, server):
                 id,
                 elapsed_ms,
             )
-            return Response(content=cached_bytes, media_type="image/webp")
+            return Response(
+                content=cached_bytes,
+                media_type="image/webp",
+                headers=_THUMBNAIL_CACHE_HEADERS,
+            )
 
         lock = get_thumbnail_lock(id)
         async with lock:
@@ -201,7 +216,11 @@ def register_routes(router, server):
                         thumb_path,
                         elapsed_ms,
                     )
-                    return FileResponse(thumb_path, media_type="image/webp")
+                    return FileResponse(
+                        thumb_path,
+                        media_type="image/webp",
+                        headers=_THUMBNAIL_CACHE_HEADERS,
+                    )
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
@@ -211,7 +230,11 @@ def register_routes(router, server):
                     id,
                     elapsed_ms,
                 )
-                return Response(content=cached_bytes, media_type="image/webp")
+                return Response(
+                    content=cached_bytes,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             def build_thumbnail_blocking() -> tuple[
                 str, str | None, bytes | None, str | None
@@ -259,7 +282,11 @@ def register_routes(router, server):
                     resolved_path,
                     elapsed_ms,
                 )
-                return FileResponse(saved_thumb, media_type="image/webp")
+                return FileResponse(
+                    saved_thumb,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             if status == "memory-only" and thumbnail_bytes:
                 cache_thumbnail_bytes(id, thumbnail_bytes)
@@ -270,7 +297,11 @@ def register_routes(router, server):
                     resolved_path,
                     elapsed_ms,
                 )
-                return Response(content=thumbnail_bytes, media_type="image/webp")
+                return Response(
+                    content=thumbnail_bytes,
+                    media_type="image/webp",
+                    headers=_THUMBNAIL_CACHE_HEADERS,
+                )
 
             if status == "missing-source":
                 logger.warning(
@@ -361,20 +392,37 @@ def register_routes(router, server):
                     penalised_tag_map[pic_id].append(tag)
 
         def map_bbox_to_thumbnail(bbox, picture):
+            # Map a picture-space (source pixel) bbox into AR-BITMAP pixel space
+            # (0..thumbnail_width × 0..thumbnail_height, origin top-left). The
+            # bitmap is a uniform resize of the WHOLE frame, so the scale is
+            # ``thumbnail_width / source_width``. The source dimensions are the
+            # picture's, but ``picture.width``/``height`` are stored un-rotated:
+            # for an EXIF-rotated (90°/270°) image the bitmap swaps them, so pick
+            # whichever orientation shares the bitmap's aspect ratio.
             if not bbox or len(bbox) != 4:
                 return bbox, False
-            left = getattr(picture, "thumbnail_left", None)
-            top = getattr(picture, "thumbnail_top", None)
-            side = getattr(picture, "thumbnail_side", None)
-            if left is None or top is None or side in (None, 0):
+            out_w = getattr(picture, "thumbnail_width", None)
+            out_h = getattr(picture, "thumbnail_height", None)
+            pic_w = getattr(picture, "width", None)
+            pic_h = getattr(picture, "height", None)
+            if not out_w or not out_h or not pic_w or not pic_h:
                 return bbox, False
             try:
-                scale = 256.0 / float(side)
+                target_ar = out_w / float(out_h)
+                if abs((pic_w / float(pic_h)) - target_ar) <= abs(
+                    (pic_h / float(pic_w)) - target_ar
+                ):
+                    src_w, src_h = float(pic_w), float(pic_h)
+                else:
+                    # EXIF 90°/270°: the stored dims are swapped vs the bitmap.
+                    src_w, src_h = float(pic_h), float(pic_w)
+                sx = out_w / src_w
+                sy = out_h / src_h
                 x1, y1, x2, y2 = bbox
-                x1 = max(0.0, min(256.0, (x1 - left) * scale))
-                y1 = max(0.0, min(256.0, (y1 - top) * scale))
-                x2 = max(0.0, min(256.0, (x2 - left) * scale))
-                y2 = max(0.0, min(256.0, (y2 - top) * scale))
+                x1 = max(0.0, min(float(out_w), x1 * sx))
+                y1 = max(0.0, min(float(out_h), y1 * sy))
+                x2 = max(0.0, min(float(out_w), x2 * sx))
+                y2 = max(0.0, min(float(out_h), y2 * sy))
                 return (
                     [
                         int(round(x1)),
@@ -384,7 +432,13 @@ def register_routes(router, server):
                     ],
                     True,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Could not map bbox to thumbnail for picture %s (%s); "
+                    "returning unscaled bbox.",
+                    getattr(picture, "id", None),
+                    exc,
+                )
                 return bbox, False
 
         pics = server.vault.db.run_task(
@@ -396,9 +450,13 @@ def register_routes(router, server):
                     "file_path",
                     "faces",
                     "detections",
-                    "thumbnail_left",
-                    "thumbnail_top",
-                    "thumbnail_side",
+                    "width",
+                    "height",
+                    "thumbnail_width",
+                    "thumbnail_height",
+                    "square_crop_x",
+                    "square_crop_y",
+                    "square_crop_side",
                     "imported_at",
                 ],
                 include_deleted=True,
@@ -434,7 +492,6 @@ def register_routes(router, server):
         for pic in pics:
             try:
                 face_entries = []
-                mapped_any = False
                 raw_face_bboxes = []
                 for face in getattr(pic, "faces", []):
                     bbox = None
@@ -459,12 +516,11 @@ def register_routes(router, server):
                         )
                 face_data = []
                 for entry in face_entries:
-                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
-                    mapped_any = mapped_any or mapped
+                    mapped_bbox, _mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     face_data.append({**entry, "bbox": mapped_bbox})
 
-                # Object detections, mapped into thumbnail-crop space exactly
-                # like faces so the grid overlay renders them identically.
+                # Object detections, mapped into AR-bitmap space exactly like
+                # faces so the grid overlay renders them identically.
                 detection_entries = []
                 for det in getattr(pic, "detections", []):
                     bbox = getattr(det, "bbox", None)
@@ -485,19 +541,32 @@ def register_routes(router, server):
                         )
                 detection_data = []
                 for entry in detection_entries:
-                    mapped_bbox, mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
-                    mapped_any = mapped_any or mapped
+                    mapped_bbox, _mapped = map_bbox_to_thumbnail(entry.get("bbox"), pic)
                     detection_data.append({**entry, "bbox": mapped_bbox})
 
-                imported_at = getattr(pic, "imported_at", None)
-                v = int(imported_at.timestamp()) if imported_at is not None else 0
+                # Cache-buster keyed on the thumbnail bitmap itself. Regeneration
+                # (the square-crop -> AR-bitmap rebuild on upgrade, or any later
+                # rebuild) repopulates these dimensions, so the URL changes and the
+                # browser refetches instead of serving the stale cached image. The
+                # old key was imported_at, which never changed on regen -> the
+                # browser kept painting the pre-upgrade square bitmap into the
+                # justified layout's AR cell -> squashed thumbnails.
+                tw = getattr(pic, "thumbnail_width", None)
+                th = getattr(pic, "thumbnail_height", None)
+                v = f"{tw}x{th}" if tw and th else "0"
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
+                # Whole-frame AR-bitmap dimensions and the face-weighted square-crop
+                # rectangle (bitmap pixel space). All are NULL until the picture is
+                # processed; the frontend falls back to object-fit until then.
                 results[pic.id] = {
                     "thumbnail": thumbnail_url,
                     "faces": face_data,
                     "detections": detection_data,
-                    "thumbnail_width": 256 if mapped_any else None,
-                    "thumbnail_height": 256 if mapped_any else None,
+                    "thumbnail_width": getattr(pic, "thumbnail_width", None),
+                    "thumbnail_height": getattr(pic, "thumbnail_height", None),
+                    "square_crop_x": getattr(pic, "square_crop_x", None),
+                    "square_crop_y": getattr(pic, "square_crop_y", None),
+                    "square_crop_side": getattr(pic, "square_crop_side", None),
                     "penalised_tags": list(
                         dict.fromkeys(penalised_tag_map.get(pic.id, []))
                     ),

@@ -447,12 +447,16 @@
         :style="filmstripStyleVars"
       >
         <div
+          ref="overlayCanvasRef"
           class="overlay-canvas"
+          tabindex="0"
+          aria-label="Image — right-click or press the menu key for actions"
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
           @dblclick="toggleZoom"
           @wheel.prevent="onWheelZoom"
+          @contextmenu="handleMediaContextMenu"
         >
           <div
             class="overlay-media"
@@ -754,6 +758,7 @@ import {
 import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
@@ -764,11 +769,14 @@ import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
   faceBoxColor,
-  formatUserDate,
   getStackColor,
   toggleScore,
 } from "../../utils/utils.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -778,6 +786,7 @@ const props = defineProps({
   backendUrl: { type: String, required: true },
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
+  smartScoreUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -801,6 +810,7 @@ const {
   backendUrl,
   tagUpdate,
   descriptionUpdate,
+  smartScoreUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -973,9 +983,7 @@ function setOverlayImageById(nextId) {
       // snapshot captured on open, so it carries the pre-edit score. Re-applying it
       // for the same image would clobber an optimistic rating change (a 0 toggle is a
       // valid edit, hence the != null guard rather than a truthiness check).
-      ...(isSameImage && existingScore != null
-        ? { score: existingScore }
-        : {}),
+      ...(isSameImage && existingScore != null ? { score: existingScore } : {}),
       tags: dedupeTagList(
         isSameImage ? (existingTags.length ? existingTags : targetTags) : [],
       ),
@@ -1003,6 +1011,7 @@ const emit = defineEmits([
   "set-project",
   "comfyui-run",
   "run-plugin",
+  "request-context-menu",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -1012,7 +1021,6 @@ const isDescriptionEditing = computed(
 const overlayCopyState = ref("idle");
 const imagePlaceholderLabel = "{{image_path}}";
 const captionPlaceholderLabel = "{{caption}}";
-const canCopyOverlay = computed(() => !!image.value);
 const descriptionTeaser = computed(() => {
   const desc = image.value?.description || "";
   const trimmed = desc.trim();
@@ -1023,6 +1031,7 @@ const descriptionTeaser = computed(() => {
 
 const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
+const lastSmartScoreUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -1460,27 +1469,6 @@ function compareOverlayStackOrder(a, b) {
 function sortOverlayStackMembers(members) {
   if (!Array.isArray(members)) return [];
   return members.slice().sort(compareOverlayStackOrder);
-}
-
-function buildOverlayStackLeaderMap(images) {
-  const byStack = new Map();
-  for (const img of images) {
-    const stackId = getOverlayStackId(img);
-    if (!stackId || img?.id == null) continue;
-    if (!byStack.has(stackId)) {
-      byStack.set(stackId, []);
-    }
-    byStack.get(stackId).push(img);
-  }
-  const leaders = new Map();
-  for (const [stackId, members] of byStack.entries()) {
-    const ordered = sortOverlayStackMembers(members);
-    const leader = ordered[0];
-    if (leader?.id != null) {
-      leaders.set(stackId, String(leader.id));
-    }
-  }
-  return leaders;
 }
 
 function getOverlayLocalStackMembers(stackId) {
@@ -2007,6 +1995,25 @@ function handleKeydown(e) {
   // keypress (e.g. Escape) after the overlay has already handled it.
   e.stopImmediatePropagation();
 
+  // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
+  // available regardless of chrome visibility. Suppressed while typing so the
+  // native menu (paste / spellcheck) still works in the tag and description
+  // fields.
+  if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    const t = e.target;
+    const typing =
+      t instanceof HTMLElement &&
+      (t.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) ||
+        t.getAttribute("role") === "textbox");
+    if (!typing) {
+      e.preventDefault();
+      handleUserActivity();
+      openContextMenuFromKeyboard();
+      return;
+    }
+  }
+
   // When chrome is hidden, only Space and Escape reveal it — other keys still
   // navigate/act but don't bring the chrome back.
   if (chromeHidden.value) {
@@ -2232,7 +2239,54 @@ function showSwipeHint() {
 }
 
 function handleBackdropClick() {
+  // A right-click context menu open over the lightbox is dismissed by this same
+  // click. Swallow it so click-away closes the MENU ONLY, never the lightbox.
+  // The menu was still in the DOM at pointerdown time (captured in
+  // handleOverlayPointerDown), even though it removes itself before this click.
+  if (menuWasOpenOnPointerDown) {
+    menuWasOpenOnPointerDown = false;
+    return;
+  }
   emit("close");
+}
+
+// ── Media context menu (right-click / keyboard) ────────────────────────────
+// Right-click over the media surface opens the custom overlay context menu
+// (owned by ImageGrid, which scopes every action to this one picture). The
+// sidebar panels and filmstrip are siblings of `.overlay-canvas`, so a
+// right-click there is never seen here and keeps the native menu (copy / paste
+// / spellcheck in the description and tag fields).
+function buildContextMenuImage() {
+  if (!image.value?.id) return null;
+  return {
+    ...image.value,
+    format: getOverlayFormat(image.value),
+    faces: Array.isArray(faceBboxes.value) ? faceBboxes.value : [],
+  };
+}
+
+function handleMediaContextMenu(event) {
+  const ctxImage = buildContextMenuImage();
+  if (!ctxImage) return; // no image loaded → fall through to the native menu
+  event.preventDefault();
+  emit("request-context-menu", {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    image: ctxImage,
+  });
+}
+
+function openContextMenuFromKeyboard() {
+  const ctxImage = buildContextMenuImage();
+  if (!ctxImage) return;
+  // Focus the canvas first so the menu captures it as the invoker and returns
+  // focus here on Escape. Anchor the menu over the centre of the media.
+  const el = overlayCanvasRef.value;
+  el?.focus();
+  const rect = el?.getBoundingClientRect();
+  const x = rect ? Math.round(rect.left + rect.width / 2) : 0;
+  const y = rect ? Math.round(rect.top + rect.height / 2) : 0;
+  emit("request-context-menu", { clientX: x, clientY: y, image: ctxImage });
 }
 
 function handleUserActivity() {
@@ -2258,7 +2312,10 @@ function handleOverlayPointerDown() {
   menuWasOpenOnPointerDown = !!(
     document.querySelector(".v-overlay--active") ||
     document.querySelector(".add-to-set.open") ||
-    document.querySelector(".add-to-project.open")
+    document.querySelector(".add-to-project.open") ||
+    // Our own right-click context menu (teleported to <body>). It closes itself
+    // on this pointerdown, so it must be detected now, not at click time.
+    document.querySelector(".image-ctx-menu")
   );
 }
 
@@ -2355,7 +2412,7 @@ function onPanEnd(event) {
   isPanning.value = false;
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
 }
@@ -2647,6 +2704,7 @@ function clearDrawMode() {
 
 const imgRef = ref(null);
 const videoRef = ref(null);
+const overlayCanvasRef = ref(null);
 const mediaInnerRef = ref(null);
 const videoMeta = ref({ duration: null });
 const videoError = ref(null); // set to MediaError when browser can't play the video
@@ -2766,7 +2824,7 @@ async function onDrawEnd(event) {
   drawState.value = { ...drawState.value, active: false };
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
   if (Math.abs(x2 - x1) < 5 || Math.abs(y2 - y1) < 5) {
@@ -2793,7 +2851,11 @@ async function onDrawEnd(event) {
       });
     }
   } catch (e) {
-    alert(`Failed to create ${drawModeLabel.value} box: ${e?.message || e}`);
+    console.error("Failed to create box", e);
+    noticeStore.error(
+      `Couldn't create that ${drawModeLabel.value} box. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-create-box" },
+    );
   } finally {
     clearDrawMode();
   }
@@ -2802,7 +2864,7 @@ async function onDrawEnd(event) {
 function onDrawCancel(event) {
   try {
     event?.currentTarget?.releasePointerCapture(event.pointerId);
-  } catch (_) {
+  } catch {
     /* pointer already released */
   }
   clearDrawMode();
@@ -3064,11 +3126,20 @@ async function fetchOverlayMetadata(imageId) {
           ? image.value.smart_score
           : null;
     if (Object.prototype.hasOwnProperty.call(data, "smartScore")) {
-      // Keep Smart Score consistent with the grid/list payload when already
-      // present there; metadata endpoint currently computes a different
-      // single-candidate value for some images.
+      // Prefer the server's freshly-committed value. After a tag or penalised-tag
+      // settings edit the backend NULLs the cached score and recomputes, so an
+      // authoritative NON-NULL fetch is the corrected number and MUST replace the
+      // stale value currently shown (the panel used to keep the old value here,
+      // which is why the score stayed stale until a full reload).
+      // Only fall back to the currently-displayed value when the fetch returns
+      // null/absent: the brief post-invalidation window before the recompute
+      // lands, and grid-sourced images that don't carry a smartScore at all — so
+      // we never flash "unscored" during the transient.
+      const freshSmartScore = data.smartScore;
       merged.smartScore =
-        existingSmartScore !== null ? existingSmartScore : data.smartScore;
+        freshSmartScore !== null && freshSmartScore !== undefined
+          ? freshSmartScore
+          : existingSmartScore;
     }
     const dataTags = getTagList(data.tags);
     if (data.tags !== undefined) {
@@ -3127,7 +3198,7 @@ async function fetchFaceBboxes(imageId) {
             );
             const data = res.data;
             face.character_name = data.name || null;
-          } catch (e) {
+          } catch {
             face.character_name = null;
           }
         } else {
@@ -3321,7 +3392,11 @@ async function assignFaceToCharacter(face, character) {
       });
     }
   } catch (e) {
-    alert(`Failed to assign character: ${e?.message || e}`);
+    console.error("Failed to assign character", e);
+    noticeStore.error(
+      `Couldn't assign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-assign-character" },
+    );
   }
 }
 
@@ -3349,7 +3424,11 @@ async function unassignFaceCharacter(face) {
       });
     }
   } catch (e) {
-    alert(`Failed to unassign character: ${e?.message || e}`);
+    console.error("Failed to unassign character", e);
+    noticeStore.error(
+      `Couldn't unassign that person. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-unassign-character" },
+    );
   }
 }
 
@@ -3467,6 +3546,34 @@ watch(
   },
 );
 
+// A smart_score recompute landed somewhere (after a tag edit or a penalised-tag
+// settings change). Re-fetch the open card's metadata so the panel shows the
+// freshly-committed score. Deliberately NOT gated on the open card's id being in
+// payload.pictureIds: unlike the tag/description watchers (whose events name the
+// exact pictures they touched), a smart_score signal can legitimately omit the
+// open card even when that card WAS rescored —
+//   • the bulk-drain event carries a whole task batch's ids (vault.py, the
+//     remaining==0 emit), which need not contain the open card;
+//   • an interactive rescore that overflowed the registry is demoted onto that
+//     same bulk path (smart_score_invalidation.py), losing its origin/id;
+//   • Vue coalesces two signals written before the watcher flushes into the
+//     latest value, dropping an intermediate one that named the open card.
+// Any of those left the score stale until a full reload. Re-fetching on every
+// distinct signal is safe and cheap: fetchOverlayMetadata is requestId-deduped
+// and keeps the current value on a still-null read (recompute pending), so a
+// redundant fetch for an unrelated batch neither flickers nor hammers.
+watch(
+  () => smartScoreUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastSmartScoreUpdateKey.value) return;
+    lastSmartScoreUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    fetchOverlayMetadata(image.value.id);
+  },
+);
+
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];
   return faces.map((face, idx) => ({
@@ -3536,7 +3643,7 @@ function handleDescriptionUpdate(imageId, newDescription) {
 async function copyOverlayImage() {
   if (!image.value) return;
   const url = getFullImageUrl(image.value);
-  let copied = false;
+  let copied;
   try {
     if (isSupportedVideoFile(getOverlayFormat(image.value))) {
       copied = await copyVideoFrameToClipboard();
@@ -3580,7 +3687,7 @@ async function copyImageElementToClipboard() {
     const blob = await canvasToBlob(canvas, "image/png");
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -3601,7 +3708,7 @@ async function copyVideoFrameToClipboard() {
     const blob = await canvasToBlob(canvas, "image/png");
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -3614,7 +3721,7 @@ async function copyImageByFetch(url) {
     const blob = await response.blob();
     if (!blob) return false;
     return await copyBlobToClipboard(blob);
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -3914,7 +4021,6 @@ function resetOverlayCopyState() {
   color: rgba(var(--v-theme-on-dark-surface), 0.8);
 }
 
-
 .overlay-comfy-activator {
   gap: 6px;
 }
@@ -4029,9 +4135,15 @@ function resetOverlayCopyState() {
   font-size: var(--text-2xs);
 }
 
+/* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
+   `on-warning` / `on-error` are the wrong tokens here — they are authored for a
+   solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
+   The right foreground is the surface's own, matching `.overlay-comfy-note` and
+   `.overlay-comfy-status` directly above; the hue comes from the dark-surface
+   status set because the lightbox is dark in both themes. 9.18:1 – 11.24:1. */
 .overlay-comfy-warning {
-  background: rgba(var(--v-theme-warning), 0.2);
-  color: rgb(var(--v-theme-on-warning));
+  background: rgba(var(--v-theme-dark-surface-warning), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .overlay-comfy-note {
@@ -4045,8 +4157,8 @@ function resetOverlayCopyState() {
 }
 
 .overlay-comfy-error {
-  background: rgba(var(--v-theme-error), 0.2);
-  color: rgb(var(--v-theme-on-error));
+  background: rgba(var(--v-theme-dark-surface-error), 0.2);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .overlay-comfy-success {
@@ -4737,7 +4849,7 @@ function resetOverlayCopyState() {
   position: absolute;
   left: 8px;
   top: 8px;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   background: rgba(var(--v-theme-on-dark-surface), 0.12);
   z-index: 1001;
   font-size: var(--text-sm);

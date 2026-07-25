@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import DeletedFileLog, Picture
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.scrapheap_service import file_location_is_unreachable
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -49,19 +50,46 @@ class MissingFilePurgeTask(BaseTask):
     def _run_task(self):
         image_root = self._db.image_root
         missing = []
+        unreachable = 0
         for pic in self._pictures:
             if not pic.file_path:
                 continue
             try:
                 resolved = ImageUtils.resolve_picture_path(image_root, pic.file_path)
-                if not os.path.isfile(resolved):
-                    missing.append(pic)
+                if os.path.isfile(resolved):
+                    continue
+                if file_location_is_unreachable(resolved):
+                    # The file is absent because its LOCATION is absent — an
+                    # unmounted reference folder or a dropped network share —
+                    # not because it was deleted. Purging here would delete a
+                    # live picture's row AND write file_removed=True, so a later
+                    # restore would refuse to bring it back: permanent loss of a
+                    # file that never went anywhere. Skip until the volume is
+                    # back; the next pass will re-examine it.
+                    unreachable += 1
+                    logger.warning(
+                        "MissingFilePurgeTask: SKIPPING picture %s — its "
+                        "location is unreachable (parent directory missing at "
+                        "%s; unmounted reference folder or network vault?). Not "
+                        "purging, because the file may still exist.",
+                        pic.id,
+                        resolved,
+                    )
+                    continue
+                missing.append(pic)
             except Exception as exc:
                 logger.debug(
                     "MissingFilePurgeTask: could not resolve path for picture %s: %s",
                     pic.id,
                     exc,
                 )
+
+        if unreachable:
+            logger.warning(
+                "MissingFilePurgeTask: %s picture(s) in this batch live at "
+                "unreachable locations and were left untouched.",
+                unreachable,
+            )
 
         if not missing:
             return {"purged": 0}
@@ -96,8 +124,21 @@ class MissingFilePurgeTask(BaseTask):
                             path_sha=path_sha,
                             pixel_sha=pic.pixel_sha,
                             deleted_at=now,
+                            # The file is genuinely gone from disk (that is why
+                            # it is being purged), so this is a real permanent
+                            # deletion restore must never resurrect.
+                            file_removed=True,
                         )
                     )
+                elif not already_logged.file_removed:
+                    # The path was first logged as file_removed=False (removed
+                    # from the library but the file was deliberately kept). The
+                    # file has now genuinely vanished, so upgrade the stale flag
+                    # to True instead of skipping — the ledger must be truthful,
+                    # not merely rely on restore's separate missing-file net.
+                    # Only ever raise False -> True; never downgrade.
+                    already_logged.file_removed = True
+                    session.add(already_logged)
 
             db_pic = session.get(Picture, pic.id)
             if db_pic is not None:

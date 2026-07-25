@@ -9,9 +9,7 @@
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
     >
-      <v-icon size="14" class="pf-header-icon"
-        >mdi-paperclip</v-icon
-      >
+      <v-icon size="14" class="pf-header-icon">mdi-paperclip</v-icon>
       <span class="pf-title">Project Files</span>
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>
       <span class="pf-spacer"></span>
@@ -174,7 +172,7 @@ function toggleExpanded() {
   }
 }
 
-function onDragOver(e) {
+function onDragOver() {
   clearTimeout(dragLeaveTimer);
   dragOver.value = true;
 }
@@ -298,15 +296,6 @@ function urlLabel(file) {
     return name.replace(/^https?:\/\//, "").replace(/\/$/, "");
   }
   return name;
-}
-
-function shortenUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./, "");
-  } catch {
-    return url.slice(0, 24);
-  }
 }
 
 function fileIcon(file) {
@@ -550,7 +539,9 @@ onMounted(() => {
 }
 
 .pf-file-delete:hover {
-  background: rgba(var(--v-theme-error), 0.8);
+  /* Solid, so the authored `on-error` pair actually applies (4.86:1 / 4.68:1).
+     At 80% the fill lightens and the glyph falls to 3.49:1. */
+  background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
   opacity: 1 !important;
 }
