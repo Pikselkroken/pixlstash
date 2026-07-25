@@ -18,6 +18,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureLikenessQueue
 from pixlstash.tagger_plugins.clip_service import CLIP_MODEL_NAME
 
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
@@ -264,7 +265,7 @@ class ImageEmbeddingTask(BaseTask):
                 continue
             registry.mark_unprocessable(
                 pid,
-                os.path.join(image_root, str(file_path)),
+                ImageUtils.resolve_picture_path(image_root, str(file_path)),
                 reason="image could not be decoded",
             )
 
