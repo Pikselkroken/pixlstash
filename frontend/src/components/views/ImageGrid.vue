@@ -4553,6 +4553,12 @@ const pendingTagFilterRefresh = ref(false);
 // smart-score re-rank) was deferred to avoid the filmstrip losing its current
 // picture while the overlay is open. Triggers a full refetch on close.
 const pendingOverlayGridRefresh = ref(false);
+// Pictures whose smart score changed while the overlay was open. Reconciled by
+// repositioning each card on close; see handleOverlayChange. Above this many the
+// per-id fetches cost more than one re-sort, so we fall back to a full reload —
+// mirroring MAX_TARGETED_UPDATE in useGridRealtimeSync.
+const pendingOverlaySmartScoreIds = new Set();
+const MAX_DEFERRED_SMART_SCORE_REPOSITIONS = 25;
 // When fetchAllGridImages completes while the overlay is open, the resulting
 // image list is stored here instead of being written to allGridImages directly.
 // Applied to allGridImages when the overlay closes.
@@ -5090,9 +5096,15 @@ function handleOverlayChange(payload) {
   if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     if (overlayOpen.value) {
-      // Smart-score re-ranking would reorder allGridImages mid-viewing.
-      // Defer the full refetch; still refresh the single card's metadata.
-      pendingOverlayGridRefresh.value = true;
+      // Smart-score re-ranking would reorder allGridImages mid-viewing, so the
+      // re-rank is deferred to overlay close. Record WHICH picture changed rather
+      // than raising the blanket pendingOverlayGridRefresh: closeOverlay can then
+      // reposition just these cards (refreshSmartScoreForImage fetches the true
+      // score and moves the card to the server's slot) instead of re-sorting the
+      // whole library. The full reload produced the same final order at the cost
+      // of a complete re-score of every candidate, and it ran *in addition* to the
+      // opportunistic move the realtime-sync path performs for the same edit.
+      pendingOverlaySmartScoreIds.add(imageId);
       refreshGridImage(imageId);
       return;
     }
@@ -5121,6 +5133,25 @@ function closeOverlay() {
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
+  // A deferred smart-score re-rank is reconciled by moving just the affected
+  // cards. Only when no broader refresh is already queued — a full reload
+  // re-sorts everything anyway, so repositioning first would be wasted work (and
+  // the reload's own resetThumbnailState would discard it).
+  const deferredSmartScoreIds = Array.from(pendingOverlaySmartScoreIds);
+  pendingOverlaySmartScoreIds.clear();
+  const hasBroaderRefresh =
+    pendingGridImages.value !== null ||
+    pendingTagFilterRefresh.value ||
+    pendingOverlayGridRefresh.value;
+  if (deferredSmartScoreIds.length && !hasBroaderRefresh) {
+    if (deferredSmartScoreIds.length > MAX_DEFERRED_SMART_SCORE_REPOSITIONS) {
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      for (const id of deferredSmartScoreIds) {
+        void refreshSmartScoreForImage(id);
+      }
+    }
+  }
   if (pendingGridImages.value !== null) {
     // A background fetch completed while the overlay was open. Apply its
     // result now that we're safe to update the grid.
@@ -5142,6 +5173,16 @@ function closeOverlay() {
     pendingOverlayGridRefresh.value = false;
     lastFetchSuccess.value = { key: "", at: 0 };
     lastFetchError.value = { key: "", at: 0 };
+    // Preserve scroll, exactly as the non-deferred siblings of this refresh do
+    // (see the fields.stack / smart-score branches in handlePictureChanged).
+    // Those set the flag right before fetching, but when the overlay is open they
+    // only raise pendingOverlayGridRefresh and return — so the flag never got set
+    // and the deferred fetch ran as a non-preserving one. That resets
+    // visibleStart/visibleEnd to the top of the list (useGridFetch) while
+    // scrollTop stays where the user left it, so the grid renders the first
+    // screenful of cards far above the viewport and looks blank until any scroll
+    // recomputes the window.
+    preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
   }
 }
@@ -5387,6 +5428,14 @@ function _spliceAndReinsert(
     const updated = allGridImages.value.slice();
     updated[currentIndex] = { ...target, idx: currentIndex };
     allGridImages.value = updated;
+    // Still invalidate: we are only here because the card's score changed, and the
+    // batch-sourced fields that change with it (penalised_tags — the problem
+    // indicator — plus faces/detections) are refreshed ONLY by a thumbnail batch.
+    // Without this, loadedRanges still covers the window, updateVisibleThumbnails
+    // no-ops, and a card whose position happens not to move keeps its stale
+    // indicator. Adding a penalised tag to an already low-scoring card lands
+    // exactly here, since it is already at the bottom of a descending sort.
+    invalidateVisibleThumbnailRanges();
     return null;
   }
   items.splice(insertIndex, 0, target);
@@ -6342,20 +6391,51 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
+    // id → current slot, for results whose slot moved while the batch was in
+    // flight. Built once per batch (not per image) so the write-back stays linear.
+    // First occurrence wins: an expanded stack can repeat a picture id, and the
+    // leader row is the one a positional write would have targeted.
+    const movedIndexById = new Map();
+    for (let i = 0; i < allGridImages.value.length; i += 1) {
+      const existingId = allGridImages.value[i]?.id;
+      if (existingId == null) continue;
+      const key = String(existingId);
+      if (!movedIndexById.has(key)) movedIndexById.set(key, i);
+    }
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
-      img.idx = start + i; // Redundant but explicit for safety
       // Skip null-id slots: the snapshot was taken before the grid was fully
       // populated and a concurrent BG batch may have since written real data
       // into this slot. Writing a stale null-id object would wipe that data.
       if (img.id == null) {
         continue;
       }
-      allGridImages.value[start + i] = img;
+      // Resolve the picture's CURRENT slot rather than trusting start + i.
+      // gridImages was sliced out of allGridImages before the await above, and a
+      // smart-score reposition (repositionImageBySmartScore → _spliceAndReinsert)
+      // re-orders allGridImages *without* bumping thumbnailRequestEpoch, so the
+      // epoch guard cannot catch it. Adding a penalised tag does exactly that: the
+      // card moves, and a positional write-back would drop this refreshed
+      // penalised_tags payload onto whichever picture now occupies the slot —
+      // leaving the just-tagged card with stale data (no problem indicator) and
+      // corrupting an unrelated card. The original index is still preferred when it
+      // holds the right picture, so the common no-movement case is unchanged.
+      let targetIndex = start + i;
+      if (String(allGridImages.value[targetIndex]?.id) !== String(img.id)) {
+        const moved = movedIndexById.get(String(img.id));
+        if (moved === undefined) {
+          // Picture left the grid entirely (filtered out, or collapsed into a
+          // stack) — nothing to update.
+          continue;
+        }
+        targetIndex = moved;
+      }
+      img.idx = targetIndex;
+      allGridImages.value[targetIndex] = img;
       if (img.thumbnail) {
         clearThumbnailRetry(img.id);
       } else {
-        scheduleThumbnailRetry(img.id, start + i, requestEpoch);
+        scheduleThumbnailRetry(img.id, targetIndex, requestEpoch);
       }
     }
     loadedRanges.value.push([start, end]);
@@ -6396,6 +6476,7 @@ function updateVisibleThumbnails() {
 
   const requestEpoch = thumbnailRequestEpoch.value;
   thumbFetchTimeout = setTimeout(async () => {
+    thumbFetchTimeout = null;
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
