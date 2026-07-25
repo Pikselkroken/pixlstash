@@ -294,7 +294,7 @@ def test_confident_defects_drive_a_top_picture_down_by_count():
     # This synthetic candidate is *exceptionally* good (raw base ~0.84 vs the
     # GOOD_BASE_RAW = 0.65 the count bands are calibrated for), so it legitimately
     # survives further down the count curve than the band tests above require.
-    assert scores[0] >= 4.0  # clean stays high
+    assert scores[0] >= _best_case_score(emb) - 1.0  # clean stays high
     assert scores[1] <= scores[0] - 1.5  # one confident disaster costs it dearly
     assert scores[2] <= scores[1] - 0.5  # ... and three cost substantially more
     assert scores[2] < 2.0
@@ -435,7 +435,9 @@ def test_unpenalised_picture_keeps_a_high_score():
     emb = _unit(rng.standard_normal(512))
     clean = _candidate(1, emb)
     (score,) = SmartScoreUtils.calculate_smart_score_batch_numpy([clean], [], [])
-    assert score >= 4.0
+    # Within a point of the best this configuration can score, rather than a hardcoded
+    # 4.0 — see _best_case_score.
+    assert score >= _best_case_score(emb) - 1.0
     assert score <= 5.0
 
 
@@ -494,6 +496,33 @@ def test_get_latest_tag_precisions_falls_back_to_prior_run():
 
 
 # ------------------------------------------------------------------ scorer wiring
+
+
+def _best_case_score(emb):
+    """Top of the scale the *current* weights can reach for a synthetic candidate.
+
+    The absolute score a good picture lands on is a function of the positive weights
+    (``w_aest`` / ``w_sharpness`` / …), so pinning it to a literal turns every deliberate
+    re-weighting into a spurious test failure — which is exactly what happened when the
+    aesthetic and sharpness weights were reduced from 0.30 to 0.20. Scoring a best-case
+    candidate under the same configuration makes these assertions calibration-relative:
+    they survive an intentional re-weighting but still fail if good pictures stop scoring
+    like good pictures relative to what the formula can produce.
+
+    Scored with no anchors, matching the callers — the anchor terms are exercised
+    separately.
+    """
+    best = _candidate(
+        999,
+        emb,
+        aesthetic_score=7.0,
+        sharpness=1.0,
+        edge_density=0.18,
+        luminance_entropy=0.9,
+        colorfulness=1.0,
+    )
+    (score,) = SmartScoreUtils.calculate_smart_score_batch_numpy([best], [], [])
+    return float(score)
 
 
 def _candidate(pid, emb, **overrides):

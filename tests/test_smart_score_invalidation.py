@@ -1610,13 +1610,17 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
         _seed_prediction(server, carrier, PENALISED_TAG, confidence=0.9)
         _seed_prediction(server, bystander, "bad anatomy", confidence=0.9)
 
-        # Record the priority of every DB task enqueued during the PATCH so we can prove
-        # the invalidation is NOT a separate follow-up task.
-        priorities: list = []
+        # Record the DB tasks enqueued during the PATCH so we can prove the invalidation
+        # is NOT a separate follow-up task. Tasks are captured with their qualname and
+        # filtered to the ones this route submits: the WorkPlanner's finders tick on
+        # their own thread and enqueue unrelated reads of their own (e.g.
+        # MissingWatchFolderImportFinder), so counting every task in flight made this
+        # assertion depend on background timing rather than on the route's behaviour.
+        tasks: list = []
         original_run_task = server.vault.db.run_task
 
         def _spy(func, *args, **kwargs):
-            priorities.append(kwargs.get("priority"))
+            tasks.append((kwargs.get("priority"), getattr(func, "__qualname__", "")))
             return original_run_task(func, *args, **kwargs)
 
         server.vault.db.run_task = _spy
@@ -1637,8 +1641,12 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
 
         # No separate LOW task did the reset; exactly one IMMEDIATE task carried both the
         # config write and the invalidation.
-        assert DBPriority.LOW not in priorities
-        assert priorities.count(DBPriority.IMMEDIATE) == 1
+        route_tasks = [
+            priority for priority, name in tasks if "patch_me_config" in name
+        ]
+        assert route_tasks, f"config route enqueued no DB task; saw {tasks}"
+        assert DBPriority.LOW not in route_tasks
+        assert route_tasks.count(DBPriority.IMMEDIATE) == 1
     finally:
         server.vault.close()
         temp_dir.cleanup()

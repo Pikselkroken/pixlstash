@@ -13,7 +13,6 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlalchemy import event as sa_event
