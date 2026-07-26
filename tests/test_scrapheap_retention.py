@@ -1404,6 +1404,80 @@ def test_purge_rows_skips_ids_that_left_the_scrapheap(server, tmp_path):
     assert owned == {DeletedFileLog.hash_path(gone_path)}
 
 
+def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
+    server, tmp_path, monkeypatch
+):
+    """F1 — the guarded DELETE, not the re-check, must decide what was destroyed.
+
+    Deriving the skip list from the re-check SELECT alone saved the ROW but left
+    the caller unlinking the FILE and the ledger asserting ``file_removed=True``
+    — a live picture with no original on disk that neither restore nor a re-scan
+    recovers. Here the re-check blesses both ids and the restore lands after it,
+    so the DELETE's own ``deleted`` predicate spares one of them.
+    """
+    client = _client(server)
+    saved_id, saved_path = _make_reference_picture(
+        server, str(tmp_path / "saved"), "saved.png", allow_delete=True
+    )
+    doomed_id, doomed_path = _make_reference_picture(
+        server, str(tmp_path / "doomed"), "doomed.png", allow_delete=True
+    )
+    for pid in (saved_id, doomed_id):
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
+
+    original_recheck = scrapheap_service.still_scrapheaped_ids_in_session
+
+    def _restore_after_the_recheck(session, picture_ids):
+        """Blessed by the re-check, then restored before the DELETE runs."""
+        selected = original_recheck(session, picture_ids)
+        if saved_id in selected:
+            pic = session.get(Picture, saved_id)
+            pic.deleted = False
+            pic.deleted_at = None
+            session.add(pic)
+            session.commit()
+        return selected
+
+    monkeypatch.setattr(
+        scrapheap_service,
+        "still_scrapheaped_ids_in_session",
+        _restore_after_the_recheck,
+    )
+
+    body = _delete_forever(client, False)
+
+    # Negative: the spared row keeps its file, and the ledger must not claim a
+    # permanent deletion that never happened.
+    assert _get_picture(server, saved_id) is not None
+    assert os.path.isfile(saved_path), (
+        "A row the DELETE spared had its file unlinked — the skip list must "
+        "come from what the DELETE actually removed"
+    )
+    assert _ledger_flags_for(server, saved_path) == [], (
+        "The ledger asserted a permanent deletion for a picture that survived"
+    )
+    # The whole batch fails closed rather than committing a partial result.
+    assert body["deleted_count"] == 0, body
+    assert sorted(body["skipped_restored"]) == sorted([saved_id, doomed_id]), body
+    assert _get_picture(server, doomed_id) is not None
+    assert os.path.isfile(doomed_path)
+    assert _ledger_flags_for(server, doomed_path) == []
+
+    # Positive: with no mismatch injected, the ordinary purge still destroys it.
+    monkeypatch.setattr(
+        scrapheap_service, "still_scrapheaped_ids_in_session", original_recheck
+    )
+    body = _delete_forever(client, False)
+    assert body["deleted_count"] == 1, body
+    assert _get_picture(server, doomed_id) is None
+    assert not os.path.isfile(doomed_path)
+    assert _ledger_flags_for(server, doomed_path) == [True]
+    # ...and the restored picture is still untouched by that second purge.
+    assert _get_picture(server, saved_id) is not None
+    assert os.path.isfile(saved_path)
+
+
 # ── Delete preview counts ─────────────────────────────────────────────────────
 
 

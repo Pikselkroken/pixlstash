@@ -186,9 +186,12 @@ class ScrapheapPurgeOutcome:
     skipped_locked: list[int] = field(default_factory=list)
     retained_count: int = 0
     purged_ids: list[int] = field(default_factory=list)
-    # Ids that were planned for destruction but had left the scrapheap by the
-    # time the DELETE ran (restored concurrently, or already purged). Their
-    # rows, files and ledger entries are untouched.
+    # Ids that were planned for destruction but were NOT destroyed: they had
+    # left the scrapheap by the time the DELETE ran (restored concurrently, or
+    # already purged), or the whole batch was rolled back because the guarded
+    # DELETE and the re-check disagreed. Their rows, files and ledger entries
+    # are untouched — the caller drops their file removals on the strength of
+    # this list.
     skipped_restored: list[int] = field(default_factory=list)
 
 
@@ -494,6 +497,25 @@ def still_scrapheaped_ids_in_session(
     return still
 
 
+def existing_picture_ids_in_session(
+    session: Session, picture_ids: list[int]
+) -> set[int]:
+    """Which of ``picture_ids`` still have a row at all.
+
+    Used immediately after the guarded DELETE, inside the same transaction, to
+    learn which ids it ACTUALLY removed. ``rowcount`` gives a total but not an
+    identity, and the file removal has to be driven by identity — see
+    :func:`purge_rows_in_session`. Chunked like its sibling above.
+    """
+    ids = [int(pid) for pid in picture_ids if pid is not None]
+    existing: set[int] = set()
+    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
+        chunk = ids[start : start + LOCK_QUERY_CHUNK]
+        rows = session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
+        existing |= {int(pid) for pid in rows if pid is not None}
+    return existing
+
+
 def purge_rows_in_session(
     session: Session, picture_ids: list[int], log_records: list[dict]
 ) -> tuple[int, set[str], set[int]]:
@@ -510,22 +532,37 @@ def purge_rows_in_session(
     ``file_removed=True`` ledger row so even a snapshot restore drops them
     forever. :func:`plan_and_purge_in_session` already collapses planning and
     deletion into ONE DB-queue submission so nothing can interleave, but that is
-    a property of the caller and a future refactor can lose it; this re-check
-    holds regardless of how the work is scheduled. Ids that are no longer
-    scrapheaped (restored, or already destroyed by another purge) get NO ledger
-    row, are NOT deleted, and are returned so the caller can also spare their
-    files.
+    a property of the CALLER and a future refactor can lose it; the re-check is
+    the belt that does not depend on scheduling.
+
+    **Exactly what that belt delivers — do not over-read it.** It is authoritative
+    for the row, the file and the ledger *together*, and only because all three
+    are derived from the same answer:
+
+    * The re-check narrows the batch to ids that are still soft-deleted. Ids that
+      have left the scrapheap get no ledger row and are not deleted.
+    * **The guarded DELETE, not the re-check, decides what was destroyed.** Its
+      own ``deleted`` predicate can still spare a row that the re-check blessed
+      moments earlier, so the removed set is read back from the database after
+      the DELETE. Deriving the skips from the re-check alone would save the ROW
+      but still unlink the FILE and leave the ledger asserting a permanent
+      deletion that never happened — a live picture with no original on disk and
+      a ``file_removed=True`` path that neither restore nor a re-scan recovers.
+    * If the two ever disagree, the WHOLE batch is rolled back: no rows deleted,
+      no ledger rows written, no files unlinked, ``deleted_count`` 0, every id
+      reported as skipped. An irreversible path fails closed, loudly, rather than
+      committing a partial result it cannot describe.
 
     Returns:
-        ``(deleted_count, owned_path_shas, skipped_ids)``. ``owned_path_shas``
+        ``(deleted_count, owned_path_shas, skipped_ids)``. ``deleted_count`` is
+        the number of rows the DELETE actually removed. ``owned_path_shas``
         is every ``path_sha`` THIS call created or raised to
         ``file_removed=True``. It is the write-ownership token for
         :func:`mark_files_kept_in_session`: only a row this purge is responsible
         for may later be corrected back to ``False``. Rows that were already
         ``True`` before this call are excluded — see that function for the
-        collision this prevents. ``skipped_ids`` are the ids that left the
-        scrapheap between planning and now; the caller MUST drop their file
-        removals.
+        collision this prevents. ``skipped_ids`` are every requested id that was
+        NOT destroyed; the caller MUST drop their file removals.
     """
     if not picture_ids:
         return 0, set(), set()
@@ -583,31 +620,40 @@ def purge_rows_in_session(
         # Deliberately NOT owned, so a failed removal here can never reach back
         # and downgrade it.
     purgeable_ids = sorted(purgeable)
-    removed_rows = 0
     for start in range(0, len(purgeable_ids), LOCK_QUERY_CHUNK):
         chunk = purgeable_ids[start : start + LOCK_QUERY_CHUNK]
         # ``deleted`` is repeated in the DELETE itself, not just in the SELECT
         # above: belt-and-braces against anything that could commit between the
         # two statements in this same session.
-        result = session.exec(
+        session.exec(
             delete(Picture).where(Picture.id.in_(chunk), Picture.deleted.is_(True))
         )
-        removed_rows += int(getattr(result, "rowcount", 0) or 0)
-    session.commit()
-    if removed_rows != len(purgeable_ids):
+    # The DELETE is authoritative, not the re-check above. Read the removed set
+    # back BEFORE committing: a row its predicate spared must keep its file and
+    # must not be ledgered, which needs identity, not a rowcount.
+    removed_ids = purgeable - existing_picture_ids_in_session(session, purgeable_ids)
+    spared_by_the_delete = purgeable - removed_ids
+    if spared_by_the_delete:
         # Only reachable if something committed between the SELECT and the
         # DELETE in this same session, which the single DB worker thread makes
-        # impossible today. Loud rather than silent: the ledger now asserts more
-        # permanent deletions than rows were destroyed.
+        # impossible today. Fail the WHOLE batch closed rather than commit a
+        # ledger that asserts deletions which did not happen: this is the one
+        # irreversible path, and a partial result here is the exact shape of the
+        # snapshot-restore data loss this release already had to fix.
+        session.rollback()
         logger.error(
-            "Delete-forever: the DELETE removed %d row(s) but %d were selected "
-            "as still-scrapheaped; the permanent-deletion ledger may now claim "
-            "deletions that did not happen. Selected ids: %s",
-            removed_rows,
+            "Delete-forever: ABORTED and rolled back — the guarded DELETE "
+            "spared %d of the %d id(s) the re-check had selected (%s), so the "
+            "batch could not be described honestly. NOTHING was destroyed: no "
+            "rows deleted, no permanent-deletion ledger rows written, no files "
+            "removed. Re-run the purge.",
+            len(spared_by_the_delete),
             len(purgeable_ids),
-            purgeable_ids,
+            sorted(spared_by_the_delete),
         )
-    return len(purgeable_ids), owned_path_shas, skipped_ids
+        return 0, set(), requested
+    session.commit()
+    return len(removed_ids), owned_path_shas, skipped_ids
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
@@ -957,7 +1003,10 @@ def plan_and_purge_in_session(
     Running the whole decision inside one task closes the window: nothing else
     can write while this runs. It is the structural half of the fix.
     :func:`purge_rows_in_session` re-checks ``deleted`` at the point of deletion
-    anyway, which is the half that holds no matter how the work is scheduled.
+    anyway — the half that does not depend on this scheduling — and derives the
+    row, the file and the ledger from what the guarded DELETE actually removed,
+    rolling the batch back if the two ever disagree. Read that docstring for the
+    precise limits of the guarantee before relying on it.
 
     Returns:
         ``(plan, deleted_count, owned_path_shas, skipped_restored_ids)``.
