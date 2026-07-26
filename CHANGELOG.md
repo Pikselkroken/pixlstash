@@ -1,6 +1,6 @@
 # [1.8.0] [Security:Moderate]
 
-Smart Scores are recomputed for your whole library the first time you open 1.8.0, so the grid may re-order compared to 1.7. This is expected, not a bug: the scoring weights are rebalanced so the top of the 1-5 range is reachable again and your best pictures can score like it. Your originals and snapshots are untouched, and the recompute runs in the background in small batches without re-running any AI models, so it stays out of your way.
+Smart Scores are recomputed for your whole library the first time you open 1.8.0, so the grid may re-order compared to 1.7. Part of that is a fix: the built-in reference points that score a library with few ratings of its own had stopped loading, so if you have rated only a handful of pictures your scores should be better than before. This is expected, not a bug: the scoring weights are rebalanced so the top of the 1-5 range is reachable again and your best pictures can score like it. Your originals and snapshots are untouched, and the recompute runs in the background in small batches without re-running any AI models, so it stays out of your way.
 
 - New justified (Google Photos style) grid layout, plus a single thumbnail-size control that replaces the columns slider.
 - Remember the expansion state of sidebar items

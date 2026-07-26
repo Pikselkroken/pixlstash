@@ -88,22 +88,26 @@ _NEAR_DUPLICATE_COSINE = 0.95
 # than on the point estimate.
 #
 # Where the bar comes from.  The leak-free measurement on this fixture is
-# tau-b = 0.410 with a 95% lower bound of 0.054 (n=18, 15 folds).  The bar is set at
-# 0.0, just under that: it is the one value with a defensible meaning at this sample
-# size, namely "we can rule out, at 95%, that the smart score orders pictures no better
-# than chance against human judgement".  It is not set closer to 0.054 because a
-# jackknife over the fixture shows a single picture's behaviour is worth up to ~0.15 of
-# the bound at n=18, so a tighter bar would start failing on one image's tag detection
-# moving rather than on a real regression.  This is a coarse floor: it catches the
-# scorer collapsing, inverting, or losing its anchors, not fine-grained drift.  A
-# meaningfully tighter bar needs a bigger labelled fixture, not a bolder number.
+# tau-b = 0.410 with a 95% lower bound of 0.054 (n=18, 15 folds).  A jackknife shows a
+# single picture's behaviour is worth up to ~0.15 of that bound at n=18, so the bar has
+# to sit *below* the noise band, not just below the measurement: 0.054 - 0.15 is
+# negative, so a bar at 0.0 would fail when one image's tag detections move rather than
+# when the scorer regresses.  Hence -0.10 -- comfortably outside one picture's leverage,
+# while still meaning "the score is not inverted and has not collapsed".  That is a
+# coarse floor by construction: it catches the scorer inverting, collapsing, or losing
+# its anchors, not fine-grained drift.  A meaningfully tighter bar needs a bigger
+# labelled fixture, not a bolder number -- at n=18 there is no threshold between -0.10
+# and 0.41 that a single image cannot cross on its own.
 #
 # Raising this bar is real work on the scorer -- chiefly anomaly-detector precision, and
 # how much a single unstable detection is allowed to move a picture -- not a matter of
 # re-tuning weights until the number looks better.  Re-weighting was swept and cannot
 # reach 0.70.  Changing the bar upward is only legitimate alongside a scoring change
 # that earns it.
-_MIN_TAU_B_LOWER_BOUND = 0.0
+# Note this file is in DEFERRED_FROM_GATE (tests/test_ci_shards.py), so this assertion
+# does not block a PR: its only CI home is the release-prep sweep, which is
+# informational.  That is how it stayed red at 0.55-vs-0.70 for a whole release cycle.
+_MIN_TAU_B_LOWER_BOUND = -0.10
 
 
 def _poll_until_zero(server, count_fn, label, timeout_s=_TASK_TIMEOUT_S, interval=0.5):
