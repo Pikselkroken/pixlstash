@@ -10,6 +10,14 @@ from pixlstash.db_models.picture import Picture
 
 API_PREFIX = "/api/v1"
 
+# Upper bound for "the watcher eventually imports the file" polls below. These
+# loops break as soon as the expected pictures appear, so a generous bound costs
+# a passing run nothing and only bounds the failing case. It has to be generous:
+# CI runs the backend gate as 8 concurrent shards (plus 4 Windows), so a runner
+# is far more contended than when these waits were written against a single
+# sequential job, and a scan cycle can take much longer in wall-clock terms.
+_IMPORT_WAIT_SECONDS = 60
+
 
 def test_watch_folder():
     """Test watching a folder for changes."""
@@ -52,7 +60,7 @@ def test_watch_folder():
                 start = time.monotonic()
                 pictures = []
                 expected_count = len(image_files)
-                while time.monotonic() - start < 20:
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
@@ -130,7 +138,7 @@ def test_watch_folder_delete_after_import():
                 expected_count = len(image_files)
                 start = time.monotonic()
                 pictures = []
-                while time.monotonic() - start < 20:
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
@@ -207,7 +215,7 @@ def test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan():
 
                 # Wait for initial import to complete.
                 start = time.monotonic()
-                while time.monotonic() - start < 20:
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
@@ -228,7 +236,7 @@ def test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan():
 
                 # The second file should still be discovered and imported.
                 start = time.monotonic()
-                while time.monotonic() - start < 20:
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
@@ -326,7 +334,7 @@ def test_watch_folder_retries_after_transient_hash_failure(monkeypatch):
                 # on a later scan after the finder re-discovers it.
                 start = time.monotonic()
                 pictures = []
-                while time.monotonic() - start < 30:
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
