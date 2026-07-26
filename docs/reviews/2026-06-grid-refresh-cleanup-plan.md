@@ -392,7 +392,7 @@ non-members, so it's independent of shared-backend state and re-runs.
 ## 10. Open security follow-ups (before merge)
 
 1. **`POST /api/v1/test-hooks/ws-event` — ✅ APPROVED by `chief-security-officer`**
-   (`docs/reviews/grid-refresh-security-signoff.md`). Off by default (route absent unless
+   (sign-off record retired once the feature shipped). Off by default (route absent unless
    `enable_test_hooks` is set; only the e2e launcher sets it), owner-only via
    `require_unscoped_owner`, no exfil surface, `repeat<=500` adequate. Non-blocking
    hardening suggestion: a boot-time guard refusing to register it under a production
