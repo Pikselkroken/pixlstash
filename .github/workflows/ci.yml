@@ -184,6 +184,7 @@ jobs:
           tests/test_florence.py
           tests/test_image_embedding_worker.py
           tests/test_impossible_clear_authz.py
+          tests/test_invalid_image_endless_retry.py
           tests/test_label_ledger.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
