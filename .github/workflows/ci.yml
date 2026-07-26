@@ -138,11 +138,19 @@ jobs:
   # release-prep budget, and it must not: regular PRs stay fast.
   #
   # Why the rest of the deferred set is not simply gated too: it is not yet
-  # known green. tests/test_smart_score_invalidation.py fails on this baseline
-  # (2 failures, unrelated to CI), and most of the rest have never run as a
-  # blocking check. Gating them today would turn every PR red. The flip to full
-  # discovery (`pytest tests/`, no list at all) is a follow-up, blocked on
-  # getting the deferred set green — the informational sweep below keeps it
+  # known green, and some of it is not deterministic. Measured 2026-07-26,
+  # tests/test_smart_score_invalidation.py returns a DIFFERENT pass count
+  # depending on machine load — 41 passed on an idle tree, 4 failed under two
+  # concurrent workloads — because its assertions race an async invalidation
+  # that has not landed yet (the failures read `assert <float> is None`).
+  # Collection order is deterministic (no randomising plugin), so load is the
+  # variable. Do not record a specific failure count for that file, and do not
+  # gate it on a loaded runner, which is its failing condition. Most of the
+  # rest have simply never run as a blocking check. Gating them today would
+  # turn every PR red. The flip to full discovery (`pytest tests/`, no list at
+  # all) is a follow-up, blocked on getting the deferred set green AND on
+  # making the load-sensitive ones deterministic — the informational sweep
+  # below keeps it
   # visible in the meantime.
   #
   # `--ci-shard i/N` (implemented in tests/conftest.py) deals the collected
