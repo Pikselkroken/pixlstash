@@ -299,7 +299,7 @@ Key endpoints (see the auto-generated index below for the full set):
 |--------|------|---------|
 | GET | `/pictures` | Filtered/paginated picture listing |
 | GET | `/pictures/search` | Keyword + semantic search |
-| GET | `/pictures/stats` | Aggregate stats |
+| GET | `/pictures/stats` | Aggregate stats (see the `score_agreement` note below) |
 | POST | `/pictures/import` | Upload images → create Pictures (one-shot) |
 | GET | `/pictures/import/status?task_id=…` | Import progress |
 | POST | `/pictures/import/staging` | Open an async streaming-import session (#459) |
@@ -321,6 +321,13 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
 | GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
+
+**`score_agreement` (stats section, `include=picture`).** Cross-tabulates the user's star rating against the smart score for the stats sidebar's agreement heatmap. Shape: `{cells: [{score, bucket, count}] (dense, all 20), rated, pairs, total, tau_b}`.
+
+- **Unrated means both `NULL` and `0`**, matching `score_distribution` (which labels NULL "Unscored" and omits 0) and the smart-score anchor query's `score > 0`. `rated` counts every rated picture; `pairs` counts the plottable subset that also has a smart score, so a rating awaiting its first smart-score computation is still reported as rated rather than silently dropped from the coverage line.
+- **One query serves both the cells and the coefficient.** It groups by `(score, smart_score * 100 cast to int)`, so `tau_b` keeps essentially all of the continuous variable's resolution while the four display buckets are summed from the same rows. The number and the grid can therefore never disagree.
+- **Kendall tau-b, not Pearson or Spearman.** The rating is ordinal with five levels, so nearly every pair ties on that axis, and tau-b is the coefficient whose denominator corrects for ties in both variables. It is `null` below `AGREEMENT_MIN_PAIRS` (20) and whenever one variable is constant (undefined, not 0).
+- **`_agreement_scope` deliberately drops `min_score` / `max_score` / `smart_score_bucket`** while honouring every other filter and scope. A cell click sets exactly those three, so a self-filtering matrix would collapse to the clicked cell and strand the user with no way to reach a neighbour. The rebuild is skipped entirely when none of the three is active. This self-exclusion is what `tests/test_score_agreement_stats.py` guards hardest.
 
 ### `characters.py`
 List, create, update, delete characters; fetch reference picture set; list pictures per character. Face assign / unassign lives in the adjacent [`characters_faces.py`](../pixlstash/routes/characters_faces.py) module (same `create_router(server)` factory, mounted next to the characters router), keeping this module focused on character CRUD and search.
@@ -741,7 +748,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | Module | Role |
 |--------|------|
 | [utils/service/filter_helpers.py](../pixlstash/utils/service/filter_helpers.py) | Shared SQL filter helpers (`normalize_set_mode`, `collect_set_filter_ids`, `project_membership_exists_clause`). Lives under `utils/service/` (not `services/`); it is a stateless utility module, not a service in the domain sense |
-| [utils/service/picture_stats.py](../pixlstash/utils/service/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py`. Lives under `utils/service/`, not `services/` |
+| [utils/service/picture_stats.py](../pixlstash/utils/service/picture_stats.py) | Aggregation queries for `GET /pictures/stats`; accepts a `PictureStatsParams` dataclass and returns the stats dict; used by `routes/pictures/_misc.py`. Lives under `utils/service/`, not `services/`. Includes `score_agreement` (see below) |
 | [services/config_service.py](../pixlstash/services/config_service.py) | Hardware monitoring (CPU, RAM, GPU via `psutil` / `pynvml`) and import-folder path resolution; extracted from `routes/config.py` |
 | [services/picture_service.py](../pixlstash/services/picture_service.py) | DB-layer helpers for single-picture reads from route handlers; accept a `Database` (`vault.db`) and delegate session management to it |
 | [services/search_query_service.py](../pixlstash/services/search_query_service.py) | DB-layer helpers for face-search and likeness-search queries; same `Database`-delegating pattern as `picture_service.py` |

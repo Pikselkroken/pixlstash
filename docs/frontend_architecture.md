@@ -394,6 +394,7 @@ Right-side statistics panel. Responsibilities:
 - Confidence-score histogram.
 - Tag-count histogram.
 - Score distribution.
+- **Agreement matrix** (`score_agreement`): a 5x4 heatmap cross-tabulating the user's star rating (rows 1-5, same order as the Score chart) against the smart-score buckets (columns, same bucketing as the Smart Score chart), shaded by count on a sqrt ramp of one hue, with Kendall tau-b and a rated-coverage line beneath. A cell click is a **compound** filter (`minScoreFilter` + `maxScoreFilter` + `smartScoreBucketFilter` at once); clicking the active cell clears all three. Keyboard: the grid is one tab stop with roving `tabindex`, arrow keys/Home/End move, Enter/Space activate. **The backend deliberately computes this section with those three filters excluded** so a cell click cannot collapse the matrix to the cell you just clicked (see backend_architecture, `_agreement_scope`); the selected cell is ringed instead. Empty cells are inert, since filtering to one would empty the grid.
 - Filter controls that emit back to `App.vue`: tag filter, score range, resolution bucket, media type.
 - Mirrors the same filter props as `ImageGrid` so its stats always match the active view.
 - Key emits: `toggle`, `filter-tag`, `filter-tags`, `filter-confidence-above`, `update:minScoreFilter`, `update:maxScoreFilter`, `update:smartScoreBucketFilter`, `update:resolutionBucketFilter`

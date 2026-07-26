@@ -5,6 +5,7 @@
 - Imports stream to the server and finish in the background, so closing the tab no longer cancels them. Running imports show up in the task manager and can be aborted.
 - Fixed: Scrapheap: delete forever now really removes the files on disk, behind a preview and a type-to-confirm dialog, and entries auto-purge on a retention you choose.
 - Real context menus in the Scrapheap and the image overlay.
+- New Agreement chart in the stats panel: a grid of your star ratings against the smart score, so you can see where the two disagree and click straight through to those pictures.
 - Fixed: Segment from the image overlay now draws its new boxes as soon as the run finishes, instead of only after you close and reopen the picture.
 - Fixed: Find similar faces from the image overlay now shows its results, the way Reverse image search already did.
 - Fix snapshot restore hard-deleting files that were added after the snapshot was taken, and stop deletions from destroying pictures in locked sets.
