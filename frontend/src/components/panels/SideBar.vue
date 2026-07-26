@@ -72,6 +72,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
+import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
@@ -193,34 +194,29 @@ const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
-const peopleSectionCollapsed = ref(false);
-const setsSectionCollapsed = ref(false);
-
-// Project tree expansion state (Projects tab flat tree)
-const expandedProjectIds = ref(new Set());
-const projectTreePeopleCollapsed = ref(new Set()); // project IDs where People is collapsed
-const projectTreeSetsCollapsed = ref(new Set()); // project IDs where Sets is collapsed
-
-function toggleProjectExpanded(id) {
-  const next = new Set(expandedProjectIds.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  expandedProjectIds.value = next;
-}
-
-function toggleProjectTreePeople(id) {
-  const next = new Set(projectTreePeopleCollapsed.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  projectTreePeopleCollapsed.value = next;
-}
-
-function toggleProjectTreeSets(id) {
-  const next = new Set(projectTreeSetsCollapsed.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  projectTreeSetsCollapsed.value = next;
-}
+// Which sections, projects and folders are open — hydrated from and written
+// back to localStorage by the composable, so the shape of the sidebar survives
+// a reload. Section state (People/Sets, the Folders-tab headers) defaults to
+// expanded; the folder tree defaults to collapsed.
+const {
+  peopleSectionCollapsed,
+  setsSectionCollapsed,
+  referenceFoldersCollapsed,
+  importFoldersCollapsed,
+  expandedProjectIds,
+  projectTreePeopleCollapsed, // project IDs where People is collapsed
+  projectTreeSetsCollapsed, // project IDs where Sets is collapsed
+  expandedFolderIds, // reference-folder id (number) or subfolder path (string)
+  togglePeopleSection,
+  toggleSetsSection,
+  toggleReferenceFoldersSection,
+  toggleImportFoldersSection,
+  toggleProjectExpanded,
+  toggleProjectTreePeople,
+  toggleProjectTreeSets,
+  toggleFolderExpanded,
+  syncProjectExpansion,
+} = useSidebarExpansion();
 
 function selectProjectNode(p) {
   // Explicit entry click → navigate. Unlike a tab switch, clicking a specific
@@ -418,10 +414,9 @@ const importFolders = ref([]);
 const importFoldersLoading = ref(false);
 const inDocker = ref(false);
 const referenceFoldersImageRoot = ref(null);
-const expandedFolderIds = ref(new Set());
+// expandedFolderIds / referenceFoldersCollapsed / importFoldersCollapsed are
+// persisted — see useSidebarExpansion() at the top of this component.
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
-const referenceFoldersCollapsed = ref(false);
-const importFoldersCollapsed = ref(false);
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
 const dragOverReferenceTargetKey = ref(null);
@@ -515,9 +510,7 @@ async function relocateReferenceFolder() {
     const data = await requestFolderRelocate(folder.id, destination);
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
-    for (const rf of referenceFolders.value) {
-      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
-    }
+    browseExpandedFolders();
     emit("images-moved", {
       imageIds: data?.moved_picture_ids || [],
       kind: "reference-folder",
@@ -729,6 +722,9 @@ async function fetchReferenceFolders() {
     // subdirectories (controls whether the expand chevron is shown).
     if (!inDocker.value) {
       referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
+      // Subfolders expanded in an earlier session start out with no listing of
+      // their own, so the restored tree would render them empty.
+      browseExpandedFolderPaths();
     }
     // If any folder is still pending, start polling for status updates.
     if (sidebarPrimaryTab.value === "folders") {
@@ -757,14 +753,26 @@ async function fetchImportFolders() {
   }
 }
 
-function toggleFolderExpanded(folderId) {
-  const set = new Set(expandedFolderIds.value);
-  if (set.has(folderId)) {
-    set.delete(folderId);
-  } else {
-    set.add(folderId);
+/**
+ * Fetch a listing for every subfolder the user has expanded. Their entries live
+ * in `folderBrowseCache`, which is per-session: a tree restored from a previous
+ * session (or re-rendered after the cache was dropped) has the nodes but not
+ * their children until they are browsed again.
+ */
+function browseExpandedFolderPaths() {
+  for (const key of expandedFolderIds.value) {
+    if (typeof key === "string") void browseFolderPath(key, true);
   }
-  expandedFolderIds.value = set;
+}
+
+/** Re-browse everything currently expanded, after the browse cache is cleared. */
+function browseExpandedFolders() {
+  for (const rf of referenceFolders.value) {
+    if (expandedFolderIds.value.has(rf.id)) {
+      void browseFolderPath(rf.folder, true);
+    }
+  }
+  browseExpandedFolderPaths();
 }
 
 async function browseFolderPath(path, prefetchChildren = false) {
@@ -1267,21 +1275,13 @@ const sortedProjects = computed(() =>
   ),
 );
 
-// Auto-expand projects the first time they appear in the tree.
-// This keeps all projects open by default without preventing the user from
-// manually collapsing them.
-const _seenProjectIds = new Set();
+// Auto-expand projects the first time they appear in the tree, except the ones
+// the user collapsed in an earlier session. This keeps projects open by default
+// without preventing a manual collapse — or undoing a remembered one — and
+// forgets projects that no longer exist.
 watch(
   () => sortedProjects.value.map((p) => p.id),
-  (ids) => {
-    const newIds = ids.filter((id) => !_seenProjectIds.has(id));
-    if (newIds.length === 0) return;
-    newIds.forEach((id) => _seenProjectIds.add(id));
-    expandedProjectIds.value = new Set([
-      ...expandedProjectIds.value,
-      ...newIds,
-    ]);
-  },
+  (ids) => syncProjectExpansion(ids),
   { immediate: true },
 );
 
@@ -2885,9 +2885,7 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
     });
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
-    for (const rf of referenceFolders.value) {
-      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
-    }
+    browseExpandedFolders();
     emit("images-moved", {
       imageIds: data?.moved_picture_ids || imageIds,
       kind: "reference-folder",
@@ -4774,7 +4772,7 @@ defineExpose({
             <div
               v-if="referenceFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--ref"
-              @click="referenceFoldersCollapsed = !referenceFoldersCollapsed"
+              @click="toggleReferenceFoldersSection()"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'reference-folders', $event)
               "
@@ -4991,7 +4989,7 @@ defineExpose({
             <div
               v-if="importFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--import"
-              @click="importFoldersCollapsed = !importFoldersCollapsed"
+              @click="toggleImportFoldersSection()"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('header', 'import-folders', $event)
               "
@@ -5131,7 +5129,7 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="peopleSectionCollapsed = !peopleSectionCollapsed"
+                @click.stop="togglePeopleSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'people', $event)
                 "
@@ -5308,7 +5306,7 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="setsSectionCollapsed = !setsSectionCollapsed"
+                @click.stop="toggleSetsSection()"
                 @contextmenu.prevent.stop="
                   openSidebarCtxMenu('header', 'sets', $event)
                 "
