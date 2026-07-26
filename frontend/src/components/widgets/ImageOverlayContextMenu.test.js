@@ -249,3 +249,146 @@ describe("overlay delete scoping contract", () => {
     expect(deleted).toEqual([10, 20, 30]);
   });
 });
+
+// ── 4. Overlay search actions must close the lightbox ───────────────────────
+// Both overlay search actions put their results in the GRID, which sits behind
+// the lightbox — and while the overlay is open every grid mutation is deferred
+// (frontend_architecture §9.1). An overlay search handler that does not close
+// the overlay therefore looks like it did nothing at all. That was the
+// find-similar-faces bug: it was wired to the shared GRID handler, which has no
+// closeOverlay() because the grid menu has no overlay to close.
+//
+// Reproduces both ImageGrid handlers verbatim against a shared fake state.
+describe("overlay search actions close the lightbox", () => {
+  function makeState() {
+    return {
+      overlayOpen: true,
+      reverseImageSearchPictureIds: [],
+      faceLikenessSearchFaceId: null,
+      clearSearchEmitted: 0,
+    };
+  }
+
+  const closeOverlay = (s) => {
+    s.overlayOpen = false;
+  };
+
+  // ImageGrid.handleOverlayReverseImageSearch
+  function overlayReverseImageSearch(s, overlayPictureId) {
+    if (overlayPictureId == null) return;
+    s.faceLikenessSearchFaceId = null;
+    s.reverseImageSearchPictureIds = [overlayPictureId];
+    closeOverlay(s);
+    s.clearSearchEmitted += 1;
+  }
+
+  // ImageGrid.handleOverlayFindSimilarFaces
+  function overlayFindSimilarFaces(s, faceId) {
+    if (!faceId) return;
+    s.reverseImageSearchPictureIds = [];
+    s.faceLikenessSearchFaceId = faceId;
+    closeOverlay(s);
+    s.clearSearchEmitted += 1;
+  }
+
+  // ImageGrid.handleFindSimilarFaces — the GRID handler, kept for the grid menu.
+  // No closeOverlay: there is no overlay open on that path.
+  function gridFindSimilarFaces(s, faceId) {
+    if (!faceId) return;
+    s.reverseImageSearchPictureIds = [];
+    s.faceLikenessSearchFaceId = faceId;
+    s.clearSearchEmitted += 1;
+  }
+
+  it("find-similar-faces closes the overlay and arms the face search", () => {
+    const s = makeState();
+    overlayFindSimilarFaces(s, 7);
+    expect(s.overlayOpen).toBe(false);
+    expect(s.faceLikenessSearchFaceId).toBe(7);
+    expect(s.reverseImageSearchPictureIds).toEqual([]);
+    expect(s.clearSearchEmitted).toBe(1);
+  });
+
+  it("matches its reverse-image-search sibling's close behaviour", () => {
+    const faces = makeState();
+    const reverse = makeState();
+    overlayFindSimilarFaces(faces, 7);
+    overlayReverseImageSearch(reverse, 42);
+    expect(faces.overlayOpen).toBe(reverse.overlayOpen);
+    expect(faces.clearSearchEmitted).toBe(reverse.clearSearchEmitted);
+  });
+
+  it("the two searches are mutually exclusive", () => {
+    const s = makeState();
+    overlayReverseImageSearch(s, 42);
+    expect(s.reverseImageSearchPictureIds).toEqual([42]);
+    expect(s.faceLikenessSearchFaceId).toBe(null);
+
+    overlayFindSimilarFaces(s, 7);
+    expect(s.faceLikenessSearchFaceId).toBe(7);
+    expect(s.reverseImageSearchPictureIds).toEqual([]);
+  });
+
+  it("ignores a missing face id (no close, no search)", () => {
+    const s = makeState();
+    overlayFindSimilarFaces(s, undefined);
+    expect(s.overlayOpen).toBe(true);
+    expect(s.faceLikenessSearchFaceId).toBe(null);
+    expect(s.clearSearchEmitted).toBe(0);
+  });
+
+  it("the grid handler still does not close anything (unchanged)", () => {
+    const s = makeState();
+    s.overlayOpen = false; // grid menu: no lightbox in the first place
+    gridFindSimilarFaces(s, 7);
+    expect(s.faceLikenessSearchFaceId).toBe(7);
+    expect(s.clearSearchEmitted).toBe(1);
+  });
+});
+
+// ── 5. The overlay menu emits the face id the handler needs ─────────────────
+// The handler bails on a falsy faceId, so the menu must pass one. With a single
+// face the item acts directly; with several it opens a per-face submenu.
+describe("overlay-mode find-similar-faces payload", () => {
+  const faceMenu = (faces) =>
+    mount(ImageGridContextMenu, {
+      props: {
+        ...REQUIRED,
+        overlayMode: true,
+        visible: true,
+        selectedImageIds: [42],
+        selectedCharacter: "ALL",
+        contextImage: { id: 42, format: "jpg", faces },
+      },
+      ...globalStubs,
+    });
+
+  it("emits the only face's id when the picture has one face", async () => {
+    const wrapper = faceMenu([{ id: 7, frame_index: 0, bbox: [0, 0, 1, 1] }]);
+    const item = wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().includes("Find similar faces"));
+    await item.trigger("click");
+    expect(wrapper.emitted("find-similar-faces")[0]).toEqual([7]);
+  });
+
+  it("emits the chosen face's id from the multi-face submenu", async () => {
+    const wrapper = faceMenu([
+      { id: 7, frame_index: 0, bbox: [0, 0, 1, 1] },
+      { id: 9, frame_index: 0, bbox: [1, 1, 2, 2] },
+    ]);
+    await wrapper.find(".ctx-submenu-wrap").trigger("mouseenter");
+    const faceItems = wrapper.findAll(".ctx-face-item");
+    expect(faceItems.length).toBe(2);
+    await faceItems[1].trigger("click");
+    expect(wrapper.emitted("find-similar-faces")[0]).toEqual([9]);
+  });
+
+  it("skips faces from later video frames and faces with no id", async () => {
+    const wrapper = faceMenu([
+      { id: null, frame_index: 0, bbox: [0, 0, 1, 1] },
+      { id: 11, frame_index: 3, bbox: [1, 1, 2, 2] },
+    ]);
+    expect(itemLabels(wrapper).join(" ")).not.toContain("Find similar faces");
+  });
+});

@@ -169,7 +169,7 @@
       :context-image="overlayCtxImage"
       @close="overlayCtxVisible = false"
       @share-picture="handleOverlayShare"
-      @find-similar-faces="handleFindSimilarFaces"
+      @find-similar-faces="handleOverlayFindSimilarFaces"
       @reverse-image-search="handleOverlayReverseImageSearch"
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
@@ -6649,6 +6649,18 @@ function handleOverlayReverseImageSearch() {
   faceLikenessSearchFaceId.value = null;
   reverseImageSearchPictureIds.value = [id];
   // Reveal the results behind the lightbox and clear any text search.
+  closeOverlay();
+  emit("clear-search", "");
+}
+
+function handleOverlayFindSimilarFaces(faceId) {
+  if (!faceId) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = faceId;
+  // Same contract as the overlay's reverse-image-search sibling: the results
+  // land in the grid BEHIND the lightbox, and while the overlay is open every
+  // grid mutation is deferred (§9.1), so without closing it the action looks
+  // like it did nothing at all.
   closeOverlay();
   emit("clear-search", "");
 }
