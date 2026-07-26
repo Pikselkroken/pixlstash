@@ -199,6 +199,7 @@ jobs:
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
           tests/test_restore.py
+          tests/test_score_agreement_stats.py
           tests/test_scope_table.py
           tests/test_server.py
           tests/test_smart_score_consistency.py

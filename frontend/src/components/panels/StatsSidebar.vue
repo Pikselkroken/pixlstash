@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed, onMounted, onUnmounted } from "vue";
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
@@ -833,6 +833,237 @@ function handleSmartScoreBarClick(label) {
   }
 }
 
+// ─── Agreement matrix (your rating x smart score) ────────────────────────────
+// Rows run 1..5 top to bottom and columns 1-2..4-5 left to right, matching the
+// two histograms above so this reads as their cross-product and agreement runs
+// as a band down the diagonal.
+const AGREEMENT_STARS = [1, 2, 3, 4, 5];
+const AGREEMENT_BUCKETS = ["1-2", "2-3", "3-4", "4-5"];
+// Both axes are already the same 1-5 scale, so the buckets are compared to the
+// ratings in smart-score units rather than by grid position.
+const AGREEMENT_BUCKET_RANGES = {
+  "1-2": [1, 2],
+  "2-3": [2, 3],
+  "3-4": [3, 4],
+  "4-5": [4, 5],
+};
+// A star is a rounded smart score: rating 4 stands for anything from 3.5 to 4.5,
+// so any bucket within half a point of the rating is a match.
+const AGREEMENT_MATCH_RADIUS = 0.5;
+// The gutter is wider than the sibling charts' 50px to make room for the
+// rotated y-axis title.
+const AGREEMENT_X0 = 62;
+const AGREEMENT_COL_W = 49;
+const AGREEMENT_CELL_W = 47; // 2px surface gap between cells
+const AGREEMENT_ROW_H = 22;
+const AGREEMENT_CELL_H = 20;
+const AGREEMENT_HEADER_H = 14;
+const AGREEMENT_AXIS_H = 15; // x-axis title strip below the grid
+// Above this shade the fill is dark enough that the count needs the hue's own
+// on-colour ink, the same inside/outside-the-bar switch the sibling charts make
+// spatially.
+const AGREEMENT_ON_FILL_SHADE = 0.55;
+const AGREEMENT_CAVEAT =
+  "Green cells are pictures you and the smart score agree about, within half a point, and red ones are where you disagree by more than a point and a half. The stronger the colour, the more pictures are in that cell. Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells outside the green band.";
+
+// Traffic-light hue by how far apart the two scores are, opacity by count.
+//
+// The gap is measured in smart-score points, not in grid steps: a star rating is
+// a rounded smart score, so rating 4 covers 3.5 to 4.5 and therefore matches BOTH
+// the 3-4 and the 4-5 bucket. Comparing normalised grid positions instead made
+// rating 4 a near-miss against 4-5, which is wrong: the two axes are the same
+// 1-5 scale and should be compared on it.
+//
+// Distance is from the rating to the nearest point of the bucket's interval, so
+// a rating inside the bucket is 0 apart. Ratings and bucket edges are whole
+// numbers, so this only ever yields 0, 1, 2 or 3.
+function agreementDisagreement(star, bucket) {
+  const range = AGREEMENT_BUCKET_RANGES[bucket];
+  if (!range) return 0;
+  const [low, high] = range;
+  return Math.max(low - star, star - high, 0);
+}
+
+function agreementTone(star, bucket) {
+  const distance = agreementDisagreement(star, bucket);
+  if (distance <= AGREEMENT_MATCH_RADIUS) return "good";
+  if (distance <= 1 + AGREEMENT_MATCH_RADIUS) return "mixed";
+  return "bad";
+}
+
+const agreement = computed(() => {
+  const raw = picStats.value?.score_agreement;
+  if (!raw || !Array.isArray(raw.cells) || !raw.cells.length) return null;
+  return raw;
+});
+
+const agreementCounts = computed(() => {
+  const map = new Map();
+  for (const cell of agreement.value?.cells || []) {
+    map.set(`${cell.score}|${cell.bucket}`, Number(cell.count) || 0);
+  }
+  return map;
+});
+
+function agreementCount(star, bucket) {
+  return agreementCounts.value.get(`${star}|${bucket}`) || 0;
+}
+
+const agreementMax = computed(() => {
+  let max = 0;
+  for (const count of agreementCounts.value.values()) {
+    if (count > max) max = count;
+  }
+  return max;
+});
+
+// sqrt so a single dominant cell doesn't flatten every other populated cell to
+// the same near-invisible wash. Empty cells get no fill at all.
+function agreementShade(star, bucket) {
+  const count = agreementCount(star, bucket);
+  if (!count || !agreementMax.value) return 0;
+  const ratio = Math.sqrt(count / agreementMax.value);
+  return 0.12 + ratio * 0.73;
+}
+
+function agreementCountOnFill(star, bucket) {
+  return agreementShade(star, bucket) >= AGREEMENT_ON_FILL_SHADE;
+}
+
+function agreementCellLabel(star, bucket) {
+  const count = agreementCount(star, bucket);
+  const pictures = count === 1 ? "1 picture" : `${count} pictures`;
+  return `${star} star, smart score ${bucket}: ${pictures}`;
+}
+
+function isAgreementCellActive(star, bucket) {
+  return (
+    props.minScoreFilter === star &&
+    props.maxScoreFilter === star &&
+    props.smartScoreBucketFilter === bucket
+  );
+}
+
+const agreementCellSelected = computed(() =>
+  AGREEMENT_STARS.some((star) =>
+    AGREEMENT_BUCKETS.some((bucket) => isAgreementCellActive(star, bucket)),
+  ),
+);
+
+function clearAgreementFilter() {
+  emit("update:minScoreFilter", null);
+  emit("update:maxScoreFilter", null);
+  emit("update:smartScoreBucketFilter", null);
+}
+
+// A cell click is a compound filter: the row sets the score range, the column
+// sets the smart-score bucket. Clicking the active cell clears both, matching
+// the toggle behaviour of the sibling bars.
+function onAgreementCellClick(star, bucket, row, col) {
+  if (agreementCount(star, bucket) <= 0) return; // an empty cell filters to nothing
+  agreementFocus.value = { row, col };
+  if (isAgreementCellActive(star, bucket)) {
+    clearAgreementFilter();
+    return;
+  }
+  emit("update:minScoreFilter", star);
+  emit("update:maxScoreFilter", star);
+  emit("update:smartScoreBucketFilter", bucket);
+}
+
+// Roving tabindex: the grid is one tab stop and arrow keys move within it, so 20
+// cells don't cost 20 tab presses to skip past.
+const agreementFocus = ref({ row: 0, col: 0 });
+
+function agreementTabIndex(row, col) {
+  return agreementFocus.value.row === row && agreementFocus.value.col === col
+    ? 0
+    : -1;
+}
+
+function focusAgreementCell(row, col) {
+  agreementFocus.value = { row, col };
+  nextTick(() => {
+    const cells = document.querySelectorAll(".agreement-grid [role='gridcell']");
+    cells[row * AGREEMENT_BUCKETS.length + col]?.focus?.();
+  });
+}
+
+function onAgreementKeydown(event) {
+  const { row, col } = agreementFocus.value;
+  const lastRow = AGREEMENT_STARS.length - 1;
+  const lastCol = AGREEMENT_BUCKETS.length - 1;
+  let next = null;
+  if (event.key === "ArrowRight") next = { row, col: Math.min(lastCol, col + 1) };
+  else if (event.key === "ArrowLeft") next = { row, col: Math.max(0, col - 1) };
+  else if (event.key === "ArrowDown") next = { row: Math.min(lastRow, row + 1), col };
+  else if (event.key === "ArrowUp") next = { row: Math.max(0, row - 1), col };
+  else if (event.key === "Home") next = { row, col: 0 };
+  else if (event.key === "End") next = { row, col: lastCol };
+  else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onAgreementCellClick(
+      AGREEMENT_STARS[row],
+      AGREEMENT_BUCKETS[col],
+      row,
+      col,
+    );
+    return;
+  }
+  if (!next) return;
+  event.preventDefault();
+  focusAgreementCell(next.row, next.col);
+}
+
+// Signed to two decimals, so a negative coefficient reads as "the smart score
+// disagrees with you" rather than as a typo.
+function formatCoefficient(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const rounded = Number(value).toFixed(2);
+  return Number(rounded) > 0 ? `+${rounded}` : rounded;
+}
+
+// Both coefficients are shown with their names spelled out: they answer
+// different questions (Pearson assumes the star scale is evenly spaced,
+// Spearman only assumes the order), and a bare Greek letter tells the reader
+// neither which is which nor what it measures.
+const agreementCoefficients = computed(() => {
+  const data = agreement.value;
+  if (!data) return [];
+  return [
+    {
+      key: "pearson",
+      name: "Pearson r",
+      value: formatCoefficient(data.pearson),
+      title:
+        "Pearson's r: straight-line correlation. Treats the gap between each star as equal.",
+    },
+    {
+      key: "spearman",
+      name: "Spearman ρ",
+      value: formatCoefficient(data.spearman),
+      title:
+        "Spearman's rho: rank correlation. Only assumes more stars means better, not that the steps are even.",
+    },
+  ].filter((entry) => entry.value !== null);
+});
+
+const agreementNoCoefficientLabel = computed(() =>
+  (agreement.value?.pairs || 0) > 0
+    ? "Rate a few more pictures to see the correlation"
+    : "Rate some pictures to compare them with the smart score",
+);
+
+const agreementCoverage = computed(() => {
+  const data = agreement.value;
+  if (!data) return "";
+  const rated = Number(data.rated) || 0;
+  const total = Number(data.total) || 0;
+  if (!total) return "No pictures in view";
+  const pct = Math.round((rated / total) * 100);
+  return `${rated.toLocaleString()} of ${total.toLocaleString()} rated (${pct}%)`;
+});
+
 const RESOLUTION_LABEL_TO_BUCKET = {
   Unknown: "unknown",
   "<1 MP": "lt1mp",
@@ -1571,6 +1802,158 @@ defineExpose({ focusTasksTab });
                   </text>
                 </g>
               </svg>
+            </div>
+          </div>
+
+          <!-- Smart score vs your rating (agreement matrix) -->
+          <div v-if="agreement" class="stats-section">
+            <div class="stats-section-header">
+              <span class="stats-section-title">Agreement</span>
+              <span
+                class="stats-info-dot"
+                :title="AGREEMENT_CAVEAT"
+                tabindex="0"
+                role="note"
+                :aria-label="AGREEMENT_CAVEAT"
+              >
+                <v-icon size="11">mdi-information-outline</v-icon>
+              </span>
+              <button
+                v-if="agreementCellSelected"
+                class="stats-clear-btn"
+                type="button"
+                title="Clear agreement filter"
+                @click="clearAgreementFilter"
+              >
+                <v-icon size="11">mdi-close</v-icon>
+              </button>
+            </div>
+            <div v-if="agreement.pairs > 0" class="stats-hist">
+              <svg
+                :width="260"
+                :height="
+                  AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + AGREEMENT_AXIS_H + 2
+                "
+                class="stats-bar-chart agreement-grid"
+                role="grid"
+                aria-label="Your rating against smart score"
+                @keydown="onAgreementKeydown"
+              >
+                <!-- Axis titles. The y title is rotated up the left edge; the x
+                     title sits under the grid, both in the recessive label ink. -->
+                <text
+                  :x="-(AGREEMENT_HEADER_H + (AGREEMENT_ROW_H * 5) / 2)"
+                  y="9"
+                  transform="rotate(-90)"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Your rating
+                </text>
+                <text
+                  :x="AGREEMENT_X0 + (AGREEMENT_COL_W * 4) / 2"
+                  :y="AGREEMENT_HEADER_H + AGREEMENT_ROW_H * 5 + 11"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Smart score
+                </text>
+                <text
+                  v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                  :key="`col-${bucket}`"
+                  :x="AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2"
+                  y="9"
+                  text-anchor="middle"
+                  class="hist-label"
+                >
+                  {{ bucket }}
+                </text>
+                <g
+                  v-for="(star, row) in AGREEMENT_STARS"
+                  :key="`row-${star}`"
+                  role="row"
+                  :transform="`translate(0, ${AGREEMENT_HEADER_H + row * AGREEMENT_ROW_H})`"
+                >
+                  <text x="46" y="14" text-anchor="end" class="hist-label">
+                    {{ star }}
+                  </text>
+                  <g
+                    v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                    :key="`cell-${star}-${bucket}`"
+                    role="gridcell"
+                    :class="[
+                      'agreement-cell',
+                      `agreement-cell--${agreementTone(star, bucket)}`,
+                      {
+                        'agreement-cell--interactive':
+                          agreementCount(star, bucket) > 0,
+                        'agreement-cell--selected': isAgreementCellActive(
+                          star,
+                          bucket,
+                        ),
+                      },
+                    ]"
+                    :tabindex="agreementTabIndex(row, col)"
+                    :aria-selected="isAgreementCellActive(star, bucket)"
+                    :aria-label="agreementCellLabel(star, bucket)"
+                    @click="onAgreementCellClick(star, bucket, row, col)"
+                    @focus="agreementFocus = { row, col }"
+                  >
+                    <rect
+                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                      y="2"
+                      :width="AGREEMENT_CELL_W"
+                      :height="AGREEMENT_CELL_H"
+                      rx="2"
+                      class="agreement-cell-rect"
+                      :style="{ opacity: agreementShade(star, bucket) }"
+                    />
+                    <rect
+                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                      y="2"
+                      :width="AGREEMENT_CELL_W"
+                      :height="AGREEMENT_CELL_H"
+                      rx="2"
+                      class="agreement-cell-outline"
+                    />
+                    <text
+                      v-if="agreementCount(star, bucket) > 0"
+                      :x="
+                        AGREEMENT_X0 +
+                        col * AGREEMENT_COL_W +
+                        AGREEMENT_CELL_W / 2
+                      "
+                      :y="2 + AGREEMENT_CELL_H / 2 + 4"
+                      text-anchor="middle"
+                      :class="[
+                        'agreement-count',
+                        {
+                          'agreement-count--on-fill': agreementCountOnFill(
+                            star,
+                            bucket,
+                          ),
+                        },
+                      ]"
+                    >
+                      {{ agreementCount(star, bucket) }}
+                    </text>
+                  </g>
+                </g>
+              </svg>
+            </div>
+            <div class="agreement-summary">
+              <dl v-if="agreementCoefficients.length" class="agreement-stats">
+                <template v-for="stat in agreementCoefficients" :key="stat.key">
+                  <dt class="agreement-stat-name" :title="stat.title">
+                    {{ stat.name }}
+                  </dt>
+                  <dd class="agreement-stat-value">{{ stat.value }}</dd>
+                </template>
+              </dl>
+              <span v-else class="agreement-stat-empty">
+                {{ agreementNoCoefficientLabel }}
+              </span>
+              <span class="agreement-coverage">{{ agreementCoverage }}</span>
             </div>
           </div>
 
@@ -2372,6 +2755,123 @@ defineExpose({ focusTasksTab });
   fill: rgba(var(--v-theme-tertiary), 0.85);
   stroke: rgba(var(--v-theme-tertiary), 1);
   stroke-width: 1;
+}
+
+/* ── Agreement matrix ──────────────────────────────────────────────────────
+   Composite encoding: HUE is the traffic light (how far the cell sits from
+   agreement, fixed by its position in the grid), OPACITY is how many pictures
+   are in it. The hue is redundant with position and every populated cell prints
+   its count, so nothing here is carried by colour alone — which is what makes a
+   red/green pair acceptable for colour-blind readers. Status hues come from the
+   theme's own success/warning/error tokens, which are defined per theme, so
+   light and dark each get their tuned value. The fill IS the value, so hover
+   must not change it: hover and focus ring the cell instead. */
+.agreement-cell-rect {
+  fill: rgb(var(--v-theme-primary));
+}
+.agreement-cell--good .agreement-cell-rect {
+  fill: rgb(var(--v-theme-success));
+}
+.agreement-cell--mixed .agreement-cell-rect {
+  fill: rgb(var(--v-theme-warning));
+}
+.agreement-cell--bad .agreement-cell-rect {
+  fill: rgb(var(--v-theme-error));
+}
+/* Once the fill is strong enough to carry it, the count switches to that hue's
+   own label ink (each pairs 4.8:1+ with its fill in both themes). */
+.agreement-cell--good .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-success));
+}
+.agreement-cell--mixed .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-warning));
+}
+.agreement-cell--bad .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-error));
+}
+.agreement-cell-outline {
+  fill: none;
+  stroke: rgba(var(--v-theme-on-surface), 0.12);
+  stroke-width: 1;
+}
+.agreement-cell--interactive {
+  cursor: pointer;
+}
+.agreement-cell--interactive:hover .agreement-cell-outline {
+  stroke: rgba(var(--v-theme-on-surface), 0.45);
+}
+.agreement-cell--selected .agreement-cell-outline {
+  stroke: rgb(var(--v-theme-primary));
+  stroke-width: 2;
+}
+.agreement-cell:focus-visible {
+  outline: none;
+}
+.agreement-cell:focus-visible .agreement-cell-outline {
+  stroke: rgb(var(--v-theme-accent));
+  stroke-width: 2;
+}
+.agreement-count {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-surface), 0.75);
+  pointer-events: none;
+}
+.agreement-count--on-fill {
+  fill: rgba(var(--v-theme-on-primary), 0.9);
+}
+.agreement-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+/* Name / value pairs, so both coefficients line up on the value column instead
+   of running together as one sentence. */
+.agreement-stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.agreement-stat-name {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  cursor: help;
+}
+.agreement-stat-value {
+  margin: 0;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  text-align: right;
+}
+.agreement-stat-empty {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+.hist-axis-title {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-surface), 0.45);
+  letter-spacing: 0.04em;
+}
+.agreement-coverage {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+.stats-info-dot {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  cursor: help;
+}
+.stats-info-dot:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
 }
 
 /* ── Tasks tab ─────────────────────────────────────────────────────────────── */

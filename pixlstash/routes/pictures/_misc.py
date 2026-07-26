@@ -107,6 +107,7 @@ class PictureStatsResponse(BaseModel):
     score_distribution: Optional[list] = None
     smart_score_distribution: Optional[list] = None
     resolution_distribution: Optional[list] = None
+    score_agreement: Optional[dict] = None
 
 
 class OpenLocationResponse(BaseModel):
