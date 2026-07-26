@@ -26,10 +26,9 @@ from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture_set import PictureSetMember
 import pixlstash.routes.pictures as pictures_routes
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.server import Server
-from tests.utils import upload_pictures_and_wait, wait_for_faces
+from tests.utils import seed_likeness_stable, upload_pictures_and_wait, wait_for_faces
 
 logger = get_logger(__name__)
 
@@ -1410,31 +1409,10 @@ def test_stack_query_respects_project_filter():
                 )
                 session.commit()
 
-            # Wait for LikenessParametersTask to finish before seeding edges.
-            # That task calls reset_likeness_for_pictures which wipes PictureLikeness rows.
-            _deadline = time.monotonic() + 30.0
-            while time.monotonic() < _deadline:
-                _pending = server.vault.db.run_immediate_read_task(
-                    LikenessParameterUtils.count_pending_parameters
-                )
-                if (
-                    _pending == 0
-                    and not server.vault._task_runner.has_active_task_of_type(
-                        "LikenessParametersTask"
-                    )
-                ):
-                    break
-                time.sleep(0.05)
-            assert (
-                _pending == 0
-                and not server.vault._task_runner.has_active_task_of_type(
-                    "LikenessParametersTask"
-                )
-            ), (
-                f"LikenessParametersTask did not complete within deadline ({_pending} pending)"
-            )
-
-            server.vault.db.run_task(seed_likeness)
+            # The background likeness pipeline both wipes pairs
+            # (reset_likeness_for_pictures) and writes its own real ones, so seed
+            # only once it is quiescent and on a wiped slate.
+            seed_likeness_stable(server, seed_likeness)
 
             stacks_a_resp = client.get(
                 "/pictures/likeness-groups",
@@ -1968,9 +1946,9 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
             assert set_b_id is not None
 
             # /pictures/likeness-groups groups are built from likeness edges, so seed a chain.
-            def seed_likeness_edges(session, a: int, b: int, c: int):
-                ab_a, ab_b = sorted((a, b))
-                bc_a, bc_b = sorted((b, c))
+            def seed_likeness_edges(session):
+                ab_a, ab_b = sorted((pic_a, pic_b))
+                bc_a, bc_b = sorted((pic_b, pic_c))
                 session.add(
                     PictureLikeness(
                         picture_id_a=ab_a,
@@ -1989,32 +1967,10 @@ def test_pictures_likeness_groups_supports_set_intersection_filter():
                 )
                 session.commit()
 
-            # Wait for LikenessParametersTask to finish before seeding edges.
-            # That task calls reset_likeness_for_pictures which deletes PictureLikeness
-            # rows, so any edges seeded before it completes will be wiped.
-            _deadline = time.monotonic() + 30.0
-            while time.monotonic() < _deadline:
-                _pending = server.vault.db.run_immediate_read_task(
-                    LikenessParameterUtils.count_pending_parameters
-                )
-                if (
-                    _pending == 0
-                    and not server.vault._task_runner.has_active_task_of_type(
-                        "LikenessParametersTask"
-                    )
-                ):
-                    break
-                time.sleep(0.05)
-            assert (
-                _pending == 0
-                and not server.vault._task_runner.has_active_task_of_type(
-                    "LikenessParametersTask"
-                )
-            ), (
-                f"LikenessParametersTask did not complete within deadline ({_pending} pending)"
-            )
-
-            server.vault.db.run_task(seed_likeness_edges, pic_a, pic_b, pic_c)
+            # The background likeness pipeline both wipes pairs
+            # (reset_likeness_for_pictures) and writes its own real ones, so seed
+            # only once it is quiescent and on a wiped slate.
+            seed_likeness_stable(server, seed_likeness_edges)
 
             assert (
                 client.post(f"/picture_sets/{set_a_id}/members/{pic_b}").status_code
