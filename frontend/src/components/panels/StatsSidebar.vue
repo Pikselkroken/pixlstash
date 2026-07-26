@@ -839,17 +839,39 @@ function handleSmartScoreBarClick(label) {
 // on the main diagonal.
 const AGREEMENT_STARS = [1, 2, 3, 4, 5];
 const AGREEMENT_BUCKETS = ["1-2", "2-3", "3-4", "4-5"];
-const AGREEMENT_X0 = 50; // same label gutter as the sibling bar charts
-const AGREEMENT_COL_W = 52;
-const AGREEMENT_CELL_W = 50; // 2px surface gap between cells
+// The gutter is wider than the sibling charts' 50px to make room for the
+// rotated y-axis title.
+const AGREEMENT_X0 = 62;
+const AGREEMENT_COL_W = 49;
+const AGREEMENT_CELL_W = 47; // 2px surface gap between cells
 const AGREEMENT_ROW_H = 22;
 const AGREEMENT_CELL_H = 20;
 const AGREEMENT_HEADER_H = 14;
-// Above this shade the fill is dark enough that the count needs on-primary ink,
-// the same inside/outside-the-bar switch the sibling charts make spatially.
+const AGREEMENT_AXIS_H = 15; // x-axis title strip below the grid
+// Above this shade the fill is dark enough that the count needs the hue's own
+// on-colour ink, the same inside/outside-the-bar switch the sibling charts make
+// spatially.
 const AGREEMENT_ON_FILL_SHADE = 0.55;
 const AGREEMENT_CAVEAT =
-  "Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells off the diagonal.";
+  "Green cells are pictures you and the smart score agree about, red ones are where you disagree, and the stronger the colour the more pictures are in that cell. Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells off the diagonal.";
+
+// Traffic-light hue by how far a cell sits from agreement, saturation by count.
+// Both axes are normalised to 0..1 first because they have different step counts
+// (five ratings against four buckets), so raw index distance would be lopsided.
+function agreementDisagreement(star, bucket) {
+  const col = AGREEMENT_BUCKETS.indexOf(bucket);
+  if (col < 0) return 0;
+  const ratingPos = (star - 1) / (AGREEMENT_STARS.length - 1);
+  const smartPos = col / (AGREEMENT_BUCKETS.length - 1);
+  return Math.abs(ratingPos - smartPos);
+}
+
+function agreementTone(star, bucket) {
+  const distance = agreementDisagreement(star, bucket);
+  if (distance <= 0.2) return "good";
+  if (distance <= 0.5) return "mixed";
+  return "bad";
+}
 
 const agreement = computed(() => {
   const raw = picStats.value?.score_agreement;
@@ -975,12 +997,44 @@ function onAgreementKeydown(event) {
   focusAgreementCell(next.row, next.col);
 }
 
-const agreementTauLabel = computed(() => {
-  const tau = agreement.value?.tau_b;
-  if (tau == null) return "Rate a few more pictures to see agreement";
-  const rounded = tau.toFixed(2);
-  return `${Number(rounded) > 0 ? "τ +" : "τ "}${rounded}`;
+// Signed to two decimals, so a negative coefficient reads as "the smart score
+// disagrees with you" rather than as a typo.
+function formatCoefficient(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const rounded = Number(value).toFixed(2);
+  return Number(rounded) > 0 ? `+${rounded}` : rounded;
+}
+
+// Both coefficients are shown with their names spelled out: they answer
+// different questions (Pearson assumes the star scale is evenly spaced,
+// Spearman only assumes the order), and a bare Greek letter tells the reader
+// neither which is which nor what it measures.
+const agreementCoefficients = computed(() => {
+  const data = agreement.value;
+  if (!data) return [];
+  return [
+    {
+      key: "pearson",
+      name: "Pearson r",
+      value: formatCoefficient(data.pearson),
+      title:
+        "Pearson's r: straight-line correlation. Treats the gap between each star as equal.",
+    },
+    {
+      key: "spearman",
+      name: "Spearman ρ",
+      value: formatCoefficient(data.spearman),
+      title:
+        "Spearman's rho: rank correlation. Only assumes more stars means better, not that the steps are even.",
+    },
+  ].filter((entry) => entry.value !== null);
 });
+
+const agreementNoCoefficientLabel = computed(() =>
+  (agreement.value?.pairs || 0) > 0
+    ? "Rate a few more pictures to see the correlation"
+    : "Rate some pictures to compare them with the smart score",
+);
 
 const agreementCoverage = computed(() => {
   const data = agreement.value;
@@ -1759,12 +1813,33 @@ defineExpose({ focusTasksTab });
             <div v-if="agreement.pairs > 0" class="stats-hist">
               <svg
                 :width="260"
-                :height="AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + 2"
+                :height="
+                  AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + AGREEMENT_AXIS_H + 2
+                "
                 class="stats-bar-chart agreement-grid"
                 role="grid"
                 aria-label="Your rating against smart score"
                 @keydown="onAgreementKeydown"
               >
+                <!-- Axis titles. The y title is rotated up the left edge; the x
+                     title sits under the grid, both in the recessive label ink. -->
+                <text
+                  :x="-(AGREEMENT_HEADER_H + (AGREEMENT_ROW_H * 5) / 2)"
+                  y="9"
+                  transform="rotate(-90)"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Your rating
+                </text>
+                <text
+                  :x="AGREEMENT_X0 + (AGREEMENT_COL_W * 4) / 2"
+                  :y="AGREEMENT_HEADER_H + AGREEMENT_ROW_H * 5 + 11"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Smart score
+                </text>
                 <text
                   v-for="(bucket, col) in AGREEMENT_BUCKETS"
                   :key="`col-${bucket}`"
@@ -1788,15 +1863,18 @@ defineExpose({ focusTasksTab });
                     v-for="(bucket, col) in AGREEMENT_BUCKETS"
                     :key="`cell-${star}-${bucket}`"
                     role="gridcell"
-                    :class="{
-                      'agreement-cell': true,
-                      'agreement-cell--interactive':
-                        agreementCount(star, bucket) > 0,
-                      'agreement-cell--selected': isAgreementCellActive(
-                        star,
-                        bucket,
-                      ),
-                    }"
+                    :class="[
+                      'agreement-cell',
+                      `agreement-cell--${agreementTone(star, bucket)}`,
+                      {
+                        'agreement-cell--interactive':
+                          agreementCount(star, bucket) > 0,
+                        'agreement-cell--selected': isAgreementCellActive(
+                          star,
+                          bucket,
+                        ),
+                      },
+                    ]"
                     :tabindex="agreementTabIndex(row, col)"
                     :aria-selected="isAgreementCellActive(star, bucket)"
                     :aria-label="agreementCellLabel(star, bucket)"
@@ -1846,11 +1924,16 @@ defineExpose({ focusTasksTab });
               </svg>
             </div>
             <div class="agreement-summary">
-              <span v-if="agreement.tau_b != null" class="agreement-tau">
-                {{ agreementTauLabel }}
-              </span>
-              <span v-else class="agreement-tau agreement-tau--muted">
-                {{ agreementTauLabel }}
+              <dl v-if="agreementCoefficients.length" class="agreement-stats">
+                <template v-for="stat in agreementCoefficients" :key="stat.key">
+                  <dt class="agreement-stat-name" :title="stat.title">
+                    {{ stat.name }}
+                  </dt>
+                  <dd class="agreement-stat-value">{{ stat.value }}</dd>
+                </template>
+              </dl>
+              <span v-else class="agreement-stat-empty">
+                {{ agreementNoCoefficientLabel }}
               </span>
               <span class="agreement-coverage">{{ agreementCoverage }}</span>
             </div>
@@ -2657,11 +2740,36 @@ defineExpose({ focusTasksTab });
 }
 
 /* ── Agreement matrix ──────────────────────────────────────────────────────
-   Sequential encoding: one hue (the same primary the smart-score chart uses),
-   light to dark by per-cell opacity. The fill IS the value, so hover must not
-   change it — hover and focus ring the cell instead. */
+   Composite encoding: HUE is the traffic light (how far the cell sits from
+   agreement, fixed by its position in the grid), OPACITY is how many pictures
+   are in it. The hue is redundant with position and every populated cell prints
+   its count, so nothing here is carried by colour alone — which is what makes a
+   red/green pair acceptable for colour-blind readers. Status hues come from the
+   theme's own success/warning/error tokens, which are defined per theme, so
+   light and dark each get their tuned value. The fill IS the value, so hover
+   must not change it: hover and focus ring the cell instead. */
 .agreement-cell-rect {
   fill: rgb(var(--v-theme-primary));
+}
+.agreement-cell--good .agreement-cell-rect {
+  fill: rgb(var(--v-theme-success));
+}
+.agreement-cell--mixed .agreement-cell-rect {
+  fill: rgb(var(--v-theme-warning));
+}
+.agreement-cell--bad .agreement-cell-rect {
+  fill: rgb(var(--v-theme-error));
+}
+/* Once the fill is strong enough to carry it, the count switches to that hue's
+   own label ink (each pairs 4.8:1+ with its fill in both themes). */
+.agreement-cell--good .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-success));
+}
+.agreement-cell--mixed .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-warning));
+}
+.agreement-cell--bad .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-error));
 }
 .agreement-cell-outline {
   fill: none;
@@ -2700,14 +2808,36 @@ defineExpose({ focusTasksTab });
   gap: var(--space-1);
   padding-top: var(--space-2);
 }
-.agreement-tau {
+/* Name / value pairs, so both coefficients line up on the value column instead
+   of running together as one sentence. */
+.agreement-stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.agreement-stat-name {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  cursor: help;
+}
+.agreement-stat-value {
+  margin: 0;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
-  color: rgba(var(--v-theme-on-surface), 0.8);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  text-align: right;
 }
-.agreement-tau--muted {
-  font-weight: var(--weight-regular);
+.agreement-stat-empty {
+  font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.55);
+}
+.hist-axis-title {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-surface), 0.45);
+  letter-spacing: 0.04em;
 }
 .agreement-coverage {
   font-size: var(--text-2xs);

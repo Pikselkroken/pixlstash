@@ -67,11 +67,27 @@ function moveFocus({ row, col }, key) {
   return null;
 }
 
-// (5) Verbatim copies of agreementTauLabel / agreementCoverage.
-function tauLabel(tau) {
-  if (tau == null) return "Rate a few more pictures to see agreement";
-  const rounded = tau.toFixed(2);
-  return `${Number(rounded) > 0 ? "τ +" : "τ "}${rounded}`;
+// (5) Verbatim copies of formatCoefficient / agreementCoverage / the tone rule.
+function formatCoefficient(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const rounded = Number(value).toFixed(2);
+  return Number(rounded) > 0 ? `+${rounded}` : rounded;
+}
+
+// (6) Verbatim copies of agreementDisagreement / agreementTone.
+function disagreement(star, bucket) {
+  const col = AGREEMENT_BUCKETS.indexOf(bucket);
+  if (col < 0) return 0;
+  const ratingPos = (star - 1) / (AGREEMENT_STARS.length - 1);
+  const smartPos = col / (AGREEMENT_BUCKETS.length - 1);
+  return Math.abs(ratingPos - smartPos);
+}
+
+function tone(star, bucket) {
+  const d = disagreement(star, bucket);
+  if (d <= 0.2) return "good";
+  if (d <= 0.5) return "mixed";
+  return "bad";
 }
 
 function coverage({ rated, total }) {
@@ -226,20 +242,74 @@ describe("keyboard model", () => {
   });
 });
 
+describe("traffic-light tone", () => {
+  it("paints the agreement diagonal green", () => {
+    expect(tone(1, "1-2")).toBe("good");
+    expect(tone(5, "4-5")).toBe("good");
+    expect(tone(3, "2-3")).toBe("good");
+    expect(tone(3, "3-4")).toBe("good");
+  });
+
+  it("paints the far corners red — a 1-star the machine loves, and the reverse", () => {
+    expect(tone(1, "4-5")).toBe("bad");
+    expect(tone(5, "1-2")).toBe("bad");
+  });
+
+  it("paints a near miss amber rather than red", () => {
+    expect(tone(1, "2-3")).toBe("mixed");
+    expect(tone(5, "3-4")).toBe("mixed");
+  });
+
+  it("is symmetric: disagreeing in either direction reads the same", () => {
+    expect(tone(1, "4-5")).toBe(tone(5, "1-2"));
+    expect(tone(2, "4-5")).toBe(tone(4, "1-2"));
+  });
+
+  it("normalises both axes, so five ratings against four buckets stay comparable", () => {
+    // Raw index distance would make column 3 look further from row 3 than it is:
+    // the axes have different step counts, so they are compared as fractions.
+    expect(disagreement(3, "2-3")).toBeCloseTo(Math.abs(0.5 - 1 / 3), 5);
+    expect(disagreement(1, "1-2")).toBe(0);
+    expect(disagreement(5, "4-5")).toBe(0);
+    expect(disagreement(1, "4-5")).toBe(1);
+  });
+
+  it("gets worse monotonically as a row moves away from its matching column", () => {
+    expect(disagreement(1, "1-2")).toBeLessThan(disagreement(1, "2-3"));
+    expect(disagreement(1, "2-3")).toBeLessThan(disagreement(1, "3-4"));
+    expect(disagreement(1, "3-4")).toBeLessThan(disagreement(1, "4-5"));
+  });
+
+  it("covers every cell with a tone", () => {
+    for (const star of AGREEMENT_STARS) {
+      for (const bucket of AGREEMENT_BUCKETS) {
+        expect(["good", "mixed", "bad"]).toContain(tone(star, bucket));
+      }
+    }
+  });
+});
+
 describe("summary copy", () => {
   it("signs a positive coefficient explicitly", () => {
-    expect(tauLabel(0.42)).toBe("τ +0.42");
+    expect(formatCoefficient(0.42)).toBe("+0.42");
   });
 
   it("shows a negative coefficient (the machine disagrees with you)", () => {
-    expect(tauLabel(-0.31)).toBe("τ -0.31");
+    expect(formatCoefficient(-0.31)).toBe("-0.31");
   });
 
-  it("explains itself instead of printing a number when the backend suppressed it", () => {
-    expect(tauLabel(null)).toBe("Rate a few more pictures to see agreement");
-    expect(tauLabel(undefined)).toBe(
-      "Rate a few more pictures to see agreement",
-    );
+  it("shows a flat coefficient without a misleading plus sign", () => {
+    expect(formatCoefficient(0)).toBe("0.00");
+  });
+
+  it("returns null for a suppressed coefficient so the row is dropped, not blank", () => {
+    expect(formatCoefficient(null)).toBe(null);
+    expect(formatCoefficient(undefined)).toBe(null);
+  });
+
+  it("always shows two decimals, so the two rows line up", () => {
+    expect(formatCoefficient(0.5)).toBe("+0.50");
+    expect(formatCoefficient(-1)).toBe("-1.00");
   });
 
   it("reports coverage against the whole view, not just the rated part", () => {

@@ -16,6 +16,7 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.db_models import Picture
@@ -23,6 +24,9 @@ from pixlstash.server import Server
 from pixlstash.utils.service.picture_stats import (
     AGREEMENT_MIN_PAIRS,
     _kendall_tau_b,
+    _mid_ranks,
+    _weighted_pearson,
+    _weighted_spearman,
     clear_stats_cache,
 )
 from tests.utils import upload_pictures_and_wait
@@ -75,6 +79,76 @@ def test_tau_b_is_none_when_a_variable_is_constant():
 def test_tau_b_is_none_below_two_observations():
     assert _kendall_tau_b([[1, 0], [0, 0]]) is None
     assert _kendall_tau_b([[0, 0], [0, 0]]) is None
+
+
+# ── Pearson and Spearman ───────────────────────────────────────────────────
+# Both run on pre-aggregated (x, y, count) rows rather than one row per picture,
+# so the weighting is the part that can silently go wrong.
+
+
+def test_pearson_is_one_on_a_perfect_line():
+    points = [(1.0, 2.0, 1), (2.0, 4.0, 1), (3.0, 6.0, 1)]
+    assert _weighted_pearson(points) == pytest.approx(1.0)
+
+
+def test_pearson_is_minus_one_on_a_perfect_falling_line():
+    points = [(1.0, 6.0, 1), (2.0, 4.0, 1), (3.0, 2.0, 1)]
+    assert _weighted_pearson(points) == pytest.approx(-1.0)
+
+
+def test_pearson_weights_are_equivalent_to_repeating_the_rows():
+    """A count of 3 must behave exactly like the same pair listed three times."""
+    weighted = [(1.0, 1.5, 3), (5.0, 4.5, 2)]
+    expanded = [(1.0, 1.5, 1)] * 3 + [(5.0, 4.5, 1)] * 2
+    assert _weighted_pearson(weighted) == pytest.approx(_weighted_pearson(expanded))
+
+
+def test_pearson_matches_a_hand_computed_value():
+    # x = 1,2,3,4 / y = 1,3,2,4 -> r = 0.8 exactly.
+    points = [(1.0, 1.0, 1), (2.0, 3.0, 1), (3.0, 2.0, 1), (4.0, 4.0, 1)]
+    assert _weighted_pearson(points) == pytest.approx(0.8)
+
+
+def test_pearson_is_none_when_a_variable_is_constant():
+    """Everything rated 3: no variance, so the coefficient is undefined, not 0."""
+    assert _weighted_pearson([(3.0, 1.0, 5), (3.0, 4.0, 5)]) is None
+    assert _weighted_pearson([(1.0, 2.0, 5), (5.0, 2.0, 5)]) is None
+
+
+def test_pearson_is_none_below_two_observations():
+    assert _weighted_pearson([(1.0, 1.0, 1)]) is None
+
+
+def test_mid_ranks_average_the_positions_a_tie_occupies():
+    # Three 1s occupy ranks 1-3 (mid 2), two 5s occupy ranks 4-5 (mid 4.5).
+    assert _mid_ranks({1.0: 3, 5.0: 2}) == {1.0: 2.0, 5.0: 4.5}
+
+
+def test_spearman_is_one_for_any_monotonic_relationship():
+    """Rank correlation does not care that the curve is not a straight line."""
+    points = [(1.0, 1.0, 1), (2.0, 10.0, 1), (3.0, 1000.0, 1)]
+    assert _weighted_spearman(points) == pytest.approx(1.0)
+    # Pearson, which assumes a line, does not reach 1 on the same data.
+    assert _weighted_pearson(points) < 0.9
+
+
+def test_spearman_shares_ranks_across_ties_rather_than_inventing_an_order():
+    """The five-level rating axis is nothing but ties; mid-ranks are load-bearing.
+
+    Every 1-star picture shares one rank, so the two 1-star rows differ only in
+    smart score and cannot pull the coefficient in either direction on the
+    rating axis.
+    """
+    points = [(1.0, 1.2, 1), (1.0, 1.8, 1), (5.0, 4.2, 1), (5.0, 4.8, 1)]
+    rho = _weighted_spearman(points)
+    mirrored = _weighted_spearman(
+        [(1.0, 1.8, 1), (1.0, 1.2, 1), (5.0, 4.8, 1), (5.0, 4.2, 1)]
+    )
+    assert rho == pytest.approx(mirrored)
+
+
+def test_spearman_is_none_when_a_variable_is_constant():
+    assert _weighted_spearman([(3.0, 1.0, 5), (3.0, 4.0, 5)]) is None
 
 
 # ── The endpoint ───────────────────────────────────────────────────────────
@@ -189,6 +263,8 @@ def test_score_zero_and_null_are_both_unrated():
         assert agreement["total"] == 2
         assert all(cell["count"] == 0 for cell in agreement["cells"])
         assert agreement["tau_b"] is None
+        assert agreement["pearson"] is None
+        assert agreement["spearman"] is None
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -230,6 +306,8 @@ def test_tau_b_is_suppressed_below_the_minimum_pair_count():
 
         assert agreement["pairs"] < AGREEMENT_MIN_PAIRS
         assert agreement["tau_b"] is None
+        assert agreement["pearson"] is None
+        assert agreement["spearman"] is None
     finally:
         server.vault.close()
         temp_dir.cleanup()

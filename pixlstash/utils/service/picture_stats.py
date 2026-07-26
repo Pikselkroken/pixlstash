@@ -544,10 +544,84 @@ def _agreement_scope(session, pic_subq, params: PictureStatsParams):
     return pic_subq if rebuilt is None else rebuilt
 
 
+def _weighted_pearson(points: list[tuple[float, float, int]]) -> float | None:
+    """Pearson's r over ``(x, y, weight)`` triples.
+
+    Weighted because the rows arrive pre-aggregated: one entry per distinct
+    (rating, smart score) pair with its observation count, rather than one entry
+    per picture.
+
+    Args:
+        points: Distinct (x, y) pairs with the number of observations of each.
+
+    Returns:
+        r in [-1, 1], or ``None`` when either variable is constant. A vanishing
+        denominator means "no variance", which is not the same as "no
+        relationship", so it must not be reported as 0.
+    """
+    n = sum(w for _, _, w in points)
+    if n < 2:
+        return None
+    sum_x = sum(x * w for x, _, w in points)
+    sum_y = sum(y * w for _, y, w in points)
+    sum_xx = sum(x * x * w for x, _, w in points)
+    sum_yy = sum(y * y * w for _, y, w in points)
+    sum_xy = sum(x * y * w for x, y, w in points)
+
+    covariance = n * sum_xy - sum_x * sum_y
+    var_x = n * sum_xx - sum_x * sum_x
+    var_y = n * sum_yy - sum_y * sum_y
+    if var_x <= 0 or var_y <= 0:
+        return None
+    return covariance / ((var_x * var_y) ** 0.5)
+
+
+def _mid_ranks(counts: dict[float, int]) -> dict[float, float]:
+    """Map each distinct value to its tie-corrected (mid) rank.
+
+    Args:
+        counts: Observation count per distinct value.
+
+    Returns:
+        Value -> the average of the ranks that value's observations occupy.
+    """
+    ranks: dict[float, float] = {}
+    seen = 0
+    for value in sorted(counts):
+        count = counts[value]
+        # Ranks seen+1 .. seen+count all collapse to their average.
+        ranks[value] = seen + (count + 1) / 2
+        seen += count
+    return ranks
+
+
+def _weighted_spearman(points: list[tuple[float, float, int]]) -> float | None:
+    """Spearman's rho: Pearson over mid-ranks, so tied values share a rank.
+
+    Mid-ranks matter a lot here. The rating axis has five levels, so a naive
+    ranking would impose an arbitrary order inside each star level and invent a
+    relationship that isn't in the data.
+
+    Args:
+        points: Distinct (x, y) pairs with the number of observations of each.
+
+    Returns:
+        rho in [-1, 1], or ``None`` when it is undefined.
+    """
+    x_counts: dict[float, int] = {}
+    y_counts: dict[float, int] = {}
+    for x, y, w in points:
+        x_counts[x] = x_counts.get(x, 0) + w
+        y_counts[y] = y_counts.get(y, 0) + w
+    x_ranks = _mid_ranks(x_counts)
+    y_ranks = _mid_ranks(y_counts)
+    return _weighted_pearson([(x_ranks[x], y_ranks[y], w) for x, y, w in points])
+
+
 def _kendall_tau_b(matrix: list[list[int]]) -> float | None:
     """Kendall's tau-b for an ordered contingency table.
 
-    Tau-b rather than Pearson or Spearman because the user score is an ordinal
+    Kept alongside Pearson and Spearman because the user score is an ordinal
     1-5 rating: almost every pair ties on that axis, and tau-b is the coefficient
     whose denominator corrects for ties in *both* variables.
 
@@ -623,7 +697,8 @@ def _compute_agreement(session, pic_subq, params: PictureStatsParams) -> dict:
 
     Returns:
         ``{}`` when not requested, else a dict with ``cells`` (all 20, dense and
-        ordered), ``rated``, ``pairs``, ``total`` and ``tau_b``.
+        ordered), ``rated``, ``pairs``, ``total`` and the three coefficients
+        ``pearson``, ``spearman`` and ``tau_b``.
     """
     if "picture" not in params.include:
         return {}
@@ -680,13 +755,22 @@ def _compute_agreement(session, pic_subq, params: PictureStatsParams) -> dict:
         for bucket, label in enumerate(AGREEMENT_BUCKET_LABELS)
     ]
 
-    tau_b = _kendall_tau_b(matrix) if pairs >= AGREEMENT_MIN_PAIRS else None
+    # Pearson and Spearman run on the same 0.01-resolution rows, so all three
+    # coefficients describe exactly the grid that is drawn.
+    points = [
+        (float(score), cent / _AGREEMENT_CENTS_PER_UNIT, count)
+        for score, by_cent in fine.items()
+        for cent, count in by_cent.items()
+    ]
+    enough = pairs >= AGREEMENT_MIN_PAIRS
     return {
         "cells": cells,
         "rated": rated,
         "pairs": pairs,
         "total": int(total),
-        "tau_b": tau_b,
+        "tau_b": _kendall_tau_b(matrix) if enough else None,
+        "pearson": _weighted_pearson(points) if enough else None,
+        "spearman": _weighted_spearman(points) if enough else None,
     }
 
 
