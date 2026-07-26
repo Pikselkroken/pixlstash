@@ -440,6 +440,15 @@ defineExpose({
   color: rgb(var(--v-theme-on-dark-surface));
   padding: 6px;
   resize: vertical;
+  /* Same bar as the sidebar's other scroll regions (the two tag lists and the
+     faces grid). Left on the browser default this is the loudest thing in the
+     panel: a full-width light track with stepper arrows on a dark surface. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.description-editor textarea:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .description-actions {

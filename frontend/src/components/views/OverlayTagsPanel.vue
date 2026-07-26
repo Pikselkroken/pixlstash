@@ -145,7 +145,10 @@
     </template>
   </div>
 
-  <div v-if="nearMissPredictions.length" class="sidebar-section">
+  <div
+    v-if="nearMissPredictions.length"
+    class="sidebar-section sidebar-section--rejected-tags"
+  >
     <div
       class="section-header section-header--collapsible"
       @click="nearMissesCollapsed = !nearMissesCollapsed"
@@ -974,6 +977,40 @@ defineExpose({
 </script>
 
 <style scoped>
+/* Section layout must live here rather than in ImageOverlay's scoped block.
+   This component has multiple root nodes, so Vue never stamps the parent's
+   scope id onto them (the renderer only forwards it to a *single* root), which
+   means the parent's `.sidebar-section--tags` rules silently never match.
+   OverlayDescriptionPanel carries its own copy for the same reason. Without
+   these, the sections are plain auto-height blocks and the `overflow-y: auto`
+   below can never resolve into a scrollbar. */
+.sidebar-section {
+  margin-bottom: 6px;
+}
+
+/* A definite, shrinkable height is what gives `.tag-list` something to scroll
+   within: the overlay sidebar is a fixed-height flex column, so this section
+   yields down to `min-height` when the column runs out of room. */
+.sidebar-section--tags {
+  display: flex;
+  flex-direction: column;
+  min-height: 104px;
+}
+
+.sidebar-section--tags.sidebar-section--collapsed {
+  min-height: 0;
+}
+
+/* Already bounded by the drop zone's own `max-height`, so it must NOT shrink:
+   a flex item squeezed below its content still paints that content (the zone is
+   `overflow: visible` in its unshrunk state), which drops the rejected chips on
+   top of the Metadata section below. */
+.sidebar-section--rejected-tags {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
 .section-header--collapsible {
   cursor: pointer;
   user-select: none;
@@ -1029,7 +1066,33 @@ defineExpose({
   padding-right: var(--space-2);
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  /* Reserve the bar's lane up front: without it the chips reflow every time a
+     tag is added or removed across the overflow threshold. */
+  scrollbar-gutter: stable;
+}
+
+/* The overlay sidebar is a `dark-surface`, so the scrollbar keys off
+   `on-dark-surface`. The global `.is-desktop` treatment in style.css keys off
+   `on-surface` (the light-chrome pair) and does not apply in a plain browser at
+   all, which left an OS-default bar on a translucent dark panel. The bar is
+   also the whole "there is more below" affordance here, so it stays visible
+   rather than hiding until hover. Track is transparent: the drop zone's dashed
+   border already draws the edge and a second line would compete. */
+.tag-list,
+.tag-drop-zone--predictions {
+  scrollbar-width: thin;
+  /* 0.40 is the floor, not a taste call: over this panel it measures 3.28:1
+     against the surface, clearing WCAG 1.4.11's 3:1 for a UI component. The
+     0.1-0.2 alphas used for borders in this file land near 2:1 and would make
+     the bar decorative rather than perceivable. */
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.tag-list:hover,
+.tag-drop-zone--predictions:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .overlay-lock-note {
@@ -1057,6 +1120,10 @@ defineExpose({
   justify-content: center;
   vertical-align: middle;
   cursor: pointer;
+  /* Flex items floor at min-content, so a single long tag would otherwise force
+     the row wider than the 320px sidebar and get clipped by `overflow-x`. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .overlay-tag--penalised {
@@ -1169,8 +1236,18 @@ defineExpose({
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }
 
+/* Secondary list: cap it so a long rejection set cannot push Metadata out of
+   the sidebar, and scroll the remainder. Mirrors `.face-assign-grid`, which
+   already bounds-and-scrolls the Faces section of this same sidebar. */
 .tag-drop-zone--predictions {
   gap: var(--space-2);
+  /* ~4 chip rows: a 11px/1.2 chip is ~17px, plus the --space-2 row gap and the
+     zone's own --space-2 padding. Deliberately shallower than the applied list
+     above it, so the secondary list reads as secondary. */
+  max-height: 92px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .tag-drop-placeholder {

@@ -4457,15 +4457,9 @@ function resetOverlayCopyState() {
   overflow: hidden;
 }
 
-.sidebar-section--tags {
-  min-height: 104px;
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-section--tags.sidebar-section--collapsed {
-  min-height: 0;
-}
+/* The Tags / Rejected Tags section layout lives in OverlayTagsPanel's own
+   scoped block: that component has multiple root nodes, so this file's scope id
+   is never stamped onto them and rules written here would not match. */
 
 .section-header--collapsible {
   cursor: pointer;
@@ -4539,7 +4533,16 @@ function resetOverlayCopyState() {
   margin-top: var(--space-2);
   max-height: 210px;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: var(--space-1);
+  /* Same treatment as the two tag lists in OverlayTagsPanel: this sidebar's
+     three scroll regions share one bar, keyed to the dark surface. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.face-assign-grid:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .face-assign-card {
