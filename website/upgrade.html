@@ -7,7 +7,7 @@
     <title>Upgrade PixlStash</title>
     <meta
       name="description"
-      content="How to upgrade PixlStash — pip, Windows installer, Docker, or from source."
+      content="How to upgrade PixlStash: pip, Windows installer, Docker, or from source."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -321,7 +321,7 @@
         <div class="whatsnew-media">
           <img
             src="assets/ScreenshotSnapshots.jpg"
-            alt="PixlStash 1.5 — snapshots and easy restore"
+            alt="PixlStash 1.5: snapshots and easy restore"
           />
         </div>
       </a>
@@ -339,7 +339,7 @@
           <div class="method-steps">
             <div class="step">
               <span class="step-label"
-                >1 — Activate your virtual environment</span
+                >1. Activate your virtual environment</span
               >
               Linux / MacOS:
               <div class="cmd-block" style="margin-top: 8px">
@@ -351,7 +351,7 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">2 — Upgrade</span>
+              <span class="step-label">2. Upgrade</span>
               <div class="cmd-block">
                 <code>pip install --upgrade pixlstash</code>
                 <button
@@ -363,7 +363,7 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">3 — Restart the server</span>
+              <span class="step-label">3. Restart the server</span>
               <p class="step-note">
                 Stop the running server and start it again with
                 <code>pixlstash-server</code> (or however you normally launch
@@ -384,7 +384,7 @@
           </div>
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Download the new installer</span>
+              <span class="step-label">1. Download the new installer</span>
               <p class="step-note">
                 Go to the
                 <a
@@ -398,14 +398,14 @@
               </p>
             </div>
             <div class="step">
-              <span class="step-label">2 — Stop the running server</span>
+              <span class="step-label">2. Stop the running server</span>
               <p class="step-note">
                 Close the PixlStash server window or stop the background service
                 before running the installer.
               </p>
             </div>
             <div class="step">
-              <span class="step-label">3 — Run the installer</span>
+              <span class="step-label">3. Run the installer</span>
               <p class="step-note">
                 Double-click the downloaded installer and follow the prompts. It
                 will replace the existing installation in-place. Your image
@@ -428,7 +428,7 @@
           </div>
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Pull the latest image</span>
+              <span class="step-label">1. Pull the latest image</span>
               <p class="cmd-row-label">CPU</p>
               <div class="cmd-block">
                 <code>docker pull ghcr.io/pikselkroken/pixlstash:latest</code>
@@ -453,7 +453,7 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">2 — Restart the container</span>
+              <span class="step-label">2. Restart the container</span>
               <div class="cmd-block">
                 <code>docker stop pixlstash && docker rm pixlstash</code>
                 <button
@@ -464,7 +464,7 @@
                 </button>
               </div>
               <p class="step-note">
-                Then re-run your original <code>docker run</code> command — see
+                Then re-run your original <code>docker run</code> command. See
                 the install guide for
                 <a href="install.html#docker-cpu">CPU</a> or
                 <a href="install.html#docker-gpu">GPU</a> inference.
@@ -490,14 +490,14 @@
           </div>
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Pull the latest code</span>
+              <span class="step-label">1. Pull the latest code</span>
               <div class="cmd-block">
                 <code>cd pixlstash git pull</code>
                 <button class="copy-btn" data-copy="git pull">Copy</button>
               </div>
             </div>
             <div class="step">
-              <span class="step-label">2 — Re-install dependencies</span>
+              <span class="step-label">2. Re-install dependencies</span>
               <div class="cmd-block">
                 <code>pip install -e .</code>
                 <button class="copy-btn" data-copy="pip install -e .">
@@ -506,7 +506,7 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">3 — Rebuild the frontend</span>
+              <span class="step-label">3. Rebuild the frontend</span>
               <div class="cmd-block">
                 <code
                   >cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</code
@@ -520,7 +520,7 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">4 — Restart the server</span>
+              <span class="step-label">4. Restart the server</span>
               <p class="step-note">
                 Stop and restart <code>pixlstash-server</code> (or
                 <code>python -m pixlstash.app</code>) to load the new code.

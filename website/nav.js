@@ -6,7 +6,7 @@
       document.documentElement.setAttribute("data-theme", "light");
     }
   } catch (e) {
-    /* localStorage unavailable — stay on the dark default */
+    /* localStorage unavailable, stay on the dark default */
   }
 
   const links = [
@@ -16,7 +16,7 @@
     { href: "comfyui.html", label: "ComfyUI" },
     {
       href: "whatsnew.html",
-      label: "New in 1.7",
+      label: "New in 1.8",
       className: "nav-link--whatsnew",
     },
     { href: "api.html", label: "API" },
@@ -95,7 +95,7 @@
     paint(root.getAttribute("data-theme") === "light" ? "light" : "dark");
 
     // Consolidate the theme across open tabs: when another tab writes the
-    // shared localStorage key, this tab's `storage` event fires — apply it live
+    // shared localStorage key, this tab's `storage` event fires, so apply it live
     // so every tab (and every page) stays on one setting. Uses web storage, no
     // cookies. (localStorage is shared per-origin; sessionStorage is per-tab and
     // would do the opposite, so it is deliberately not used here.)

@@ -7,7 +7,7 @@
     <title>Install PixlStash</title>
     <meta
       name="description"
-      content="Install PixlStash — Desktop App, Server Installer for Windows, Docker, pip, or from source."
+      content="Install PixlStash: Desktop App, Server Installer for Windows, Docker, pip, or from source."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -309,7 +309,7 @@
 
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Download the app</span>
+              <span class="step-label">1. Download the app</span>
               <p class="step-note">
                 Grab the installer for your platform from the
                 <a
@@ -324,7 +324,7 @@
             </div>
 
             <div class="step">
-              <span class="step-label">2 — Launch &amp; pick a backend</span>
+              <span class="step-label">2. Launch &amp; pick a backend</span>
               <p class="step-note">
                 On first run, PixlStash detects your hardware and recommends a
                 compute backend (the Python + AI runtime). The download is a few
@@ -334,9 +334,9 @@
             </div>
 
             <div class="step">
-              <span class="step-label">3 — Use PixlStash</span>
+              <span class="step-label">3. Use PixlStash</span>
               <p class="step-note">
-                The window opens straight into your library — no login prompt
+                The window opens straight into your library. There is no login prompt
                 for the local user. Your data lives in the standard per-user
                 location, so it is shared with a pip or Docker install on the
                 same machine. You can switch or update backends any time from
@@ -347,7 +347,7 @@
             <div class="divider"></div>
 
             <div class="step">
-              <p class="sub-heading">Linux — make the AppImage executable</p>
+              <p class="sub-heading">Linux: make the AppImage executable</p>
               <p class="step-note">
                 A freshly downloaded <code>.AppImage</code> won't launch until
                 you mark it executable. Either
@@ -363,7 +363,7 @@
               <p class="step-note">
                 On newer distributions (e.g. Ubuntu&nbsp;24.04) the AppImage may
                 also need <strong>FUSE 2</strong>, which isn't installed by
-                default — if you see an error mentioning
+                default. If you see an error mentioning
                 <code>libfuse.so.2</code> or
                 <em>"AppImages require FUSE to run"</em>, install it with
                 <code>sudo apt install libfuse2</code> (Debian/Ubuntu) or your
@@ -395,7 +395,7 @@
               <img
                 class="smartscreen-img"
                 src="assets/SmartScreen.png"
-                alt="Windows SmartScreen – click More info then Run anyway"
+                alt="Windows SmartScreen: click More info then Run anyway"
               />
             </div>
           </div>
@@ -405,13 +405,13 @@
         <div class="tab-panel" id="panel-windows" role="tabpanel">
           <p class="section-title">Server Installer for Windows</p>
           <p class="section-subtitle">
-            The easiest way to get started with the server on Windows — no
+            The easiest way to get started with the server on Windows. No
             Python or Node.js required.
           </p>
 
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Download the installer</span>
+              <span class="step-label">1. Download the installer</span>
               <p class="step-note">
                 Go to the
                 <a
@@ -425,7 +425,7 @@
             </div>
 
             <div class="step">
-              <span class="step-label">2 — Run the installer</span>
+              <span class="step-label">2. Run the installer</span>
               <p class="step-note">
                 Double-click the downloaded <code>.exe</code> and follow the
                 prompts.
@@ -433,7 +433,7 @@
             </div>
 
             <div class="step">
-              <span class="step-label">3 — Start PixlStash</span>
+              <span class="step-label">3. Start PixlStash</span>
               <p class="step-note">
                 Use the <strong>PixlStash Server</strong> shortcut in the Start
                 Menu, then open your browser to:
@@ -460,7 +460,7 @@
               <img
                 class="smartscreen-img"
                 src="assets/SmartScreen.png"
-                alt="Windows SmartScreen – click More info then Run anyway"
+                alt="Windows SmartScreen: click More info then Run anyway"
               />
             </div>
           </div>
@@ -471,13 +471,13 @@
           <p class="section-title">Docker</p>
           <p class="section-subtitle">
             A pre-built image is published to the GitHub Container Registry on
-            every release — no clone required. Works on Linux, MacOS, and
+            every release. No clone required. Works on Linux, MacOS, and
             Windows. AI inference runs on CPU by default; GPU is optional.
           </p>
 
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 - Install Docker</span>
+              <span class="step-label">1. Install Docker</span>
               <div class="method-info">
                 <p class="step-note">
                   Download and install
@@ -499,11 +499,11 @@
               </div>
             </div>
             <div class="step">
-              <span class="step-label">2a - Trial Image </span>
+              <span class="step-label">2a. Trial Image</span>
               <div class="method-info">
                 <strong>Just want to try it?</strong>
                 <br />
-                Run this one command — no data is saved after you stop it (CPU
+                Run this one command. No data is saved after you stop it (CPU
                 inference only):
                 <div class="cmd-block" style="margin-top: 10px">
                   <code
@@ -526,7 +526,7 @@
             </div>
 
             <div class="step" id="docker-cpu">
-              <span class="step-label">2b - Permanent Storage</span>
+              <span class="step-label">2b. Permanent Storage</span>
               <div class="method-info">
                 <p class="step-note">
                   First, create the storage folder so it is owned by your user
@@ -587,7 +587,7 @@
             </div>
 
             <div class="step">
-              <span class="step-label">3 - Open in browser</span>
+              <span class="step-label">3. Open in browser</span>
               <div class="cmd-block">
                 <code>http://localhost:9537</code>
                 <button class="copy-btn" data-copy="http://localhost:9537">
@@ -763,7 +763,7 @@ sudo systemctl restart docker"
           <div class="method-steps">
             <div class="step">
               <span class="step-label"
-                >1 — Create and activate a virtual environment</span
+                >1. Create and activate a virtual environment</span
               >
               <div class="cmd-block">
                 <code>python -m venv venv</code>
@@ -797,7 +797,7 @@ sudo systemctl restart docker"
             </div>
 
             <div class="step">
-              <span class="step-label">2 — Install PixlStash</span>
+              <span class="step-label">2. Install PixlStash</span>
               <div class="cmd-block">
                 <code>pip install pixlstash</code>
                 <button class="copy-btn" data-copy="pip install pixlstash">
@@ -807,7 +807,7 @@ sudo systemctl restart docker"
             </div>
 
             <div class="step">
-              <span class="step-label">3 — Start the server</span>
+              <span class="step-label">3. Start the server</span>
               <div class="cmd-block">
                 <code>pixlstash-server</code>
                 <button class="copy-btn" data-copy="pixlstash-server">
@@ -817,7 +817,7 @@ sudo systemctl restart docker"
             </div>
 
             <div class="step">
-              <span class="step-label">4 — Open in browser</span>
+              <span class="step-label">4. Open in browser</span>
               <div class="cmd-block">
                 <code>http://localhost:9537</code>
                 <button class="copy-btn" data-copy="http://localhost:9537">
@@ -828,8 +828,8 @@ sudo systemctl restart docker"
 
             <div class="method-info">
               💡 On first startup PixlStash downloads AI model weights (several
-              hundred MB). An internet connection is required this first time —
-              subsequent starts use the cached models.
+              hundred MB). An internet connection is required this first time.
+              Subsequent starts use the cached models.
             </div>
 
             <div class="divider"></div>
@@ -907,7 +907,7 @@ WantedBy=multi-user.target"
 
           <div class="method-steps">
             <div class="step">
-              <span class="step-label">1 — Clone the repository</span>
+              <span class="step-label">1. Clone the repository</span>
               <div class="cmd-block">
                 <code
                   >git clone https://github.com/pikselkroken/pixlstash.git cd
@@ -925,7 +925,7 @@ cd pixlstash"
 
             <div class="step">
               <span class="step-label"
-                >2 — Create and activate a virtual environment</span
+                >2. Create and activate a virtual environment</span
               >
               <div class="cmd-block">
                 <code>python -m venv venv</code>
@@ -959,7 +959,7 @@ cd pixlstash"
             </div>
 
             <div class="step">
-              <span class="step-label">3 — Install Python dependencies</span>
+              <span class="step-label">3. Install Python dependencies</span>
               <div class="cmd-block">
                 <code>pip install --upgrade pip pip install -e .</code>
                 <button
@@ -973,7 +973,7 @@ pip install -e ."
             </div>
 
             <div class="step">
-              <span class="step-label">4 — Build the frontend</span>
+              <span class="step-label">4. Build the frontend</span>
               <div class="cmd-block">
                 <code>cd frontend && npm ci && npm run build && cd ..</code>
                 <button
@@ -989,7 +989,7 @@ cd .."
             </div>
 
             <div class="step">
-              <span class="step-label">5 — Start the server</span>
+              <span class="step-label">5. Start the server</span>
               <div class="cmd-block">
                 <code>pixlstash-server</code>
                 <button class="copy-btn" data-copy="pixlstash-server">
@@ -999,7 +999,7 @@ cd .."
             </div>
 
             <div class="step">
-              <span class="step-label">6 — Open in browser</span>
+              <span class="step-label">6. Open in browser</span>
               <div class="cmd-block">
                 <code>http://localhost:9537</code>
                 <button class="copy-btn" data-copy="http://localhost:9537">
@@ -1010,8 +1010,8 @@ cd .."
 
             <div class="method-info">
               💡 On first startup PixlStash downloads AI model weights (several
-              hundred MB). An internet connection is required this first time —
-              subsequent starts use the cached models.
+              hundred MB). An internet connection is required this first time.
+              Subsequent starts use the cached models.
             </div>
 
             <div class="divider"></div>
@@ -1091,7 +1091,7 @@ WantedBy=multi-user.target"
 
             <div class="step">
               <span class="step-label"
-                >A — Install NVIDIA driver and CUDA Toolkit</span
+                >A. Install NVIDIA driver and CUDA Toolkit</span
               >
               <p class="step-note">
                 Install or update your NVIDIA driver (must support CUDA 12.x),
@@ -1117,7 +1117,7 @@ nvidia-smi"
             </div>
 
             <div class="step">
-              <span class="step-label">B — Install PyTorch with CUDA 12.8</span>
+              <span class="step-label">B. Install PyTorch with CUDA 12.8</span>
               <div class="cmd-block">
                 <code
                   >pip install torch torchvision --force-reinstall --index-url
@@ -1133,7 +1133,7 @@ nvidia-smi"
             </div>
 
             <div class="step">
-              <span class="step-label">C — Install ONNX Runtime GPU</span>
+              <span class="step-label">C. Install ONNX Runtime GPU</span>
               <div class="cmd-block">
                 <code
                   >pip uninstall -y onnxruntime pip install
@@ -1150,7 +1150,7 @@ pip install onnxruntime-gpu"
             </div>
 
             <div class="step">
-              <span class="step-label">D — Verify GPU availability</span>
+              <span class="step-label">D. Verify GPU availability</span>
               <div class="cmd-row">
                 <div>
                   <p class="cmd-row-label">Linux / macOS</p>

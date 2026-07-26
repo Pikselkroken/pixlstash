@@ -1,4 +1,4 @@
-/* ── PixlStash shared stylesheet — "The Quiet Darkroom" ──
+/* ── PixlStash shared stylesheet: "The Quiet Darkroom" ──
    Dark-led, warm neutrals, one amber safelight accent. Unified brand palette:
    the accent/olive/raspberry/teal + status are the same in both themes; only the
    neutrals switch under [data-theme="light"]. Matches frontend/DESIGN.md. */
@@ -20,13 +20,13 @@
   --toolbar-text: #f2e5da;
   --hover-wash: rgba(196, 122, 30, 0.12);
   /* brand + status (unified across both themes) */
-  --accent: #c47a1e; /* amber — the one safelight */
-  --accent-2: #e08a2a; /* brighter amber — glow / gradient end */
+  --accent: #c47a1e; /* amber, the one safelight */
+  --accent-2: #e08a2a; /* brighter amber, glow / gradient end */
   --accent-3: #2a7d3e; /* success (e.g. "Copied") */
   --on-accent: #f7f1ea; /* warm-white label on any brand fill */
-  --primary: #567309; /* olive — commit / go */
-  --secondary: #bb3566; /* raspberry — category */
-  --tertiary: #46707a; /* teal — quiet category */
+  --primary: #567309; /* olive, commit / go */
+  --secondary: #bb3566; /* raspberry, category */
+  --tertiary: #46707a; /* teal, quiet category */
   --logo-accent: #c47a1e; /* "Stash" wordmark = accent */
   --warning: #e8912f;
   /* type + shape */
@@ -63,7 +63,7 @@ body {
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-  /* Warm canvas with one faint amber safelight glow — no cool greens. */
+  /* Warm canvas with one faint amber safelight glow, no cool greens. */
   background:
     radial-gradient(
       circle at 15% -5%,
@@ -265,7 +265,7 @@ a {
   background: var(--accent);
   color: var(--on-accent);
 }
-/* Darken on hover (not brighten) — the amber accent is already near the
+/* Darken on hover (not brighten), because the amber accent is already near the
    contrast floor, so lightening it would drop the warm-white label below 3:1. */
 .download-btn:hover {
   background: color-mix(in srgb, var(--accent) 86%, #000);
