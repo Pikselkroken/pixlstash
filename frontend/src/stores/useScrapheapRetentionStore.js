@@ -36,7 +36,9 @@ export const useScrapheapRetentionStore = defineStore(
   "scrapheapRetention",
   () => {
     // `null` is a meaningful value ("Never"), so "not fetched yet" is tracked
-    // separately by `loaded` rather than by a null sentinel.
+    // separately by `loaded` rather than by a null sentinel. The pre-fetch value
+    // is the shipped default, which is `null`: before the server answers we must
+    // not imply a countdown is running that the user never turned on.
     const retentionDays = ref(DEFAULT_RETENTION_DAYS);
     // Declared by the server so the select can never offer a window the API
     // would reject with a 422; the local list is only the pre-fetch fallback.

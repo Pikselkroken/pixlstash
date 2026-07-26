@@ -2,7 +2,7 @@
   "name": "pixlstash-desktop",
   "productName": "PixlStash",
   "desktopName": "pixlstash.desktop",
-  "version": "1.8.0-dev.1",
+  "version": "1.8.0-dev.2",
   "description": "PixlStash desktop app: a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
   "author": {
     "name": "Gaute Lindkvist",
@@ -30,7 +30,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "cross-env": "^7.0.3",
-    "electron": "^42.3.3",
+    "electron": "^42.7.1",
     "electron-builder": "^26.15.2",
     "typescript": "^5.7.2"
   },

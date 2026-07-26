@@ -407,12 +407,15 @@ describe("isRetentionReduction", () => {
     expect(isRetentionReduction(null, null)).toBe(false);
   });
 
-  // Setting the window for the first time is not a reduction: 30 is the
-  // smallest offered value, so picking it from the 30-day default is a no-op,
-  // and any other pick is a raise.
-  it("is false for a first set from the default", () => {
-    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 30)).toBe(false);
-    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 60)).toBe(false);
+  // The default is "Never" (auto-empty off), so a first set is TURNING IT ON —
+  // the one change that can expose a whole long-lived scrapheap at once. It has
+  // to go through the impact check and the confirm, not slip past them.
+  it("is true for a first set from the default, because the default is off", () => {
+    expect(DEFAULT_RETENTION_DAYS).toBe(null);
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 30)).toBe(true);
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 60)).toBe(true);
+    expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, 120)).toBe(true);
+    // ...but re-saving the default is not a change at all.
     expect(isRetentionReduction(DEFAULT_RETENTION_DAYS, null)).toBe(false);
   });
 

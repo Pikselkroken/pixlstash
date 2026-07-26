@@ -55,6 +55,13 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _MIGRATIONS_DIR = os.path.join(_PROJECT_ROOT, "pixlstash")
 
+# Auto-purge SHIPS OFF (``scrapheap_service.DEFAULT_RETENTION_DAYS is None``):
+# nothing is destroyed on a timer the user never chose. So the baseline install
+# this suite exercises is one where the user has EXPLICITLY turned auto-empty on
+# at the shortest window — that is what makes the "what the sweep destroys"
+# tests meaningful. The off-by-default behaviour has its own section below.
+_ENABLED_RETENTION_DAYS = 30
+
 _RESET_TABLES = [
     DeletedFileLog,
     PictureSetMember,
@@ -111,9 +118,14 @@ def reset_vault(server):
         if os.path.isfile(path):
             os.remove(path)
     server.auth.ensure_user()
-    server._server_config.pop(scrapheap_service.RETENTION_DAYS_KEY, None)
     server._server_config.pop(scrapheap_service.RETENTION_REDUCED_AT_KEY, None)
-    server.vault.set_scrapheap_retention(scrapheap_service.DEFAULT_RETENTION_DAYS, None)
+    # An install where the user turned auto-empty ON at 30 days. Written to both
+    # server-config (what the endpoints read) and the vault (what the finder
+    # reads) so the two can never disagree mid-test.
+    server._server_config[scrapheap_service.RETENTION_DAYS_KEY] = (
+        _ENABLED_RETENTION_DAYS
+    )
+    server.vault.set_scrapheap_retention(_ENABLED_RETENTION_DAYS, None)
     yield
 
 
@@ -197,6 +209,18 @@ def _run_purge_sweep(server):
     if task is None:
         return None
     return task.run()
+
+
+def _rewire_retention_from_config(server):
+    """Push server-config into the vault exactly as ``Server.__init__`` does.
+
+    Lets a test put the process into the state a real boot would produce for a
+    given server-config.json without paying for a second Server.
+    """
+    days = scrapheap_service.read_retention_days(server._server_config)
+    reduced_at = scrapheap_service.read_retention_reduced_at(server._server_config)
+    server.vault.set_scrapheap_retention(days, reduced_at)
+    return days
 
 
 # ── deleted_at stamping ───────────────────────────────────────────────────────
@@ -439,11 +463,13 @@ def test_is_retention_reduction_matrix():
     assert reduction(30, 60) is False, "A raise is not a reduction"
     assert reduction(30, 30) is False, "A no-op save is not a reduction"
     assert reduction(30, None) is False, "Setting Never is not a reduction"
-    # The default is also the shortest choice, so a first explicit set can never
-    # be a reduction — that is the "untouched on first-set" rule.
+    # The default is now None (auto-purge off), so turning it on for the FIRST
+    # time is a reduction and earns the grace floor plus the impact confirm.
+    # Enabling an unattended destruction path is the most consequential change
+    # the control offers; it must not be the one that skips the safeguards.
     for choice in scrapheap_service.RETENTION_DAY_CHOICES:
-        assert reduction(scrapheap_service.DEFAULT_RETENTION_DAYS, choice) is False, (
-            f"first-set of {choice} must not count as a reduction"
+        assert reduction(scrapheap_service.DEFAULT_RETENTION_DAYS, choice) is True, (
+            f"turning auto-purge on at {choice} days must count as a reduction"
         )
 
 
@@ -2522,6 +2548,195 @@ def test_config_save_never_purges_synchronously(server, tmp_path):
     )
     assert os.path.isfile(path), "A config save must never remove a file"
     assert _ledger_flags_for(server, path) == []
+
+
+# ── Auto-purge ships OFF until the user turns it on ───────────────────────────
+# v1.8.0 introduces a timer that permanently removes files from disk. Nobody may
+# get that from a setting they never chose, so the default is "Never" — on a
+# fresh install AND on one upgraded from a release that had no such setting.
+# Both directions are asserted: OFF must destroy nothing however old the
+# scrapheap, and an explicit opt-in must still purge (a default of OFF that
+# quietly became a feature that never runs would be its own regression).
+
+
+def test_a_config_that_was_never_asked_reads_as_off():
+    read = scrapheap_service.read_retention_days
+    assert scrapheap_service.DEFAULT_RETENTION_DAYS is None, (
+        "The shipped default must be Never; auto-deletion is opt-in"
+    )
+    assert read({}) is None, "A pristine config must not enable auto-purge"
+    # A v1.7.x server-config: it predates the setting entirely.
+    assert read({"host": "localhost", "port": 9537, "image_root": "/tmp/x"}) is None
+    # Fail-safe: a value we cannot parse is not a licence to delete files.
+    assert read({scrapheap_service.RETENTION_DAYS_KEY: "soon"}) is None
+    assert read({scrapheap_service.RETENTION_DAYS_KEY: 7}) is None
+
+
+def test_an_explicit_choice_is_not_overridden_by_the_new_default():
+    """Only an ABSENT key means "never chosen"; a stored value is honoured.
+
+    The two cases ARE distinguishable, which is what makes flipping the default
+    safe: ``apply_retention_config`` (i.e. an explicit save) is the only writer
+    of the key, so a stored ``30`` is a deliberate choice and is left alone
+    rather than being silently switched off with everyone else's.
+    """
+    read = scrapheap_service.read_retention_days
+    for choice in scrapheap_service.RETENTION_DAY_CHOICES:
+        assert read({scrapheap_service.RETENTION_DAYS_KEY: choice}) == choice
+    assert read({scrapheap_service.RETENTION_DAYS_KEY: None}) is None, (
+        "An explicit Never stays Never"
+    )
+
+
+def test_a_fresh_install_purges_nothing_however_old_the_scrapheap(server, tmp_path):
+    """OFF is honoured by the FINDER, not merely by the settings UI."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "untouched.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=9999),
+    )
+
+    server._server_config.pop(scrapheap_service.RETENTION_DAYS_KEY, None)
+    assert _rewire_retention_from_config(server) is None
+
+    # A fresh finder each time, so the cadence gate cannot be what suppresses
+    # the sweep: every one of these genuinely reaches the retention check.
+    for _ in range(3):
+        assert _run_purge_sweep(server) is None, (
+            "An install that never opted in must schedule no purge at all"
+        )
+    assert _get_picture(server, pic_id) is not None
+    assert os.path.isfile(path), "No file may be removed from disk by default"
+    assert _ledger_flags_for(server, path) == []
+
+    body = client.get("/server-config/scrapheap-retention").json()
+    assert body["scrapheap_retention_days"] is None, (
+        "The UI must be told auto-empty is off, not shown a window"
+    )
+
+
+def test_an_upgraded_install_boots_with_auto_purge_off(tmp_path):
+    """A v1.7.x install upgraded to v1.8.0 must not start deleting files.
+
+    Boots a real Server on a server-config.json shaped the way v1.7.x wrote it
+    (no ``scrapheap_retention_*`` keys at all) and asserts both halves: the
+    vault the timer reads is "Never", and startup does not MATERIALISE a window
+    into the file. The second half is what keeps the "absent means never asked"
+    signal intact for the next boot.
+    """
+    config_path = tmp_path / "server-config.json"
+    legacy_config = {
+        "host": "localhost",
+        "port": 9537,
+        "log_level": "info",
+        "require_ssl": False,
+        "image_root": str(tmp_path / "images"),
+        "disable_background_workers": True,
+    }
+    config_path.write_text(json.dumps(legacy_config))
+
+    with Server(str(config_path)) as upgraded:
+        assert upgraded.vault.scrapheap_retention_days is None
+        assert upgraded.vault.scrapheap_retention_reduced_at is None
+        assert scrapheap_service.RETENTION_DAYS_KEY not in upgraded._server_config, (
+            "Startup must not invent a retention window"
+        )
+        finder = ScrapheapRetentionPurgeFinder(vault=upgraded.vault)
+        assert finder.find_task() is None
+
+    on_disk = json.loads(config_path.read_text())
+    assert scrapheap_service.RETENTION_DAYS_KEY not in on_disk, (
+        "The upgrade must leave the install un-asked, not silently opted in"
+    )
+
+
+def test_turning_auto_purge_on_deliberately_still_purges(server, tmp_path):
+    """The positive direction: an explicit opt-in must genuinely destroy."""
+    client = _client(server)
+    server._server_config.pop(scrapheap_service.RETENTION_DAYS_KEY, None)
+    _rewire_retention_from_config(server)
+
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "optin.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+    assert _run_purge_sweep(server) is None, "Off means off"
+
+    resp = client.patch(
+        "/server-config/scrapheap-retention", json={"scrapheap_retention_days": 30}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["scrapheap_retention_days"] == 30
+    # Switching it on is a lowering (Never is an infinite window), so the grace
+    # floor is stamped: nothing is destroyed for a day, which is the user's
+    # window to change their mind about an unattended deletion.
+    assert body["scrapheap_retention_reduced_at"] is not None
+    assert server.vault.scrapheap_retention_days == 30
+    assert _run_purge_sweep(server) is None, (
+        "Switching auto-empty on must not purge inside its grace floor"
+    )
+    assert _get_picture(server, pic_id) is not None
+
+    # Past the floor the opted-in window does exactly what it promises.
+    server.vault.set_scrapheap_retention(
+        30, datetime.now(timezone.utc) - timedelta(days=2)
+    )
+    result = _run_purge_sweep(server)
+    assert result == {"purged": 1, "skipped": 0, "skipped_locked": 0, "retained": 0}, (
+        result
+    )
+    assert _get_picture(server, pic_id) is None
+    assert not os.path.isfile(path)
+
+
+def test_turning_auto_purge_on_reports_its_blast_radius(server, tmp_path):
+    """The impact preview must be honest about the switch-on, not only about a
+    shortening: enabling the timer is the change that can expose an entire
+    long-lived scrapheap at once."""
+    client = _client(server)
+    server._server_config.pop(scrapheap_service.RETENTION_DAYS_KEY, None)
+    _rewire_retention_from_config(server)
+
+    for index in range(2):
+        pic_id, _ = _make_reference_picture(
+            server, str(tmp_path / f"r{index}"), f"old{index}.png", allow_delete=True
+        )
+        delete_resp = client.delete(f"/pictures/{pic_id}")
+        assert delete_resp.status_code == 200, delete_resp.text
+        _set_deleted_at(
+            server,
+            pic_id,
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+        )
+
+    resp = client.get("/server-config/scrapheap-retention/impact", params={"days": 30})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["would_purge_count"] == 2, (
+        "Switching auto-empty on must state what it would destroy"
+    )
+    assert body["first_purge_at"] is not None
+    # A pure read: it must not have enabled anything.
+    assert server.vault.scrapheap_retention_days is None
+    assert (
+        client.get("/server-config/scrapheap-retention").json()[
+            "scrapheap_retention_days"
+        ]
+        is None
+    )
 
 
 # ── Per-picture contract in the scrapheap listing ─────────────────────────────

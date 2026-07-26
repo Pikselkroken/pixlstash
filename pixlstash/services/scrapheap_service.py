@@ -20,6 +20,12 @@ Retention policy (settled with the maintainer, do not redesign):
   (``auto_purge_exempt=True``, ``purge_at=None``).
 * ``scrapheap_retention_days`` is one of :data:`RETENTION_DAY_CHOICES` or
   ``None`` ("Never" — auto-purge is disabled entirely).
+* **Auto-purge is OFF until the user turns it on.** The default is ``None``, and
+  the server-config key is written only by an explicit save, so a fresh install
+  and an install upgraded from a release without the setting both land on
+  "Never". Nothing is ever removed from disk on a timer the user did not choose.
+  A stored value that cannot be parsed also resolves to "Never" rather than to a
+  window, so an unreadable config can never license a deletion.
 * Lowering the window gives EVERY picture a :data:`REDUCTION_GRACE_DAYS`-day
   reprieve measured from the reduction itself, not from the picture's own
   ``deleted_at``. The deadline is
@@ -107,8 +113,15 @@ logger = get_logger(__name__)
 # disables auto-purge entirely.
 RETENTION_DAY_CHOICES: tuple[int, ...] = (30, 60, 90, 120)
 
-# Default window when server-config carries no explicit value.
-DEFAULT_RETENTION_DAYS: int = 30
+# Default when server-config carries no explicit value: ``None`` — "Never",
+# auto-purge OFF. This is a CONSENT default, not a tuning knob. An unattended
+# timer that permanently removes files from disk must be something the user
+# switched on, so an install that has never been asked (a fresh install, or one
+# upgraded from a release that had no such setting) is never on the clock. The
+# key is written to server-config ONLY by ``apply_retention_config``, i.e. only
+# by an explicit save, so "absent" reliably means "never chosen" and an existing
+# explicit choice is preserved across the upgrade.
+DEFAULT_RETENTION_DAYS: Optional[int] = None
 
 # Extra days granted to pictures that were already in the scrapheap when the
 # retention window was *lowered*, so a reduction never purges anything the same
@@ -278,10 +291,15 @@ def is_retention_reduction(
     """Whether moving ``current_days`` -> ``new_days`` shortens the window.
 
     ``None`` ("Never") is treated as an infinite window, so ``Never -> 90`` is a
-    reduction while ``30 -> 60`` and ``90 -> Never`` are not. Because the default
-    window (:data:`DEFAULT_RETENTION_DAYS`) is also the shortest choice, a
-    *first* explicit set can never be a reduction — which is exactly the
-    "untouched on raise or first-set" rule.
+    reduction while ``30 -> 60`` and ``90 -> Never`` are not.
+
+    Since the default is ``None`` (auto-purge off), **turning auto-empty on for
+    the first time is a reduction** and therefore earns the grace floor: nothing
+    already in the scrapheap can be destroyed within
+    :data:`REDUCTION_GRACE_DAYS` of the switch-on, however old it is. That is
+    deliberate — enabling an unattended destruction path is the single most
+    consequential change the control offers, so it gets the same reprieve (and
+    the same impact confirm) as shortening an existing window.
     """
     return retention_rank(new_days) < retention_rank(current_days)
 
@@ -357,9 +375,15 @@ def compute_purge_at(
 def read_retention_days(server_config: dict) -> Optional[int]:
     """Read ``scrapheap_retention_days`` from a server-config dict.
 
-    An absent key means the default window; an explicit ``null`` means "Never".
-    An unrecognised value falls back to the default and is logged rather than
-    silently accepted — a typo must not silently change how long files survive.
+    An absent key means :data:`DEFAULT_RETENTION_DAYS` — ``None``, "Never",
+    auto-purge OFF. Only :func:`apply_retention_config` ever writes the key, so
+    "absent" means the user has never been asked and nothing is destroyed on a
+    timer; an explicit value (including an explicit ``30``) is a deliberate
+    choice and is honoured.
+
+    An unrecognised value also resolves to "Never" and is logged rather than
+    silently accepted. That is the fail-safe direction: a config we cannot parse
+    must not be read as a licence to delete files.
     """
     if RETENTION_DAYS_KEY not in server_config:
         return DEFAULT_RETENTION_DAYS
@@ -370,21 +394,19 @@ def read_retention_days(server_config: dict) -> Optional[int]:
         days = int(raw)
     except (TypeError, ValueError):
         logger.warning(
-            "server-config %s=%r is not an integer; falling back to the default "
-            "%s-day scrapheap retention window",
+            "server-config %s=%r is not an integer; disabling the scrapheap "
+            "auto-purge (treating it as Never) until a valid window is saved",
             RETENTION_DAYS_KEY,
             raw,
-            DEFAULT_RETENTION_DAYS,
         )
         return DEFAULT_RETENTION_DAYS
     if days not in RETENTION_DAY_CHOICES:
         logger.warning(
-            "server-config %s=%r is not one of %s; falling back to the default "
-            "%s-day scrapheap retention window",
+            "server-config %s=%r is not one of %s; disabling the scrapheap "
+            "auto-purge (treating it as Never) until a valid window is saved",
             RETENTION_DAYS_KEY,
             raw,
             RETENTION_DAY_CHOICES,
-            DEFAULT_RETENTION_DAYS,
         )
         return DEFAULT_RETENTION_DAYS
     return days
@@ -863,9 +885,11 @@ def retention_impact_in_session(
     during the grace day and so understate destruction, which is a consent bug
     in a number whose only job is to inform consent.
 
-    Only a reduction is reported: raising the window, setting it for the first
-    time, or re-saving the same value destroys nothing NEW, so the count is 0 and
-    the UI shows no confirmation.
+    Only a reduction is reported: raising the window, switching to Never, or
+    re-saving the same value destroys nothing NEW, so the count is 0 and the UI
+    shows no confirmation. Turning auto-purge ON from the Never default IS a
+    reduction, so it gets a real count — which is the point: enabling the timer
+    is the one change that can expose an entire long-lived scrapheap at once.
     """
     if not is_retention_reduction(current_days, candidate_days):
         return {"would_purge_count": 0, "first_purge_at": None}

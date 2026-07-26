@@ -26,9 +26,11 @@ Tasks intentionally excluded (require external setup):
 import gc
 import math
 import os
+import random
 import tempfile
 import time
 
+import numpy as np
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlmodel import func, select
@@ -52,6 +54,60 @@ _PICTURES_DIR = os.path.join(os.path.dirname(__file__), "../pictures")
 _SCORES_FILE = os.path.join(_PICTURES_DIR, "scores.txt")
 _TASK_TIMEOUT_S = 180
 _API_PREFIX = "/api/v1"
+
+# Cosine similarity at or above which two fixture pictures count as near-duplicates and
+# are held out together (see _near_duplicate_groups).  The fixture separates cleanly at
+# this value: the three genuine duplicate pairs sit at 0.998-1.000 and the next-closest
+# unrelated pair is at 0.833, so anything in roughly [0.9, 0.99] produces identical
+# folds.
+_NEAR_DUPLICATE_COSINE = 0.95
+
+# Floor for the one-sided 95% bootstrap lower bound on Kendall tau-b between the smart
+# score and the reference labels in pictures/scores.txt.
+#
+# THIS BAR IS DELIBERATELY LOW.  It records where smart-score quality actually is, not
+# where it should be.  Do not "restore" the old 0.70.
+#
+# History, so the next person does not repeat it: this test used to assert
+# max(pearson, spearman) >= 0.70 and had a recorded baseline of 0.853.  That number was
+# never valid.  The test writes the reference labels it is grading into Picture.score,
+# and Picture.score is exactly what the scorer selects its good (>= 4) and bad (== 1)
+# anchors from, so 9 of the 18 pictures were their own anchor at cosine 1.0 and the
+# measurement was largely the labels correlated with themselves.  The apparent "drop"
+# during 1.8.0 was not a quality regression; it was the anchor term being de-weighted,
+# which shrank the leak.  The test now scores each picture with its own label (and its
+# near-duplicates' labels) removed from the anchor pool, so the number it reports is a
+# real held-out measurement and is much lower than the leaked one ever was.
+#
+# The statistic changed with it.  `max(pearson, spearman)` gave the assertion two
+# independent shots at the bar; Pearson assumes a linear relationship between a bounded,
+# non-linearly compressed score and a 5-level ordinal label, which does not hold; and at
+# n=18 the sampling error on any correlation is large enough that a point estimate
+# cannot support a threshold at all.  So: Kendall tau-b (tie-aware, and 31 of the 153
+# label pairs are tied), asserted on the pessimistic end of a seeded bootstrap rather
+# than on the point estimate.
+#
+# Where the bar comes from.  The leak-free measurement on this fixture is
+# tau-b = 0.410 with a 95% lower bound of 0.054 (n=18, 15 folds).  A jackknife shows a
+# single picture's behaviour is worth up to ~0.15 of that bound at n=18, so the bar has
+# to sit *below* the noise band, not just below the measurement: 0.054 - 0.15 is
+# negative, so a bar at 0.0 would fail when one image's tag detections move rather than
+# when the scorer regresses.  Hence -0.10 -- comfortably outside one picture's leverage,
+# while still meaning "the score is not inverted and has not collapsed".  That is a
+# coarse floor by construction: it catches the scorer inverting, collapsing, or losing
+# its anchors, not fine-grained drift.  A meaningfully tighter bar needs a bigger
+# labelled fixture, not a bolder number -- at n=18 there is no threshold between -0.10
+# and 0.41 that a single image cannot cross on its own.
+#
+# Raising this bar is real work on the scorer -- chiefly anomaly-detector precision, and
+# how much a single unstable detection is allowed to move a picture -- not a matter of
+# re-tuning weights until the number looks better.  Re-weighting was swept and cannot
+# reach 0.70.  Changing the bar upward is only legitimate alongside a scoring change
+# that earns it.
+# Note this file is in DEFERRED_FROM_GATE (tests/test_ci_shards.py), so this assertion
+# does not block a PR: its only CI home is the release-prep sweep, which is
+# informational.  That is how it stayed red at 0.55-vs-0.70 for a whole release cycle.
+_MIN_TAU_B_LOWER_BOUND = -0.10
 
 
 def _poll_until_zero(server, count_fn, label, timeout_s=_TASK_TIMEOUT_S, interval=0.5):
@@ -128,6 +184,144 @@ def _spearman_corr(xs: list[float], ys: list[float]) -> float:
     rank_x = _average_ranks(xs)
     rank_y = _average_ranks(ys)
     return _pearson_corr(rank_x, rank_y)
+
+
+def _kendall_tau_b(xs: list[float], ys: list[float]) -> float:
+    """Kendall's tau-b between two sequences, tie-corrected in both variables.
+
+    tau-b is the right coefficient here: the reference labels are a 5-level ordinal
+    scale with heavy ties (18 labels over 5 levels leaves 31 of the 153 pairs tied on
+    the label side), and the smart score is a bounded, non-linearly compressed value,
+    so neither Pearson's linearity assumption nor tau-a's tie-blind denominator holds.
+    tau-b answers exactly the question the feature is judged on: given two pictures, how
+    often does the score order them the way the human did?
+
+    Args:
+        xs: First sequence (e.g. reference labels).
+        ys: Second sequence (e.g. smart scores), same length as ``xs``.
+
+    Returns:
+        tau-b in [-1, 1], or 0.0 when it is undefined (fewer than two points, or one
+        sequence entirely tied).
+    """
+    n = len(xs)
+    if n != len(ys) or n < 2:
+        return 0.0
+    concordant_minus_discordant = 0
+    tied_x_pairs = 0
+    tied_y_pairs = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = xs[i] - xs[j]
+            dy = ys[i] - ys[j]
+            if dx == 0 and dy == 0:
+                tied_x_pairs += 1
+                tied_y_pairs += 1
+            elif dx == 0:
+                tied_x_pairs += 1
+            elif dy == 0:
+                tied_y_pairs += 1
+            elif (dx > 0) == (dy > 0):
+                concordant_minus_discordant += 1
+            else:
+                concordant_minus_discordant -= 1
+    total_pairs = n * (n - 1) // 2
+    denominator = math.sqrt((total_pairs - tied_x_pairs) * (total_pairs - tied_y_pairs))
+    if denominator <= 0.0:
+        return 0.0
+    return float(concordant_minus_discordant / denominator)
+
+
+def _bootstrap_tau_b_lower_bound(
+    xs: list[float],
+    ys: list[float],
+    resamples: int = 4000,
+    confidence: float = 0.95,
+    seed: int = 20260726,
+) -> float:
+    """One-sided lower confidence bound on tau-b from a percentile bootstrap.
+
+    The point estimate of a correlation at n=18 is far too noisy to assert on directly
+    (a 95% interval around it spans most of the usable range), so the assertion is made
+    against this lower bound instead: "even the pessimistic end of the sampling
+    distribution is still above the floor". Resampling is paired (a bootstrap draw
+    picks whole (label, score) observations) and seeded, so the bound is exactly
+    reproducible run to run and the test cannot flake on bootstrap noise alone.
+
+    Args:
+        xs: Reference labels.
+        ys: Smart scores, paired element-wise with ``xs``.
+        resamples: Number of bootstrap resamples.
+        confidence: One-sided confidence level; 0.95 returns the 5th percentile.
+        seed: Fixed RNG seed, so the returned bound is deterministic.
+
+    Returns:
+        The lower confidence bound on tau-b.
+    """
+    n = len(xs)
+    if n != len(ys) or n < 2:
+        return 0.0
+    rng = random.Random(seed)
+    taus = []
+    for _ in range(resamples):
+        idx = [rng.randrange(n) for _ in range(n)]
+        taus.append(_kendall_tau_b([xs[i] for i in idx], [ys[i] for i in idx]))
+    taus.sort()
+    position = (1.0 - confidence) * (len(taus) - 1)
+    low = int(math.floor(position))
+    high = min(low + 1, len(taus) - 1)
+    weight = position - low
+    return float(taus[low] * (1.0 - weight) + taus[high] * weight)
+
+
+def _near_duplicate_groups(
+    embeddings_by_id: dict[int, "np.ndarray"], threshold: float
+) -> list[list[int]]:
+    """Group picture ids into single-linkage clusters of near-duplicate embeddings.
+
+    Leave-one-out over individual pictures is not enough to remove label leakage from
+    this fixture: ``Changed{1,2,3}.png`` and ``Reference{1,2,3}.png`` are pairwise
+    near-identical (cosine 0.998-1.000) and carry identical labels, so holding out one
+    of a pair still leaves its twin in the anchor set at cosine ~1.0: the same leak,
+    one step removed. Holding out the whole cluster closes it.
+
+    Args:
+        embeddings_by_id: Picture id to its L2-normalisable image embedding vector.
+        threshold: Cosine similarity at or above which two pictures are treated as
+            near-duplicates and forced into the same held-out group.
+
+    Returns:
+        Groups of picture ids, each group sorted, groups ordered by first id.
+    """
+    ids = sorted(embeddings_by_id)
+    parent = {pid: pid for pid in ids}
+
+    def find(pid):
+        while parent[pid] != pid:
+            parent[pid] = parent[parent[pid]]
+            pid = parent[pid]
+        return pid
+
+    def union(a, b):
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_b] = root_a
+
+    normalised = {}
+    for pid in ids:
+        vec = np.asarray(embeddings_by_id[pid], dtype=np.float64)
+        norm = float(np.linalg.norm(vec))
+        normalised[pid] = vec / norm if norm > 0 else vec
+
+    for i, pid_a in enumerate(ids):
+        for pid_b in ids[i + 1 :]:
+            if float(np.dot(normalised[pid_a], normalised[pid_b])) >= threshold:
+                union(pid_a, pid_b)
+
+    groups: dict[int, list[int]] = {}
+    for pid in ids:
+        groups.setdefault(find(pid), []).append(pid)
+    return [sorted(group) for group in sorted(groups.values(), key=min)]
 
 
 def _format_ascii_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -393,7 +587,14 @@ def test_full_pipeline_on_real_pictures():
 
 
 def test_smart_score_correlates_with_reference_scores():
-    """Verify smart score correlates strongly with reference human scores."""
+    """Measure held-out agreement between the smart score and reference human scores.
+
+    Runs leave-one-group-out cross-validation over ``pictures/scores.txt``: every
+    picture is scored with its own reference label, and its near-duplicates' labels,
+    removed from the scorer's anchor pool, so no picture can be graded against a label
+    it was seeded from.  Asserts on the lower end of a bootstrap interval around
+    Kendall tau-b; see ``_MIN_TAU_B_LOWER_BOUND`` for why the bar is where it is.
+    """
 
     image_files = sorted(
         f
@@ -468,28 +669,39 @@ def test_smart_score_correlates_with_reference_scores():
             # penalty is applied correctly when smart scores are computed.
             _poll_until_zero(server, TagTask.count_missing_tags, "tags")
 
-            def fetch_imported_picture_shas(session):
+            def fetch_imported_picture_rows(session):
                 pics = session.exec(
                     select(Picture).where(Picture.id.in_(picture_ids))
                 ).all()
-                return [
-                    {
-                        "id": pic.id,
-                        "pixel_sha": pic.pixel_sha,
-                        "imported_file": os.path.basename(pic.file_path or ""),
-                    }
-                    for pic in pics
-                    if pic.id is not None and pic.pixel_sha
-                ]
+                rows = []
+                for pic in pics:
+                    if pic.id is None or not pic.pixel_sha:
+                        continue
+                    blob = pic.image_embedding
+                    embedding = None
+                    if blob is not None:
+                        if isinstance(blob, (memoryview, bytearray)):
+                            blob = bytes(blob)
+                        embedding = np.frombuffer(blob, dtype=np.float32).copy()
+                    rows.append(
+                        {
+                            "id": pic.id,
+                            "pixel_sha": pic.pixel_sha,
+                            "imported_file": os.path.basename(pic.file_path or ""),
+                            "image_embedding": embedding,
+                        }
+                    )
+                return rows
 
             imported_rows = server.vault.db.run_immediate_read_task(
-                fetch_imported_picture_shas
+                fetch_imported_picture_rows
             )
             assert imported_rows, "Could not fetch imported pictures for score mapping"
 
             expected_score_by_picture_id = {}
             expected_source_name_by_picture_id = {}
             imported_name_by_picture_id = {}
+            embedding_by_picture_id = {}
             for row in imported_rows:
                 score = source_sha_to_score.get(row["pixel_sha"])
                 if score is not None:
@@ -500,53 +712,113 @@ def test_smart_score_correlates_with_reference_scores():
                     imported_name_by_picture_id[row["id"]] = row.get(
                         "imported_file", ""
                     )
+                    if row["image_embedding"] is not None:
+                        embedding_by_picture_id[row["id"]] = row["image_embedding"]
 
             assert expected_score_by_picture_id, (
                 "No imported pictures matched scores.txt via content hash"
             )
+            assert len(embedding_by_picture_id) == len(expected_score_by_picture_id), (
+                "Some scored pictures have no image embedding; cannot build "
+                "leak-free evaluation folds"
+            )
 
-            for pic_id, score in expected_score_by_picture_id.items():
-                patch_resp = client.patch(
-                    f"{_API_PREFIX}/pictures/{pic_id}", json={"score": score}
-                )
-                assert patch_resp.status_code == 200, patch_resp.text
+            # --- Leave-one-group-out evaluation ------------------------------
+            #
+            # The scorer seeds its anchors from *user scores*: good anchors are
+            # pictures with score >= 4, bad anchors are pictures with score == 1
+            # (pixlstash/scoring/smart_score.py, fetch_smart_score_data).  The
+            # reference labels this test grades against are written to exactly
+            # that column, so scoring all 18 pictures in one pass makes 9 of them
+            # their own anchor at cosine 1.0 and the test grades the labels
+            # against themselves.  That leak, not model quality, is what
+            # produced the 0.85 correlation this test used to record.
+            #
+            # So each picture is scored with its own label (and its near
+            # duplicates' labels) removed from the anchor pool, and only the
+            # held-out scores are collected.  What is measured is then the real
+            # question: does the smart score predict a rating it has not seen?
+            groups = _near_duplicate_groups(
+                embedding_by_picture_id, _NEAR_DUPLICATE_COSINE
+            )
+            logger.info(
+                "Leave-one-group-out folds (%d groups, cosine >= %.2f): %s",
+                len(groups),
+                _NEAR_DUPLICATE_COSINE,
+                [
+                    [expected_source_name_by_picture_id.get(pid, str(pid)) for pid in g]
+                    for g in groups
+                ],
+            )
 
-            # Smart scores may have been pre-computed before user scores were
-            # set (no good/bad anchors yet).  Reset them so the background
-            # worker recomputes with the now-available user anchors.
-            def _reset_smart_scores(session, ids):
+            def _set_scores_and_invalidate(session, scores_by_id, invalidate_ids):
+                """Write the fold's anchor labels and clear the held-out scores.
+
+                Written directly rather than through ``PATCH /pictures/{id}`` because
+                this is evaluation scaffolding, not a user flow, and the endpoint is
+                actively unsuitable here: a score change that crosses an anchor
+                boundary schedules a *background* ``smart_score = NULL`` sweep over the
+                whole library at LOW priority, which can land after this fold has
+                already polled its rescore to completion and blank the value the fold
+                is about to read.  A single synchronous write swaps all 18 labels and
+                invalidates exactly the held-out rows, with no reset in flight.  The
+                column written is byte-for-byte what the endpoint persists.
+
+                The single commit is load-bearing: the rescore is triggered by
+                ``smart_score IS NULL``, so putting the label swap and the invalidation
+                in one transaction means the scoring task cannot observe a held-out row
+                as scorable while its own label is still sitting in the anchor pool.
+                """
+                for score_value, ids_for_score in scores_by_id.items():
+                    session.execute(
+                        update(Picture)
+                        .where(Picture.id.in_(ids_for_score))
+                        .values(score=score_value)
+                    )
                 session.execute(
-                    update(Picture).where(Picture.id.in_(ids)).values(smart_score=None)
+                    update(Picture)
+                    .where(Picture.id.in_(invalidate_ids))
+                    .values(smart_score=None)
                 )
                 session.commit()
 
-            server.vault.db.run_task(_reset_smart_scores, picture_ids)
+            held_out_smart_score_by_id = {}
+            for group in groups:
+                held_out = set(group)
+                ids_by_score = {}
+                for pic_id, label in expected_score_by_picture_id.items():
+                    # 0 == unrated: excluded from both the good (>= 4) and the
+                    # bad (0 < score <= 1) anchor queries.
+                    fold_score = 0 if pic_id in held_out else label
+                    ids_by_score.setdefault(fold_score, []).append(pic_id)
 
-            _poll_until_zero(server, SmartScoreTask.count_remaining, "smart scores")
+                server.vault.db.run_task(
+                    _set_scores_and_invalidate, ids_by_score, list(group)
+                )
+                _poll_until_zero(server, SmartScoreTask.count_remaining, "smart scores")
 
-            smart_resp = client.get(
-                f"{_API_PREFIX}/pictures",
-                params={
-                    "sort": "SMART_SCORE",
-                    "descending": "true",
-                    "offset": 0,
-                    "limit": 10000,
-                },
-            )
-            assert smart_resp.status_code == 200, smart_resp.text
+                def fetch_group_scores(session, ids):
+                    return {
+                        row[0]: row[1]
+                        for row in session.exec(
+                            select(Picture.id, Picture.smart_score).where(
+                                Picture.id.in_(ids)
+                            )
+                        ).all()
+                    }
 
-            smart_results = smart_resp.json() or []
-            smart_score_by_id = {
-                int(row.get("id")): float(row.get("smartScore"))
-                for row in smart_results
-                if row.get("id") is not None and row.get("smartScore") is not None
-            }
+                fold_scores = server.vault.db.run_immediate_read_task(
+                    fetch_group_scores, group
+                )
+                for pic_id in group:
+                    value = fold_scores.get(pic_id)
+                    assert value is not None, (
+                        f"No held-out smart score for picture {pic_id} "
+                        f"({expected_source_name_by_picture_id.get(pic_id, '')})"
+                    )
+                    held_out_smart_score_by_id[pic_id] = float(value)
 
-            common_ids = [
-                pid
-                for pid in expected_score_by_picture_id.keys()
-                if pid in smart_score_by_id
-            ]
+            common_ids = sorted(held_out_smart_score_by_id)
             assert len(common_ids) >= 8, (
                 f"Too few points for correlation check: {len(common_ids)}"
             )
@@ -554,8 +826,12 @@ def test_smart_score_correlates_with_reference_scores():
             expected_values = [
                 float(expected_score_by_picture_id[pid]) for pid in common_ids
             ]
-            smart_values = [float(smart_score_by_id[pid]) for pid in common_ids]
+            smart_values = [
+                float(held_out_smart_score_by_id[pid]) for pid in common_ids
+            ]
 
+            tau_b = _kendall_tau_b(expected_values, smart_values)
+            tau_b_lower = _bootstrap_tau_b_lower_bound(expected_values, smart_values)
             pearson = _pearson_corr(expected_values, smart_values)
             spearman = _spearman_corr(expected_values, smart_values)
 
@@ -567,7 +843,7 @@ def test_smart_score_correlates_with_reference_scores():
                         expected_source_name_by_picture_id.get(pid, ""),
                         imported_name_by_picture_id.get(pid, ""),
                         f"{expected_score_by_picture_id[pid]:.2f}",
-                        f"{smart_score_by_id[pid]:.4f}",
+                        f"{held_out_smart_score_by_id[pid]:.4f}",
                     ]
                 )
 
@@ -580,27 +856,34 @@ def test_smart_score_correlates_with_reference_scores():
             coeff_table = _format_ascii_table(
                 ["Coefficient", "Value"],
                 [
-                    ["Pearson", f"{pearson:.4f}"],
-                    ["Spearman", f"{spearman:.4f}"],
+                    ["Kendall tau-b", f"{tau_b:.4f}"],
+                    ["tau-b 95% lower bound", f"{tau_b_lower:.4f}"],
+                    ["Pearson (diagnostic)", f"{pearson:.4f}"],
+                    ["Spearman (diagnostic)", f"{spearman:.4f}"],
                     ["Sample Size", str(len(common_ids))],
+                    ["Folds", str(len(groups))],
                 ],
             )
 
-            logger.info("Smart score vs expected table:\n%s", score_table)
-            logger.info("Smart score correlation coefficients:\n%s", coeff_table)
+            logger.info("Held-out smart score vs expected table:\n%s", score_table)
+            logger.info("Held-out smart score correlation:\n%s", coeff_table)
 
             logger.info(
-                "Smart score correlation: n=%d pearson=%.4f spearman=%.4f",
+                "Smart score leave-one-group-out correlation: n=%d folds=%d "
+                "tau_b=%.4f tau_b_lower=%.4f pearson=%.4f spearman=%.4f",
                 len(common_ids),
+                len(groups),
+                tau_b,
+                tau_b_lower,
                 pearson,
                 spearman,
             )
 
-            threshold = 0.70
-            assert max(pearson, spearman) >= threshold, (
-                "Smart score correlation too low: "
-                f"pearson={pearson:.4f}, spearman={spearman:.4f}, "
-                f"required>={threshold:.2f}"
+            assert tau_b_lower >= _MIN_TAU_B_LOWER_BOUND, (
+                "Smart score agreement with reference labels regressed: "
+                f"tau_b={tau_b:.4f}, 95% lower bound={tau_b_lower:.4f}, "
+                f"required>={_MIN_TAU_B_LOWER_BOUND:.2f} "
+                f"(n={len(common_ids)}, {len(groups)} leave-one-group-out folds)"
             )
 
     gc.collect()

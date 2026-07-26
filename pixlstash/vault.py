@@ -135,6 +135,7 @@ class Vault:
         # Scrapheap auto-purge retention window (days) or None = "Never", plus
         # the instant it was last LOWERED (puts a +1 day floor under EVERY
         # picture's purge deadline, however old). See scrapheap_service.
+        # Defaults to None: auto-purge stays off until the user turns it on.
         self._scrapheap_retention_days: Optional[int] = scrapheap_retention_days
         self._scrapheap_retention_reduced_at: Optional[datetime.datetime] = (
             scrapheap_retention_reduced_at
