@@ -358,11 +358,29 @@ theme's *canvas*, which is the opposite lightness. So there is now a fourth fami
 identical in both themes and equal to the dark-tuned hues:
 
 ```js
-'dark-surface-error':   '#f44336',   // 4.12:1 on #242628, 4.69:1 on #181b20
-'dark-surface-warning': '#db7900',   // 4.88 / 5.55
-'dark-surface-success': '#4caf50',   // 5.46 / 6.21
-'dark-surface-info':    '#2196F3',   // 4.86 / 5.53
+'dark-surface-error':   '#c9786f',   // 4.63:1 on #242628, 5.26:1 on #181b20
+'dark-surface-warning': '#e8912f',   // 6.16 / 7.01
+'dark-surface-success': '#5d9c6c',   // 4.65 / 5.29
+'dark-surface-info':    '#6b92b0',   // 4.60 / 5.23
 ```
+
+**This family is a FOREGROUND family, and that is the whole point.** Updated
+2026-07-26, after the values above were briefly replaced by the deep fill hues.
+`6e14c32c` deepened the four status hues — correct for the fill tier, where a deep
+hue is what lets a warm near-white label clear 4.5:1 — and the same four values were
+applied here in the same pass. That inverted the family's purpose: these are not
+fills that carry a label, they are the label. On `#242628` they fell to `error`
+**2.51**, `info` **2.48**, `success` **2.97**, against the 4.5:1 those 11px semibold
+`ReviewRail` buttons need. The current values are the same four hues lifted toward
+white until they read as text, so the palette stays one family with two lightness
+poles: deep for fills, light for foregrounds on dark chrome.
+
+The earlier values (`#f44336` / `#db7900` / `#4caf50` / `#2196F3`) were not restored:
+`#f44336` measured 4.12:1 here, already under the floor, and saturated Material
+primaries now sit beside the deepened fills.
+
+Arithmetic for every pair in both themes is enforced by
+`frontend/src/utils/contrastAudit.test.js`; `npm run audit:contrast` prints the table.
 
 The eleven `success` declarations moved onto it, as did the notice host's `--on-dark`
 variant (§2.5) and the two `ImageOverlay` chips above. **Not** migrated: the ~40

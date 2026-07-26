@@ -67,15 +67,18 @@ const pixlStashLight = {
     "dark-surface": "#242628",
     "on-dark-surface": "#f2e5da",
     // Status hues FOR the deliberately-dark surfaces. A `dark-surface` stays
-    // dark in both themes, so the theme's own status hues — tuned for that
-    // theme's canvas — are the wrong values inside it: the deepened light
-    // `success` reads 2.96:1 there. These four are identical in both themes
-    // (they are the dark-tuned hues) and measure 4.12:1 – 5.46:1 plain on
-    // `#242628`, 3.49:1 – 4.23:1 on their own 16% tint.
-    "dark-surface-error": "#b0392b  ",
+    // dark in both themes, so the theme's own status hues are the wrong values
+    // inside it — and in the specific direction that matters: the fill hues are
+    // tuned to CARRY a light label, not to BE one. This family is their light
+    // counterpart, the same four hues lifted until they read as 11px semibold
+    // text (`ReviewRail`'s Abort/Clear). Identical in both themes. Measured
+    // 4.60:1 – 6.16:1 plain on `#242628`, 5.23:1 – 7.01:1 on `#181b20`.
+    // Deep fill hues here would fail: `error` #b0392b reads 2.51:1, `info`
+    // #2f6690 2.48:1, `success` #2a7d3e 2.97:1.
+    "dark-surface-error": "#c9786f",
     "dark-surface-warning": "#e8912f",
-    "dark-surface-success": "#2a7d3e",
-    "dark-surface-info": "#2f6690",
+    "dark-surface-success": "#5d9c6c",
+    "dark-surface-info": "#6b92b0",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
     // on a dark card. This is the dark theme's outgoing bright olive — a good
     // foreground on a dark card and a bad fill under a white label, so it moves
@@ -113,8 +116,8 @@ const pixlStashLight = {
     // Status hues + their authored foregrounds. The foreground is whichever of
     // the warm near-white / warm near-black clears 4.5:1 on the SOLID fill; it
     // is not a house style, it is the only value that passes. Measured:
-    error: "#b0392b",
-    "on-error": "#f7f1ea", //   4.86:1
+    error: "#b54538",
+    "on-error": "#f7f1ea", //   4.83:1 (same value in both themes)
     info: "#1a6ec4",
     "on-info": "#ffffff", //    5.16:1
     success: "#2e7d32",
@@ -144,13 +147,13 @@ const pixlStashDark = {
     "cancel-button-text": "#f2e5da",
     "dark-surface": "#181b20",
     "on-dark-surface": "#f2e5da",
-    // Same four values as the light theme by design — see the note there. In
-    // this theme they coincide with the theme's own status hues, so pointing a
-    // dark-surface consumer at them is a no-op here and a fix in light mode.
-    "dark-surface-error": "#b0392b",
+    // Same four values as the light theme by design — see the note there. They
+    // are deliberately LIGHTER than this theme's own status hues: those are
+    // fills, these are foregrounds, and a `dark-surface` needs the latter.
+    "dark-surface-error": "#c9786f",
     "dark-surface-warning": "#e8912f",
-    "dark-surface-success": "#2a7d3e",
-    "dark-surface-info": "#2f6690",
+    "dark-surface-success": "#5d9c6c",
+    "dark-surface-info": "#6b92b0",
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",
@@ -177,18 +180,20 @@ const pixlStashDark = {
     overlay: "#00000066",
     focus: "#7c4dff",
     hover: "#ffffff14",
-    // Status hues stay BRIGHT in dark mode: their dominant use is as a
-    // foreground on a dark surface, where deepening them would hurt. A bright
-    // fill takes a dark foreground, so all four pair with the same warm
-    // near-black the theme already uses for `on-accent`. Measured:
-    error: "#b0392b",
-    "on-error": "#f7f1ea", //   4.68:1
-    info: "#2f6690",
-    "on-info": "#1b1b1b", //    5.51:1
+    // Status hues are DEEP in both themes (unified Camp B palette), so three of
+    // the four carry the warm near-white label like every other fill tier here.
+    // `warning` is the exception: it is bright enough that the label has to flip
+    // to the warm near-black instead. Foreground-on-dark-chrome is a different
+    // job with its own family — see `dark-surface-<status>` above; do not reach
+    // for these values there. Measured on the SOLID fill:
+    error: "#b54538",
+    "on-error": "#f7f1ea", //   4.83:1
+    info: "#3b6f97",
+    "on-info": "#f7f1ea", //    4.79:1
     success: "#2a7d3e",
-    "on-success": "#1b1b1b", // 6.20:1
+    "on-success": "#f7f1ea", // 4.57:1
     warning: "#e8912f",
-    "on-warning": "#1b1b1b", // 5.53:1
+    "on-warning": "#1b1b1b", // 6.99:1
     scrim: "#000000",
     shadow: "#2a2f36",
     panel: "#313337",

@@ -12,6 +12,7 @@
 - Fixed: Smart Score only counts defects that are actually in a picture's tag list, so pictures the tagger flagged behind the scenes but never tagged are no longer pushed down the grid. Affected scores are recalculated once in the background when you upgrade.
 - Unloading a model frees the VRAM it was holding, and the budget readout reflects it.
 - Refreshed Appearance pane and a unified amber palette across the app and the website, with dark mode fixes on the website and install pages.
+- Fixed: Status labels and buttons in the review rail, lightbox and notices are readable again on dark backgrounds. The refreshed palette had left several of them too dark to make out.
 - Symmetrical sidebars, a stats panel that docks at every width, and full-width pair review in the review overlay.
 - Fix watch folders importing the same picture twice when it was picked up while the file was still being copied in.
 - Every API route now goes through one deny-by-default authorization gate that enforces object access from a declared policy, and routes that declare nothing are refused instead of served [Security:Moderate]

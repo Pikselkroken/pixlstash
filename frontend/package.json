@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
+    "audit:contrast": "node src/utils/contrastAudit.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
