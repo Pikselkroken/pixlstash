@@ -2836,7 +2836,15 @@ def _empty_scrapheap_via_http(server):
         "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
     )
     assert login.status_code == 200, login.text
-    resp = client.request("DELETE", "/api/v1/pictures/scrapheap")
+    # The destructive endpoint refuses without the single-use confirm_token the
+    # preview mints, so drive the real preview -> confirm flow.
+    preview = client.post("/api/v1/pictures/scrapheap/delete-preview", json={})
+    assert preview.status_code == 200, preview.text
+    resp = client.request(
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={"confirm_token": preview.json()["confirm_token"]},
+    )
     assert resp.status_code == 200, resp.text
     # The endpoint deletes files in a FastAPI BackgroundTask; TestClient runs
     # those synchronously before returning, so the filesystem is settled here.

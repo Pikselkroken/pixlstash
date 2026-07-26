@@ -16,12 +16,18 @@ import os
 import tempfile
 from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _setup_server():

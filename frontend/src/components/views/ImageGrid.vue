@@ -3933,6 +3933,10 @@ const deleteForeverIds = ref([]);
 // True when the pending purge was scoped to an explicit id list by the overlay
 // context menu, so runScrapheapSelectionPurge must not mutate the grid selection.
 const deleteForeverScoped = ref(false);
+// Single-use confirmation minted by the delete preview for exactly this
+// selection. The server refuses the purge without it, so it is cleared on every
+// new preview and after every attempt — a stale one must never be replayed.
+const deleteForeverConfirmToken = ref("");
 
 function openDeleteForeverForSelection(ids, scoped = false) {
   deleteForeverMode.value = "selection";
@@ -3956,11 +3960,13 @@ function openDeleteForeverForAll() {
 async function loadDeletePreview(ids) {
   if (deleteForeverLoading.value) return;
   deleteForeverLoading.value = true;
+  deleteForeverConfirmToken.value = "";
   try {
     const d =
       (await previewScrapheapDelete(ids ?? null, {
         baseUrl: props.backendUrl,
       })) ?? {};
+    deleteForeverConfirmToken.value = String(d.confirm_token ?? "");
     deleteForeverTotalCount.value = Number(d.total_count) || 0;
     deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
     deleteForeverUnprotectedCount.value = Number(d.unprotected_count) || 0;
@@ -4005,6 +4011,7 @@ async function loadDeletePreview(ids) {
 }
 
 function cancelDeleteForever() {
+  deleteForeverConfirmToken.value = "";
   deleteForeverOpen.value = false;
 }
 
@@ -4029,6 +4036,7 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     const resp = await purgeScrapheap({
       pictureIds: idsToRemove,
       includeProtected,
+      confirmToken: deleteForeverConfirmToken.value,
       baseUrl: backendUrl,
     });
     // Locked pictures survive a purge too, and this endpoint reports them under
@@ -4078,6 +4086,9 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
       { key: "scrapheap-purge" },
     );
   } finally {
+    // The server spends the confirmation on the first attempt, so a retry must
+    // go back through the preview rather than replaying a dead token.
+    deleteForeverConfirmToken.value = "";
     deleteForeverBusy.value = false;
     deleteForeverOpen.value = false;
   }
@@ -4109,6 +4120,7 @@ async function runEmptyScrapheap(includeProtected) {
   try {
     const resp = await purgeScrapheap({
       includeProtected,
+      confirmToken: deleteForeverConfirmToken.value,
       baseUrl: props.backendUrl,
     });
     // Clear + refetch reconciles either case: when only the unprotected subset
@@ -4129,6 +4141,8 @@ async function runEmptyScrapheap(includeProtected) {
       key: "scrapheap-empty",
     });
   } finally {
+    // Spent server-side on the first attempt; a retry re-runs the preview.
+    deleteForeverConfirmToken.value = "";
     scrapheapEmptying.value = false;
     deleteForeverBusy.value = false;
     deleteForeverOpen.value = false;

@@ -38,9 +38,14 @@ import pixlstash.routes.pictures._crud as crud_module
 import pixlstash.routes.pictures._misc as misc_module
 from pixlstash.routes.pictures import _helpers as helpers_module
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _good_picture_files():
@@ -490,7 +495,10 @@ def test_comfyui_i2i_owner_passes_scope_guard(env, monkeypatch):
         json={"workflow_name": "nonexistent", "picture_ids": [picture_ids[1]]},
     )
     # Owner is not scope-blocked; it falls through to the missing-workflow 404.
-    assert r.status_code != 403, r.text
+    # Assert that exact status rather than a bare ``!= 403``: the loose form is
+    # also satisfied by a 404 from a renamed route or a 500, so it would keep
+    # passing after the handler it is meant to reach stopped existing.
+    assert r.status_code == 404, r.text
 
 
 def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):

@@ -37,9 +37,14 @@ from fastapi.testclient import TestClient
 
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures", "good")
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 @pytest.fixture

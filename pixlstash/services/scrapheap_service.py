@@ -49,6 +49,19 @@ Retention policy (settled with the maintainer, do not redesign):
   retract an *earlier* purge's genuine deletion of different content that once
   lived at the same path, and restore would then resurrect it bound to the wrong
   file.
+* A picture that has LEFT the scrapheap by the time the rows are deleted is
+  never destroyed. Selection, planning and deletion run in ONE DB-queue
+  submission (:func:`plan_and_purge_in_session`) so no other write can land in
+  between, and :func:`purge_rows_in_session` re-checks ``deleted`` in the same
+  session that issues the DELETE, so the guarantee survives any future change to
+  how the work is scheduled. The skipped ids are logged and reported as
+  ``skipped_restored``; their rows, files and ledger entries are untouched.
+* The endpoint is gated by a server-side ``confirm_token`` minted by
+  ``POST /pictures/scrapheap/delete-preview`` (see
+  :class:`ScrapheapDeleteConfirmations`). The type-to-confirm dialog is a client
+  control and proves nothing. This is an INTENT control; authorization stays with
+  the AuthzGate. The unattended sweep calls :func:`purge_scrapheap_pictures`
+  directly and needs no confirmation.
 * The deadline is enforced **twice**, mirroring the two-layer protected-original
   defence: once when the finder selects candidates
   (:func:`find_due_retention_picture_ids_in_session`) and again inside
@@ -72,6 +85,9 @@ Retention policy (settled with the maintainer, do not redesign):
 
 import math
 import os
+import secrets
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
@@ -170,6 +186,13 @@ class ScrapheapPurgeOutcome:
     skipped_locked: list[int] = field(default_factory=list)
     retained_count: int = 0
     purged_ids: list[int] = field(default_factory=list)
+    # Ids that were planned for destruction but were NOT destroyed: they had
+    # left the scrapheap by the time the DELETE ran (restored concurrently, or
+    # already purged), or the whole batch was rolled back because the guarded
+    # DELETE and the re-check disagreed. Their rows, files and ledger entries
+    # are untouched — the caller drops their file removals on the strength of
+    # this list.
+    skipped_restored: list[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -454,26 +477,117 @@ def fetch_no_delete_folder_ids_in_session(session: Session) -> set[int]:
     return {r for r in result if r is not None}
 
 
+def still_scrapheaped_ids_in_session(
+    session: Session, picture_ids: list[int]
+) -> set[int]:
+    """Which of ``picture_ids`` are, RIGHT NOW, still soft-deleted.
+
+    Chunked for the same reason :data:`LOCK_QUERY_CHUNK` exists: a whole-heap
+    delete-forever can hand over more ids than SQLITE_LIMIT_VARIABLE_NUMBER
+    allows in one ``IN (...)`` on builds older than SQLite 3.32.
+    """
+    ids = [int(pid) for pid in picture_ids if pid is not None]
+    still: set[int] = set()
+    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
+        chunk = ids[start : start + LOCK_QUERY_CHUNK]
+        rows = session.exec(
+            select(Picture.id).where(Picture.id.in_(chunk), Picture.deleted.is_(True))
+        ).all()
+        still |= {int(pid) for pid in rows if pid is not None}
+    return still
+
+
+def existing_picture_ids_in_session(
+    session: Session, picture_ids: list[int]
+) -> set[int]:
+    """Which of ``picture_ids`` still have a row at all.
+
+    Used immediately after the guarded DELETE, inside the same transaction, to
+    learn which ids it ACTUALLY removed. ``rowcount`` gives a total but not an
+    identity, and the file removal has to be driven by identity — see
+    :func:`purge_rows_in_session`. Chunked like its sibling above.
+    """
+    ids = [int(pid) for pid in picture_ids if pid is not None]
+    existing: set[int] = set()
+    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
+        chunk = ids[start : start + LOCK_QUERY_CHUNK]
+        rows = session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
+        existing |= {int(pid) for pid in rows if pid is not None}
+    return existing
+
+
 def purge_rows_in_session(
     session: Session, picture_ids: list[int], log_records: list[dict]
-) -> tuple[int, set[str]]:
+) -> tuple[int, set[str], set[int]]:
     """Write the permanent-deletion ledger and delete the picture rows.
 
     Logged and deleted in the same transaction so the two can never diverge.
 
+    **The ``deleted`` predicate is re-evaluated HERE, in the same session that
+    issues the DELETE, and it is the load-bearing safety property of this
+    module.** The purge selects its ids while the pictures are scrapheaped and
+    then deletes them BY ID; a restore committed in between makes those ids live
+    again, and an unqualified ``DELETE ... WHERE id IN (...)`` would hard-delete
+    the rows the user just rescued, remove their files from disk, and leave a
+    ``file_removed=True`` ledger row so even a snapshot restore drops them
+    forever. :func:`plan_and_purge_in_session` already collapses planning and
+    deletion into ONE DB-queue submission so nothing can interleave, but that is
+    a property of the CALLER and a future refactor can lose it; the re-check is
+    the belt that does not depend on scheduling.
+
+    **Exactly what that belt delivers — do not over-read it.** It is authoritative
+    for the row, the file and the ledger *together*, and only because all three
+    are derived from the same answer:
+
+    * The re-check narrows the batch to ids that are still soft-deleted. Ids that
+      have left the scrapheap get no ledger row and are not deleted.
+    * **The guarded DELETE, not the re-check, decides what was destroyed.** Its
+      own ``deleted`` predicate can still spare a row that the re-check blessed
+      moments earlier, so the removed set is read back from the database after
+      the DELETE. Deriving the skips from the re-check alone would save the ROW
+      but still unlink the FILE and leave the ledger asserting a permanent
+      deletion that never happened — a live picture with no original on disk and
+      a ``file_removed=True`` path that neither restore nor a re-scan recovers.
+    * If the two ever disagree, the WHOLE batch is rolled back: no rows deleted,
+      no ledger rows written, no files unlinked, ``deleted_count`` 0, every id
+      reported as skipped. An irreversible path fails closed, loudly, rather than
+      committing a partial result it cannot describe.
+
     Returns:
-        ``(deleted_count, owned_path_shas)`` where ``owned_path_shas`` is every
-        ``path_sha`` THIS call created or raised to ``file_removed=True``. It is
-        the write-ownership token for :func:`mark_files_kept_in_session`: only a
-        row this purge is responsible for may later be corrected back to
-        ``False``. Rows that were already ``True`` before this call are excluded
-        — see that function for the collision this prevents.
+        ``(deleted_count, owned_path_shas, skipped_ids)``. ``deleted_count`` is
+        the number of rows the DELETE actually removed. ``owned_path_shas``
+        is every ``path_sha`` THIS call created or raised to
+        ``file_removed=True``. It is the write-ownership token for
+        :func:`mark_files_kept_in_session`: only a row this purge is responsible
+        for may later be corrected back to ``False``. Rows that were already
+        ``True`` before this call are excluded — see that function for the
+        collision this prevents. ``skipped_ids`` are every requested id that was
+        NOT destroyed; the caller MUST drop their file removals.
     """
     if not picture_ids:
-        return 0, set()
+        return 0, set(), set()
+    requested = {int(pid) for pid in picture_ids if pid is not None}
+    purgeable = still_scrapheaped_ids_in_session(session, list(requested))
+    skipped_ids = requested - purgeable
+    if skipped_ids:
+        logger.warning(
+            "Delete-forever: SKIPPING %d picture id(s) that left the scrapheap "
+            "between planning and deletion (restored, or already purged): %s — "
+            "their rows, files and ledger entries are untouched. Nothing is "
+            "lost; re-run the purge if they are scrapheaped again.",
+            len(skipped_ids),
+            sorted(skipped_ids),
+        )
+    if not purgeable:
+        return 0, set(), skipped_ids
     now = datetime.now(timezone.utc)
     owned_path_shas: set[str] = set()
     for record in log_records:
+        record_id = record.get("picture_id")
+        if record_id is not None and int(record_id) not in purgeable:
+            # Its picture is no longer being destroyed, so asserting a permanent
+            # deletion for its path would be a lie that restore acts on.
+            continue
         path_sha = record.get("path_sha")
         if not path_sha:
             continue
@@ -505,9 +619,41 @@ def purge_rows_in_session(
         # records some earlier purge's permanently destroyed content, not ours.
         # Deliberately NOT owned, so a failed removal here can never reach back
         # and downgrade it.
-    session.exec(delete(Picture).where(Picture.id.in_(picture_ids)))
+    purgeable_ids = sorted(purgeable)
+    for start in range(0, len(purgeable_ids), LOCK_QUERY_CHUNK):
+        chunk = purgeable_ids[start : start + LOCK_QUERY_CHUNK]
+        # ``deleted`` is repeated in the DELETE itself, not just in the SELECT
+        # above: belt-and-braces against anything that could commit between the
+        # two statements in this same session.
+        session.exec(
+            delete(Picture).where(Picture.id.in_(chunk), Picture.deleted.is_(True))
+        )
+    # The DELETE is authoritative, not the re-check above. Read the removed set
+    # back BEFORE committing: a row its predicate spared must keep its file and
+    # must not be ledgered, which needs identity, not a rowcount.
+    removed_ids = purgeable - existing_picture_ids_in_session(session, purgeable_ids)
+    spared_by_the_delete = purgeable - removed_ids
+    if spared_by_the_delete:
+        # Only reachable if something committed between the SELECT and the
+        # DELETE in this same session, which the single DB worker thread makes
+        # impossible today. Fail the WHOLE batch closed rather than commit a
+        # ledger that asserts deletions which did not happen: this is the one
+        # irreversible path, and a partial result here is the exact shape of the
+        # snapshot-restore data loss this release already had to fix.
+        session.rollback()
+        logger.error(
+            "Delete-forever: ABORTED and rolled back — the guarded DELETE "
+            "spared %d of the %d id(s) the re-check had selected (%s), so the "
+            "batch could not be described honestly. NOTHING was destroyed: no "
+            "rows deleted, no permanent-deletion ledger rows written, no files "
+            "removed. Re-run the purge.",
+            len(spared_by_the_delete),
+            len(purgeable_ids),
+            sorted(spared_by_the_delete),
+        )
+        return 0, set(), requested
     session.commit()
-    return len(picture_ids), owned_path_shas
+    return len(removed_ids), owned_path_shas, skipped_ids
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
@@ -823,6 +969,9 @@ def build_purge_plan(
             # never here — a skipped protected picture writes NO ledger row.)
             plan.log_records.append(
                 {
+                    # Carried so purge_rows_in_session can drop the record when
+                    # its picture turns out to have left the scrapheap.
+                    "picture_id": int(row.id) if row.id is not None else None,
                     "path_sha": DeletedFileLog.hash_path(row.file_path),
                     "pixel_sha": row.pixel_sha,
                     "file_removed": True,
@@ -832,6 +981,53 @@ def build_purge_plan(
                 (row.id, row.file_path, was_reference_protected)
             )
     return plan
+
+
+def plan_and_purge_in_session(
+    session: Session,
+    ids: Optional[list[int]],
+    include_protected: bool,
+    retention_guard: Optional["RetentionGuard"],
+) -> tuple[ScrapheapPurgePlan, int, set[str], set[int]]:
+    """Select, plan and destroy in ONE DB-queue submission.
+
+    The purge used to run as four separate submissions — fetch the scrapheap
+    rows, fetch the protected folder ids, look the locks up, then delete. Writes
+    are serialised on a single DB worker thread, so any write submitted between
+    those steps ran BETWEEN them: a ``POST /pictures/scrapheap/restore`` landing
+    in that window made the selected ids live again and the final delete-by-id
+    destroyed them (rows, files and a ``file_removed=True`` ledger row). The
+    locked-set lookup was worse still — it ran on the CALLER's thread via
+    ``run_immediate_read_task``, so a set locked afterwards was not seen at all.
+
+    Running the whole decision inside one task closes the window: nothing else
+    can write while this runs. It is the structural half of the fix.
+    :func:`purge_rows_in_session` re-checks ``deleted`` at the point of deletion
+    anyway — the half that does not depend on this scheduling — and derives the
+    row, the file and the ledger from what the guarded DELETE actually removed,
+    rolling the batch back if the two ever disagree. Read that docstring for the
+    precise limits of the guarantee before relying on it.
+
+    Returns:
+        ``(plan, deleted_count, owned_path_shas, skipped_restored_ids)``.
+    """
+    rows = fetch_scrapheap_rows_in_session(session, ids)
+    if not rows:
+        return ScrapheapPurgePlan(), 0, set(), set()
+    no_delete_folder_ids = fetch_no_delete_folder_ids_in_session(session)
+    # Unconditional: a locked picture-set freezes its members against EVERY
+    # destruction path, manual delete-forever included. Looked up through the one
+    # shared helper so this can never disagree with the sweep or the listing.
+    locked_ids = locked_scrapheap_picture_ids_in_session(
+        session, [row.id for row in rows if row.id is not None]
+    )
+    plan = build_purge_plan(
+        rows, no_delete_folder_ids, locked_ids, include_protected, retention_guard
+    )
+    deleted_count, owned_path_shas, skipped_restored = purge_rows_in_session(
+        session, plan.picture_ids, plan.log_records
+    )
+    return plan, deleted_count, owned_path_shas, skipped_restored
 
 
 def classify_delete_preview(
@@ -886,6 +1082,196 @@ def classify_delete_preview(
         "protected": protected_items,
         "locked": sorted(locked_items),
     }
+
+
+# ── Server-side delete-forever confirmation ──────────────────────────────────
+#
+# The type-to-confirm dialog is a CLIENT control and proves nothing to the
+# server: ``DELETE /pictures/scrapheap`` with an empty body used to destroy the
+# entire scrapheap and its files with no server-side intent check at all. There
+# is no CSRF token anywhere, and CORS admits ANY localhost/LAN-IP *port* with
+# credentials, so a page served on another local port can drive the owner's own
+# session straight into the one irreversible endpoint in the product.
+#
+# Alternatives considered:
+#
+# * **Echo the preview's ``total_count``** (the CSO's suggestion). Rejected as
+#   the primary control: it is a small integer, stable, and enumerable — a
+#   caller that cannot read the preview response can still just try 1, 2, 3…
+#   It also makes ordinary concurrent activity (another tab scrapheaping a
+#   picture) a spurious failure.
+# * **Require a custom header.** Rejected: a DELETE with a JSON body already
+#   triggers a preflight, and ``allow_headers=["*"]`` means the preflight passes
+#   for every origin the regex admits. It costs a round trip and buys nothing.
+# * **A single-use, TTL-bounded random token minted by the preview endpoint and
+#   bound to the exact selection** — chosen. It cannot be guessed, so a caller
+#   that cannot read a preview response cannot construct one; it cannot be
+#   replayed, so one leaked value destroys at most one selection; and it is
+#   bound to the selection, so a token minted for one picture cannot be spent
+#   emptying the whole heap.
+#
+# This is an INTENT control, not an authorization control. Authorization for
+# these routes is owned by the AuthzGate (``OWNER_ONLY`` in
+# ``pixlstash/authz/registry.py``) and is unchanged.
+
+# How long a preview's confirmation stays spendable. Long enough to read a
+# dialog listing every protected original, short enough that a token left in a
+# closed tab is not a standing capability.
+CONFIRM_TOKEN_TTL_SECONDS: int = 300
+
+# Cap on outstanding confirmations, so repeated previews cannot grow the map
+# without bound. The oldest is evicted first; it is only ever a fresh preview
+# away from being reissued.
+CONFIRM_TOKEN_MAX_OUTSTANDING: int = 64
+
+# Why a confirmation was refused. ``MISSING`` is a malformed request (400);
+# the rest mean the preview is no longer spendable (409 — re-run the preview).
+CONFIRM_MISSING = "missing"
+CONFIRM_UNKNOWN = "unknown"
+CONFIRM_MISMATCH = "mismatch"
+
+
+def selection_fingerprint(ids: Optional[list[int]]) -> str:
+    """Stable identity of a delete-forever selection.
+
+    ``None`` (the whole scrapheap) is its OWN fingerprint, deliberately distinct
+    from any explicit id list: a confirmation minted for "these three pictures"
+    must never be spendable on "everything".
+    """
+    if ids is None:
+        return "ALL"
+    return ",".join(str(int(pid)) for pid in sorted({int(pid) for pid in ids}))
+
+
+@dataclass(frozen=True)
+class DeleteConfirmation:
+    """One outstanding, unspent confirmation.
+
+    Attributes:
+        fingerprint: The selection the preview was computed over.
+        total_count: What the preview reported, for the audit log.
+        expires_at: ``time.monotonic()`` deadline.
+    """
+
+    fingerprint: str
+    total_count: int
+    expires_at: float
+
+
+class ScrapheapDeleteConfirmations:
+    """Mint and redeem single-use delete-forever confirmations.
+
+    One instance per server. Thread-safe: previews and deletes are served from
+    the FastAPI thread pool, so mint and redeem can genuinely race, and
+    "redeemed exactly once" is the property that makes a token single-use.
+
+    Deliberately in-memory: a confirmation is a few-minutes-long proof that a
+    human just read a destructive preview, so losing them on restart is correct
+    behaviour, not a limitation.
+
+    A confirmation is bound to the SELECTION, not to ``include_protected``: one
+    preview drives both dialog buttons, and it already reports exactly what each
+    one destroys.
+    """
+
+    def __init__(
+        self,
+        ttl_seconds: int = CONFIRM_TOKEN_TTL_SECONDS,
+        max_outstanding: int = CONFIRM_TOKEN_MAX_OUTSTANDING,
+    ) -> None:
+        """Initialise an empty confirmation store."""
+        self._ttl_seconds = ttl_seconds
+        self._max_outstanding = max_outstanding
+        self._lock = threading.Lock()
+        self._outstanding: dict[str, DeleteConfirmation] = {}
+
+    def issue(self, ids: Optional[list[int]], total_count: int) -> str:
+        """Mint a confirmation for ``ids`` and return the opaque token."""
+        token = secrets.token_urlsafe(32)
+        record = DeleteConfirmation(
+            fingerprint=selection_fingerprint(ids),
+            total_count=int(total_count),
+            expires_at=time.monotonic() + self._ttl_seconds,
+        )
+        with self._lock:
+            self._prune_locked()
+            while len(self._outstanding) >= self._max_outstanding:
+                oldest = min(
+                    self._outstanding,
+                    key=lambda key: self._outstanding[key].expires_at,
+                )
+                del self._outstanding[oldest]
+                logger.info(
+                    "Delete-forever: evicted the oldest unspent confirmation "
+                    "(more than %d outstanding); that preview must be re-run "
+                    "before it can be confirmed",
+                    self._max_outstanding,
+                )
+            self._outstanding[token] = record
+        return token
+
+    def redeem(
+        self, token: Optional[str], ids: Optional[list[int]]
+    ) -> tuple[bool, str]:
+        """Spend ``token`` for the selection ``ids``.
+
+        Returns:
+            ``(True, "")`` when the confirmation was valid and is now spent, or
+            ``(False, reason)`` — one of :data:`CONFIRM_MISSING`,
+            :data:`CONFIRM_UNKNOWN` (absent, already spent, or expired) or
+            :data:`CONFIRM_MISMATCH` (minted for a different selection). The
+            token is consumed on a fingerprint mismatch too: a confirmation the
+            user did not mean to spend this way is not spendable at all.
+        """
+        if not token or not isinstance(token, str):
+            logger.warning(
+                "Delete-forever: REFUSED — no confirm_token. This endpoint "
+                "permanently destroys pictures and their files, so it requires "
+                "a confirmation minted by POST /pictures/scrapheap/delete-preview."
+            )
+            return False, CONFIRM_MISSING
+        wanted = selection_fingerprint(ids)
+        with self._lock:
+            self._prune_locked()
+            record = self._outstanding.pop(token, None)
+        if record is None:
+            logger.warning(
+                "Delete-forever: REFUSED — the confirmation is unknown, already "
+                "spent, or older than %ds. Nothing was destroyed; re-run the "
+                "delete preview.",
+                self._ttl_seconds,
+            )
+            return False, CONFIRM_UNKNOWN
+        if record.fingerprint != wanted:
+            logger.warning(
+                "Delete-forever: REFUSED — the confirmation was minted for a "
+                "different selection (preview covered %s picture(s); this "
+                "request targets a different set). Nothing was destroyed; the "
+                "confirmation has been discarded.",
+                record.total_count,
+            )
+            return False, CONFIRM_MISMATCH
+        logger.info(
+            "Delete-forever: confirmation accepted for a selection previewed as "
+            "%d picture(s)",
+            record.total_count,
+        )
+        return True, ""
+
+    def _prune_locked(self) -> None:
+        """Drop expired confirmations. Caller must hold ``self._lock``."""
+        now = time.monotonic()
+        expired = [
+            token
+            for token, record in self._outstanding.items()
+            if record.expires_at <= now
+        ]
+        for token in expired:
+            del self._outstanding[token]
+        if expired:
+            logger.debug(
+                "Delete-forever: dropped %d expired confirmation(s)", len(expired)
+            )
 
 
 def file_location_is_unreachable(file_path: str) -> bool:
@@ -1155,30 +1541,45 @@ def purge_scrapheap_pictures(
     Returns:
         A :class:`ScrapheapPurgeOutcome`.
     """
-    rows = fetch_scrapheap_rows(vault, ids)
-    if not rows:
-        return ScrapheapPurgeOutcome()
-
-    no_delete_folder_ids = fetch_no_delete_folder_ids(vault)
-    # Unconditional: a locked picture-set freezes its members against EVERY
-    # destruction path, manual delete-forever included. Looked up through the one
-    # shared helper so this can never disagree with the sweep or the listing.
-    locked_ids = locked_scrapheap_picture_ids(
-        vault, [row.id for row in rows if row.id is not None]
+    # Selection, planning, the ledger write and the DELETE all run inside ONE
+    # DB-queue submission (see plan_and_purge_in_session): writes are serialised
+    # on a single worker thread, so splitting them let a concurrent restore land
+    # in the gap and turned the delete-by-id into a hard delete of live rows.
+    plan, deleted_count, owned_path_shas, skipped_restored = vault.db.run_task(
+        plan_and_purge_in_session,
+        ids,
+        include_protected,
+        retention_guard,
+        priority=DBPriority.IMMEDIATE,
     )
-    plan = build_purge_plan(
-        rows, no_delete_folder_ids, locked_ids, include_protected, retention_guard
-    )
-
     # Rows + ledger first, files second: a crash between the two leaves orphaned
     # files that MissingFilePurgeFinder/the reference scan already handle, while
     # the reverse order would leave rows pointing at destroyed files.
-    deleted_count, owned_path_shas = vault.db.run_task(
-        purge_rows_in_session,
-        plan.picture_ids,
-        plan.log_records,
-        priority=DBPriority.IMMEDIATE,
-    )
+    #
+    # A picture that left the scrapheap mid-purge was NOT deleted and got no
+    # ledger row, so its file must not be removed either — drop its target.
+    #
+    # Fail CLOSED on an unidentifiable target. A target with no picture id
+    # cannot be matched against ``skipped_restored``, so it cannot be shown to
+    # have been destroyed — and on the rollback path nothing was. Admitting it
+    # would unlink a file for a row that still exists, which is the F1 shape
+    # again. Unreachable today (a persisted Picture always has a PK), but this
+    # is the one irreversible path and "unknown" must not mean "delete it".
+    removal_targets = []
+    for target in plan.removal_targets:
+        if target[0] is None:
+            logger.error(
+                "Delete-forever: NOT removing the file for a purge target with "
+                "no picture id (rel_path=%s) — it cannot be matched against the "
+                "ids that were actually destroyed, so the removal is refused "
+                "rather than guessed. The row (if any) and the file are kept.",
+                target[1],
+            )
+            continue
+        if int(target[0]) in skipped_restored:
+            continue
+        removal_targets.append(target)
+    purged_ids = [pid for pid in plan.picture_ids if pid not in skipped_restored]
     # Always the removal+reconcile pair, never the bare removal: the ledger rows
     # were committed above and assert file_removed=True, which stays a PREDICTION
     # until the files are actually gone. ``owned_path_shas`` scopes any later
@@ -1187,19 +1588,21 @@ def purge_scrapheap_pictures(
         schedule_file_removal(
             remove_picture_files_and_reconcile_ledger,
             vault,
-            plan.removal_targets,
+            removal_targets,
             owned_path_shas,
         )
     else:
         remove_picture_files_and_reconcile_ledger(
-            vault, plan.removal_targets, owned_path_shas
+            vault, removal_targets, owned_path_shas
         )
     logger.info(
         "Delete-forever: purged %d, skipped %d protected, skipped %d locked, "
-        "retained %d (include_protected=%s, guarded=%s)",
+        "skipped %d that left the scrapheap, retained %d "
+        "(include_protected=%s, guarded=%s)",
         deleted_count,
         plan.skipped_count,
         len(plan.skipped_locked),
+        len(skipped_restored),
         plan.retained_count,
         include_protected,
         retention_guard is not None,
@@ -1209,5 +1612,6 @@ def purge_scrapheap_pictures(
         skipped_count=plan.skipped_count,
         skipped_locked=sorted(plan.skipped_locked),
         retained_count=plan.retained_count,
-        purged_ids=list(plan.picture_ids),
+        purged_ids=purged_ids,
+        skipped_restored=sorted(skipped_restored),
     )

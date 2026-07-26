@@ -16,13 +16,19 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 import pixlstash.routes.pictures._anomaly as anomaly_module
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 class _FakeTaggerService:

@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -37,11 +38,19 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.services import scrapheap_service
+from pixlstash.tasks import (
+    scrapheap_retention_purge_finder as scrapheap_retention_purge_finder_module,
+)
 from pixlstash.tasks.scrapheap_retention_purge_finder import (
     ScrapheapRetentionPurgeFinder,
 )
 from pixlstash.tasks.scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from tests.authz_guard import no_spa_fallback  # noqa: F401
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _MIGRATIONS_DIR = os.path.join(_PROJECT_ROOT, "pixlstash")
@@ -436,6 +445,98 @@ def test_is_retention_reduction_matrix():
         assert reduction(scrapheap_service.DEFAULT_RETENTION_DAYS, choice) is False, (
             f"first-set of {choice} must not count as a reduction"
         )
+
+
+# ── The finder's cadence gate must not depend on the machine's uptime ─────────
+
+
+class _JustBootedClock:
+    """``time`` shim whose ``monotonic()`` reads as a freshly booted host.
+
+    ``time.monotonic()``'s reference point is undefined; on Linux it is seconds
+    since BOOT. A long-lived workstation reports hundreds of thousands, so a
+    ``_last_check_at = 0.0`` sentinel accidentally looks like "checked a very
+    long time ago" and the bug stays invisible. A just-booted container or CI
+    runner reports a few hundred, and the same sentinel then reads as "checked
+    moments ago".
+    """
+
+    def __init__(self, uptime_s: float) -> None:
+        self._uptime_s = uptime_s
+        self._origin = time.monotonic()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def monotonic(self) -> float:
+        return self._uptime_s + (time.monotonic() - self._origin)
+
+
+def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
+    server, tmp_path, monkeypatch
+):
+    """The finder must not skip its FIRST check just because uptime is low.
+
+    ``_last_check_at`` was initialised to ``0.0`` and compared as an absolute
+    monotonic instant, so on any host whose uptime is below the 15-minute check
+    interval the very first ``find_task()`` returned ``None`` — the retention
+    sweep silently did nothing until the machine had been up long enough. It
+    self-heals, which is exactly why it went unnoticed: a finder that finds
+    nothing is indistinguishable from "nothing to do".
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "boot.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+
+    monkeypatch.setattr(
+        scrapheap_retention_purge_finder_module,
+        "time",
+        _JustBootedClock(uptime_s=1.0),
+    )
+
+    finder = ScrapheapRetentionPurgeFinder(vault=server.vault)
+    task = finder.find_task()
+    assert task is not None, (
+        "The first sweep after start-up must run regardless of the host's "
+        "uptime — _last_check_at must be a None sentinel, not an absolute "
+        "monotonic instant"
+    )
+    assert task.run()["purged"] == 1
+    assert _get_picture(server, pic_id) is None
+    assert not os.path.isfile(path)
+
+
+def test_the_finder_still_respects_its_interval_after_a_check(server, tmp_path):
+    """Over-firing is its own regression: the cadence gate must still hold.
+
+    The fix only changes what "never checked" means; a finder that HAS checked
+    must still refuse to re-scan inside the interval.
+    """
+    client = _client(server)
+    pic_id, _path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "cadence.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+
+    finder = ScrapheapRetentionPurgeFinder(vault=server.vault)
+    assert finder.find_task() is not None, "the first check must run"
+    assert finder.find_task() is None, (
+        "a second check inside the 15-minute interval must be refused"
+    )
 
 
 # ── The purge sweep ───────────────────────────────────────────────────────────
@@ -902,10 +1003,23 @@ def test_restore_then_redelete_between_planning_and_purge_is_safe(server, tmp_pa
 # ── The manual delete-forever must respect a locked set too ───────────────────
 
 
-def _delete_forever(client, include_protected, ids=None):
+def _confirm_token(client, ids=None):
+    """Run the delete preview and return the confirmation it mints."""
+    resp = client.post("/pictures/scrapheap/delete-preview", json={"ids": ids})
+    assert resp.status_code == 200, resp.text
+    token = resp.json().get("confirm_token")
+    assert token, "the preview must mint a confirm_token"
+    return token
+
+
+def _delete_forever(client, include_protected, ids=None, confirm_token=None):
+    """The real preview -> confirm flow: DELETE refuses without a confirmation."""
     body = {"include_protected": include_protected}
     if ids is not None:
         body["picture_ids"] = ids
+    body["confirm_token"] = (
+        confirm_token if confirm_token is not None else _confirm_token(client, ids)
+    )
     resp = client.request("DELETE", "/api/v1/pictures/scrapheap", json=body)
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -1076,6 +1190,443 @@ def test_delete_forever_still_destroys_everything_it_should(server, tmp_path):
     assert _ledger_flags_for(server, prot_path) == [True]
 
 
+# ── The server must require its own confirmation, not trust the dialog ────────
+
+
+def _scrapheap_two(server, tmp_path, client):
+    """Two ordinary unprotected pictures, both in the scrapheap."""
+    made = []
+    for i in range(2):
+        pic_id, path = _make_reference_picture(
+            server, str(tmp_path / f"c{i}"), f"c{i}.png", allow_delete=True
+        )
+        delete_resp = client.delete(f"/pictures/{pic_id}")
+        assert delete_resp.status_code == 200, delete_resp.text
+        made.append((pic_id, path))
+    return made
+
+
+def test_delete_forever_refuses_without_a_confirmation(server, tmp_path):
+    """BLOCKER #3 — the type-to-confirm dialog is client-side and proves nothing.
+
+    A bare, bodyless DELETE used to destroy the ENTIRE scrapheap and its files.
+    CORS admits any localhost/LAN-IP port with credentials, so a page on another
+    local port could drive it. Every unconfirmed shape must now be refused with
+    nothing destroyed.
+    """
+    client = _client(server)
+    made = _scrapheap_two(server, tmp_path, client)
+
+    # No body at all — the exact shape that emptied the whole scrapheap.
+    resp = client.request("DELETE", "/api/v1/pictures/scrapheap")
+    assert resp.status_code == 400, resp.text
+    assert "confirm_token" in resp.json()["detail"]
+
+    # A body, but no confirmation.
+    resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": True}
+    )
+    assert resp.status_code == 400, resp.text
+
+    # A made-up confirmation.
+    resp = client.request(
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={"confirm_token": "not-a-real-token"},
+    )
+    assert resp.status_code == 409, resp.text
+
+    for pic_id, path in made:
+        assert _get_picture(server, pic_id) is not None, (
+            "a refusal must destroy nothing"
+        )
+        assert os.path.isfile(path)
+        assert _ledger_flags_for(server, path) == []
+
+
+def test_preview_then_confirm_still_empties_the_scrapheap(server, tmp_path):
+    """Over-blocking regression guard: the legitimate flow must still work."""
+    client = _client(server)
+    made = _scrapheap_two(server, tmp_path, client)
+
+    preview = client.post("/pictures/scrapheap/delete-preview", json={"ids": None})
+    assert preview.status_code == 200, preview.text
+    token = preview.json()["confirm_token"]
+    assert token
+
+    resp = client.request(
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={"include_protected": False, "confirm_token": token},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted_count"] == 2, resp.text
+    for pic_id, path in made:
+        assert _get_picture(server, pic_id) is None
+        assert not os.path.isfile(path)
+
+
+def test_a_confirmation_cannot_be_spent_twice(server, tmp_path):
+    """Single-use: a captured confirmation must not authorise a second purge."""
+    client = _client(server)
+    (first_id, _first_path), (second_id, second_path) = _scrapheap_two(
+        server, tmp_path, client
+    )
+
+    token = _confirm_token(client, [first_id])
+    resp = client.request(
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={"picture_ids": [first_id], "confirm_token": token},
+    )
+    assert resp.status_code == 200, resp.text
+    assert _get_picture(server, first_id) is None
+
+    resp = client.request(
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={"picture_ids": [second_id], "confirm_token": token},
+    )
+    assert resp.status_code == 409, resp.text
+    assert _get_picture(server, second_id) is not None
+    assert os.path.isfile(second_path)
+
+
+def test_a_confirmation_is_bound_to_the_selection_it_previewed(server, tmp_path):
+    """A confirmation for one picture must not be spendable on the whole heap."""
+    client = _client(server)
+    (first_id, first_path), (second_id, second_path) = _scrapheap_two(
+        server, tmp_path, client
+    )
+
+    token = _confirm_token(client, [first_id])
+    resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"confirm_token": token}
+    )
+    assert resp.status_code == 409, resp.text
+    for pic_id, path in ((first_id, first_path), (second_id, second_path)):
+        assert _get_picture(server, pic_id) is not None
+        assert os.path.isfile(path)
+
+
+def test_a_confirmation_expires(server, tmp_path, monkeypatch):
+    """A stale confirmation left in a closed tab is not a standing capability."""
+    client = _client(server)
+    made = _scrapheap_two(server, tmp_path, client)
+    token = _confirm_token(client, None)
+
+    real_monotonic = scrapheap_service.time.monotonic
+    monkeypatch.setattr(
+        scrapheap_service.time,
+        "monotonic",
+        lambda: real_monotonic() + scrapheap_service.CONFIRM_TOKEN_TTL_SECONDS + 1,
+    )
+    resp = client.request(
+        "DELETE", "/api/v1/pictures/scrapheap", json={"confirm_token": token}
+    )
+    assert resp.status_code == 409, resp.text
+    for pic_id, path in made:
+        assert _get_picture(server, pic_id) is not None
+        assert os.path.isfile(path)
+
+
+def test_the_auto_purge_needs_no_confirmation(server, tmp_path):
+    """The confirmation gates the HTTP endpoint, not the unattended sweep."""
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "old"), "old.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+
+    assert _run_purge_sweep(server)["purged"] == 1
+    assert _get_picture(server, pic_id) is None
+    assert not os.path.isfile(path)
+
+
+# ── A restore landing mid-purge must not be hard-deleted ──────────────────────
+
+
+def _restore_between_planning_and_purge(monkeypatch, picture_id):
+    """Commit a restore of ``picture_id`` in the window before the DELETE.
+
+    Models a ``POST /pictures/scrapheap/restore`` that lands after the purge has
+    selected its ids and before the rows are deleted. Injected at the real seam —
+    ``purge_rows_in_session``, the function that issues the DELETE — so the test
+    holds whether the purge is one DB submission or several.
+    """
+    original = scrapheap_service.purge_rows_in_session
+
+    def _restore_then_purge(session, picture_ids, log_records):
+        pic = session.get(Picture, picture_id)
+        assert pic is not None
+        pic.deleted = False
+        pic.deleted_at = None
+        session.add(pic)
+        session.commit()
+        return original(session, picture_ids, log_records)
+
+    monkeypatch.setattr(scrapheap_service, "purge_rows_in_session", _restore_then_purge)
+
+
+def test_delete_forever_does_not_destroy_a_picture_restored_mid_purge(
+    server, tmp_path, monkeypatch
+):
+    """BLOCKER #4 — the purge must re-check ``deleted`` where it deletes.
+
+    The purge selects its ids while the pictures are scrapheaped, then deletes
+    BY ID. A restore landing in between makes those ids live again, so an
+    unqualified ``DELETE ... WHERE id IN (...)`` hard-deletes rows the user just
+    rescued — and removes their files from disk. Both directions asserted: the
+    restored picture survives intact, and the one still in the scrapheap is
+    still destroyed (under-deleting is its own regression).
+    """
+    client = _client(server)
+    restored_id, restored_path = _make_reference_picture(
+        server, str(tmp_path / "rescued"), "rescued.png", allow_delete=True
+    )
+    doomed_id, doomed_path = _make_reference_picture(
+        server, str(tmp_path / "doomed"), "doomed.png", allow_delete=True
+    )
+    for pid in (restored_id, doomed_id):
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
+
+    _restore_between_planning_and_purge(monkeypatch, restored_id)
+
+    body = _delete_forever(client, False)
+
+    # Negative: the restored picture is live again and must be untouched.
+    rescued = _get_picture(server, restored_id)
+    assert rescued is not None, (
+        "A picture restored between the id selection and the DELETE was "
+        "permanently destroyed — the purge must re-check `deleted`"
+    )
+    assert rescued.deleted is False
+    assert os.path.isfile(restored_path), (
+        "The restored picture's file was removed from disk by the purge"
+    )
+    assert _ledger_flags_for(server, restored_path) == [], (
+        "A skipped picture must not get a permanent-deletion ledger row"
+    )
+
+    # Positive: everything still scrapheaped is destroyed as before.
+    assert _get_picture(server, doomed_id) is None
+    assert not os.path.isfile(doomed_path)
+    assert _ledger_flags_for(server, doomed_path) == [True]
+    assert body["deleted_count"] == 1, body
+
+
+def test_auto_purge_does_not_destroy_a_picture_restored_mid_purge(
+    server, tmp_path, monkeypatch
+):
+    """The same race on the UNATTENDED path (the retention auto-purge)."""
+    client = _client(server)
+    restored_id, restored_path = _make_reference_picture(
+        server, str(tmp_path / "rescued"), "rescued.png", allow_delete=True
+    )
+    doomed_id, doomed_path = _make_reference_picture(
+        server, str(tmp_path / "doomed"), "doomed.png", allow_delete=True
+    )
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    for pid in (restored_id, doomed_id):
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
+        _set_deleted_at(server, pid, old)
+
+    _restore_between_planning_and_purge(monkeypatch, restored_id)
+
+    result = _run_purge_sweep(server)
+
+    assert _get_picture(server, restored_id) is not None, (
+        "The unattended sweep destroyed a picture restored mid-purge"
+    )
+    assert os.path.isfile(restored_path)
+    assert _ledger_flags_for(server, restored_path) == []
+    assert _get_picture(server, doomed_id) is None
+    assert not os.path.isfile(doomed_path)
+    assert result["purged"] == 1, result
+
+
+def test_purge_rows_skips_ids_that_left_the_scrapheap(server, tmp_path):
+    """Unit-level: the ledger + DELETE are both scoped to still-deleted rows."""
+    live_id, live_path = _make_reference_picture(
+        server, str(tmp_path / "live"), "live.png", allow_delete=True
+    )
+    gone_id, gone_path = _make_reference_picture(
+        server, str(tmp_path / "gone"), "gone.png", allow_delete=True
+    )
+
+    def _mark(session: Session):
+        # `gone` is in the scrapheap, `live` never was — exactly the state the
+        # purge finds after a concurrent restore.
+        pic = session.get(Picture, gone_id)
+        pic.deleted = True
+        pic.deleted_at = datetime.now(timezone.utc)
+        session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(_mark)
+
+    records = [
+        {
+            "picture_id": live_id,
+            "path_sha": DeletedFileLog.hash_path(live_path),
+            "pixel_sha": None,
+            "file_removed": True,
+        },
+        {
+            "picture_id": gone_id,
+            "path_sha": DeletedFileLog.hash_path(gone_path),
+            "pixel_sha": None,
+            "file_removed": True,
+        },
+    ]
+    deleted_count, owned, skipped = server.vault.db.run_task(
+        scrapheap_service.purge_rows_in_session, [live_id, gone_id], records
+    )
+
+    assert skipped == {live_id}
+    assert deleted_count == 1
+    assert _get_picture(server, live_id) is not None
+    assert _get_picture(server, gone_id) is None
+    assert _ledger_flags_for(server, live_path) == []
+    assert _ledger_flags_for(server, gone_path) == [True]
+    assert owned == {DeletedFileLog.hash_path(gone_path)}
+
+
+def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
+    server, tmp_path, monkeypatch
+):
+    """F1 — the guarded DELETE, not the re-check, must decide what was destroyed.
+
+    Deriving the skip list from the re-check SELECT alone saved the ROW but left
+    the caller unlinking the FILE and the ledger asserting ``file_removed=True``
+    — a live picture with no original on disk that neither restore nor a re-scan
+    recovers. Here the re-check blesses both ids and the restore lands after it,
+    so the DELETE's own ``deleted`` predicate spares one of them.
+    """
+    client = _client(server)
+    saved_id, saved_path = _make_reference_picture(
+        server, str(tmp_path / "saved"), "saved.png", allow_delete=True
+    )
+    doomed_id, doomed_path = _make_reference_picture(
+        server, str(tmp_path / "doomed"), "doomed.png", allow_delete=True
+    )
+    for pid in (saved_id, doomed_id):
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
+
+    original_recheck = scrapheap_service.still_scrapheaped_ids_in_session
+
+    def _restore_after_the_recheck(session, picture_ids):
+        """Blessed by the re-check, then restored before the DELETE runs."""
+        selected = original_recheck(session, picture_ids)
+        if saved_id in selected:
+            pic = session.get(Picture, saved_id)
+            pic.deleted = False
+            pic.deleted_at = None
+            session.add(pic)
+            session.commit()
+        return selected
+
+    monkeypatch.setattr(
+        scrapheap_service,
+        "still_scrapheaped_ids_in_session",
+        _restore_after_the_recheck,
+    )
+
+    body = _delete_forever(client, False)
+
+    # Negative: the spared row keeps its file, and the ledger must not claim a
+    # permanent deletion that never happened.
+    assert _get_picture(server, saved_id) is not None
+    assert os.path.isfile(saved_path), (
+        "A row the DELETE spared had its file unlinked — the skip list must "
+        "come from what the DELETE actually removed"
+    )
+    assert _ledger_flags_for(server, saved_path) == [], (
+        "The ledger asserted a permanent deletion for a picture that survived"
+    )
+    # The whole batch fails closed rather than committing a partial result.
+    assert body["deleted_count"] == 0, body
+    assert sorted(body["skipped_restored"]) == sorted([saved_id, doomed_id]), body
+    assert _get_picture(server, doomed_id) is not None
+    assert os.path.isfile(doomed_path)
+    assert _ledger_flags_for(server, doomed_path) == []
+
+    # Positive: with no mismatch injected, the ordinary purge still destroys it.
+    monkeypatch.setattr(
+        scrapheap_service, "still_scrapheaped_ids_in_session", original_recheck
+    )
+    body = _delete_forever(client, False)
+    assert body["deleted_count"] == 1, body
+    assert _get_picture(server, doomed_id) is None
+    assert not os.path.isfile(doomed_path)
+    assert _ledger_flags_for(server, doomed_path) == [True]
+    # ...and the restored picture is still untouched by that second purge.
+    assert _get_picture(server, saved_id) is not None
+    assert os.path.isfile(saved_path)
+
+
+def test_a_removal_target_with_no_picture_id_is_refused_not_unlinked(
+    server, tmp_path, monkeypatch
+):
+    """F1 sibling — an unidentifiable target must fail CLOSED, not open.
+
+    The skip filter matches removal targets by picture id. A target carrying no
+    id cannot be shown to have been destroyed, so admitting it unconditionally
+    unlinked a file for a row that may still exist — including on the rollback
+    path, where nothing was destroyed at all. Unreachable today (a persisted
+    Picture always has a PK), but "unknown" must never mean "delete it" on the
+    one irreversible path.
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "anon.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    original_plan = scrapheap_service.build_purge_plan
+
+    def _anonymise_the_targets(*args, **kwargs):
+        plan = original_plan(*args, **kwargs)
+        plan.removal_targets = [
+            (None, rel_path, protected)
+            for _pid, rel_path, protected in plan.removal_targets
+        ]
+        return plan
+
+    monkeypatch.setattr(scrapheap_service, "build_purge_plan", _anonymise_the_targets)
+
+    body = _delete_forever(client, False)
+
+    # The row is still purged — this guards the FILE, not the row.
+    assert body["deleted_count"] == 1, body
+    assert _get_picture(server, pic_id) is None
+    assert os.path.isfile(path), (
+        "A removal target with no picture id had its file unlinked; an "
+        "unidentifiable target must be refused, not guessed"
+    )
+
+    # Positive: with real ids on the targets, the file is still destroyed.
+    monkeypatch.setattr(scrapheap_service, "build_purge_plan", original_plan)
+    other_id, other_path = _make_reference_picture(
+        server, str(tmp_path / "refs2"), "named.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{other_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    assert _get_picture(server, other_id) is None
+    assert not os.path.isfile(other_path)
+
+
 # ── Delete preview counts ─────────────────────────────────────────────────────
 
 
@@ -1178,7 +1729,12 @@ def test_manual_delete_forever_is_not_subject_to_the_retention_guard(server, tmp
     # Deleted seconds ago — nowhere near its deadline.
 
     resp = client.request(
-        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": False}
+        "DELETE",
+        "/api/v1/pictures/scrapheap",
+        json={
+            "include_protected": False,
+            "confirm_token": _confirm_token(client, None),
+        },
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["deleted_count"] == 1

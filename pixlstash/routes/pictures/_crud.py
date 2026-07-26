@@ -185,6 +185,10 @@ class ScrapheapDeleteResponse(BaseModel):
     # EVERY path — including ``include_protected=true`` — so these are never
     # destroyed by this endpoint at any flag value. Unlock the set to delete them.
     skipped_locked: list[int] = []
+    # Ids left intact because they had LEFT the scrapheap by the time the rows
+    # were deleted — a restore that landed mid-purge. Their rows, files and
+    # permanent-deletion ledger entries are untouched; nothing is lost.
+    skipped_restored: list[int] = []
     # Echoes the effective ``include_protected`` flag for this call.
     include_protected: bool = False
     # Snapshots that still contain metadata for the just-purged pictures, each
@@ -223,6 +227,12 @@ class ScrapheapDeletePreviewResponse(BaseModel):
     protected: list[ScrapheapProtectedItem]
     # Ids frozen by a locked picture-set, so the dialog can name them.
     locked: list[int] = []
+    # Single-use, short-lived proof that these counts were actually fetched.
+    # ``DELETE /pictures/scrapheap`` refuses without it, so the irreversible
+    # endpoint cannot be driven blind from another origin. Bound to THIS
+    # selection and spent by the first delete that presents it; re-run the
+    # preview to get another.
+    confirm_token: str = ""
 
 
 def _parse_scrapheap_ids(payload: dict | None) -> list[int] | None:
@@ -267,6 +277,11 @@ class BulkPictureDeleteResponse(BaseModel):
 
 
 def register_routes(router, server):
+    # Per-server store of unspent delete-forever confirmations. Scoped to this
+    # router (i.e. to this Server) rather than module-global so two servers in
+    # one process — the test suite — cannot spend each other's confirmations.
+    scrapheap_confirmations = scrapheap_service.ScrapheapDeleteConfirmations()
+
     @router.patch(
         "/pictures/project",
         summary="Set project for pictures",
@@ -1141,6 +1156,7 @@ def register_routes(router, server):
                 "unprotected_count": 0,
                 "protected": [],
                 "locked": [],
+                "confirm_token": scrapheap_confirmations.issue(ids, 0),
             }
         no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids(
             server.vault
@@ -1161,6 +1177,12 @@ def register_routes(router, server):
                 ImageUtils.resolve_picture_path(image_root, item["file_path"])
                 or item["file_path"]
             )
+        # The confirmation the destructive call must echo back. Minted here, and
+        # only here, so a delete can never run without these counts having been
+        # computed for exactly this selection first.
+        preview["confirm_token"] = scrapheap_confirmations.issue(
+            ids, preview["total_count"]
+        )
         return preview
 
     @router.delete(
@@ -1179,11 +1201,27 @@ def register_routes(router, server):
             "value — a locked set is a hard whole-set freeze, and this is the "
             "one irreversible path, so it must not be the one that ignores it. "
             "They are skipped and returned in `skipped_locked` rather than "
-            "failing the request; unlock the set to delete them. Call "
-            "`POST /pictures/scrapheap/delete-preview` first to show the user "
-            "exactly what each option will destroy."
+            "failing the request; unlock the set to delete them.\n\n"
+            "**A `confirm_token` is REQUIRED.** Call "
+            "`POST /pictures/scrapheap/delete-preview` first — it reports "
+            "exactly what each option will destroy and mints the token — then "
+            "send that token back here. It is single-use, expires after five "
+            "minutes, and is bound to the previewed selection, so this "
+            "irreversible endpoint cannot be driven without the destruction "
+            "preview having been fetched for exactly these pictures. A missing "
+            "token is a 400; an unknown, spent, expired or wrong-selection "
+            "token is a 409 and destroys nothing."
         ),
         response_model=ScrapheapDeleteResponse,
+        responses={
+            400: {"description": "confirm_token missing."},
+            409: {
+                "description": (
+                    "confirm_token is unknown, already spent, expired, or was "
+                    "minted for a different selection. Nothing was destroyed."
+                )
+            },
+        },
     )
     def delete_scrapheap_selection(
         request: Request,
@@ -1192,6 +1230,32 @@ def register_routes(router, server):
     ):
         origin_client_id = getattr(request.state, "origin_client_id", None)
         ids = _parse_scrapheap_ids(payload)
+        # Server-side intent check, NOT an authorization check (the AuthzGate
+        # owns authorization: OWNER_ONLY in authz/registry.py). The type-to-
+        # confirm dialog lives entirely in the client, so without this the one
+        # irreversible endpoint in the product accepted a bare, bodyless DELETE.
+        confirmed, reason = scrapheap_confirmations.redeem(
+            payload.get("confirm_token") if isinstance(payload, dict) else None,
+            ids,
+        )
+        if not confirmed:
+            if reason == scrapheap_service.CONFIRM_MISSING:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "confirm_token is required. Call POST "
+                        "/pictures/scrapheap/delete-preview and send back the "
+                        "confirm_token it returns; nothing was deleted."
+                    ),
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This delete confirmation is no longer valid (already used, "
+                    "expired, or for a different selection). Nothing was "
+                    "deleted — re-check what would be destroyed and try again."
+                ),
+            )
         # Default false: absent body (delete-all) never destroys protected
         # originals — that requires an explicit include_protected=true.
         include_protected = bool(
@@ -1233,6 +1297,7 @@ def register_routes(router, server):
             "deleted_count": outcome.deleted_count,
             "skipped_count": outcome.skipped_count,
             "skipped_locked": outcome.skipped_locked,
+            "skipped_restored": outcome.skipped_restored,
             "include_protected": include_protected,
             "snapshots_with_deleted": snapshots_with_deleted,
         }

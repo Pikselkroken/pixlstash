@@ -104,10 +104,10 @@ jobs:
           npm test
 
   # ---------------------------------------------------------------------------
-  # The backend gate. Runs the same file set that blocked before this change,
-  # but split across 8 runners instead of 22 sequential steps in one job.
+  # The backend gate. Split across 8 runners instead of one job with 22
+  # sequential steps.
   #
-  # The list below is the GATED set. The ~59 files that are not in it are not
+  # The list below is the GATED set. The ~52 files that are not in it are not
   # forgotten — they are declared as DEFERRED in tests/test_ci_shards.py, and
   # that test fails if any file under tests/ is in neither list. Adding a test
   # file therefore forces an explicit decision: gate it, or record why it is
@@ -116,20 +116,51 @@ jobs:
   # remembered to edit this workflow, and PR #588 is a live example of one that
   # did not.
   #
-  # Why the deferred set is not simply gated too: it is not yet known green.
-  # tests/test_smart_score_invalidation.py fails on this baseline (2 failures,
-  # unrelated to CI), and most of the rest have never run as a blocking check.
-  # Gating them today would turn every PR red. The flip to full discovery
-  # (`pytest tests/`, no list at all) is a follow-up, blocked on getting the
-  # deferred set green — the informational sweep below keeps it visible in the
-  # meantime.
+  # The seven behavioural authz/fail-closed suites — test_authz_gate_step3,
+  # test_authz_gate_step4, test_authz_host_capability_16_3,
+  # test_ip_locality_fail_closed, test_pictures_stream, test_scrapheap_retention
+  # and test_async_import_staging — are gated here and MUST stay gated. Policy
+  # *declaration* completeness has always blocked every PR
+  # (test_architecture_guardrails.py::test_all_routes_declare_access_policy);
+  # these are the other half, the ones that prove the AuthzGate actually
+  # ENFORCES what it declares. While they were deferred their only run was the
+  # non-blocking release-prep sweep, and a broken assertion in one of them sat
+  # undetected for five days. tests/test_ci_shards.py::
+  # test_security_suites_cannot_be_quietly_deferred fails if any of them is
+  # removed from this list or parked back in DEFERRED_FROM_GATE.
+  #
+  # Cost of gating them, measured rather than assumed (2026-07-26): the seven
+  # files are 151 tests in 182 s wall clock on a machine calibrated against this
+  # runner (gate shard 6/8 = 238 s locally vs 257 s in CI, so ~1.08x). That is
+  # ~3.3 min of extra test time spread over 8 shards — roughly +25 s per shard,
+  # not the ~20 min the block was previously assumed to cost. Gate wall clock
+  # goes from ~13 min to ~13.5 min. This does NOT approach the widened
+  # release-prep budget, and it must not: regular PRs stay fast.
+  #
+  # Why the rest of the deferred set is not simply gated too: it is not yet
+  # known green, and some of it is not deterministic. Measured 2026-07-26,
+  # tests/test_smart_score_invalidation.py returns a DIFFERENT pass count
+  # depending on machine load — 41 passed on an idle tree, 4 failed under two
+  # concurrent workloads — because its assertions race an async invalidation
+  # that has not landed yet (the failures read `assert <float> is None`).
+  # Collection order is deterministic (no randomising plugin), so load is the
+  # variable. Do not record a specific failure count for that file, and do not
+  # gate it on a loaded runner, which is its failing condition. Most of the
+  # rest have simply never run as a blocking check. Gating them today would
+  # turn every PR red. The flip to full discovery (`pytest tests/`, no list at
+  # all) is a follow-up, blocked on getting the deferred set green AND on
+  # making the load-sensitive ones deterministic — the informational sweep
+  # below keeps it
+  # visible in the meantime.
   #
   # `--ci-shard i/N` (implemented in tests/conftest.py) deals the collected
   # tests round-robin, so each file's tests are spread evenly and no single slow
   # file becomes one shard's critical path — splitting by *test* rather than by
-  # file is what breaks up the 20-minute authz block and the 6-minute
-  # test_server.py. tests/test_ci_shards.py asserts the matrix below and the
-  # `/N` in the command agree.
+  # file is what breaks up the authz suites and the 6-minute test_server.py.
+  # Measured with the authz files gated: 684 tests deal out 85-86 per shard,
+  # with the 151 authz tests landing 18-20 per shard, so no shard absorbs the
+  # block. tests/test_ci_shards.py asserts the matrix below and the `/N` in the
+  # command agree.
   #
   # Parallelism is deliberately across runners only, NOT pytest-xdist inside a
   # runner. xdist is installed (and is a good local `-n auto`), but two attempts
@@ -172,7 +203,11 @@ jobs:
           python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/8"
           tests/test_anomaly_region_scope.py
           tests/test_architecture_guardrails.py
+          tests/test_async_import_staging.py
           tests/test_authentication.py
+          tests/test_authz_gate_step3.py
+          tests/test_authz_gate_step4.py
+          tests/test_authz_host_capability_16_3.py
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
           tests/test_ci_shards.py
@@ -185,6 +220,7 @@ jobs:
           tests/test_image_embedding_worker.py
           tests/test_impossible_clear_authz.py
           tests/test_invalid_image_endless_retry.py
+          tests/test_ip_locality_fail_closed.py
           tests/test_label_ledger.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
@@ -196,11 +232,13 @@ jobs:
           tests/test_picture_set_locking.py
           tests/test_picture_sets.py
           tests/test_picture_stack_utils.py
+          tests/test_pictures_stream.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
           tests/test_restore.py
           tests/test_score_agreement_stats.py
           tests/test_scope_table.py
+          tests/test_scrapheap_retention.py
           tests/test_server.py
           tests/test_smart_score_consistency.py
           tests/test_snapshots.py
@@ -214,14 +252,66 @@ jobs:
           tests/test_work_planner.py
 
   # ---------------------------------------------------------------------------
-  # RELEASE-PREP ONLY — informational single-process sweep.
+  # RELEASE-PREP ONLY — informational ordering sweep, sharded by contiguous
+  # block.
   #
-  # The whole suite now blocks on every run via the shards above, so this is no
-  # longer about coverage. What it still adds is the canonical ordering: one
-  # process, one shard, collection order. That is the control that would catch
-  # an order- or shard-dependence introduced by the sharding itself. It keeps
-  # the previous step's `continue-on-error` semantics — a red here is a triage
-  # signal, not a gate failure — and the previous release-prep trigger.
+  # This job's value is the ORDER, not coverage: the gate deals its tests
+  # round-robin, which is exactly the thing that could hide (or cause) an
+  # order- or shard-dependence. This job is the control for that.
+  #
+  # Note it is ALSO the only run for the files in DEFERRED_FROM_GATE
+  # (tests/test_ci_shards.py) — a substantial slice of tests/. Those are
+  # therefore covered only here, only during release prep, and only
+  # informationally. That is a known gap, not a design goal: an earlier version
+  # of this comment claimed "the whole suite now blocks on every run", which was
+  # never true and contradicted the deferral list in the same tree. The
+  # behavioural authz/fail-closed suites used to be in that gap and are now
+  # gated; prefer moving the remaining files onto the gate over relying on this
+  # sweep. It keeps the `continue-on-error` semantics — a red here is a triage
+  # signal, not a gate failure — and the release-prep trigger.
+  #
+  # It used to be one process running `pytest tests/` end to end: the perfect
+  # control, at ~40-50 min, on the critical path of every release prep. It is
+  # now split across a matrix, which necessarily weakens the control, so the
+  # split was chosen to give up as little of it as possible:
+  #
+  #  * `--ci-block-shard i/N` (tests/conftest.py) gives shard i the i-th
+  #    CONTIGUOUS slice of the canonical collection order. Relative order is
+  #    preserved inside every shard, so any order dependence between two tests
+  #    still fails unless the pair happens to straddle one of the N-1 block
+  #    boundaries. Weaker than one process; far stronger than round-robin.
+  #  * NOT `--ci-shard`. Reusing the gate's round-robin here would shard the
+  #    shard-dependence detector with the same dealing algorithm it exists to
+  #    audit — the one arrangement guaranteed to prove nothing.
+  #  * Not "contiguous blocks of whole files" either. It preserves a little
+  #    more (boundaries always land between files), but it cannot split a slow
+  #    single file such as the 6-min test_server.py, so the slowest shard would
+  #    still be most of the wall clock. Test-level blocks lose at most N-1
+  #    adjacency points to buy a real split. (This bullet used to cite a
+  #    "~20-min authz block" as the other example; the seven behavioural authz
+  #    files were measured at 182 s total on 2026-07-26 and are now gated, so
+  #    test_server.py is the real case.)
+  #  * Not "keep one full-order job, but only on refs/tags/v*". That preserves
+  #    the control perfectly and loses it exactly where it is wanted: an
+  #    ordering bug found at tag time is found after the release candidate has
+  #    already been signed off, and it puts a 50-min serial job on the tag
+  #    build's critical path.
+  #
+  # N=6, not 8. Two reasons, and the second is the binding one. (1) Concurrency:
+  # this workflow alone already queues 14 jobs (checks 1 + backend 8 + e2e 1 +
+  # backend_windows 4) against the account's 20-concurrent-job budget, so 6 is
+  # what fits without the sweep queueing behind the gate it is supposed to run
+  # alongside. (2) Diminishing returns: the fixed per-runner cost here (disk
+  # reclaim + pip install + HuggingFace cache restore) is ~10 min and does not
+  # shard, so past ~6 shards each extra runner buys a minute or two of test
+  # time and pays a full setup for it. Expected wall clock ~16-20 min: ~10 min
+  # setup plus the slowest block. Blocks are equal in test COUNT, not in test
+  # TIME — that imbalance is the price of preserving order, and it is why this
+  # lands near the 8-shard gate's 13-16 min rather than below it.
+  #
+  # The per-shard check name is NOT stable across a resize, by design: this job
+  # is informational and must never be a required check. Branch protection
+  # requires `build` (below), which aggregates it.
   #
   # The old "1.7.0 headline API surface" step is gone: its five files
   # (test_tag_health_api, test_reviews_api, test_tag_predictions_api,
@@ -230,9 +320,16 @@ jobs:
   # release prep.
   # ---------------------------------------------------------------------------
   backend_release_sweep:
-    name: backend-full (informational, release-prep only)
+    name: backend-full block ${{ matrix.shard }} (informational, release-prep only)
     if: startsWith(github.head_ref || github.ref_name, 'rc-prep') || startsWith(github.head_ref || github.ref_name, 'release') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    strategy:
+      # Every block must report, for the same reason as the gate: one red block
+      # says nothing about the other five, and release prep cannot afford
+      # another full round trip to find out.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     # See the `backend` job for the rationale and the read-only token requirement.
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -240,9 +337,13 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-backend
 
-      - name: Full suite, single process
+      - name: Full suite in collection order (block ${{ matrix.shard }} of 6)
         continue-on-error: true
-        run: python -m pytest $PYTEST_FLAGS tests/
+        env:
+          CI_SHARD: ${{ matrix.shard }}
+        run: >-
+          python -m pytest $PYTEST_FLAGS --ci-block-shard "$CI_SHARD/6"
+          tests/
 
   # ---------------------------------------------------------------------------
   # Aggregate status for the Linux side. Exists so branch protection can require
@@ -262,6 +363,20 @@ jobs:
       # `paths:` or `if:` filter to the gate, this check would otherwise go
       # green having run zero tests — a required check that passes by not
       # running is worse than no required check at all. (CSO condition F2.)
+      #
+      # `backend` and `backend_release_sweep` are both matrices, and
+      # `needs.<job>.result` collapses a matrix into ONE value: `skipped` only
+      # if every leg was skipped, `failure` if ANY leg failed, `cancelled` if
+      # any was cancelled and none failed, `success` otherwise. So the checks
+      # below already cover partial failure, and they keep working when a
+      # matrix is resized — which is the whole point of aggregating here
+      # instead of listing per-shard check names in branch protection.
+      #
+      # A `failure` from the sweep is still fatal here even though the sweep is
+      # "informational": its pytest step carries `continue-on-error`, so a
+      # failing TEST cannot produce one. A failing JOB therefore means
+      # checkout/setup died and the ordering control did not run at all, which
+      # during release prep is exactly what must not pass silently.
       - name: Require the blocking backend jobs to have succeeded
         env:
           CHECKS_RESULT: ${{ needs.checks.result }}

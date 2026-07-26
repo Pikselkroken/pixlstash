@@ -24,6 +24,8 @@ import json
 import os
 import tempfile
 
+import pytest
+
 from pixlstash.auth import (
     is_local_ip,
     is_local_or_tailscale_ip,
@@ -37,8 +39,14 @@ from pixlstash.authz.policy import (
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py. The deliberate
+# absent-route probe below asserts 404/405 and is unaffected (non-2xx only).
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 # The 5 red-line routes on the stricter loopback-only tier. Four spawn a host GUI
 # process (os.startfile / open / xdg-open); server-config/open was a

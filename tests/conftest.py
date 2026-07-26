@@ -89,13 +89,26 @@ def pytest_addoption(parser):
         default=None,
         metavar="INDEX/TOTAL",
         help="Run only the INDEX-th of TOTAL equal slices of the collected "
-        "tests (1-based, e.g. '2/6'). Used by the CI matrix to split the "
-        "suite across runners. The union of all TOTAL shards is exactly the "
-        "collected suite, so coverage never depends on a hand-written list.",
+        "tests (1-based, e.g. '2/6'), dealt ROUND-ROBIN over collection order. "
+        "Used by the blocking CI matrices to split the suite across runners. "
+        "The union of all TOTAL shards is exactly the collected suite, so "
+        "coverage never depends on a hand-written list.",
+    )
+    parser.addoption(
+        "--ci-block-shard",
+        type=str,
+        default=None,
+        metavar="INDEX/TOTAL",
+        help="Like --ci-shard, but each shard is a CONTIGUOUS block of the "
+        "collected suite instead of a round-robin deal, so collection order is "
+        "preserved inside every shard. Used by the informational release-prep "
+        "sweep, whose job is to detect order dependence: round-robin would "
+        "reorder the very thing that sweep exists to check. Mutually exclusive "
+        "with --ci-shard.",
     )
 
 
-def _parse_ci_shard(spec: str) -> tuple[int, int]:
+def _parse_ci_shard(spec: str, option: str = "--ci-shard") -> tuple[int, int]:
     """Parse an ``INDEX/TOTAL`` shard spec into zero-based (index, total)."""
     try:
         index_text, total_text = spec.split("/", 1)
@@ -103,17 +116,32 @@ def _parse_ci_shard(spec: str) -> tuple[int, int]:
         total = int(total_text)
     except ValueError as exc:
         raise UsageError(
-            f"--ci-shard expects INDEX/TOTAL (e.g. '2/6'), got {spec!r}"
+            f"{option} expects INDEX/TOTAL (e.g. '2/6'), got {spec!r}"
         ) from exc
     if total < 1 or not (1 <= index <= total):
         raise UsageError(
-            f"--ci-shard index must be within 1..TOTAL and TOTAL >= 1, got {spec!r}"
+            f"{option} index must be within 1..TOTAL and TOTAL >= 1, got {spec!r}"
         )
     return index - 1, total
 
 
+def _block_shard_bounds(count: int, index: int, total: int) -> tuple[int, int]:
+    """Return the ``[start, stop)`` bounds of block *index* of *total*.
+
+    Splits ``range(count)`` into ``total`` contiguous blocks whose sizes differ
+    by at most one: the first ``count % total`` blocks get one extra item. The
+    blocks tile ``0..count`` exactly, so the partition is complete and disjoint,
+    and because each block is a slice, relative order inside a block is the
+    original collection order.
+    """
+    base, remainder = divmod(count, total)
+    start = index * base + min(index, remainder)
+    stop = start + base + (1 if index < remainder else 0)
+    return start, stop
+
+
 def pytest_collection_modifyitems(config, items):
-    """Keep only the tests belonging to this ``--ci-shard`` slice.
+    """Keep only the tests belonging to this shard, if one was requested.
 
     Sharding is applied to whatever pytest *collected*, so the CI matrix never
     names test files: adding ``tests/test_new_thing.py`` puts it in a shard
@@ -122,20 +150,49 @@ def pytest_collection_modifyitems(config, items):
     previously left most of ``tests/`` running only in the non-blocking
     release-prep sweep.
 
-    Assignment is round-robin over the deterministic collection order, so each
-    file's tests are dealt evenly across shards (a single very slow file cannot
-    become one shard's critical path) and shard sizes differ by at most one.
+    Two modes, deliberately distinct, because they serve opposite goals:
+
+    ``--ci-shard`` (round-robin) assigns by ``position % total``, so each file's
+    tests are dealt evenly across shards. That is the right choice for the
+    blocking gate: a single very slow file cannot become one shard's critical
+    path, and shard sizes differ by at most one. It does, however, destroy the
+    canonical execution order.
+
+    ``--ci-block-shard`` (contiguous) gives shard ``k`` the ``k``-th contiguous
+    slice of the collection. Wall clock balances worse — blocks are equal in
+    test *count*, not in test *time* — but relative order is preserved inside
+    every shard, so an order dependence still fails wherever both tests land in
+    the same block. Only the ``total - 1`` block boundaries lose adjacency. That
+    is what lets the release-prep sweep stay an ordering control while running
+    in parallel; sharding it round-robin would have audited the round-robin
+    dealing algorithm with itself.
     """
-    spec = config.getoption("--ci-shard")
-    if not spec:
+    round_robin_spec = config.getoption("--ci-shard")
+    block_spec = config.getoption("--ci-block-shard")
+    if round_robin_spec and block_spec:
+        raise UsageError(
+            "--ci-shard and --ci-block-shard are mutually exclusive; pass one "
+            f"(got {round_robin_spec!r} and {block_spec!r})"
+        )
+
+    if round_robin_spec:
+        index, total = _parse_ci_shard(round_robin_spec, "--ci-shard")
+        if total == 1:
+            return
+        selected = range(index, len(items), total)
+    elif block_spec:
+        index, total = _parse_ci_shard(block_spec, "--ci-block-shard")
+        if total == 1:
+            return
+        start, stop = _block_shard_bounds(len(items), index, total)
+        selected = range(start, stop)
+    else:
         return
-    index, total = _parse_ci_shard(spec)
-    if total == 1:
-        return
+
     kept = []
     deselected = []
     for position, item in enumerate(items):
-        (kept if position % total == index else deselected).append(item)
+        (kept if position in selected else deselected).append(item)
     if deselected:
         config.hook.pytest_deselected(items=deselected)
     items[:] = kept
@@ -178,5 +235,4 @@ def pytest_sessionfinish(session, exitstatus):
         # Best-effort teardown: ignore cleanup failures during session shutdown.
         pass
 
-    # Encourage deterministic finalization of native-backed objects.
     gc.collect()
