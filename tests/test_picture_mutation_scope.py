@@ -38,9 +38,14 @@ import pixlstash.routes.pictures._crud as crud_module
 import pixlstash.routes.pictures._misc as misc_module
 from pixlstash.routes.pictures import _helpers as helpers_module
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _good_picture_files():

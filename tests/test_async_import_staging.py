@@ -24,8 +24,13 @@ from sqlmodel import select
 
 from pixlstash.db_models import Character, Picture, PictureSet, PictureSetMember, Tag
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _png_bytes(color=(100, 149, 237)) -> bytes:

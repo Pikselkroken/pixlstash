@@ -18,15 +18,21 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import select
 
 from pixlstash.db_models import Face, PictureSetMember, Tag
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 # A face-requiring tag (see person_tags.FACE_REQUIRING_TAGS) so the no_face filter fires.
 _FACE_TAG = "smile"

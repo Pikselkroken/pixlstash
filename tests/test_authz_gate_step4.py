@@ -41,9 +41,19 @@ from starlette.testclient import TestClient
 from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
 from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 from pixlstash.server import Server
+from tests.authz_guard import (  # noqa: F401
+    assert_real_route,
+    no_spa_fallback,
+    resolves_to_real_route,
+)
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# Every positive assertion here must reach a real route: the SPA catch-all answers
+# unmatched GETs with 200, which once made a whole-library BOLA vector's test
+# vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 # ===========================================================================
@@ -402,6 +412,31 @@ def test_non_integer_scoped_id_fails_closed():
     assert client.get("/api/v1/step4-decoy/proj/UNASSIGNED/summary").status_code == 200
 
 
+def test_anti_vacuity_guard_recognises_the_spa_catch_all():
+    """Pin the guard that keeps this file honest (``tests/authz_guard.py``).
+
+    ``/stacks/{id}/stack`` is the URL this suite asserted 200 against for five
+    days. It is not a route; the SPA catch-all answered it, so the assertion was
+    vacuous while its docstring claimed to cover ``/stacks/{id}/pictures`` — a
+    historical whole-library BOLA vector. Assert the discrimination directly, with
+    no server, so the guard cannot itself rot unnoticed.
+    """
+    app = FastAPI()
+
+    @app.get("/api/v1/stacks/{stack_id}/pictures")
+    def _real():  # pragma: no cover - never called
+        return []
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa(full_path: str):  # pragma: no cover - never called
+        return "index.html"
+
+    assert resolves_to_real_route(app, "GET", "/api/v1/stacks/1/pictures")
+    assert not resolves_to_real_route(app, "GET", "/api/v1/stacks/1/stack")
+    with pytest.raises(AssertionError, match="matches no mounted API route"):
+        assert_real_route(app, "GET", "/api/v1/stacks/1/stack")
+
+
 def test_shipped_default_is_enforcing():
     """Step 6 flipped the rollback constant: the gate ships ENFORCING. Report-only
     remains the one-line rollback (flip back to False)."""
@@ -515,12 +550,51 @@ def env():
             "set_id": set_id,
             "char_id": char_id,
             "proj_id": proj_id,
+            "mint": mint,
             "tokens": tokens,
         }
     finally:
         server.__exit__(None, None, None)
         temp_dir.cleanup()
         gc.collect()
+
+
+@pytest.fixture
+def stacked_env(env):
+    """``env`` plus a stack holding BOTH pictures and a *picture*-scoped token for
+    pic A only — the fixture the stack read-route leak tests need.
+
+    The grant shape matters and is not interchangeable. Stacking is deliberately
+    **set/project-membership-atomic**: ``create_stack`` calls
+    ``reconcile_stack_membership``, which unions every member's set and project
+    memberships across the stack. So stacking A with B *adds B to A's set and
+    project*, and a set- or project-scoped token therefore cannot straddle a
+    stack — by construction, never a leak, and useless as a probe.
+
+    A ``picture`` token grants exactly ``{resource_id}``
+    (``fetch_scope_allowed_picture_ids``) and is untouched by stacking, so it is
+    the one grant that does straddle. It is also the realistic threat model: a
+    single-picture share link whose holder tries to enumerate the library through
+    that picture's stack.
+
+    Note the stack is built here rather than in ``env`` precisely because of the
+    reconciliation above: creating it widens set S and project P to include B,
+    which would silently defeat the set/project scope tests that share ``env``.
+    """
+    owner, mint = env["owner"], env["mint"]
+    r = owner.post(f"{API}/stacks", json={"picture_ids": [env["pic_a"], env["pic_b"]]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    stack_id = body.get("id") or body.get("stack_id")
+    assert stack_id, body
+    assert sorted(body["picture_ids"]) == sorted([env["pic_a"], env["pic_b"]]), body
+    return {
+        "stack_id": stack_id,
+        "pic_token": mint("picture", env["pic_a"]),
+        # Grants a picture that is not a member of the stack, so the whole stack
+        # is out of scope: the deny direction.
+        "outsider_token": mint("picture", env["pic_b"] + 999),
+    }
 
 
 def test_integration_picture_scoped_via_set_token(env):
@@ -597,21 +671,129 @@ def test_integration_project_summary_unassigned_regression(env):
         assert r.status_code == 403, f"UNASSIGNED aggregate must 403: {r.text}"
 
 
-def test_integration_scoped_list_pass_through_not_overblocked(env):
+def test_integration_scoped_list_pass_through_not_overblocked(env, stacked_env):
     """The SCOPED_LIST historical-leak vectors (list, stream, ?character_id=
-    UNASSIGNED, /stacks/{id}/pictures) stay reachable by a resource-scoped token
-    when the gate is enforcing — scope_aware pass-through must not over-block; the
-    inline filter (unchanged) remains the enforcement."""
-    anon, tok = env["anon"], env["tokens"]["set"]
+    UNASSIGNED, /stacks/{id}/pictures, /pictures/{id}/stack) stay reachable by a
+    resource-scoped token when the gate is enforcing — scope_aware pass-through
+    must not over-block; the inline filter (unchanged) remains the enforcement.
+
+    Previously this asserted 200 against ``/stacks/{pic_id}/stack``, which is not a
+    route: the SPA catch-all answered it with 200 and the assertion was vacuous.
+    The two real stack routes are used now, and every path is checked against the
+    mounted route table before it is requested, so a rename fails loudly here
+    instead of dissolving into a fallback 200.
+    """
+    anon, tok = env["anon"], stacked_env["pic_token"]
+    paths = (
+        f"{API}/pictures",
+        f"{API}/pictures/stream",
+        f"{API}/pictures?character_id=UNASSIGNED",
+        f"{API}/stacks/{stacked_env['stack_id']}/pictures",
+        f"{API}/pictures/{env['pic_a']}/stack",
+    )
+    for path in paths:
+        assert_real_route(env["server"].api, "GET", path.split("?")[0])
     with _enforcing(env["server"]):
-        for path in (
-            f"{API}/pictures",
-            f"{API}/pictures/stream",
-            f"{API}/pictures?character_id=UNASSIGNED",
-            f"{API}/stacks/{env['pic_a']}/stack",
-        ):
+        for path in paths:
             r = anon.get(path, headers=_bearer(tok))
             assert r.status_code == 200, (
                 f"scope_aware SCOPED_LIST {path} must not be over-blocked by the "
                 f"gate; got {r.status_code}: {r.text}"
             )
+
+
+def test_integration_stack_pictures_does_not_leak_out_of_scope_members(
+    env, stacked_env
+):
+    """``GET /stacks/{id}/pictures`` — one of the three historical whole-library
+    BOLA leaks — filters stack members down to the caller's grant.
+
+    Both directions. The stack holds A (granted to the picture token) and B (not):
+    the scoped caller reaches the stack but must see A only, while the owner must
+    still see both, because over-blocking is its own regression. A picture token
+    for a stack non-member must not learn the stack exists at all.
+    """
+    anon, tok = env["anon"], stacked_env["pic_token"]
+    path = f"{API}/stacks/{stacked_env['stack_id']}/pictures"
+    assert_real_route(env["server"].api, "GET", path)
+    with _enforcing(env["server"]):
+        # In scope: reachable, but the out-of-scope sibling is filtered out.
+        r = anon.get(path, headers=_bearer(tok))
+        assert r.status_code == 200, f"in-scope stack read must pass: {r.text}"
+        ids = {row["id"] for row in r.json()}
+        assert ids == {env["pic_a"]}, (
+            f"stack listing leaked out-of-scope members: expected only "
+            f"{env['pic_a']}, got {sorted(ids)}"
+        )
+
+        # Not over-blocked: the owner still sees the whole stack.
+        r = env["owner"].get(path)
+        assert r.status_code == 200, r.text
+        owner_ids = {row["id"] for row in r.json()}
+        assert owner_ids == {env["pic_a"], env["pic_b"]}, sorted(owner_ids)
+
+        # No member in scope at all => the stack must not be disclosed.
+        r = anon.get(path, headers=_bearer(stacked_env["outsider_token"]))
+        assert r.status_code == 404, (
+            f"a token granting no stack member must not see the stack; "
+            f"got {r.status_code}: {r.text}"
+        )
+
+
+def test_integration_picture_stack_does_not_leak_out_of_scope_membership(
+    env, stacked_env
+):
+    """``GET /pictures/{picture_id}/stack`` is the sibling read of the same leak
+    class: it must not tell an out-of-scope caller which stack a picture is in,
+    nor name that stack's out-of-scope members.
+
+    Both directions: A (granted) resolves to the stack but lists only A; B
+    (ungranted) is refused outright; the owner still sees both members.
+    """
+    anon, tok = env["anon"], stacked_env["pic_token"]
+    in_scope = f"{API}/pictures/{env['pic_a']}/stack"
+    out_of_scope = f"{API}/pictures/{env['pic_b']}/stack"
+    assert_real_route(env["server"].api, "GET", in_scope)
+    with _enforcing(env["server"]):
+        # In scope: resolves, but members outside the grant are stripped.
+        r = anon.get(in_scope, headers=_bearer(tok))
+        assert r.status_code == 200, f"in-scope picture's stack must resolve: {r.text}"
+        body = r.json()
+        assert body["id"] == stacked_env["stack_id"], body
+        assert body["picture_ids"] == [env["pic_a"]], (
+            f"stack members leaked outside the grant: {body['picture_ids']}"
+        )
+
+        # Out of scope: the caller must not learn B's stack membership.
+        r = anon.get(out_of_scope, headers=_bearer(tok))
+        assert r.status_code == 404, (
+            f"out-of-scope picture's stack must be refused; got {r.status_code}: "
+            f"{r.text}"
+        )
+
+        # Not over-blocked: the owner sees the full membership.
+        r = env["owner"].get(in_scope)
+        assert r.status_code == 200, r.text
+        assert sorted(r.json()["picture_ids"]) == sorted([env["pic_a"], env["pic_b"]])
+
+
+def test_integration_stack_detail_does_not_leak_out_of_scope_members(env, stacked_env):
+    """``GET /stacks/{id}`` is the third route of the same ``_LIST_AWARE`` family
+    and the same leak class; cover it rather than leave the sibling untested."""
+    anon = env["anon"]
+    path = f"{API}/stacks/{stacked_env['stack_id']}"
+    assert_real_route(env["server"].api, "GET", path)
+    with _enforcing(env["server"]):
+        r = anon.get(path, headers=_bearer(stacked_env["pic_token"]))
+        assert r.status_code == 200, f"in-scope stack detail must pass: {r.text}"
+        assert r.json()["picture_ids"] == [env["pic_a"]], r.json()
+
+        r = env["owner"].get(path)
+        assert r.status_code == 200, r.text
+        assert sorted(r.json()["picture_ids"]) == sorted([env["pic_a"], env["pic_b"]])
+
+        r = anon.get(path, headers=_bearer(stacked_env["outsider_token"]))
+        assert r.status_code == 404, (
+            f"a token granting no stack member must not see the stack; "
+            f"got {r.status_code}: {r.text}"
+        )

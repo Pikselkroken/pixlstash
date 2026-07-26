@@ -29,14 +29,20 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi import APIRouter, Depends, FastAPI
 from starlette.testclient import TestClient
 
 from pixlstash.authz.gate import AUTHZ_GATE_ENFORCING, AuthzGate
 from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 _LOCALITY_403 = "restricted to local"  # substring of the LOCAL_OWNER_ONLY 403 detail
 
 
