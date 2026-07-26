@@ -495,7 +495,10 @@ def test_comfyui_i2i_owner_passes_scope_guard(env, monkeypatch):
         json={"workflow_name": "nonexistent", "picture_ids": [picture_ids[1]]},
     )
     # Owner is not scope-blocked; it falls through to the missing-workflow 404.
-    assert r.status_code != 403, r.text
+    # Assert that exact status rather than a bare ``!= 403``: the loose form is
+    # also satisfied by a 404 from a renamed route or a 500, so it would keep
+    # passing after the handler it is meant to reach stopped existing.
+    assert r.status_code == 404, r.text
 
 
 def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):
