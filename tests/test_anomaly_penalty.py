@@ -498,6 +498,39 @@ def test_get_latest_tag_precisions_falls_back_to_prior_run():
 # ------------------------------------------------------------------ scorer wiring
 
 
+def test_top_of_the_scale_stays_reachable():
+    """A picture that maxes every objective input must still reach the top of the scale.
+
+    The positive weights deliberately sum to more than the 1.0 the raw score is
+    compressed into; that surplus is the only reason a real picture can reach 5 stars
+    without scoring ~100% on every single term. Trimming a positive weight without
+    redistributing it lowers the whole library rather than just de-emphasising that one
+    signal: dropping aesthetic and sharpness from 0.30 to 0.20 took the sum to 1.07, and
+    over 6,000 real pictures the best achievable score became 4.38, with none reaching
+    4.5. Asserted behaviourally (and without anchors, the harshest case) so it fails on
+    the symptom rather than on a particular set of weights.
+    """
+    rng = np.random.default_rng(3)
+    emb = _unit(rng.standard_normal(512))
+    perfect = _candidate(
+        1,
+        emb,
+        aesthetic_score=7.0,
+        width=2400,
+        height=2400,
+        sharpness=1.0,
+        edge_density=0.18,
+        luminance_entropy=0.9,
+        noise_level=0.0,
+        colorfulness=1.0,
+    )
+    (score,) = SmartScoreUtils.calculate_smart_score_batch_numpy([perfect], [], [])
+    assert score >= 4.9, (
+        f"a flawless picture tops out at {score:.2f}. The positive weights no longer "
+        "leave headroom above the 1.0 clip — redistribute rather than simply trimming."
+    )
+
+
 def _best_case_score(emb):
     """Top of the scale the *current* weights can reach for a synthetic candidate.
 

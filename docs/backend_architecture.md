@@ -840,7 +840,9 @@ Selected milestones:
 
 | 0083 | Scoped `smart_score` NULL-reset for pictures penalised by an anomaly prediction with no matching `Tag` row |
 
-Current head: `0083_recompute_smart_score_unapplied_anomaly_predictions`.
+| 0084 | Library-wide `smart_score` NULL-reset after rebalancing the positive weights |
+
+Current head: `0084_recompute_smart_score_rebalanced_weights`.
 
 ---
 

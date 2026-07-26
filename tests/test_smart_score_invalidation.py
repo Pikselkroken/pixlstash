@@ -1004,6 +1004,11 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        # The tag must be applied, not just predicted: the scorer only charges a model
+        # prediction whose defect is visible in the picture's tag list. Without the Tag
+        # row the penalty is zero under both tables below and the comparison is float
+        # noise rather than a real difference.
+        _seed_tag(server, pic_id, PENALISED_TAG)
         _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.95)
 
         # Drive the finder by hand: the live WorkPlanner would otherwise claim and score
