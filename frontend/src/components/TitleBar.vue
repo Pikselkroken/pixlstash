@@ -244,13 +244,12 @@ const close = () => desktop?.windowClose?.();
   /* Tiny5 brand wordmark (WordmarkLogo.vue), sized by font-size. */
   font-size: var(--text-md);
   flex-shrink: 0;
-  /* "Pixl" tracks the title-bar text colour; "Stash" is the subdued accent blend. */
+  /* "Pixl" tracks the title-bar text colour; "Stash" is the accent, the same
+     two-tone split the sidebar, login screen, and website use (DESIGN.md,
+     "Wordmark amber"). This was a 55% blend with on-background, which washed
+     the amber out to a pale tan. */
   color: rgb(var(--v-theme-on-background));
-  --wordmark-accent: color-mix(
-    in srgb,
-    rgb(var(--v-theme-accent)) 55%,
-    rgb(var(--v-theme-on-background))
-  );
+  --wordmark-accent: rgb(var(--v-theme-accent));
 }
 
 .titlebar-version {
