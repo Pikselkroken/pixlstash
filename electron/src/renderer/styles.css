@@ -65,9 +65,9 @@ body {
 .winbar.winbar--mac {
   padding-left: 78px; /* room for native traffic lights */
 }
-/* Brand wordmark, matching the in-app title bar (TitleBar.vue): the Tiny5
-   pixel face at 16px, "Pixl" in the body colour and "Stash" in a subdued
-   accent blend rather than the full amber. */
+/* Brand wordmark: the Tiny5 pixel face at 16px, "Pixl" in the body colour and
+   "Stash" in the accent — the two-tone split every other brand surface uses
+   (DESIGN.md "Wordmark amber", docs/design/visual-language.md §Wordmark). */
 .winbar .wb-brand {
   margin-right: auto;
   padding: 0 12px;
@@ -79,7 +79,7 @@ body {
 }
 
 .winbar .wb-stash {
-  color: color-mix(in srgb, var(--accent) 55%, var(--fg));
+  color: var(--accent);
 }
 .winbar .wb-controls {
   display: flex;
