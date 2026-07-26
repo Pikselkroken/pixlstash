@@ -4533,7 +4533,16 @@ function resetOverlayCopyState() {
   margin-top: var(--space-2);
   max-height: 210px;
   overflow-y: auto;
-  padding-right: 2px;
+  padding-right: var(--space-1);
+  /* Same treatment as the two tag lists in OverlayTagsPanel: this sidebar's
+     three scroll regions share one bar, keyed to the dark surface. */
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.face-assign-grid:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .face-assign-card {

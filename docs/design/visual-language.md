@@ -591,6 +591,20 @@ These get skipped and that is exactly why a UI looks cheap.
   same "`on-<x>` on a tint" trap as `on-<status>` (§4); it will keep recurring, so check
   it every time an `on-*` token appears next to an `rgba(...)` fill.
 - **Disabled:** drop to ~38% opacity of the token, never a different grey.
+- **Scrollbars:** a scroll region inside a `dark-surface` panel styles its own bar,
+  because the global `.is-desktop` treatment in `style.css` keys off `on-surface`
+  (the light-chrome pair) and does not apply in a plain browser at all. The pattern
+  is `scrollbar-width: thin` plus
+  `scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent`, going to
+  `0.55` on hover, with `scrollbar-gutter: stable` so content does not reflow when
+  the bar appears. **0.4 is a floor, not a taste call:** it measures 3.28:1 against
+  the overlay panel and clears WCAG 1.4.11's 3:1 for a UI component, where the
+  0.1 - 0.2 alphas this system uses for *borders* land near 2:1. The bar is usually
+  the only signal that a bounded list continues, so it stays visible rather than
+  fading until hover, and the track stays transparent so it does not draw a second
+  line next to an existing border. Reference: the four scroll regions of the image
+  overlay sidebar (`.tag-list`, `.tag-drop-zone--predictions`, `.face-assign-grid`,
+  and the description `textarea`).
 
 ---
 
