@@ -806,6 +806,7 @@ const props = defineProps({
   tagUpdate: { type: Object, default: () => ({}) },
   descriptionUpdate: { type: Object, default: () => ({}) },
   smartScoreUpdate: { type: Object, default: () => ({}) },
+  detectionUpdate: { type: Object, default: () => ({}) },
   hiddenTags: { type: Array, default: () => [] },
   applyTagFilter: { type: Boolean, default: false },
   dateFormat: { type: String, default: "locale" },
@@ -830,6 +831,7 @@ const {
   tagUpdate,
   descriptionUpdate,
   smartScoreUpdate,
+  detectionUpdate,
   hiddenTags,
   applyTagFilter,
   showStacks,
@@ -1051,6 +1053,7 @@ const descriptionTeaser = computed(() => {
 const lastTagUpdateKey = ref(0);
 const lastDescriptionUpdateKey = ref(0);
 const lastSmartScoreUpdateKey = ref(0);
+const lastDetectionUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const comfyuiMenuOpen = ref(false);
 const pluginMenuOpen = ref(false);
@@ -3584,6 +3587,25 @@ watch(
     lastSmartScoreUpdateKey.value = nextKey;
     if (!open.value || !image.value?.id) return;
     fetchOverlayMetadata(image.value.id);
+  },
+);
+
+// A Segment run finished. The boxes come from /pictures/{id}/detections, which
+// is only read when the displayed card changes, so without this the overlay kept
+// the pre-segment boxes until it was closed and reopened. Re-fetch on every
+// distinct signal rather than gating on the payload's ids: two detection tasks
+// completing in one Vue flush coalesce to the later payload, which can omit the
+// open card. fetchDetections is requestId-deduped and drops a response for a card
+// that is no longer displayed, so a redundant fetch is one cheap call, not a race.
+watch(
+  () => detectionUpdate.value,
+  (payload) => {
+    if (!payload || typeof payload !== "object") return;
+    const nextKey = payload.key || 0;
+    if (!nextKey || nextKey === lastDetectionUpdateKey.value) return;
+    lastDetectionUpdateKey.value = nextKey;
+    if (!open.value || !image.value?.id) return;
+    fetchDetections(image.value.id);
   },
 );
 

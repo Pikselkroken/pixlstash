@@ -351,6 +351,16 @@ function connectUpdatesSocket() {
           const nextKey = (wsStore.wsSmartScoreUpdate?.key || 0) + 1;
           wsStore.wsSmartScoreUpdate = { key: nextKey, pictureIds };
         }
+        // Signal the open lightbox to re-fetch its detection boxes when a
+        // Segment run lands. The grid's card-content refresh is deferred under
+        // an open overlay (§9.1) and the overlay reads its boxes straight from
+        // the detections endpoint, so it needs its own signal. The backend
+        // always stamps this change `fields: ["detections"]`, so match on the
+        // explicit field only.
+        if (changedFields.includes("detections")) {
+          const nextKey = (wsStore.wsDetectionUpdate?.key || 0) + 1;
+          wsStore.wsDetectionUpdate = { key: nextKey, pictureIds };
+        }
       }
       if (
         pictureIds.length > 0 &&
@@ -2298,6 +2308,7 @@ defineExpose({
                 :wsTagUpdate="wsStore.wsTagUpdate"
                 :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
                 :wsSmartScoreUpdate="wsStore.wsSmartScoreUpdate"
+                :wsDetectionUpdate="wsStore.wsDetectionUpdate"
                 :wsPluginProgress="wsStore.wsPluginProgress"
                 :mediaTypeFilter="filterStore.mediaTypeFilter"
                 :comfyuiModelFilter="filterStore.comfyuiModelFilter"

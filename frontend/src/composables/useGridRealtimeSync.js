@@ -453,7 +453,13 @@ export function useGridRealtimeSync(deps) {
         return reloadOrDefer("card-content-refresh-too-large");
       }
       if (deferWhileOverlayOpen()) {
-        return { action: TARGETED, reason: "card-content-refresh-overlay-deferred" };
+        // Only the GRID card refresh is deferred here. The open lightbox keeps
+        // itself current off App.vue's `wsDetectionUpdate` signal, which it uses
+        // to re-read /pictures/{id}/detections.
+        return {
+          action: TARGETED,
+          reason: "card-content-refresh-overlay-deferred",
+        };
       }
       for (const id of pictureIds) grid.refreshGridImage?.(id);
       return { action: TARGETED, reason: "card-content-refresh" };

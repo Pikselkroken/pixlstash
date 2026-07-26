@@ -45,6 +45,13 @@ export const useWsStore = defineStore("ws", () => {
   // origin. Fired for both origin-stamped (interactive tag edits) and origin-less
   // (bulk penalised-tag settings drain) CHANGED_PICTURES events.
   const wsSmartScoreUpdate = ref({ key: 0, pictureIds: [] });
+  // Signals a DetectionTask (Segment) finished for the given pictures. The grid
+  // treats `detections` as a card-content field and refreshes the card in place,
+  // but that refresh is deferred while the lightbox is open, and the overlay
+  // fetches its boxes from /pictures/{id}/detections rather than from the card.
+  // Without this signal an open overlay kept showing the pre-segment boxes until
+  // it was closed and reopened.
+  const wsDetectionUpdate = ref({ key: 0, pictureIds: [] });
   const wsPluginProgress = ref({ key: 0, payload: null });
   const isUploadInProgress = ref(false);
 
@@ -95,6 +102,7 @@ export const useWsStore = defineStore("ws", () => {
     wsTagUpdate,
     wsDescriptionUpdate,
     wsSmartScoreUpdate,
+    wsDetectionUpdate,
     wsPluginProgress,
     isUploadInProgress,
     clientId,

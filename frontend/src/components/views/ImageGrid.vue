@@ -8,6 +8,7 @@
     :tagUpdate="props.wsTagUpdate"
     :descriptionUpdate="props.wsDescriptionUpdate"
     :smartScoreUpdate="props.wsSmartScoreUpdate"
+    :detectionUpdate="props.wsDetectionUpdate"
     :hiddenTags="props.hiddenTags"
     :applyTagFilter="props.applyTagFilter"
     :dateFormat="props.dateFormat"
@@ -1198,6 +1199,10 @@ const props = defineProps({
     default: () => ({ key: 0, pictureIds: [] }),
   },
   wsSmartScoreUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
+  wsDetectionUpdate: {
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
   },

@@ -6,6 +6,7 @@ Thumbnails are rebuilt the first time you open 1.8.0 so the new grid layouts hav
 - Imports stream to the server and finish in the background, so closing the tab no longer cancels them. Running imports show up in the task manager and can be aborted.
 - Scrapheap: delete forever now really removes the files on disk, behind a preview and a type-to-confirm dialog, and entries auto-purge on a retention you choose.
 - Real context menus in the Scrapheap and the image overlay.
+- Fixed: Segment from the image overlay now draws its new boxes as soon as the run finishes, instead of only after you close and reopen the picture.
 - Fix snapshot restore hard-deleting files that were added after the snapshot was taken, and stop deletions from destroying pictures in locked sets.
 - Smart Score updates in the overlay as you edit tags, and your own edits no longer trigger the refresh pill.
 - Smart Score only counts defects that are actually in a picture's tag list, so pictures the tagger flagged behind the scenes but never tagged are no longer pushed down the grid. Affected scores are recalculated once in the background when you upgrade.
