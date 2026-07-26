@@ -1,5 +1,11 @@
 import time
 
+from sqlalchemy import func
+from sqlmodel import delete, select
+
+from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
+
 API_PREFIX = "/api/v1"
 
 _DEFAULT_TIMEOUT_S = 180
@@ -85,3 +91,87 @@ def wait_for_faces(client, picture_id, timeout_s=30, poll_interval=0.5):
     resp = client.get(f"{API_PREFIX}/pictures/{picture_id}/faces")
     assert resp.status_code == 200
     return resp.json().get("faces", [])
+
+
+def wait_likeness_settled(server, timeout_s=_DEFAULT_TIMEOUT_S):
+    """Block until the background likeness pipeline has fully processed every
+    uploaded picture, so a manually-seeded ``PictureLikeness`` fixture will not
+    be clobbered underneath the assertions that read it.
+
+    ``timeout_s`` is generous (CPU embeddings + likeness recompute for the
+    uploaded fixtures can take well over 30s on a loaded CI runner); the poll
+    returns as soon as the pipeline is quiescent, so a large cap costs nothing
+    on a fast machine and only avoids a spurious timeout under contention.
+
+    Uploading real pictures runs two background stages that mutate the
+    ``picturelikeness`` table: the likeness-parameter pass calls
+    ``LikenessParameterUtils.reset_likeness_for_pictures`` (which DELETEs every
+    pair touching a picture and re-queues it), then ``LikenessTask`` recomputes
+    real pairs. Both race with a seeded fixture. Waiting on the parameter stage
+    alone is not enough: ``count_pending_parameters`` reads 0 in the gaps
+    between per-picture embedding batches, and ``MissingLikenessFinder`` then
+    seeds the queue and writes real pairs for the pictures that *are* ready —
+    which collides with the fixture's own INSERT on the
+    ``(picture_id_a, picture_id_b)`` unique constraint.
+
+    Once every picture is fully processed (embedding + likeness_parameters +
+    perceptual_hash all set), the queue is drained, and the pair table is stable
+    across two polls, the pipeline is quiescent: a subsequent atomic reseed (see
+    ``seed_likeness_stable``) then stays put because the finder has no further
+    work (queue empty + pairs present).
+    """
+
+    def _snapshot(session):
+        total = int(session.exec(select(func.count()).select_from(Picture)).one())
+        ready = int(
+            session.exec(
+                select(func.count())
+                .select_from(Picture)
+                .where(
+                    Picture.image_embedding.is_not(None),
+                    Picture.likeness_parameters.is_not(None),
+                    Picture.perceptual_hash.is_not(None),
+                )
+            ).one()
+        )
+        queued = int(
+            session.exec(select(func.count()).select_from(PictureLikenessQueue)).one()
+        )
+        pairs = int(
+            session.exec(select(func.count()).select_from(PictureLikeness)).one()
+        )
+        return total, ready, queued, pairs
+
+    start = time.time()
+    prev_pairs = None
+    while time.time() - start < timeout_s:
+        total, ready, queued, pairs = server.vault.db.run_immediate_read_task(_snapshot)
+        # Quiescent only when every picture is fully processed and the queue is
+        # empty; stable across two polls confirms the last recompute wrote.
+        if total > 0 and ready == total and queued == 0 and pairs == prev_pairs:
+            return
+        prev_pairs = pairs
+        time.sleep(0.25)
+    raise AssertionError("likeness pipeline did not settle in time")
+
+
+def seed_likeness_stable(server, seed_fn):
+    """Wait for the likeness pipeline to quiesce, then seed with a clean
+    ``picturelikeness`` slate in one atomic transaction.
+
+    Deletes any pipeline-computed pairs and drains the queue *inside* the seed
+    transaction so no observer ever sees an empty-table/empty-queue state (which
+    would re-trigger ``LikenessUtils.seed_queue``). Wiping first also means the
+    fixture's own INSERTs cannot collide with a real pair the pipeline already
+    computed for the same picture ids. After commit the queue is empty and the
+    seeded pairs are present, so ``MissingLikenessFinder`` has no further work
+    and the fixture stays authoritative. Returns whatever ``seed_fn`` returns.
+    """
+    wait_likeness_settled(server)
+
+    def _wrapped(session):
+        session.exec(delete(PictureLikeness))
+        session.exec(delete(PictureLikenessQueue))
+        return seed_fn(session)
+
+    return server.vault.db.run_task(_wrapped)
