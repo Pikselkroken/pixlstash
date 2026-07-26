@@ -1,4 +1,4 @@
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import {
   packJustifiedRows,
   rowAtOffset,
@@ -343,6 +343,26 @@ export function useVirtualScroll(
     visibleEnd.value = range.end;
     onVisibleRangeChange?.();
   }
+
+  // ── Keep the range in step with the packed model ──────────────────────────
+  // justifiedLayout packs from the aspect ratios of the images that have
+  // ARRIVED, so it is null until the first batch lands and then repacks on every
+  // change to that list (placeholder 1:1 ratios first, real ratios as batches
+  // splice in). Each repack moves every row boundary, while visibleStart/End are
+  // plain refs seeded by the fetch from a UNIFORM square-grid estimate
+  // (ceil(viewH / cellH) * columns) that does not describe justified geometry.
+  // Nothing else recalculates them against the real model: computeVisibleRange
+  // returns an empty window while the layout is null, and the only other hook,
+  // remeasureJustifiedWidth, early-returns once the width stops changing and so
+  // never reaches its own recalculateVisibleRange(). Without this watcher the
+  // render window keeps describing a geometry that never existed, so the grid
+  // paints its cards outside the viewport (commonly a zero-item window, i.e. a
+  // blank grid) until the user scrolls and computeVisibleRange finally reads the
+  // packed model.
+  watch(justifiedLayout, (layout) => {
+    if (!layout || !layout.rowHeights.length) return;
+    recalculateVisibleRange();
+  });
 
   // ── Cursor scroll-into-view ───────────────────────────────────────────────
   function scrollCursorIntoView(idx) {
