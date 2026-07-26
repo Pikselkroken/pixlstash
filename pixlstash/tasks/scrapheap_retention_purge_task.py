@@ -101,6 +101,17 @@ class ScrapheapRetentionPurgeTask(BaseTask):
                 "the window changed between planning and execution)",
                 outcome.retained_count,
             )
+        if outcome.skipped_restored:
+            # Not an error: the re-check inside the purge caught a picture that
+            # had left the scrapheap (a restore that landed mid-purge) and spared
+            # its row, file and ledger entry. Recorded so an unattended sweep
+            # never silently drops work.
+            logger.info(
+                "ScrapheapRetentionPurgeTask: spared %d picture(s) that left the "
+                "scrapheap between planning and deletion: %s",
+                len(outcome.skipped_restored),
+                outcome.skipped_restored,
+            )
         if outcome.skipped_count:
             # The finder already excludes protected rows, so a non-zero skip
             # means the protection changed between planning and execution. The

@@ -306,10 +306,15 @@ export async function setPicturesProject(
  * Callers MUST treat a rejection as "could not verify" and refuse to open the
  * destructive confirm, never as "nothing would be deleted".
  *
+ * The response also carries `confirm_token`, a single-use, five-minute proof
+ * bound to exactly this selection. `purgeScrapheap` will not delete without it,
+ * so this call is a required step, not an optional courtesy.
+ *
  * @param {Array<number|string>|null} [ids=null] - null means the whole heap.
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
- * @returns {Promise<Object>} the counts and the protected-file list.
+ * @returns {Promise<Object>} the counts, the protected-file list, and
+ *   `confirm_token`.
  */
 export async function previewScrapheapDelete(ids = null, { baseUrl = "" } = {}) {
   const res = await apiClient.post(
@@ -326,18 +331,29 @@ export async function previewScrapheapDelete(ids = null, { baseUrl = "" } = {}) 
  * unless `includeProtected` is set, and locked ones are always kept and
  * reported in `skipped_locked`.
  *
+ * `confirmToken` is REQUIRED and comes from `previewScrapheapDelete` for the
+ * same selection. The type-to-confirm dialog is a client control that proves
+ * nothing to the server, so the server mints its own single-use confirmation
+ * with the destruction preview and refuses this call without it (400 when it is
+ * missing, 409 when it is spent, expired, or for a different selection).
+ *
  * @param {Object} [options]
  * @param {Array<number|string>} [options.pictureIds]
  * @param {boolean} [options.includeProtected=false]
+ * @param {string} options.confirmToken - from the matching preview.
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, including `skipped_locked`.
  */
 export async function purgeScrapheap({
   pictureIds,
   includeProtected = false,
+  confirmToken,
   baseUrl = "",
 } = {}) {
-  const data = { include_protected: includeProtected };
+  const data = {
+    include_protected: includeProtected,
+    confirm_token: confirmToken,
+  };
   if (pictureIds) data.picture_ids = pictureIds;
   const res = await apiClient.delete(`${baseUrl}/pictures/scrapheap`, { data });
   return res.data;

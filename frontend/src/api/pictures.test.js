@@ -200,17 +200,32 @@ describe("api/pictures", () => {
   // as undefined and accidentally scope the purge to nothing.
   it("purgeScrapheap omits picture_ids when emptying everything", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
-    await purgeScrapheap({ includeProtected: true });
+    await purgeScrapheap({ includeProtected: true, confirmToken: "tok-a" });
     expect(apiClient.delete).toHaveBeenCalledWith("/pictures/scrapheap", {
-      data: { include_protected: true },
+      data: { include_protected: true, confirm_token: "tok-a" },
     });
   });
 
   it("purgeScrapheap scopes to the given ids when they are supplied", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
-    await purgeScrapheap({ pictureIds: [3] });
+    await purgeScrapheap({ pictureIds: [3], confirmToken: "tok-b" });
     expect(apiClient.delete).toHaveBeenCalledWith("/pictures/scrapheap", {
-      data: { include_protected: false, picture_ids: [3] },
+      data: {
+        include_protected: false,
+        confirm_token: "tok-b",
+        picture_ids: [3],
+      },
+    });
+  });
+
+  // The server refuses the purge without the preview's single-use
+  // confirm_token, so the field must always be on the wire — never silently
+  // dropped when a caller forgets it.
+  it("purgeScrapheap always sends confirm_token", async () => {
+    apiClient.delete.mockResolvedValue({ data: {} });
+    await purgeScrapheap({});
+    expect(apiClient.delete).toHaveBeenCalledWith("/pictures/scrapheap", {
+      data: { include_protected: false, confirm_token: undefined },
     });
   });
 

@@ -315,7 +315,7 @@ def test_scrapheap_purge_logs_deleted_files(server):
     # Soft-delete into the scrapheap, then permanently purge it.
     delete_resp = client.delete(f"/pictures/{pic_id}")
     assert delete_resp.status_code == 200
-    purge_resp = client.delete("/pictures/scrapheap")
+    purge_resp = _purge_scrapheap(client)
     assert purge_resp.status_code == 200
 
     # The row and the file on disk are gone...
@@ -360,7 +360,7 @@ def test_scrapheap_purge_reports_snapshots_with_deleted(server):
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
     delete_resp = client.delete(f"/pictures/{pic_id}")
     assert delete_resp.status_code == 200
-    resp = client.delete("/pictures/scrapheap")
+    resp = _purge_scrapheap(client)
     assert resp.status_code == 200
     body = resp.json()
 
@@ -368,6 +368,23 @@ def test_scrapheap_purge_reports_snapshots_with_deleted(server):
     assert any(s["id"] == cp.id and s["matched_count"] >= 1 for s in snaps), (
         f"Expected snapshot {cp.id} in {snaps}"
     )
+
+
+def _purge_scrapheap(client, *, ids=None, include_protected=None):
+    """Drive the real preview -> confirm delete-forever flow.
+
+    ``DELETE /pictures/scrapheap`` refuses without the single-use
+    ``confirm_token`` the preview mints for that exact selection, so a test may
+    not call the destructive endpoint bare.
+    """
+    preview = client.post("/pictures/scrapheap/delete-preview", json={"ids": ids})
+    assert preview.status_code == 200, preview.text
+    body = {"confirm_token": preview.json()["confirm_token"]}
+    if ids is not None:
+        body["picture_ids"] = ids
+    if include_protected is not None:
+        body["include_protected"] = include_protected
+    return client.request("DELETE", "/api/v1/pictures/scrapheap", json=body)
 
 
 def _make_reference_folder_picture(server, folder_dir, file_name, *, allow_delete):
@@ -454,9 +471,7 @@ def test_scrapheap_delete_forever_destroys_protected_reference_original(
 
     assert client.delete(f"/pictures/{pic_id}").status_code == 200
     # include_protected=true is the type-to-confirm "delete all" action.
-    purge_resp = client.request(
-        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": True}
-    )
+    purge_resp = _purge_scrapheap(client, include_protected=True)
     assert purge_resp.status_code == 200
     assert purge_resp.json()["deleted_count"] == 1
 
@@ -605,9 +620,7 @@ def test_scrapheap_delete_include_protected_false_skips_protected(server, tmp_pa
         server, client, tmp_path
     )
 
-    resp = client.request(
-        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": False}
-    )
+    resp = _purge_scrapheap(client, include_protected=False)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["deleted_count"] == 1, body
@@ -646,9 +659,7 @@ def test_scrapheap_delete_include_protected_true_destroys_all(server, tmp_path):
         server, client, tmp_path
     )
 
-    resp = client.request(
-        "DELETE", "/api/v1/pictures/scrapheap", json={"include_protected": True}
-    )
+    resp = _purge_scrapheap(client, include_protected=True)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["deleted_count"] == 3, body
@@ -684,7 +695,7 @@ def test_scrapheap_purge_unprotected_folder_removes_file_and_logs(server, tmp_pa
     expected_path_sha = DeletedFileLog.hash_path(abs_file_path)
 
     assert client.delete(f"/pictures/{pic_id}").status_code == 200
-    purge_resp = client.delete("/pictures/scrapheap")
+    purge_resp = _purge_scrapheap(client)
     assert purge_resp.status_code == 200
     assert purge_resp.json()["deleted_count"] == 1
 
@@ -829,7 +840,7 @@ def test_scrapheap_delete_forever_upgrades_stale_kept_flag(server, tmp_path):
         return pic.id
 
     server.vault.db.run_task(_insert_plain)
-    assert client.delete("/pictures/scrapheap").json()["deleted_count"] == 1
+    assert _purge_scrapheap(client).json()["deleted_count"] == 1
 
     flags = _ledger_flags_for(server, abs_file_path)
     assert flags == [True], (
