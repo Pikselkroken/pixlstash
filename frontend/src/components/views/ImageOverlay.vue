@@ -4457,15 +4457,9 @@ function resetOverlayCopyState() {
   overflow: hidden;
 }
 
-.sidebar-section--tags {
-  min-height: 104px;
-  display: flex;
-  flex-direction: column;
-}
-
-.sidebar-section--tags.sidebar-section--collapsed {
-  min-height: 0;
-}
+/* The Tags / Rejected Tags section layout lives in OverlayTagsPanel's own
+   scoped block: that component has multiple root nodes, so this file's scope id
+   is never stamped onto them and rules written here would not match. */
 
 .section-header--collapsible {
   cursor: pointer;
