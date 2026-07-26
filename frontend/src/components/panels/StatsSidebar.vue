@@ -835,10 +835,21 @@ function handleSmartScoreBarClick(label) {
 
 // ─── Agreement matrix (your rating x smart score) ────────────────────────────
 // Rows run 1..5 top to bottom and columns 1-2..4-5 left to right, matching the
-// two histograms above so this reads as their cross-product and agreement falls
-// on the main diagonal.
+// two histograms above so this reads as their cross-product and agreement runs
+// as a band down the diagonal.
 const AGREEMENT_STARS = [1, 2, 3, 4, 5];
 const AGREEMENT_BUCKETS = ["1-2", "2-3", "3-4", "4-5"];
+// Both axes are already the same 1-5 scale, so the buckets are compared to the
+// ratings in smart-score units rather than by grid position.
+const AGREEMENT_BUCKET_RANGES = {
+  "1-2": [1, 2],
+  "2-3": [2, 3],
+  "3-4": [3, 4],
+  "4-5": [4, 5],
+};
+// A star is a rounded smart score: rating 4 stands for anything from 3.5 to 4.5,
+// so any bucket within half a point of the rating is a match.
+const AGREEMENT_MATCH_RADIUS = 0.5;
 // The gutter is wider than the sibling charts' 50px to make room for the
 // rotated y-axis title.
 const AGREEMENT_X0 = 62;
@@ -853,23 +864,30 @@ const AGREEMENT_AXIS_H = 15; // x-axis title strip below the grid
 // spatially.
 const AGREEMENT_ON_FILL_SHADE = 0.55;
 const AGREEMENT_CAVEAT =
-  "Green cells are pictures you and the smart score agree about, red ones are where you disagree, and the stronger the colour the more pictures are in that cell. Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells off the diagonal.";
+  "Green cells are pictures you and the smart score agree about, within half a point, and red ones are where you disagree by more than a point and a half. The stronger the colour, the more pictures are in that cell. Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells outside the green band.";
 
-// Traffic-light hue by how far a cell sits from agreement, saturation by count.
-// Both axes are normalised to 0..1 first because they have different step counts
-// (five ratings against four buckets), so raw index distance would be lopsided.
+// Traffic-light hue by how far apart the two scores are, opacity by count.
+//
+// The gap is measured in smart-score points, not in grid steps: a star rating is
+// a rounded smart score, so rating 4 covers 3.5 to 4.5 and therefore matches BOTH
+// the 3-4 and the 4-5 bucket. Comparing normalised grid positions instead made
+// rating 4 a near-miss against 4-5, which is wrong: the two axes are the same
+// 1-5 scale and should be compared on it.
+//
+// Distance is from the rating to the nearest point of the bucket's interval, so
+// a rating inside the bucket is 0 apart. Ratings and bucket edges are whole
+// numbers, so this only ever yields 0, 1, 2 or 3.
 function agreementDisagreement(star, bucket) {
-  const col = AGREEMENT_BUCKETS.indexOf(bucket);
-  if (col < 0) return 0;
-  const ratingPos = (star - 1) / (AGREEMENT_STARS.length - 1);
-  const smartPos = col / (AGREEMENT_BUCKETS.length - 1);
-  return Math.abs(ratingPos - smartPos);
+  const range = AGREEMENT_BUCKET_RANGES[bucket];
+  if (!range) return 0;
+  const [low, high] = range;
+  return Math.max(low - star, star - high, 0);
 }
 
 function agreementTone(star, bucket) {
   const distance = agreementDisagreement(star, bucket);
-  if (distance <= 0.2) return "good";
-  if (distance <= 0.5) return "mixed";
+  if (distance <= AGREEMENT_MATCH_RADIUS) return "good";
+  if (distance <= 1 + AGREEMENT_MATCH_RADIUS) return "mixed";
   return "bad";
 }
 

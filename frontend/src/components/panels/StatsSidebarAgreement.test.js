@@ -75,18 +75,25 @@ function formatCoefficient(value) {
 }
 
 // (6) Verbatim copies of agreementDisagreement / agreementTone.
+const AGREEMENT_BUCKET_RANGES = {
+  "1-2": [1, 2],
+  "2-3": [2, 3],
+  "3-4": [3, 4],
+  "4-5": [4, 5],
+};
+const AGREEMENT_MATCH_RADIUS = 0.5;
+
 function disagreement(star, bucket) {
-  const col = AGREEMENT_BUCKETS.indexOf(bucket);
-  if (col < 0) return 0;
-  const ratingPos = (star - 1) / (AGREEMENT_STARS.length - 1);
-  const smartPos = col / (AGREEMENT_BUCKETS.length - 1);
-  return Math.abs(ratingPos - smartPos);
+  const range = AGREEMENT_BUCKET_RANGES[bucket];
+  if (!range) return 0;
+  const [low, high] = range;
+  return Math.max(low - star, star - high, 0);
 }
 
 function tone(star, bucket) {
   const d = disagreement(star, bucket);
-  if (d <= 0.2) return "good";
-  if (d <= 0.5) return "mixed";
+  if (d <= AGREEMENT_MATCH_RADIUS) return "good";
+  if (d <= 1 + AGREEMENT_MATCH_RADIUS) return "mixed";
   return "bad";
 }
 
@@ -243,41 +250,62 @@ describe("keyboard model", () => {
 });
 
 describe("traffic-light tone", () => {
-  it("paints the agreement diagonal green", () => {
-    expect(tone(1, "1-2")).toBe("good");
-    expect(tone(5, "4-5")).toBe("good");
+  // A star rating is a rounded smart score: rating 4 stands for 3.5 to 4.5, so it
+  // matches BOTH the 3-4 and the 4-5 bucket. Measuring the gap in grid steps
+  // instead of score points made rating 4 a near-miss against 4-5 — the bug this
+  // block now pins down.
+  it("treats a rating as a match for every bucket within half a point", () => {
+    expect(tone(4, "3-4")).toBe("good");
+    expect(tone(4, "4-5")).toBe("good");
+    expect(tone(2, "1-2")).toBe("good");
+    expect(tone(2, "2-3")).toBe("good");
     expect(tone(3, "2-3")).toBe("good");
     expect(tone(3, "3-4")).toBe("good");
   });
 
-  it("paints the far corners red — a 1-star the machine loves, and the reverse", () => {
-    expect(tone(1, "4-5")).toBe("bad");
-    expect(tone(5, "1-2")).toBe("bad");
+  it("matches the end ratings to the single bucket their range reaches", () => {
+    // Rating 1 covers 0.5-1.5 and rating 5 covers 4.5-5.5, so each overlaps one
+    // bucket only. That asymmetry is real, not a mapping artefact.
+    expect(tone(1, "1-2")).toBe("good");
+    expect(tone(1, "2-3")).toBe("mixed");
+    expect(tone(5, "4-5")).toBe("good");
+    expect(tone(5, "3-4")).toBe("mixed");
   });
 
-  it("paints a near miss amber rather than red", () => {
-    expect(tone(1, "2-3")).toBe("mixed");
-    expect(tone(5, "3-4")).toBe("mixed");
+  it("paints the far corners red", () => {
+    expect(tone(1, "4-5")).toBe("bad");
+    expect(tone(5, "1-2")).toBe("bad");
+    expect(tone(1, "3-4")).toBe("bad");
+    expect(tone(5, "2-3")).toBe("bad");
+  });
+
+  it("measures the gap in smart-score points from the nearest edge of the bucket", () => {
+    expect(disagreement(4, "4-5")).toBe(0); // inside the bucket
+    expect(disagreement(4, "3-4")).toBe(0); // on its upper edge
+    expect(disagreement(4, "2-3")).toBe(1); // one point below
+    expect(disagreement(4, "1-2")).toBe(2);
+    expect(disagreement(1, "4-5")).toBe(3); // the worst possible disagreement
   });
 
   it("is symmetric: disagreeing in either direction reads the same", () => {
     expect(tone(1, "4-5")).toBe(tone(5, "1-2"));
     expect(tone(2, "4-5")).toBe(tone(4, "1-2"));
-  });
-
-  it("normalises both axes, so five ratings against four buckets stay comparable", () => {
-    // Raw index distance would make column 3 look further from row 3 than it is:
-    // the axes have different step counts, so they are compared as fractions.
-    expect(disagreement(3, "2-3")).toBeCloseTo(Math.abs(0.5 - 1 / 3), 5);
-    expect(disagreement(1, "1-2")).toBe(0);
-    expect(disagreement(5, "4-5")).toBe(0);
-    expect(disagreement(1, "4-5")).toBe(1);
+    expect(disagreement(2, "4-5")).toBe(disagreement(4, "1-2"));
   });
 
   it("gets worse monotonically as a row moves away from its matching column", () => {
     expect(disagreement(1, "1-2")).toBeLessThan(disagreement(1, "2-3"));
     expect(disagreement(1, "2-3")).toBeLessThan(disagreement(1, "3-4"));
     expect(disagreement(1, "3-4")).toBeLessThan(disagreement(1, "4-5"));
+  });
+
+  it("gives every middle rating a two-bucket green band and the ends one", () => {
+    const greenPerRating = AGREEMENT_STARS.map(
+      (star) =>
+        AGREEMENT_BUCKETS.filter((bucket) => tone(star, bucket) === "good")
+          .length,
+    );
+    expect(greenPerRating).toEqual([1, 2, 2, 2, 1]);
   });
 
   it("covers every cell with a tone", () => {
