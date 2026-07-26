@@ -1558,11 +1558,27 @@ def purge_scrapheap_pictures(
     #
     # A picture that left the scrapheap mid-purge was NOT deleted and got no
     # ledger row, so its file must not be removed either — drop its target.
-    removal_targets = [
-        target
-        for target in plan.removal_targets
-        if target[0] is None or int(target[0]) not in skipped_restored
-    ]
+    #
+    # Fail CLOSED on an unidentifiable target. A target with no picture id
+    # cannot be matched against ``skipped_restored``, so it cannot be shown to
+    # have been destroyed — and on the rollback path nothing was. Admitting it
+    # would unlink a file for a row that still exists, which is the F1 shape
+    # again. Unreachable today (a persisted Picture always has a PK), but this
+    # is the one irreversible path and "unknown" must not mean "delete it".
+    removal_targets = []
+    for target in plan.removal_targets:
+        if target[0] is None:
+            logger.error(
+                "Delete-forever: NOT removing the file for a purge target with "
+                "no picture id (rel_path=%s) — it cannot be matched against the "
+                "ids that were actually destroyed, so the removal is refused "
+                "rather than guessed. The row (if any) and the file are kept.",
+                target[1],
+            )
+            continue
+        if int(target[0]) in skipped_restored:
+            continue
+        removal_targets.append(target)
     purged_ids = [pid for pid in plan.picture_ids if pid not in skipped_restored]
     # Always the removal+reconcile pair, never the bare removal: the ledger rows
     # were committed above and assert file_removed=True, which stays a PREDICTION

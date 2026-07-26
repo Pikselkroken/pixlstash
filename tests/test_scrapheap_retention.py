@@ -18,6 +18,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -37,6 +38,9 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.services import scrapheap_service
+from pixlstash.tasks import (
+    scrapheap_retention_purge_finder as scrapheap_retention_purge_finder_module,
+)
 from pixlstash.tasks.scrapheap_retention_purge_finder import (
     ScrapheapRetentionPurgeFinder,
 )
@@ -441,6 +445,98 @@ def test_is_retention_reduction_matrix():
         assert reduction(scrapheap_service.DEFAULT_RETENTION_DAYS, choice) is False, (
             f"first-set of {choice} must not count as a reduction"
         )
+
+
+# ── The finder's cadence gate must not depend on the machine's uptime ─────────
+
+
+class _JustBootedClock:
+    """``time`` shim whose ``monotonic()`` reads as a freshly booted host.
+
+    ``time.monotonic()``'s reference point is undefined; on Linux it is seconds
+    since BOOT. A long-lived workstation reports hundreds of thousands, so a
+    ``_last_check_at = 0.0`` sentinel accidentally looks like "checked a very
+    long time ago" and the bug stays invisible. A just-booted container or CI
+    runner reports a few hundred, and the same sentinel then reads as "checked
+    moments ago".
+    """
+
+    def __init__(self, uptime_s: float) -> None:
+        self._uptime_s = uptime_s
+        self._origin = time.monotonic()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def monotonic(self) -> float:
+        return self._uptime_s + (time.monotonic() - self._origin)
+
+
+def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
+    server, tmp_path, monkeypatch
+):
+    """The finder must not skip its FIRST check just because uptime is low.
+
+    ``_last_check_at`` was initialised to ``0.0`` and compared as an absolute
+    monotonic instant, so on any host whose uptime is below the 15-minute check
+    interval the very first ``find_task()`` returned ``None`` — the retention
+    sweep silently did nothing until the machine had been up long enough. It
+    self-heals, which is exactly why it went unnoticed: a finder that finds
+    nothing is indistinguishable from "nothing to do".
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "boot.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+
+    monkeypatch.setattr(
+        scrapheap_retention_purge_finder_module,
+        "time",
+        _JustBootedClock(uptime_s=1.0),
+    )
+
+    finder = ScrapheapRetentionPurgeFinder(vault=server.vault)
+    task = finder.find_task()
+    assert task is not None, (
+        "The first sweep after start-up must run regardless of the host's "
+        "uptime — _last_check_at must be a None sentinel, not an absolute "
+        "monotonic instant"
+    )
+    assert task.run()["purged"] == 1
+    assert _get_picture(server, pic_id) is None
+    assert not os.path.isfile(path)
+
+
+def test_the_finder_still_respects_its_interval_after_a_check(server, tmp_path):
+    """Over-firing is its own regression: the cadence gate must still hold.
+
+    The fix only changes what "never checked" means; a finder that HAS checked
+    must still refuse to re-scan inside the interval.
+    """
+    client = _client(server)
+    pic_id, _path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "cadence.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    _set_deleted_at(
+        server,
+        pic_id,
+        datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
+    )
+
+    finder = ScrapheapRetentionPurgeFinder(vault=server.vault)
+    assert finder.find_task() is not None, "the first check must run"
+    assert finder.find_task() is None, (
+        "a second check inside the 15-minute interval must be refused"
+    )
 
 
 # ── The purge sweep ───────────────────────────────────────────────────────────
@@ -1476,6 +1572,59 @@ def test_a_row_the_delete_spares_keeps_its_file_and_gets_no_ledger_row(
     # ...and the restored picture is still untouched by that second purge.
     assert _get_picture(server, saved_id) is not None
     assert os.path.isfile(saved_path)
+
+
+def test_a_removal_target_with_no_picture_id_is_refused_not_unlinked(
+    server, tmp_path, monkeypatch
+):
+    """F1 sibling — an unidentifiable target must fail CLOSED, not open.
+
+    The skip filter matches removal targets by picture id. A target carrying no
+    id cannot be shown to have been destroyed, so admitting it unconditionally
+    unlinked a file for a row that may still exist — including on the rollback
+    path, where nothing was destroyed at all. Unreachable today (a persisted
+    Picture always has a PK), but "unknown" must never mean "delete it" on the
+    one irreversible path.
+    """
+    client = _client(server)
+    pic_id, path = _make_reference_picture(
+        server, str(tmp_path / "refs"), "anon.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+
+    original_plan = scrapheap_service.build_purge_plan
+
+    def _anonymise_the_targets(*args, **kwargs):
+        plan = original_plan(*args, **kwargs)
+        plan.removal_targets = [
+            (None, rel_path, protected)
+            for _pid, rel_path, protected in plan.removal_targets
+        ]
+        return plan
+
+    monkeypatch.setattr(scrapheap_service, "build_purge_plan", _anonymise_the_targets)
+
+    body = _delete_forever(client, False)
+
+    # The row is still purged — this guards the FILE, not the row.
+    assert body["deleted_count"] == 1, body
+    assert _get_picture(server, pic_id) is None
+    assert os.path.isfile(path), (
+        "A removal target with no picture id had its file unlinked; an "
+        "unidentifiable target must be refused, not guessed"
+    )
+
+    # Positive: with real ids on the targets, the file is still destroyed.
+    monkeypatch.setattr(scrapheap_service, "build_purge_plan", original_plan)
+    other_id, other_path = _make_reference_picture(
+        server, str(tmp_path / "refs2"), "named.png", allow_delete=True
+    )
+    delete_resp = client.delete(f"/pictures/{other_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
+    assert _delete_forever(client, False)["deleted_count"] == 1
+    assert _get_picture(server, other_id) is None
+    assert not os.path.isfile(other_path)
 
 
 # ── Delete preview counts ─────────────────────────────────────────────────────
