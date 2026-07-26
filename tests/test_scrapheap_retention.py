@@ -202,7 +202,8 @@ def test_soft_delete_stamps_deleted_at(server, tmp_path):
     assert _get_picture(server, pic_id).deleted_at is None
 
     before = datetime.now(timezone.utc).replace(tzinfo=None)
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     after = datetime.now(timezone.utc).replace(tzinfo=None)
 
     pic = _get_picture(server, pic_id)
@@ -234,12 +235,14 @@ def test_redelete_does_not_extend_the_window(server, tmp_path):
     pic_id, _path = _make_reference_picture(
         server, str(tmp_path / "refs"), "c.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     original = _get_picture(server, pic_id).deleted_at
     old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=5)
     _set_deleted_at(server, pic_id, old)
 
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     assert _get_picture(server, pic_id).deleted_at.replace(tzinfo=None) == old, (
         "A second DELETE on an already-deleted picture must not restamp deleted_at"
     )
@@ -252,7 +255,8 @@ def test_restore_clears_deleted_at(server, tmp_path):
     pic_id, _path = _make_reference_picture(
         server, str(tmp_path / "refs"), "d.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     resp = client.post("/pictures/scrapheap/restore", json={"picture_ids": [pic_id]})
     assert resp.status_code == 200, resp.text
 
@@ -260,7 +264,8 @@ def test_restore_clears_deleted_at(server, tmp_path):
     assert pic.deleted is False
     assert pic.deleted_at is None, "Restore must clear the retention stamp"
 
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     assert _get_picture(server, pic_id).deleted_at is not None
 
 
@@ -446,7 +451,8 @@ def test_purge_removes_expired_unprotected_and_skips_protected(server, tmp_path)
         server, str(tmp_path / "prot"), "kept.png", allow_delete=False
     )
     for pid in (unprot_id, prot_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
 
     long_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
     _set_deleted_at(server, unprot_id, long_ago)
@@ -489,7 +495,8 @@ def test_purge_task_refuses_a_protected_id_handed_to_it_directly(server, tmp_pat
     prot_id, prot_path = _make_reference_picture(
         server, str(tmp_path / "prot"), "direct.png", allow_delete=False
     )
-    assert client.delete(f"/pictures/{prot_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{prot_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         prot_id,
@@ -519,7 +526,8 @@ def test_finder_never_selects_a_protected_picture(server, tmp_path):
     prot_id, _ = _make_reference_picture(
         server, str(tmp_path / "prot"), "unselected.png", allow_delete=False
     )
-    assert client.delete(f"/pictures/{prot_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{prot_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         prot_id,
@@ -541,7 +549,8 @@ def test_purge_keeps_pictures_inside_the_window(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "fresh.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -559,7 +568,8 @@ def test_purge_skips_rows_without_a_deleted_at_stamp(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "nostamp.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(server, pic_id, None)
 
     assert _run_purge_sweep(server) is None
@@ -572,7 +582,8 @@ def test_never_disables_the_purge_entirely(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "forever.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -600,7 +611,8 @@ def test_a_fresh_reduction_spares_every_age_then_expires(server, tmp_path):
         server, str(tmp_path / "u2"), "old.png", allow_delete=True
     )
     for pid in (young_id, old_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     _set_deleted_at(server, young_id, now - timedelta(days=30, hours=12))
@@ -638,7 +650,8 @@ def test_lowering_the_window_spares_an_ancient_scrapheap(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "ancient.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -685,7 +698,8 @@ def test_no_grace_for_pictures_deleted_after_the_reduction(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "after.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     now = datetime.now(timezone.utc)
     _set_deleted_at(
@@ -727,7 +741,8 @@ def test_soft_delete_of_a_locked_member_is_refused(server, tmp_path):
         server, str(tmp_path / "refs"), "frozen.png", allow_delete=True
     )
     _lock_picture_in_set(server, pic_id)
-    assert client.delete(f"/pictures/{pic_id}").status_code == 423
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 423, delete_resp.text
 
 
 def test_auto_purge_never_destroys_a_locked_set_member(server, tmp_path):
@@ -741,7 +756,8 @@ def test_auto_purge_never_destroys_a_locked_set_member(server, tmp_path):
         server, str(tmp_path / "refs"), "locked.png", allow_delete=True
     )
     # Soft-delete FIRST, then lock: reaching the scrapheap is the precondition.
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, pic_id)
     _set_deleted_at(
         server,
@@ -778,7 +794,8 @@ def test_auto_purge_resumes_once_the_set_is_unlocked(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "unlockme.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     set_id = _lock_picture_in_set(server, pic_id)
     _set_deleted_at(
         server,
@@ -816,7 +833,8 @@ def test_task_re_checks_the_deadline_and_refuses_an_in_window_picture(server, tm
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "inwindow.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -845,7 +863,8 @@ def test_restore_then_redelete_between_planning_and_purge_is_safe(server, tmp_pa
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "toctou.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -863,7 +882,8 @@ def test_restore_then_redelete_between_planning_and_purge_is_safe(server, tmp_pa
         ).status_code
         == 200
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     assert task.run() == {
         "purged": 0,
@@ -911,7 +931,8 @@ def test_delete_forever_never_destroys_a_locked_member(
         server, str(tmp_path / "free"), "free.png", allow_delete=True
     )
     for pid in (locked_id, free_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, locked_id)
 
     body = _delete_forever(client, include_protected)
@@ -942,7 +963,8 @@ def test_delete_forever_of_a_locked_protected_picture_keeps_it(
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "both"), "both.png", allow_delete=False
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, pic_id)
 
     body = _delete_forever(client, include_protected)
@@ -962,7 +984,8 @@ def test_delete_forever_destroys_the_member_once_the_set_is_unlocked(server, tmp
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "later.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     set_id = _lock_picture_in_set(server, pic_id)
 
     body = _delete_forever(client, False)
@@ -1009,7 +1032,8 @@ def test_delete_forever_skips_a_locked_stack_sibling(server, tmp_path):
 
     server.vault.db.run_task(_stack)
     for pid in (member_id, sibling_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, member_id)
 
     body = _delete_forever(client, True)
@@ -1029,7 +1053,8 @@ def test_delete_forever_still_destroys_everything_it_should(server, tmp_path):
         server, str(tmp_path / "unprot"), "u.png", allow_delete=True
     )
     for pid in (prot_id, unprot_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
 
     body = _delete_forever(client, False)
     assert body == {
@@ -1081,7 +1106,8 @@ def test_delete_preview_counts_are_disjoint_and_honest(server, tmp_path):
         server, str(tmp_path / "n"), "n.png", allow_delete=True
     )
     for pid in (locked_only, protected_only, both, neither):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, locked_only)
     _lock_picture_in_set(server, both)
 
@@ -1114,7 +1140,8 @@ def test_delete_preview_counts_match_what_each_action_destroys(server, tmp_path)
         server, str(tmp_path / "n"), "n.png", allow_delete=True
     )
     for pid in (locked_id, prot_id, plain_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, locked_id)
 
     body = _preview(client)
@@ -1146,7 +1173,8 @@ def test_manual_delete_forever_is_not_subject_to_the_retention_guard(server, tmp
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "manual.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     # Deleted seconds ago — nowhere near its deadline.
 
     resp = client.request(
@@ -1167,7 +1195,8 @@ def test_successful_removal_keeps_file_removed_true(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "gone.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     assert _delete_forever(client, False)["deleted_count"] == 1
     assert not os.path.isfile(path)
@@ -1192,7 +1221,8 @@ def test_failed_removal_corrects_the_ledger_to_file_kept(server, tmp_path, monke
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "stubborn.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     real_remove = os.remove
 
@@ -1239,7 +1269,8 @@ def test_failed_removal_never_downgrades_another_purges_ledger_row(
     pic_a, path_p = _make_reference_picture(
         server, str(folder), "P.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_a}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_a}")
+    assert delete_resp.status_code == 200, delete_resp.text
     assert _delete_forever(client, False)["deleted_count"] == 1
     assert not os.path.isfile(path_p)
     assert _ledger_flags_for(server, path_p) == [True], "purge A must log a real kill"
@@ -1249,7 +1280,8 @@ def test_failed_removal_never_downgrades_another_purges_ledger_row(
         server, str(folder), "P.png", allow_delete=True
     )
     assert path_b == path_p, "the collision requires the same path"
-    assert client.delete(f"/pictures/{pic_b}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_b}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     # --- Purge B: removal is denied. ----------------------------------------
     real_remove = os.remove
@@ -1283,7 +1315,8 @@ def test_failed_removal_still_downgrades_the_row_this_purge_wrote(
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "fresh"), "mine.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     assert _ledger_flags_for(server, path) == [], "no pre-existing row for this path"
 
     real_remove = os.remove
@@ -1316,7 +1349,8 @@ def test_failed_removal_downgrades_a_row_this_purge_raised_from_false(
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "raised"), "kept_then_killed.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     # Pre-existing "removed from library, file kept" row for this path.
     def _seed(session: Session):
@@ -1362,7 +1396,8 @@ def test_unreachable_location_corrects_the_ledger_to_file_kept(server, tmp_path)
     pic_id, path = _make_reference_picture(
         server, str(folder), "on_a_usb_stick.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     # Simulate the volume going away between the soft delete and the purge.
     shutil.move(str(folder), str(tmp_path / "unmounted"))
@@ -1445,7 +1480,8 @@ def test_impact_count_matches_what_a_sweep_actually_destroys(server, tmp_path):
         pid, _ = _make_reference_picture(
             server, str(tmp_path / f"old{i}"), f"old{i}.png", allow_delete=True
         )
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
         _set_deleted_at(
             server,
             pid,
@@ -1456,7 +1492,8 @@ def test_impact_count_matches_what_a_sweep_actually_destroys(server, tmp_path):
     young_id, young_path = _make_reference_picture(
         server, str(tmp_path / "young"), "young.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{young_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{young_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         young_id,
@@ -1511,7 +1548,8 @@ def test_impact_excludes_protected_and_locked(server, tmp_path):
         server, str(tmp_path / "lock"), "lock.png", allow_delete=True
     )
     for pid in (plain_id, prot_id, locked_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
         _set_deleted_at(
             server,
             pid,
@@ -1542,7 +1580,8 @@ def test_impact_counts_pictures_expiring_during_the_grace_day(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "edge"), "edge.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     # 29.5 days old: NOT past a 30-day window right now, but it will be within
     # the one-day grace period.
     _set_deleted_at(
@@ -1567,7 +1606,8 @@ def test_impact_is_zero_when_not_a_reduction(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "any.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -1593,7 +1633,8 @@ def test_impact_has_no_side_effects(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "untouched.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -1669,7 +1710,8 @@ def test_sql_pushdown_selects_exactly_what_the_python_scan_did(server, tmp_path)
         pid, _ = _make_reference_picture(
             server, str(tmp_path / name), f"{name}.png", allow_delete=allow_delete
         )
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
         _set_deleted_at(server, pid, now - timedelta(days=age_days))
         made[name] = pid
         return pid
@@ -1791,7 +1833,8 @@ def test_deadline_boundary_is_inclusive(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "exact.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     _set_deleted_at(server, pic_id, (now - timedelta(days=30)).replace(tzinfo=None))
@@ -1815,7 +1858,8 @@ def test_sweep_skips_the_scan_entirely_inside_the_grace_floor(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "graced.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -1901,7 +1945,8 @@ def test_config_save_never_purges_synchronously(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "survivor.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -1941,7 +1986,8 @@ def test_listing_exposes_purge_at_and_auto_purge_exempt(server, tmp_path):
         server, str(tmp_path / "prot"), "reference.png", allow_delete=False
     )
     for pid in (unprot_id, prot_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     deleted_at = datetime(2026, 7, 1, 12, 0)
     _set_deleted_at(server, unprot_id, deleted_at)
     _set_deleted_at(server, prot_id, deleted_at)
@@ -1977,7 +2023,8 @@ def test_listing_purge_at_reflects_the_reduction_grace_floor(server, tmp_path):
         server, str(tmp_path / "young"), "unfloored.png", allow_delete=True
     )
     for pid in (old_id, young_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
 
     reduced_at = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
     old_deleted_at = datetime(2026, 1, 1, 12, 0)  # deadline long past
@@ -2004,7 +2051,8 @@ def test_listing_purge_at_matches_what_the_sweep_does(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "agree.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -2032,7 +2080,8 @@ def test_listing_agrees_with_the_sweep_about_a_locked_picture(server, tmp_path):
     pic_id, path = _make_reference_picture(
         server, str(tmp_path / "refs"), "lockedrow.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     set_id = _lock_picture_in_set(server, pic_id)
     _set_deleted_at(
         server,
@@ -2090,7 +2139,8 @@ def test_listing_exempt_reason_protected_wins_over_locked(server, tmp_path):
         server, str(tmp_path / "plain"), "plain.png", allow_delete=True
     )
     for pid in (both_id, prot_only_id, locked_only_id, plain_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
     _lock_picture_in_set(server, both_id)
     _lock_picture_in_set(server, locked_only_id)
 
@@ -2135,7 +2185,8 @@ def test_listing_marks_a_stack_sibling_freeze_as_locked(server, tmp_path):
     # Soft-delete FIRST (a locked stack refuses the delete with 423), then lock
     # only ONE of the two — the sibling is frozen transitively.
     for pid in (member_id, sibling_id):
-        assert client.delete(f"/pictures/{pid}").status_code == 200
+        delete_resp = client.delete(f"/pictures/{pid}")
+        assert delete_resp.status_code == 200, delete_resp.text
         _set_deleted_at(
             server,
             pid,
@@ -2198,7 +2249,8 @@ def test_sweep_still_finds_work_in_a_large_scrapheap(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "amongmany.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     _set_deleted_at(
         server,
         pic_id,
@@ -2221,7 +2273,8 @@ def test_listing_purge_at_is_null_when_retention_is_never(server, tmp_path):
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "never.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
     server.vault.set_scrapheap_retention(None, None)
 
     rows = _scrapheap_listing(client)
@@ -2238,7 +2291,8 @@ def test_listing_exposes_retention_fields_in_the_grid_projection(server, tmp_pat
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "grid.png", allow_delete=True
     )
-    assert client.delete(f"/pictures/{pic_id}").status_code == 200
+    delete_resp = client.delete(f"/pictures/{pic_id}")
+    assert delete_resp.status_code == 200, delete_resp.text
 
     resp = client.get("/pictures", params={"only_deleted": "true", "fields": "grid"})
     assert resp.status_code == 200, resp.text
