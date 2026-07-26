@@ -74,7 +74,7 @@ const busy = computed(
 );
 
 // ── Tooltip copy ────────────────────────────────────────────────────────────
-// The three things a user cannot infer from the control itself. Kept as data so
+// The things a user cannot infer from the control itself. Kept as data so
 // the same strings feed the visible tooltip and the activator's accessible name.
 // The grace period is read from the server rather than hardcoded, so the promise
 // in the copy can never drift from what the purge task actually does.
@@ -82,14 +82,35 @@ const tooltipPoints = computed(() => {
   const grace = store.graceDays;
   const graceText = grace === 1 ? "one day of grace" : `${grace} days of grace`;
   return [
+    "Auto-empty starts off. Nothing is deleted on a timer until you pick a window here.",
     "Applies to managed pictures only.",
     "Protected reference-folder originals are never auto-deleted.",
-    `Shortening the window gives everything already in the scrapheap ${graceText}, however old it is, so nothing is purged the instant you save.`,
+    `Turning it on, or shortening the window, gives everything already in the scrapheap ${graceText}, however old it is, so nothing is purged the instant you save.`,
   ];
 });
 const tooltipAriaLabel = computed(
   () => `What auto-emptying affects. ${tooltipPoints.value.join(" ")}`,
 );
+
+// ── State line ──────────────────────────────────────────────────────────────
+// The control shows a WINDOW; on its own it does not say whether anything is
+// running. Auto-empty now ships OFF, so "off" has to be a stated fact rather
+// than the absence of one — and stating the ON case in the same place keeps the
+// two symmetric, so neither reads as the default. Icon AND text, never colour
+// alone. Server-wide setting, so the copy stays impersonal (see the header).
+const stateLine = computed(() => {
+  if (!store.loaded) return null;
+  if (store.isNever) {
+    return {
+      icon: "mdi-timer-off-outline",
+      text: "Auto-empty is off. Nothing is deleted from disk until the scrapheap is emptied by hand.",
+    };
+  }
+  return {
+    icon: "mdi-delete-clock-outline",
+    text: `Auto-empty is on. Managed pictures are permanently deleted from disk ${store.label} after deletion.`,
+  };
+});
 
 // ── Save ────────────────────────────────────────────────────────────────────
 const savedFlash = ref(false);
@@ -205,7 +226,7 @@ function cancelReduction() {
   <div>
     <SettingsSection
       title="Scrapheap"
-      desc="Pictures you delete land in the scrapheap first. PixlStash can empty it for you after a set time."
+      desc="Pictures you delete land in the scrapheap first. If you want, PixlStash can empty it for you after a set time."
       first
     >
       <div class="sr-row">
@@ -234,8 +255,9 @@ function cancelReduction() {
         </v-tooltip>
       </div>
 
-      <p v-if="store.isNever" class="sr-clarifier">
-        Nothing is auto-removed; empty the scrapheap manually.
+      <p v-if="stateLine" class="sr-state" role="status">
+        <v-icon size="14" class="sr-state__icon">{{ stateLine.icon }}</v-icon>
+        <span>{{ stateLine.text }}</span>
       </p>
 
       <div v-if="store.error" class="sr-error" role="alert">
@@ -315,10 +337,22 @@ function cancelReduction() {
   line-height: var(--leading-snug);
 }
 
-.sr-clarifier {
+/* States the policy in words, so "off" is something the user reads rather than
+   infers from a dropdown that happens to say Never. */
+.sr-state {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+}
+
+.sr-state__icon {
+  flex-shrink: 0;
+  /* Optical: lifts the glyph onto the first line's cap height. */
+  margin-top: var(--space-1);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 

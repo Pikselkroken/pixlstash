@@ -13,6 +13,10 @@ work at all when:
 * ``scrapheap_retention_days`` is ``None`` ("Never" — auto-purge disabled), or
 * nothing is past its deadline.
 
+``None`` is the DEFAULT, so on an install where nobody has turned auto-empty on
+this finder never schedules a task and no file is ever removed from disk by the
+timer. The check is here, in the finder, not merely in the UI.
+
 Protected reference-folder originals (``allow_delete_file=False``) are excluded
 from the candidate query itself and are exempt from any timer; only the manual,
 consent-gated ``include_protected=true`` delete-forever can destroy them.

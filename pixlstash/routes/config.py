@@ -299,7 +299,9 @@ def create_router(server) -> APIRouter:
             description=(
                 "Days an UNPROTECTED (managed) picture stays in the scrapheap "
                 "before it is permanently purged. `null` means Never — "
-                "auto-purge is disabled entirely. Protected reference-folder "
+                "auto-purge is disabled entirely, and that is the **default**: "
+                "a server on which nobody has saved a window reports `null` and "
+                "never deletes anything on a timer. Protected reference-folder "
                 "originals (allow_delete_file=false) are exempt from this "
                 "timer at any value and are only ever destroyed by the manual, "
                 "consent-gated delete-forever."
@@ -313,8 +315,9 @@ def create_router(server) -> APIRouter:
                 "null if it never was. A picture soft-deleted before this "
                 "instant gets `scrapheap_retention_grace_days` extra day(s), so "
                 "shortening the window is never retroactively instantaneous. "
-                "Untouched when the window is raised, set for the first time, "
-                "or re-saved unchanged."
+                "Turning auto-purge ON (Never -> a finite window) counts as a "
+                "lowering and is stamped too. Untouched when the window is "
+                "raised, switched to Never, or re-saved unchanged."
             ),
             examples=["2026-07-22T09:15:00+00:00"],
         )
@@ -843,8 +846,9 @@ def create_router(server) -> APIRouter:
             "Returns the scrapheap auto-purge retention window. An UNPROTECTED "
             "(managed) picture left in the scrapheap longer than "
             "`scrapheap_retention_days` is permanently deleted by a background "
-            "task; `null` means Never (auto-purge disabled). Protected "
-            "reference-folder originals are exempt from the timer entirely."
+            "task; `null` means Never (auto-purge disabled), which is the "
+            "default until someone saves a window. Protected reference-folder "
+            "originals are exempt from the timer entirely."
         ),
     )
     def get_scrapheap_retention_config(request: Request):
@@ -873,15 +877,18 @@ def create_router(server) -> APIRouter:
         response_model=ScrapheapRetentionConfigResponse,
         description=(
             "Sets the scrapheap auto-purge window (one of 30/60/90/120 days, or "
-            "null for Never) and persists it to server-config.json. Saving does "
-            "NOT purge anything synchronously — the background retention task is "
-            "the only thing that ever deletes, and it never touches protected "
-            "reference-folder originals. Lowering the window stamps "
-            "`scrapheap_retention_reduced_at`, which puts a floor of one grace "
-            "day under EVERY picture's deadline — so even a 400-day-old "
-            "scrapheap item survives at least a day after a 120 -> 30 or "
-            "Never -> 30 change. Raising it, setting it for the first time, or "
-            "saving the same value leaves that stamp untouched."
+            "null for Never) and persists it to server-config.json. **This is "
+            "the only thing that ever enables the auto-purge**: until it is "
+            "called with a finite window the server stays on the Never default "
+            "and the timer deletes nothing. Saving does NOT purge anything "
+            "synchronously — the background retention task is the only thing "
+            "that ever deletes, and it never touches protected reference-folder "
+            "originals. Lowering the window, INCLUDING turning it on "
+            "(Never -> 30), stamps `scrapheap_retention_reduced_at`, which puts "
+            "a floor of one grace day under EVERY picture's deadline — so even "
+            "a 400-day-old scrapheap item survives at least a day after the "
+            "change. Raising it, switching to Never, or saving the same value "
+            "leaves that stamp untouched."
         ),
         responses={
             422: {

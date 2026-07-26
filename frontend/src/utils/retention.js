@@ -16,8 +16,15 @@
 /** Retention windows the UI offers, in days. `null` ("Never") is not in here. */
 export const RETENTION_DAY_OPTIONS = [30, 60, 90, 120];
 
-/** Backend default when the server has never been configured. */
-export const DEFAULT_RETENTION_DAYS = 30;
+/**
+ * Backend default when the server has never been configured: `null` ("Never"),
+ * i.e. auto-empty is OFF until the user turns it on. Mirrors
+ * `scrapheap_service.DEFAULT_RETENTION_DAYS`. Also the fallback for a value we
+ * cannot read, which is the safe direction: showing "Never" understates what a
+ * server might do, whereas showing a window we invented would promise a
+ * countdown nothing is running.
+ */
+export const DEFAULT_RETENTION_DAYS = null;
 
 /** The `<select>` value that stands for the `null` ("Never") retention. */
 export const NEVER_SELECT_VALUE = "never";
@@ -204,6 +211,10 @@ export const LOCKED_BADGE_TITLE =
 // it makes pictures eligible for permanent, unrecoverable deletion — and the
 // biggest jump (Never → 30) is the one that reads most like a harmless dropdown
 // pick. So a reduction is confirmed; every other direction stays one click.
+//
+// Since "Never" is now the shipped default, that biggest jump is exactly what
+// TURNING AUTO-EMPTY ON looks like. It is a reduction here, so switching it on
+// goes through the same impact check and confirm as shortening a live window.
 
 /**
  * Order retention windows by how much they keep. "Never" keeps everything, so
