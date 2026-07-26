@@ -60,13 +60,21 @@ def _load_builtin_anchors() -> tuple[list["_BuiltinAnchor"], list["_BuiltinAncho
         Tuple of (good_anchors, bad_anchors) where each element is a list of
         _BuiltinAnchor objects compatible with prepare_smart_score_inputs.
     """
-    data_dir = pathlib.Path(__file__).parent / "data" / "anchors"
+    # parents[1], NOT .parent: this module lives in pixlstash/scoring/, so the
+    # package root is one level up and the assets are in pixlstash/data/anchors.
+    # `.parent` silently resolved to pixlstash/scoring/data/anchors, which has
+    # never existed, and the anchors loaded empty from the Phase 2 split until
+    # this was corrected. `smart_score_utils.py` uses parents[2] for the same
+    # directory because it sits one level deeper.
+    data_dir = pathlib.Path(__file__).resolve().parents[1] / "data" / "anchors"
     good_path = data_dir / "builtin_good.npy"
     bad_path = data_dir / "builtin_bad.npy"
 
     def _load(path: pathlib.Path, score: int) -> list[_BuiltinAnchor]:
         if not path.is_file():
-            logger.debug("Built-in anchor file not found: %s", path)
+            # These ship in the wheel, so a missing file is a packaging or
+            # path defect, not a normal condition. debug hid exactly that.
+            logger.error("Built-in anchor file not found: %s", path)
             return []
         try:
             arr = np.load(path)
