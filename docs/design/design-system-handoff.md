@@ -9,6 +9,13 @@ Sources of truth (in-repo): tokens `docs/design/design-tokens.css`, spec
 `docs/design/visual-language.md`, color `frontend/src/main.js`. This page mirrors them
 as of `v1.8.0-foundations` (2026-07). If they diverge later, the repo wins.
 
+> **Partially stale (2026-07-26).** `6e14c32c` deepened the four status hues and this
+> page was not updated with it, so the `<status>` / `on-<status>` rows and the contrast
+> figures quoted for them still describe the pre-`6e14c32c` palette. The
+> `dark-surface-<status>` rows *have* been corrected. For current status values read
+> `frontend/src/main.js`, or run `npm run audit:contrast` in `frontend/` for the
+> measured table.
+
 ---
 
 ## 1. The idea in three words
@@ -155,10 +162,10 @@ go white; dark: chrome is a raised dark surface, elevation reads by lightness).
 | `warning` / `on-warning` | `#b8861f` / `#23211d` | `#db7900` / `#1b1b1b` | warning |
 | `info` / `on-info` | `#1a6ec4` / `#ffffff` | `#2196F3` / `#1b1b1b` | info |
 | `dark-surface` / `on-dark-surface` | `#242628` / `#f2e5da` | `#181b20` / `#f2e5da` | deliberately-dark chrome (lightbox) |
-| `dark-surface-success` | `#4caf50` | `#4caf50` | status hue **inside** a `dark-surface` |
-| `dark-surface-error` | `#f44336` | `#f44336` | " |
-| `dark-surface-warning` | `#db7900` | `#db7900` | " |
-| `dark-surface-info` | `#2196F3` | `#2196F3` | " |
+| `dark-surface-success` | `#5d9c6c` | `#5d9c6c` | status hue **inside** a `dark-surface` (foreground, so lighter than the fill hue) |
+| `dark-surface-error` | `#c9786f` | `#c9786f` | " |
+| `dark-surface-warning` | `#e8912f` | `#e8912f` | " |
+| `dark-surface-info` | `#6b92b0` | `#6b92b0` | " |
 | `dark-surface-primary` | `#8EA604` | `#8EA604` | `primary` as a foreground **inside** a `dark-surface` |
 | `sidebar-hover` / `on-sidebar-hover` | `#9e6727` / `#ffffff` | `#b85c0c` / `#ffffff` | sidebar row hover (= the accent value) |
 | `focus` | `#7c4dff` | `#7c4dff` | (legacy; focus rings use `--focus-ring`) |
