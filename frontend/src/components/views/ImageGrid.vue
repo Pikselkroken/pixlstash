@@ -1299,6 +1299,14 @@ const isMultiCharacterView = computed(
   () => normalizedSelectedCharacterIds.value.length > 1,
 );
 
+// True when project membership is part of the grid query, i.e. when the view is
+// scoped to a project (or to the "unassigned project" pseudo-view). This mirrors
+// useGridFetch._appendSelectionParams, which appends `project_id` only in this
+// mode; in the global mode nothing about the query depends on project
+// membership. Used to decide whether a project assignment can change what the
+// grid shows and therefore warrants a refetch.
+const isProjectScopedView = computed(() => props.projectViewMode === "project");
+
 // ============================================================
 // THUMBNAIL SYSTEM STATE
 // ============================================================
@@ -3518,14 +3526,29 @@ async function handleSetProjectForSelected(payload) {
       });
     }
 
-    preserveScrollOnNextFetch.value = true;
-    if (overlayOpen.value) {
-      // A project change while the overlay is open would replace allGridImages,
-      // breaking the filmstrip. Defer the refetch until the overlay closes.
-      pendingOverlayGridRefresh.value = true;
-    } else {
-      await fetchAllGridImages({ force: true });
-      updateVisibleThumbnails();
+    // Project membership only scopes the grid query in the project view:
+    // useGridFetch appends `project_id` exclusively when projectViewMode is
+    // "project" (_appendSelectionParams). In the global view (All Pictures and
+    // every other non-project-scoped view) an assignment changes neither which
+    // pictures match the query nor their sort position, and the card itself
+    // renders no project data, so a refetch would only flicker the grid and
+    // throw away scroll position and selection. Refetch only where membership
+    // can actually move a picture into or out of the view. The sibling set path
+    // (handleOverlayAddedToSet) and the sidebar drag-drop path
+    // (App.handleImagesMoved) already scope their grid work the same way.
+    if (isProjectScopedView.value) {
+      if (overlayOpen.value) {
+        // A project change while the overlay is open would replace
+        // allGridImages, breaking the filmstrip. Defer the refetch until the
+        // overlay closes.
+        pendingOverlayGridRefresh.value = true;
+      } else {
+        // Only arm the scroll-preserving flag when a fetch actually follows;
+        // otherwise it leaks into the next unrelated fetch.
+        preserveScrollOnNextFetch.value = true;
+        await fetchAllGridImages({ force: true });
+        updateVisibleThumbnails();
+      }
     }
     emit("refresh-sidebar");
   } catch (err) {
