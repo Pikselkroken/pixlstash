@@ -13,7 +13,13 @@
 #   customCheckAppRunning -> allowOnlyOneInstallerInstance.nsh, inside the install
 #                        Section, AFTER the user is prompted to close a running app
 #                        and BEFORE installApplicationFiles. Closes the app, THEN
-#                        sweeps the orphaned backend. Orphan-kill lives here now.
+#                        sweeps the orphaned backend and runs the long-path
+#                        preflight. Orphan-kill lives here now.
+#   customUnInstallCheck / customUnInstallCheckCurrentUser
+#                     -> installUtil.nsh handleUninstallResult, right after
+#                        uninstallOldVersion. Replaces the stock hard-quit when
+#                        the OLD version's uninstaller fails: we warn and let the
+#                        update continue over the existing files instead.
 #   customInstall     -> installSection.nsh, AFTER installApplicationFiles
 #                        (i.e. after the .7z is extracted into $INSTDIR). Markers + log.
 #   customFinishPage  -> assistedInstaller.nsh, replaces the default finish page.
@@ -52,6 +58,22 @@
 #      of install and on user abort, so a failed/cancelled install is reportable.
 #   4. A finish-page link (and an abort message) that opens a pre-filled GitHub
 #      new-issue URL with the app + Windows version baked in.
+#   5. MAX_PATH update failures. When run with --updated, the OLD version's
+#      uninstaller (stock uninstaller.nsh) renames EVERY installed file into
+#      %TEMP%\ns?????.tmp\old-install\ before deleting, which makes each path
+#      ~10+ characters longer. The bundled torch ships license texts nested
+#      ~190 chars deep, so on machines where those paths sit near the Windows
+#      260-char limit the rename overflows, the old uninstaller Aborts (exit
+#      code 2), and installSection.nsh's handleUninstallResult quits the whole
+#      update -- after a misleading "PixlStash cannot be closed" retry dialog.
+#      Every update away from such a version fails forever. Two-part fix:
+#      (a) the preflight .ps1 detects over-long paths in the previous install
+#      and customCheckAppRunning then clears the old UninstallString so the
+#      doomed uninstaller is never launched (files are updated in place);
+#      (b) customUnInstallCheck downgrades any remaining old-uninstaller
+#      failure from a hard quit to a warning. (New runtimes no longer ship
+#      such paths at all -- see flatten_deep_license_trees in
+#      scripts/build_desktop_runtime.py.)
 #
 # NOTE: this file has NOT been built or run on Windows (authored on Linux). See
 # the PR notes for the exact Windows build + over-the-top-update smoke test.
@@ -85,6 +107,11 @@
     # Tick count (ms) captured just before the runtime is extracted, so
     # customInstall can report how long the big extraction actually took.
     Var /GLOBAL PixlExtractStartTick
+    # Set when the old version's uninstall step was skipped or tolerated
+    # (customCheckAppRunning / customUnInstallCheck); printed by customInstall.
+    # Installer-pass only: installUtil.nsh (where customUnInstallCheck lands)
+    # is not included in the uninstaller build.
+    Var /GLOBAL PixlUninstallNote
   !endif
 
   # Defining customCheckAppRunning (below) makes the `!ifmacrondef
@@ -265,6 +292,7 @@
 # ---------------------------------------------------------------------------
 !macro customInit
   StrCpy $PixlKillResult "no previous backend checked (fresh install)"
+  StrCpy $PixlUninstallNote ""
   # Seed the extraction timer so customInstall's elapsed print is safe even if
   # customCheckAppRunning was skipped (e.g. an inner elevated UAC instance).
   StrCpy $PixlExtractStartTick ""
@@ -374,37 +402,56 @@
       # Guard against a single quote in the (user-chooseable) install path. A "'"
       # would terminate the single-quoted nsExec literal below early and splice the
       # rest of the path into raw command tokens. There is no -iex / Invoke-
-      # Expression sink (the .ps1 only uses -Root for a string prefix compare), and
-      # the installer runs as the same user who chose the path, so this is robustness
-      # rather than a privilege boundary. We skip the auto-kill and tell the user to
-      # close PixlStash manually instead of emitting a malformed command.
+      # Expression sink (the .ps1 only uses -Root / -InstallRoot for string prefix
+      # and length compares), and the installer runs as the same user who chose the
+      # path, so this is robustness rather than a privilege boundary. We skip the
+      # auto-kill and tell the user to close PixlStash manually instead of
+      # emitting a malformed command.
       ${StrContains} $9 "'" "$INSTDIR"
       ${If} $9 != ""
         StrCpy $PixlKillResult "skipped auto-kill: install path contains a quote; close PixlStash manually before updating"
       ${Else}
-        # Embed and run our scoped kill helper. The .ps1 is embedded verbatim (File)
-        # so its many PowerShell '$' are NOT subject to NSIS escaping. Extract into
-        # $PLUGINSDIR (a freshly-created, randomised, auto-wiped per-install temp dir,
-        # not a predictable $TEMP name, which closes the swap-the-script window),
-        # and pass the bundled runtime dir as -Root so it only stops python.exe under
-        # it. InitPluginsDir is idempotent.
+        # Embed and run our preflight helper (orphan kill + long-path check). The
+        # .ps1 is embedded verbatim (File) so its many PowerShell '$' are NOT
+        # subject to NSIS escaping. Extract into $PLUGINSDIR (a freshly-created,
+        # randomised, auto-wiped per-install temp dir, not a predictable $TEMP
+        # name, which closes the swap-the-script window), and pass the bundled
+        # runtime dir as -Root so it only stops python.exe under it.
+        # InitPluginsDir is idempotent.
         InitPluginsDir
-        File "/oname=$PLUGINSDIR\pixlstash-kill-orphan.ps1" "${BUILD_RESOURCES_DIR}\kill-orphan-backend.ps1"
-        nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\pixlstash-kill-orphan.ps1" -Root "$INSTDIR\resources\python"'
-        Pop $0   # exit code (script always exits 0; non-zero => powershell missing)
-        StrCpy $PixlKillResult "orphan-kill ran for $INSTDIR\resources\python (exit $0)"
+        File "/oname=$PLUGINSDIR\pixlstash-preflight.ps1" "${BUILD_RESOURCES_DIR}\installer-preflight.ps1"
+        nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\pixlstash-preflight.ps1" -Root "$INSTDIR\resources\python" -InstallRoot "$INSTDIR"'
+        Pop $0   # 0 = ok, 3 = over-long paths found; anything else => powershell missing
+        StrCpy $PixlKillResult "backend preflight ran for $INSTDIR\resources\python (exit $0)"
 
-        # Fallback only when PowerShell is unavailable / constrained. Narrow:
-        # python.exe whose window title starts with PixlStash. Title-only, so it can
-        # in principle hit an unrelated PixlStash-titled python the same user runs;
-        # accepted as a best-effort last resort (CSO sign-off). Non-fatal.
-        ${If} $0 != "0"
+        ${If} $0 == "3"
+          # The previous install contains paths that overflow MAX_PATH once the
+          # OLD uninstaller renames them into its %TEMP% staging dir, so that
+          # uninstaller is guaranteed to Abort (exit 2) and installSection.nsh
+          # would quit the whole update (see header, fix 5). Clear the old
+          # UninstallString values so uninstallOldVersion finds nothing and
+          # returns immediately; the update then extracts over the existing
+          # files, and registryAddInstallInfo rewrites the full uninstall entry
+          # (including a fresh UninstallString) at the end of this install.
+          DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+          !ifdef UNINSTALL_REGISTRY_KEY_2
+            DeleteRegValue SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY_2}" "UninstallString"
+          !endif
+          ClearErrors
+          StrCpy $PixlUninstallNote "skipped the old version's uninstaller: its files are nested too deeply for the Windows path-length limit and it would abort the update; updated over the existing files instead"
+        ${ElseIf} $0 != "0"
+          # Fallback only when PowerShell is unavailable / constrained. Narrow:
+          # python.exe whose window title starts with PixlStash. Title-only, so it
+          # can in principle hit an unrelated PixlStash-titled python the same user
+          # runs; accepted as a best-effort last resort (CSO sign-off). Non-fatal.
+          # (No long-path check possible here; if the old uninstaller does fail,
+          # customUnInstallCheck below still keeps the update alive.)
           nsExec::ExecToLog 'taskkill /F /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq PixlStash*"'
           Pop $1
           StrCpy $PixlKillResult "$PixlKillResult; powershell unavailable, used taskkill title fallback"
         ${EndIf}
 
-        Delete "$PLUGINSDIR\pixlstash-kill-orphan.ps1"
+        Delete "$PLUGINSDIR\pixlstash-preflight.ps1"
       ${EndIf}
     ${EndIf}
   !endif
@@ -452,6 +499,46 @@
 !macroend
 
 # ---------------------------------------------------------------------------
+# customUnInstallCheck / customUnInstallCheckCurrentUser: inserted by
+# installUtil.nsh's handleUninstallResult, right after uninstallOldVersion ran
+# the OLD version's uninstaller. The stock body hard-quits the installer
+# (SetErrorLevel 2 + Quit) when that uninstaller exits non-zero -- which bricks
+# every update away from a version whose uninstaller is broken (the MAX_PATH
+# abort, header fix 5, being the known case). Downgrade both failure modes to a
+# visible warning and let the update continue: the extraction that follows
+# overwrites the files anyway, and the old uninstaller restores everything it
+# touched before aborting, so the directory is consistent. Stale files the old
+# uninstaller would have removed stay behind -- exactly what the abort left us
+# with anyway. On success these macros do nothing, matching stock behaviour.
+# (Note: uninstallOldVersion still shows its own "cannot be closed" retry box
+# after 5 failed attempts; Cancel there now continues the update instead of
+# killing it. The preflight skip in customCheckAppRunning avoids that box
+# entirely on the known MAX_PATH case.)
+# ---------------------------------------------------------------------------
+!macro pixlTolerantUninstallResult
+  ${If} ${Errors}
+    ClearErrors
+    SetDetailsPrint both
+    DetailPrint "Could not launch the old version's uninstaller; updating over the existing files."
+    SetDetailsPrint none
+    StrCpy $PixlUninstallNote "old uninstaller could not be launched; updated over existing files"
+  ${ElseIf} $R0 != 0
+    SetDetailsPrint both
+    DetailPrint "The old version's uninstaller failed (exit code $R0); updating over the existing files."
+    SetDetailsPrint none
+    StrCpy $PixlUninstallNote "old uninstaller failed (exit $R0); updated over existing files"
+  ${EndIf}
+!macroend
+
+!macro customUnInstallCheck
+  !insertmacro pixlTolerantUninstallResult
+!macroend
+
+!macro customUnInstallCheckCurrentUser
+  !insertmacro pixlTolerantUninstallResult
+!macroend
+
+# ---------------------------------------------------------------------------
 # customInstall: in installSection.nsh, AFTER installApplicationFiles (the .7z
 # has been extracted into $INSTDIR). The details view is live here, so this is
 # where we print the human-readable markers and write the persistent log. If the
@@ -468,6 +555,9 @@
   DetailPrint "Install directory: $INSTDIR"
   DetailPrint "OS: $3"
   DetailPrint "Backend check: $PixlKillResult"
+  ${If} $PixlUninstallNote != ""
+    DetailPrint "Old-version uninstall: $PixlUninstallNote"
+  ${EndIf}
   DetailPrint "Bundled backend: $INSTDIR\resources\python\python.exe"
   DetailPrint "Application files extracted."
   # Report how long the extraction took (start captured in customCheckAppRunning).
