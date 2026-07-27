@@ -9,9 +9,7 @@
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
     >
-      <v-icon size="14" class="pf-header-icon"
-        >mdi-paperclip</v-icon
-      >
+      <v-icon size="14" class="pf-header-icon">mdi-paperclip</v-icon>
       <span class="pf-title">Project Files</span>
       <span v-if="files.length > 0" class="pf-count">{{ files.length }}</span>
       <span class="pf-spacer"></span>
@@ -134,7 +132,12 @@
 <script setup>
 import { ref, watch, onMounted, nextTick } from "vue";
 import { VProgressCircular } from "vuetify/components";
-import { apiClient } from "../../utils/apiClient";
+import {
+  listProjectAttachments,
+  uploadProjectAttachment,
+  addProjectAttachmentUrl,
+  deleteProjectAttachment,
+} from "../../api/projects";
 
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -155,11 +158,11 @@ let dragLeaveTimer = null;
 
 async function fetchFiles() {
   try {
-    const resp = await apiClient.get(
-      `/projects/${props.projectId}/attachments`,
-    );
-    files.value = resp.data;
-  } catch {
+    files.value = await listProjectAttachments(props.projectId);
+  } catch (e) {
+    // The panel renders empty rather than broken; log so a failing fetch is
+    // not indistinguishable from a project with no files.
+    console.warn("Failed to load the project's attachments", e);
     files.value = [];
   }
 }
@@ -174,7 +177,7 @@ function toggleExpanded() {
   }
 }
 
-function onDragOver(e) {
+function onDragOver() {
   clearTimeout(dragLeaveTimer);
   dragOver.value = true;
 }
@@ -205,11 +208,12 @@ async function onDrop(e) {
     uploadError.value = null;
     try {
       for (const url of droppedUrls) {
-        const resp = await apiClient.post(
-          `/projects/${props.projectId}/attachments/url`,
-          { url, title: url },
+        const created = await addProjectAttachmentUrl(
+          props.projectId,
+          url,
+          url,
         );
-        files.value.push(resp.data);
+        files.value.push(created);
       }
     } catch (err) {
       uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
@@ -225,15 +229,7 @@ async function onDrop(e) {
   uploading.value = true;
   try {
     for (const file of droppedFiles) {
-      const formData = new FormData();
-      formData.append("file", file);
-      await apiClient.post(
-        `/projects/${props.projectId}/attachments`,
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-        },
-      );
+      await uploadProjectAttachment(props.projectId, file);
     }
     await fetchFiles();
   } catch (err) {
@@ -263,11 +259,10 @@ function downloadFile(file) {
 async function deleteFile(file) {
   if (!window.confirm(`Remove "${file.original_filename}"?`)) return;
   try {
-    await apiClient.delete(
-      `/projects/${props.projectId}/attachments/${file.id}`,
-    );
+    await deleteProjectAttachment(props.projectId, file.id);
     files.value = files.value.filter((f) => f.id !== file.id);
-  } catch {
+  } catch (e) {
+    console.error("Failed to delete the project attachment", e);
     uploadError.value = "Could not delete file. Please try again.";
   }
 }
@@ -278,11 +273,12 @@ async function addUrl() {
   const title = urlTitle.value.trim() || url;
   uploadError.value = null;
   try {
-    const resp = await apiClient.post(
-      `/projects/${props.projectId}/attachments/url`,
-      { url, title },
+    const created = await addProjectAttachmentUrl(
+      props.projectId,
+      url,
+      title,
     );
-    files.value.push(resp.data);
+    files.value.push(created);
     urlInput.value = "";
     urlTitle.value = "";
     showUrlForm.value = false;
@@ -298,15 +294,6 @@ function urlLabel(file) {
     return name.replace(/^https?:\/\//, "").replace(/\/$/, "");
   }
   return name;
-}
-
-function shortenUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./, "");
-  } catch {
-    return url.slice(0, 24);
-  }
 }
 
 function fileIcon(file) {
@@ -550,7 +537,9 @@ onMounted(() => {
 }
 
 .pf-file-delete:hover {
-  background: rgba(var(--v-theme-error), 0.8);
+  /* Solid, so the authored `on-error` pair actually applies (4.86:1 / 4.68:1).
+     At 80% the fill lightens and the glyph falls to 3.49:1. */
+  background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
   opacity: 1 !important;
 }

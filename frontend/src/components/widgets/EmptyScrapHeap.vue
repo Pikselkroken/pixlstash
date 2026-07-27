@@ -9,6 +9,23 @@
         >
           Restore All
         </button>
+        <!-- Active retention policy, stated where the action happens. Hidden
+             until the policy is known so it never shows a guessed window. -->
+        <p v-if="retentionLabel" class="retention-note">
+          <v-icon size="14" class="retention-note__icon"
+            >mdi-delete-clock-outline</v-icon
+          >
+          <span>Auto-empty: {{ retentionLabel }}</span>
+          <span class="retention-note__sep" aria-hidden="true">·</span>
+          <button
+            type="button"
+            class="retention-note__change"
+            :aria-label="`Change the auto-empty window (currently ${retentionLabel})`"
+            @click="$emit('open-retention-settings')"
+          >
+            change
+          </button>
+        </p>
       </div>
       <div class="selection-bar-actions">
         <button
@@ -16,7 +33,7 @@
           :disabled="disabled"
           @click="$emit('empty-scrapheap')"
         >
-          Empty Scrap Heap
+          Empty Scrapheap
         </button>
       </div>
     </div>
@@ -24,11 +41,30 @@
 </template>
 
 <script setup>
-const props = defineProps({
+/**
+ * Scrapheap action bar: restore-all / empty, plus the active auto-empty policy.
+ *
+ * Presentational only — the parent (ImageGrid) owns the retention value and the
+ * navigation to Settings, so this component never touches the store or the API.
+ */
+import { VIcon } from "vuetify/components";
+
+defineProps({
   visible: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   restoreDisabled: { type: Boolean, default: false },
+  /**
+   * Human label for the active auto-empty window, e.g. "30 days" / "Never".
+   * Empty string hides the policy line (policy not loaded yet).
+   */
+  retentionLabel: { type: String, default: "" },
 });
+
+defineEmits([
+  "empty-scrapheap",
+  "restore-scrapheap",
+  "open-retention-settings",
+]);
 </script>
 
 <style scoped>
@@ -65,6 +101,51 @@ const props = defineProps({
   margin-left: auto;
   flex-wrap: nowrap;
 }
+/* Active-policy line: quiet status text, not a control, with one inline link-
+   styled button through to the setting that owns it. */
+.retention-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-background), 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.retention-note__icon {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.retention-note__sep {
+  color: rgba(var(--v-theme-on-background), 0.4);
+}
+
+.retention-note__change {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: rgb(var(--v-theme-accent));
+  cursor: pointer;
+  text-decoration: underline;
+  border-radius: var(--radius-sm);
+}
+
+.retention-note__change:hover {
+  filter: brightness(1.15);
+}
+
+.retention-note__change:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .restore-btn {
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));

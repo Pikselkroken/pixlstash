@@ -1,7 +1,21 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  getAuthState,
+  changePassword,
+  listTokens,
+  createToken,
+  patchToken,
+  deleteToken,
+  uploadWatermark,
+  deleteWatermark,
+} from "../../api/users";
+import { getUserConfig, patchUserConfig } from "../../api/config";
+import { listPictureSets } from "../../api/pictureSets";
+import { listProjects } from "../../api/projects";
+import { listCharacters } from "../../api/characters";
 import { copyText } from "../../utils/clipboard";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -91,10 +105,10 @@ async function fetchSettingsAuth() {
   settingsLoading.value = true;
   settingsError.value = "";
   try {
-    const res = await apiClient.get("/users/me/auth");
-    settingsUsername.value = res.data?.username || "";
-    settingsHasPassword.value = Boolean(res.data?.has_password);
-  } catch (e) {
+    const auth = await getAuthState();
+    settingsUsername.value = auth?.username || "";
+    settingsHasPassword.value = Boolean(auth?.has_password);
+  } catch {
     settingsError.value = "Failed to load account settings.";
   } finally {
     settingsLoading.value = false;
@@ -105,9 +119,9 @@ async function fetchUserTokens() {
   tokensLoading.value = true;
   tokensError.value = "";
   try {
-    const res = await apiClient.get("/users/me/token");
-    tokens.value = Array.isArray(res.data) ? res.data : [];
-  } catch (e) {
+    const rows = await listTokens();
+    tokens.value = Array.isArray(rows) ? rows : [];
+  } catch {
     tokensError.value = "Failed to load tokens.";
   } finally {
     tokensLoading.value = false;
@@ -117,9 +131,9 @@ async function fetchUserTokens() {
 async function fetchPublicUrl() {
   publicUrlLoading.value = true;
   try {
-    const res = await apiClient.get("/users/me/config");
-    publicUrlValue.value = res.data?.public_url || "";
-  } catch (_) {
+    const cfg = await getUserConfig();
+    publicUrlValue.value = cfg?.public_url || "";
+  } catch {
     /* silent */
   } finally {
     publicUrlLoading.value = false;
@@ -137,15 +151,13 @@ async function savePublicUrl() {
   publicUrlValue.value = trimmed;
   publicUrlLoading.value = true;
   try {
-    await apiClient.patch("/users/me/config", {
-      public_url: trimmed || null,
-    });
+    await patchUserConfig({ public_url: trimmed || null });
     emit("update:public-url", trimmed || null);
     publicUrlSuccess.value = "Saved.";
     setTimeout(() => {
       publicUrlSuccess.value = "";
     }, 2500);
-  } catch (_) {
+  } catch {
     publicUrlError.value = "Failed to save.";
   } finally {
     publicUrlLoading.value = false;
@@ -158,13 +170,9 @@ async function handleWatermarkUpload(event) {
   watermarkUploadError.value = "";
   watermarkUploading.value = true;
   try {
-    const form = new FormData();
-    form.append("file", file);
-    await apiClient.post("/users/me/watermark", form, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    await uploadWatermark(file);
     refreshWatermarkPreview();
-  } catch (_) {
+  } catch {
     watermarkUploadError.value = "Upload failed.";
   } finally {
     watermarkUploading.value = false;
@@ -176,9 +184,9 @@ async function clearWatermark() {
   watermarkUploadError.value = "";
   watermarkUploading.value = true;
   try {
-    await apiClient.delete("/users/me/watermark");
+    await deleteWatermark();
     refreshWatermarkPreview();
-  } catch (_) {
+  } catch {
     watermarkUploadError.value = "Failed to remove watermark.";
   } finally {
     watermarkUploading.value = false;
@@ -227,14 +235,14 @@ async function loadShareResourceOptions(type) {
   try {
     let items = [];
     if (type === "picture_set") {
-      const res = await apiClient.get("/picture_sets");
-      items = (res.data || []).map((s) => ({ id: s.id, label: s.name }));
+      const rows = await listPictureSets();
+      items = (rows || []).map((s) => ({ id: s.id, label: s.name }));
     } else if (type === "character") {
-      const res = await apiClient.get("/characters");
-      items = (res.data || []).map((c) => ({ id: c.id, label: c.name }));
+      const chars = await listCharacters();
+      items = (chars || []).map((c) => ({ id: c.id, label: c.name }));
     } else if (type === "project") {
-      const res = await apiClient.get("/projects");
-      items = (res.data || []).map((p) => ({ id: p.id, label: p.name }));
+      const rows = await listProjects();
+      items = (rows || []).map((p) => ({ id: p.id, label: p.name }));
     }
     shareResourceOptions.value = items;
   } catch {
@@ -283,7 +291,7 @@ async function createUserToken() {
   const description = tokenDescription.value.trim() || null;
   tokensLoading.value = true;
   try {
-    const res = await apiClient.post("/users/me/token", {
+    const created = await createToken({
       description,
       scope: tokenScope.value,
       resource_type:
@@ -296,7 +304,7 @@ async function createUserToken() {
           : false,
       watermark: tokenWatermark.value,
     });
-    newlyCreatedToken.value = res.data?.token || "";
+    newlyCreatedToken.value = created?.token || "";
     tokenDialogOpen.value = Boolean(newlyCreatedToken.value);
     if (newlyCreatedToken.value) createTokenDialogOpen.value = false;
     tokenDescription.value = "";
@@ -322,7 +330,7 @@ async function updateTokenWatermark(token, value) {
   token.watermark = value;
   watermarkUpdating.add(token.id);
   try {
-    await apiClient.patch(`/users/me/token/${token.id}`, { watermark: value });
+    await patchToken(token.id, { watermark: value });
   } catch (e) {
     tokensError.value = e?.response?.data?.detail || "Failed to update token.";
     token.watermark = previousValue;
@@ -344,7 +352,7 @@ async function deleteUserToken() {
   tokensLoading.value = true;
   tokensError.value = "";
   try {
-    await apiClient.delete(`/users/me/token/${tokenToDelete.value.id}`);
+    await deleteToken(tokenToDelete.value.id);
     tokenDeleteDialogOpen.value = false;
     tokenToDelete.value = null;
     await fetchUserTokens();
@@ -369,7 +377,7 @@ async function submitPasswordChange() {
   settingsLoading.value = true;
   try {
     const newPasswordValue = newPassword.value.trim();
-    await apiClient.post("/users/me/auth", {
+    await changePassword({
       current_password: currentPassword.value || null,
       new_password: newPasswordValue,
     });

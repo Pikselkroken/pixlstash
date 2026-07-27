@@ -1,6 +1,6 @@
 <template>
   <transition name="selbar-pop">
-    <div v-if="visible" class="floating-selection-bar">
+    <div v-if="visible" ref="barEl" class="floating-selection-bar">
       <span
         v-if="visible && selectedFaceCount > 0"
         class="selection-face-count"
@@ -311,7 +311,9 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import { listWorkflows, runImageToImage } from "../../api/comfyui";
+import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
@@ -367,6 +369,13 @@ const emit = defineEmits([
   "selection-menu-open",
   "clear-impossible-tags",
 ]);
+
+// The pill parks on the bottom edge, inside the notice column's footprint, so
+// per notice-surface.md §2.2 it owns its contribution to `--floating-bottom-h`.
+// Registering the real element (not a constant) is the point: the pill wraps and
+// grows on coarse pointers, so a hardcoded height would let a notice overlap it.
+const barEl = ref(null);
+useBottomAnchor("selection-bar", barEl);
 
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
@@ -577,8 +586,8 @@ async function fetchComfyWorkflows() {
   comfyuiWorkflowLoading.value = true;
   comfyuiWorkflowError.value = "";
   try {
-    const res = await apiClient.get("/comfyui/workflows");
-    const workflows = res.data?.workflows;
+    const body = await listWorkflows();
+    const workflows = body?.workflows;
     comfyuiWorkflows.value = Array.isArray(workflows) ? workflows : [];
   } catch (err) {
     comfyuiWorkflowError.value =
@@ -609,11 +618,10 @@ async function runSelectedComfyWorkflow() {
       client_id: props.comfyuiClientId || undefined,
       stack: stackI2IOutputs.value,
     };
-    const res = await apiClient.post(
-      `${props.backendUrl}/comfyui/run_i2i`,
-      payload,
-    );
-    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    const body = await runImageToImage(payload, {
+      baseUrl: props.backendUrl,
+    });
+    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("comfyui-run", {
       prompts,
       pictureIds,
@@ -716,7 +724,13 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 <style scoped>
 .floating-selection-bar {
   position: absolute;
-  bottom: 18px;
+  /* --space-5, not the old off-grid 18px. This is the prerequisite for the
+     notice stack's arithmetic landing on tokens (notice-surface.md §2.2): the
+     stack rests at `--space-5 + measured pill height + --space-3`, which only
+     leaves an exact `--space-3` gap if the pill's own inset is also --space-5.
+     Only the pill's HEIGHT is measured (useBottomAnchor observes the border
+     box), never its inset, so moving it here does not disturb that measurement. */
+  bottom: var(--space-5);
   left: 50%;
   /* width: max-content so the pill hugs its icons. NOTE: do NOT add
      container-type here — inline-size containment makes the width ignore the
@@ -729,21 +743,33 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   z-index: 200;
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 24px);
-  padding: 6px 10px;
-  border-radius: 999px;
+  gap: var(--space-3);
+  max-width: calc(100% - var(--space-6));
+  /* Block padding deliberately left at 6px: it sets the pill's occupied height,
+     and that dimension belongs to the UI/UX-gated action-bar reconciliation
+     (visual-language.md §5/§13, the 34/40/48/56px drift), not to a token swap. */
+  padding: 6px var(--space-4);
+  border-radius: var(--radius-pill);
   background: rgba(var(--v-theme-surface), 0.86);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  /* --elevation-3, not -4: -4 is reserved for dialogs and lightbox chrome. The
+     pill is persistent floating chrome, and it now sits --space-3 from the
+     notice cards, which are also -3. Peers on the bottom edge read as one layer. */
+  box-shadow: var(--elevation-3);
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   backdrop-filter: blur(12px);
 }
 
-.selbar-pop-enter-active,
+/* Entering the screen decelerates, leaving it accelerates and is quicker
+   (visual-language.md §10) — the same pairing the notice stack beside it uses. */
+.selbar-pop-enter-active {
+  transition:
+    transform var(--dur-2) var(--ease-decelerate),
+    opacity var(--dur-2) var(--ease-decelerate);
+}
 .selbar-pop-leave-active {
   transition:
-    transform 0.22s ease,
-    opacity 0.22s ease;
+    transform var(--dur-1) var(--ease-accelerate),
+    opacity var(--dur-1) var(--ease-accelerate);
 }
 .selbar-pop-enter-from,
 .selbar-pop-leave-to {
@@ -753,8 +779,10 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .selection-count,
 .selection-face-count {
-  font-weight: bold;
-  font-size: 1.1em;
+  /* 600, not `bold`: 700 is reserved (visual-language.md §3). Size from the ramp
+     in rem — the old `1.1em` compounded off the inherited 16px to 17.6px. */
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
@@ -762,7 +790,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   min-width: 0;
 }
 .selection-expanded-count {
-  font-size: 0.85em;
+  font-size: var(--text-sm);
   opacity: 0.75;
   white-space: nowrap;
   cursor: default;
@@ -771,7 +799,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 .selection-ctx-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 .clear-btn {
@@ -785,7 +813,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   padding: 0;
   width: 40px;
   height: 40px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
@@ -800,15 +828,19 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   opacity: 0.35;
   cursor: default;
 }
+/* Solid `warning` fill, so it is one of the few places `on-warning` is the right
+   token. It is now authored (main.js) rather than Vuetify-derived: light
+   #23211d on #b8861f = 4.95:1, dark #1b1b1b on #db7900 = 5.53:1. It used to
+   resolve to #fff at 3.25:1 / 3.11:1 — a small white label under the 4.5 floor. */
 .remove-btn {
   background: rgb(var(--v-theme-warning));
   color: rgb(var(--v-theme-on-warning));
   border: none;
-  padding: 2px 10px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-4);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
 }
 .remove-btn:hover {
   filter: brightness(1.3);
@@ -824,7 +856,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   padding: 0;
   width: 40px;
   height: 40px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
   flex-shrink: 0;
@@ -847,9 +879,9 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   color: rgb(var(--v-theme-on-background));
   border: none;
   padding: 0 10px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.88em;
+  font-size: var(--text-base);
   font-family: inherit;
   height: 40px;
   white-space: nowrap;
@@ -888,8 +920,8 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
   background: rgba(var(--v-theme-surface), 0.96);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-primary), 0.3);
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-3);
 }
 
 .plugin-menu-header {
@@ -972,7 +1004,7 @@ defineExpose({ openTagInput, openPluginPanel, openComfyuiPanel });
 
 .bar-btn-apply-label {
   white-space: nowrap;
-  font-size: 0.92em;
+  font-size: var(--text-base);
   flex-shrink: 1;
 }
 

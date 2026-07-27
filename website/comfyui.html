@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ComfyUI nodes — PixlStash</title>
+    <title>ComfyUI nodes | PixlStash</title>
     <meta
       name="description"
       content="ComfyUI-PixlStash connects your ComfyUI workflows to a PixlStash vaul. Load, search, gate, and save images by project, set, or character. Explore the nodes, example workflows, and how to install them."
@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       html {
@@ -65,7 +66,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
       }
 
       .feature-card h3 {
@@ -107,15 +108,15 @@
       }
 
       .node-tag--write {
-        background: rgba(196, 148, 47, 0.16);
-        color: #7a5a18;
-        border: 1px solid rgba(196, 148, 47, 0.32);
+        background: color-mix(in srgb, var(--warning) 16%, transparent);
+        color: var(--warning);
+        border: 1px solid color-mix(in srgb, var(--warning) 38%, transparent);
       }
 
       .node-tag--read {
-        background: rgba(47, 139, 95, 0.12);
-        color: #1e5c3a;
-        border: 1px solid rgba(47, 139, 95, 0.28);
+        background: color-mix(in srgb, var(--success) 14%, transparent);
+        color: var(--success);
+        border: 1px solid color-mix(in srgb, var(--success) 38%, transparent);
       }
 
       .node-req {
@@ -134,12 +135,8 @@
       .shot {
         border-radius: var(--radius-lg);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.12);
-        background: linear-gradient(
-          135deg,
-          rgba(255, 255, 255, 0.92),
-          rgba(235, 239, 244, 0.7)
-        );
+        border: 1px solid var(--border);
+        background: var(--panel);
         position: relative;
         overflow: hidden;
         display: flex;
@@ -152,8 +149,7 @@
         border-radius: 14px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 18px 40px rgba(17, 20, 26, 0.2);
+        border: 1px solid var(--border);
         background: #1c1f24;
       }
 
@@ -220,7 +216,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         overflow: hidden;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
         font-size: 0.92rem;
       }
 
@@ -228,7 +224,7 @@
       .config-table td {
         text-align: left;
         padding: 12px 16px;
-        border-bottom: 1px solid rgba(34, 38, 44, 0.08);
+        border-bottom: 1px solid var(--border);
         line-height: 1.5;
       }
 
@@ -265,8 +261,8 @@
         background: var(--panel);
         border-radius: var(--radius-lg);
         padding: 22px;
-        border: 1px solid rgba(34, 38, 44, 0.11);
-        box-shadow: 0 16px 48px var(--shadow);
+        border: 1px solid var(--border);
+        box-shadow: 0 4px 16px var(--shadow);
       }
 
       .install-card h3 {
@@ -280,8 +276,7 @@
         border-radius: 12px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 12px 28px rgba(17, 20, 26, 0.18);
+        border: 1px solid var(--border);
         cursor: zoom-in;
         background: #1c1f24;
       }
@@ -566,7 +561,7 @@
               character. Wire in a Character Loader plus a batch of images, set
               a likeness threshold, and the gate splits the batch into
               <code>accepted</code> and <code>rejected</code> streams (with
-              counts) — so you never waste compute polishing an off-model
+              counts), so you never waste compute polishing an off-model
               render.
               <span class="node-req"
                 >Requires PixlStash v1.4+ and a running face-extraction
@@ -748,7 +743,7 @@
             <p>
               Because the Picture Saver writes straight to PixlStash, everything
               you generate or edit shows up organised by project, set, and
-              character — ready to search, tag, and curate.
+              character, ready to search, tag, and curate.
             </p>
           </div>
         </div>
@@ -866,10 +861,10 @@ git clone https://github.com/Pikselkroken/ComfyUI-PixlStash.git"
             </tbody>
           </table>
           <p class="method-info" style="margin-top: 16px">
-            Credentials live only in ComfyUI's settings — they're never written
+            Credentials live only in ComfyUI's settings. They are never written
             into a saved workflow, so you can share a <code>.json</code> safely.
-            Need a token? Create a scoped one in PixlStash under user settings —
-            see the <a href="introduction.html">getting-started tour</a> and the
+            Need a token? Create a scoped one in PixlStash under user settings.
+            See the <a href="introduction.html">getting-started tour</a> and the
             <a href="api.html">API reference</a>.
           </p>
         </div>

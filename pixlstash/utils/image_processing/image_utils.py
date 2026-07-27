@@ -34,6 +34,13 @@ THUMBNAIL_FORMAT = "WEBP"
 THUMBNAIL_EXTENSION = ".webp"
 THUMBNAIL_QUALITY = 80
 THUMBNAIL_WEBP_METHOD = 2
+# A thumbnail is ONE aspect-ratio-preserving bitmap of the whole frame. It is
+# sized so the SHORT edge is ``THUMBNAIL_SHORT_EDGE`` px, with the long edge
+# capped at ``THUMBNAIL_LONG_EDGE_CAP`` px. For aspect ratios beyond
+# (cap / short) the short edge shrinks below the target so the long edge hits the
+# cap (extreme panoramas). The bitmap is never upscaled beyond the source.
+THUMBNAIL_SHORT_EDGE = 384
+THUMBNAIL_LONG_EDGE_CAP = 1024
 
 
 class ImageUtils:
@@ -42,6 +49,9 @@ class ImageUtils:
     @staticmethod
     def _coerce_metadata_value(value):
         """Coerce a raw metadata value to a JSON-serialisable Python type."""
+        # Best-effort coercion: when a numeric/bytes value cannot be converted the
+        # str()/repr() fallback below IS the JSON-serialisable result, not an error
+        # path (these swallows are allowlisted in the except-hygiene guardrail).
         if IFDRational is not None and isinstance(value, IFDRational):
             try:
                 return float(value)
@@ -249,7 +259,12 @@ class ImageUtils:
                     pil_img = pil_img.convert("RGB")
                 rgb = np.array(pil_img)
                 return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Could not load image %s via PIL fallback (%s); returning None.",
+                file_path,
+                exc,
+            )
             return None
 
     @staticmethod
@@ -359,7 +374,10 @@ class ImageUtils:
                                     ).strip()
                                     if text:
                                         return text
-                            except Exception:
+                            except Exception as exc:
+                                logger.debug(
+                                    "Could not read EXIF timezone offset (%s).", exc
+                                )
                                 return None
                             return None
 
@@ -499,12 +517,58 @@ class ImageUtils:
             return None
 
     @staticmethod
-    def generate_thumbnail_bytes(img, size=(384, 384)) -> Optional[bytes]:
+    def thumbnail_bitmap_size(
+        src_w: int,
+        src_h: int,
+        short_edge: int = THUMBNAIL_SHORT_EDGE,
+        long_edge_cap: int = THUMBNAIL_LONG_EDGE_CAP,
+    ) -> Optional[tuple]:
+        """Return the aspect-ratio-preserving bitmap ``(w, h)`` for a source size.
+
+        The short edge targets ``short_edge`` px; the long edge is capped at
+        ``long_edge_cap`` px, so aspect ratios beyond ``long_edge_cap /
+        short_edge`` get a short edge below the target (extreme panoramas). The
+        bitmap is never upscaled beyond the source (so a source smaller than the
+        target keeps its native size). Returns ``None`` for a degenerate size.
         """
-        Crop to square (bottom-cropped for tall images) and resize longest edge.
+        if src_w <= 0 or src_h <= 0:
+            return None
+        short = min(src_w, src_h)
+        long_edge = max(src_w, src_h)
+        scale = short_edge / float(short)
+        if long_edge * scale > long_edge_cap:
+            scale = long_edge_cap / float(long_edge)
+        scale = min(scale, 1.0)  # never upscale beyond the source
+        out_w = max(1, int(round(src_w * scale)))
+        out_h = max(1, int(round(src_h * scale)))
+        return out_w, out_h
+
+    @staticmethod
+    def render_thumbnail(
+        img,
+        face_bboxes: Optional[list] = None,
+        short_edge: int = THUMBNAIL_SHORT_EDGE,
+        long_edge_cap: int = THUMBNAIL_LONG_EDGE_CAP,
+    ) -> Optional[tuple]:
+        """Render the whole-frame AR bitmap thumbnail and its square-crop rect.
+
+        Generation is MODE-AGNOSTIC: it always produces ONE
+        aspect-ratio-preserving bitmap of the entire frame (no crop baked in),
+        sized by :meth:`thumbnail_bitmap_size`, plus the face-weighted square-crop
+        rectangle *within* that bitmap for clients that render a square cell.
 
         Accepts either a PIL Image or a numpy array (OpenCV BGR image).
+        ``face_bboxes`` are ``[x1, y1, x2, y2]`` boxes in the SOURCE image's pixel
+        space (optional); when omitted the square crop is landscape-centred and
+        portrait-top-anchored.
+
+        Returns ``(thumbnail_bytes, bitmap_w, bitmap_h, square_crop)`` where
+        ``square_crop`` is ``{"x", "y", "side"}`` in BITMAP pixel space
+        (origin top-left, ``side == min(bitmap_w, bitmap_h)``). Returns ``None``
+        on failure.
         """
+        from pixlstash.utils.image_processing.face_utils import FaceUtils
+
         try:
             if isinstance(img, Image.Image):
                 pil_img = img.copy()
@@ -513,27 +577,54 @@ class ImageUtils:
                 pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             if pil_img.mode not in ("RGB", "L"):
                 pil_img = pil_img.convert("RGB")
-            if pil_img.width != pil_img.height:
-                side = min(pil_img.width, pil_img.height)
-                if pil_img.height > pil_img.width:
-                    left = 0
-                    top = 0
-                else:
-                    left = int(round((pil_img.width - side) / 2.0))
-                    top = 0
-                right = left + side
-                bottom = top + side
-                pil_img = pil_img.crop((left, top, right, bottom))
-            max_edge = max(pil_img.width, pil_img.height)
-            if max_edge > size[0]:
-                scale = size[0] / max_edge
-                new_w = int(round(pil_img.width * scale))
-                new_h = int(round(pil_img.height * scale))
-                pil_img = pil_img.resize((new_w, new_h), resample=Image.LANCZOS)
-            return ImageUtils._encode_thumbnail(pil_img)
+
+            src_w, src_h = pil_img.width, pil_img.height
+            dims = ImageUtils.thumbnail_bitmap_size(
+                src_w, src_h, short_edge, long_edge_cap
+            )
+            if dims is None:
+                return None
+            bmp_w, bmp_h = dims
+            if (bmp_w, bmp_h) != (src_w, src_h):
+                pil_img = pil_img.resize((bmp_w, bmp_h), resample=Image.LANCZOS)
+
+            thumbnail_bytes = ImageUtils._encode_thumbnail(pil_img)
+            if thumbnail_bytes is None:
+                return None
+
+            # Map source-space face boxes into bitmap space (uniform scale).
+            faces_bitmap = None
+            if face_bboxes:
+                scale = bmp_w / float(src_w) if src_w else 1.0
+                faces_bitmap = [
+                    [v * scale for v in bbox]
+                    for bbox in face_bboxes
+                    if bbox and len(bbox) == 4
+                ]
+            crop_x, crop_y, crop_side = FaceUtils.square_crop_rect(
+                bmp_w, bmp_h, faces_bitmap
+            )
+            crop = {"x": crop_x, "y": crop_y, "side": crop_side}
+            return thumbnail_bytes, bmp_w, bmp_h, crop
         except Exception as e:
-            logger.error(f"Error generating thumbnail bytes: {e}")
+            logger.error(f"Error rendering thumbnail: {e}")
             return None
+
+    @staticmethod
+    def generate_thumbnail_bytes(
+        img,
+        face_bboxes: Optional[list] = None,
+    ) -> Optional[bytes]:
+        """Return only the encoded whole-frame AR bitmap bytes.
+
+        Thin wrapper over :meth:`render_thumbnail` that discards the dimensions
+        and square-crop metadata. Accepts a PIL Image or a numpy (OpenCV BGR)
+        array.
+        """
+        rendered = ImageUtils.render_thumbnail(img, face_bboxes=face_bboxes)
+        if rendered is None:
+            return None
+        return rendered[0]
 
     @staticmethod
     def _calculate_sha256_digest(
@@ -667,12 +758,25 @@ class ImageUtils:
         img_format = None
         width = height = None
         thumbnail_bytes = None
+        # Thumbnail column values (AR-bitmap dims + faceless square crop). Faces
+        # are not known at import; ``FaceExtractionTask`` refines the square crop
+        # once faces are detected.
+        thumb_cols: dict = {}
         is_video = False
         try:
             with Image.open(BytesIO(image_bytes)) as img:
                 img_format = img.format or "PNG"
                 width, height = img.size
-                thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(img)
+                rendered = ImageUtils.render_thumbnail(img)
+                if rendered is not None:
+                    thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                    thumb_cols = {
+                        "thumbnail_width": bmp_w,
+                        "thumbnail_height": bmp_h,
+                        "square_crop_x": crop["x"],
+                        "square_crop_y": crop["y"],
+                        "square_crop_side": crop["side"],
+                    }
         except Exception:
             is_video = True
 
@@ -699,9 +803,17 @@ class ImageUtils:
                     logger.error("Could not read first frame from video for thumbnail.")
                     raise ValueError("Failed to read first frame from video")
                 height, width = frame.shape[:2]
-                thumbnail_bytes = ImageUtils.generate_thumbnail_bytes(frame)
-                if thumbnail_bytes is None:
+                rendered = ImageUtils.render_thumbnail(frame)
+                if rendered is None:
                     raise ValueError("Failed to generate thumbnail for video")
+                thumbnail_bytes, bmp_w, bmp_h, crop = rendered
+                thumb_cols = {
+                    "thumbnail_width": bmp_w,
+                    "thumbnail_height": bmp_h,
+                    "square_crop_x": crop["x"],
+                    "square_crop_y": crop["y"],
+                    "square_crop_side": crop["side"],
+                }
             finally:
                 if cap is not None:
                     cap.release()
@@ -790,6 +902,7 @@ class ImageUtils:
             comfyui_positive_prompt=comfyui_positive_prompt,
             comfyui_models=comfyui_models_json,
             comfyui_loras=comfyui_loras_json,
+            **thumb_cols,
         )
 
     @staticmethod

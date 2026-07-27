@@ -394,13 +394,13 @@ function zoomToRegion(box) {
 .rs-bin-banner--remove {
   background: color-mix(
     in srgb,
-    rgb(var(--v-theme-error)) 11%,
+    rgb(var(--v-theme-dark-surface-error)) 11%,
     rgb(var(--v-theme-dark-surface))
   );
-  border-left: 3px solid rgb(var(--v-theme-error));
+  border-left: 3px solid rgb(var(--v-theme-dark-surface-error));
 }
 .rs-bin-banner--remove .rs-bin-banner-icon {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-bin-banner--add {
   background: color-mix(

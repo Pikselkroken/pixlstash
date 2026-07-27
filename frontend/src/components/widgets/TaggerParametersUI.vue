@@ -40,20 +40,6 @@ watch(
 
 watch(form, (next) => emit("update:modelValue", { ...next }), { deep: true });
 
-function enumLabel(field, value) {
-  const source = Array.isArray(field.enum)
-    ? field.enum
-    : Array.isArray(field.options)
-      ? field.options
-      : null;
-  if (!source) return value;
-  const entry = source.find((e) =>
-    typeof e === "object" ? e.value === value : e === value,
-  );
-  if (!entry) return value;
-  return typeof entry === "object" ? (entry.label ?? entry.value) : entry;
-}
-
 function enumOptions(field) {
   const source = Array.isArray(field.enum)
     ? field.enum

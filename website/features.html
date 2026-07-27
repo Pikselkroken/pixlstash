@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Features — PixlStash</title>
+    <title>Features | PixlStash</title>
     <meta
       name="description"
-      content="Explore all the features of PixlStash — AI tagging, semantic search, smart scoring, face detection, and more."
+      content="Explore all the features of PixlStash: AI tagging, semantic search, smart scoring, face detection, and more."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,6 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       .section {
@@ -51,7 +52,7 @@
         background: var(--panel);
         border-radius: var(--radius-md);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.1);
+        border: 1px solid var(--border);
       }
 
       .feature-card h3 {
@@ -74,12 +75,8 @@
       .shot {
         border-radius: var(--radius-lg);
         padding: 18px;
-        border: 1px solid rgba(34, 38, 44, 0.12);
-        background: linear-gradient(
-          135deg,
-          rgba(255, 255, 255, 0.92),
-          rgba(235, 239, 244, 0.7)
-        );
+        border: 1px solid var(--border);
+        background: var(--panel);
         position: relative;
         overflow: hidden;
       }
@@ -90,8 +87,7 @@
         border-radius: 14px;
         display: block;
         margin-bottom: 14px;
-        border: 1px solid rgba(34, 38, 44, 0.18);
-        box-shadow: 0 18px 40px rgba(17, 20, 26, 0.2);
+        border: 1px solid var(--border);
       }
 
       .shot-image-btn {
@@ -203,15 +199,15 @@
         text-decoration: none;
         color: inherit;
         margin: 6px auto 16px;
-        background: rgba(185, 193, 202, 0.65);
-        border: 1px solid rgba(14, 127, 168, 0.25);
+        background: var(--panel);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         overflow: hidden;
         transition: box-shadow 0.18s ease;
       }
 
       .demo-teaser:hover {
-        box-shadow: 0 4px 14px rgba(14, 127, 168, 0.18);
+        box-shadow: 0 4px 14px var(--shadow);
       }
 
       .demo-teaser-wrap {
@@ -227,18 +223,14 @@
         flex-direction: column;
         justify-content: center;
         gap: 6px;
-        background: linear-gradient(
-          125deg,
-          rgba(14, 127, 168, 0.18),
-          rgba(10, 95, 126, 0.1)
-        );
+        background: color-mix(in srgb, var(--tertiary) 12%, transparent);
       }
 
       .demo-teaser-label {
         font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.07em;
-        color: #0e7fa8;
+        color: var(--tertiary);
         font-weight: 700;
       }
 
@@ -258,7 +250,7 @@
       .demo-teaser-link {
         font-size: 0.82rem;
         font-weight: 700;
-        color: #0e7fa8;
+        color: var(--tertiary);
       }
 
       .demo-teaser-media img {
@@ -301,7 +293,7 @@
             <span class="demo-teaser-label">Live demo</span>
             <h2>Try PixlStash right now</h2>
             <p>
-              Explore a real library in our hosted demo — no install needed.
+              Explore a real library in our hosted demo. No install needed.
             </p>
             <span class="demo-teaser-link">Open the demo →</span>
           </div>
@@ -327,6 +319,33 @@
               />
             </button>
             <p>Pretty image view with scoring, stacking and sorting.</p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Justified or square layout</h4></div>
+            <div class="shot-image-pair">
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotsJustified.jpg"
+                  data-full="assets/ScreenshotsJustified.jpg"
+                  alt="PixlStash justified grid with thumbnails at their own aspect ratios filling each row to the full grid width"
+                  loading="lazy"
+                />
+              </button>
+              <button class="shot-image-btn" type="button">
+                <img
+                  src="assets/ScreenshotsJustifiedSettings.jpg"
+                  data-full="assets/ScreenshotsJustifiedSettings.jpg"
+                  alt="PixlStash Appearance settings with a Square and Justified thumbnail layout picker"
+                  loading="lazy"
+                />
+              </button>
+            </div>
+            <p>
+              Thumbnails can keep their own aspect ratio and fill each row to
+              the full grid width, or stay as squares. One size control in the
+              toolbar, from Tiny to Huge, sets the thumbnail size in both
+              layouts.
+            </p>
           </div>
           <div class="shot">
             <div class="shot-label"><h4>Project Organisation</h4></div>
@@ -677,7 +696,7 @@
             <h3>JoyCaption &amp; selectable engines</h3>
             <p>
               Use JoyCaption for tagging or image descriptions. Choose which
-              engine to use for each operation — switch models per-request
+              engine to use for each operation, and switch models per-request
               without touching the settings page.
             </p>
           </div>
@@ -707,6 +726,23 @@
             <p>
               Navigate and control PixlStash efficiently using standard keyboard
               shortcuts for selection, scoring, deletion, etc.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Scrapheap auto-empty</h3>
+            <p>
+              Deleted pictures go to the scrapheap first and can be put back.
+              PixlStash can empty it after 30, 60, 90, or 120 days, or leave it
+              alone if the retention is set to Never. Auto-empty is off by
+              default, and deleting for good asks you to type to confirm.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Background imports</h3>
+            <p>
+              Imports stream to the server and complete there, so closing the
+              tab or navigating away does not cancel them. Progress shows in the
+              task manager, and a running import can be aborted from there.
             </p>
           </div>
           <div class="feature-card">

@@ -1,3 +1,33 @@
+# [1.8.0] [Security:Moderate]
+
+Smart Scores are recomputed for your whole library the first time you open 1.8.0, so the grid may re-order compared to 1.7. Part of that is a fix: the built-in reference points that score a library with few ratings of its own had stopped loading, so if you have rated only a handful of pictures your scores should be better than before. This is expected, not a bug: the scoring weights are rebalanced so the top of the 1-5 range is reachable again and your best pictures can score like it. Your originals and snapshots are untouched, and the recompute runs in the background in small batches without re-running any AI models, so it stays out of your way.
+
+- New justified (Google Photos style) grid layout, plus a single thumbnail-size control that replaces the columns slider.
+- Remember the expansion state of sidebar items
+- Imports stream to the server and finish in the background, so closing the tab no longer cancels them. Running imports show up in the task manager and can be aborted.
+- Fixed: Scrapheap: delete forever now really removes the files on disk, behind a preview and a type-to-confirm dialog.
+- Scrapheap auto-empty ships off. PixlStash never removes anything from disk on a timer unless you pick a retention window in Settings, and installs upgrading from 1.7 stay off until you do. If you had already saved a window, your choice is kept.
+- Real context menus in the Scrapheap and the image overlay.
+- New Agreement chart in the stats panel: a grid of your star ratings against the smart score, so you can see where the two disagree and click straight through to those pictures.
+- Fixed: Segment from the image overlay now draws its new boxes as soon as the run finishes, instead of only after you close and reopen the picture.
+- Fixed: Find similar faces from the image overlay now shows its results, the way Reverse image search already did.
+- Fix snapshot restore hard-deleting files that were added after the snapshot was taken, and stop deletions from destroying pictures in locked sets.
+- Smart Score updates in the overlay as you edit tags, and your own edits no longer trigger the refresh pill.
+- Fixed: Smart Score only counts defects that are actually in a picture's tag list, so pictures the tagger flagged behind the scenes but never tagged are no longer pushed down the grid. Affected scores are recalculated once in the background when you upgrade.
+- Unloading a model frees the VRAM it was holding, and the budget readout reflects it.
+- Refreshed Appearance pane and a unified amber palette across the app and the website, with dark mode fixes on the website and install pages.
+- Fixed: Status labels and buttons in the review rail, lightbox and notices are readable again on dark backgrounds. The refreshed palette had left several of them too dark to make out.
+- Symmetrical sidebars, a stats panel that docks at every width, and full-width pair review in the review overlay.
+- Fix watch folders importing the same picture twice when it was picked up while the file was still being copied in.
+- Every API route now goes through one deny-by-default authorization gate that enforces object access from a declared policy, and routes that declare nothing are refused instead of served [Security:Moderate]
+- Fixed: Locality checks fail closed on IPs they cannot parse, and the test-hooks route is loopback-only [Security:Low]
+- Fix Windows updates failing with "Failed to uninstall old application files: 2" (often preceded by a misleading "PixlStash cannot be closed" prompt). The bundled torch ships license files nested so deeply that the previous version's uninstaller pushed them past the Windows 260-character path limit and aborted, killing every update. The installer now detects this and updates over the existing files instead, a failing old uninstaller no longer aborts the update, and new runtimes no longer bundle over-long paths.
+
+# [1.7.2] [Security:Critical]
+
+- Fixed: Restoring a snapshot could silently drop pictures whose image files were still on disk, most often pictures in reference folders, and emptying the scrapheap afterwards could then delete those files for good. Pictures removed from the library while their file was deliberately kept are no longer recorded as permanently deleted, so a restore keeps them. If you have used snapshot restore, update before restoring again; anything lost this way can be recovered from an earlier snapshot once you are on this version.
+- Update setuptools and several node build dependencies flagged by npm audit.
+
 # [1.7.1] [Security:Critical]
 
 - Update tar, brace-expansion and js-yaml node packages

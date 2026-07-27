@@ -8,6 +8,7 @@ import { SettingsDialog } from '../pages/SettingsDialog.js'
 import { SideBar } from '../pages/SideBar.js'
 import { ShareDialog } from '../pages/ShareDialog.js'
 import { ReviewSessions } from '../pages/ReviewSessions.js'
+import { NoticeHost } from '../pages/NoticeHost.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -125,6 +126,11 @@ export async function loginToFreshSession(browser, baseURL) {
 
 export const test = base.extend({
   // The minted credentials object: { token, username, password }.
+  // Playwright resolves a fixture's dependencies by parsing this destructuring
+  // pattern, so a fixture that needs none must still be written `({}, use)`.
+  // `(_, use)` is rejected by Playwright at runtime, so the rule is disabled
+  // here rather than the code changed.
+  // eslint-disable-next-line no-empty-pattern
   credentials: async ({}, use) => {
     await use(readCredentials())
   },
@@ -160,6 +166,11 @@ export const test = base.extend({
   },
   reviews: async ({ page }, use) => {
     await use(new ReviewSessions(page))
+  },
+  // The notice surface (NoticeHost.vue). Call `notices.installHooks()` BEFORE
+  // the first navigation — the store seam is an addInitScript.
+  notices: async ({ page }, use) => {
+    await use(new NoticeHost(page))
   },
 })
 

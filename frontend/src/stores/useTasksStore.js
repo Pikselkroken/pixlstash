@@ -1,6 +1,7 @@
 import { computed, reactive, ref } from "vue";
 import { defineStore } from "pinia";
-import { apiClient, isReadOnly } from "../utils/apiClient";
+import { isReadOnly } from "../utils/apiClient";
+import { getWorkerProgress } from "../api/workers";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
 // actively running; slow when the app is merely idle-watching for new work.
@@ -78,11 +79,72 @@ export const useTasksStore = defineStore("tasks", () => {
     if (handler) handler();
   }
 
+  // ── Import run state (frontend-driven, #459) ──────────────────────────────
+  // The async import (ImageImporter) surfaces its server-side Phase B here as a
+  // determinate task row, mirroring the ComfyUI run pattern: the two-phase
+  // dialog auto-hides at the safe transition and the import continues as just
+  // another entry in the Tasks tab. runId → { status, percent, message, label,
+  // current, total, abortable }.
+  //
+  // `abortable` is the honest gate for the Tasks-tab cancel affordance: it is
+  // true ONLY while a client-side abort can genuinely act (the pre-commit upload
+  // window, where aborting the in-flight request stops sending remaining bytes).
+  // Once the staging session is committed the import is a background server task
+  // that the client cannot stop without a backend cancel endpoint, so the run is
+  // marked non-abortable and no cancel control is offered. See ImageImporter.vue.
+  const importRuns = reactive({});
+  const importAbortHandlers = new Map();
+
+  function setImportRun(runId, run) {
+    if (!runId) return;
+    const current = Number(run?.current);
+    const total = Number(run?.total);
+    importRuns[runId] = {
+      status: run?.status || "running",
+      percent: Number(run?.percent) || 0,
+      message: run?.message || "Importing on the server…",
+      label: run?.label || "Importing pictures",
+      current: Number.isFinite(current) ? current : 0,
+      total: Number.isFinite(total) ? total : 0,
+      abortable: Boolean(run?.abortable),
+    };
+  }
+
+  function clearImportRun(runId) {
+    if (runId && runId in importRuns) delete importRuns[runId];
+  }
+
+  function registerImportAbort(runId, handler) {
+    if (runId && typeof handler === "function") {
+      importAbortHandlers.set(runId, handler);
+    }
+  }
+
+  function unregisterImportAbort(runId) {
+    importAbortHandlers.delete(runId);
+  }
+
+  function abortImportRun(runId) {
+    const handler = importAbortHandlers.get(runId);
+    if (handler) handler();
+  }
+
+  // The backend surfaces the async import (#459) through the SAME generic
+  // worker-progress snapshot as detection/watch-folder rows, under this key
+  // (TaskType.PICTURE_IMPORT.value). When our own frontend-driven import run is
+  // active it IS the single import row (driven by /status polling across both
+  // stages), so we suppress the generic snapshot entry to avoid a double row.
+  // With no active import run (e.g. after a mid-import tab refresh) it is NOT
+  // suppressed, so the import still shows as a fallback worker row.
+  const IMPORT_WORKER_KEY = "PictureImportTask";
+
   // ── Derived: active work ──────────────────────────────────────────────────
   const activeWorkerEntries = computed(() => {
+    const suppressImportWorker = Object.keys(importRuns).length > 0;
     return Object.entries(workerSnapshots.value || {})
       .filter(([key, snapshot]) => {
         if (!snapshot) return false;
+        if (suppressImportWorker && key === IMPORT_WORKER_KEY) return false;
         if (typeof snapshot.active === "boolean") return snapshot.active;
         const lastActiveAt = Number(lastActiveAtByWorker.get(key) || 0);
         const lastProgressAt = Number(lastProgressAtByWorker.get(key) || 0);
@@ -103,10 +165,20 @@ export const useTasksStore = defineStore("tasks", () => {
     })),
   );
 
-  // ComfyUI runs lead: they are the work the user just kicked off and is waiting
-  // on, so they read first in the Tasks tab.
+  const importEntries = computed(() =>
+    Object.entries(importRuns).map(([key, run]) => ({
+      kind: "import",
+      key,
+      run,
+    })),
+  );
+
+  // ComfyUI runs and imports lead: they are the work the user just kicked off
+  // and is waiting on, so they read first in the Tasks tab, above the ambient
+  // backend workers.
   const activeEntries = computed(() => [
     ...comfyuiEntries.value,
+    ...importEntries.value,
     ...activeWorkerEntries.value,
   ]);
 
@@ -114,11 +186,6 @@ export const useTasksStore = defineStore("tasks", () => {
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
   // ── Rate helpers (read by the Tasks tab for sparklines / "/s" labels) ──────
-  function getMaxRate(key) {
-    const samples = series.value[key] || [];
-    return samples.length ? Math.max(...samples.map((s) => s.rate || 0)) : 0;
-  }
-
   function getLatestRate(key) {
     const samples = series.value[key] || [];
     if (!samples.length) return 0;
@@ -162,9 +229,9 @@ export const useTasksStore = defineStore("tasks", () => {
     if (isReadOnly.value) return;
     fetchInFlight = true;
     try {
-      const res = await apiClient.get("/workers/progress");
-      const workers = res.data?.workers || {};
-      systemUsage.value = res.data?.process || res.data?.system || null;
+      const progress = await getWorkerProgress();
+      const workers = progress?.workers || {};
+      systemUsage.value = progress?.process || progress?.system || null;
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };
@@ -277,13 +344,20 @@ export const useTasksStore = defineStore("tasks", () => {
     registerComfyuiAbort,
     unregisterComfyuiAbort,
     abortComfyuiRun,
+    // import runs (#459)
+    importRuns,
+    setImportRun,
+    clearImportRun,
+    registerImportAbort,
+    unregisterImportAbort,
+    abortImportRun,
     // derived
     activeEntries,
+    importEntries,
     activeWorkerEntries,
     activeCount,
     hasActiveTasks,
     // rate helpers
-    getMaxRate,
     getLatestRate,
     // polling lifecycle
     tasksTabOpen,

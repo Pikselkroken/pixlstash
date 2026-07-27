@@ -46,6 +46,7 @@ from pixlstash.event_types import EventType
 from pixlstash.utils.service.smart_score_invalidation import InteractiveRescoreRegistry
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
 
@@ -80,6 +81,8 @@ class Vault:
         fast_captions: bool = False,
         daily_snapshots_enabled: bool = True,
         insightface_model_pack: str = "buffalo_l",
+        scrapheap_retention_days: Optional[int] = DEFAULT_RETENTION_DAYS,
+        scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
     ):
         """
         Initialize a Vault instance.
@@ -129,6 +132,14 @@ class Vault:
         self._server_config_path = server_config_path
         self._disable_background_workers = disable_background_workers
         self._daily_snapshots_enabled: bool = daily_snapshots_enabled
+        # Scrapheap auto-purge retention window (days) or None = "Never", plus
+        # the instant it was last LOWERED (puts a +1 day floor under EVERY
+        # picture's purge deadline, however old). See scrapheap_service.
+        # Defaults to None: auto-purge stays off until the user turns it on.
+        self._scrapheap_retention_days: Optional[int] = scrapheap_retention_days
+        self._scrapheap_retention_reduced_at: Optional[datetime.datetime] = (
+            scrapheap_retention_reduced_at
+        )
 
         self._planner_watchers = {}
         self._planner_watchers_lock = threading.Lock()
@@ -172,11 +183,18 @@ class Vault:
         from pixlstash.tasks import (
             TaskType,
             EnsureGfsSnapshotFinder,
+            ScrapheapRetentionPurgeFinder,
             TagHealthAutoRebuildFinder,
         )
 
         self._planner_work_finders[TaskType.GFS_SNAPSHOT] = EnsureGfsSnapshotFinder(
             vault=self
+        )
+        # Needs a full Vault to read the retention settings (and to notify on
+        # purge); same reason GFS_SNAPSHOT is registered here rather than in
+        # WorkPlanner.work_finders().
+        self._planner_work_finders[TaskType.SCRAPHEAP_RETENTION_PURGE] = (
+            ScrapheapRetentionPurgeFinder(vault=self)
         )
         # Needs a full Vault (not just `database`) to reach its service
         # layer's vault-facing wrapper (start_rebuild), same reason
@@ -490,6 +508,49 @@ class Vault:
         """Whether automatic (GFS) snapshots are enabled."""
         return self._daily_snapshots_enabled
 
+    def set_scrapheap_retention(
+        self,
+        retention_days: Optional[int],
+        reduced_at: Optional[datetime.datetime],
+    ) -> None:
+        """Set the scrapheap auto-purge window at runtime.
+
+        Takes effect on the next ScrapheapRetentionPurgeFinder cycle. It never
+        purges anything synchronously — a config save must not destroy files.
+
+        Args:
+            retention_days: Days an UNPROTECTED soft-deleted picture stays in
+                the scrapheap, or None for "Never" (auto-purge disabled).
+            reduced_at: When the window was last lowered, or None if it never
+                was. Puts a floor of ``reduced_at + 1 day`` under every
+                picture's deadline, so a lowering never purges anything within
+                a day of the save, however old it is.
+        """
+        self._scrapheap_retention_days = (
+            None if retention_days is None else int(retention_days)
+        )
+        self._scrapheap_retention_reduced_at = reduced_at
+
+    @property
+    def scrapheap_retention_days(self) -> Optional[int]:
+        """Scrapheap auto-purge window in days; None means "Never"."""
+        return self._scrapheap_retention_days
+
+    @property
+    def scrapheap_retention_reduced_at(self) -> Optional[datetime.datetime]:
+        """When the retention window was last lowered, or None."""
+        return self._scrapheap_retention_reduced_at
+
+    @property
+    def unprocessable_images(self):
+        """Registry of pictures whose image file cannot be decoded (issue #585).
+
+        Lives on the database so task threads (which mark decode failures) and
+        finder threads (which suppress them) reach the same instance via their
+        ``self._db``; exposed here for discoverability.
+        """
+        return self.db.unprocessable_images
+
     def set_keep_models_in_memory(self, keep_models_in_memory: bool):
         previous = self._keep_models_in_memory
         self._keep_models_in_memory = bool(keep_models_in_memory)
@@ -782,9 +843,11 @@ class Vault:
                 # _persist_scores skipped (still NULL) is never announced as rescored.
                 # Ids that were never registered (background-only rescores, or interactive
                 # ids demoted when the registry was full) are left to the bulk drain emit.
+                announced_ids: set[int] = set()
                 for origin, ids in self.interactive_rescore_registry.consume(
                     persisted_ids
                 ).items():
+                    announced_ids.update(ids)
                     self.notify(
                         EventType.CHANGED_PICTURES,
                         {
@@ -797,19 +860,65 @@ class Vault:
                     self.db.run_immediate_read_task(SmartScoreTask.count_remaining) or 0
                 )
                 if remaining == 0:
-                    # Tag the event with the changed field so the SPA only
-                    # reloads the grid when it is actually sorting/filtering by
-                    # smart_score; under any other sort this change is invisible.
-                    self.notify(
-                        EventType.CHANGED_PICTURES,
-                        {"picture_ids": picture_ids, "fields": ["smart_score"]},
-                    )
+                    # Exclude ids already announced origin-stamped above: re-announcing
+                    # them origin-less here would raise the "view changed externally" pill
+                    # on the very tab that made the edit (a self-pill). Unregistered
+                    # ids — genuine background rescores, or interactive ids demoted when
+                    # the registry was full — still ride this bulk emit so their cards
+                    # refresh; over-suppressing them would strand real external changes.
+                    drain_ids = [
+                        pid for pid in picture_ids if int(pid) not in announced_ids
+                    ]
+                    if drain_ids:
+                        # Tag the event with the changed field so the SPA only
+                        # reloads the grid when it is actually sorting/filtering by
+                        # smart_score; under any other sort this change is invisible.
+                        self.notify(
+                            EventType.CHANGED_PICTURES,
+                            {"picture_ids": drain_ids, "fields": ["smart_score"]},
+                        )
+                    else:
+                        logger.debug(
+                            "SmartScoreTask drained with all %s rescored id(s) announced "
+                            "origin-stamped; no origin-less drain event emitted.",
+                            len(announced_ids),
+                        )
                 else:
                     logger.debug(
                         "SmartScoreTask updated %s pictures; deferring CHANGED_PICTURES event with %s smart scores remaining.",
                         changed_count,
                         remaining,
                     )
+            return
+
+        if task.type == "PictureImportTask":
+            imported_ids = result.get("imported_picture_ids") or []
+            origin_client_id = result.get("origin_client_id") or task.params.get(
+                "origin_client_id"
+            )
+            # Mirror the streaming-upload import: a genuine PixlStash tab carries
+            # an origin_client_id (slick in-place insert); an external caller does
+            # not (raise the New-pictures pill instead).
+            import_source = "ui" if origin_client_id else "external"
+            self.notify(
+                EventType.CHANGED_PICTURES,
+                {
+                    "picture_ids": imported_ids,
+                    "source": import_source,
+                    "origin_client_id": origin_client_id,
+                    "change_kind": "added",
+                },
+            )
+            if imported_ids:
+                self.notify(
+                    EventType.PICTURE_IMPORTED,
+                    {
+                        "ids": imported_ids,
+                        "source": import_source,
+                        "origin_client_id": origin_client_id,
+                        "change_kind": "added",
+                    },
+                )
             return
 
         if task.type == "DetectionTask":
@@ -970,6 +1079,8 @@ class Vault:
                 try:
                     return len(value or []) > 0, value
                 except Exception:
+                    # Relationship-length guard: a non-lenable value is simply
+                    # "not populated"; (False, value) IS the answer.
                     return False, value
             return value is not None, value
 
@@ -1143,6 +1254,31 @@ class Vault:
                 else:
                     total = 0
                     missing = 0
+            elif worker_type == TaskType.PICTURE_IMPORT:
+                # User-triggered (no finder): surface live progress straight from
+                # the running task(s), mirroring the WATCH_FOLDERS / DETECTION
+                # handling so an async streaming import (#459) renders as a task
+                # row in the frontend task manager.
+                label = "picture_import"
+                active_import_tasks = (
+                    self._task_runner.get_active_tasks_of_type("PictureImportTask")
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_import_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0)) for t in active_import_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_import_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(
@@ -1184,6 +1320,14 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.THUMBNAIL_GENERATION:
+                # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
+                # the v1.8.0 upgrade this counts the entire library, which is what
+                # the in-app "Upgrading thumbnails" progress bar reads.
+                missing = int(
+                    self.db.run_immediate_read_task(self._count_missing_thumbnails) or 0
+                )
+                label = "thumbnails_generated"
             else:
                 missing = 0
                 label = "planner_managed"
@@ -1207,6 +1351,24 @@ class Vault:
     @staticmethod
     def _count_total_pictures(session: Session) -> int:
         result = session.exec(select(func.count()).select_from(Picture)).one()
+        if isinstance(result, (tuple, list)):
+            return result[0]
+        return result or 0
+
+    @staticmethod
+    def _count_missing_thumbnails(session: Session) -> int:
+        """Pictures awaiting whole-frame thumbnail (re)generation.
+
+        Mirrors ``MissingThumbnailFinder._fetch_missing``: keyed on
+        ``thumbnail_width IS NULL`` for live, file-backed pictures.
+        """
+        result = session.exec(
+            select(func.count())
+            .select_from(Picture)
+            .where(Picture.thumbnail_width.is_(None))
+            .where(Picture.deleted.is_(False))
+            .where(Picture.file_path.is_not(None))
+        ).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0
@@ -1305,9 +1467,13 @@ class Vault:
             return result[0]
         return result or 0
 
-    @staticmethod
-    def _count_missing_image_embeddings(session: Session) -> int:
-        return ImageEmbeddingTask.count_remaining(session)
+    def _count_missing_image_embeddings(self, session: Session) -> int:
+        # Exclude undecodable pictures (issue #585) so "remaining" can reach 0
+        # instead of stalling on files that can never produce an embedding.
+        suppressed_ids = self.db.unprocessable_images.active_suppressed_ids()
+        return ImageEmbeddingTask.count_remaining(
+            session, suppressed_ids=suppressed_ids
+        )
 
     @staticmethod
     def _count_pending_likeness_parameters(session: Session) -> int:

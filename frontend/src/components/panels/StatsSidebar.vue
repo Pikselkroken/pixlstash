@@ -1,6 +1,7 @@
 <script setup>
-import { ref, watch, computed, onMounted, onUnmounted } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { isReadOnly } from "../../utils/apiClient";
+import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 const props = defineProps({
@@ -66,7 +67,6 @@ const VIDEO_EXTENSIONS = ["mp4", "webm", "mov", "avi", "mkv", "m4v"];
 const topTagsOpen = ref(true);
 const coocOpen = ref(false);
 const confHistOpen = ref(false);
-const tagCountHistOpen = ref(false);
 
 // Tab state
 const activeTab = ref("tags");
@@ -80,10 +80,7 @@ async function fetchPicStats() {
   const qs = buildQueryParams();
   picStatsLoading.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=picture`,
-    );
-    picStats.value = res.data;
+    picStats.value = await getPictureStats(qs, { include: "picture" });
     picStatsLoaded.value = true;
   } catch {
     picStats.value = null;
@@ -111,10 +108,10 @@ async function fetchTagConfidence(tag) {
   const qs = buildQueryParams();
   confTagLoading.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=conf&confidence_tag=${encodeURIComponent(tag)}`,
-    );
-    confTagData.value = res.data;
+    confTagData.value = await getPictureStats(qs, {
+      include: "conf",
+      confidence_tag: tag,
+    });
   } catch {
     confTagData.value = null;
   } finally {
@@ -257,9 +254,9 @@ async function fetchStats() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await apiClient.get(`/pictures/stats${qs ? `?${qs}` : ""}`);
-    stats.value = { ...res.data, regular_tags: prevRegularTags };
-  } catch (e) {
+    const body = await getPictureStats(qs);
+    stats.value = { ...body, regular_tags: prevRegularTags };
+  } catch {
     error.value = "Failed to load stats";
     stats.value = null;
   } finally {
@@ -284,31 +281,29 @@ const loadingPenalisedBoth = ref(false);
 async function fetchCooc() {
   const qs = buildQueryParams();
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=cooc`,
-    );
+    const body = await getPictureStats(qs, { include: "cooc" });
     if (stats.value)
       stats.value = {
         ...stats.value,
-        top_cooccurrences: res.data.top_cooccurrences,
+        top_cooccurrences: body.top_cooccurrences,
       };
     coocLoaded.value = true;
-  } catch {
-    // silently fail — cooc stays empty
+  } catch (e) {
+    // Non-fatal: the co-occurrence section stays empty and the rest of the
+    // panel still renders. Log it so it is not an invisible failure.
+    console.warn("Failed to load tag co-occurrence stats:", e);
   }
 }
 
 async function fetchConf() {
   const qs = buildQueryParams();
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}include=conf`,
-    );
+    const body = await getPictureStats(qs, { include: "conf" });
     if (stats.value)
       stats.value = {
         ...stats.value,
-        confidence_histogram: res.data.confidence_histogram,
-        regular_tags: res.data.regular_tags,
+        confidence_histogram: body.confidence_histogram,
+        regular_tags: body.regular_tags,
       };
     confLoaded.value = true;
   } catch {
@@ -652,7 +647,6 @@ const donutUntaggedDash = computed(() => {
   if (!stats.value || stats.value.total === 0)
     return DONUT_CIRCUMFERENCE + " " + DONUT_CIRCUMFERENCE;
   const fraction = stats.value.untagged / stats.value.total;
-  const taggedFraction = stats.value.tagged / stats.value.total;
   return `${fraction * DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`;
 });
 
@@ -687,10 +681,10 @@ async function fetchStatsPenalised() {
   const qs = buildQueryParams();
   loadingPenalised.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}only_penalised=1&include=cooc`,
-    );
-    statsPenalised.value = res.data;
+    statsPenalised.value = await getPictureStats(qs, {
+      only_penalised: 1,
+      include: "cooc",
+    });
   } catch {
     statsPenalised.value = null;
   } finally {
@@ -702,10 +696,10 @@ async function fetchStatsPenalisedBoth() {
   const qs = buildQueryParams();
   loadingPenalisedBoth.value = true;
   try {
-    const res = await apiClient.get(
-      `/pictures/stats?${qs ? qs + "&" : ""}only_penalised=both&include=cooc`,
-    );
-    statsPenalisedBoth.value = res.data;
+    statsPenalisedBoth.value = await getPictureStats(qs, {
+      only_penalised: "both",
+      include: "cooc",
+    });
   } catch {
     statsPenalisedBoth.value = null;
   } finally {
@@ -793,13 +787,6 @@ const confHistBuckets = computed(() => {
 const confHistMax = computed(() =>
   Math.max(1, ...confHistBuckets.value.map((b) => b.count)),
 );
-const tagCountBuckets = computed(
-  () => stats.value?.anomaly_tag_count_histogram ?? [],
-);
-const tagCountHistMax = computed(() =>
-  Math.max(1, ...tagCountBuckets.value.map((b) => b.count)),
-);
-
 function histBarWidth(count, maxCount) {
   return Math.max(count > 0 ? 2 : 0, (count / maxCount) * 208);
 }
@@ -846,6 +833,237 @@ function handleSmartScoreBarClick(label) {
   }
 }
 
+// ─── Agreement matrix (your rating x smart score) ────────────────────────────
+// Rows run 1..5 top to bottom and columns 1-2..4-5 left to right, matching the
+// two histograms above so this reads as their cross-product and agreement runs
+// as a band down the diagonal.
+const AGREEMENT_STARS = [1, 2, 3, 4, 5];
+const AGREEMENT_BUCKETS = ["1-2", "2-3", "3-4", "4-5"];
+// Both axes are already the same 1-5 scale, so the buckets are compared to the
+// ratings in smart-score units rather than by grid position.
+const AGREEMENT_BUCKET_RANGES = {
+  "1-2": [1, 2],
+  "2-3": [2, 3],
+  "3-4": [3, 4],
+  "4-5": [4, 5],
+};
+// A star is a rounded smart score: rating 4 stands for anything from 3.5 to 4.5,
+// so any bucket within half a point of the rating is a match.
+const AGREEMENT_MATCH_RADIUS = 0.5;
+// The gutter is wider than the sibling charts' 50px to make room for the
+// rotated y-axis title.
+const AGREEMENT_X0 = 62;
+const AGREEMENT_COL_W = 49;
+const AGREEMENT_CELL_W = 47; // 2px surface gap between cells
+const AGREEMENT_ROW_H = 22;
+const AGREEMENT_CELL_H = 20;
+const AGREEMENT_HEADER_H = 14;
+const AGREEMENT_AXIS_H = 15; // x-axis title strip below the grid
+// Above this shade the fill is dark enough that the count needs the hue's own
+// on-colour ink, the same inside/outside-the-bar switch the sibling charts make
+// spatially.
+const AGREEMENT_ON_FILL_SHADE = 0.55;
+const AGREEMENT_CAVEAT =
+  "Green cells are pictures you and the smart score agree about, within half a point, and red ones are where you disagree by more than a point and a half. The stronger the colour, the more pictures are in that cell. Pictures you rate 1 or 5 also train the smart score, so agreement at the extremes is partly built in. The interesting part is the middle rows and the cells outside the green band.";
+
+// Traffic-light hue by how far apart the two scores are, opacity by count.
+//
+// The gap is measured in smart-score points, not in grid steps: a star rating is
+// a rounded smart score, so rating 4 covers 3.5 to 4.5 and therefore matches BOTH
+// the 3-4 and the 4-5 bucket. Comparing normalised grid positions instead made
+// rating 4 a near-miss against 4-5, which is wrong: the two axes are the same
+// 1-5 scale and should be compared on it.
+//
+// Distance is from the rating to the nearest point of the bucket's interval, so
+// a rating inside the bucket is 0 apart. Ratings and bucket edges are whole
+// numbers, so this only ever yields 0, 1, 2 or 3.
+function agreementDisagreement(star, bucket) {
+  const range = AGREEMENT_BUCKET_RANGES[bucket];
+  if (!range) return 0;
+  const [low, high] = range;
+  return Math.max(low - star, star - high, 0);
+}
+
+function agreementTone(star, bucket) {
+  const distance = agreementDisagreement(star, bucket);
+  if (distance <= AGREEMENT_MATCH_RADIUS) return "good";
+  if (distance <= 1 + AGREEMENT_MATCH_RADIUS) return "mixed";
+  return "bad";
+}
+
+const agreement = computed(() => {
+  const raw = picStats.value?.score_agreement;
+  if (!raw || !Array.isArray(raw.cells) || !raw.cells.length) return null;
+  return raw;
+});
+
+const agreementCounts = computed(() => {
+  const map = new Map();
+  for (const cell of agreement.value?.cells || []) {
+    map.set(`${cell.score}|${cell.bucket}`, Number(cell.count) || 0);
+  }
+  return map;
+});
+
+function agreementCount(star, bucket) {
+  return agreementCounts.value.get(`${star}|${bucket}`) || 0;
+}
+
+const agreementMax = computed(() => {
+  let max = 0;
+  for (const count of agreementCounts.value.values()) {
+    if (count > max) max = count;
+  }
+  return max;
+});
+
+// sqrt so a single dominant cell doesn't flatten every other populated cell to
+// the same near-invisible wash. Empty cells get no fill at all.
+function agreementShade(star, bucket) {
+  const count = agreementCount(star, bucket);
+  if (!count || !agreementMax.value) return 0;
+  const ratio = Math.sqrt(count / agreementMax.value);
+  return 0.12 + ratio * 0.73;
+}
+
+function agreementCountOnFill(star, bucket) {
+  return agreementShade(star, bucket) >= AGREEMENT_ON_FILL_SHADE;
+}
+
+function agreementCellLabel(star, bucket) {
+  const count = agreementCount(star, bucket);
+  const pictures = count === 1 ? "1 picture" : `${count} pictures`;
+  return `${star} star, smart score ${bucket}: ${pictures}`;
+}
+
+function isAgreementCellActive(star, bucket) {
+  return (
+    props.minScoreFilter === star &&
+    props.maxScoreFilter === star &&
+    props.smartScoreBucketFilter === bucket
+  );
+}
+
+const agreementCellSelected = computed(() =>
+  AGREEMENT_STARS.some((star) =>
+    AGREEMENT_BUCKETS.some((bucket) => isAgreementCellActive(star, bucket)),
+  ),
+);
+
+function clearAgreementFilter() {
+  emit("update:minScoreFilter", null);
+  emit("update:maxScoreFilter", null);
+  emit("update:smartScoreBucketFilter", null);
+}
+
+// A cell click is a compound filter: the row sets the score range, the column
+// sets the smart-score bucket. Clicking the active cell clears both, matching
+// the toggle behaviour of the sibling bars.
+function onAgreementCellClick(star, bucket, row, col) {
+  if (agreementCount(star, bucket) <= 0) return; // an empty cell filters to nothing
+  agreementFocus.value = { row, col };
+  if (isAgreementCellActive(star, bucket)) {
+    clearAgreementFilter();
+    return;
+  }
+  emit("update:minScoreFilter", star);
+  emit("update:maxScoreFilter", star);
+  emit("update:smartScoreBucketFilter", bucket);
+}
+
+// Roving tabindex: the grid is one tab stop and arrow keys move within it, so 20
+// cells don't cost 20 tab presses to skip past.
+const agreementFocus = ref({ row: 0, col: 0 });
+
+function agreementTabIndex(row, col) {
+  return agreementFocus.value.row === row && agreementFocus.value.col === col
+    ? 0
+    : -1;
+}
+
+function focusAgreementCell(row, col) {
+  agreementFocus.value = { row, col };
+  nextTick(() => {
+    const cells = document.querySelectorAll(".agreement-grid [role='gridcell']");
+    cells[row * AGREEMENT_BUCKETS.length + col]?.focus?.();
+  });
+}
+
+function onAgreementKeydown(event) {
+  const { row, col } = agreementFocus.value;
+  const lastRow = AGREEMENT_STARS.length - 1;
+  const lastCol = AGREEMENT_BUCKETS.length - 1;
+  let next = null;
+  if (event.key === "ArrowRight") next = { row, col: Math.min(lastCol, col + 1) };
+  else if (event.key === "ArrowLeft") next = { row, col: Math.max(0, col - 1) };
+  else if (event.key === "ArrowDown") next = { row: Math.min(lastRow, row + 1), col };
+  else if (event.key === "ArrowUp") next = { row: Math.max(0, row - 1), col };
+  else if (event.key === "Home") next = { row, col: 0 };
+  else if (event.key === "End") next = { row, col: lastCol };
+  else if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onAgreementCellClick(
+      AGREEMENT_STARS[row],
+      AGREEMENT_BUCKETS[col],
+      row,
+      col,
+    );
+    return;
+  }
+  if (!next) return;
+  event.preventDefault();
+  focusAgreementCell(next.row, next.col);
+}
+
+// Signed to two decimals, so a negative coefficient reads as "the smart score
+// disagrees with you" rather than as a typo.
+function formatCoefficient(value) {
+  if (value == null || Number.isNaN(Number(value))) return null;
+  const rounded = Number(value).toFixed(2);
+  return Number(rounded) > 0 ? `+${rounded}` : rounded;
+}
+
+// Both coefficients are shown with their names spelled out: they answer
+// different questions (Pearson assumes the star scale is evenly spaced,
+// Spearman only assumes the order), and a bare Greek letter tells the reader
+// neither which is which nor what it measures.
+const agreementCoefficients = computed(() => {
+  const data = agreement.value;
+  if (!data) return [];
+  return [
+    {
+      key: "pearson",
+      name: "Pearson r",
+      value: formatCoefficient(data.pearson),
+      title:
+        "Pearson's r: straight-line correlation. Treats the gap between each star as equal.",
+    },
+    {
+      key: "spearman",
+      name: "Spearman ρ",
+      value: formatCoefficient(data.spearman),
+      title:
+        "Spearman's rho: rank correlation. Only assumes more stars means better, not that the steps are even.",
+    },
+  ].filter((entry) => entry.value !== null);
+});
+
+const agreementNoCoefficientLabel = computed(() =>
+  (agreement.value?.pairs || 0) > 0
+    ? "Rate a few more pictures to see the correlation"
+    : "Rate some pictures to compare them with the smart score",
+);
+
+const agreementCoverage = computed(() => {
+  const data = agreement.value;
+  if (!data) return "";
+  const rated = Number(data.rated) || 0;
+  const total = Number(data.total) || 0;
+  if (!total) return "No pictures in view";
+  const pct = Math.round((rated / total) * 100);
+  return `${rated.toLocaleString()} of ${total.toLocaleString()} rated (${pct}%)`;
+});
+
 const RESOLUTION_LABEL_TO_BUCKET = {
   Unknown: "unknown",
   "<1 MP": "lt1mp",
@@ -870,6 +1088,14 @@ function handleResolutionBarClick(label) {
     emit("update:resolutionBucketFilter", key);
   }
 }
+
+// Let a caller (e.g. the "View progress" action on the justified-layout
+// regeneration notice) deep-link to the Tasks tab. Opening the panel itself is
+// the parent's job (it owns `statsOpen`); this only selects the tab.
+function focusTasksTab() {
+  activeTab.value = "tasks";
+}
+defineExpose({ focusTasksTab });
 </script>
 
 <template>
@@ -1579,6 +1805,158 @@ function handleResolutionBarClick(label) {
             </div>
           </div>
 
+          <!-- Smart score vs your rating (agreement matrix) -->
+          <div v-if="agreement" class="stats-section">
+            <div class="stats-section-header">
+              <span class="stats-section-title">Agreement</span>
+              <span
+                class="stats-info-dot"
+                :title="AGREEMENT_CAVEAT"
+                tabindex="0"
+                role="note"
+                :aria-label="AGREEMENT_CAVEAT"
+              >
+                <v-icon size="11">mdi-information-outline</v-icon>
+              </span>
+              <button
+                v-if="agreementCellSelected"
+                class="stats-clear-btn"
+                type="button"
+                title="Clear agreement filter"
+                @click="clearAgreementFilter"
+              >
+                <v-icon size="11">mdi-close</v-icon>
+              </button>
+            </div>
+            <div v-if="agreement.pairs > 0" class="stats-hist">
+              <svg
+                :width="260"
+                :height="
+                  AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + AGREEMENT_AXIS_H + 2
+                "
+                class="stats-bar-chart agreement-grid"
+                role="grid"
+                aria-label="Your rating against smart score"
+                @keydown="onAgreementKeydown"
+              >
+                <!-- Axis titles. The y title is rotated up the left edge; the x
+                     title sits under the grid, both in the recessive label ink. -->
+                <text
+                  :x="-(AGREEMENT_HEADER_H + (AGREEMENT_ROW_H * 5) / 2)"
+                  y="9"
+                  transform="rotate(-90)"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Your rating
+                </text>
+                <text
+                  :x="AGREEMENT_X0 + (AGREEMENT_COL_W * 4) / 2"
+                  :y="AGREEMENT_HEADER_H + AGREEMENT_ROW_H * 5 + 11"
+                  text-anchor="middle"
+                  class="hist-axis-title"
+                >
+                  Smart score
+                </text>
+                <text
+                  v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                  :key="`col-${bucket}`"
+                  :x="AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2"
+                  y="9"
+                  text-anchor="middle"
+                  class="hist-label"
+                >
+                  {{ bucket }}
+                </text>
+                <g
+                  v-for="(star, row) in AGREEMENT_STARS"
+                  :key="`row-${star}`"
+                  role="row"
+                  :transform="`translate(0, ${AGREEMENT_HEADER_H + row * AGREEMENT_ROW_H})`"
+                >
+                  <text x="46" y="14" text-anchor="end" class="hist-label">
+                    {{ star }}
+                  </text>
+                  <g
+                    v-for="(bucket, col) in AGREEMENT_BUCKETS"
+                    :key="`cell-${star}-${bucket}`"
+                    role="gridcell"
+                    :class="[
+                      'agreement-cell',
+                      `agreement-cell--${agreementTone(star, bucket)}`,
+                      {
+                        'agreement-cell--interactive':
+                          agreementCount(star, bucket) > 0,
+                        'agreement-cell--selected': isAgreementCellActive(
+                          star,
+                          bucket,
+                        ),
+                      },
+                    ]"
+                    :tabindex="agreementTabIndex(row, col)"
+                    :aria-selected="isAgreementCellActive(star, bucket)"
+                    :aria-label="agreementCellLabel(star, bucket)"
+                    @click="onAgreementCellClick(star, bucket, row, col)"
+                    @focus="agreementFocus = { row, col }"
+                  >
+                    <rect
+                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                      y="2"
+                      :width="AGREEMENT_CELL_W"
+                      :height="AGREEMENT_CELL_H"
+                      rx="2"
+                      class="agreement-cell-rect"
+                      :style="{ opacity: agreementShade(star, bucket) }"
+                    />
+                    <rect
+                      :x="AGREEMENT_X0 + col * AGREEMENT_COL_W"
+                      y="2"
+                      :width="AGREEMENT_CELL_W"
+                      :height="AGREEMENT_CELL_H"
+                      rx="2"
+                      class="agreement-cell-outline"
+                    />
+                    <text
+                      v-if="agreementCount(star, bucket) > 0"
+                      :x="
+                        AGREEMENT_X0 +
+                        col * AGREEMENT_COL_W +
+                        AGREEMENT_CELL_W / 2
+                      "
+                      :y="2 + AGREEMENT_CELL_H / 2 + 4"
+                      text-anchor="middle"
+                      :class="[
+                        'agreement-count',
+                        {
+                          'agreement-count--on-fill': agreementCountOnFill(
+                            star,
+                            bucket,
+                          ),
+                        },
+                      ]"
+                    >
+                      {{ agreementCount(star, bucket) }}
+                    </text>
+                  </g>
+                </g>
+              </svg>
+            </div>
+            <div class="agreement-summary">
+              <dl v-if="agreementCoefficients.length" class="agreement-stats">
+                <template v-for="stat in agreementCoefficients" :key="stat.key">
+                  <dt class="agreement-stat-name" :title="stat.title">
+                    {{ stat.name }}
+                  </dt>
+                  <dd class="agreement-stat-value">{{ stat.value }}</dd>
+                </template>
+              </dl>
+              <span v-else class="agreement-stat-empty">
+                {{ agreementNoCoefficientLabel }}
+              </span>
+              <span class="agreement-coverage">{{ agreementCoverage }}</span>
+            </div>
+          </div>
+
           <!-- Resolution distribution -->
           <div class="stats-section">
             <div class="stats-section-header">
@@ -1726,6 +2104,48 @@ function handleResolutionBarClick(label) {
               </div>
               <div class="tm-comfy-message">{{ entry.run.message }}</div>
             </div>
+            <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+                 transition and the import lands here as a determinate task row.
+                 data-import-task-row is the FLIP flight target the import dialog
+                 flies its count chip into. -->
+            <div
+              v-else-if="entry.kind === 'import'"
+              class="tm-worker-row tm-import-row"
+              :data-import-task-row="entry.key"
+            >
+              <div class="tm-worker-row-top">
+                <span
+                  class="tm-status-dot"
+                  :class="{ 'tm-status-dot--running': entry.run.status === 'running' }"
+                ></span>
+                <span class="tm-worker-label">{{ entry.run.label }}</span>
+                <span v-if="entry.run.total > 0" class="tm-worker-progress">
+                  {{ entry.run.current }} / {{ entry.run.total }}
+                </span>
+                <!-- Cancel is offered only while the import is genuinely
+                     client-abortable (the pre-commit upload window, run.abortable).
+                     A committed server-side import cannot be stopped from the
+                     client, so no cancel control is shown for it. -->
+                <button
+                  v-if="entry.run.abortable && !isReadOnly"
+                  class="tm-comfy-abort"
+                  type="button"
+                  title="Cancel import"
+                  @click="tasksStore.abortImportRun(entry.key)"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="tm-comfy-bar">
+                <div
+                  class="tm-comfy-fill"
+                  :style="{
+                    width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
+                  }"
+                ></div>
+              </div>
+              <div class="tm-comfy-message">{{ entry.run.message }}</div>
+            </div>
             <!-- Backend worker: throughput sparkline + rate -->
             <div v-else class="tm-worker-row">
               <div class="tm-worker-row-top">
@@ -1773,18 +2193,17 @@ function handleResolutionBarClick(label) {
 <style scoped>
 .stats-sidebar {
   position: relative;
-  width: 288px;
-  min-width: 288px;
-  max-width: 288px;
+  width: var(--stats-panel-w);
+  min-width: var(--stats-panel-w);
+  max-width: var(--stats-panel-w);
   height: 100%;
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  /* No left divider in the docked layout: the panel uses the sidebar's chrome
-     colour so the left sidebar and right stats panel frame the grid symmetrically;
-     the grid's images provide the separation. The mobile drawer re-adds an edge
-     (see the max-width: 1339px block). */
-  border-left: 1px solid transparent;
+  /* Mirrors `.sidebar`'s border-right exactly, so the two rails present the
+     same edge onto the grid canvas. Was `transparent`, which reserved the pixel
+     but painted nothing while the left rail carried a visible hairline. */
+  border-left: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
   transition:
     width 0.15s,
@@ -1793,60 +2212,27 @@ function handleResolutionBarClick(label) {
   overflow: hidden;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar {
-    position: fixed;
-    right: 0;
-    top: calc(var(--titlebar-h, 0px) + 36px);
-    bottom: 0;
-    height: auto;
-    z-index: 150;
-    transform: translateX(0);
-    transition: transform 0.3s ease;
-    border-left: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  }
-
-  .stats-sidebar.collapsed {
-    transform: translateX(100%);
-    width: 288px;
-    min-width: 288px;
-    max-width: 288px;
-    border-left-color: rgba(var(--v-theme-on-surface), 0.1);
-    overflow: hidden;
-    background: rgba(var(--v-theme-surface), 1);
-  }
-}
-
+/* The panel is DOCKED at every width and is never taken out of flow. A
+   `max-width: 1339px` block used to turn it into a fixed overlay drawer
+   (z-index 150, anchored below the 36px header band). That drawer opened
+   directly on top of the toolbar's own stats toggle — the only control that
+   closes it — because the toggle sits in the band *below* that anchor. It also
+   hid the title row, and its close button was never wired up, so on any
+   viewport at or under 1339px an opened panel could not be dismissed at all.
+   Docking removes the collision by construction: the toolbar ends where the
+   panel begins. If a floating stats panel is ever wanted it should be a user
+   preference like the left sidebar's (`.sidebar-overlay` in App.css), not a
+   width breakpoint. */
 .stats-sidebar.collapsed {
   width: 0;
   min-width: 0;
   max-width: 0;
   border-left-color: transparent;
-  overflow: visible;
+  /* Was `visible` so the edge-toggle button could hang outside the collapsed
+     panel; that button no longer exists, and a zero-width panel must not let
+     its content bleed over the grid. */
+  overflow: hidden;
   background: transparent;
-}
-
-.stats-sidebar-edge-toggle {
-  position: absolute;
-  left: -28px;
-  top: 8px;
-  width: 28px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--v-theme-surface), 1);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-  border-right: none;
-  border-radius: var(--radius-md) 0 0 var(--radius-md);
-  cursor: pointer;
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  z-index: 1;
-}
-
-.stats-sidebar-edge-toggle:hover {
-  color: rgb(var(--v-theme-primary));
-  background: rgba(var(--v-theme-surface), 1);
 }
 
 .stats-sidebar-close-btn {
@@ -1889,26 +2275,12 @@ function handleResolutionBarClick(label) {
   flex-shrink: 0;
 }
 
-@media (max-width: 1339px) {
-  .stats-sidebar-header {
-    height: auto;
-    border-bottom: none;
-    margin-bottom: 0;
-  }
-}
-
 .stats-sidebar-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex: 1;
   padding: 0 var(--space-2) 0 var(--space-3);
-}
-
-@media (max-width: 1339px) {
-  .stats-sidebar-title-row {
-    display: none;
-  }
 }
 
 .stats-sidebar-title,
@@ -2385,6 +2757,123 @@ function handleResolutionBarClick(label) {
   stroke-width: 1;
 }
 
+/* ── Agreement matrix ──────────────────────────────────────────────────────
+   Composite encoding: HUE is the traffic light (how far the cell sits from
+   agreement, fixed by its position in the grid), OPACITY is how many pictures
+   are in it. The hue is redundant with position and every populated cell prints
+   its count, so nothing here is carried by colour alone — which is what makes a
+   red/green pair acceptable for colour-blind readers. Status hues come from the
+   theme's own success/warning/error tokens, which are defined per theme, so
+   light and dark each get their tuned value. The fill IS the value, so hover
+   must not change it: hover and focus ring the cell instead. */
+.agreement-cell-rect {
+  fill: rgb(var(--v-theme-primary));
+}
+.agreement-cell--good .agreement-cell-rect {
+  fill: rgb(var(--v-theme-success));
+}
+.agreement-cell--mixed .agreement-cell-rect {
+  fill: rgb(var(--v-theme-warning));
+}
+.agreement-cell--bad .agreement-cell-rect {
+  fill: rgb(var(--v-theme-error));
+}
+/* Once the fill is strong enough to carry it, the count switches to that hue's
+   own label ink (each pairs 4.8:1+ with its fill in both themes). */
+.agreement-cell--good .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-success));
+}
+.agreement-cell--mixed .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-warning));
+}
+.agreement-cell--bad .agreement-count--on-fill {
+  fill: rgb(var(--v-theme-on-error));
+}
+.agreement-cell-outline {
+  fill: none;
+  stroke: rgba(var(--v-theme-on-surface), 0.12);
+  stroke-width: 1;
+}
+.agreement-cell--interactive {
+  cursor: pointer;
+}
+.agreement-cell--interactive:hover .agreement-cell-outline {
+  stroke: rgba(var(--v-theme-on-surface), 0.45);
+}
+.agreement-cell--selected .agreement-cell-outline {
+  stroke: rgb(var(--v-theme-primary));
+  stroke-width: 2;
+}
+.agreement-cell:focus-visible {
+  outline: none;
+}
+.agreement-cell:focus-visible .agreement-cell-outline {
+  stroke: rgb(var(--v-theme-accent));
+  stroke-width: 2;
+}
+.agreement-count {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-surface), 0.75);
+  pointer-events: none;
+}
+.agreement-count--on-fill {
+  fill: rgba(var(--v-theme-on-primary), 0.9);
+}
+.agreement-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+/* Name / value pairs, so both coefficients line up on the value column instead
+   of running together as one sentence. */
+.agreement-stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.agreement-stat-name {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  cursor: help;
+}
+.agreement-stat-value {
+  margin: 0;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.85);
+  text-align: right;
+}
+.agreement-stat-empty {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+.hist-axis-title {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  fill: rgba(var(--v-theme-on-surface), 0.45);
+  letter-spacing: 0.04em;
+}
+.agreement-coverage {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+.stats-info-dot {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), 0.45);
+  cursor: help;
+}
+.stats-info-dot:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
 /* ── Tasks tab ─────────────────────────────────────────────────────────────── */
 .tm-idle-msg {
   font-size: var(--text-xs);
@@ -2527,6 +3016,46 @@ function handleResolutionBarClick(label) {
   .tm-status-dot--running,
   .tm-tab-icon--busy,
   .tm-tab-pulse {
+    animation: none;
+  }
+}
+
+/* Landing punctuation for the async import (#459): a one-shot spring-pop + accent
+   glow-and-settle when the FLIP flight from the import dialog lands the chip on
+   this row (mirrors the gridNewPulse landing-pulse pattern, visual-language §10).
+   One-shot `both` so it plays once on the row's first render, then rests. */
+.tm-import-row {
+  animation:
+    tm-import-pop var(--dur-4) var(--ease-spring) both,
+    tm-import-glow 2.2s ease-out both;
+}
+
+@keyframes tm-import-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes tm-import-glow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5);
+    border-color: rgba(var(--v-theme-primary), 0.6);
+  }
+  35% {
+    box-shadow: 0 0 0 4px rgba(var(--v-theme-primary), 0.18);
+    border-color: rgba(var(--v-theme-primary), 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0);
+    border-color: rgba(var(--v-theme-on-surface), 0.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-import-row {
     animation: none;
   }
 }

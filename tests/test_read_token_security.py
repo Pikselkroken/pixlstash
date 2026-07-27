@@ -25,7 +25,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-import pixlstash.routes.pictures._crud as crud_module
+import pixlstash.routes.pictures._character_likeness as likeness_module
 import pixlstash.routes.pictures._listing as listing_module
 import pixlstash.utils.rate_limiter as rl_module
 from pixlstash.db_models import Picture
@@ -1192,12 +1192,12 @@ class TestResourceScopedReadTokenIsolation:
 
                 with (
                     patch.object(
-                        crud_module,
+                        likeness_module,
                         "select_reference_faces_for_character",
                         _fake_select_reference_faces,
                     ),
                     patch.object(
-                        crud_module,
+                        likeness_module,
                         "compute_character_likeness_for_faces",
                         _fake_compute_likeness,
                     ),
@@ -1779,10 +1779,22 @@ class TestRateLimiter:
                         )
 
     def test_rate_limit_window_resets(self):
-        """After the window expires the counter resets and requests go through again."""
+        """After the window expires the counter resets and requests go through again.
+
+        The window has to outlast the three logins below, because the limiter
+        slides: with a 1s window the first hit was already evicted by the time
+        the third arrived whenever the two bcrypt password verifications took
+        more than a second between them, and the assertion below saw 200
+        instead of 429. That is a wall-clock budget, not a limiter bug, and it
+        went from rare to reproducible once CI started running test files
+        concurrently. ``_WINDOW`` is therefore sized with enough headroom to
+        survive a contended runner; the reset itself is still proven by
+        sleeping past it.
+        """
+        window_seconds = 5
         with (
             patch.object(rl_module, "_LIMIT", 2),
-            patch.object(rl_module, "_WINDOW", 1),
+            patch.object(rl_module, "_WINDOW", window_seconds),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 config_path = f"{tmp}/server-config.json"
@@ -1801,8 +1813,8 @@ class TestRateLimiter:
                     )
                     assert r.status_code == 429
 
-                    # Wait out the 1-second window.
-                    time.sleep(1.2)
+                    # Wait out the window.
+                    time.sleep(window_seconds + 0.2)
 
                     r = client.post(
                         f"{API}/login", json={"username": "u", "password": "password1"}

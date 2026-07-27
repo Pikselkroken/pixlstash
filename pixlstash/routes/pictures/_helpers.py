@@ -13,13 +13,11 @@ from sqlalchemy import (
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
-    Face,
     Picture,
-    PictureProjectMember,
-    PictureSetMember,
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import scrapheap_service
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     normalize_hidden_tags,
@@ -203,6 +201,84 @@ def _parse_sidecar_tags(raw_text: str) -> list[str]:
     return parsed
 
 
+def _enrich_scrapheap_retention(server, pics: list[dict]) -> list[dict]:
+    """Add ``purge_at``, ``auto_purge_exempt`` and ``auto_purge_exempt_reason``.
+
+    All three are computed server-side so the countdown, the badge, and the
+    retention grace maths have exactly one implementation. The values are read
+    fresh from the DB (``deleted_at``, ``reference_folder_id``, locked-set
+    membership) rather than from the request's field projection, so
+    ``fields=grid`` gets them too.
+
+    **The listing must agree with the sweep.** Both exemptions the sweep honours
+    are applied here, through the same helpers the finder uses
+    (``fetch_no_delete_folder_ids`` and ``locked_scrapheap_picture_ids``, the
+    latter covering the live-stack-sibling freeze), so the two can never
+    disagree. Omitting the lock check made the grid render a permanent, urgent
+    "purges today" countdown on a locked picture the sweep would never touch.
+
+    Args:
+        server: The application server with vault access.
+        pics: Scrapheap picture dicts to enrich (mutated in place).
+
+    Returns:
+        The same list, with all three keys set on every dict.
+    """
+    if not pics:
+        return pics
+    picture_ids = [
+        int(p.get("id"))
+        for p in pics
+        if isinstance(p, dict) and p.get("id") is not None
+    ]
+    if not picture_ids:
+        return pics
+
+    rows = scrapheap_service.fetch_scrapheap_rows(server.vault, picture_ids)
+    no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids(server.vault)
+    locked_ids = scrapheap_service.locked_scrapheap_picture_ids(
+        server.vault, picture_ids
+    )
+    retention_days = server.vault.scrapheap_retention_days
+    reduced_at = server.vault.scrapheap_retention_reduced_at
+
+    reason_by_id: dict[int, str | None] = {}
+    purge_at_by_id: dict[int, str | None] = {}
+    for row in rows:
+        if row.id is None:
+            continue
+        row_id = int(row.id)
+        is_protected = row.is_protected(no_delete_folder_ids)
+        is_locked = row_id in locked_ids
+        purge_at = scrapheap_service.compute_purge_at(
+            row.deleted_at, retention_days, reduced_at, is_protected, is_locked
+        )
+        reason_by_id[row_id] = scrapheap_service.auto_purge_exemption(
+            is_protected, is_locked
+        )
+        purge_at_by_id[row_id] = purge_at.isoformat() if purge_at else None
+
+    for pic in pics:
+        if not isinstance(pic, dict):
+            continue
+        pic_id = pic.get("id")
+        pic_id = int(pic_id) if pic_id is not None else None
+        if pic_id not in reason_by_id:
+            # Vanished between the listing query and this enrichment: report it
+            # as exempt with no deadline rather than advertising a countdown we
+            # did not actually compute. The reason is null because we no longer
+            # know which exemption would have applied.
+            pic["purge_at"] = None
+            pic["auto_purge_exempt"] = True
+            pic["auto_purge_exempt_reason"] = None
+            continue
+        reason = reason_by_id[pic_id]
+        pic["auto_purge_exempt"] = reason is not None
+        pic["auto_purge_exempt_reason"] = reason
+        pic["purge_at"] = purge_at_by_id.get(pic_id)
+    return pics
+
+
 def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
     """Add stack_count field to each dict in pics by querying the DB.
 
@@ -286,89 +362,6 @@ def _enrich_stack_counts(server, pics: list[dict]) -> list[dict]:
     return enriched
 
 
-def _picture_id_in_scoped_set(server, picture_id: int, set_id: int) -> bool:
-    """Return True if picture_id is a member of set_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(PictureSetMember).where(
-                    PictureSetMember.set_id == set_id,
-                    PictureSetMember.picture_id == picture_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def _picture_id_in_scoped_character(server, picture_id: int, character_id: int) -> bool:
-    """Return True if the picture has at least one face assigned to character_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(Face).where(
-                    Face.picture_id == picture_id,
-                    Face.character_id == character_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def _picture_id_in_scoped_project(server, picture_id: int, project_id: int) -> bool:
-    """Return True if picture_id is a member of project_id."""
-
-    def check(session):
-        return (
-            session.exec(
-                select(PictureProjectMember).where(
-                    PictureProjectMember.picture_id == picture_id,
-                    PictureProjectMember.project_id == project_id,
-                )
-            ).first()
-            is not None
-        )
-
-    return server.vault.db.run_immediate_read_task(check)
-
-
-def enforce_picture_scope(server, request: Request, picture_id: int):
-    """Raise 403 if a scoped token does not permit access to this picture."""
-    scope = getattr(request.state, "token_scope", None)
-    if scope is None:
-        return
-    if scope.resource_type == "picture_set":
-        if not _picture_id_in_scoped_set(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "character":
-        if not _picture_id_in_scoped_character(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "project":
-        if not _picture_id_in_scoped_project(server, picture_id, scope.resource_id):
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type == "picture":
-        # Single-picture share token: only that exact picture is permitted.
-        if picture_id != scope.resource_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised to access this picture",
-            )
-    elif scope.resource_type is not None:
-        raise HTTPException(
-            status_code=403,
-            detail="Token is not authorised for this resource type",
-        )
+# enforce_picture_scope and its private _picture_id_in_scoped_* helpers live in
+# pixlstash/authz/membership.py — the single home for object-membership checks.
+# The centralised authz gate calls them; handlers no longer do (Step 5).

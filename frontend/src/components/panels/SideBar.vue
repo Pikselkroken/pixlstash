@@ -20,11 +20,46 @@ import ShareDialog from "../io/ShareDialog.vue";
 import WordmarkLogo from "../WordmarkLogo.vue";
 import unknownPerson from "../../assets/unknown-person.png"; // Fallback avatar for characters without thumbnails
 import {
-  apiClient,
   appendShareToken,
   isReadOnly,
   sessionContext,
 } from "../../utils/apiClient";
+import {
+  listCharacters,
+  patchCharacter,
+  getCharacterSummary,
+  getCharacterThumbnail,
+  addCharacterFaces,
+  addCharacterFacesByFaceId,
+  deleteCharacter as apiDeleteCharacter,
+} from "../../api/characters";
+import {
+  listPictureSets,
+  patchPictureSet,
+  deletePictureSet,
+  addPictureToSet,
+} from "../../api/pictureSets";
+import {
+  listProjects,
+  getProjectSummary,
+  deleteProject,
+} from "../../api/projects";
+import {
+  listReferenceFolders,
+  listImportFolders,
+  deleteFolder,
+  browseFilesystem,
+  // Aliased: this component's own click handler is also called
+  // relocateReferenceFolder.
+  relocateReferenceFolder as requestFolderRelocate,
+  movePicturesToReferenceFolder,
+} from "../../api/folders";
+import { setPicturesProject } from "../../api/pictures";
+import {
+  getSharedResourceIds,
+  revokeTokensByResource,
+} from "../../api/users";
+import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
   SET_ICONS,
@@ -35,13 +70,26 @@ import {
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
+import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
 const sidebarStore = useSidebarStore();
 const lockedSetsStore = useLockedSetsStore();
+// Failures and outcomes report through the notice surface rather than a
+// blocking native alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
+
+/**
+ * Human-readable reason from an axios/HTTP error, for a one-sentence notice.
+ * @param {unknown} e
+ */
+function noticeDetail(e) {
+  return e?.response?.data?.detail || e?.message || "Please try again.";
+}
 
 // The desktop shell hosts the brand (logo + "new version" alert) in the title
 // bar, so the sidebar copies below are gated on !isDesktop.
@@ -75,6 +123,7 @@ const props = defineProps({
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
@@ -95,6 +144,8 @@ const emit = defineEmits([
   "update:sidebar-width",
   "update:date-format",
   "update:theme-mode",
+  "update:thumbnail-mode",
+  "empty-scrapheap",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -143,34 +194,29 @@ const labelObservers = new Map();
 
 const dragOverSet = ref(null);
 
-const peopleSectionCollapsed = ref(false);
-const setsSectionCollapsed = ref(false);
-
-// Project tree expansion state (Projects tab flat tree)
-const expandedProjectIds = ref(new Set());
-const projectTreePeopleCollapsed = ref(new Set()); // project IDs where People is collapsed
-const projectTreeSetsCollapsed = ref(new Set()); // project IDs where Sets is collapsed
-
-function toggleProjectExpanded(id) {
-  const next = new Set(expandedProjectIds.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  expandedProjectIds.value = next;
-}
-
-function toggleProjectTreePeople(id) {
-  const next = new Set(projectTreePeopleCollapsed.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  projectTreePeopleCollapsed.value = next;
-}
-
-function toggleProjectTreeSets(id) {
-  const next = new Set(projectTreeSetsCollapsed.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  projectTreeSetsCollapsed.value = next;
-}
+// Which sections, projects and folders are open — hydrated from and written
+// back to localStorage by the composable, so the shape of the sidebar survives
+// a reload. Section state (People/Sets, the Folders-tab headers) defaults to
+// expanded; the folder tree defaults to collapsed.
+const {
+  peopleSectionCollapsed,
+  setsSectionCollapsed,
+  referenceFoldersCollapsed,
+  importFoldersCollapsed,
+  expandedProjectIds,
+  projectTreePeopleCollapsed, // project IDs where People is collapsed
+  projectTreeSetsCollapsed, // project IDs where Sets is collapsed
+  expandedFolderIds, // reference-folder id (number) or subfolder path (string)
+  togglePeopleSection,
+  toggleSetsSection,
+  toggleReferenceFoldersSection,
+  toggleImportFoldersSection,
+  toggleProjectExpanded,
+  toggleProjectTreePeople,
+  toggleProjectTreeSets,
+  toggleFolderExpanded,
+  syncProjectExpansion,
+} = useSidebarExpansion();
 
 function selectProjectNode(p) {
   // Explicit entry click → navigate. Unlike a tab switch, clicking a specific
@@ -204,7 +250,6 @@ const setThumbnails = ref({});
 const setThumbnailRetryCounts = ref({});
 const setThumbnailRetryTimers = new Map();
 const SET_THUMBNAIL_MAX_RETRIES = 2;
-const expandedCharacters = ref({});
 
 const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
@@ -267,7 +312,14 @@ const sidebarCtxFolderScopePath = ref(null); // null means the reference folder 
 const sidebarCtxImportFolder = ref(null); // import folder object or null
 const sidebarCtxProject = ref(null); // { id, name } or null
 const sidebarCtxAllPictures = ref(false); // true when ctx opened from All Pictures row
+const sidebarCtxScrapheap = ref(false); // true when ctx opened from the Scrapheap row
 const sidebarCtxDeleteIds = ref([]); // character IDs to delete via context menu
+// Right-click on a section HEADER (not an item): 'people' | 'sets' |
+// 'reference-folders' | 'import-folders', or null. Offers the "create/add" action.
+const sidebarCtxHeader = ref(null);
+// Right-click on empty/uncovered sidebar space: offers the view toggles
+// (auto-hide, dock mode).
+const sidebarCtxEmpty = ref(false);
 
 // Computed style for the main context menu — opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
@@ -351,6 +403,9 @@ const characterEditorCharacter = ref(null);
 const setEditorOpen = ref(false);
 const setEditorSet = ref(null);
 const settingsDialogOpen = ref(false);
+// Nav entry the settings dialog should land on. Set by `openSettingsDialog(tab)`
+// so a caller can deep-link (e.g. the scrapheap header's "change" link).
+const settingsDialogInitialTab = ref("");
 // --- Reference Folders (Folders tab) ---
 const sidebarPrimaryTab = ref("library"); // 'library' | 'folders'
 const referenceFolders = ref([]);
@@ -359,10 +414,9 @@ const importFolders = ref([]);
 const importFoldersLoading = ref(false);
 const inDocker = ref(false);
 const referenceFoldersImageRoot = ref(null);
-const expandedFolderIds = ref(new Set());
+// expandedFolderIds / referenceFoldersCollapsed / importFoldersCollapsed are
+// persisted — see useSidebarExpansion() at the top of this component.
 const folderBrowseCache = ref({}); // keyed by path → { entries, loading, image_count }
-const referenceFoldersCollapsed = ref(false);
-const importFoldersCollapsed = ref(false);
 const selectedFolderKey = ref(null); // 'rf-{id}' | 'path-{path}' | 'if-{id}' | null
 const selectedFolderReferenceId = ref(null); // numeric reference-folder id or null
 const dragOverReferenceTargetKey = ref(null);
@@ -453,15 +507,10 @@ async function relocateReferenceFolder() {
   referenceFolderRelocateError.value = "";
   referenceFolderRelocateResult.value = "";
   try {
-    const { data } = await apiClient.post(
-      `/reference-folders/${folder.id}/relocate`,
-      { destination_folder: destination },
-    );
+    const data = await requestFolderRelocate(folder.id, destination);
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
-    for (const rf of referenceFolders.value) {
-      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
-    }
+    browseExpandedFolders();
     emit("images-moved", {
       imageIds: data?.moved_picture_ids || [],
       kind: "reference-folder",
@@ -487,9 +536,14 @@ function closeImportFolderEditor() {
 }
 
 function showDockerRestartPrompt() {
-  window.alert(
-    "Docker mode: restart the PixlStash container with the new folder mount, then open PixlStash again.",
-  );
+  // Informational outcome, not a decision — a notice, not a blocking dialog.
+  // Sticky (no auto-dismiss) because it asks the user to go and do something.
+  noticeStore.push({
+    level: "info",
+    text: "Docker: restart the PixlStash container with the new folder mount, then reopen PixlStash.",
+    timeout: 0,
+    key: "docker-restart-prompt",
+  });
 }
 
 async function referenceFolderSaved(savedFolder = null) {
@@ -504,9 +558,14 @@ async function referenceFolderSaved(savedFolder = null) {
     const issueText = issues
       ? ` ${issues} item${issues === 1 ? "" : "s"} need attention.`
       : "";
-    window.alert(
-      `Reference folder relocated. Rewritten ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`,
-    );
+    // A partial outcome (some items may need attention) reads as `warning`;
+    // a clean relocation is a plain success.
+    const relocationText = `Reference folder relocated — rewrote ${relocation.rewritten_count || 0} image path${relocation.rewritten_count === 1 ? "" : "s"}.${issueText}`;
+    if (issues) {
+      noticeStore.warning(relocationText, { key: "reference-relocated" });
+    } else {
+      noticeStore.success(relocationText, { key: "reference-relocated" });
+    }
   }
   // A newly added folder may be active-but-unscanned, so ensure polling runs.
   _startFolderStatusPoll();
@@ -654,15 +713,18 @@ const collapsedProjectBtnTitle = computed(() => {
 async function fetchReferenceFolders() {
   referenceFoldersLoading.value = true;
   try {
-    const res = await apiClient.get("/reference-folders");
-    referenceFolders.value = res.data?.folders ?? [];
+    const body = await listReferenceFolders();
+    referenceFolders.value = body?.folders ?? [];
     entityNames.mergeRefFolderLabels(referenceFolders.value);
-    inDocker.value = Boolean(res.data?.in_docker);
-    referenceFoldersImageRoot.value = res.data?.image_root ?? null;
+    inDocker.value = Boolean(body?.in_docker);
+    referenceFoldersImageRoot.value = body?.image_root ?? null;
     // In non-Docker mode we eagerly browse roots so we know which have
     // subdirectories (controls whether the expand chevron is shown).
     if (!inDocker.value) {
       referenceFolders.value.forEach((rf) => browseFolderPath(rf.folder, true));
+      // Subfolders expanded in an earlier session start out with no listing of
+      // their own, so the restored tree would render them empty.
+      browseExpandedFolderPaths();
     }
     // If any folder is still pending, start polling for status updates.
     if (sidebarPrimaryTab.value === "folders") {
@@ -678,8 +740,8 @@ async function fetchReferenceFolders() {
 async function fetchImportFolders() {
   importFoldersLoading.value = true;
   try {
-    const res = await apiClient.get("/import-folders");
-    importFolders.value = res.data?.folders ?? [];
+    const body = await listImportFolders();
+    importFolders.value = body?.folders ?? [];
     entityNames.mergeImportFolderLabels(importFolders.value);
     if (sidebarPrimaryTab.value === "folders") {
       _startFolderStatusPoll();
@@ -691,14 +753,26 @@ async function fetchImportFolders() {
   }
 }
 
-function toggleFolderExpanded(folderId) {
-  const set = new Set(expandedFolderIds.value);
-  if (set.has(folderId)) {
-    set.delete(folderId);
-  } else {
-    set.add(folderId);
+/**
+ * Fetch a listing for every subfolder the user has expanded. Their entries live
+ * in `folderBrowseCache`, which is per-session: a tree restored from a previous
+ * session (or re-rendered after the cache was dropped) has the nodes but not
+ * their children until they are browsed again.
+ */
+function browseExpandedFolderPaths() {
+  for (const key of expandedFolderIds.value) {
+    if (typeof key === "string") void browseFolderPath(key, true);
   }
-  expandedFolderIds.value = set;
+}
+
+/** Re-browse everything currently expanded, after the browse cache is cleared. */
+function browseExpandedFolders() {
+  for (const rf of referenceFolders.value) {
+    if (expandedFolderIds.value.has(rf.id)) {
+      void browseFolderPath(rf.folder, true);
+    }
+  }
+  browseExpandedFolderPaths();
 }
 
 async function browseFolderPath(path, prefetchChildren = false) {
@@ -721,11 +795,9 @@ async function browseFolderPath(path, prefetchChildren = false) {
     [path]: { entries: [], loading: true, image_count: null },
   };
   try {
-    const res = await apiClient.get(
-      `/filesystem/browse?path=${encodeURIComponent(path)}`,
-    );
-    const entries = res.data?.entries ?? [];
-    const imageCount = Number(res.data?.image_count);
+    const listing = await browseFilesystem(path);
+    const entries = listing?.entries ?? [];
+    const imageCount = Number(listing?.image_count);
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
       [path]: {
@@ -739,7 +811,7 @@ async function browseFolderPath(path, prefetchChildren = false) {
         void browseFolderPath(entry.path, false);
       });
     }
-  } catch (e) {
+  } catch {
     folderBrowseCache.value = {
       ...folderBrowseCache.value,
       [path]: { entries: [], loading: false, image_count: null, error: true },
@@ -811,12 +883,12 @@ function _anyFolderNeedsPolling() {
 
 async function _pollFolderStatus() {
   try {
-    const [referenceRes, importRes] = await Promise.all([
-      apiClient.get("/reference-folders"),
-      apiClient.get("/import-folders"),
+    const [referenceBody, importBody] = await Promise.all([
+      listReferenceFolders(),
+      listImportFolders(),
     ]);
-    const folders = referenceRes.data?.folders ?? [];
-    const updatedImportFolders = importRes.data?.folders ?? [];
+    const folders = referenceBody?.folders ?? [];
+    const updatedImportFolders = importBody?.folders ?? [];
     // Detect folders whose first scan just completed so we can refresh
     // the browse cache (image counts were zero before).
     const justScanned = referenceFolders.value.filter((rf) => {
@@ -1095,7 +1167,6 @@ function cancelCloseProjectSubMenu() {
 
 function _flyoutPos(rect) {
   const menuMaxH = window.innerHeight * 0.6;
-  const menuMinW = 200;
   const left = rect.right + 4;
   // Clamp top so menu doesn't go below viewport
   const top = Math.min(rect.top, window.innerHeight - menuMaxH - 8);
@@ -1188,10 +1259,13 @@ async function deleteProjectById(project) {
   )
     return;
   try {
-    await apiClient.delete(`${props.backendUrl}/projects/${project.id}`);
+    await deleteProject(project.id, { baseUrl: props.backendUrl });
     await projectDeleted(project.id);
   } catch (e) {
-    alert("Failed to delete project: " + (e.message || e));
+    console.error("Failed to delete project", e);
+    noticeStore.error(`Couldn't delete that project. ${noticeDetail(e)}`, {
+      key: "project-delete",
+    });
   }
 }
 
@@ -1201,21 +1275,13 @@ const sortedProjects = computed(() =>
   ),
 );
 
-// Auto-expand projects the first time they appear in the tree.
-// This keeps all projects open by default without preventing the user from
-// manually collapsing them.
-const _seenProjectIds = new Set();
+// Auto-expand projects the first time they appear in the tree, except the ones
+// the user collapsed in an earlier session. This keeps projects open by default
+// without preventing a manual collapse — or undoing a remembered one — and
+// forgets projects that no longer exist.
 watch(
   () => sortedProjects.value.map((p) => p.id),
-  (ids) => {
-    const newIds = ids.filter((id) => !_seenProjectIds.has(id));
-    if (newIds.length === 0) return;
-    newIds.forEach((id) => _seenProjectIds.add(id));
-    expandedProjectIds.value = new Set([
-      ...expandedProjectIds.value,
-      ...newIds,
-    ]);
-  },
+  (ids) => syncProjectExpansion(ids),
   { immediate: true },
 );
 
@@ -1429,9 +1495,6 @@ const charsCollapsed = computed(() => {
   );
 });
 
-const sidebarFolderRootIconSize = computed(() =>
-  Math.round(sidebarThumbnailSizeModel.value * 0.75),
-);
 const sidebarFolderChildIconSize = computed(() =>
   Math.round(sidebarThumbnailSizeModel.value * 0.5),
 );
@@ -1554,16 +1617,11 @@ function onSidebarResizeKey(e) {
   }
 }
 
-const isSearchActive = computed(() => {
-  const query = typeof props.searchQuery === "string" ? props.searchQuery : "";
-  return query.trim().length > 0;
-});
-
 const reactiveSelectedDescending = ref(props.selectedDescending);
 
 watch(
   () => props.selectedDescending,
-  (newValue, oldValue) => {
+  (newValue) => {
     reactiveSelectedDescending.value = newValue;
   },
 );
@@ -1585,11 +1643,6 @@ const sortModel = computed({
       sort: value != null ? String(value) : "",
       descending: descendingModel.value,
     }),
-});
-
-const searchModel = computed({
-  get: () => props.searchQuery,
-  set: (value) => emit("update:search-query", value ?? ""),
 });
 
 // --- Character Editor Dialog Functions ---
@@ -1614,7 +1667,13 @@ function closeSetEditor() {
   setEditorSet.value = null;
 }
 
-function openSettingsDialog() {
+/**
+ * Open the settings dialog, optionally on a specific nav entry.
+ * @param {string} [tab] - nav entry id (e.g. "scrapheap"); Appearance if omitted
+ *   or not visible in this session.
+ */
+function openSettingsDialog(tab = "") {
+  settingsDialogInitialTab.value = typeof tab === "string" ? tab : "";
   settingsDialogOpen.value = true;
 }
 
@@ -1792,7 +1851,7 @@ async function deleteCharacter() {
   if (!props.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
   try {
-    await apiClient.delete(`/characters/${props.selectedCharacter}`);
+    await apiDeleteCharacter(props.selectedCharacter);
 
     // Remove the deleted character from the characters array
     characters.value = characters.value.filter(
@@ -1800,19 +1859,6 @@ async function deleteCharacter() {
     );
 
     await fetchCharacters(); // Refresh sidebar
-  } catch (e) {
-    setError(e.message);
-  }
-}
-
-async function deleteCharacterById(id) {
-  const char = characters.value.find((c) => c.id === id);
-  if (!char) return;
-  if (!window.confirm(`Delete character "${char.name}"?`)) return;
-  try {
-    await apiClient.delete(`/characters/${id}`);
-    characters.value = characters.value.filter((c) => c.id !== id);
-    await fetchCharacters();
   } catch (e) {
     setError(e.message);
   }
@@ -1829,7 +1875,7 @@ async function deleteCharactersByIds(ids) {
     : `Delete ${ids.length} characters?`;
   if (!window.confirm(msg)) return;
   try {
-    await Promise.all(ids.map((id) => apiClient.delete(`/characters/${id}`)));
+    await Promise.all(ids.map((id) => apiDeleteCharacter(id)));
     characters.value = characters.value.filter(
       (c) => !ids.includes(Number(c.id)),
     );
@@ -1849,12 +1895,15 @@ async function deleteSetById(id) {
   )
     return;
   try {
-    await apiClient.delete(`${props.backendUrl}/picture_sets/${id}`);
+    await deletePictureSet(id, { baseUrl: props.backendUrl });
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
   } catch (e) {
-    alert("Failed to delete set: " + (e.message || e));
+    console.error("Failed to delete set", e);
+    noticeStore.error(`Couldn't delete that set. ${noticeDetail(e)}`, {
+      key: "set-delete",
+    });
   }
 }
 
@@ -1878,14 +1927,17 @@ async function deleteSetsByIds(ids) {
   try {
     await Promise.all(
       normalizedIds.map((id) =>
-        apiClient.delete(`${props.backendUrl}/picture_sets/${id}`),
+        deletePictureSet(id, { baseUrl: props.backendUrl }),
       ),
     );
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
   } catch (e) {
-    alert("Failed to delete picture set(s): " + (e.message || e));
+    console.error("Failed to delete picture sets", e);
+    noticeStore.error(`Couldn't delete those sets. ${noticeDetail(e)}`, {
+      key: "set-delete-many",
+    });
   }
 }
 
@@ -1895,14 +1947,18 @@ async function deleteReferenceFolderById(id) {
   const folderLabel = folder.label || folder.folder;
   if (!window.confirm(`Remove reference folder "${folderLabel}"?`)) return;
   try {
-    await apiClient.delete(`/reference-folders/${id}`);
+    await deleteFolder("reference", id);
     if (selectedFolderKey.value === `rf-${id}`) {
       selectedFolderKey.value = null;
       emit("select-folder", null);
     }
     await fetchReferenceFolders();
   } catch (e) {
-    alert("Failed to remove reference folder: " + (e.message || e));
+    console.error("Failed to remove reference folder", e);
+    noticeStore.error(
+      `Couldn't remove that reference folder. ${noticeDetail(e)}`,
+      { key: "reference-folder-remove" },
+    );
   }
 }
 
@@ -1912,7 +1968,7 @@ async function deleteImportFolderById(id) {
   const folderLabel = folder.label || folder.folder;
   if (!window.confirm(`Remove import folder "${folderLabel}"?`)) return;
   try {
-    await apiClient.delete(`/import-folders/${id}`);
+    await deleteFolder("import", id);
     if (selectedFolderKey.value === `if-${id}`) {
       selectedFolderKey.value = null;
       selectedFolderReferenceId.value = null;
@@ -1921,13 +1977,60 @@ async function deleteImportFolderById(id) {
     }
     await fetchImportFolders();
   } catch (e) {
-    alert("Failed to remove import folder: " + (e.message || e));
+    console.error("Failed to remove import folder", e);
+    noticeStore.error(
+      `Couldn't remove that import folder. ${noticeDetail(e)}`,
+      {
+        key: "import-folder-remove",
+      },
+    );
   }
 }
 
 function openSidebarCtxMenu(type, item, event) {
   if (isReadOnly.value && (type === "folder" || type === "import-folder"))
     return;
+  // Reset here rather than in every branch: only the scrapheap branch turns it
+  // on, so a single top-level reset keeps the per-type blocks below untouched.
+  sidebarCtxScrapheap.value = false;
+  // Same treatment for the header/empty targets — reset up front so the legacy
+  // per-item branches below never have to clear them.
+  sidebarCtxHeader.value = null;
+  sidebarCtxEmpty.value = false;
+  // A right-click on a section header ('people' | 'sets' | 'reference-folders' |
+  // 'import-folders') or on empty sidebar space is not tied to a specific item,
+  // so clear every item target and short-circuit.
+  if (type === "header" || type === "empty") {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = null;
+    sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
+    sidebarCtxImportFolder.value = null;
+    sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
+    sidebarCtxDeleteIds.value = [];
+    if (type === "header") sidebarCtxHeader.value = item;
+    else sidebarCtxEmpty.value = true;
+    sidebarCtxX.value = event.clientX;
+    sidebarCtxY.value = event.clientY;
+    sidebarCtxVisible.value = true;
+    return;
+  }
+  if (type === "scrapheap") {
+    sidebarCtxCharacter.value = null;
+    sidebarCtxSet.value = null;
+    sidebarCtxFolder.value = null;
+    sidebarCtxFolderScopePath.value = null;
+    sidebarCtxImportFolder.value = null;
+    sidebarCtxProject.value = null;
+    sidebarCtxAllPictures.value = false;
+    sidebarCtxScrapheap.value = true;
+    sidebarCtxDeleteIds.value = [];
+    sidebarCtxX.value = event.clientX;
+    sidebarCtxY.value = event.clientY;
+    sidebarCtxVisible.value = true;
+    return;
+  }
   if (type === "character") {
     sidebarCtxCharacter.value = item;
     sidebarCtxSet.value = null;
@@ -2009,6 +2112,24 @@ function closeSidebarCtxMenu() {
   setCtxColorMenuOpen.value = false;
 }
 
+// True when the Scrapheap holds nothing to empty — drives the disabled state of
+// the context-menu item (a confirm on an empty heap is a dead-end affordance).
+// The sidebar row already owns this count, so we read it here rather than reach
+// into the grid's `scrapheapEmptyDisabled`.
+const scrapheapIsEmpty = computed(
+  () => !categoryCounts.value[props.scrapheapPicturesId],
+);
+
+// Empty Scrapheap from the sidebar context menu. Navigate into the scrapheap
+// first so the grid's post-confirm refetch reconciles the right view, then hand
+// off to the grid's existing consent-gated delete-forever-all flow via App.vue.
+function emptyScrapheapFromCtx() {
+  if (scrapheapIsEmpty.value) return;
+  closeSidebarCtxMenu();
+  selectCharacter(props.scrapheapPicturesId, "Scrapheap");
+  emit("empty-scrapheap");
+}
+
 function openSetCtxIconMenu(event) {
   setCtxColorMenuOpen.value = false;
   const rect = event.currentTarget.getBoundingClientRect();
@@ -2058,7 +2179,7 @@ async function applySetAppearance(setId, icon, color) {
   if (icon !== null) payload.set_icon = icon;
   if (color !== null) payload.set_color = color;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, payload);
+    await patchPictureSet(setId, payload, { baseUrl: props.backendUrl });
     refreshSidebar();
   } catch (e) {
     console.error("Failed to update set appearance", e);
@@ -2074,9 +2195,11 @@ async function toggleSetLock(set) {
   closeSidebarCtxMenu();
   if (!set?.id) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${set.id}`, {
-      locked: !set.locked,
-    });
+    await patchPictureSet(
+      set.id,
+      { locked: !set.locked },
+      { baseUrl: props.backendUrl },
+    );
     refreshSidebar();
     lockedSetsStore.fetch();
   } catch (e) {
@@ -2124,90 +2247,13 @@ function createCharacter() {
   });
 }
 
-const pendingImportTarget = ref(null);
-
-function getImportedPictureIds(payload) {
-  const results = Array.isArray(payload?.results) ? payload.results : [];
-  return Array.from(
-    new Set(
-      results
-        .map((entry) => entry?.picture_id)
-        .filter((id) => id !== null && id !== undefined),
-    ),
-  );
-}
-
-function getRequestErrorDetail(errorLike) {
-  return (
-    errorLike?.response?.data?.detail ||
-    errorLike?.message ||
-    String(errorLike || "")
-  );
-}
-
-function isAlreadyInSetError(errorLike) {
-  const detail = String(getRequestErrorDetail(errorLike)).toLowerCase();
-  return detail.includes("already in set") || detail.includes("already");
-}
-
-async function associateImportedPictures(pictureIds, target) {
-  if (!target || !pictureIds.length) return;
-  if (target.type === "set") {
-    const outcomes = await Promise.allSettled(
-      pictureIds.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/picture_sets/${target.id}/members/${id}`,
-        ),
-      ),
-    );
-    await fetchPictureSets();
-    const hardFailures = outcomes.filter(
-      (result) =>
-        result.status === "rejected" && !isAlreadyInSetError(result.reason),
-    );
-    if (hardFailures.length) {
-      throw new Error(getRequestErrorDetail(hardFailures[0].reason));
-    }
-    return;
-  }
-  if (target.type === "character") {
-    await apiClient.post(`${props.backendUrl}/characters/${target.id}/faces`, {
-      picture_ids: pictureIds,
-    });
-    await fetchSidebarData();
-    await fetchCharacterThumbnail(target.id);
-  }
-}
-
-async function handleImportFinished(payload) {
+// Drop-to-set / drop-to-character association is now done server-side: the drop
+// target (set_id / character_id) is threaded into the import staging session
+// (openStagingSession), and PictureImportTask associates every imported picture
+// on commit. The async streaming-staging contract returns no per-file
+// results[], so there is nothing to associate client-side here — just re-emit.
+function handleImportFinished(payload) {
   emit("import-finished", payload);
-  const target = pendingImportTarget.value;
-  if (!target) return;
-  pendingImportTarget.value = null;
-  const pictureIds = getImportedPictureIds(payload);
-  if (!pictureIds.length) return;
-  try {
-    await associateImportedPictures(pictureIds, target);
-  } catch (e) {
-    const detail = e?.response?.data?.detail || e?.message || String(e);
-    let targetName = "";
-    if (target.type === "character") {
-      targetName =
-        characters.value.find((c) => c.id === target.id)?.name || "Character";
-    } else if (target.type === "set") {
-      targetName =
-        pictureSets.value.find((s) => s.id === target.id)?.name || "Set";
-    }
-    const normalizedDetail = String(detail || "").toLowerCase();
-    const prefix = normalizedDetail.includes("already")
-      ? `Already associated with ${targetName}`
-      : `Failed to associate imported pictures with ${targetName}`;
-    setError(`${prefix}: ${detail}`, target.id, target.type);
-  }
-}
-
-function openImportDialog() {
-  emit("open-import-dialog");
 }
 
 function startLocalImport(files, projectId = null) {
@@ -2284,12 +2330,6 @@ const isAllPicturesRowActive = computed(() => {
   return true;
 });
 
-const isUnassignedPicturesRowActive = computed(
-  () =>
-    !props.hasFolderFilter &&
-    props.selectedCharacter === props.unassignedPicturesId,
-);
-
 const allPicturesRowLabel = computed(() => {
   if (projectViewMode.value === "global") return "All Pictures";
   return "Project Pictures";
@@ -2329,31 +2369,39 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const resAll = await apiClient.get(
-      `${props.backendUrl}/characters/${props.allPicturesId}/summary`,
-    );
-    const data = await resAll.data;
+    const data = await getCharacterSummary(props.allPicturesId, undefined, {
+      baseUrl: props.backendUrl,
+    });
     setCategoryCount(props.allPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
   try {
     // Unassigned images summary
-    const unassignedSummaryUrl =
+    const unassignedParams =
       projectViewMode.value === "project"
-        ? `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary?project_id=${selectedProjectId.value != null ? selectedProjectId.value : "UNASSIGNED"}`
-        : `${props.backendUrl}/characters/${props.unassignedPicturesId}/summary`;
-    const resUnassigned = await apiClient.get(unassignedSummaryUrl);
-    const data = await resUnassigned.data;
+        ? {
+            project_id:
+              selectedProjectId.value != null
+                ? selectedProjectId.value
+                : "UNASSIGNED",
+          }
+        : undefined;
+    const data = await getCharacterSummary(
+      props.unassignedPicturesId,
+      unassignedParams,
+      { baseUrl: props.backendUrl },
+    );
     setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const resScrapheap = await apiClient.get(
-      `${props.backendUrl}/characters/${props.scrapheapPicturesId}/summary`,
+    const data = await getCharacterSummary(
+      props.scrapheapPicturesId,
+      undefined,
+      { baseUrl: props.backendUrl },
     );
-    const data = await resScrapheap.data;
     setCategoryCount(props.scrapheapPicturesId, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
@@ -2368,31 +2416,31 @@ async function fetchSidebarData() {
                   char.project_id != null ? char.project_id : "UNASSIGNED",
               }
             : null;
-        const res = await apiClient.get(
-          `${props.backendUrl}/characters/${char.id}/summary`,
-          characterSummaryParams
-            ? { params: characterSummaryParams }
-            : undefined,
+        const data = await getCharacterSummary(
+          char.id,
+          characterSummaryParams ?? undefined,
+          { baseUrl: props.backendUrl },
         );
-        const data = await res.data;
         setCategoryCount(char.id, data.image_count, shouldFlash);
-      } catch {}
+      } catch (e) {
+        console.warn("Error fetching character images summary:", e);
+      }
     }),
   );
   // Fetch counts for each project and the unassigned bucket
   try {
     const countRequests = [
-      apiClient
-        .get(`${props.backendUrl}/projects/UNASSIGNED/summary`)
-        .then((r) => {
-          projectCounts.value[UNASSIGNED_PROJECT_KEY] = r.data.image_count;
-        }),
+      getProjectSummary("UNASSIGNED", undefined, {
+        baseUrl: props.backendUrl,
+      }).then((body) => {
+        projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
+      }),
       ...projects.value.map((p) =>
-        apiClient
-          .get(`${props.backendUrl}/projects/${p.id}/summary`)
-          .then((r) => {
-            projectCounts.value[p.id] = r.data.image_count;
-          }),
+        getProjectSummary(p.id, undefined, {
+          baseUrl: props.backendUrl,
+        }).then((body) => {
+          projectCounts.value[p.id] = body.image_count;
+        }),
       ),
     ];
     await Promise.all(countRequests);
@@ -2406,8 +2454,7 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const res = await apiClient.get(`${props.backendUrl}/characters`);
-    const chars = await res.data;
+    const chars = await listCharacters({ baseUrl: props.backendUrl });
     const nextCharacters = Array.isArray(chars) ? chars : [];
     if (!Array.isArray(chars)) {
       console.warn(
@@ -2440,12 +2487,12 @@ function refreshSidebar(options = {}) {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    const cacheBuster = Date.now();
-    const thumbUrl = `/characters/${characterId}/thumbnail?cb=${cacheBuster}`;
-    const res = await apiClient.get(thumbUrl, { responseType: "blob" });
+    const blob = await getCharacterThumbnail(characterId, {
+      cacheBuster: Date.now(),
+    });
 
     // Create an object URL for the blob
-    const blobUrl = URL.createObjectURL(res.data);
+    const blobUrl = URL.createObjectURL(blob);
     characterThumbnails.value[characterId] = blobUrl;
   } catch (e) {
     console.error(`Failed to fetch thumbnail for character ${characterId}:`, e);
@@ -2456,9 +2503,8 @@ async function fetchCharacterThumbnail(characterId) {
 // --- Sorting & Pagination ---
 async function fetchSortOptions() {
   try {
-    const res = await apiClient.get(`${props.backendUrl}/sort_mechanisms`);
+    const payload = await listSortMechanisms({ baseUrl: props.backendUrl });
 
-    const payload = res.data;
     const options = Array.isArray(payload)
       ? payload
       : Array.isArray(payload?.sort_mechanisms)
@@ -2507,8 +2553,8 @@ async function fetchProjects() {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl}/projects`);
-    projects.value = Array.isArray(res.data) ? res.data : [];
+    const rows = await listProjects({ baseUrl: props.backendUrl });
+    projects.value = Array.isArray(rows) ? rows : [];
     entityNames.mergeProjectNames(projects.value);
   } catch (e) {
     console.error("Error fetching projects:", e);
@@ -2520,10 +2566,7 @@ async function fetchPictureSets() {
   try {
     // Always fetch all sets — in the flat project tree each project filters
     // its own sets client-side, so we must not scope this call to a single project.
-    const setUrl = `${props.backendUrl}/picture_sets`;
-    const res = await apiClient.get(setUrl);
-
-    const sets = await res.data; // Axios responses use `data` for the payload
+    const sets = await listPictureSets({ baseUrl: props.backendUrl });
     pictureSets.value = Array.isArray(sets) ? [...sets] : [];
     entityNames.mergeSetNames(pictureSets.value);
     await updateSetThumbnails(pictureSets.value);
@@ -2536,14 +2579,14 @@ async function fetchPictureSets() {
 async function fetchSharedIds() {
   if (isReadOnly.value) return; // only owner can query tokens
   try {
-    const [charRes, setRes, projRes] = await Promise.all([
-      apiClient.get("/users/me/shared-resource-ids?resource_type=character"),
-      apiClient.get("/users/me/shared-resource-ids?resource_type=picture_set"),
-      apiClient.get("/users/me/shared-resource-ids?resource_type=project"),
+    const [charBody, setBody, projBody] = await Promise.all([
+      getSharedResourceIds("character"),
+      getSharedResourceIds("picture_set"),
+      getSharedResourceIds("project"),
     ]);
-    sharedCharacterIds.value = new Set(charRes.data?.ids ?? []);
-    sharedSetIds.value = new Set(setRes.data?.ids ?? []);
-    sharedProjectIds.value = new Set(projRes.data?.ids ?? []);
+    sharedCharacterIds.value = new Set(charBody?.ids ?? []);
+    sharedSetIds.value = new Set(setBody?.ids ?? []);
+    sharedProjectIds.value = new Set(projBody?.ids ?? []);
   } catch (e) {
     console.warn("[SideBar] fetchSharedIds error:", e);
   }
@@ -2551,9 +2594,7 @@ async function fetchSharedIds() {
 
 async function revokeAllShares(resourceType, resourceId) {
   try {
-    await apiClient.delete(
-      `/users/me/tokens/by-resource?resource_type=${encodeURIComponent(resourceType)}&resource_id=${encodeURIComponent(resourceId)}`,
-    );
+    await revokeTokensByResource(resourceType, resourceId);
     // Remove from local set so icon disappears immediately
     if (resourceType === "character")
       sharedCharacterIds.value.delete(resourceId);
@@ -2725,10 +2766,11 @@ async function handleDropOnSet(setId, event) {
       event.dataTransfer,
     );
     if (!files.length) return;
-    pendingImportTarget.value = { type: "set", id: setId };
+    // Thread the drop target into the staging session so the backend associates
+    // every imported picture with this set on commit (no client-side results[]).
     const targetSet = pictureSets.value.find((s) => s.id === setId);
-    const options =
-      targetSet?.project_id != null ? { projectId: targetSet.project_id } : {};
+    const options = { setId };
+    if (targetSet?.project_id != null) options.projectId = targetSet.project_id;
     imageImporterRef.value?.startImport(files, options);
     return;
   }
@@ -2754,9 +2796,7 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      const res = await apiClient.post(
-        `${props.backendUrl}/picture_sets/${setId}/members/${picId}`,
-      );
+      await addPictureToSet(setId, picId, { baseUrl: props.backendUrl });
     });
 
     await Promise.all(addPromises);
@@ -2840,17 +2880,12 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
   const imageIds = readDraggedImageIds(event);
   if (!imageIds.length) return;
   try {
-    const body = { picture_ids: imageIds };
-    if (scopePath) body.destination_subpath = scopePath;
-    const { data } = await apiClient.post(
-      `/reference-folders/${folderId}/move-pictures`,
-      body,
-    );
+    const data = await movePicturesToReferenceFolder(folderId, imageIds, {
+      destinationSubpath: scopePath,
+    });
     await fetchReferenceFolders();
     folderBrowseCache.value = {};
-    for (const rf of referenceFolders.value) {
-      if (expandedFolderIds.value.has(rf.id)) browseFolderPath(rf.folder, true);
-    }
+    browseExpandedFolders();
     emit("images-moved", {
       imageIds: data?.moved_picture_ids || imageIds,
       kind: "reference-folder",
@@ -2861,13 +2896,17 @@ async function handleReferenceFolderDrop(folderId, scopePath, event) {
     const failures = detail?.failures || [];
     if (failures.length) {
       const first = failures[0];
-      alert(
-        `Failed to move ${failures.length} image${failures.length === 1 ? "" : "s"}: ${first.reason || "unknown error"}`,
+      console.error("Failed to move images", e);
+      noticeStore.error(
+        `Couldn't move ${failures.length} image${failures.length === 1 ? "" : "s"}. ${first.reason || "Please try again."}`,
+        { key: "images-move" },
       );
       return;
     }
-    alert(
-      "Failed to move images: " + (detail?.message || detail || e.message || e),
+    console.error("Failed to move images", e);
+    noticeStore.error(
+      `Couldn't move those images. ${detail?.message || detail || e?.message || "Please try again."}`,
+      { key: "images-move" },
     );
   }
 }
@@ -2900,10 +2939,9 @@ async function onProjectDrop(projectId, event) {
     // created via the batch /pictures/project endpoint with mode "add".
     // (Patching a picture's direct project_id column does NOT create the
     // membership the project view queries — that returns 200 but shows nothing.)
-    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-      picture_ids: imageIds,
-      project_id: projectId,
+    await setPicturesProject(imageIds, projectId, {
       mode: "add",
+      baseUrl: props.backendUrl,
     });
     emit("images-moved", { imageIds });
   } catch (e) {
@@ -2929,18 +2967,18 @@ async function onCharacterDrop(characterId, event) {
       event.dataTransfer,
     );
     if (!files.length) return;
-    pendingImportTarget.value = { type: "character", id: characterId };
-    const options =
-      selectedProjectId.value != null
-        ? { projectId: selectedProjectId.value }
-        : {};
+    // Thread the drop target into the staging session so the backend associates
+    // every imported picture with this character on commit (no client results[]).
+    const options = { characterId };
+    if (selectedProjectId.value != null)
+      options.projectId = selectedProjectId.value;
     imageImporterRef.value?.startImport(files, options);
     return;
   }
   // Accept faceIds or imageIds from drag event
   let faceIds = [];
   let imageIds = [];
-  let dragType = null;
+  let dragType;
   try {
     const rawDataStr = event.dataTransfer.getData("application/json");
     const data = JSON.parse(rawDataStr);
@@ -2977,16 +3015,18 @@ async function onCharacterDrop(characterId, event) {
   if (dragType === "face-bbox" && faceIds.length > 0) {
     // Assign faces to character
     try {
-      const body = { face_ids: faceIds };
-      const res = await apiClient.post(
-        `${props.backendUrl}/characters/${characterId}/faces`,
-        body,
-      );
+      await addCharacterFacesByFaceId(characterId, faceIds, {
+        baseUrl: props.backendUrl,
+      });
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
     } catch (e) {
-      alert("Failed to assign faces to character: " + (e.message || e));
+      console.error("Failed to assign faces to character", e);
+      noticeStore.error(
+        `Couldn't assign those faces to the person. ${noticeDetail(e)}`,
+        { key: "faces-assign-character" },
+      );
     }
     return;
   }
@@ -2997,11 +3037,9 @@ async function onCharacterDrop(characterId, event) {
 
   try {
     // Fallback: assign images to character
-    const body = { picture_ids: imageIds };
-    const res = await apiClient.post(
-      `${props.backendUrl}/characters/${characterId}/faces`,
-      body,
-    );
+    await addCharacterFaces(characterId, imageIds, {
+      baseUrl: props.backendUrl,
+    });
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("images-assigned-to-character", { characterId, imageIds });
@@ -3378,9 +3416,11 @@ async function toggleCharacterProjectMembership(charId) {
       ? null
       : selectedProjectId.value;
   try {
-    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
-      project_id: newProjectId,
-    });
+    await patchCharacter(
+      charId,
+      { project_id: newProjectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = {
@@ -3402,9 +3442,11 @@ async function toggleSetProjectMembership(setId) {
       ? null
       : selectedProjectId.value;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
-      project_id: newProjectId,
-    });
+    await patchPictureSet(
+      setId,
+      { project_id: newProjectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = {
@@ -3451,9 +3493,11 @@ async function moveCharacterToProject(charId, projectId) {
   const char = characters.value.find((c) => c.id === charId);
   if (!char || char.project_id === projectId) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/characters/${charId}`, {
-      project_id: projectId,
-    });
+    await patchCharacter(
+      charId,
+      { project_id: projectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
       characters.value[idx] = {
@@ -3475,9 +3519,11 @@ async function moveSetToProject(setId, projectId) {
   const set = pictureSets.value.find((s) => s.id === setId);
   if (!set || set.project_id === projectId) return;
   try {
-    await apiClient.patch(`${props.backendUrl}/picture_sets/${setId}`, {
-      project_id: projectId,
-    });
+    await patchPictureSet(
+      setId,
+      { project_id: projectId },
+      { baseUrl: props.backendUrl },
+    );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
       pictureSets.value[idx] = {
@@ -3553,36 +3599,6 @@ function onProjectSetsDrop(projectId) {
   }
 }
 
-async function handleDropOnProjectPictures(event) {
-  if (projectViewMode.value !== "project" || selectedProjectId.value === null) {
-    return;
-  }
-  let draggedIds = [];
-  try {
-    const data = JSON.parse(event.dataTransfer.getData("application/json"));
-    if (data.imageIds && Array.isArray(data.imageIds)) {
-      draggedIds = data.imageIds;
-    }
-  } catch (e) {
-    console.error("Could not parse drag data:", e);
-    return;
-  }
-  if (draggedIds.length === 0) return;
-  try {
-    // Many-to-many membership via the batch endpoint (see onProjectDrop).
-    await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-      picture_ids: draggedIds,
-      project_id: selectedProjectId.value,
-      mode: "add",
-    });
-    emit("images-moved", { imageIds: draggedIds });
-    // Reassignment changes per-project image counts.
-    fetchSidebarData();
-  } catch (e) {
-    console.error("Failed to assign pictures to project:", e);
-  }
-}
-
 const currentProjectId = computed(() =>
   projectViewMode.value === "project" ? selectedProjectId.value : null,
 );
@@ -3647,6 +3663,9 @@ defineExpose({
     v-model:theme-mode="themeModeModel"
     :checkForUpdates="props.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
+    :thumbnail-mode="props.thumbnailMode"
+    @update:thumbnail-mode="(value) => emit('update:thumbnail-mode', value)"
+    :initial-tab="settingsDialogInitialTab"
     @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
     @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
     @update:comfyui-configured="
@@ -3826,13 +3845,20 @@ defineExpose({
     ></div>
     <!-- On the desktop shell the brand (logo + name + update alert) lives in
          the title bar, so this row collapses to just the dock toggle. -->
-    <div v-if="!isDesktop" class="sidebar-brand">
+    <div
+      v-if="!isDesktop"
+      class="sidebar-brand"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <div class="sidebar-brand-left">
+        <!-- The logo is a real outbound link — let its native right-click menu
+             (copy/open link) through and don't open the sidebar's view menu. -->
         <a
           href="https://pikselkroken.github.io/pixlstash/"
           target="_blank"
           rel="noopener noreferrer"
           class="sidebar-brand-logo-link"
+          @contextmenu.stop
         >
           <img
             src="/Logo.png"
@@ -3852,6 +3878,7 @@ defineExpose({
               rel="noopener noreferrer"
               :class="securityUpdateClass"
               :title="securityUpdateTitle"
+              @contextmenu.stop
               >&#x2191; v{{ latestVersion
               }}{{
                 latestSecurityLevel ? " security \u26a0\ufe0f" : " available"
@@ -3871,6 +3898,7 @@ defineExpose({
       v-if="props.docked"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
     >
       <div
         class="sidebar-collapsed-row sidebar-collapsed-row--has-flyout sidebar-collapsed-row--project"
@@ -4088,7 +4116,11 @@ defineExpose({
         </div>
       </Teleport>
     </div>
-    <div v-else-if="!scopedResourceType" class="sidebar-view-header">
+    <div
+      v-else-if="!scopedResourceType"
+      class="sidebar-view-header"
+      @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <div class="sidebar-view-tabs-row">
         <div class="sidebar-view-tabs">
           <button
@@ -4126,9 +4158,20 @@ defineExpose({
         </div>
       </div>
     </div>
-    <div class="sidebar-scroll" ref="dockedScrollRef">
+    <div
+      class="sidebar-scroll"
+      ref="dockedScrollRef"
+      @contextmenu.self.prevent="openSidebarCtxMenu('empty', null, $event)"
+    >
       <template v-if="props.docked">
-        <div class="sidebar-collapsed-list">
+        <!-- Catch-all: any right-click that reaches the list (blank gaps, the
+             margins beside the centered rows, the spacer) opens the view menu.
+             Item rows below use `.stop` on their own context menus so they never
+             fall through to this. -->
+        <div
+          class="sidebar-collapsed-list"
+          @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
+        >
           <div
             v-if="sidebarPrimaryTab !== 'folders'"
             :class="[
@@ -4143,6 +4186,9 @@ defineExpose({
               ]"
               title="All Pictures"
               @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('all-pictures', null, $event)
+              "
             >
               <v-icon>mdi-image-multiple</v-icon>
             </div>
@@ -4185,7 +4231,7 @@ defineExpose({
                 @click="
                   selectCharacter(char.id, char.name || 'Character', $event)
                 "
-                @contextmenu.prevent="
+                @contextmenu.prevent.stop="
                   openSidebarCtxMenu('character', char, $event)
                 "
               >
@@ -4228,6 +4274,9 @@ defineExpose({
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-person"
               title="Add person"
               @click="createCharacter()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'people', $event)
+              "
             >
               <i
                 class="mdi mdi-account sidebar-collapsed-item--add-bg-icon"
@@ -4288,7 +4337,12 @@ defineExpose({
                 left: collapsedCharMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">
+              <div
+                class="sidebar-collapsed-flyout-header"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'people', $event)
+                "
+              >
                 <span>People</span>
                 <v-icon
                   v-if="!isReadOnly"
@@ -4393,7 +4447,9 @@ defineExpose({
                 ]"
                 :title="pset.name || 'Picture Set'"
                 @click="selectSet(pset.id, pset.name || 'Picture Set', $event)"
-                @contextmenu.prevent="openSidebarCtxMenu('set', pset, $event)"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('set', pset, $event)
+                "
               >
                 <v-icon
                   v-if="pset.set_icon && pset.set_icon !== ICON_CARDS"
@@ -4457,6 +4513,9 @@ defineExpose({
               class="sidebar-collapsed-item sidebar-collapsed-item--add sidebar-collapsed-item--add-set"
               title="Add picture set"
               @click="createSet()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'sets', $event)
+              "
             >
               <i
                 class="mdi mdi-image-album sidebar-collapsed-item--add-bg-icon"
@@ -4533,7 +4592,12 @@ defineExpose({
                 left: collapsedSetMenuPos.left + 'px',
               }"
             >
-              <div class="sidebar-collapsed-flyout-header">
+              <div
+                class="sidebar-collapsed-flyout-header"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'sets', $event)
+                "
+              >
                 <span>Picture Sets</span>
                 <v-icon
                   v-if="!isReadOnly"
@@ -4621,7 +4685,9 @@ defineExpose({
             </div>
           </Teleport>
 
-          <!-- Scrap Heap at bottom of dock -->
+          <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
+               of the dock's blank space; its right-clicks bubble to the list's
+               catch-all handler, so it needs no handler of its own. -->
           <div v-if="!isReadOnly" class="sidebar-collapsed-spacer"></div>
           <div
             v-if="!isReadOnly"
@@ -4646,6 +4712,9 @@ defineExpose({
               ]"
               title="Scrapheap"
               @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('scrapheap', null, $event)
+              "
             >
               <v-icon>mdi-trash-can-outline</v-icon>
             </div>
@@ -4703,7 +4772,10 @@ defineExpose({
             <div
               v-if="referenceFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--ref"
-              @click="referenceFoldersCollapsed = !referenceFoldersCollapsed"
+              @click="toggleReferenceFoldersSection()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'reference-folders', $event)
+              "
             >
               <div class="sidebar-folder-section-title">Reference folders</div>
               <v-icon
@@ -4917,7 +4989,10 @@ defineExpose({
             <div
               v-if="importFolders.length"
               class="sidebar-folder-section-header sidebar-folder-section-header--import"
-              @click="importFoldersCollapsed = !importFoldersCollapsed"
+              @click="toggleImportFoldersSection()"
+              @contextmenu.prevent.stop="
+                openSidebarCtxMenu('header', 'import-folders', $event)
+              "
             >
               <div class="sidebar-folder-section-title">Import folders</div>
               <v-icon
@@ -5032,6 +5107,9 @@ defineExpose({
                   },
                 ]"
                 @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+                @contextmenu.prevent="
+                  openSidebarCtxMenu('scrapheap', null, $event)
+                "
               >
                 <span class="sidebar-list-icon sidebar-list-icon--toplevel"
                   ><v-icon size="18">mdi-trash-can-outline</v-icon></span
@@ -5051,7 +5129,10 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="peopleSectionCollapsed = !peopleSectionCollapsed"
+                @click.stop="togglePeopleSection()"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'people', $event)
+                "
               >
                 <v-icon class="sidebar-section-chevron" size="16">{{
                   peopleSectionCollapsed
@@ -5132,7 +5213,6 @@ defineExpose({
                   >
                 </div>
                 <div
-                  v-if="visibleCharacters.length > 0"
                   v-for="char in visibleCharacters"
                   :key="char.id"
                   class="sidebar-character-group"
@@ -5226,7 +5306,10 @@ defineExpose({
             >
               <div
                 class="sidebar-section-header sidebar-section-header--collapsible"
-                @click.stop="setsSectionCollapsed = !setsSectionCollapsed"
+                @click.stop="toggleSetsSection()"
+                @contextmenu.prevent.stop="
+                  openSidebarCtxMenu('header', 'sets', $event)
+                "
               >
                 <v-icon class="sidebar-section-chevron" size="16">{{
                   setsSectionCollapsed
@@ -5281,7 +5364,7 @@ defineExpose({
                     >Click the + button to add one.</span
                   >
                 </div>
-                <template v-for="(pset, idx) in visibleSets" :key="pset.id">
+                <template v-for="pset in visibleSets" :key="pset.id">
                   <div
                     :class="[
                       'sidebar-list-item',
@@ -5973,7 +6056,9 @@ defineExpose({
       @mousedown.stop
     >
       <!-- ── Read-only indicator ───────────────────────────────── -->
-      <div v-if="isReadOnly" class="ctx-readonly-header">
+      <!-- Suppressed for the empty-space menu: its view toggles (auto-hide,
+           dock) are not content edits and stay enabled in read-only. -->
+      <div v-if="isReadOnly && !sidebarCtxEmpty" class="ctx-readonly-header">
         <span class="ctx-readonly-pill">
           <v-icon size="10">mdi-lock-outline</v-icon>
           Read only
@@ -5992,6 +6077,22 @@ defineExpose({
             >mdi-share-variant-outline</v-icon
           >
           Share
+        </button>
+      </template>
+      <template v-if="sidebarCtxScrapheap">
+        <button
+          class="sidebar-ctx-item sidebar-ctx-item--danger"
+          :disabled="isReadOnly || scrapheapIsEmpty"
+          :title="
+            scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined
+          "
+          :aria-disabled="isReadOnly || scrapheapIsEmpty"
+          @click="emptyScrapheapFromCtx()"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-trash-can-outline</v-icon
+          >
+          Empty Scrapheap
         </button>
       </template>
       <template v-if="sidebarCtxCharacter">
@@ -6396,6 +6497,96 @@ defineExpose({
             >mdi-trash-can-outline</v-icon
           >
           Remove
+        </button>
+      </template>
+      <!-- ── Section-header menus (right-click a section's title) ── -->
+      <template v-if="sidebarCtxHeader === 'people'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createCharacter();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-account-plus-outline</v-icon
+          >
+          Create person
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'sets'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            createSet();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-image-album</v-icon>
+          Create set
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'reference-folders'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            openReferenceFolderEditor();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-plus-outline</v-icon
+          >
+          Add folder
+        </button>
+      </template>
+      <template v-if="sidebarCtxHeader === 'import-folders'">
+        <button
+          class="sidebar-ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            openImportFolderEditor();
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon"
+            >mdi-folder-plus-outline</v-icon
+          >
+          Add folder
+        </button>
+      </template>
+      <!-- ── Empty-space menu (right-click uncovered sidebar area) ── -->
+      <template v-if="sidebarCtxEmpty">
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            sidebarStore.setSidebarPinned(!sidebarStore.sidebarPinned);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            sidebarStore.sidebarPinned
+              ? "mdi-checkbox-blank-outline"
+              : "mdi-checkbox-marked-outline"
+          }}</v-icon>
+          Auto hide sidebar
+        </button>
+        <button
+          class="sidebar-ctx-item"
+          @click="
+            sidebarStore.setSidebarDocked(!sidebarStore.sidebarDocked);
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            sidebarStore.sidebarDocked
+              ? "mdi-checkbox-marked-outline"
+              : "mdi-checkbox-blank-outline"
+          }}</v-icon>
+          Dock mode
         </button>
       </template>
     </div>
@@ -7191,13 +7382,18 @@ defineExpose({
   overflow: hidden;
 }
 
+/* The project menu's background is a 38% `tertiary` TINT over `sidebar`, not a
+   solid `tertiary` fill, so `on-tertiary` is the wrong foreground here: an
+   `on-<x>` token is authored against a solid, full-opacity `<x>` fill and is
+   simply a different colour on a tint (measured 1.43-1.70:1 in light). On a
+   tint the foreground is the surface's own. See design-system-handoff.md §9.2. */
 .sidebar-project-menu-item {
   display: flex;
   align-items: center;
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
   font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   transition:
     background 0.1s,
     color 0.1s;
@@ -7207,12 +7403,12 @@ defineExpose({
 
 .sidebar-project-menu-item:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-menu-item.active {
   background: rgba(var(--v-theme-tertiary), 0.3);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   font-weight: 600;
 }
 
@@ -7226,7 +7422,7 @@ defineExpose({
 .sidebar-project-menu-item-action {
   flex-shrink: 0;
   opacity: 0;
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
   transition: opacity 0.12s;
 }
 
@@ -7246,7 +7442,7 @@ defineExpose({
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  color: rgba(var(--v-theme-on-tertiary), 0.65);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   border-top: 1px solid rgba(var(--v-theme-border), 0.25);
   min-height: 26px;
   transition:
@@ -7256,7 +7452,7 @@ defineExpose({
 
 .sidebar-project-menu-add:hover {
   background: rgba(var(--v-theme-accent), 0.08);
-  color: rgb(var(--v-theme-on-tertiary));
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .sidebar-project-select {
@@ -7343,7 +7539,9 @@ defineExpose({
   overflow: hidden;
   scrollbar-color: rgb(var(--v-theme-accent)) rgba(var(--v-theme-shadow), 0.15);
   box-sizing: border-box;
-  border-right: 1px solid rgba(var(--v-theme-on-background), 0.12);
+  /* One rule for "chrome rail meets the grid canvas", shared with
+     `.stats-sidebar`'s border-left so both rails present the same edge. */
+  border-right: 1px solid rgb(var(--v-theme-border));
 }
 
 /* Drag-to-resize grip on the sidebar's right edge (expanded mode only). Sits over
@@ -7911,7 +8109,14 @@ defineExpose({
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-accent), 0.15);
-  color: rgb(var(--v-theme-accent));
+  /* 11px text on a 15% accent tint. The accent as its own foreground here
+     measured 3.41:1 light / 2.81:1 dark after the fill deepen — under the 4.5:1
+     body floor in both, and under even the 3:1 UI floor in dark. Same rule as
+     the project-menu fixes: on a TINT the foreground is the surface's own, not
+     the tint's hue. `on-surface` gives 11.55:1 light / 10.43:1 dark at rest
+     (9.77 / 9.00 on the 28% hover tint); the accent still carries the
+     affordance through the tint itself. */
+  color: rgb(var(--v-theme-on-surface));
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   text-decoration: none;
@@ -8197,7 +8402,10 @@ defineExpose({
   transform: translateY(-50%);
   z-index: 1200;
   color: rgb(var(--v-theme-on-error));
-  background: rgba(var(--v-theme-error), 0.8);
+  /* Solid, not 80%: `on-error` is authored against the SOLID fill (4.86:1 light,
+     4.68:1 dark). Blending the fill toward the surface lightens it and drops
+     this --text-base label to 3.49:1, under the 4.5 floor. */
+  background: rgb(var(--v-theme-error));
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-lg);
   font-size: var(--text-base);

@@ -22,6 +22,21 @@ logger = get_logger(__name__)
 # How long to cache stats results for identical queries, in seconds.
 STATS_TTL = 60.0
 
+# Display buckets for the agreement matrix's smart-score axis. Identical to the
+# `smart_score_distribution` bucketing so the matrix reads as the cross-product of
+# the two histograms the sidebar already shows.
+AGREEMENT_BUCKET_LABELS = ("1-2", "2-3", "3-4", "4-5")
+
+# Smart score is aggregated at 0.01 resolution for the rank statistic, then summed
+# into the four display buckets. One query serves both, so the coefficient and the
+# cells can never disagree, and tau-b keeps almost all of the continuous variable's
+# resolution instead of being attenuated by four coarse bins.
+_AGREEMENT_CENTS_PER_UNIT = 100
+
+# Below this many plottable pairs a rank coefficient is noise dressed up as a
+# finding, so the API returns null and the UI says why instead of printing it.
+AGREEMENT_MIN_PAIRS = 20
+
 
 @dataclasses.dataclass
 class PictureStatsParams:
@@ -67,6 +82,7 @@ def _empty_stats() -> dict:
         "score_distribution": [],
         "smart_score_distribution": [],
         "resolution_distribution": [],
+        "score_agreement": {},
     }
 
 
@@ -494,6 +510,270 @@ def _compute_picture_distributions(
     return score_distribution, smart_score_distribution, resolution_distribution
 
 
+def _agreement_scope(session, pic_subq, params: PictureStatsParams):
+    """Return the picture scope the agreement matrix is computed over.
+
+    A filter widget must not filter itself. Clicking a cell sets the score and
+    smart-score-bucket filters, and if the matrix honoured them it would collapse
+    to the single cell that was clicked, leaving no way to reach a neighbouring
+    one. So those three predicates are dropped here while every other scope and
+    filter still applies, and the clicked cell is rendered as selected instead.
+
+    Args:
+        session: Active database session.
+        pic_subq: The already-built, fully-filtered scope.
+        params: All parsed filter parameters from the request.
+
+    Returns:
+        ``pic_subq`` unchanged when none of the three predicates is active (the
+        common case, so the second subquery build is skipped), otherwise a scope
+        rebuilt without them. Falls back to ``pic_subq`` if the rebuild resolves
+        to an empty candidate set.
+    """
+    if (
+        params.min_score is None
+        and params.max_score is None
+        and params.smart_score_bucket is None
+    ):
+        return pic_subq
+    unfiltered = dataclasses.replace(
+        params, min_score=None, max_score=None, smart_score_bucket=None
+    )
+    # A subquery has no defined truthiness, so test for None explicitly.
+    rebuilt = _build_filtered_picture_subquery(session, unfiltered)
+    return pic_subq if rebuilt is None else rebuilt
+
+
+def _weighted_pearson(points: list[tuple[float, float, int]]) -> float | None:
+    """Pearson's r over ``(x, y, weight)`` triples.
+
+    Weighted because the rows arrive pre-aggregated: one entry per distinct
+    (rating, smart score) pair with its observation count, rather than one entry
+    per picture.
+
+    Args:
+        points: Distinct (x, y) pairs with the number of observations of each.
+
+    Returns:
+        r in [-1, 1], or ``None`` when either variable is constant. A vanishing
+        denominator means "no variance", which is not the same as "no
+        relationship", so it must not be reported as 0.
+    """
+    n = sum(w for _, _, w in points)
+    if n < 2:
+        return None
+    sum_x = sum(x * w for x, _, w in points)
+    sum_y = sum(y * w for _, y, w in points)
+    sum_xx = sum(x * x * w for x, _, w in points)
+    sum_yy = sum(y * y * w for _, y, w in points)
+    sum_xy = sum(x * y * w for x, y, w in points)
+
+    covariance = n * sum_xy - sum_x * sum_y
+    var_x = n * sum_xx - sum_x * sum_x
+    var_y = n * sum_yy - sum_y * sum_y
+    if var_x <= 0 or var_y <= 0:
+        return None
+    return covariance / ((var_x * var_y) ** 0.5)
+
+
+def _mid_ranks(counts: dict[float, int]) -> dict[float, float]:
+    """Map each distinct value to its tie-corrected (mid) rank.
+
+    Args:
+        counts: Observation count per distinct value.
+
+    Returns:
+        Value -> the average of the ranks that value's observations occupy.
+    """
+    ranks: dict[float, float] = {}
+    seen = 0
+    for value in sorted(counts):
+        count = counts[value]
+        # Ranks seen+1 .. seen+count all collapse to their average.
+        ranks[value] = seen + (count + 1) / 2
+        seen += count
+    return ranks
+
+
+def _weighted_spearman(points: list[tuple[float, float, int]]) -> float | None:
+    """Spearman's rho: Pearson over mid-ranks, so tied values share a rank.
+
+    Mid-ranks matter a lot here. The rating axis has five levels, so a naive
+    ranking would impose an arbitrary order inside each star level and invent a
+    relationship that isn't in the data.
+
+    Args:
+        points: Distinct (x, y) pairs with the number of observations of each.
+
+    Returns:
+        rho in [-1, 1], or ``None`` when it is undefined.
+    """
+    x_counts: dict[float, int] = {}
+    y_counts: dict[float, int] = {}
+    for x, y, w in points:
+        x_counts[x] = x_counts.get(x, 0) + w
+        y_counts[y] = y_counts.get(y, 0) + w
+    x_ranks = _mid_ranks(x_counts)
+    y_ranks = _mid_ranks(y_counts)
+    return _weighted_pearson([(x_ranks[x], y_ranks[y], w) for x, y, w in points])
+
+
+def _kendall_tau_b(matrix: list[list[int]]) -> float | None:
+    """Kendall's tau-b for an ordered contingency table.
+
+    Kept alongside Pearson and Spearman because the user score is an ordinal
+    1-5 rating: almost every pair ties on that axis, and tau-b is the coefficient
+    whose denominator corrects for ties in *both* variables.
+
+    Args:
+        matrix: Row-major counts, rows and columns both in increasing rank order.
+
+    Returns:
+        Tau-b in [-1, 1], or ``None`` when it is undefined (fewer than two
+        observations, or one variable is constant so its tie correction consumes
+        the whole denominator).
+    """
+    n_rows = len(matrix)
+    n_cols = len(matrix[0]) if n_rows else 0
+    if not n_rows or not n_cols:
+        return None
+
+    # Per row, running counts of the observations to the left of / to the right of
+    # each column, so the concordant / discordant sums stay O(rows * cols).
+    suffix = [[0] * n_cols for _ in range(n_rows)]
+    prefix = [[0] * n_cols for _ in range(n_rows)]
+    for i in range(n_rows):
+        running = 0
+        for j in range(n_cols - 1, -1, -1):
+            suffix[i][j] = running
+            running += matrix[i][j]
+        running = 0
+        for j in range(n_cols):
+            prefix[i][j] = running
+            running += matrix[i][j]
+
+    concordant = 0
+    discordant = 0
+    for i in range(n_rows):
+        for j in range(n_cols):
+            cell = matrix[i][j]
+            if not cell:
+                continue
+            greater = sum(suffix[k][j] for k in range(i + 1, n_rows))
+            lesser = sum(prefix[k][j] for k in range(i + 1, n_rows))
+            concordant += cell * greater
+            discordant += cell * lesser
+
+    row_totals = [sum(row) for row in matrix]
+    col_totals = [sum(matrix[i][j] for i in range(n_rows)) for j in range(n_cols)]
+    n = sum(row_totals)
+    if n < 2:
+        return None
+
+    all_pairs = n * (n - 1) / 2
+    row_ties = sum(t * (t - 1) / 2 for t in row_totals)
+    col_ties = sum(t * (t - 1) / 2 for t in col_totals)
+    denominator = (all_pairs - row_ties) * (all_pairs - col_ties)
+    if denominator <= 0:
+        # Every observation shares one rating, or one smart-score value: there is
+        # no pair the coefficient could be computed from.
+        return None
+    return (concordant - discordant) / (denominator**0.5)
+
+
+def _compute_agreement(session, pic_subq, params: PictureStatsParams) -> dict:
+    """Cross-tabulate the user's star rating against the smart score.
+
+    Both ``NULL`` and ``0`` mean "unrated" here, matching how
+    ``score_distribution`` labels NULL "Unscored" and omits 0, and how the
+    smart-score anchor query treats ``score > 0``.
+
+    Args:
+        session: Active database session.
+        pic_subq: Subquery of filtered picture ids. The caller is responsible for
+            passing a scope that does NOT apply the score / smart-score-bucket
+            filters, so clicking a cell cannot collapse the matrix to itself.
+        params: Filter params (used for the include guard).
+
+    Returns:
+        ``{}`` when not requested, else a dict with ``cells`` (all 20, dense and
+        ordered), ``rated``, ``pairs``, ``total`` and the three coefficients
+        ``pearson``, ``spearman`` and ``tau_b``.
+    """
+    if "picture" not in params.include:
+        return {}
+
+    cents = cast(Picture.smart_score * _AGREEMENT_CENTS_PER_UNIT, Integer)
+    rows = session.execute(
+        select(Picture.score, cents.label("cents"), func.count().label("n"))
+        .where(
+            Picture.id.in_(select(pic_subq.c.id)),
+            Picture.score.is_not(None),
+            Picture.score > 0,
+        )
+        .group_by(Picture.score, cents)
+    ).fetchall()
+
+    total = session.exec(select(func.count()).select_from(pic_subq)).one()
+
+    # Rated-but-not-yet-scored pictures can't be placed on the smart-score axis.
+    # They still count as rated for the coverage line; they are not plotted and
+    # they do not enter the coefficient.
+    rated = 0
+    fine: dict[int, dict[int, int]] = {}
+    for score, cent, count in rows:
+        rated += int(count)
+        if cent is None:
+            continue
+        fine.setdefault(int(score), {})[int(cent)] = int(count)
+
+    columns = sorted({cent for row in fine.values() for cent in row})
+    col_index = {cent: idx for idx, cent in enumerate(columns)}
+    matrix = [[0] * len(columns) for _ in range(5)]
+    for score, by_cent in fine.items():
+        for cent, count in by_cent.items():
+            matrix[score - 1][col_index[cent]] = count
+
+    def bucket_of(cent: int) -> int:
+        if cent < 2 * _AGREEMENT_CENTS_PER_UNIT:
+            return 0
+        if cent < 3 * _AGREEMENT_CENTS_PER_UNIT:
+            return 1
+        if cent < 4 * _AGREEMENT_CENTS_PER_UNIT:
+            return 2
+        return 3
+
+    display = [[0] * len(AGREEMENT_BUCKET_LABELS) for _ in range(5)]
+    for score, by_cent in fine.items():
+        for cent, count in by_cent.items():
+            display[score - 1][bucket_of(cent)] += count
+
+    pairs = sum(sum(row) for row in display)
+    cells = [
+        {"score": score + 1, "bucket": label, "count": display[score][bucket]}
+        for score in range(5)
+        for bucket, label in enumerate(AGREEMENT_BUCKET_LABELS)
+    ]
+
+    # Pearson and Spearman run on the same 0.01-resolution rows, so all three
+    # coefficients describe exactly the grid that is drawn.
+    points = [
+        (float(score), cent / _AGREEMENT_CENTS_PER_UNIT, count)
+        for score, by_cent in fine.items()
+        for cent, count in by_cent.items()
+    ]
+    enough = pairs >= AGREEMENT_MIN_PAIRS
+    return {
+        "cells": cells,
+        "rated": rated,
+        "pairs": pairs,
+        "total": int(total),
+        "tau_b": _kendall_tau_b(matrix) if enough else None,
+        "pearson": _weighted_pearson(points) if enough else None,
+        "spearman": _weighted_spearman(points) if enough else None,
+    }
+
+
 def compute_picture_stats(vault, params: PictureStatsParams) -> dict:
     """Run picture statistics aggregation queries and return the result dict.
 
@@ -505,7 +785,7 @@ def compute_picture_stats(vault, params: PictureStatsParams) -> dict:
         A dict with keys: total, total_tags, tagged, untagged,
         avg_tags_per_image, top_tags, top_cooccurrences,
         confidence_histogram, regular_tags, score_distribution,
-        smart_score_distribution, resolution_distribution.
+        smart_score_distribution, resolution_distribution, score_agreement.
     """
 
     def compute(session: Session) -> dict:
@@ -521,6 +801,9 @@ def compute_picture_stats(vault, params: PictureStatsParams) -> dict:
         score_dist, smart_score_dist, res_dist = _compute_picture_distributions(
             session, pic_subq, params
         )
+        agreement = _compute_agreement(
+            session, _agreement_scope(session, pic_subq, params), params
+        )
 
         return {
             **counts,
@@ -530,6 +813,7 @@ def compute_picture_stats(vault, params: PictureStatsParams) -> dict:
             "score_distribution": score_dist,
             "smart_score_distribution": smart_score_dist,
             "resolution_distribution": res_dist,
+            "score_agreement": agreement,
         }
 
     return vault.db.run_immediate_read_task(compute)

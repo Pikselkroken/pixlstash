@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
+from pixlstash.authz.membership import enforce_set_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -23,7 +24,9 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.event_types import EventType
-from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.services.project_membership_service import (
+    reconcile_entity_project_change,
+)
 from pixlstash.services.set_lock_service import (
     enforce_set_not_locked,
 )
@@ -37,8 +40,8 @@ from pixlstash.picture_scoring import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
-from pixlstash.utils.service.path_utils import resolve_path_within
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.stack.stack_utils import deduplicate_by_stack
 from pixlstash.utils.query.predicate_filter import PredicateFilter
 
@@ -320,34 +323,14 @@ def create_router(server) -> APIRouter:
         )
 
     def _require_scope_allows_picture_set(request: Request, set_id: int):
-        """Raise 403 if the token scope does not cover the requested picture set."""
-        scope = getattr(request.state, "token_scope", None)
-        if scope is None:
-            return
-        if scope.resource_type == "picture_set":
-            if scope.resource_id != set_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this picture set",
-                )
-        elif scope.resource_type == "project":
-            # Allow access if the set belongs to the token's project
-            def _check_set_in_project(session, sid: int, pid: int):
-                ps = session.get(PictureSet, sid)
-                if ps is None or ps.project_id != pid:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Token is not authorised for this picture set",
-                    )
+        """Raise 403 if the token scope does not cover the requested picture set.
 
-            server.vault.db.run_immediate_read_task(
-                _check_set_in_project, set_id, scope.resource_id
-            )
-        elif scope.resource_type is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised for this resource type",
-            )
+        Thin delegation to the single membership implementation in
+        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        The authz gate calls the same function directly for SET_SCOPED routes;
+        Step 5 removes this shim.
+        """
+        enforce_set_scope(server, request, set_id)
 
     @router.get(
         "/picture_sets",
@@ -737,7 +720,6 @@ def create_router(server) -> APIRouter:
         responses={200: {"content": {"image/png": {}}}},
     )
     def get_picture_set_thumbnail(id: int, request: Request):
-        _require_scope_allows_picture_set(request, id)
         thumbnail_cache_version = 16
         cache_dir = os.path.join(server.vault.image_root, "tmp", "set_thumbnails")
         os.makedirs(cache_dir, exist_ok=True)
@@ -1001,7 +983,6 @@ def create_router(server) -> APIRouter:
                     "/api/v1/projects/{project_id_or_name}/picture_sets/{name}."
                 ),
             )
-        _require_scope_allows_picture_set(request, id)
 
         sort_mech = None
         if sort:
@@ -1278,11 +1259,13 @@ def create_router(server) -> APIRouter:
             if set_color is not _UNSET:
                 picture_set.set_color = set_color
 
-            # Always reconcile member picture memberships when an explicit
-            # non-null project assignment is requested. This keeps set
-            # assignment idempotent and repairs historical drift where the set
-            # is assigned but some members are missing project membership rows.
-            if project_assignment_requested:
+            # Reconcile member-picture project membership when this update sets
+            # or changes the project. A same-project re-assign (project provided
+            # but unchanged) is the idempotent-repair path that heals historical
+            # drift where members are missing membership rows; a project change
+            # also removes members from the old project (reference-aware). Shared
+            # with character updates via project_membership_service.
+            if project_assignment_requested or project_id_changed:
                 member_ids = [
                     pic_id
                     for pic_id in session.exec(
@@ -1292,83 +1275,14 @@ def create_router(server) -> APIRouter:
                     ).all()
                     if pic_id is not None
                 ]
-                if member_ids:
-                    pictures = session.exec(
-                        select(Picture).where(Picture.id.in_(member_ids))
-                    ).all()
-                    for pic in pictures:
-                        if pic.id is None:
-                            continue
-                        membership = session.exec(
-                            select(PictureProjectMember).where(
-                                PictureProjectMember.picture_id == int(pic.id),
-                                PictureProjectMember.project_id == project_id,
-                            )
-                        ).first()
-                        if membership is None:
-                            session.add(
-                                PictureProjectMember(
-                                    picture_id=int(pic.id),
-                                    project_id=project_id,
-                                )
-                            )
-                            pictures_changed = True
-                        if pic.project_id != project_id:
-                            pic.project_id = project_id
-                            session.add(pic)
-                            pictures_changed = True
-
-            # When the set leaves a project, drop its member pictures from that
-            # old project unless another character or picture set still assigned
-            # to it anchors them there.
-            if project_id_changed and old_project_id is not None:
-                old_member_ids = [
-                    pic_id
-                    for pic_id in session.exec(
-                        select(PictureSetMember.picture_id).where(
-                            PictureSetMember.set_id == id
-                        )
-                    ).all()
-                    if pic_id is not None
-                ]
-                if old_member_ids:
-                    old_pictures = session.exec(
-                        select(Picture).where(Picture.id.in_(old_member_ids))
-                    ).all()
-                    for pic in old_pictures:
-                        if pic.id is None:
-                            continue
-                        if not picture_referenced_by_project(
-                            session,
-                            int(pic.id),
-                            old_project_id,
-                            exclude_set_id=id,
-                        ):
-                            old_membership = session.exec(
-                                select(PictureProjectMember).where(
-                                    PictureProjectMember.picture_id == int(pic.id),
-                                    PictureProjectMember.project_id == old_project_id,
-                                )
-                            ).first()
-                            if old_membership is not None:
-                                session.delete(old_membership)
-                                pictures_changed = True
-                        # If the set left all projects, repoint pictures that
-                        # pointed at the old project to a remaining membership.
-                        if project_id is None and pic.project_id == old_project_id:
-                            session.flush()
-                            fallback_project_id = session.exec(
-                                select(PictureProjectMember.project_id)
-                                .where(PictureProjectMember.picture_id == int(pic.id))
-                                .order_by(PictureProjectMember.project_id.asc())
-                            ).first()
-                            pic.project_id = (
-                                int(fallback_project_id)
-                                if fallback_project_id is not None
-                                else None
-                            )
-                            session.add(pic)
-                            pictures_changed = True
+                reconcile_result = reconcile_entity_project_change(
+                    session,
+                    picture_ids=member_ids,
+                    old_project_id=old_project_id,
+                    new_project_id=project_id,
+                    exclude_set_id=id,
+                )
+                pictures_changed = reconcile_result.changed
 
             # Apply the lock toggle last (after the read-only guard above) and
             # collect the member ids so a lock/unlock can refresh their badges.
@@ -1472,8 +1386,6 @@ def create_router(server) -> APIRouter:
         include_deleted: bool = Query(False),
         expand_stacks: bool = Query(False),
     ):
-        _require_scope_allows_picture_set(request, id)
-
         def fetch_members(session, id, include_deleted, expand_stacks):
             picture_set = session.get(PictureSet, id)
             if not picture_set:

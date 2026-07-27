@@ -53,6 +53,8 @@ For each picture and anomaly tag `t`:
 - `p_t` = the tagger's stored probability (`TagPrediction.confidence`, kept down to 0.05, so
   the penalty sees graded evidence — not just accepted tags). A human ledger decision
   overrides the model: human POS → 1.0, human NEG → 0.0.
+  **(Superseded 2026-07-25: a model prediction is now charged only when it also has a
+  `Tag` row; see the closing section.)**
 - `prec_t` = the tag's precision from the latest evaluated `TaggerRun`
   (`report.payload.per_tag[].precision`), else `DEFAULT_TAG_PRECISION = 0.90`.
 - **Precision floor (`0.70`)** — answers *what to do with less-accurate tags*. Below it, a
@@ -182,3 +184,41 @@ Tier 3 learn the severities and the confidence curve.
 - CLIP-IQA: Wang et al., *Exploring CLIP for Assessing the Look and Feel of Images*,
   arXiv:2207.12396; QualiCLIP (opinion-unaware, CLIP-based).
 - NR-IQA state of the art for the later backbone decision: Q-Align, Q-SiT, DeQA-Score, MUSIQ.
+
+## Superseded: predictions vs. applied tags (2026-07-25)
+
+Phase 1 above scored anomalies straight from `TagPrediction`, deliberately *"not just
+accepted tags"*, so the penalty could see graded evidence below the apply gate. Commit
+`1ba016d0` narrowed that to predictions clearing the tagger's per-label acceptance
+threshold, on the rationale that the picture should only be penalised for defects the
+user can actually see. The threshold was a **proxy** for tag membership, and it does not
+hold:
+
+- `TagPredictionBackfillTask` writes predictions against a picture's *existing* tag set
+  and never writes a `Tag` row (that is its stated contract; it must not disturb a
+  curated tag set). Every prediction it writes above threshold became a phantom penalty.
+- A prediction written by an older model and re-graded against a newer `meta.json`'s
+  lower threshold clears a gate it never cleared when it was written: the same staleness
+  class recorded in [`b2b-model-swap-smart-score-staleness.md`](b2b-model-swap-smart-score-staleness.md).
+
+`fetch_anomaly_confidences` now requires **both** the threshold *and* a matching `Tag`
+row for model-sourced predictions. Human ledger decisions stay exempt in both directions
+(a human POS counts with no tag row, a human NEG suppresses while the tag is applied).
+
+Measured on the author's 31,815-picture anomaly-bearing library: 11,156 pictures had a
+phantom penalty, all moving downward (0 increases), median reduction 0.517, and 6,009
+were fully de-penalised. The drop rate is strongly model-version dependent: 0.2% for
+`v151` and 2.5% for `v146` (versions whose tags and thresholds are mutually consistent,
+confirming the live tagging path's *prediction ≥ threshold ⟹ `Tag` row* invariant) versus
+46.8% for `v112` and 20.8% for `v114`, which are the stale-model and backfill populations.
+
+Migration `0083` NULL-resets a deliberate superset of that: 26,155 rows on the same vault,
+because its predicate is pure SQL (any non-POS anomaly prediction with no matching `Tag`
+row) and cannot evaluate the per-label thresholds that live in the tagger's `meta.json`.
+Over-resetting derived data is self-healing and measured in seconds of recompute; missing
+a stale score is not, which is the same trade-off `invalidate_for_penalised_tag_change`
+already makes.
+
+**Still out of scope (known asymmetry):** an applied anomaly `Tag` with no prediction, or
+a sub-threshold one, remains unpenalised. Making a `Tag` row *sufficient* as well as
+necessary is a separate semantic change and was deliberately deferred.

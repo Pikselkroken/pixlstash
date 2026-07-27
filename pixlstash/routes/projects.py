@@ -16,6 +16,7 @@ from sqlalchemy import delete, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from pixlstash.authz.membership import enforce_project_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -29,7 +30,7 @@ from pixlstash.db_models import (
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
 logger = get_logger(__name__)
@@ -162,21 +163,14 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail="Project name already exists")
 
     def _require_scope_allows_project(request: Request, project_id: int):
-        """Raise 403 if the token scope does not cover the requested project."""
-        scope = getattr(request.state, "token_scope", None)
-        if scope is None:
-            return
-        if scope.resource_type == "project":
-            if scope.resource_id != project_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this project",
-                )
-        elif scope.resource_type is not None:
-            raise HTTPException(
-                status_code=403,
-                detail="Token is not authorised for this resource type",
-            )
+        """Raise 403 if the token scope does not cover the requested project.
+
+        Thin delegation to the single membership implementation in
+        ``pixlstash/authz/membership.py`` (backend refactor plan §3.7, Step 4).
+        The authz gate calls the same function directly for PROJECT_SCOPED
+        routes; Step 5 removes this shim.
+        """
+        enforce_project_scope(server, request, project_id)
 
     # -------------------------------------------------------------------------
     # Projects CRUD
@@ -631,11 +625,6 @@ def create_router(server) -> APIRouter:
         include_attachments: bool = Query(default=True),
     ):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): reject any token scoped to a different resource —
-        # not just a project-id mismatch.  Previously a character- or
-        # picture_set-scoped token fell through this check and could export an
-        # arbitrary project.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
@@ -865,10 +854,6 @@ def create_router(server) -> APIRouter:
     )
     def list_attachments(request: Request, project_id: int):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): a resource-scoped token may only touch its own
-        # project — checking the include_attachments flag alone let a project-A
-        # token list project-B's attachments.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None
@@ -995,9 +980,6 @@ def create_router(server) -> APIRouter:
     )
     def download_attachment(request: Request, project_id: int, attachment_id: int):
         server.auth.require_user_id(request)
-        # Scope guard (BOLA): a resource-scoped token may only download from its
-        # own project's attachments.
-        _require_scope_allows_project(request, project_id)
         token_scope = getattr(request.state, "token_scope", None)
         if (
             token_scope is not None

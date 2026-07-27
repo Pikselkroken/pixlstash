@@ -7,6 +7,8 @@
     :backendUrl="props.backendUrl"
     :tagUpdate="props.wsTagUpdate"
     :descriptionUpdate="props.wsDescriptionUpdate"
+    :smartScoreUpdate="props.wsSmartScoreUpdate"
+    :detectionUpdate="props.wsDetectionUpdate"
     :hiddenTags="props.hiddenTags"
     :applyTagFilter="props.applyTagFilter"
     :dateFormat="props.dateFormat"
@@ -31,6 +33,7 @@
     @set-project="handleSetProjectForSelected"
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
+    @request-context-menu="handleOverlayContextMenuRequest"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -70,6 +73,7 @@
          Hidden on the desktop shell, where it lives in the title bar. -->
     <nav
       v-if="breadcrumb.length && !isDesktop"
+      ref="breadcrumbEl"
       class="grid-breadcrumb"
       :class="{
         'grid-breadcrumb--above-bar': isMultiCharacterView || isSetOverlapView,
@@ -143,6 +147,33 @@
       @remove-picture-shares="openRevokeSharesDialog"
       @reverse-image-search="handleReverseImageSearch"
       @find-similar-faces="handleFindSimilarFaces"
+    />
+
+    <!-- ── Overlay (lightbox) context menu ─────────────────────
+         A second, dedicated instance so grid-menu and overlay-menu state stay
+         cleanly separated. It runs in overlay-mode (restricted action set +
+         dark skin) and every action is scoped to the single overlay picture via
+         overlay-specific handlers — never the grid selection. -->
+    <ImageGridContextMenu
+      overlay-mode
+      :visible="overlayCtxVisible"
+      :x="overlayCtxX"
+      :y="overlayCtxY"
+      :selected-image-ids="overlayCtxSelectedIds"
+      :selected-character="String(props.selectedCharacter)"
+      :all-pictures-id="String(props.allPicturesId)"
+      :unassigned-pictures-id="String(props.unassignedPicturesId)"
+      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :backend-url="props.backendUrl"
+      :lock-reason="overlayCtxLockReason"
+      :context-image="overlayCtxImage"
+      @close="overlayCtxVisible = false"
+      @share-picture="handleOverlayShare"
+      @find-similar-faces="handleOverlayFindSimilarFaces"
+      @reverse-image-search="handleOverlayReverseImageSearch"
+      @segment="openOverlaySegmentDialog"
+      @delete-selected="handleOverlayDelete"
+      @remove-from-group="handleOverlayScrapheapRestore"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -226,14 +257,27 @@
       :visible="showScrapheapBar"
       :disabled="scrapheapEmptyDisabled"
       :restoreDisabled="scrapheapRestoreDisabled"
+      :retention-label="scrapheapRetentionLabel"
       @empty-scrapheap="confirmEmptyScrapheap"
       @restore-scrapheap="confirmRestoreScrapheap"
+      @open-retention-settings="emit('open-settings', 'scrapheap')"
     />
     <SnapshotsWithDeletedDialog
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
       :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
       @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
+    />
+    <DeleteForeverDialog
+      v-model:open="deleteForeverOpen"
+      :total-count="deleteForeverTotalCount"
+      :protected-count="deleteForeverProtectedCount"
+      :unprotected-count="deleteForeverUnprotectedCount"
+      :protected-paths="deleteForeverProtectedPaths"
+      :locked-count="deleteForeverLockedCount"
+      :busy="deleteForeverBusy"
+      @confirm="confirmDeleteForever"
+      @cancel="cancelDeleteForever"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -436,29 +480,28 @@
           {
             'compact-mode': props.compactMode,
             'touch-select-mode': touchSelectMode,
+            'image-grid--justified': isJustifiedMode,
           },
         ]"
-        :style="{
-          gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
-          position: 'relative',
-          ...badgeCssVars,
-        }"
+        :style="gridContainerStyle"
         ref="gridContainer"
         data-testid="image-grid"
         @click="handleGridBackgroundClick"
       >
-        <!-- Top spacer for virtual scroll alignment -->
+        <!-- Top spacer for virtual scroll alignment (width 100% makes it a
+             full flex line in justified mode; harmless in grid mode) -->
         <div
           v-if="topSpacerHeight > 0"
           :style="{
             gridColumn: '1 / -1',
+            width: '100%',
             height: `${topSpacerHeight}px`,
           }"
         ></div>
         <div
           v-for="(img, idx) in gridImagesToRender"
           :key="img.id ? `img-${img.id}-${img.idx}` : `placeholder-${img.idx}`"
-          :style="getStackCardStyle(img)"
+          :style="[getStackCardStyle(img), getJustifiedCardStyle(img, idx)]"
           :class="[
             'image-card',
             {
@@ -496,8 +539,13 @@
             <div
               :class="[
                 'thumbnail-container',
-                { 'thumbnail-container-drag-source': isDragSourceImage(img) },
+                {
+                  'thumbnail-container-drag-source': isDragSourceImage(img),
+                  'thumbnail-container--justified': isJustifiedMode,
+                  'thumbnail-container--cropped': isSquareCropActive(img),
+                },
               ]"
+              :style="getJustifiedThumbStyle(img, idx)"
               :ref="(el) => setThumbnailContainerRef(img.id, el)"
               draggable="true"
               @dragstart.capture="handleContainerDragStart(img, $event)"
@@ -562,6 +610,23 @@
                   >
                 </div>
               </div>
+              <!-- Scrapheap auto-purge state (permanent, bottom-left).
+                   Either a countdown to the server's `purge_at` or, for a
+                   protected reference original, the "won't auto-delete" badge.
+                   Icon + text, never colour alone. -->
+              <div
+                v-if="getScrapheapPurgeBadge(img)"
+                class="thumbnail-purge-badge"
+                :class="`thumbnail-purge-badge--${getScrapheapPurgeBadge(img).kind}`"
+                :title="getScrapheapPurgeBadge(img).title"
+              >
+                <v-icon size="12" class="thumbnail-purge-badge__icon">{{
+                  getScrapheapPurgeBadge(img).icon
+                }}</v-icon>
+                <span class="thumbnail-purge-badge__text">{{
+                  getScrapheapPurgeBadge(img).label
+                }}</span>
+              </div>
               <!-- Resolution overlay (always rendered, visible on hover) -->
               <div
                 v-if="
@@ -618,6 +683,7 @@
                 <img
                   :src="getThumbnailSrc(img)"
                   class="thumbnail-img"
+                  :style="getSquareCropImgStyle(img)"
                   :ref="(el) => setThumbnailRef(img.id, el)"
                   loading="eager"
                   fetchpriority="high"
@@ -707,7 +773,16 @@
                     img.format &&
                     img.format !== 'unknown'
                   "
-                  class="thumbnail-bottom-left-badges"
+                  :class="[
+                    'thumbnail-bottom-left-badges',
+                    {
+                      // The scrapheap purge badge is permanent and owns the
+                      // bottom-left corner; the hover-only format badge stacks
+                      // above it instead of landing on top of it.
+                      'thumbnail-bottom-left-badges--raised':
+                        !!getScrapheapPurgeBadge(img),
+                    },
+                  ]"
                 >
                   <!-- Format badge: hover-only -->
                   <div class="thumbnail-id-overlay thumbnail-badge">
@@ -782,6 +857,7 @@
           v-if="bottomSpacerHeight > 0"
           :style="{
             gridColumn: '1 / -1',
+            width: '100%',
             height: `${bottomSpacerHeight}px`,
           }"
         ></div>
@@ -940,7 +1016,22 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
+import {
+  useNoticeStore,
+  DEFAULT_TIMEOUTS,
+} from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
+import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import { useScopedNotice } from "../../composables/useScopedNotice";
+import { buildPurgeBadge } from "../../utils/retention.js";
+import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
+import {
+  squareCropParams,
+  squareCropImgStyle,
+  squareCropBboxRect,
+  coverBboxRect,
+} from "../../utils/squareCrop.js";
 import {
   isSupportedImageFile,
   isSupportedVideoFile,
@@ -960,19 +1051,52 @@ import ComfyUiRunner from "../io/ComfyUiRunner.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
-import { apiClient, appendShareToken, isReadOnly } from "../../utils/apiClient";
+import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
+import { appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
-  arraysEqualByString,
+  listPicturesByIds,
+  getPictureMetadata,
+  getThumbnails,
+  deletePictures,
+  setPicturesProject,
+  previewScrapheapDelete,
+  purgeScrapheap,
+  restoreScrapheap,
+  openPictureLocation,
+  detectPictures,
+  listPicturePlugins,
+  runPicturePlugin,
+  resetPictureTags,
+  resetPictureDescription,
+  clearImpossibleTags,
+  restoreImpossibleTags,
+  applyScores,
+  getGuestScores,
+  submitGuestScores,
+  startExport,
+  getExportStatus,
+  downloadExport,
+} from "../../api/pictures";
+import { addPictureTag, removePictureTag } from "../../api/tags";
+import { getStack, removeStackMembers } from "../../api/stacks";
+import {
+  getCharacter,
+  addCharacterFaces,
+  removeCharacterFaces,
+  removeCharacterFacesByFaceId,
+} from "../../api/characters";
+import { getPictureSet, addPictureToSet, removePictureFromSet } from "../../api/pictureSets";
+import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
+import { listTaggers } from "../../api/taggers";
+import { runTextToImage } from "../../api/comfyui";
+import {
   faceBoxColor,
   formatUserDate,
   getInfoFont,
-  getStackColor,
   isRangeOverlap,
   normalizePluginProgressMessage,
   rangeCovers,
-  shiftRangesForDelta,
   sleep,
-  getStackThreshold,
   toggleScore,
 } from "../../utils/utils.js";
 import {
@@ -994,6 +1118,10 @@ import {
   stackBadgeTitle,
 } from "../../utils/stack.js";
 import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
+import {
+  rowOfIndex,
+  JUSTIFIED_ROW_GAP,
+} from "../../composables/useJustifiedLayout.js";
 import { useMultiSelect } from "../../composables/useMultiSelect.js";
 import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
 import { useStackOrdering } from "../../composables/useStackOrdering.js";
@@ -1002,6 +1130,7 @@ import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 
 const emit = defineEmits([
   "open-overlay",
+  "update:overlay-open",
   "refresh-sidebar",
   "clear-search",
   "reset-to-all",
@@ -1048,6 +1177,12 @@ const props = defineProps({
   penalisedTagWeights: { type: Object, default: () => ({}) },
   showStacks: { type: Boolean, default: true },
   compactMode: { type: Boolean, default: false },
+  // 'square' (uniform grid) or 'justified' (Google-Photos-style rows of
+  // variable-width thumbnails sharing a common row height).
+  thumbnailMode: { type: String, default: "square" },
+  // Shared thumbnail-size level (0..6). Drives square column count (via
+  // gridStore.columns) and, in justified mode, the target row height.
+  sizeLevel: { type: Number, default: 3 },
   themeMode: { type: String, default: "light" },
   dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
@@ -1060,6 +1195,14 @@ const props = defineProps({
     default: () => ({ key: 0, pictureIds: [] }),
   },
   wsDescriptionUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
+  wsSmartScoreUpdate: {
+    type: Object,
+    default: () => ({ key: 0, pictureIds: [] }),
+  },
+  wsDetectionUpdate: {
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
   },
@@ -1109,7 +1252,6 @@ const props = defineProps({
 // CONSTANTS
 // ============================================================
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
-const MIN_THUMBNAIL_SIZE = 128;
 // Per-column thumbnail width is now driven by `1fr` tracks that fill the grid;
 // the 384px upper bound is enforced via the column-count clamp in App.vue
 // (updateMaxColumns), so no fixed max is applied to the track itself here.
@@ -1157,6 +1299,14 @@ const isMultiCharacterView = computed(
   () => normalizedSelectedCharacterIds.value.length > 1,
 );
 
+// True when project membership is part of the grid query, i.e. when the view is
+// scoped to a project (or to the "unassigned project" pseudo-view). This mirrors
+// useGridFetch._appendSelectionParams, which appends `project_id` only in this
+// mode; in the global mode nothing about the query depends on project
+// membership. Used to decide whether a project assignment can change what the
+// grid shows and therefore warrants a refetch.
+const isProjectScopedView = computed(() => props.projectViewMode === "project");
+
 // ============================================================
 // THUMBNAIL SYSTEM STATE
 // ============================================================
@@ -1198,6 +1348,23 @@ const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 const contextMenuImage = ref(null);
 const contextMenuClickedFace = ref(null);
+// ── Overlay (lightbox) context menu — state kept separate from the grid menu.
+// The image object arrives in the request payload from ImageOverlay (it owns
+// the currently-displayed picture + its loaded faces), so this never depends on
+// the grid selection.
+const overlayCtxVisible = ref(false);
+const overlayCtxX = ref(0);
+const overlayCtxY = ref(0);
+const overlayCtxImage = ref(null);
+// The overlay menu acts on exactly one picture: the one on screen.
+const overlayCtxSelectedIds = computed(() =>
+  overlayCtxImage.value?.id != null ? [overlayCtxImage.value.id] : [],
+);
+const overlayCtxLockReason = computed(() =>
+  overlayCtxImage.value?.id != null
+    ? lockedSetsStore.lockReason(overlayCtxImage.value.id)
+    : null,
+);
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
 const sharedPictureIds = ref(new Set());
@@ -1208,6 +1375,10 @@ const sharePicDialogOpen = ref(false);
 // Segment (object detection) dialog
 const segmentDialogOpen = ref(false);
 const segmentPrompt = ref("");
+// When set, confirmSegment targets these ids instead of the grid selection.
+// Used by the overlay context menu to scope segmentation to the single picture
+// on screen. Null → fall back to the grid selection (the normal grid path).
+const segmentTargetIds = ref(null);
 
 // ============================================================
 // GRID DATA STATE
@@ -1259,13 +1430,11 @@ async function handleClearImpossibleTags() {
   }
   clearingImpossibleTags.value = true;
   try {
-    const res = await apiClient.post(
-      `${props.backendUrl}/pictures/impossible-tags/clear`,
-      { picture_ids: pictureIds, filters },
-    );
-    const removed = Array.isArray(res.data?.removed) ? res.data.removed : [];
-    const count =
-      typeof res.data?.count === "number" ? res.data.count : removed.length;
+    const body = await clearImpossibleTags(pictureIds, filters, {
+      baseUrl: props.backendUrl,
+    });
+    const removed = Array.isArray(body?.removed) ? body.removed : [];
+    const count = typeof body?.count === "number" ? body.count : removed.length;
     lastImpossibleRemoved.value = removed;
     impossibleSnackbarText.value =
       count > 0
@@ -1287,9 +1456,7 @@ async function handleUndoImpossibleTags() {
   const pairs = lastImpossibleRemoved.value;
   if (!Array.isArray(pairs) || !pairs.length) return;
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/impossible-tags/restore`, {
-      pairs,
-    });
+    await restoreImpossibleTags(pairs, { baseUrl: props.backendUrl });
     impossibleSnackbarVisible.value = false;
     lastImpossibleRemoved.value = [];
     debouncedFetchAllGridImages({ force: true });
@@ -1367,8 +1534,8 @@ async function fetchAvailablePlugins() {
     return;
   }
   try {
-    const res = await apiClient.get(`${props.backendUrl}/pictures/plugins`);
-    const plugins = Array.isArray(res.data?.plugins) ? res.data.plugins : [];
+    const body = await listPicturePlugins({ baseUrl: props.backendUrl });
+    const plugins = Array.isArray(body?.plugins) ? body.plugins : [];
     availablePlugins.value = plugins.filter((plugin) => plugin && plugin.name);
   } catch (err) {
     console.warn("Failed to load image plugins:", err);
@@ -1387,8 +1554,8 @@ const captionerPlugins = computed(() =>
 async function fetchTaggerPlugins() {
   if (!props.backendUrl) return;
   try {
-    const res = await apiClient.get(`${props.backendUrl}/taggers`);
-    allTaggerPlugins.value = res.data?.plugins ?? [];
+    const body = await listTaggers({ baseUrl: props.backendUrl });
+    allTaggerPlugins.value = body?.plugins ?? [];
   } catch (err) {
     console.warn("Failed to load tagger plugins:", err);
     allTaggerPlugins.value = [];
@@ -1404,7 +1571,7 @@ async function handleAutoTag({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(`${props.backendUrl}/pictures/${id}/reset_tags`, body),
+        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1422,10 +1589,7 @@ async function handleGenerateDescription({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        apiClient.post(
-          `${props.backendUrl}/pictures/${id}/reset_description`,
-          body,
-        ),
+        resetPictureDescription(id, body, { baseUrl: props.backendUrl }),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1469,17 +1633,18 @@ async function runPluginWithParameters(
 ) {
   if (!pluginName || !Array.isArray(pictureIds) || !pictureIds.length) return;
   try {
-    const res = await apiClient.post(
-      `${props.backendUrl}/pictures/plugins/${encodeURIComponent(pluginName)}`,
+    const res = await runPicturePlugin(
+      pluginName,
       {
         picture_ids: pictureIds,
         parameters: parameters || {},
         captions: Array.isArray(captions) ? captions : undefined,
         stack,
       },
+      { baseUrl: props.backendUrl },
     );
-    const createdIds = Array.isArray(res.data?.created_picture_ids)
-      ? res.data.created_picture_ids
+    const createdIds = Array.isArray(res?.created_picture_ids)
+      ? res.created_picture_ids
       : [];
     if (createdIds.length) {
       const newIds = createdIds
@@ -1503,7 +1668,9 @@ async function runPluginWithParameters(
     }
   } catch (err) {
     console.error("Failed to run plugin:", err);
-    alert(err?.response?.data?.detail || err?.message || String(err));
+    noticeStore.error(`Plugin run failed. ${errorDetail(err)}`, {
+      key: "plugin-run",
+    });
   }
 }
 
@@ -1638,11 +1805,8 @@ async function runComfyuiOnGridImages({
       project_id: contextProjectId,
       character_id: contextCharacterId,
     };
-    const res = await apiClient.post(
-      `${props.backendUrl}/comfyui/run_t2i`,
-      payload,
-    );
-    const prompts = Array.isArray(res.data?.prompts) ? res.data.prompts : [];
+    const body = await runTextToImage(payload, { baseUrl: props.backendUrl });
+    const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     handleComfyuiRun({ prompts });
   } catch (err) {
     console.error("ComfyUI T2I run failed:", err);
@@ -2155,16 +2319,9 @@ function isImageRecentlyAdded(id) {
 // ============================================================
 // THUMBNAIL HELPERS
 // ============================================================
-function onThumbnailLoad(id, event = null) {
+function onThumbnailLoad(id) {
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
   const assignedAt = Number(thumbnailAssignedAtMap[id]);
-  const eventTarget = event?.target || null;
-  const src =
-    eventTarget?.currentSrc ||
-    eventTarget?.src ||
-    thumbnailRefs[id]?.currentSrc ||
-    thumbnailRefs[id]?.src ||
-    null;
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
     delete thumbnailAssignedAtMap[id];
   }
@@ -2250,7 +2407,28 @@ function getVideoThumbnailSrc(img) {
 // selectedFaceIds, isFaceSelected, toggleFaceSelection, clearFaceSelection,
 // onFaceBboxDragStart — moved to useMultiSelect composable.
 
-// Helper to calculate face bbox overlay style using object-fit: cover logic
+// Square-crop render helpers (thumbnail v2). Square mode sprite-crops the whole
+// AR bitmap to the stored face-weighted rectangle; justified mode shows the
+// whole bitmap. Videos keep object-fit:cover (the crop rectangle describes the
+// still bitmap, not the video frames), and a picture whose crop fields have not
+// yet been populated falls back to cover centring until they arrive.
+function isSquareCropActive(img) {
+  return (
+    !isJustifiedMode.value &&
+    !isVideo(img) &&
+    squareCropParams(img) !== null
+  );
+}
+
+// Inline <img> style for the sprite crop, or null → CSS object-fit:cover.
+function getSquareCropImgStyle(img) {
+  if (isJustifiedMode.value || isVideo(img)) return null;
+  return squareCropImgStyle(img);
+}
+
+// Helper to calculate face/detection bbox overlay style. Square-crop mode maps
+// the bitmap-space bbox through the stored crop; otherwise it mirrors the
+// object-fit:cover render (justified whole-bitmap, or the square-mode fallback).
 function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   if (!el) return { display: "none" };
   const container = el.parentElement;
@@ -2259,19 +2437,17 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
   const containerHeight = container.clientHeight;
   const naturalWidth = img.thumbnail_width || img.width || 1;
   const naturalHeight = img.thumbnail_height || img.height || 1;
-  // Calculate scale and offset for object-fit: cover
-  const scale = Math.max(
-    containerWidth / naturalWidth,
-    containerHeight / naturalHeight,
-  );
-  const displayWidth = naturalWidth * scale;
-  const offsetX = (containerWidth - displayWidth) / 2;
-  const offsetY = 0;
-  // Transform bbox
-  const left = offsetX + bbox[0] * scale;
-  const top = offsetY + bbox[1] * scale;
-  const width = (bbox[2] - bbox[0]) * scale;
-  const height = (bbox[3] - bbox[1]) * scale;
+  const cropParams = isSquareCropActive(img) ? squareCropParams(img) : null;
+  const rect = cropParams
+    ? squareCropBboxRect(bbox, cropParams, containerWidth)
+    : coverBboxRect(
+        bbox,
+        naturalWidth,
+        naturalHeight,
+        containerWidth,
+        containerHeight,
+      );
+  const { left, top, width, height } = rect;
   const borderColor = faceBoxColor(idx);
   return {
     position: "absolute",
@@ -2570,127 +2746,6 @@ function formatCompactDatetime(dateStr) {
   }
 }
 
-function getCompactGroupLabel(img, visualIdx) {
-  if (!props.compactMode || !img) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
-
-  function getGroupKey(item) {
-    if (!item) return null;
-    if (isSearchMode && typeof item.likeness_score === "number")
-      return Math.round(item.likeness_score * 20);
-    if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 19);
-    if (sort.includes("DATE") && item.created_at)
-      return item.created_at.slice(0, 10);
-    const smartScore = getGridSmartScoreValue(item);
-    if (sort.includes("SMART_SCORE") && smartScore !== null)
-      return Math.round(smartScore * 10);
-    if (
-      sort.includes("CHARACTER_LIKENESS") &&
-      typeof item.character_likeness === "number"
-    )
-      return Math.round(item.character_likeness * 100);
-    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
-      return Math.round(item.text_score * 10);
-    return null;
-  }
-
-  const currentKey = getGroupKey(img);
-  if (currentKey === null) return null;
-
-  const prevImg =
-    visualIdx > 0 ? gridImagesToRender.value[visualIdx - 1] : null;
-  if (visualIdx > 0 && getGroupKey(prevImg) === currentKey) return null;
-
-  if (isSearchMode && typeof img.likeness_score === "number")
-    return `≈ ${img.likeness_score.toFixed(2)}`;
-  if (sort === "IMPORTED_AT" && img.imported_at)
-    return formatCompactDatetime(img.imported_at);
-  if (sort.includes("DATE") && img.created_at)
-    return formatCompactDate(img.created_at);
-  const smartScore = getGridSmartScoreValue(img);
-  if (sort.includes("SMART_SCORE") && smartScore !== null)
-    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
-  if (
-    sort.includes("CHARACTER_LIKENESS") &&
-    typeof img.character_likeness === "number"
-  )
-    return `≈ ${(Math.floor(img.character_likeness * 100) / 100).toFixed(2)}`;
-  if (sort === "TEXT_CONTENT" && typeof img.text_score === "number")
-    return `${(img.text_score * 100).toFixed(0)}%`;
-  return null;
-}
-
-const compactStickyLabel = computed(() => {
-  if (!props.compactMode) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
-
-  function getGroupKey(item) {
-    if (!item) return null;
-    if (isSearchMode && typeof item.likeness_score === "number")
-      return Math.round(item.likeness_score * 20);
-    if (sort === "IMPORTED_AT" && item.imported_at)
-      return item.imported_at.slice(0, 19);
-    if (sort.includes("DATE") && item.created_at)
-      return item.created_at.slice(0, 10);
-    const smartScore = getGridSmartScoreValue(item);
-    if (sort.includes("SMART_SCORE") && smartScore !== null)
-      return Math.round(smartScore * 10);
-    if (
-      sort.includes("CHARACTER_LIKENESS") &&
-      typeof item.character_likeness === "number"
-    )
-      return Math.round(item.character_likeness * 100);
-    if (sort === "TEXT_CONTENT" && typeof item.text_score === "number")
-      return Math.round(item.text_score * 10);
-    return null;
-  }
-
-  const firstVisibleVisualIdx = visibleStart.value - renderStart.value;
-  const firstImg = gridImagesToRender.value?.[firstVisibleVisualIdx];
-  if (!firstImg) return null;
-
-  // Suppress if this item already has a between-row pill (it's a group boundary)
-  const prevImg =
-    firstVisibleVisualIdx > 0
-      ? gridImagesToRender.value[firstVisibleVisualIdx - 1]
-      : null;
-  const isGroupBoundary =
-    firstVisibleVisualIdx === 0 ||
-    getGroupKey(prevImg) !== getGroupKey(firstImg);
-  if (isGroupBoundary) return null;
-
-  if (isSearchMode && typeof firstImg.likeness_score === "number")
-    return `≈ ${firstImg.likeness_score.toFixed(2)}`;
-  if (sort === "IMPORTED_AT" && firstImg.imported_at)
-    return formatCompactDatetime(firstImg.imported_at);
-  if (sort.includes("DATE") && firstImg.created_at)
-    return formatCompactDate(firstImg.created_at);
-  const smartScore = getGridSmartScoreValue(firstImg);
-  if (sort.includes("SMART_SCORE") && smartScore !== null)
-    return `★ ${(Math.round(smartScore * 10) / 10).toFixed(1)}`;
-  if (
-    sort.includes("CHARACTER_LIKENESS") &&
-    typeof firstImg.character_likeness === "number"
-  )
-    return `≈ ${(Math.floor(firstImg.character_likeness * 100) / 100).toFixed(2)}`;
-  if (sort === "TEXT_CONTENT" && typeof firstImg.text_score === "number")
-    return `${(firstImg.text_score * 100).toFixed(0)}%`;
-  if (
-    sort === "TAG_UNCERTAINTY" &&
-    typeof firstImg.tag_uncertainty === "number"
-  )
-    return `⚠ ${(firstImg.tag_uncertainty * 100).toFixed(0)}%`;
-  if (
-    sort === "ANOMALY_TAG_UNCERTAINTY" &&
-    typeof firstImg.anomaly_tag_uncertainty === "number"
-  )
-    return `⚠ ${(firstImg.anomaly_tag_uncertainty * 100).toFixed(0)}%`;
-  return null;
-});
-
 // ── Visible range label (emitted to SelectionBar) ──────────────
 function getImageSortLabel(img) {
   if (!img) return null;
@@ -2741,6 +2796,20 @@ const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+const scrapheapRetentionStore = useScrapheapRetentionStore();
+// Every failure path in this component reports through the notice surface. A
+// native alert() is unstyled, blocking and focus-stealing; a bare `catch` that
+// only logs is worse, because the user is never told at all.
+const noticeStore = useNoticeStore();
+
+/**
+ * Human-readable reason from an axios/HTTP error, for a one-sentence notice.
+ * @param {unknown} err
+ * @param {string} fallback - used when the server sent nothing useful.
+ */
+function errorDetail(err, fallback = "Please try again.") {
+  return err?.response?.data?.detail || err?.message || fallback;
+}
 // Live "is the Review Sessions overlay up" signal. It stays mounted over the
 // grid as a modal review surface with its own keyboard/drag handling, so the
 // grid's keyboard shortcuts and native drag must go inert while it is open.
@@ -2755,6 +2824,13 @@ const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 const isDesktop =
   typeof window !== "undefined" && !!window.pixlstashDesktop;
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
+
+// Below 600px the centred notice card widens over the bottom-left breadcrumb, so
+// there it joins the bottom-edge contract (notice-surface.md §2.4). Above that
+// width it sits outside the notice column's footprint and contributes nothing —
+// which is what `narrowOnly` encodes.
+const breadcrumbEl = ref(null);
+useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
 
 watch(
   visibleRangeLabel,
@@ -2878,12 +2954,13 @@ async function removeFromGroup() {
       clearFaceSelection();
       return;
     }
-    apiClient
-      .post(`${backendUrl}/pictures/scrapheap/restore`, {
-        picture_ids: pictureIds,
-      })
+    restoreScrapheap(pictureIds, { baseUrl: backendUrl })
       .catch((err) => {
-        alert(`Error restoring images: ${err.message}`);
+        console.error("Failed to restore pictures from the scrapheap", err);
+        noticeStore.error(
+          `Couldn't restore those pictures. ${errorDetail(err)}`,
+          { key: "scrapheap-restore-selection" },
+        );
       })
       .finally(() => {
         allGridImages.value = allGridImages.value.filter(
@@ -2910,28 +2987,26 @@ async function removeFromGroup() {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        apiClient.delete(
-          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
-          {
-            data: { picture_ids: pictureIds },
-          },
-        ),
+        removeCharacterFaces(props.selectedCharacter, pictureIds, {
+          baseUrl: backendUrl,
+        }),
       );
     }
     if (faceIds.length) {
       requests.push(
-        apiClient.delete(
-          `${backendUrl}/characters/${props.selectedCharacter}/faces`,
-          {
-            data: { face_ids: faceIds },
-          },
-        ),
+        removeCharacterFacesByFaceId(props.selectedCharacter, faceIds, {
+          baseUrl: backendUrl,
+        }),
       );
     }
     if (!requests.length) return;
     Promise.all(requests)
       .catch((err) => {
-        alert(`Error removing faces from character: ${err.message}`);
+        console.error("Failed to remove faces from character", err);
+        noticeStore.error(
+          `Couldn't remove those faces from the person. ${errorDetail(err)}`,
+          { key: "faces-remove-character" },
+        );
       })
       .finally(() => {
         if (pictureIds.length) {
@@ -3005,10 +3080,20 @@ async function removeFromGroup() {
         memberIds = cached.ids;
       } else {
         try {
-          const res = await apiClient.get(`${backendUrl}/stacks/${stackId}`);
-          memberIds = res.data?.picture_ids ?? [];
-        } catch {
-          // Fallback: only remove the originally-selected picture(s).
+          const stack = await getStack(stackId, { baseUrl: backendUrl });
+          memberIds = stack?.picture_ids ?? [];
+        } catch (err) {
+          // Fallback: only remove the originally-selected picture(s). That is a
+          // narrower result than the user asked for (a collapsed stack tile
+          // stands for the whole stack), so it is reported rather than swallowed.
+          console.warn(
+            `Failed to fetch members of stack ${stackId}; removing only the selected pictures from it.`,
+            err,
+          );
+          noticeStore.warning(
+            "Couldn't read a stack's members, so only the selected pictures were removed from it.",
+            { key: "stack-members-fetch" },
+          );
           memberIds = pictureIds.filter((id) => {
             const img = imageById.get(String(id));
             return getPictureStackId(img) === stackId;
@@ -3021,13 +3106,17 @@ async function removeFromGroup() {
     try {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
-        [...idsToRemoveFromSet].map(
-          (id) =>
-            apiClient
-              .delete(
-                `${backendUrl}/picture_sets/${props.selectedSet}/members/${id}`,
-              )
-              .catch(() => {}), // silently ignore if picture not in set
+        [...idsToRemoveFromSet].map((id) =>
+          removePictureFromSet(props.selectedSet, id, {
+            baseUrl: backendUrl,
+          }).catch((err) => {
+            // Expected when the picture was not in the set (the selection can
+            // span sets); log rather than drop it so a real failure is visible.
+            console.debug(
+              `Could not remove picture ${id} from set ${props.selectedSet}`,
+              err,
+            );
+          }),
         ),
       );
 
@@ -3036,13 +3125,9 @@ async function removeFromGroup() {
       if (stackRemovalsForExpanded.size) {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
-            apiClient
-              .delete(`${backendUrl}/stacks/${stackId}/members`, {
-                data: { picture_ids: ids },
-              })
-              .catch((err) =>
-                console.error("Failed to remove from stack:", err),
-              ),
+            removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
+              (err) => console.error("Failed to remove from stack:", err),
+            ),
           ),
         );
       }
@@ -3053,7 +3138,11 @@ async function removeFromGroup() {
         (img) => !removedSet.has(String(img?.id)),
       );
     } catch (err) {
-      alert(`Error removing images from set: ${err.message}`);
+      console.error("Failed to remove pictures from set", err);
+      noticeStore.error(
+        `Couldn't remove those pictures from the set. ${errorDetail(err)}`,
+        { key: "set-remove-pictures" },
+      );
     }
 
     selectedImageIds.value = [];
@@ -3165,8 +3254,69 @@ function handleRemoveFromCharacter(payload) {
   emit("refresh-sidebar");
 }
 
-async function deleteSelected() {
-  if (!selectedImageIds.value.length) return;
+// ── "Frozen by a locked set" outcome ─────────────────────────────────────────
+// The bulk delete skips locked pictures and reports them in `skipped_locked`.
+// Surfacing that is the whole point: a 200 that deleted nothing must never look
+// like success.
+//
+// This was a dialog only because no notice host existed. It is a `warning`
+// notice now (notice-surface.md §1): it reports an outcome already committed,
+// needs no consent, and enumerates nothing — so it fails all three dialog tests.
+// The dialog's title + body collapse to the one sentence the surface allows,
+// and its `hint` becomes the action, which routes to the locked set the user has
+// to unlock.
+//
+// Both cards are scoped (notice-surface.md §9.6) — see `lockedDeleteNotice`,
+// declared with the selection state it watches.
+/**
+ * Report the locked-set outcome, if there is one to report.
+ * @param {{title: string, body: string, hint: string}|null} message - from
+ *   `buildLockedDeleteMessage`; `null` means nothing was skipped, so stay quiet.
+ */
+function showLockedDeleteNotice(message) {
+  if (!message) return;
+  noticeStore.warning(message.body, {
+    // One key for both the pre-flight block and the post-response outcome: a
+    // user retrying a locked selection gets one card with a count, not a stack.
+    key: "delete-skipped-locked",
+    // The ordinary `warning` window, restated explicitly for one reason: to opt
+    // out of the action⇒sticky default (§6 rule 1). This card reports what just
+    // happened to the current selection; it is not a companion to the unlock,
+    // which is several clicks deep in a sidebar context menu and will outlast
+    // any sane notice. It should be long gone by then. The reading-time floor
+    // still applies, and hover/focus still pauses it for a slow reader.
+    timeout: DEFAULT_TIMEOUTS.warning,
+    action: {
+      label: "Help",
+      handler: () => {
+        // Follow-up carrying the lever (how to unlock), too long for the
+        // one-sentence rule on the first card. No explicit window: the `info`
+        // default raised by the reading-time floor is exactly the right rule for
+        // a long sentence, and the same copy lives on the lock badge tooltip, so
+        // nothing is lost when it goes.
+        noticeStore.push({
+          level: "info",
+          text: message.hint,
+          key: "delete-skipped-locked-help",
+        });
+      },
+    },
+  });
+  // After the flush this operation's own selection edit schedules — see
+  // useScopedNotice: arming any earlier would let the delete dismiss its own
+  // report.
+  lockedDeleteNotice.arm();
+}
+
+// `idsOverride` scopes the delete to an explicit picture list (the overlay
+// context menu passes `[overlayImageId]`). When set, the grid selection is
+// neither read for the target NOR mutated as a side effect — the overlay owns
+// its own post-delete cleanup (it closes the lightbox). Default (null) is the
+// grid path: act on, and update, `selectedImageIds`.
+async function deleteSelected(idsOverride = null) {
+  const scoped = Array.isArray(idsOverride) && idsOverride.length > 0;
+  const baseIds = scoped ? idsOverride : selectedImageIds.value;
+  if (!baseIds.length) return;
   const isScrapheapSelection = isScrapheapView.value;
 
   // For non-scrapheap deletions, expand collapsed stacks to all their members
@@ -3186,7 +3336,7 @@ async function deleteSelected() {
     const resolved = new Set();
     const collapsedStackIds = new Set();
 
-    for (const id of selectedImageIds.value) {
+    for (const id of baseIds) {
       const img = imageById.get(String(id));
       const stackId = getPictureStackId(img);
       if (!stackId || expandedStackIds.value.has(stackId)) {
@@ -3206,10 +3356,8 @@ async function deleteSelected() {
 
     for (const stackId of collapsedStackIds) {
       try {
-        const res = await apiClient.get(
-          `${props.backendUrl}/stacks/${stackId}`,
-        );
-        const memberIds = res.data?.picture_ids;
+        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const memberIds = stack?.picture_ids;
         if (Array.isArray(memberIds) && memberIds.length) {
           for (const mid of memberIds) resolved.add(mid);
         }
@@ -3218,8 +3366,8 @@ async function deleteSelected() {
           "Failed to fetch stack members for delete, falling back to selected ids:",
           e,
         );
-        // Fallback: delete the originally-selected picture(s) from this stack.
-        for (const id of selectedImageIds.value) {
+        // Fallback: delete the originally-targeted picture(s) from this stack.
+        for (const id of baseIds) {
           const img = imageById.get(String(id));
           if (getPictureStackId(img) === stackId) resolved.add(id);
         }
@@ -3228,48 +3376,78 @@ async function deleteSelected() {
 
     idsToRemove = [...resolved];
   } else {
-    idsToRemove = selectedImageIds.value.slice();
+    idsToRemove = baseIds.slice();
   }
 
   if (isScrapheapSelection) {
-    if (
-      !confirm(`Permanently delete ${idsToRemove.length} selected image(s)?`)
-    ) {
-      return;
-    }
+    // Destructive & irreversible: route through the tokenized Delete-forever
+    // confirm, which names any reference-folder ORIGINALS being destroyed. The
+    // scrapheap purge runs on @confirm (runScrapheapSelectionPurge).
+    openDeleteForeverForSelection(idsToRemove, scoped);
+    return;
+  }
+
+  // Pictures frozen by a locked set are SKIPPED by the bulk delete — the server
+  // returns 200 with `skipped_locked`. If every id in the batch is one of those,
+  // the request provably cannot delete anything, so don't send it: explain
+  // instead. (Attempting and silently no-op'ing is what produced the reported
+  // bug.) The client-side lock map is the same source the grid already gates its
+  // context menu on; the server stays authoritative for every mixed batch below.
+  const lockedInBatch = idsToRemove.filter((id) =>
+    lockedSetsStore.isLocked(id),
+  );
+  if (idsToRemove.length && lockedInBatch.length === idsToRemove.length) {
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: lockedInBatch.length,
+        deletedCount: 0,
+      }),
+    );
+    return;
   }
 
   const backendUrl = props.backendUrl;
-  let scrapheapPurgeResp = null;
   try {
-    if (isScrapheapSelection) {
-      scrapheapPurgeResp = await apiClient.delete(
-        `${backendUrl}/pictures/scrapheap`,
-        {
-          data: {
-            picture_ids: idsToRemove,
-          },
-        },
-      );
-    } else {
-      // Soft-delete via the bulk endpoint instead of one DELETE per id, which
-      // floods the browser/Electron per-host connection pool on large selections
-      // (excess sockets get reset and surface as axios "Network Error"). Chunk to
-      // the server's per-request id cap so a huge selection is a handful of
-      // requests, not thousands; each chunk broadcasts a single ``removed`` event.
-      const BULK_DELETE_CHUNK = 1000;
-      for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
-        const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-        await apiClient.delete(`${backendUrl}/pictures`, {
-          data: { picture_ids: chunk },
-        });
+    // Soft-delete via the bulk endpoint instead of one DELETE per id, which
+    // floods the browser/Electron per-host connection pool on large selections
+    // (excess sockets get reset and surface as axios "Network Error"). Chunk to
+    // the server's per-request id cap so a huge selection is a handful of
+    // requests, not thousands; each chunk broadcasts a single ``removed`` event.
+    const BULK_DELETE_CHUNK = 1000;
+    // Ids the server refused because a locked set freezes them. Collected across
+    // every chunk so the outcome message counts the whole operation.
+    const skippedLocked = new Set();
+    for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
+      const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
+      const resp = await deletePictures(chunk, { baseUrl: backendUrl });
+      const skipped = resp?.skipped_locked;
+      if (Array.isArray(skipped)) {
+        for (const id of skipped) skippedLocked.add(String(id));
       }
     }
-    removeImagesById(idsToRemove);
-    selectedImageIds.value = [];
-    lastSelectedImageId.value = null;
-    if (isScrapheapSelection) {
-      updateVisibleThumbnails();
+
+    // Only drop the tiles the server actually deleted. Removing the skipped ones
+    // too would hide pictures that are still in the library until the next
+    // refetch — a second, quieter version of the same lie.
+    const removedIds = idsToRemove.filter(
+      (id) => !skippedLocked.has(String(id)),
+    );
+    removeImagesById(removedIds);
+    // Overlay path: don't touch the grid selection. removeImagesById already
+    // drops any deleted id from it (a no-op when the overlay picture wasn't
+    // grid-selected), so the user's grid selection is left exactly as it was.
+    if (!scoped) {
+      // Keep the frozen pictures selected: they are still there, and the user's
+      // next move (after unlocking the set) is to delete exactly them.
+      selectedImageIds.value = selectedImageIds.value.filter((id) =>
+        skippedLocked.has(String(id)),
+      );
+      // Drop the range-selection anchor unless it is one of the survivors —
+      // otherwise a later shift-click would anchor on a deleted picture.
+      const stillSelected = new Set(selectedImageIds.value.map(String));
+      if (!stillSelected.has(String(lastSelectedImageId.value))) {
+        lastSelectedImageId.value = null;
+      }
     }
     if (deletedExpandedStackLeader) {
       // Repopulate so the promoted stack leader and remaining members reappear
@@ -3278,17 +3456,25 @@ async function deleteSelected() {
       debouncedFetchAllGridImages();
     }
     emit("refresh-sidebar");
-    if (isScrapheapSelection) {
-      showSnapshotsWithDeleted(scrapheapPurgeResp);
-    }
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: skippedLocked.size,
+        deletedCount: removedIds.length,
+      }),
+    );
   } catch (err) {
-    alert(`Error deleting images: ${err?.message || err}`);
+    console.error("Bulk delete failed", err);
+    noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
+      key: "pictures-delete",
+    });
   }
 }
 
 async function handleSetProjectForSelected(payload) {
   if (partialStackGroupingReason.value) {
-    window.alert(partialStackGroupingReason.value);
+    noticeStore.warning(partialStackGroupingReason.value, {
+      key: "partial-stack-grouping",
+    });
     return;
   }
   const explicitPictureIds = Array.isArray(payload?.pictureIds)
@@ -3312,7 +3498,9 @@ async function handleSetProjectForSelected(payload) {
       ? null
       : Number(nextProjectIdRaw);
   if (nextProjectId !== null && !Number.isFinite(nextProjectId)) {
-    window.alert("Invalid project selected.");
+    noticeStore.error("That project is no longer available.", {
+      key: "project-invalid",
+    });
     return;
   }
 
@@ -3323,37 +3511,51 @@ async function handleSetProjectForSelected(payload) {
       if (nextProjectId === null) {
         return;
       }
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
         mode: "remove",
+        baseUrl: props.backendUrl,
       });
     } else if (action === "added") {
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
         mode: "add",
+        baseUrl: props.backendUrl,
       });
     } else {
-      await apiClient.patch(`${props.backendUrl}/pictures/project`, {
-        picture_ids: pictureIds,
-        project_id: nextProjectId,
+      await setPicturesProject(pictureIds, nextProjectId, {
+        baseUrl: props.backendUrl,
       });
     }
 
-    preserveScrollOnNextFetch.value = true;
-    if (overlayOpen.value) {
-      // A project change while the overlay is open would replace allGridImages,
-      // breaking the filmstrip. Defer the refetch until the overlay closes.
-      pendingOverlayGridRefresh.value = true;
-    } else {
-      await fetchAllGridImages({ force: true });
-      updateVisibleThumbnails();
+    // Project membership only scopes the grid query in the project view:
+    // useGridFetch appends `project_id` exclusively when projectViewMode is
+    // "project" (_appendSelectionParams). In the global view (All Pictures and
+    // every other non-project-scoped view) an assignment changes neither which
+    // pictures match the query nor their sort position, and the card itself
+    // renders no project data, so a refetch would only flicker the grid and
+    // throw away scroll position and selection. Refetch only where membership
+    // can actually move a picture into or out of the view. The sibling set path
+    // (handleOverlayAddedToSet) and the sidebar drag-drop path
+    // (App.handleImagesMoved) already scope their grid work the same way.
+    if (isProjectScopedView.value) {
+      if (overlayOpen.value) {
+        // A project change while the overlay is open would replace
+        // allGridImages, breaking the filmstrip. Defer the refetch until the
+        // overlay closes.
+        pendingOverlayGridRefresh.value = true;
+      } else {
+        // Only arm the scroll-preserving flag when a fetch actually follows;
+        // otherwise it leaks into the next unrelated fetch.
+        preserveScrollOnNextFetch.value = true;
+        await fetchAllGridImages({ force: true });
+        updateVisibleThumbnails();
+      }
     }
     emit("refresh-sidebar");
   } catch (err) {
     const message = err?.response?.data?.detail || err?.message || String(err);
-    window.alert(`Failed to update project association: ${message}`);
+    noticeStore.error(`Couldn't update the project. ${message}`, {
+      key: "project-update",
+    });
   }
 }
 
@@ -3425,6 +3627,79 @@ const isScrapheapView = computed(() => {
   const selected = String(props.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
+
+// ── Scrapheap auto-empty policy ─────────────────────────────────────────────
+// Two separate things, deliberately not conflated:
+//   * the retention WINDOW — a server setting, shared via the store, shown in
+//     the scrapheap header so the policy is visible where the actions are;
+//   * each picture's purge DATE — `purge_at`, stamped by the server, which
+//     already accounts for the grace period applied when the window is
+//     shortened. The grid only formats the distance to it and never re-derives
+//     a purge date from the window.
+// An exempt picture carries `auto_purge_exempt: true`, a null `purge_at`, and
+// an `auto_purge_exempt_reason` naming WHY — "protected" (a reference-folder
+// original) or "locked" (frozen by a locked set). The two get different badges
+// because only the second is something the user can change (unlock the set).
+// The descriptor itself is built by `buildPurgeBadge` in utils/retention.js so
+// the three states are unit-testable without a grid.
+const scrapheapRetentionLabel = computed(() =>
+  isScrapheapView.value && scrapheapRetentionStore.loaded
+    ? scrapheapRetentionStore.label
+    : "",
+);
+
+// Captured on entry to the scrapheap view so every tile counts down from one
+// instant and no two labels can disagree within a render.
+const purgeNowMs = ref(Date.now());
+
+watch(
+  isScrapheapView,
+  (isScrapheap) => {
+    if (!isScrapheap) return;
+    purgeNowMs.value = Date.now();
+    scrapheapRetentionStore.fetchRetention();
+  },
+  { immediate: true },
+);
+
+/**
+ * Auto-purge badge state for the pictures in the current render window, keyed
+ * by picture id. Built once per window rather than per cell so a large virtual
+ * grid does not re-derive it for every tile on every render.
+ * @returns {Map<number|string, {kind: string, icon: string, label: string, title: string}>}
+ */
+const scrapheapPurgeBadges = computed(() => {
+  const badges = new Map();
+  if (!isScrapheapView.value) return badges;
+  // Nothing is on a clock when auto-empty is off, so neither a countdown nor a
+  // "won't auto-delete" badge means anything — the header already states the
+  // policy. Also suppressed until the policy is known, so the badges can't
+  // appear and then vanish once the fetch lands.
+  if (!scrapheapRetentionStore.loaded || scrapheapRetentionStore.isNever) {
+    return badges;
+  }
+  const now = purgeNowMs.value;
+  const dateFormat =
+    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+  const formatDate = (iso) => formatUserDate(iso, dateFormat);
+  for (const img of gridImagesToRender.value || []) {
+    if (!img || img.id == null) continue;
+    const badge = buildPurgeBadge(img, { now, formatDate });
+    if (badge) badges.set(img.id, badge);
+  }
+  return badges;
+});
+
+/**
+ * Badge descriptor for one tile, or `undefined` outside the scrapheap view.
+ * @param {Object} img - grid picture.
+ */
+function getScrapheapPurgeBadge(img) {
+  return img && img.id != null
+    ? scrapheapPurgeBadges.value.get(img.id)
+    : undefined;
+}
+
 const selectedMediaSupport = computed(() => {
   const ids = Array.isArray(selectedImageIds.value)
     ? selectedImageIds.value
@@ -3596,9 +3871,6 @@ const selectedExpandedCount = computed(() => {
   }
   return total;
 });
-const isSelectionEmpty = computed(() => {
-  return !showSelectionBar.value;
-});
 const showScrapheapBar = computed(() => {
   return isScrapheapView.value;
 });
@@ -3635,6 +3907,193 @@ const scrapheapRestoreDisabled = computed(() => {
 const snapshotsWithDeleted = ref([]);
 const snapshotsWithDeletedOpen = ref(false);
 
+// ── Delete-forever confirm (Scrapheap DAM 1.1) ────────────────────────────────
+// The tokenized destructive confirm that replaces the native window.confirm on
+// the two scrapheap purge paths. Its counts and the exact on-disk paths of the
+// protected reference-folder ORIGINALS come from an AUTHORITATIVE server preview
+// (POST /pictures/scrapheap/delete-preview) — NOT from the virtualized grid /
+// grid_lite payload, which could omit protected originals outside the loaded
+// window and undercount. When protected originals are present the dialog runs a
+// three-way, type-to-confirm flow (delete all incl. protected / delete
+// unprotected only / cancel). Data-safety critical: if the preview can't be
+// loaded we fail SAFE and never open the destructive confirm.
+const deleteForeverOpen = ref(false);
+const deleteForeverBusy = ref(false); // DELETE request in flight
+const deleteForeverLoading = ref(false); // preview request in flight
+const deleteForeverTotalCount = ref(0);
+const deleteForeverProtectedCount = ref(0);
+const deleteForeverUnprotectedCount = ref(0);
+const deleteForeverProtectedPaths = ref([]);
+// Pictures a locked set freezes. Destroyed by NEITHER delete-forever action, so
+// the dialog states it up front. Defensive: a server that has not shipped
+// `locked_count` yet yields 0, i.e. the pre-existing copy, unchanged.
+const deleteForeverLockedCount = ref(0);
+const deleteForeverMode = ref("selection"); // "selection" | "all"
+const deleteForeverIds = ref([]);
+// True when the pending purge was scoped to an explicit id list by the overlay
+// context menu, so runScrapheapSelectionPurge must not mutate the grid selection.
+const deleteForeverScoped = ref(false);
+// Single-use confirmation minted by the delete preview for exactly this
+// selection. The server refuses the purge without it, so it is cleared on every
+// new preview and after every attempt — a stale one must never be replayed.
+const deleteForeverConfirmToken = ref("");
+
+function openDeleteForeverForSelection(ids, scoped = false) {
+  deleteForeverMode.value = "selection";
+  deleteForeverScoped.value = scoped;
+  deleteForeverIds.value = ids.slice();
+  loadDeletePreview(ids.slice());
+}
+
+function openDeleteForeverForAll() {
+  deleteForeverMode.value = "all";
+  deleteForeverScoped.value = false;
+  deleteForeverIds.value = [];
+  loadDeletePreview(null);
+}
+
+/**
+ * Fetch the authoritative deletion preview (counts + the FULL protected-original
+ * path list) and open the confirm. `ids` = selected ids, or null for empty-all.
+ * Fails SAFE: on any error the destructive confirm is NOT opened.
+ */
+async function loadDeletePreview(ids) {
+  if (deleteForeverLoading.value) return;
+  deleteForeverLoading.value = true;
+  deleteForeverConfirmToken.value = "";
+  try {
+    const d =
+      (await previewScrapheapDelete(ids ?? null, {
+        baseUrl: props.backendUrl,
+      })) ?? {};
+    deleteForeverConfirmToken.value = String(d.confirm_token ?? "");
+    deleteForeverTotalCount.value = Number(d.total_count) || 0;
+    deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
+    deleteForeverUnprotectedCount.value = Number(d.unprotected_count) || 0;
+    deleteForeverProtectedPaths.value = Array.isArray(d.protected)
+      ? d.protected.map((p) => p?.file_path).filter(Boolean)
+      : [];
+    deleteForeverLockedCount.value = Number(d.locked_count) || 0;
+    if (deleteForeverTotalCount.value === 0) {
+      // Nothing to delete (e.g. the scrapheap was emptied concurrently).
+      return;
+    }
+    if (
+      deleteForeverLockedCount.value > 0 &&
+      deleteForeverProtectedCount.value === 0 &&
+      deleteForeverUnprotectedCount.value === 0
+    ) {
+      // Nothing in either destroyable bucket: every targeted picture is frozen
+      // by a lock, so both actions would be no-ops. Read straight off the
+      // server's disjoint classification rather than inferring it from
+      // `total_count`, so the UI can't disagree with the sweep about what
+      // survives. Explain instead of opening a destructive confirm.
+      showLockedDeleteNotice(
+        buildLockedDeleteMessage({
+          lockedCount: deleteForeverLockedCount.value,
+          deletedCount: 0,
+        }),
+      );
+      return;
+    }
+    deleteForeverOpen.value = true;
+  } catch (err) {
+    console.error("Failed to load scrapheap delete preview", err);
+    // Fail SAFE: the destructive confirm is never opened on an unverified
+    // basis, and the user is told why rather than seeing nothing happen.
+    noticeStore.error(
+      "Couldn't check which files would be destroyed, so nothing was deleted.",
+      { key: "scrapheap-delete-preview" },
+    );
+  } finally {
+    deleteForeverLoading.value = false;
+  }
+}
+
+function cancelDeleteForever() {
+  deleteForeverConfirmToken.value = "";
+  deleteForeverOpen.value = false;
+}
+
+// payload: { includeProtected: boolean } from DeleteForeverDialog.
+async function confirmDeleteForever(payload) {
+  const includeProtected = Boolean(payload?.includeProtected);
+  if (deleteForeverMode.value === "all") {
+    await runEmptyScrapheap(includeProtected);
+  } else {
+    await runScrapheapSelectionPurge(deleteForeverIds.value, includeProtected);
+  }
+}
+
+async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
+  if (!idsToRemove || !idsToRemove.length) {
+    deleteForeverOpen.value = false;
+    return;
+  }
+  const backendUrl = props.backendUrl;
+  deleteForeverBusy.value = true;
+  try {
+    const resp = await purgeScrapheap({
+      pictureIds: idsToRemove,
+      includeProtected,
+      confirmToken: deleteForeverConfirmToken.value,
+      baseUrl: backendUrl,
+    });
+    // Locked pictures survive a purge too, and this endpoint reports them under
+    // the same `skipped_locked` name as the bulk soft-delete. Same rule as
+    // there: never drop a tile the server kept.
+    const skippedLocked = new Set(
+      (Array.isArray(resp?.data?.skipped_locked)
+        ? resp.data.skipped_locked
+        : []
+      ).map(String),
+    );
+    if (includeProtected) {
+      removeImagesById(
+        idsToRemove.filter((id) => !skippedLocked.has(String(id))),
+      );
+    } else {
+      // The protected originals in the selection are intentionally kept — refetch
+      // so the grid reflects exactly what the server removed.
+      preserveScrollOnNextFetch.value = true;
+      debouncedFetchAllGridImages();
+    }
+    // Grid path only: keep the frozen pictures selected so the user can retry
+    // after unlocking. The overlay-scoped path leaves the grid selection alone.
+    if (!deleteForeverScoped.value) {
+      selectedImageIds.value = selectedImageIds.value.filter((id) =>
+        skippedLocked.has(String(id)),
+      );
+      const stillSelected = new Set(selectedImageIds.value.map(String));
+      if (!stillSelected.has(String(lastSelectedImageId.value))) {
+        lastSelectedImageId.value = null;
+      }
+    }
+    updateVisibleThumbnails();
+    emit("refresh-sidebar");
+    showSnapshotsWithDeleted(resp);
+    showLockedDeleteNotice(
+      buildLockedDeleteMessage({
+        lockedCount: skippedLocked.size,
+        // Counted from the server's own report, not from what we asked for.
+        deletedCount: idsToRemove.length - skippedLocked.size,
+      }),
+    );
+  } catch (err) {
+    console.error("Scrapheap purge failed", err);
+    noticeStore.error(
+      `Couldn't delete those pictures. ${errorDetail(err)}`,
+      { key: "scrapheap-purge" },
+    );
+  } finally {
+    // The server spends the confirmation on the first attempt, so a retry must
+    // go back through the preview rather than replaying a dead token.
+    deleteForeverConfirmToken.value = "";
+    deleteForeverBusy.value = false;
+    deleteForeverOpen.value = false;
+  }
+}
+
 function showSnapshotsWithDeleted(response) {
   if (userPrefsStore.hidePurgeSnapshotWarning) return;
   const snaps = response?.data?.snapshots_with_deleted;
@@ -3644,17 +4103,39 @@ function showSnapshotsWithDeleted(response) {
   }
 }
 
-async function confirmEmptyScrapheap() {
-  if (scrapheapEmptyDisabled.value) return;
-  const confirmed = confirm(
-    "Empty scrapheap? This will permanently delete all pictures inside.",
-  );
-  if (!confirmed) return;
+// Only re-entrancy blocks this. It must NOT be gated on `scrapheapEmptyDisabled`:
+// that computed exists for the placeholder button's `:disabled` state, and its
+// `imagesLoading || filteredGridCount === 0` terms describe the loaded grid, not
+// the heap. The sidebar context menu navigates here and asks for the confirm in
+// the same gesture, so it always arrives while the view-switch fetch is still in
+// flight and the grid has just been reset — the request was silently dropped and
+// the menu item looked like it only navigated. What is actually in the heap is
+// decided one step later by the AUTHORITATIVE server preview, which counts the
+// whole heap (the grid can undercount) and declines to open the dialog when
+// there is nothing to delete.
+function confirmEmptyScrapheap() {
+  if (scrapheapEmptying.value) return;
+  // Route through the tokenized Delete-forever confirm (names any reference-folder
+  // originals being destroyed); the purge runs on @confirm.
+  openDeleteForeverForAll();
+}
+
+async function runEmptyScrapheap(includeProtected) {
+  // Re-entrancy only. The user has typed the confirm and we hold a single-use
+  // server token for exactly this purge; the grid's load state must not veto it,
+  // or a refetch that lands while the dialog is open would swallow a confirmed
+  // deletion. The server re-validates the token and the scope.
+  if (scrapheapEmptying.value) return;
   scrapheapEmptying.value = true;
+  deleteForeverBusy.value = true;
   try {
-    const resp = await apiClient.delete(
-      `${props.backendUrl}/pictures/scrapheap`,
-    );
+    const resp = await purgeScrapheap({
+      includeProtected,
+      confirmToken: deleteForeverConfirmToken.value,
+      baseUrl: props.backendUrl,
+    });
+    // Clear + refetch reconciles either case: when only the unprotected subset
+    // was purged, the refetch brings the kept protected originals back.
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -3666,9 +4147,16 @@ async function confirmEmptyScrapheap() {
     });
     showSnapshotsWithDeleted(resp);
   } catch (e) {
-    alert("Failed to empty scrapheap.");
+    console.error("Failed to empty the scrapheap", e);
+    noticeStore.error(`Couldn't empty the scrapheap. ${errorDetail(e)}`, {
+      key: "scrapheap-empty",
+    });
   } finally {
+    // Spent server-side on the first attempt; a retry re-runs the preview.
+    deleteForeverConfirmToken.value = "";
     scrapheapEmptying.value = false;
+    deleteForeverBusy.value = false;
+    deleteForeverOpen.value = false;
   }
 }
 
@@ -3680,7 +4168,7 @@ async function confirmRestoreScrapheap() {
   if (!confirmed) return;
   scrapheapRestoring.value = true;
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/scrapheap/restore`);
+    await restoreScrapheap(undefined, { baseUrl: props.backendUrl });
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -3691,7 +4179,10 @@ async function confirmRestoreScrapheap() {
       updateVisibleThumbnails();
     });
   } catch (e) {
-    alert("Failed to restore scrapheap.");
+    console.error("Failed to restore the scrapheap", e);
+    noticeStore.error(`Couldn't restore the scrapheap. ${errorDetail(e)}`, {
+      key: "scrapheap-restore-all",
+    });
   } finally {
     scrapheapRestoring.value = false;
   }
@@ -3699,9 +4190,16 @@ async function confirmRestoreScrapheap() {
 
 async function openReferenceLocation(picId) {
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/${picId}/open-location`);
-  } catch {
-    // silently ignore — the OS might not support it
+    await openPictureLocation(picId, { baseUrl: props.backendUrl });
+  } catch (err) {
+    // Was a silent ignore ("the OS might not support it"), which left a click
+    // doing nothing with no explanation. The cause is worth stating: it is
+    // usually a headless/remote server with no desktop file manager.
+    console.warn(`Failed to open the location of picture ${picId}`, err);
+    noticeStore.warning(
+      "Couldn't open that folder — the server has no desktop file manager.",
+      { key: "open-location" },
+    );
   }
 }
 
@@ -3735,16 +4233,15 @@ async function handleImagesUploaded(payload) {
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
           pictureIds.map((id) =>
-            apiClient.post(
-              `${props.backendUrl}/picture_sets/${selectedSetId}/members/${id}`,
-            ),
+            addPictureToSet(selectedSetId, id, {
+              baseUrl: props.backendUrl,
+            }),
           ),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
-        await apiClient.post(
-          `${props.backendUrl}/characters/${selectedCharacterId}/faces`,
-          { picture_ids: pictureIds },
-        );
+        await addCharacterFaces(selectedCharacterId, pictureIds, {
+          baseUrl: props.backendUrl,
+        });
       }
     } catch (e) {
       console.error("Failed to associate imported pictures:", e);
@@ -3898,12 +4395,68 @@ const {
   clearSelection,
 } = useMultiSelect();
 
+// The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
+// they describe: the sentence is about THIS selection in THIS view, and it
+// carries an action, so it is sticky and nothing would otherwise take it down.
+// The signature is everything the message asserts — which pictures are selected,
+// where they are being viewed, and which sets are locked. Change any of them and
+// the card is describing the past, so it goes. Unlocking the set is the
+// important one: it is the fix the card asks for, and leaving the warning up
+// afterwards would make the fix look like it failed.
+//
+// Declared here rather than beside `showLockedDeleteNotice` because
+// `useScopedNotice` evaluates the signature immediately to seed its watcher, so
+// `selectedImageIds` has to exist first.
+const lockedDeleteNotice = useScopedNotice(
+  ["delete-skipped-locked", "delete-skipped-locked-help"],
+  () =>
+    [
+      // Joined in place, not sorted: the getter re-runs on every selection
+      // change, and sorting a 10k-picture selection per click to catch a pure
+      // reorder is not worth it. A reorder is a user action anyway, so treating
+      // it as a context change is the right answer, not a false positive.
+      selectedImageIds.value.join(","),
+      String(props.selectedCharacter ?? ""),
+      String(props.selectedSet ?? ""),
+      String(props.selectedProjectId ?? ""),
+      // Locked sets are few, so a per-set membership fingerprint is cheap and
+      // catches an unlock, a re-lock and a membership edit alike.
+      lockedSetsStore.sets
+        .map((s) => `${s?.id}:${(s?.picture_ids || []).length}`)
+        .sort()
+        .join(","),
+    ].join("|"),
+);
+
 // ============================================================
 // VIEWPORT + RENDER
 // ============================================================
 // VIEWPORT + RENDER
 // ============================================================
 const allGridImagesLength = computed(() => allGridImages.value?.length ?? 0);
+
+// Aspect ratio for every grid item (present for ALL images from the base grid
+// listing, not just fetched thumbnails). Missing/zero dimensions (unimported
+// pictures, unprobed videos) fall back to square so justified packing never
+// divides by zero.
+function getGridImageAspectRatio(img) {
+  if (!img) return 1;
+  const tw = Number(img.thumbnail_width);
+  const th = Number(img.thumbnail_height);
+  if (Number.isFinite(tw) && tw > 0 && Number.isFinite(th) && th > 0) {
+    return tw / th;
+  }
+  const w = Number(img.width);
+  const h = Number(img.height);
+  if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+    return w / h;
+  }
+  return 1;
+}
+
+const gridAspectRatios = computed(() =>
+  (allGridImages.value || []).map(getGridImageAspectRatio),
+);
 
 const {
   initialRender,
@@ -3916,20 +4469,86 @@ const {
   renderEnd,
   topSpacerHeight,
   bottomSpacerHeight,
-  getGridColumnWidth,
   updateRowHeightFromGrid,
   recalculateVisibleRange,
   onGridScroll,
   scrollCursorIntoView,
+  isJustifiedMode,
+  justifiedLayout,
 } = useVirtualScroll(scrollWrapper, gridContainer, props, allGridImagesLength, {
   onVisibleRangeChange: () => updateVisibleThumbnails(),
   afterRowHeightUpdate: () => refreshAllThumbnailInfoDisplays(),
+  getAspectRatios: () => gridAspectRatios.value,
+});
+
+// ---- Justified-mode card geometry ----
+// Each card carries an exact inline width/height from the packed layout so the
+// flex-wrap lines break exactly where useJustifiedLayout computed the rows —
+// the invariant the spacer/fetch arithmetic depends on.
+const justifiedInfoRowExtra = computed(() =>
+  props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+);
+
+function _justifiedItemGeometry(img, localIdx) {
+  if (!isJustifiedMode.value) return null;
+  const layout = justifiedLayout.value;
+  if (!layout || !layout.rowHeights.length) return null;
+  const globalIdx = Number.isFinite(img?.idx)
+    ? img.idx
+    : renderStart.value + localIdx;
+  if (globalIdx < 0 || globalIdx >= layout.itemScaledWidths.length) return null;
+  const row = rowOfIndex(layout.rowStarts, globalIdx);
+  return {
+    width: layout.itemScaledWidths[globalIdx],
+    cardHeight: layout.rowHeights[row],
+  };
+}
+
+function getJustifiedCardStyle(img, localIdx) {
+  const geo = _justifiedItemGeometry(img, localIdx);
+  if (!geo) return null;
+  return {
+    width: `${geo.width}px`,
+    height: `${geo.cardHeight}px`,
+    flex: "0 0 auto",
+  };
+}
+
+function getJustifiedThumbStyle(img, localIdx) {
+  const geo = _justifiedItemGeometry(img, localIdx);
+  if (!geo) return null;
+  // The thumbnail box is the card minus the (non-scaling) info row.
+  return { height: `${geo.cardHeight - justifiedInfoRowExtra.value}px` };
+}
+
+// Container style for the two layout modes. Square keeps the original CSS
+// grid; justified switches to flex-wrap (via the class) with the packing gap
+// bound inline so JS arithmetic and CSS can never drift.
+const gridContainerStyle = computed(() => {
+  const base = { position: "relative", ...badgeCssVars.value };
+  if (isJustifiedMode.value) {
+    return {
+      ...base,
+      columnGap: `${JUSTIFIED_ROW_GAP}px`,
+      rowGap: `${JUSTIFIED_ROW_GAP}px`,
+    };
+  }
+  return {
+    ...base,
+    gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
+  };
 });
 
 // ============================================================
 // OVERLAY STATE
 // ============================================================
 const overlayOpen = ref(false);
+// The lightbox is a deliberately-dark surface, so the notice host switches to
+// its `--on-dark` variant while it is up (notice-surface.md §2.5). The host
+// lives in App.vue (it must also render where there is no grid), so the state
+// has to travel up; `isOverlayOpen()` on the imperative API is a getter, not a
+// reactive signal, and cannot drive a binding.
+watch(overlayOpen, (isOpen) => emit("update:overlay-open", isOpen));
 const overlayImageId = ref(null);
 
 // ---- Overlay route tracking ----
@@ -3987,6 +4606,12 @@ const pendingTagFilterRefresh = ref(false);
 // smart-score re-rank) was deferred to avoid the filmstrip losing its current
 // picture while the overlay is open. Triggers a full refetch on close.
 const pendingOverlayGridRefresh = ref(false);
+// Pictures whose smart score changed while the overlay was open. Reconciled by
+// repositioning each card on close; see handleOverlayChange. Above this many the
+// per-id fetches cost more than one re-sort, so we fall back to a full reload —
+// mirroring MAX_TARGETED_UPDATE in useGridRealtimeSync.
+const pendingOverlaySmartScoreIds = new Set();
+const MAX_DEFERRED_SMART_SCORE_REPOSITIONS = 25;
 // When fetchAllGridImages completes while the overlay is open, the resulting
 // image list is stored here instead of being written to allGridImages directly.
 // Applied to allGridImages when the overlay closes.
@@ -4025,7 +4650,7 @@ function getGridFetchContextSummary(fetchKey) {
       searchQuery: parsed?.searchQuery ?? "",
       mediaTypeFilter: parsed?.mediaTypeFilter ?? "all",
     };
-  } catch (_err) {
+  } catch {
     return {};
   }
 }
@@ -4148,11 +4773,6 @@ if (
 const {
   dragOverlayVisible,
   dragOverlayMessage,
-  dragOverlayDepth,
-  dragSource,
-  dragSourceImageIds,
-  setDragSourceImageIds,
-  clearDragSourceImageIds,
   isDragSourceImage,
   stackReorderDrag,
   stackReorderHoverId,
@@ -4193,18 +4813,14 @@ const {
 // ============================================================
 const {
   imagesLoading,
-  imagesError,
   totalAllPicturesCount,
   totalCurrentCategoryCount,
   gridReady,
-  gridLoadEpoch,
-  lastFetchKey,
   lastFetchError,
   lastFetchSuccess,
   smartScoreLoadingVisible,
   buildGridFetchKey,
   buildPictureIdsQueryParams,
-  buildLikenessGroupQueryParams,
   fetchAllGridImages,
   fetchAllPicturesCount,
   debouncedFetchAllGridImages,
@@ -4269,13 +4885,10 @@ const {
   expandedStackIds,
   expandedStackMembers,
   expandedStackLoading,
-  stackVisualOrderMap,
-  selectedStackId,
   selectedMultipleStackIds,
   showRemoveFromStack,
   mapGridImages,
   getStackCardStyle,
-  getStackCardColor,
   getStackBadgeIconStyle,
   getStackBandStyle,
   isStackExpandedForImage,
@@ -4288,14 +4901,12 @@ const {
   prefetchStackMembers,
   emitStackStats,
   syncExpandAllStacksFromFetchedImages,
-  collectExpandableStackIds,
   handleStackReorderDragOver,
   handleStackReorderDragLeave,
   handleStackReorderDrop,
   createStackFromSelection,
   dissolveSelectedStacks,
   removeSelectedFromStack,
-  getLikenessGroupId,
   createStacksFromSelectedGroups,
   collapseStackImages,
   getLocalStackMembers,
@@ -4353,10 +4964,9 @@ async function updateSelectedGroupName() {
     props.selectedCharacter !== `${props.scrapheapPicturesId}`
   ) {
     try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/characters/${props.selectedCharacter}`,
-      );
-      const char = res.data;
+      const char = await getCharacter(props.selectedCharacter, {
+        baseUrl: props.backendUrl,
+      });
       name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
@@ -4367,10 +4977,9 @@ async function updateSelectedGroupName() {
       return;
     }
     try {
-      const res = await apiClient.get(
-        `${props.backendUrl}/picture_sets/${primarySelectedSetId.value}`,
-      );
-      const set = res.data;
+      const set = await getPictureSet(primarySelectedSetId.value, {
+        baseUrl: props.backendUrl,
+      });
       name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
@@ -4411,6 +5020,8 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     isSetOverlapView,
     hoveredImageIdx,
     toolbarSelectionMenuOpen,
+    isJustifiedMode,
+    justifiedLayout,
   },
   props,
   emit,
@@ -4431,20 +5042,11 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
 // ============================================================
 async function fetchImageInfo(imageId, options = {}) {
   try {
-    const params = new URLSearchParams();
-    if (options.smartScore) {
-      params.set("smart_score", "true");
-    }
-    if (options.force) {
-      params.set("cb", String(Date.now()));
-    }
-    const query = params.toString();
-    const url = query
-      ? `${props.backendUrl}/pictures/${imageId}/metadata?${query}`
-      : `${props.backendUrl}/pictures/${imageId}/metadata`;
-    const res = await apiClient.get(url);
-    const data = await res.data;
-    return data;
+    return await getPictureMetadata(imageId, {
+      smartScore: !!options.smartScore,
+      cacheBuster: options.force ? Date.now() : undefined,
+      baseUrl: props.backendUrl,
+    });
   } catch (e) {
     console.error("Tag fetch failed:", e);
     return [];
@@ -4547,9 +5149,15 @@ function handleOverlayChange(payload) {
   if (!imageId) return;
   if ((fields.tags || fields.smartScore) && isSmartScoreSortActive()) {
     if (overlayOpen.value) {
-      // Smart-score re-ranking would reorder allGridImages mid-viewing.
-      // Defer the full refetch; still refresh the single card's metadata.
-      pendingOverlayGridRefresh.value = true;
+      // Smart-score re-ranking would reorder allGridImages mid-viewing, so the
+      // re-rank is deferred to overlay close. Record WHICH picture changed rather
+      // than raising the blanket pendingOverlayGridRefresh: closeOverlay can then
+      // reposition just these cards (refreshSmartScoreForImage fetches the true
+      // score and moves the card to the server's slot) instead of re-sorting the
+      // whole library. The full reload produced the same final order at the cost
+      // of a complete re-score of every candidate, and it ran *in addition* to the
+      // opportunistic move the realtime-sync path performs for the same edit.
+      pendingOverlaySmartScoreIds.add(imageId);
       refreshGridImage(imageId);
       return;
     }
@@ -4578,6 +5186,25 @@ function closeOverlay() {
   if (comfyuiRunner.value?.comfyuiPendingOverlayRefresh) {
     comfyuiRunner.value.comfyuiPendingOverlayRefresh.value = false;
   }
+  // A deferred smart-score re-rank is reconciled by moving just the affected
+  // cards. Only when no broader refresh is already queued — a full reload
+  // re-sorts everything anyway, so repositioning first would be wasted work (and
+  // the reload's own resetThumbnailState would discard it).
+  const deferredSmartScoreIds = Array.from(pendingOverlaySmartScoreIds);
+  pendingOverlaySmartScoreIds.clear();
+  const hasBroaderRefresh =
+    pendingGridImages.value !== null ||
+    pendingTagFilterRefresh.value ||
+    pendingOverlayGridRefresh.value;
+  if (deferredSmartScoreIds.length && !hasBroaderRefresh) {
+    if (deferredSmartScoreIds.length > MAX_DEFERRED_SMART_SCORE_REPOSITIONS) {
+      pendingOverlayGridRefresh.value = true;
+    } else {
+      for (const id of deferredSmartScoreIds) {
+        void refreshSmartScoreForImage(id);
+      }
+    }
+  }
   if (pendingGridImages.value !== null) {
     // A background fetch completed while the overlay was open. Apply its
     // result now that we're safe to update the grid.
@@ -4599,6 +5226,16 @@ function closeOverlay() {
     pendingOverlayGridRefresh.value = false;
     lastFetchSuccess.value = { key: "", at: 0 };
     lastFetchError.value = { key: "", at: 0 };
+    // Preserve scroll, exactly as the non-deferred siblings of this refresh do
+    // (see the fields.stack / smart-score branches in handlePictureChanged).
+    // Those set the flag right before fetching, but when the overlay is open they
+    // only raise pendingOverlayGridRefresh and return — so the flag never got set
+    // and the deferred fetch ran as a non-preserving one. That resets
+    // visibleStart/visibleEnd to the top of the list (useGridFetch) while
+    // scrollTop stays where the user left it, so the grid renders the first
+    // screenful of cards far above the viewport and looks blank until any scroll
+    // recomputes the window.
+    preserveScrollOnNextFetch.value = true;
     debouncedFetchAllGridImages();
   }
 }
@@ -4646,7 +5283,7 @@ function _getOrCreateGuestSessionId() {
 async function _submitGuestScores(scores, setCookie) {
   const sid = _getOrCreateGuestSessionId();
   const payload = { session_id: sid, set_cookie: setCookie, scores };
-  await apiClient.post(`${props.backendUrl}/pictures/guest-scores`, payload);
+  await submitGuestScores(payload, { baseUrl: props.backendUrl });
 }
 
 function setGuestScore(img, n) {
@@ -4720,10 +5357,8 @@ async function fetchGuestScores() {
   // Kept only as a fallback / explicit refresh. The main listing
   // (GET /pictures) now overlays guest scores onto img.score server-side.
   try {
-    const resp = await apiClient.get(
-      `${props.backendUrl}/pictures/guest-scores`,
-    );
-    const scores = resp?.data?.scores ?? {};
+    const resp = await getGuestScores({ baseUrl: props.backendUrl });
+    const scores = resp?.scores ?? {};
     const map = new Map();
     for (const [k, v] of Object.entries(scores)) {
       map.set(Number(k), v);
@@ -4799,11 +5434,6 @@ function getGridSmartScoreValue(img) {
   return Number.isFinite(raw) ? raw : null;
 }
 
-function formatGridSmartScoreValue(img) {
-  const value = getGridSmartScoreValue(img);
-  return value === null ? "" : value.toFixed(2);
-}
-
 // The ONE null-ordering rule shared by every client-side smart-score sort path
 // (fresh insert AND reposition). SQLite ranks NULL below every real value, and
 // the backend sorts the smart_score column with a plain .asc()/.desc() and no
@@ -4851,6 +5481,14 @@ function _spliceAndReinsert(
     const updated = allGridImages.value.slice();
     updated[currentIndex] = { ...target, idx: currentIndex };
     allGridImages.value = updated;
+    // Still invalidate: we are only here because the card's score changed, and the
+    // batch-sourced fields that change with it (penalised_tags — the problem
+    // indicator — plus faces/detections) are refreshed ONLY by a thumbnail batch.
+    // Without this, loadedRanges still covers the window, updateVisibleThumbnails
+    // no-ops, and a card whose position happens not to move keeps its stale
+    // indicator. Adding a penalised tag to an already low-scoring card lands
+    // exactly here, since it is already at the bottom of a descending sort.
+    invalidateVisibleThumbnailRanges();
     return null;
   }
   items.splice(insertIndex, 0, target);
@@ -5022,13 +5660,11 @@ async function insertGridImagesById(ids) {
 
   let fetched;
   try {
-    const params = new URLSearchParams();
-    toFetch.forEach((id) => params.append("id", id));
-    params.append("fields", "grid");
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures?${params.toString()}`,
-    );
-    fetched = Array.isArray(res.data) ? res.data : [];
+    const rows = await listPicturesByIds(toFetch, {
+      fields: "grid",
+      baseUrl: props.backendUrl,
+    });
+    fetched = Array.isArray(rows) ? rows : [];
   } catch (e) {
     console.error("insertGridImagesById: grid metadata fetch failed", {
       ids: toFetch,
@@ -5107,10 +5743,7 @@ async function applyScoresByEntries(entries, options = {}) {
     scoresPayload[String(id)] = Number(score);
   }
 
-  await apiClient.post(`${props.backendUrl}/pictures/apply-scores`, {
-    scores: scoresPayload,
-    only_unscored: false,
-  });
+  await applyScores(scoresPayload, { baseUrl: props.backendUrl });
 
   const scoreMap = new Map(
     entries.map(([id, score]) => [String(id), Number(score)]),
@@ -5162,7 +5795,9 @@ async function applyScoresByEntries(entries, options = {}) {
 async function applyScore(img, newScore) {
   const imageId = img?.id;
   if (!imageId) {
-    alert("Failed to set score: image id is missing.");
+    noticeStore.error("Couldn't set that score — the picture id is missing.", {
+      key: "score-missing-id",
+    });
     return;
   }
   try {
@@ -5202,7 +5837,10 @@ async function applyScore(img, newScore) {
       return;
     }
   } catch (e) {
-    alert(e.message);
+    console.error("Failed to set score", e);
+    noticeStore.error(`Couldn't set that score. ${errorDetail(e)}`, {
+      key: "score-set",
+    });
   }
 }
 
@@ -5353,6 +5991,25 @@ watch(
   () => {
     updateRowHeightFromGrid();
     updateVisibleThumbnails();
+  },
+);
+
+// Switching square <-> justified changes the whole row model (uniform grid vs
+// packed rows), so the geometry must be recomputed at once — otherwise the mode
+// only takes effect after an unrelated relayout (a resize, or the full refresh
+// the maintainer hit). Mirror the columns watch: re-measure row height, re-pack,
+// recompute the visible range, and refetch the now-visible thumbnails.
+watch(
+  () => props.thumbnailMode,
+  async () => {
+    updateRowHeightFromGrid();
+    recalculateVisibleRange();
+    updateVisibleThumbnails();
+    await nextTick();
+    triggerFaceOverlayRedraw();
+    requestAnimationFrame(() => {
+      triggerFaceOverlayRedraw();
+    });
   },
 );
 
@@ -5652,6 +6309,9 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         : [],
       thumbnail_width: img?.thumbnail_width,
       thumbnail_height: img?.thumbnail_height,
+      square_crop_x: img?.square_crop_x,
+      square_crop_y: img?.square_crop_y,
+      square_crop_side: img?.square_crop_side,
     }));
     // Synchronously pre-fill thumbnail URLs from imported_at so <img> elements
     // render immediately without waiting for the POST round trip. The POST
@@ -5688,14 +6348,11 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           .map((img) => String(img.id)),
       ),
     );
-    const requestedIdPreview = ids.slice(0, 8);
     let overlayNeedsRedraw = false;
     if (ids.length) {
-      const thumbRes = await apiClient.post(
-        `${props.backendUrl}/pictures/thumbnails`,
-        JSON.stringify({ ids }),
-      );
-      const thumbData = await thumbRes.data;
+      const thumbData = await getThumbnails(ids, {
+        baseUrl: props.backendUrl,
+      });
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -5741,6 +6398,29 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
           if (!Number.isNaN(thumbHeight) && thumbHeight > 0) {
             gridImg.thumbnail_height = thumbHeight;
           }
+          // Face-weighted square-crop rectangle (bitmap pixel space). Nullable
+          // while a picture is still (re)processing — leave undefined so the
+          // square render path falls back to object-fit:cover centring until
+          // the finder populates them, then upgrades reactively on the next
+          // thumbnails fetch.
+          // Guard null/undefined explicitly first: Number(null) is 0, which
+          // would masquerade as a valid crop origin instead of falling back.
+          const cropX =
+            thumbObj.square_crop_x == null
+              ? NaN
+              : Number(thumbObj.square_crop_x);
+          const cropY =
+            thumbObj.square_crop_y == null
+              ? NaN
+              : Number(thumbObj.square_crop_y);
+          const cropSide =
+            thumbObj.square_crop_side == null
+              ? NaN
+              : Number(thumbObj.square_crop_side);
+          gridImg.square_crop_x = Number.isFinite(cropX) ? cropX : undefined;
+          gridImg.square_crop_y = Number.isFinite(cropY) ? cropY : undefined;
+          gridImg.square_crop_side =
+            Number.isFinite(cropSide) && cropSide > 0 ? cropSide : undefined;
         }
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
@@ -5764,20 +6444,51 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
+    // id → current slot, for results whose slot moved while the batch was in
+    // flight. Built once per batch (not per image) so the write-back stays linear.
+    // First occurrence wins: an expanded stack can repeat a picture id, and the
+    // leader row is the one a positional write would have targeted.
+    const movedIndexById = new Map();
+    for (let i = 0; i < allGridImages.value.length; i += 1) {
+      const existingId = allGridImages.value[i]?.id;
+      if (existingId == null) continue;
+      const key = String(existingId);
+      if (!movedIndexById.has(key)) movedIndexById.set(key, i);
+    }
     for (let i = 0; i < gridImages.length; i++) {
       const img = gridImages[i];
-      img.idx = start + i; // Redundant but explicit for safety
       // Skip null-id slots: the snapshot was taken before the grid was fully
       // populated and a concurrent BG batch may have since written real data
       // into this slot. Writing a stale null-id object would wipe that data.
       if (img.id == null) {
         continue;
       }
-      allGridImages.value[start + i] = img;
+      // Resolve the picture's CURRENT slot rather than trusting start + i.
+      // gridImages was sliced out of allGridImages before the await above, and a
+      // smart-score reposition (repositionImageBySmartScore → _spliceAndReinsert)
+      // re-orders allGridImages *without* bumping thumbnailRequestEpoch, so the
+      // epoch guard cannot catch it. Adding a penalised tag does exactly that: the
+      // card moves, and a positional write-back would drop this refreshed
+      // penalised_tags payload onto whichever picture now occupies the slot —
+      // leaving the just-tagged card with stale data (no problem indicator) and
+      // corrupting an unrelated card. The original index is still preferred when it
+      // holds the right picture, so the common no-movement case is unchanged.
+      let targetIndex = start + i;
+      if (String(allGridImages.value[targetIndex]?.id) !== String(img.id)) {
+        const moved = movedIndexById.get(String(img.id));
+        if (moved === undefined) {
+          // Picture left the grid entirely (filtered out, or collapsed into a
+          // stack) — nothing to update.
+          continue;
+        }
+        targetIndex = moved;
+      }
+      img.idx = targetIndex;
+      allGridImages.value[targetIndex] = img;
       if (img.thumbnail) {
         clearThumbnailRetry(img.id);
       } else {
-        scheduleThumbnailRetry(img.id, start + i, requestEpoch);
+        scheduleThumbnailRetry(img.id, targetIndex, requestEpoch);
       }
     }
     loadedRanges.value.push([start, end]);
@@ -5797,11 +6508,12 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
 // SCROLL + VIEWPORT UPDATE
 // ============================================================
 function updateVisibleThumbnails() {
-  let start = Math.max(0, visibleStart.value - renderBuffer.value);
-  let end = Math.min(
-    allGridImages.value.length,
-    visibleEnd.value + renderBuffer.value,
-  );
+  // Fetch exactly the render window. In square mode renderStart/renderEnd are
+  // identical to visibleStart/End ± renderBuffer; in justified mode they are
+  // additionally snapped outward to row boundaries, so fetching them keeps the
+  // fetch window equal to what is actually painted (anti-blank-tile).
+  let start = Math.max(0, renderStart.value);
+  let end = Math.min(allGridImages.value.length, renderEnd.value);
   if (shouldSuppressVisibleWindowFetch(start, end)) {
     return;
   }
@@ -5817,6 +6529,7 @@ function updateVisibleThumbnails() {
 
   const requestEpoch = thumbnailRequestEpoch.value;
   thumbFetchTimeout = setTimeout(async () => {
+    thumbFetchTimeout = null;
     if (requestEpoch !== thumbnailRequestEpoch.value) {
       return;
     }
@@ -5840,7 +6553,7 @@ function handleImageCardClick(img, idx, event) {
   cursorIdx.value = idx;
   const isCtrl = event.ctrlKey || event.metaKey;
   const isShift = event.shiftKey;
-  let newSelection = [];
+  let newSelection;
   const allGrid = allGridImages.value;
   const anchorIndex =
     lastSelectedImageId.value != null
@@ -5954,6 +6667,91 @@ function handleFaceBboxContextMenu(img, overlay, event) {
   contextMenuVisible.value = true;
 }
 
+// ── Overlay (lightbox) context menu ─────────────────────────────────────────
+// The overlay emits `request-context-menu` (media-area right-click or the
+// Shift+F10 / ContextMenu key) with the currently-displayed image object and a
+// screen position. Every action below is scoped to THIS one picture — the grid
+// selection is never read or persistently mutated.
+
+function handleOverlayContextMenuRequest(payload) {
+  const img = payload?.image;
+  if (!img?.id) return;
+  overlayCtxImage.value = img;
+  overlayCtxX.value = payload.clientX ?? 0;
+  overlayCtxY.value = payload.clientY ?? 0;
+  overlayCtxVisible.value = true;
+}
+
+function handleOverlayShare() {
+  const img = overlayCtxImage.value;
+  if (!img?.id || !img?.format) return;
+  // ShareDialog reads `contextMenuImage`; point it at the overlay picture. The
+  // grid menu is closed, so this does not affect any grid interaction.
+  contextMenuImage.value = img;
+  sharePicDialogOpen.value = true;
+}
+
+function handleOverlayReverseImageSearch() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  faceLikenessSearchFaceId.value = null;
+  reverseImageSearchPictureIds.value = [id];
+  // Reveal the results behind the lightbox and clear any text search.
+  closeOverlay();
+  emit("clear-search", "");
+}
+
+function handleOverlayFindSimilarFaces(faceId) {
+  if (!faceId) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = faceId;
+  // Same contract as the overlay's reverse-image-search sibling: the results
+  // land in the grid BEHIND the lightbox, and while the overlay is open every
+  // grid mutation is deferred (§9.1), so without closing it the action looks
+  // like it did nothing at all.
+  closeOverlay();
+  emit("clear-search", "");
+}
+
+function openOverlaySegmentDialog() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null || isReadOnly.value) return;
+  segmentTargetIds.value = [id];
+  segmentPrompt.value = "";
+  segmentDialogOpen.value = true;
+}
+
+async function handleOverlayDelete() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  // Scope the shared delete flow to just this picture (idsOverride). For the
+  // scrapheap this opens the Delete-forever confirm; for a normal view it
+  // soft-deletes immediately. Either way, close the lightbox so it never shows
+  // a picture that has just left the current view.
+  await deleteSelected([id]);
+  closeOverlay();
+}
+
+async function handleOverlayScrapheapRestore() {
+  const id = overlayCtxImage.value?.id;
+  if (id == null) return;
+  try {
+    await restoreScrapheap([id], { baseUrl: props.backendUrl });
+  } catch (err) {
+    console.error("Failed to restore picture from the scrapheap", err);
+    noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
+      key: "scrapheap-restore-overlay",
+    });
+  }
+  removeImagesById([id]);
+  closeOverlay();
+  emit("refresh-sidebar");
+  fetchAllGridImages().then(() => {
+    loadedRanges.value = [];
+    updateVisibleThumbnails();
+  });
+}
+
 function handleContextMenuOpenTagPanel() {
   selectionBarRef.value?.openTagInput();
 }
@@ -5968,23 +6766,27 @@ function handleContextMenuOpenComfyuiPanel() {
 
 function openSegmentDialog() {
   if (!selectedImageIds.value.length || isReadOnly.value) return;
+  segmentTargetIds.value = null;
   segmentPrompt.value = "";
   segmentDialogOpen.value = true;
 }
 
 async function confirmSegment() {
-  const ids = selectedImageIds.value
+  const source = Array.isArray(segmentTargetIds.value)
+    ? segmentTargetIds.value
+    : selectedImageIds.value;
+  const ids = source
     .map((id) => Number(getPictureId(id)))
     .filter((id) => Number.isFinite(id) && id > 0);
   segmentDialogOpen.value = false;
+  segmentTargetIds.value = null;
   if (!ids.length || !props.backendUrl) return;
   // Detection runs as a background GPU task. The grid card refreshes in place
   // on the resulting CHANGED_PICTURES event (detections is a card-content
   // field), and the overlay reconciles too if open.
   try {
-    await apiClient.post(`${props.backendUrl}/pictures/detect`, {
-      picture_ids: ids,
-      prompt: segmentPrompt.value.trim(),
+    await detectPictures(ids, segmentPrompt.value.trim(), {
+      baseUrl: props.backendUrl,
     });
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
@@ -6023,11 +6825,10 @@ function scheduleSharedPictureFetch() {
     const ids = visibleSlice.map((img) => img.id).filter(Boolean);
     if (!ids.length) return;
     try {
-      const res = await apiClient.post(
-        `${props.backendUrl}/users/me/shared-picture-ids/batch`,
-        { picture_ids: ids },
-      );
-      const shared = new Set(res.data?.shared_ids ?? []);
+      const body = await getSharedPictureIds(ids, {
+        baseUrl: props.backendUrl,
+      });
+      const shared = new Set(body?.shared_ids ?? []);
       // Update: remove any id from the queried batch that is no longer shared,
       // and add any that are now shared. This keeps the set accurate when
       // tokens are later revoked.
@@ -6041,7 +6842,9 @@ function scheduleSharedPictureFetch() {
       }
       sharedPictureIds.value = nextShared;
     } catch (e) {
-      // Non-critical — silently ignore
+      // Non-critical: the shared badge just stays as it was. Log it so a
+      // persistently failing batch is visible rather than invisible.
+      console.debug("Failed to refresh the shared-picture badges", e);
     }
   }, 300);
 }
@@ -6059,9 +6862,9 @@ async function confirmRevokePictureShares() {
   revokeSharesPending.value = null;
   if (!pending?.pictureId) return;
   try {
-    await apiClient.delete(
-      `${props.backendUrl}/users/me/tokens/by-resource?resource_type=picture&resource_id=${pending.pictureId}`,
-    );
+    await revokeTokensByResource("picture", pending.pictureId, {
+      baseUrl: props.backendUrl,
+    });
     const next = new Set(sharedPictureIds.value);
     next.delete(pending.pictureId);
     sharedPictureIds.value = next;
@@ -6126,9 +6929,7 @@ async function removeTagFromImage(imageId, tag) {
       return;
     }
     const tagKey = String(tagId);
-    await apiClient.delete(
-      `${props.backendUrl}/pictures/${imageId}/tags/${tagKey}`,
-    );
+    await removePictureTag(imageId, tagKey, { baseUrl: props.backendUrl });
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
@@ -6144,13 +6945,10 @@ async function removeTagFromImage(imageId, tag) {
 
 async function addTagToImage(imageId, tag) {
   try {
-    const response = await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tags`,
-      {
-        tag: tag,
-      },
-    );
-    const responseTags = getTagList(response?.data?.tags);
+    const response = await addPictureTag(imageId, tag, {
+      baseUrl: props.backendUrl,
+    });
+    const responseTags = getTagList(response?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
@@ -6185,6 +6983,12 @@ watch(
     // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
       updateRowHeightFromGrid();
+      if (isJustifiedMode.value) {
+        // Justified rows don't follow the uniform cols/rowHeight arithmetic
+        // below — let the virtualizer derive the range from the packed model.
+        recalculateVisibleRange();
+        return;
+      }
       const el = scrollWrapper.value;
       if (!el) return;
       let cardHeight = rowHeight.value;
@@ -6224,6 +7028,12 @@ defineExpose({
   clearFaceSelection,
   runComfyuiOnGridImages,
   hasCursorFocus: computed(() => cursorIdx.value !== null),
+  // Lets the sidebar's Scrapheap context menu reach the same consent-gated
+  // empty-scrapheap flow the empty-state placeholder uses. The caller navigates
+  // to the scrapheap view first, so the post-confirm grid refetch is correct.
+  // It arrives mid-fetch by construction, which is why the confirm gates on a
+  // purge already running rather than on the grid's load state.
+  confirmEmptyScrapheap,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -6287,7 +7097,6 @@ async function exportCurrentViewToZip(options = {}) {
   const useOriginalFileNames = options.useOriginalFileNames === true;
   const resolution = options.resolution || "original";
   const bboxMode = options.bboxMode || "none";
-  let url = `${props.backendUrl}/pictures/export`;
   let params;
   const selectedIds = selectedImageIds.value;
   if (selectedIds && selectedIds.length > 0) {
@@ -6322,14 +7131,7 @@ async function exportCurrentViewToZip(options = {}) {
     extraParams.append("bbox_mode", bboxMode);
   }
   const extraParamString = extraParams.toString();
-  if (params) {
-    url += `?${params}`;
-    if (extraParamString) {
-      url += `&${extraParamString}`;
-    }
-  } else if (extraParamString) {
-    url += `?${extraParamString}`;
-  }
+  const exportQuery = [params, extraParamString].filter(Boolean).join("&");
 
   try {
     exportProgress.visible = true;
@@ -6339,8 +7141,10 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.message = "Preparing export...";
     exportProgress.cancelRequested = false;
 
-    const startRes = await apiClient.get(url);
-    const taskId = startRes?.data?.task_id;
+    const startBody = await startExport(exportQuery, {
+      baseUrl: props.backendUrl,
+    });
+    const taskId = startBody?.task_id;
     if (!taskId) {
       throw new Error("Missing task_id from export response.");
     }
@@ -6354,20 +7158,19 @@ async function exportCurrentViewToZip(options = {}) {
         exportProgress.visible = false;
         return;
       }
-      const statusRes = await apiClient.get(
-        `${props.backendUrl}/pictures/export/status`,
-        { params: { task_id: taskId } },
-      );
-      const status = statusRes?.data?.status;
+      const statusBody = await getExportStatus(taskId, {
+        baseUrl: props.backendUrl,
+      });
+      const status = statusBody?.status;
       exportProgress.status = status || "in_progress";
-      exportProgress.processed = statusRes?.data?.processed || 0;
-      exportProgress.total = statusRes?.data?.total || 0;
+      exportProgress.processed = statusBody?.processed || 0;
+      exportProgress.total = statusBody?.total || 0;
       exportProgress.message =
         status === "completed"
           ? "Finalizing download..."
           : "Exporting images...";
       if (status === "completed") {
-        downloadUrl = statusRes?.data?.download_url;
+        downloadUrl = statusBody?.download_url;
         break;
       }
       if (status === "failed") {
@@ -6387,19 +7190,12 @@ async function exportCurrentViewToZip(options = {}) {
       throw new Error("Export timed out waiting for ZIP.");
     }
 
-    const fileRes = await apiClient.get(`${props.backendUrl}${downloadUrl}`, {
-      responseType: "blob",
+    const { blob, filename } = await downloadExport(downloadUrl, {
+      baseUrl: props.backendUrl,
     });
 
-    let filename = "pixlstash_export.zip";
-    const disposition = fileRes.headers["content-disposition"];
-    if (disposition) {
-      const match = disposition.match(/filename="?([^";]+)"?/);
-      if (match) filename = match[1];
-    }
-
     const link = document.createElement("a");
-    link.href = URL.createObjectURL(fileRes.data);
+    link.href = URL.createObjectURL(blob);
     link.download = filename;
     document.body.appendChild(link);
     link.click();
@@ -6413,7 +7209,10 @@ async function exportCurrentViewToZip(options = {}) {
   } catch (e) {
     exportProgress.status = "failed";
     exportProgress.message = "Export failed";
-    alert("Export failed: " + (e.message || e));
+    console.error("ZIP export failed", e);
+    noticeStore.error(`Export failed. ${errorDetail(e)}`, {
+      key: "export-zip",
+    });
     setTimeout(() => {
       exportProgress.visible = false;
       exportProgress.status = "idle";
@@ -6568,6 +7367,67 @@ function handleEmptyStateReset() {
   max-width: 100%;
 }
 
+/* Raised so the permanent scrapheap purge badge keeps the bottom-left corner. */
+.thumbnail-bottom-left-badges--raised {
+  bottom: var(--space-6);
+}
+
+/* ── Scrapheap auto-purge badge ─────────────────────────────────────────────
+   Permanent status chip over an arbitrary photo, so it sits on `--scrim-photo`
+   with an `on-dark-surface` glyph (visual-language §7 "scrims"). Meaning is
+   carried by icon + text; the error tint on the last day is reinforcement, not
+   the signal. */
+.thumbnail-purge-badge {
+  position: absolute;
+  left: var(--space-1);
+  bottom: var(--space-1);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-3));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-snug);
+  pointer-events: none;
+}
+
+.thumbnail-purge-badge__icon {
+  flex-shrink: 0;
+}
+
+.thumbnail-purge-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thumbnail-purge-badge--protected .thumbnail-purge-badge__icon {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* `--locked` deliberately has no tint: its icon inherits `on-dark-surface`, the
+   same as the shipped `.thumbnail-lock-badge`, so the two lock affordances read
+   as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
+   set") carry the difference from `--protected` — no colour needed. */
+
+/* Last-day emphasis. The tint is on the ICON only: status-coloured text at 11px
+   on a translucent scrim over an unknown photo cannot be proven to clear the
+   4.5:1 body floor, while an icon only needs 3:1. The label still says "Purges
+   today" / "1 day left", so nothing depends on seeing the colour.
+   `dark-surface-error`, not `error`: the badge sits on `--scrim-photo`, which is
+   the `scrim` token and therefore dark in BOTH themes, so it needs the hue tuned
+   for a dark surface (4.12:1) rather than the light theme's deepened one
+   (3.12:1). See notice-surface.md §3.3. */
+.thumbnail-purge-badge--countdown-urgent .thumbnail-purge-badge__icon {
+  color: rgb(var(--v-theme-dark-surface-error));
+}
+
 /* Format and resolution badges are hover-only */
 .resolution-hover-overlay,
 .thumbnail-id-overlay {
@@ -6673,7 +7533,7 @@ function handleEmptyStateReset() {
   padding: 4px 12px;
   white-space: nowrap;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   pointer-events: none;
   user-select: none;
   z-index: 50;
@@ -6699,7 +7559,7 @@ function handleEmptyStateReset() {
   white-space: nowrap;
   overflow: hidden;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   user-select: none;
   z-index: 50;
   transition: bottom 0.15s;
@@ -6749,7 +7609,7 @@ function handleEmptyStateReset() {
   padding: 4px 12px;
   white-space: nowrap;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--elevation-2);
   pointer-events: none;
   user-select: none;
   z-index: 50;
@@ -6871,6 +7731,28 @@ function handleEmptyStateReset() {
   padding-top: 0 !important;
   gap: 0px;
 }
+/* Justified (Google-Photos-style) mode: the grid becomes a flex-wrap row
+   layout. Every card carries an exact inline width/height from the packed
+   model (useJustifiedLayout), and the inline column/row gap on the container
+   mirrors the packing gap, so flex line breaks land exactly on the packed row
+   boundaries — the invariant the virtual-scroll spacer arithmetic relies on. */
+.image-grid.image-grid--justified {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.image-grid--justified .image-card {
+  flex: 0 0 auto;
+  width: auto;
+}
+/* The packing gap is the only spacing between cards; the square-mode padding
+   would shrink thumbnails inside their packed boxes. */
+.image-grid--justified .thumbnail-card {
+  padding: 0;
+  height: 100%;
+}
 .grid-scroll-wrapper::-webkit-scrollbar {
   width: 8px;
 }
@@ -6927,7 +7809,8 @@ function handleEmptyStateReset() {
 .selection-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--v-theme-info), 0.38);
+  /* Amber "safelight" selection (was cold-blue info) — the brighter glow token. */
+  background: rgba(var(--v-theme-accent-bright), 0.38);
   pointer-events: none;
   z-index: 25;
   border-radius: 8px;
@@ -6958,8 +7841,8 @@ function handleEmptyStateReset() {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: rgb(var(--v-theme-info));
-  color: rgb(var(--v-theme-on-info));
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
   font-size: 16px;
   font-weight: 700;
   display: flex;
@@ -7014,6 +7897,34 @@ function handleEmptyStateReset() {
   height: 100%;
   position: relative;
   aspect-ratio: 1 / 1;
+}
+/* Justified mode: width/height come from the packed layout's inline styles;
+   the square aspect ratio must not fight them. object-fit: cover stays on the
+   image so existing square-cropped thumbnails still fill the variable-width
+   boxes until AR-preserving thumbnails are regenerated backend-side. */
+.thumbnail-container--justified,
+.thumbnail-container--justified .thumbnail-img {
+  aspect-ratio: auto;
+}
+/* Square-crop mode (thumbnail v2): the AR bitmap is sprite-cropped to the stored
+   face-weighted rectangle. The oversized, translated <img> is clipped to the
+   square cell, so the rounded corners and the card drop shadow move onto the
+   container (the img's own radius/shadow would sit off-screen and get clipped).
+   Face/detection overlays outside the crop are clipped at the cell edge here. */
+.thumbnail-container--cropped {
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
+  transition: box-shadow 0.18s;
+}
+.thumbnail-container--cropped .thumbnail-img {
+  border-radius: 0;
+  box-shadow: none;
+  object-position: top center;
+}
+.compact-mode .thumbnail-container--cropped {
+  border-radius: 0;
+  box-shadow: none;
 }
 .thumbnail-container::after {
   content: "";

@@ -2,7 +2,7 @@
   "name": "pixlstash-desktop",
   "productName": "PixlStash",
   "desktopName": "pixlstash.desktop",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "PixlStash desktop app: a native window around the local PixlStash server, with downloadable, hardware-matched compute backends.",
   "author": {
     "name": "Gaute Lindkvist",
@@ -26,16 +26,17 @@
     "pretest": "node -e \"require('node:fs').rmSync('dist-test',{recursive:true,force:true})\"",
     "test": "tsc -p tsconfig.test.json && node --test \"dist-test/test/*.test.js\""
   },
-  "dependencies": {
-    "fzstd": "^0.1.1",
-    "tar": "^7.5.16"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.10.0",
     "cross-env": "^7.0.3",
-    "electron": "^42.3.3",
+    "electron": "^42.7.1",
     "electron-builder": "^26.15.2",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "brace-expansion@5": "^5.0.8",
+    "fast-uri": "^3.1.4"
   },
   "build": {
     "appId": "dev.pixlstash.desktop",

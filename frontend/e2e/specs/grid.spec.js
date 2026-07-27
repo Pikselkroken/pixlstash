@@ -10,15 +10,23 @@ test.describe('image grid', () => {
     await page.goto('/')
     const cards = page.locator('.thumbnail-card')
     await expect(cards.first()).toBeVisible({ timeout: 15_000 })
-    expect(await cards.count()).toBeGreaterThan(0)
+    await expect.poll(() => cards.count()).toBeGreaterThan(0)
   })
 
   test('opens and closes the image overlay', async ({ page }) => {
     await page.goto('/')
-    await page.locator('.thumbnail-card').first().click()
 
     const overlay = page.locator('.image-overlay')
-    await expect(overlay).toBeVisible()
+    // The grid re-renders on picture websocket events (the e2e backend's
+    // thumbnail-upgrade job emits a steady stream of them), which can swap the
+    // card out between the actionability check and the click, swallowing it.
+    // Retry until the overlay is actually up. This spec stays on raw
+    // @playwright/test on purpose, so the retry is inline rather than borrowing
+    // the ImageOverlay page object.
+    await expect(async () => {
+      await page.locator('.thumbnail-card').first().click()
+      await expect(overlay).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 30_000 })
 
     // Close via the dedicated button (Escape first reveals chrome).
     await overlay.locator('.overlay-close').click()

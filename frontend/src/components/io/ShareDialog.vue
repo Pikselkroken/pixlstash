@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { apiClient } from '../../utils/apiClient'
+import { createToken } from '../../api/users'
+import { patchUserConfig } from '../../api/config'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -82,7 +83,7 @@ async function confirmCreate() {
   loading.value = true
   try {
     const base = props.backendUrl || ''
-    const res = await apiClient.post(`${base}/users/me/token`, {
+    const created = await createToken({
       description: props.resourceLabel
         ? `Share – ${props.resourceLabel}`
         : `Shared ${props.resourceType} #${props.resourceId}`,
@@ -95,8 +96,8 @@ async function confirmCreate() {
           ? includeAttachments.value
           : false,
       watermark: watermark.value,
-    })
-    const tok = res.data?.token
+    }, { baseUrl: base })
+    const tok = created?.token
     if (!tok) throw new Error('No token returned')
 
     const origin = props.publicUrl || window.location.origin
@@ -109,9 +110,12 @@ async function confirmCreate() {
 
     // Persist watermark preference if it changed
     if (watermark.value !== props.embedWatermark) {
-      apiClient
-        .patch(`${base}/users/me/config`, { embed_watermark: watermark.value })
-        .catch(() => {})
+      // Fire-and-forget: the share link is already made, so a failed
+      // preference save must not fail the dialog. Log it rather than drop it.
+      patchUserConfig({ embed_watermark: watermark.value }, { baseUrl: base })
+        .catch((e) => {
+          console.warn('Failed to persist the embed-watermark preference:', e)
+        })
       emit('update:embed-watermark', watermark.value)
     }
 

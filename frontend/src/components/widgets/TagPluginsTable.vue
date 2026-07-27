@@ -7,7 +7,7 @@
  * Exactly one plugin may be the active tag plugin (or none).
  */
 import { computed, ref } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { patchUserConfig } from "../../api/config";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 
 const props = defineProps({
@@ -44,7 +44,7 @@ async function setActive(pluginName) {
   // Toggle off if already active
   const next = activePlugin.value === pluginName ? null : pluginName;
   try {
-    await apiClient.patch("/users/me/config", {
+    await patchUserConfig({
       tagger_settings: { active_tag_plugin: next },
     });
     emit("update:settings", {

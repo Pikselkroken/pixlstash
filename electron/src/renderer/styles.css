@@ -1,18 +1,22 @@
 :root {
   /* PixlStash dark theme — mirrors the Vuetify pixlStashDark palette in
-     frontend/src/main.js: cream text on slate, olive-green primary, orange
-     (logo) accent. Keep these in sync with the web app's theme. */
-  --bg: #1f2328;
-  --panel: #2b3138;
-  --fg: #f2e5da;
+     frontend/src/main.js: cream text on slate, amber accent, olive primary.
+     Every value below is a token from that theme; keep them in sync with the
+     web app (they were last synced to the unified amber palette, 2026-07-24). */
+  --bg: #1b1f24; /* background */
+  --toolbar: #23282f; /* toolbar / sidebar */
+  --panel: #23282f; /* surface — raised cards */
+  --input-bg: #2b3138; /* input-background */
+  --fg: #f2e5da; /* on-background */
   --muted: rgba(242, 229, 218, 0.55);
-  --accent: #f28f3b;
-  --accent-2: #7c9004;
-  --on-accent: #1b1b1b;
-  --border: #3a4047;
-  --logo-accent: #f28f3b;
-  --ok: #4caf50;
-  --err: #f44336;
+  --accent: #c47a1e; /* accent — the unified amber */
+  --primary: #567309; /* primary — olive action fill */
+  --on-accent: #f7f1ea; /* on-accent / on-primary — warm near-white label */
+  --border: #363d45; /* border */
+  /* Red as a FOREGROUND on dark chrome, so it comes from the dark-surface-*
+     family, not from the theme's `error` fill (#b54538, tuned to carry a warm
+     label rather than to be one). */
+  --err: #c9786f; /* dark-surface-error */
 }
 
 * {
@@ -52,8 +56,8 @@ body {
   z-index: 1000;
   display: flex;
   align-items: center;
-  background: #23282f;
-  border-bottom: 1px solid rgba(242, 229, 218, 0.06);
+  background: var(--toolbar);
+  border-bottom: 1px solid rgba(242, 229, 218, 0.12);
   -webkit-app-region: drag;
   -webkit-user-select: none;
   user-select: none;
@@ -61,14 +65,21 @@ body {
 .winbar.winbar--mac {
   padding-left: 78px; /* room for native traffic lights */
 }
+/* Brand wordmark: the Tiny5 pixel face at 16px, "Pixl" in the body colour and
+   "Stash" in the accent — the two-tone split every other brand surface uses
+   (DESIGN.md "Wordmark amber", docs/design/visual-language.md §Wordmark). */
 .winbar .wb-brand {
   margin-right: auto;
   padding: 0 12px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
+  font-family: "Tiny5", monospace;
+  font-size: 16px;
+  line-height: 1;
+  letter-spacing: 0.5px;
   color: var(--fg);
-  opacity: 0.8;
+}
+
+.winbar .wb-stash {
+  color: var(--accent);
 }
 .winbar .wb-controls {
   display: flex;
@@ -122,6 +133,11 @@ body {
   font-family: "Tiny5", monospace;
   font-size: 0.9em;
   letter-spacing: 0.5px;
+}
+
+/* "Stash" in the accent, the two-tone split the web wordmark uses. */
+.brand-name span {
+  color: var(--accent);
 }
 
 .status {
@@ -218,7 +234,7 @@ body {
 }
 
 button {
-  background: var(--accent-2);
+  background: var(--primary);
   color: var(--on-accent);
   border: none;
   border-radius: 8px;
@@ -339,7 +355,7 @@ button:disabled {
   font-size: 12.5px;
   color: var(--muted);
   line-height: 1.5;
-  background: rgba(142, 166, 4, 0.06);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: 8px;
@@ -356,7 +372,7 @@ button:disabled {
 .field input[type="text"] {
   flex: 1;
   min-width: 0;
-  background: var(--bg);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--fg);
@@ -407,7 +423,7 @@ button:disabled {
 
 .choice.selected {
   border-color: var(--accent);
-  background: rgba(142, 166, 4, 0.08);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .choice input {

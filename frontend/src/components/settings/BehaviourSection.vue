@@ -1,6 +1,8 @@
 <script setup>
 import { onUnmounted, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { getUserConfig, patchUserConfig } from "../../api/config";
+import { getWorkerProgress } from "../../api/workers";
+import { listTaggers } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import TagPluginsTable from "../widgets/TagPluginsTable.vue";
 import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
@@ -57,8 +59,8 @@ function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
 
 async function fetchVramSliderBounds() {
   try {
-    const res = await apiClient.get("/workers/progress");
-    const processData = res.data?.process || res.data?.system || {};
+    const progress = await getWorkerProgress();
+    const processData = progress?.process || progress?.system || {};
     const totalVramGb =
       processData.vram_total_gb ??
       processData.vramTotalGb ??
@@ -67,7 +69,7 @@ async function fetchVramSliderBounds() {
     // Only ever increase the bound — a transient low reading must not shrink the
     // slider and cause Vuetify to auto-clamp (and overwrite) the saved budget.
     if (derived > maxVramGbMax.value) maxVramGbMax.value = derived;
-  } catch (e) {
+  } catch {
     // Leave maxVramGbMax unchanged on failure.
   }
 }
@@ -101,7 +103,7 @@ async function saveMaxVramGb() {
     return;
   }
   try {
-    await apiClient.patch("/users/me/config", { max_vram_gb: nextValue });
+    await patchUserConfig({ max_vram_gb: nextValue });
     maxVramGbSavedValue.value = nextValue;
     maxVramGbValue.value = nextValue;
     maxVramGbSuccess.value = "Saved.";
@@ -121,15 +123,15 @@ async function saveMaxVramGb() {
 async function fetchBehaviourSettings() {
   keepModelsInMemoryError.value = "";
   try {
-    const res = await apiClient.get("/users/me/config");
-    if (typeof res.data?.keep_models_in_memory === "boolean") {
-      keepModelsInMemory.value = res.data.keep_models_in_memory;
+    const cfg = await getUserConfig();
+    if (typeof cfg?.keep_models_in_memory === "boolean") {
+      keepModelsInMemory.value = cfg.keep_models_in_memory;
     } else {
       keepModelsInMemory.value = true;
     }
     await fetchVramSliderBounds();
     maxVramGbHydrating.value = true;
-    const parsedMaxVram = Number(res.data?.max_vram_gb);
+    const parsedMaxVram = Number(cfg?.max_vram_gb);
     const initialValue =
       Number.isFinite(parsedMaxVram) && parsedMaxVram > 0
         ? parsedMaxVram
@@ -143,7 +145,7 @@ async function fetchBehaviourSettings() {
     maxVramGbSavedValue.value = snappedValue;
     maxVramGbAutoSaveReady.value = true;
     maxVramGbHydrating.value = false;
-  } catch (e) {
+  } catch {
     maxVramGbAutoSaveReady.value = false;
     keepModelsInMemoryError.value = "Failed to load behaviour settings.";
   }
@@ -154,9 +156,7 @@ async function setKeepModelsInMemory(value) {
   keepModelsInMemoryError.value = "";
   try {
     const nextValue = Boolean(value);
-    await apiClient.patch("/users/me/config", {
-      keep_models_in_memory: nextValue,
-    });
+    await patchUserConfig({ keep_models_in_memory: nextValue });
     keepModelsInMemory.value = nextValue;
   } catch (e) {
     keepModelsInMemoryError.value =
@@ -169,9 +169,9 @@ async function setKeepModelsInMemory(value) {
 async function fetchTaggerPlugins() {
   taggerLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    taggerPlugins.value = res.data?.plugins ?? [];
-    taggerSettings.value = res.data?.settings ?? {};
+    const body = await listTaggers();
+    taggerPlugins.value = body?.plugins ?? [];
+    taggerSettings.value = body?.settings ?? {};
   } catch {
     taggerPlugins.value = [];
   } finally {
@@ -181,8 +181,8 @@ async function fetchTaggerPlugins() {
 
 async function refreshTaggerLoaded() {
   try {
-    const res = await apiClient.get("/taggers");
-    const fresh = res.data?.plugins ?? [];
+    const body = await listTaggers();
+    const fresh = body?.plugins ?? [];
     // Only update is_loaded on existing entries to avoid layout churn.
     taggerPlugins.value = taggerPlugins.value.map((p) => {
       const update = fresh.find((f) => f.name === p.name);

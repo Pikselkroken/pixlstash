@@ -31,6 +31,8 @@ def query_total_vram_mb() -> int:
             totals.append(int(float(value)))
         return sum(totals)
     except Exception:
+        # nvidia-smi absent/failing is normal on CPU-only hosts; 0 (no VRAM) IS
+        # the documented answer, so logging it would be routine noise.
         return 0
 
 

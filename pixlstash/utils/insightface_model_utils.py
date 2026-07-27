@@ -24,7 +24,7 @@ import threading
 import time
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.path_utils import resolve_path_within
+from pixlstash.utils.path_utils import resolve_path_within
 
 logger = get_logger(__name__)
 

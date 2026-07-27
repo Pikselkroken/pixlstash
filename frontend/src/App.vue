@@ -12,12 +12,12 @@ import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import {
-  apiClient,
   API_BASE_URL,
   appendShareToken,
   isReadOnly,
   sessionContext,
 } from "./utils/apiClient";
+import { getUserConfig, patchUserConfig } from "./api/config";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useSortStore } from "./stores/useSortStore";
@@ -41,7 +41,15 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import ImageGrid from "./components/views/ImageGrid.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
+import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
+import NoticeHost from "./components/widgets/NoticeHost.vue";
+import { useFloatingBottomInset } from "./composables/useBottomAnchor";
+import { toPx } from "./utils/floatingBottom.js";
 import { isInternalImageDrag } from "./utils/media.js";
+import {
+  clampSizeLevel,
+  nearestSizeLevelForColumns,
+} from "./utils/thumbnailSizes";
 
 const BACKEND_URL = API_BASE_URL;
 const ALL_PICTURES_ID = "ALL";
@@ -88,7 +96,7 @@ const theme = useTheme();
 // --- Component & DOM refs ---
 const gridContainer = ref(null);
 const sidebarRef = ref(null);
-const toolbarRef = ref(null);
+const statsSidebarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
 
@@ -99,8 +107,6 @@ const photosDialogOpen = ref(false);
 const folderScanning = ref(false);
 const installType = ref("pip");
 const dockerVariant = ref("gpu");
-const columnsMenuOpen = ref(false);
-const overlaysMenuOpen = ref(false);
 const loading = ref(null);
 const error = ref(null);
 
@@ -112,6 +118,7 @@ const configSnapshot = ref({});
 const config = reactive({
   sort: "",
   thumbnail: 256,
+  thumbnail_mode: "square",
   sidebar_thumbnail_size: 64,
   show_stars: true,
   show_face_bboxes: false,
@@ -129,7 +136,6 @@ const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 14;
 const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
-const COLUMNS_MENU_CLOSE_DELAY_MS = 300;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
 // Coalescing window for incoming grid-driving WS events (see
@@ -313,10 +319,10 @@ function connectUpdatesSocket() {
   };
 
   ws.onmessage = (event) => {
-    let payload = null;
+    let payload;
     try {
       payload = JSON.parse(event.data);
-    } catch (e) {
+    } catch {
       return;
     }
     const isPictureChange =
@@ -329,6 +335,33 @@ function connectUpdatesSocket() {
       const pictureIds = Array.isArray(payload.picture_ids)
         ? payload.picture_ids
         : [];
+      // Signal the open lightbox to re-fetch its card's smart_score. The overlay
+      // always displays the score (independent of grid sort), so this fires for
+      // any smart_score change regardless of the current sort and regardless of
+      // origin — matching on picture id + field, not origin, so it covers both
+      // origin-stamped interactive tag edits and the origin-less bulk drain that
+      // rides a penalised-tag settings change. `fields` absent = full change.
+      if (payload?.type === "pictures_changed" && pictureIds.length > 0) {
+        const changedFields = Array.isArray(payload.fields)
+          ? payload.fields
+          : [];
+        const touchesSmartScore =
+          changedFields.length === 0 || changedFields.includes("smart_score");
+        if (touchesSmartScore) {
+          const nextKey = (wsStore.wsSmartScoreUpdate?.key || 0) + 1;
+          wsStore.wsSmartScoreUpdate = { key: nextKey, pictureIds };
+        }
+        // Signal the open lightbox to re-fetch its detection boxes when a
+        // Segment run lands. The grid's card-content refresh is deferred under
+        // an open overlay (§9.1) and the overlay reads its boxes straight from
+        // the detections endpoint, so it needs its own signal. The backend
+        // always stamps this change `fields: ["detections"]`, so match on the
+        // explicit field only.
+        if (changedFields.includes("detections")) {
+          const nextKey = (wsStore.wsDetectionUpdate?.key || 0) + 1;
+          wsStore.wsDetectionUpdate = { key: nextKey, pictureIds };
+        }
+      }
       if (
         pictureIds.length > 0 &&
         sortStore.selectedSort === "LIKENESS_GROUPS" &&
@@ -493,9 +526,38 @@ function refreshSidebarPicturesDebounced(flash) {
   }, SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS);
 }
 
-function openSettingsDialog() {
-  sidebarRef.value?.openSettingsDialog?.();
+/**
+ * Open the settings dialog. `tab` deep-links to a nav entry (e.g. "scrapheap"
+ * from the scrapheap header's "change" link); omitted callers land on Appearance.
+ * @param {string} [tab]
+ */
+function openSettingsDialog(tab = "") {
+  sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
+
+// ── Notice surface placement (notice-surface.md §2.2) ───────────────────────
+// App.vue owns `--floating-bottom-h`: the height of the tallest bottom-anchored
+// floating element currently visible inside the notice column's footprint, plus
+// its gap. The elements themselves register through `useBottomAnchor` (the
+// SelectionBar pill, and the grid breadcrumb below 600px), each reporting a
+// MEASURED height from a ResizeObserver — the pill wraps and grows on coarse
+// pointers, so a constant would let a notice overlap it.
+const appViewportEl = ref(null);
+const { inset: floatingBottomInset } = useFloatingBottomInset();
+
+watch(
+  [floatingBottomInset, appViewportEl],
+  ([inset, el]) => {
+    if (!el) return;
+    el.style.setProperty("--floating-bottom-h", toPx(inset));
+  },
+  { immediate: true },
+);
+
+// The lightbox is a dark surface; the notice host takes its `--on-dark`
+// modifier there so a white card does not read as foreign chrome (§2.5).
+const lightboxOpen = ref(false);
+const noticeOnDark = computed(() => lightboxOpen.value);
 
 function openImportDialog() {
   photosDialogOpen.value = true;
@@ -581,14 +643,6 @@ function handleWindowPaste(event) {
   sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
 }
 
-const STATS_SIDEBAR_WIDTH = 288;
-
-function toolbarWidth() {
-  // gridWrapperRef is the flex:1 div that wraps ImageGrid — its clientWidth
-  // is exactly the toolbar width regardless of sidebar states.
-  return gridWrapperRef.value?.clientWidth ?? window.innerWidth ?? 0;
-}
-
 function updateSidebarBreakpoints() {
   if (typeof window !== "undefined") {
     sidebarStore.sidebarForcedHidden =
@@ -602,21 +656,14 @@ function updateIsMobile() {
   updateMaxColumns();
 }
 
-function clampColumnsToBounds() {
-  if (gridStore.columns > gridStore.maxColumns) {
-    gridStore.columns = gridStore.maxColumns;
-  }
-  if (gridStore.columns < gridStore.minColumns) {
-    gridStore.columns = gridStore.minColumns;
-  }
-}
-
 function updateMaxColumns() {
+  // Maintain the responsive column bounds. gridStore.columns is derived from
+  // the size level and clamps itself to these bounds, so there is nothing to
+  // write back here — updating the bounds re-evaluates the derived count.
   const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
   if (!width) {
     gridStore.minColumns = MIN_COLUMNS;
     gridStore.maxColumns = MAX_COLUMNS;
-    clampColumnsToBounds();
     return;
   }
   const availableWidth = Math.max(0, width - 8);
@@ -630,7 +677,6 @@ function updateMaxColumns() {
   );
   gridStore.minColumns = Math.max(MIN_COLUMNS, computedMin);
   gridStore.maxColumns = Math.min(MAX_COLUMNS, computedMax);
-  clampColumnsToBounds();
 }
 
 function closeSidebarIfMobile() {
@@ -1196,10 +1242,6 @@ function handleUpdateSortOptions(options) {
   sortStore.sortOptions = Array.isArray(options) ? options : [];
 }
 
-function handleUpdateStackThreshold(value) {
-  sortStore.stackThreshold = value;
-}
-
 function handleStackStatsUpdate(payload) {
   const expanded = Number(payload?.expanded ?? 0);
   const total = Number(payload?.total ?? 0);
@@ -1207,22 +1249,6 @@ function handleStackStatsUpdate(payload) {
     ? Math.max(0, expanded)
     : 0;
   gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
-}
-
-function handleExpandAllStacks() {
-  nextTick(() => {
-    gridContainer.value?.expandAllStacks?.();
-  });
-}
-
-function handleCollapseAllStacks() {
-  nextTick(() => {
-    gridContainer.value?.collapseAllStacks?.();
-  });
-}
-
-function handleComfyuiRunGrid(payload) {
-  gridContainer.value?.runComfyuiOnGridImages(payload);
 }
 
 function handleUpdateSimilarityCharacter(val) {
@@ -1267,7 +1293,7 @@ function handleUpdateThemeMode(value) {
 async function handleUpdateCheckForUpdates(value) {
   userPrefsStore.checkForUpdates = value;
   try {
-    await apiClient.patch("/users/me/config", { check_for_updates: value });
+    await patchUserConfig({ check_for_updates: value });
   } catch (e) {
     console.error("Failed to save check_for_updates preference:", e);
   }
@@ -1279,20 +1305,38 @@ function handleUpdateSidebarThumbnailSize(value) {
   userPrefsStore.sidebarThumbnailSize = nextValue;
 }
 
+// The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
+// already switched the view to the scrapheap; defer to the next tick so the grid
+// is showing that view before we open its existing consent-gated empty-forever
+// confirm (whose post-confirm refetch then reconciles the right view). The grid
+// is still fetching that view at this point, by construction — the confirm is
+// deliberately not gated on that, and takes its counts from the server preview.
+function handleEmptyScrapheapFromSidebar() {
+  nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
+}
+
+// Open the stats sidebar and focus its Tasks tab. Shared by the thumbnail-mode
+// "View progress" notice action and the ThumbnailUpgradeBanner's link, so both
+// use the same statsSidebarRef.focusTasksTab() plumbing.
+function focusTasksTabPanel() {
+  sidebarStore.statsOpen = true;
+  nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
+}
+
+function handleUpdateThumbnailMode(value) {
+  if (value !== "square" && value !== "justified") return;
+  if (value === gridStore.thumbnailMode) return;
+  // Apply immediately with no regeneration: both modes render from the same
+  // stored bitmap (justified shows it whole; square crops it to the stored
+  // rectangle), so the grid re-lays-out at once. The persist watch saves it,
+  // and the radiogroup's aria-checked change is what a screen reader announces.
+  gridStore.thumbnailMode = value;
+}
+
 function handleUpdateSidebarWidth(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
   userPrefsStore.sidebarWidth = nextValue;
-}
-
-function handleColumnsEnd() {
-  if (columnsMenuCloseTimeout) {
-    clearTimeout(columnsMenuCloseTimeout);
-  }
-  columnsMenuCloseTimeout = setTimeout(() => {
-    columnsMenuOpen.value = false;
-    columnsMenuCloseTimeout = null;
-  }, COLUMNS_MENU_CLOSE_DELAY_MS);
 }
 
 async function fetchConfig() {
@@ -1308,101 +1352,109 @@ async function fetchConfig() {
   configLoading.value = true;
   configApplying.value = true;
   try {
-    const res = await apiClient.get("/users/me/config");
-    const sortValue = res.data.sort_order ?? res.data.sort;
+    const cfg = await getUserConfig();
+    const sortValue = cfg.sort_order ?? cfg.sort;
     if (typeof sortValue === "string" && sortValue) {
       sortStore.selectedSort = sortValue;
     }
-    if (typeof res.data.show_keyboard_hint === "boolean")
-      userPrefsStore.showKeyboardHint = res.data.show_keyboard_hint;
-    if (typeof res.data.show_face_bboxes === "boolean") {
-      gridStore.showFaceBboxes = res.data.show_face_bboxes;
+    if (typeof cfg.show_keyboard_hint === "boolean")
+      userPrefsStore.showKeyboardHint = cfg.show_keyboard_hint;
+    if (typeof cfg.show_face_bboxes === "boolean") {
+      gridStore.showFaceBboxes = cfg.show_face_bboxes;
     }
-    if (typeof res.data.show_problem_icon === "boolean") {
-      gridStore.showProblemIcon = res.data.show_problem_icon;
+    if (typeof cfg.show_problem_icon === "boolean") {
+      gridStore.showProblemIcon = cfg.show_problem_icon;
     }
-    if (typeof res.data.expand_all_stacks === "boolean") {
-      gridStore.showStacks = res.data.expand_all_stacks;
-    } else if (typeof res.data.show_stacks === "boolean") {
-      gridStore.showStacks = res.data.show_stacks;
+    if (typeof cfg.expand_all_stacks === "boolean") {
+      gridStore.showStacks = cfg.expand_all_stacks;
+    } else if (typeof cfg.show_stacks === "boolean") {
+      gridStore.showStacks = cfg.show_stacks;
     }
-    if (typeof res.data.compact_mode === "boolean") {
-      gridStore.compactMode = res.data.compact_mode;
+    if (typeof cfg.compact_mode === "boolean") {
+      gridStore.compactMode = cfg.compact_mode;
     }
-    if (typeof res.data.sidebar_docked === "boolean") {
-      sidebarStore.setSidebarDocked(res.data.sidebar_docked);
+    if (typeof cfg.sidebar_docked === "boolean") {
+      sidebarStore.setSidebarDocked(cfg.sidebar_docked);
     }
-    if (typeof res.data.sidebar_pinned === "boolean") {
-      sidebarStore.setSidebarPinned(res.data.sidebar_pinned);
+    if (typeof cfg.sidebar_pinned === "boolean") {
+      sidebarStore.setSidebarPinned(cfg.sidebar_pinned);
     }
-    if (typeof res.data.date_format === "string" && res.data.date_format) {
-      userPrefsStore.dateFormat = res.data.date_format;
+    if (typeof cfg.date_format === "string" && cfg.date_format) {
+      userPrefsStore.dateFormat = cfg.date_format;
     }
-    if (typeof res.data.theme_mode === "string" && res.data.theme_mode) {
-      userPrefsStore.themeMode = res.data.theme_mode;
+    if (typeof cfg.theme_mode === "string" && cfg.theme_mode) {
+      userPrefsStore.themeMode = cfg.theme_mode;
     }
-    if (typeof res.data.descending === "boolean") {
-      sortStore.selectedDescending = res.data.descending;
+    if (typeof cfg.descending === "boolean") {
+      sortStore.selectedDescending = cfg.descending;
     }
-    if (typeof res.data.columns === "number") {
-      gridStore.columns = res.data.columns;
+    if (typeof cfg.thumbnail_size_level === "number") {
+      gridStore.sizeLevel = clampSizeLevel(cfg.thumbnail_size_level);
+    } else if (typeof cfg.columns === "number") {
+      // Legacy config predating the size ladder: derive the nearest level so
+      // an old install keeps roughly the same tile size after upgrading.
+      gridStore.sizeLevel = nearestSizeLevelForColumns(cfg.columns);
     }
-    if (typeof res.data.sidebar_thumbnail_size === "number") {
-      userPrefsStore.sidebarThumbnailSize = res.data.sidebar_thumbnail_size;
+    if (cfg.thumbnail_mode === "square" || cfg.thumbnail_mode === "justified") {
+      gridStore.thumbnailMode = cfg.thumbnail_mode;
     }
-    if (typeof res.data.sidebar_width === "number") {
-      userPrefsStore.sidebarWidth = res.data.sidebar_width;
+    if (typeof cfg.sidebar_thumbnail_size === "number") {
+      userPrefsStore.sidebarThumbnailSize = cfg.sidebar_thumbnail_size;
     }
-    if (res.data.stack_strictness != null) {
-      sortStore.stackThreshold = String(res.data.stack_strictness);
+    if (typeof cfg.sidebar_width === "number") {
+      userPrefsStore.sidebarWidth = cfg.sidebar_width;
+    }
+    if (cfg.stack_strictness != null) {
+      sortStore.stackThreshold = String(cfg.stack_strictness);
     }
     config.sort_order = sortValue || sortStore.selectedSort;
     config.descending = sortStore.selectedDescending;
     config.columns = gridStore.columns;
+    config.thumbnail_mode = gridStore.thumbnailMode;
     config.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
     config.sidebar_width = userPrefsStore.sidebarWidth;
     config.show_stars =
-      typeof res.data.show_stars === "boolean"
-        ? res.data.show_stars
+      typeof cfg.show_stars === "boolean"
+        ? cfg.show_stars
         : gridStore.showStars;
     config.show_face_bboxes =
-      typeof res.data.show_face_bboxes === "boolean"
-        ? res.data.show_face_bboxes
+      typeof cfg.show_face_bboxes === "boolean"
+        ? cfg.show_face_bboxes
         : gridStore.showFaceBboxes;
     config.show_problem_icon =
-      typeof res.data.show_problem_icon === "boolean"
-        ? res.data.show_problem_icon
+      typeof cfg.show_problem_icon === "boolean"
+        ? cfg.show_problem_icon
         : gridStore.showProblemIcon;
     config.expand_all_stacks =
-      typeof res.data.expand_all_stacks === "boolean"
-        ? res.data.expand_all_stacks
-        : typeof res.data.show_stacks === "boolean"
-          ? res.data.show_stacks
+      typeof cfg.expand_all_stacks === "boolean"
+        ? cfg.expand_all_stacks
+        : typeof cfg.show_stacks === "boolean"
+          ? cfg.show_stacks
           : gridStore.showStacks;
     config.compact_mode =
-      typeof res.data.compact_mode === "boolean"
-        ? res.data.compact_mode
+      typeof cfg.compact_mode === "boolean"
+        ? cfg.compact_mode
         : gridStore.compactMode;
     config.sidebar_docked =
-      typeof res.data.sidebar_docked === "boolean"
-        ? res.data.sidebar_docked
+      typeof cfg.sidebar_docked === "boolean"
+        ? cfg.sidebar_docked
         : sidebarStore.sidebarDocked;
     config.sidebar_pinned =
-      typeof res.data.sidebar_pinned === "boolean"
-        ? res.data.sidebar_pinned
+      typeof cfg.sidebar_pinned === "boolean"
+        ? cfg.sidebar_pinned
         : sidebarStore.sidebarPinned;
     config.date_format = userPrefsStore.dateFormat;
     config.theme_mode = userPrefsStore.themeMode;
     config.stack_strictness =
-      res.data.stack_strictness != null
-        ? res.data.stack_strictness
+      cfg.stack_strictness != null
+        ? cfg.stack_strictness
         : config.stack_strictness;
     const similarityValue =
-      res.data.similarity_character ?? res.data.selected_similarity_character;
+      cfg.similarity_character ?? cfg.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    const newHiddenTags = Array.isArray(res.data.hidden_tags)
-      ? res.data.hidden_tags
+    const newHiddenTags = Array.isArray(cfg.hidden_tags)
+      ? cfg.hidden_tags
       : [];
     if (
       userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
@@ -1410,8 +1462,8 @@ async function fetchConfig() {
     ) {
       userPrefsStore.hiddenTags = newHiddenTags;
     }
-    userPrefsStore.applyTagFilter = Boolean(res.data.apply_tag_filter);
-    const rawPt = res.data.smart_score_penalised_tags;
+    userPrefsStore.applyTagFilter = Boolean(cfg.apply_tag_filter);
+    const rawPt = cfg.smart_score_penalised_tags;
     if (rawPt && typeof rawPt === "object" && !Array.isArray(rawPt)) {
       userPrefsStore.penalisedTagWeights = Object.fromEntries(
         Object.entries(rawPt).map(([k, v]) => [
@@ -1451,28 +1503,28 @@ async function fetchConfig() {
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
-        res.data.stack_strictness != null
-          ? Number(res.data.stack_strictness)
+        cfg.stack_strictness != null
+          ? Number(cfg.stack_strictness)
           : null,
       hidden_tags: userPrefsStore.hiddenTags,
       apply_tag_filter: userPrefsStore.applyTagFilter,
     };
-    filterStore.comfyuiConfigured = Boolean(res.data?.comfyui_url);
-    if (typeof res.data?.public_url === "string" && res.data.public_url) {
-      userPrefsStore.publicUrl = res.data.public_url;
+    filterStore.comfyuiConfigured = Boolean(cfg?.comfyui_url);
+    if (typeof cfg?.public_url === "string" && cfg.public_url) {
+      userPrefsStore.publicUrl = cfg.public_url;
     }
-    userPrefsStore.embedWatermark = Boolean(res.data?.embed_watermark);
+    userPrefsStore.embedWatermark = Boolean(cfg?.embed_watermark);
     userPrefsStore.hidePurgeSnapshotWarning = Boolean(
-      res.data?.hide_purge_snapshot_warning,
+      cfg?.hide_purge_snapshot_warning,
     );
-    const cfu = res.data?.check_for_updates;
+    const cfu = cfg?.check_for_updates;
     userPrefsStore.checkForUpdates =
       cfu === true ? true : cfu === false ? false : null;
     if (userPrefsStore.checkForUpdates === null) {
       updateCheckDialogOpen.value = true;
     }
   } catch (e) {
-    console.error("Failed to fetch /users/me/config:", e);
+    console.error("Failed to fetch user config:", e);
   } finally {
     configApplying.value = false;
     configLoading.value = false;
@@ -1486,6 +1538,9 @@ async function patchConfigUIOptions() {
   const patch = {};
   if (sortStore.selectedSort) patch.sort = sortStore.selectedSort;
   patch.descending = sortStore.selectedDescending;
+  patch.thumbnail_size_level = gridStore.sizeLevel;
+  // Keep the legacy `columns` field in sync with the derived count so older
+  // clients (and anything still reading `columns`) stay consistent.
   if (gridStore.columns) patch.columns = gridStore.columns;
   if (userPrefsStore.sidebarThumbnailSize) {
     patch.sidebar_thumbnail_size = userPrefsStore.sidebarThumbnailSize;
@@ -1506,6 +1561,12 @@ async function patchConfigUIOptions() {
   }
   if (typeof gridStore.compactMode === "boolean") {
     patch.compact_mode = gridStore.compactMode;
+  }
+  if (
+    gridStore.thumbnailMode === "square" ||
+    gridStore.thumbnailMode === "justified"
+  ) {
+    patch.thumbnail_mode = gridStore.thumbnailMode;
   }
   if (typeof sidebarStore.sidebarDocked === "boolean") {
     patch.sidebar_docked = sidebarStore.sidebarDocked;
@@ -1544,11 +1605,10 @@ async function patchConfigUIOptions() {
   }
 
   try {
-    const response = await apiClient.patch("/users/me/config", changed);
-    const updatedConfig = await response.data;
+    await patchUserConfig(changed);
     configSnapshot.value = { ...snapshot, ...changed };
   } catch (e) {
-    console.error("Error patching /users/me/config:", e);
+    console.error("Error patching user config:", e);
   }
 }
 
@@ -1561,6 +1621,22 @@ function handleGlobalKeydown(e) {
     tag === "input" ||
     tag === "textarea" ||
     document.activeElement?.isContentEditable;
+
+  // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
+  // "Content on Hover or Focus" applies: it must be dismissible without moving
+  // the pointer. Escape is that mechanism, and for a touch user it is the only
+  // dismissal besides the scrim itself. Deliberately not preventDefault-ed, and
+  // skipped while typing, so the other Escape owners keep theirs. The sidebar
+  // context menu stops propagation from a capture-phase listener and never
+  // reaches here at all.
+  if (
+    e.key === "Escape" &&
+    !isEditable &&
+    sidebarStore.sidebarOverlay &&
+    sidebarStore.sidebarVisible
+  ) {
+    sidebarStore.hideAutoSidebar();
+  }
 
   const keys = ["Home", "End", "PageUp", "PageDown"];
   if (keys.includes(e.key) && !isEditable) {
@@ -1658,7 +1734,7 @@ function handleImagesMoved({ imageIds, kind, refresh }) {
   }
 }
 
-function handleFacesAssignedToCharacter({ characterId, faceIds }) {
+function handleFacesAssignedToCharacter() {
   if (
     gridContainer.value &&
     typeof gridContainer.value.clearFaceSelection === "function"
@@ -1695,34 +1771,6 @@ function handleClearSearch() {
   searchStore.searchInput = "";
   searchStore.isSearchHistoryOpen = false;
   gridStore.refreshGridVersion();
-}
-
-function blurSearchInput() {
-  toolbarRef.value?.blurSearchInput?.();
-}
-
-function blurSearch(event) {
-  if (event && event.target) {
-    event.target.blur();
-  }
-  blurSearchInput();
-}
-
-function addToSearchHistory(query) {
-  searchStore.addToSearchHistory(query);
-}
-
-function applySearchHistory(query) {
-  searchStore.searchInput = query;
-  searchStore.commitSearch();
-  searchStore.isSearchHistoryOpen = false;
-  nextTick(() => {
-    blurSearchInput();
-  });
-}
-
-function commitSearch() {
-  searchStore.commitSearch();
 }
 
 function handleResetToAll() {
@@ -1836,7 +1884,7 @@ watch(
     () => gridStore.showProblemIcon,
     () => gridStore.showStacks,
   ],
-  ([face, problem, stacks]) => {},
+  () => {},
   { immediate: true },
 );
 
@@ -1856,7 +1904,15 @@ watch(
 );
 
 watch(
-  () => gridStore.columns,
+  () => gridStore.sizeLevel,
+  () => {
+    if (!configLoaded.value) return;
+    patchConfigUIOptions();
+  },
+);
+
+watch(
+  () => gridStore.thumbnailMode,
   () => {
     if (!configLoaded.value) return;
     patchConfigUIOptions();
@@ -2046,11 +2102,17 @@ defineExpose({
 </script>
 <template>
   <v-app>
-    <div class="app-viewport">
+    <div ref="appViewportEl" class="app-viewport">
       <TitleBar
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
       />
+      <!-- App-level status strip: spans the whole shell above BOTH rails and the
+           grid. Thumbnail regeneration repaints grid tiles, sidebar thumbnails
+           and the Tasks row alike, so it is not a property of the grid column;
+           mounting it inside `.main-area` used to push the stats rail down while
+           leaving the left rail alone. -->
+      <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
       <div class="file-manager">
         <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
              sidebar overlay on hover (or tap, on touch). -->
@@ -2104,6 +2166,9 @@ defineExpose({
             :installType="installType"
             :dockerVariant="dockerVariant"
             :showKeyboardHint="userPrefsStore.showKeyboardHint"
+            :thumbnailMode="gridStore.thumbnailMode"
+            @update:thumbnail-mode="handleUpdateThumbnailMode"
+            @empty-scrapheap="handleEmptyScrapheapFromSidebar"
             @update:show-keyboard-hint="
               userPrefsStore.showKeyboardHint = $event
             "
@@ -2136,10 +2201,14 @@ defineExpose({
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
         </div>
+        <!-- Click-outside scrim for the auto-hide sidebar. Purely a dimming
+             surface and a tap target, so it is hidden from assistive tech; the
+             keyboard/AT equivalent of clicking it is Escape (handleGlobalKeydown). -->
         <Transition name="backdrop-fade">
           <div
             v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
             class="sidebar-backdrop"
+            aria-hidden="true"
             @click="sidebarStore.hideAutoSidebar()"
           ></div>
         </Transition>
@@ -2207,7 +2276,6 @@ defineExpose({
               'main-content',
               selectionStore.selectedCharacter ? 'accent-border' : '',
             ]"
-            style="margin-top: 0; flex-direction: row; align-items: stretch"
           >
             <div
               ref="gridWrapperRef"
@@ -2241,6 +2309,8 @@ defineExpose({
                 :wsUpdateKey="gridStore.wsUpdateKey"
                 :wsTagUpdate="wsStore.wsTagUpdate"
                 :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
+                :wsSmartScoreUpdate="wsStore.wsSmartScoreUpdate"
+                :wsDetectionUpdate="wsStore.wsDetectionUpdate"
                 :wsPluginProgress="wsStore.wsPluginProgress"
                 :mediaTypeFilter="filterStore.mediaTypeFilter"
                 :comfyuiModelFilter="filterStore.comfyuiModelFilter"
@@ -2291,6 +2361,8 @@ defineExpose({
                 :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
                 :columns="gridStore.columns"
+                :sizeLevel="gridStore.sizeLevel"
+                :thumbnailMode="gridStore.thumbnailMode"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
@@ -2332,121 +2404,132 @@ defineExpose({
                   gridStore.visibleRangeLabel = $event
                 "
                 @update:match-count="gridStore.matchCount = $event"
+                @update:overlay-open="lightboxOpen = $event"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"
                 @confirm-export-zip="confirmExportZip"
               />
             </div>
-            <StatsSidebar
-              :open="sidebarStore.statsOpen"
-              :backendUrl="BACKEND_URL"
-              :selectedCharacter="selectionStore.selectedCharacter"
-              :selectedCharacterIds="selectionStore.selectedCharacterIds"
-              :characterMode="selectionStore.characterMultiMode"
-              :selectedSet="selectionStore.selectedSet"
-              :selectedSetIds="selectionStore.selectedSetIds"
-              :setMode="selectionStore.setMultiMode"
-              :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-              :projectViewMode="projectStore.projectViewMode"
-              :selectedProjectId="projectStore.selectedProjectId"
-              :tagFilter="filterStore.tagFilter"
-              :tagRejectedFilter="filterStore.tagRejectedFilter"
-              :mediaTypeFilter="filterStore.mediaTypeFilter"
-              :minScoreFilter="filterStore.minScoreFilter"
-              :maxScoreFilter="filterStore.maxScoreFilter"
-              :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
-              :resolutionBucketFilter="filterStore.resolutionBucketFilter"
-              :faceBboxFilter="filterStore.faceBboxFilter"
-              :sharedOnlyFilter="filterStore.sharedOnlyFilter"
-              :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
-              :filePathPrefixFilter="
-                selectionStore.selectedFolderFilter?.pathPrefix ?? null
-              "
-              :importSourceFolderFilter="
-                selectionStore.selectedFolderFilter?.importSourceFolder ?? null
-              "
-              :allPicturesId="ALL_PICTURES_ID"
-              :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-              :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-              :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
-              :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
-              :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
-              :wsTagUpdate="wsStore.wsTagUpdate"
-              @filter-tag="
-                (tag) => {
-                  if (filterStore.tagFilter.includes(tag))
-                    filterStore.tagFilter = filterStore.tagFilter.filter(
-                      (t) => t !== tag,
-                    );
-                  else filterStore.tagFilter = [...filterStore.tagFilter, tag];
-                }
-              "
-              @filter-tags="
-                (tags) => {
-                  const allPresent = tags.every((t) =>
-                    filterStore.tagFilter.includes(t),
+          </div>
+        </main>
+        <!-- Peer of the left sidebar, NOT nested in the grid column: both rails
+             then span the full height of `.file-manager` and nothing stacked in
+             the main area can push one rail down without the other. -->
+          <StatsSidebar
+            ref="statsSidebarRef"
+            :open="sidebarStore.statsOpen"
+            :backendUrl="BACKEND_URL"
+            :selectedCharacter="selectionStore.selectedCharacter"
+            :selectedCharacterIds="selectionStore.selectedCharacterIds"
+            :characterMode="selectionStore.characterMultiMode"
+            :selectedSet="selectionStore.selectedSet"
+            :selectedSetIds="selectionStore.selectedSetIds"
+            :setMode="selectionStore.setMultiMode"
+            :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+            :projectViewMode="projectStore.projectViewMode"
+            :selectedProjectId="projectStore.selectedProjectId"
+            :tagFilter="filterStore.tagFilter"
+            :tagRejectedFilter="filterStore.tagRejectedFilter"
+            :mediaTypeFilter="filterStore.mediaTypeFilter"
+            :minScoreFilter="filterStore.minScoreFilter"
+            :maxScoreFilter="filterStore.maxScoreFilter"
+            :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+            :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+            :faceBboxFilter="filterStore.faceBboxFilter"
+            :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+            :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+            :filePathPrefixFilter="
+              selectionStore.selectedFolderFilter?.pathPrefix ?? null
+            "
+            :importSourceFolderFilter="
+              selectionStore.selectedFolderFilter?.importSourceFolder ?? null
+            "
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+            :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+            :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+            :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+            :wsTagUpdate="wsStore.wsTagUpdate"
+            @filter-tag="
+              (tag) => {
+                if (filterStore.tagFilter.includes(tag))
+                  filterStore.tagFilter = filterStore.tagFilter.filter(
+                    (t) => t !== tag,
                   );
-                  if (allPresent)
-                    filterStore.tagFilter = filterStore.tagFilter.filter(
-                      (t) => !tags.includes(t),
-                    );
-                  else
-                    filterStore.tagFilter = [
-                      ...new Set([...filterStore.tagFilter, ...tags]),
-                    ];
-                }
-              "
-              @filter-confidence-above="
-                (entry) => {
-                  if (filterStore.tagConfidenceAboveFilter.includes(entry))
-                    filterStore.tagConfidenceAboveFilter =
-                      filterStore.tagConfidenceAboveFilter.filter(
-                        (e) => e !== entry,
-                      );
-                  else
-                    filterStore.tagConfidenceAboveFilter = [
-                      ...filterStore.tagConfidenceAboveFilter,
-                      entry,
-                    ];
-                }
-              "
-              @clear-tag-filter="
-                (tags) => {
+                else filterStore.tagFilter = [...filterStore.tagFilter, tag];
+              }
+            "
+            @filter-tags="
+              (tags) => {
+                const allPresent = tags.every((t) =>
+                  filterStore.tagFilter.includes(t),
+                );
+                if (allPresent)
                   filterStore.tagFilter = filterStore.tagFilter.filter(
                     (t) => !tags.includes(t),
                   );
-                }
-              "
-              @clear-confidence-filter="
-                (entries) => {
+                else
+                  filterStore.tagFilter = [
+                    ...new Set([...filterStore.tagFilter, ...tags]),
+                  ];
+              }
+            "
+            @filter-confidence-above="
+              (entry) => {
+                if (filterStore.tagConfidenceAboveFilter.includes(entry))
                   filterStore.tagConfidenceAboveFilter =
                     filterStore.tagConfidenceAboveFilter.filter(
-                      (e) => !entries.includes(e),
+                      (e) => e !== entry,
                     );
-                }
-              "
-              @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
-              @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
-              @update:smartScoreBucketFilter="
-                (v) => (filterStore.smartScoreBucketFilter = v)
-              "
-              @update:resolutionBucketFilter="
-                (v) => (filterStore.resolutionBucketFilter = v)
-              "
-              @toggle="
-                sidebarStore.toggleStats();
-                updateIsMobile();
-              "
-            />
-          </div>
-        </main>
+                else
+                  filterStore.tagConfidenceAboveFilter = [
+                    ...filterStore.tagConfidenceAboveFilter,
+                    entry,
+                  ];
+              }
+            "
+            @clear-tag-filter="
+              (tags) => {
+                filterStore.tagFilter = filterStore.tagFilter.filter(
+                  (t) => !tags.includes(t),
+                );
+              }
+            "
+            @clear-confidence-filter="
+              (entries) => {
+                filterStore.tagConfidenceAboveFilter =
+                  filterStore.tagConfidenceAboveFilter.filter(
+                    (e) => !entries.includes(e),
+                  );
+              }
+            "
+            @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
+            @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
+            @update:smartScoreBucketFilter="
+              (v) => (filterStore.smartScoreBucketFilter = v)
+            "
+            @update:resolutionBucketFilter="
+              (v) => (filterStore.resolutionBucketFilter = v)
+            "
+            @toggle="
+              sidebarStore.toggleStats();
+              updateIsMobile();
+            "
+          />
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
         :backendUrl="BACKEND_URL"
         @close="reviewSessionsStore.overlayOpen = false"
       />
+      <!-- The notice surface. LAST child of `.app-viewport` on purpose
+           (notice-surface.md §8): its buttons then come last in DOM order, so a
+           keyboard user reaches them after the page content, not before it. It
+           is global — it renders over the lightbox, the review overlay and
+           Settings — so it must not be nested inside the grid column. -->
+      <NoticeHost :on-dark="noticeOnDark" />
     </div>
     <button
       v-show="

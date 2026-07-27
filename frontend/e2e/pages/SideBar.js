@@ -13,6 +13,11 @@ export class SideBar {
     this.setItems = page.locator('.sidebar-set-item')
     this.characterItems = page.locator('.sidebar-character-group .sidebar-list-item')
     this.projectsTab = page.locator('.sidebar-view-tab', { hasText: 'Projects' }).first()
+    // The other two stateless view tabs (SideBar.vue .sidebar-view-tab row):
+    // switching between Global / Projects / Folders is sidebar-display only and
+    // must never push a route or move the grid (see the stateless-tabs spec).
+    this.globalTab = page.locator('.sidebar-view-tab', { hasText: 'Global' }).first()
+    this.foldersTab = page.locator('.sidebar-view-tab', { hasText: 'Folders' }).first()
     this.projectRows = page.locator('.sidebar-project-tree-row')
     // Right-click context menu (teleported to <body>) and the trailing lock
     // indicator that a set row renders when the set is locked (SideBar.vue:

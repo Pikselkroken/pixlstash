@@ -133,6 +133,8 @@ class TaskRunner:
                 totals.append(int(float(value)))
             return sum(totals)
         except Exception:
+            # nvidia-smi absent/failing is normal on CPU-only hosts; 0 (no VRAM)
+            # IS the documented answer, so logging it would be routine noise.
             return 0
 
     @classmethod
@@ -174,6 +176,7 @@ class TaskRunner:
                     line_pid = int(parts[0])
                     line_used_mb = int(float(parts[1]))
                 except Exception:
+                    # Per-line parse guard: skip an unparseable nvidia-smi row.
                     continue
                 if line_pid == pid:
                     used_mb += line_used_mb
@@ -217,14 +220,20 @@ class TaskRunner:
             )
             return 0
         if estimated_mb > budget_mb:
+            # A single task larger than the whole budget can never satisfy the
+            # gate, but it should still not stampede over tasks already in flight.
+            # Fall through into the wait loop instead of returning immediately:
+            # the loop serializes it (waits for reserved_mb to reach 0) and then
+            # runs it alone via the escape hatch, reserving its estimate so later
+            # tasks queue behind it rather than piling on top.
             logger.warning(
-                "Task %s (%s) estimated VRAM %sMB exceeds configured budget %sMB; running anyway.",
+                "Task %s (%s) estimated VRAM %sMB exceeds configured budget %sMB; "
+                "will run alone once the GPU is otherwise idle.",
                 task.id,
                 task.type,
                 estimated_mb,
                 budget_mb,
             )
-            return 0
 
         wait_started_at = time.perf_counter()
         last_log_s = -1.0

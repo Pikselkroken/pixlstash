@@ -160,3 +160,30 @@ def test_smart_score_consistency():
         server.vault.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_builtin_anchors_load_from_package_data():
+    """The shipped built-in anchors must actually load.
+
+    They are the cold-start signal for a library with no user ratings yet, so
+    when the path is wrong the score silently degrades instead of failing:
+    ``_load_builtin_anchors`` just returns empty lists. That is what happened
+    when the Phase 2 scoring split moved this module one directory deeper and
+    the relative path was carried over verbatim, and nothing caught it because
+    an empty anchor set is indistinguishable from a library with no ratings.
+    """
+    from pixlstash.scoring.smart_score import _load_builtin_anchors
+
+    _load_builtin_anchors.cache_clear()
+    try:
+        good, bad = _load_builtin_anchors()
+    finally:
+        _load_builtin_anchors.cache_clear()
+
+    assert good, "built-in good anchors failed to load from package data"
+    assert bad, "built-in bad anchors failed to load from package data"
+    for anchor in (*good, *bad):
+        assert anchor.image_embedding.ndim == 1, (
+            f"anchor embedding must be a single vector, got shape "
+            f"{anchor.image_embedding.shape}"
+        )

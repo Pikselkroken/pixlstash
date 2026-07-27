@@ -1,7 +1,7 @@
 {
   "name": "pixlstash-frontend",
   "private": true,
-  "version": "1.7.1",
+  "version": "1.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
+    "audit:contrast": "node src/utils/contrastAudit.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -41,5 +42,9 @@
     "vite": "^8.0.16",
     "vitest": "^4.1.2",
     "vue-eslint-parser": "^10.4.0"
+  },
+  "overrides": {
+    "brace-expansion@5": "^5.0.8",
+    "js-beautify": "^2.0.3"
   }
 }

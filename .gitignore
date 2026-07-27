@@ -33,4 +33,4 @@ test-results
 .build-cache/
 .container-home/
 docs/macos-signing-setup.md
-docs/reviews/desktop-backend-first-run.md
+docs/reviews/

@@ -646,6 +646,8 @@ class JoyCaptionPlugin(TaggerPlugin):
             )
             return result is None
         except Exception:
+            # Best-effort cache probe: if we cannot tell, assume the model needs
+            # downloading. True IS the safe default; download() surfaces real errors.
             return True
 
     def download(

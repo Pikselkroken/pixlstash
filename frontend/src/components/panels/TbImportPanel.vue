@@ -109,7 +109,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { listProjects } from "../../api/projects";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
@@ -204,8 +204,8 @@ watch(
 
 async function fetchProjects() {
   try {
-    const res = await apiClient.get("/projects");
-    projects.value = Array.isArray(res.data) ? res.data : [];
+    const rows = await listProjects();
+    projects.value = Array.isArray(rows) ? rows : [];
   } catch (err) {
     console.warn("Failed to load projects for import menu", err);
     projects.value = [];

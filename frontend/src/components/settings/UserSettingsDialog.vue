@@ -7,6 +7,7 @@ import AccountSection from "./AccountSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComputeSection from "./ComputeSection.vue";
+import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
 import WorkflowsSection from "./WorkflowsSection.vue";
@@ -25,6 +26,14 @@ const props = defineProps({
   themeMode: { type: String, default: "light" },
   checkForUpdates: { type: Boolean, default: null },
   showKeyboardHint: { type: Boolean, default: true },
+  thumbnailMode: { type: String, default: "square" },
+  /**
+   * Nav entry to land on when the dialog opens. Lets a caller deep-link to a
+   * setting from where it matters (e.g. the scrapheap header's "change" link).
+   * Falls back to Appearance when empty or when the entry is not visible in
+   * this session (read-only / non-desktop).
+   */
+  initialTab: { type: String, default: "" },
 });
 
 const emit = defineEmits([
@@ -38,6 +47,7 @@ const emit = defineEmits([
   "update:check-for-updates",
   "update:show-keyboard-hint",
   "update:public-url",
+  "update:thumbnail-mode",
 ]);
 
 const dialogOpen = computed({
@@ -75,6 +85,12 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
+      id: "scrapheap",
+      icon: "delete-clock-outline",
+      label: "Scrapheap",
+      show: !isReadOnly.value,
+    },
+    {
       id: "snapshots",
       icon: "camera-outline",
       label: "Snapshots",
@@ -104,9 +120,14 @@ const navItems = computed(() =>
 watch(
   () => dialogOpen.value,
   (isOpen) => {
-    if (isOpen) {
-      settingsTab.value = "appearance";
-    }
+    if (!isOpen) return;
+    // Only honour a requested tab that actually exists in this session — a
+    // read-only or browser session hides several entries, and landing on a
+    // hidden pane would show an empty dialog body.
+    const requested = props.initialTab;
+    settingsTab.value = navItems.value.some((n) => n.id === requested)
+      ? requested
+      : "appearance";
   },
 );
 </script>
@@ -154,12 +175,14 @@ watch(
           :theme-mode="props.themeMode"
           :date-format="props.dateFormat"
           :show-keyboard-hint="props.showKeyboardHint"
+          :thumbnail-mode="props.thumbnailMode"
           @update:sidebar-thumbnail-size="
             emit('update:sidebar-thumbnail-size', $event)
           "
           @update:theme-mode="emit('update:theme-mode', $event)"
           @update:date-format="emit('update:date-format', $event)"
           @update:show-keyboard-hint="emit('update:show-keyboard-hint', $event)"
+          @update:thumbnail-mode="emit('update:thumbnail-mode', $event)"
         />
       </div>
       <div
@@ -189,6 +212,13 @@ watch(
           :open="dialogOpen"
           @update:comfyui-configured="emit('update:comfyui-configured', $event)"
         />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'scrapheap'"
+        class="settings-pane"
+      >
+        <ScrapheapSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"

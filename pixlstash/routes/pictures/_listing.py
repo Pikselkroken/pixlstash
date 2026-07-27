@@ -28,7 +28,7 @@ from pixlstash.picture_scoring import (
     count_pictures_by_character_likeness,
     find_pictures_by_character_likeness_sql,
 )
-from pixlstash.utils.service.serialization_utils import safe_model_dict
+from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     fetch_scope_allowed_picture_ids,
@@ -40,6 +40,7 @@ from pixlstash.utils.service.filter_helpers import (
 from pixlstash.utils.query.predicate_filter import PredicateFilter
 
 from ._helpers import (
+    _enrich_scrapheap_retention,
     _enrich_stack_counts,
     _get_hidden_tags_from_request,
 )
@@ -122,6 +123,47 @@ class GridPicture(BaseModel):
     file_path: str | None = Field(
         None,
         description="Path relative to the image root (omitted when grid_lite=true).",
+    )
+    purge_at: str | None = Field(
+        None,
+        description=(
+            "Scrapheap view only (`only_deleted=true`). ISO 8601 UTC instant at "
+            "which this picture will be permanently deleted by the retention "
+            "auto-purge, already including the grace floor that a retention "
+            "reduction puts under every deadline. `null` means it will never "
+            "be auto-purged — because retention is set to Never, because the "
+            "picture is `auto_purge_exempt`, or because it carries no "
+            "soft-delete timestamp. Render the countdown from this value; do "
+            "not recompute it client-side."
+        ),
+        examples=["2026-08-21T09:15:00+00:00"],
+    )
+    auto_purge_exempt: bool | None = Field(
+        None,
+        description=(
+            "Scrapheap view only (`only_deleted=true`). True when the retention "
+            "sweep will never destroy this picture, so `purge_at` is null. Show "
+            "an exemption badge instead of a countdown; see "
+            "`auto_purge_exempt_reason` for which badge."
+        ),
+        examples=[False],
+    )
+    auto_purge_exempt_reason: str | None = Field(
+        None,
+        description=(
+            "Scrapheap view only (`only_deleted=true`). Why the picture is "
+            "exempt, or null when it is not:\n\n"
+            "- `protected` — a reference-folder original with "
+            "`allow_delete_file=false`. Permanent and intrinsic; only the "
+            "manual, consent-gated delete-forever can destroy it.\n"
+            "- `locked` — frozen by a locked picture-set (directly, or via a "
+            "stack sibling). Clearable: unlock the set and the picture rejoins "
+            "the normal retention schedule.\n\n"
+            "When both apply, `protected` wins — it is the stronger reason, and "
+            "labelling such a picture merely 'locked' would understate why it "
+            "is being kept."
+        ),
+        examples=["locked"],
     )
 
 
@@ -775,6 +817,8 @@ def select_pictures_for_listing(
             return [pic.get("id") for pic in pics if pic.get("id") is not None]
         if stack_leaders_only:
             pics = _enrich_stack_counts(server, pics)
+        if only_deleted:
+            pics = _enrich_scrapheap_retention(server, pics)
         return pics
     if character_id == "UNASSIGNED":
         # Token scope enforcement (BOLA): this branch bypasses the set/character/
@@ -1207,6 +1251,11 @@ def select_pictures_for_listing(
             d["text_score"] = round(ts, 3) if ts is not None and ts >= 0 else None
     if stack_leaders_only:
         result = _enrich_stack_counts(server, result)
+    if only_deleted:
+        # Scrapheap view: hand the client a server-computed deadline and the
+        # protected-exempt flag so the countdown and the badge never re-derive
+        # the retention grace maths client-side.
+        result = _enrich_scrapheap_retention(server, result)
 
     if guest_session_id and result:
         picture_ids_set = {d["id"] for d in result if "id" in d}

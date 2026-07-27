@@ -1,6 +1,10 @@
 import { ref } from "vue";
 import { defineStore } from "pinia";
-import { apiClient } from "../utils/apiClient";
+import * as snapshotsApi from "../api/snapshots";
+import {
+  getSnapshotSettings,
+  setDailySnapshotsEnabled as patchDailySnapshotsEnabled,
+} from "../api/serverConfig";
 
 export const useSnapshotsStore = defineStore("snapshots", () => {
   // ── State ─────────────────────────────────────────────────────────────────
@@ -22,8 +26,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     loading.value = true;
     error.value = null;
     try {
-      const res = await apiClient.get("/api/v1/snapshots");
-      snapshots.value = res.data;
+      snapshots.value = await snapshotsApi.listSnapshots();
     } catch (err) {
       error.value =
         err?.response?.data?.detail || err?.message || "Failed to load snapshots.";
@@ -34,8 +37,8 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
 
   async function fetchStatus() {
     try {
-      const res = await apiClient.get("/api/v1/snapshots/status");
-      activeJob.value = res.data?.active_job ?? null;
+      const status = await snapshotsApi.getSnapshotStatus();
+      activeJob.value = status?.active_job ?? null;
     } catch (err) {
       // Non-fatal; leave activeJob as-is.
       console.warn("Failed to fetch snapshot status:", err);
@@ -43,9 +46,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
   }
 
   async function createSnapshot(label) {
-    const body = label ? { label } : {};
-    const res = await apiClient.post("/api/v1/snapshots", body);
-    const cp = res.data;
+    const cp = await snapshotsApi.createSnapshot(label);
     // Prepend to local list (newest first).
     snapshots.value = [cp, ...snapshots.value];
     return cp;
@@ -57,9 +58,9 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     const prev = idx >= 0 ? snapshots.value[idx].label : undefined;
     if (idx >= 0) snapshots.value[idx] = { ...snapshots.value[idx], label };
     try {
-      const res = await apiClient.patch(`/api/v1/snapshots/${id}`, { label });
-      if (idx >= 0) snapshots.value[idx] = res.data;
-      return res.data;
+      const updated = await snapshotsApi.renameSnapshot(id, label);
+      if (idx >= 0) snapshots.value[idx] = updated;
+      return updated;
     } catch (err) {
       // Roll back optimistic update.
       if (idx >= 0) snapshots.value[idx] = { ...snapshots.value[idx], label: prev };
@@ -68,22 +69,15 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
   }
 
   async function deleteSnapshot(id) {
-    await apiClient.delete(`/api/v1/snapshots/${id}`);
+    await snapshotsApi.deleteSnapshot(id);
     snapshots.value = snapshots.value.filter((c) => c.id !== id);
   }
 
   async function previewRestore(snapshotId, resources) {
     if (resources && resources.length > 0) {
-      const res = await apiClient.post(
-        `/api/v1/snapshots/${snapshotId}/restore/preview/batch`,
-        { resources }
-      );
-      return res.data;
+      return snapshotsApi.previewRestoreBatch(snapshotId, resources);
     }
-    const res = await apiClient.get(
-      `/api/v1/snapshots/${snapshotId}/restore/preview`
-    );
-    return res.data;
+    return snapshotsApi.previewRestore(snapshotId);
   }
 
   async function executeRestore(
@@ -92,20 +86,13 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     { confirmRestoreDependencies = false } = {},
   ) {
     if (resources && resources.length > 0) {
-      const res = await apiClient.post(
-        `/api/v1/snapshots/${snapshotId}/restore/batch`,
-        {
-          resources,
-          confirm_restore_dependencies: confirmRestoreDependencies,
-        }
+      return snapshotsApi.executeRestoreBatch(
+        snapshotId,
+        resources,
+        confirmRestoreDependencies,
       );
-      return res.data;
     }
-    const res = await apiClient.post(
-      `/api/v1/snapshots/${snapshotId}/restore`,
-      {}
-    );
-    return res.data;
+    return snapshotsApi.executeRestore(snapshotId);
   }
 
   /**
@@ -121,7 +108,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
 
   // ── WebSocket event handlers (called from App.vue) ─────────────────────────
 
-  function onSnapshotCreated(payload) {
+  function onSnapshotCreated() {
     // Refresh the full list so ordering / counts are correct.
     fetchSnapshots();
   }
@@ -142,7 +129,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     };
   }
 
-  function onRestoreCompleted(payload) {
+  function onRestoreCompleted() {
     activeJob.value = null;
     // Refresh snapshot list in case a safety OPPORTUNISTIC snapshot was
     // created during the restore.
@@ -164,8 +151,8 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
 
   async function fetchSnapshotSettings() {
     try {
-      const res = await apiClient.get("/api/v1/server-config/snapshots");
-      dailySnapshotsEnabled.value = res.data?.daily_snapshots ?? true;
+      const settings = await getSnapshotSettings();
+      dailySnapshotsEnabled.value = settings?.daily_snapshots ?? true;
     } catch (err) {
       // Non-fatal; leave current value as-is.
       console.warn("Failed to fetch snapshot settings:", err);
@@ -176,9 +163,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     const previous = dailySnapshotsEnabled.value;
     dailySnapshotsEnabled.value = enabled; // optimistic update
     try {
-      await apiClient.patch("/api/v1/server-config/snapshots", {
-        daily_snapshots: enabled,
-      });
+      await patchDailySnapshotsEnabled(enabled);
     } catch (err) {
       dailySnapshotsEnabled.value = previous; // roll back
       throw err;

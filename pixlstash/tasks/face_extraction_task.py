@@ -4,6 +4,7 @@ import platform
 import threading
 import time
 import warnings
+import weakref
 import torch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
@@ -64,6 +65,15 @@ class FaceExtractionTask(BaseTask):
     _global_insightface_app = None
     _global_cpu_insightface_app = None
     _cpu_insightface_lock = threading.Lock()
+    # Live task instances that hold a reference to an InsightFace app. The app is
+    # an onnxruntime session whose VRAM lives in ORT's own CUDA arena (torch's
+    # empty_cache cannot free it) — the arena is only returned to the driver when
+    # the last reference to the session is dropped and it is garbage-collected.
+    # Nulling only the class globals is not enough: each running task also holds
+    # self._insightface_app pointing at the same object, so release must clear
+    # those too or nvidia-smi never moves. WeakSet so we never keep a task alive.
+    _app_instances: "weakref.WeakSet" = weakref.WeakSet()
+    _app_instances_lock = threading.Lock()
     # Number of FaceExtractionTask instances currently executing _run_task.
     # Models are only released when this drops to zero so paired tasks
     # (submitted together by the planner) do not pay a reload cost.
@@ -264,13 +274,25 @@ class FaceExtractionTask(BaseTask):
         if callable(fn):
             try:
                 return max(0, int(fn()))
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "FaceExtractionTask: VRAM estimate failed; assuming 0: %s", exc
+                )
                 return 0
         return 0
 
     @classmethod
     def release_detection_models(cls):
+        # Drop the class globals AND every live task's per-instance reference.
+        # ORT frees the CUDA arena only when the session is garbage-collected,
+        # so a single surviving reference keeps the VRAM resident and makes the
+        # "keep models in memory" toggle appear to do nothing in nvidia-smi.
         cls._global_insightface_app = None
+        cls._global_cpu_insightface_app = None
+        with cls._app_instances_lock:
+            for inst in list(cls._app_instances):
+                inst._insightface_app = None
+            cls._app_instances.clear()
 
         gc.collect()
         if torch.cuda.is_available():
@@ -372,12 +394,19 @@ class FaceExtractionTask(BaseTask):
         self._insightface_app = FaceExtractionTask.get_or_init_insightface(
             self._engine, cpu_spillover=self._cpu_spillover_enabled
         )
+        # Track this holder so release_detection_models can drop every reference
+        # to the ORT session, not just the class global.
+        with FaceExtractionTask._app_instances_lock:
+            FaceExtractionTask._app_instances.add(self)
 
     @staticmethod
     def _get_loaded_relationship(obj, name):
         try:
             state = sa_inspect(obj)
         except Exception:
+            # Deliberate best-effort probe (allowlisted in the except-hygiene
+            # guardrail): a non-inspectable object simply is not a loaded
+            # relationship, so (False, None) IS the answer, not an error to log.
             return False, None
         attr = state.attrs.get(name)
         if attr is None:
@@ -824,55 +853,62 @@ class FaceExtractionTask(BaseTask):
                 )
         loop_s = time.time() - _loop_start
 
-        # ── Parallel thumbnail generation ─────────────────────────────────
-        # All inference is already done; thumbnail generation is pure CPU work
-        # (cv2 crop + resize + JPEG encode).  Run it across a thread pool so the
-        # ~0.3 s serial cost becomes ~0.3 s / n_workers.
+        # ── Square-crop rectangle update ──────────────────────────────────
+        # The whole-frame AR bitmap is face-INDEPENDENT, so detecting faces does
+        # not change the thumbnail file (written at import / by the finder). We
+        # only recompute the face-weighted SQUARE-CROP rectangle in bitmap space —
+        # pure geometry from the exif-corrected source dimensions and the detected
+        # boxes, with no image re-encode or file write.
         if pending_thumb_work:
             _thumb_gen_start = time.time()
-            thumb_results: dict[int, tuple] = {}  # pic_id → (bytes, crop, src_path)
-            with ThreadPoolExecutor(max_workers=self._PRELOAD_WORKERS) as pool:
-                futures = {
-                    pool.submit(
-                        FaceUtils.generate_face_weighted_thumbnail_with_crop,
-                        img,
-                        bboxes,
-                        256,
-                        (256, 256),
-                    ): (pic_id, src_path, inv_scale)
-                    for pic_id, src_path, img, bboxes, inv_scale in pending_thumb_work
-                }
-                for fut in as_completed(futures):
-                    pic_id, src_path, inv_scale = futures[fut]
-                    try:
-                        tb, tc = fut.result()
-                    except Exception as exc:
-                        logger.warning(
-                            "Thumbnail generation failed for picture %s: %s",
-                            pic_id,
-                            exc,
-                        )
-                        continue
-                    if not tb or not tc:
-                        continue
-                    if inv_scale != 1.0:
-                        tc = {
-                            "left": int(round(tc["left"] * inv_scale)),
-                            "top": int(round(tc["top"] * inv_scale)),
-                            "side": int(round(tc["side"] * inv_scale)),
-                        }
-                    thumb_results[pic_id] = (tb, tc, src_path)
-            thumb_gen_s += time.time() - _thumb_gen_start
-
-            _thumb_write_start = time.time()
-            for pic_id, (tb, tc, src_path) in thumb_results.items():
-                saved = ImageUtils.write_thumbnail_bytes(
-                    self._db.image_root, src_path, tb
+            for (
+                pic_id,
+                _src_path,
+                img,
+                bboxes_loaded,
+                inv_scale,
+            ) in pending_thumb_work:
+                try:
+                    loaded_h, loaded_w = img.shape[:2]
+                except Exception as exc:
+                    logger.debug(
+                        "FaceExtractionTask: skipping square-crop update for "
+                        "picture %s; unreadable image array: %s",
+                        pic_id,
+                        exc,
+                    )
+                    continue
+                if loaded_w <= 0 or loaded_h <= 0:
+                    continue
+                # Recover exif-corrected source dims (the space the boxes live in)
+                # from the loaded image and its inverse scale; the bitmap is a
+                # uniform scale of the same source, so its aspect ratio matches.
+                src_w = max(1, int(round(loaded_w * inv_scale)))
+                src_h = max(1, int(round(loaded_h * inv_scale)))
+                dims = ImageUtils.thumbnail_bitmap_size(src_w, src_h)
+                if dims is None:
+                    continue
+                bmp_w, bmp_h = dims
+                scale = bmp_w / float(loaded_w)
+                faces_bitmap = [
+                    [v * scale for v in b] for b in bboxes_loaded if b and len(b) == 4
+                ]
+                crop_x, crop_y, crop_side = FaceUtils.square_crop_rect(
+                    bmp_w, bmp_h, faces_bitmap
                 )
-                if not saved:
-                    logger.warning("Failed to persist thumbnail for picture %s", pic_id)
-                bulk_thumbnail_crops.append((pic_id, tc))
-            thumb_write_s += time.time() - _thumb_write_start
+                bulk_thumbnail_crops.append(
+                    (
+                        pic_id,
+                        {
+                            "width": bmp_w,
+                            "height": bmp_h,
+                            "x": crop_x,
+                            "y": crop_y,
+                            "side": crop_side,
+                        },
+                    )
+                )
+            thumb_gen_s += time.time() - _thumb_gen_start
 
         if profile_enabled:
             elapsed = time.time() - batch_start
@@ -928,9 +964,11 @@ class FaceExtractionTask(BaseTask):
                 if picture is None:
                     continue
                 if crop:
-                    picture.thumbnail_left = crop.get("left")
-                    picture.thumbnail_top = crop.get("top")
-                    picture.thumbnail_side = crop.get("side")
+                    picture.thumbnail_width = crop.get("width")
+                    picture.thumbnail_height = crop.get("height")
+                    picture.square_crop_x = crop.get("x")
+                    picture.square_crop_y = crop.get("y")
+                    picture.square_crop_side = crop.get("side")
                 session.add(picture)
             try:
                 session.commit()

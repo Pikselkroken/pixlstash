@@ -47,10 +47,11 @@
  *   maybeRefreshOverlayForComfyui()    - Call after each grid fetch to update overlay.
  *   clientId                           - Ref<string|null> with the current client id.
  *   progress                           - Reactive progress object { visible, status, percent, message }.
- *   progressPercent                    - Computed clamped percentage (0-100).
  */
-import { ref, reactive, computed, onUnmounted, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { ref, reactive, onUnmounted, watch } from "vue";
+import { abortRun } from "../../api/comfyui";
+import { getPictureMetadata } from "../../api/pictures";
+import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 
@@ -137,15 +138,6 @@ let comfyuiWs = null;
 let comfyuiHideTimer = null;
 let comfyuiWatchdogTimer = null;
 const comfyuiRefreshRetryTimers = new Map();
-
-// ---------------------------------------------------------------------------
-// Computed
-// ---------------------------------------------------------------------------
-
-const progressPercent = computed(() => {
-  const percent = Number(progress.percent) || 0;
-  return Math.min(100, Math.max(0, Math.round(percent)));
-});
 
 // ---------------------------------------------------------------------------
 // Debug helpers
@@ -323,10 +315,10 @@ function hasComfyuiRefreshRetry(pictureId) {
 async function fetchStackIdForPicture(pictureId) {
   if (!pictureId || !props.backendUrl) return null;
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${pictureId}/metadata`,
-    );
-    const stackId = res.data?.stack_id ?? res.data?.stackId ?? null;
+    const data = await getPictureMetadata(pictureId, {
+      baseUrl: props.backendUrl,
+    });
+    const stackId = data?.stack_id ?? data?.stackId ?? null;
     return stackId != null ? String(stackId) : null;
   } catch (err) {
     logComfyuiDebug("stack-id-fetch-failed", {
@@ -340,11 +332,10 @@ async function fetchStackIdForPicture(pictureId) {
 async function fetchStackMembersForOverlay(stackId) {
   if (!stackId || !props.backendUrl) return [];
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/stacks/${stackId}/pictures`,
-      { params: { fields: "grid" } },
-    );
-    return Array.isArray(res.data) ? res.data : [];
+    const rows = await listStackPictures(stackId, {
+      baseUrl: props.backendUrl,
+    });
+    return Array.isArray(rows) ? rows : [];
   } catch (err) {
     logComfyuiDebug("stack-members-fetch-failed", {
       stackId,
@@ -778,7 +769,7 @@ async function abortComfyui() {
   if (isAborting.value) return;
   isAborting.value = true;
   try {
-    await apiClient.post(`${props.backendUrl}/comfyui/abort`);
+    await abortRun({ baseUrl: props.backendUrl });
   } catch (err) {
     // Best-effort abort — ignore errors and still reset local state
     logComfyuiDebug("abort-error", { error: err?.message || String(err) });
@@ -1032,9 +1023,7 @@ defineExpose({
   maybeRefreshOverlayForComfyui,
   clientId,
   progress,
-  progressPercent,
   comfyuiPendingOverlayRefresh,
-  abortComfyui,
 });
 </script>
 

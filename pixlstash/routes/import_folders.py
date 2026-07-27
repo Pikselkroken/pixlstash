@@ -146,7 +146,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ImportFolderCreateRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
 
         folder = os.path.normpath(payload.folder)
         host_path = _normalize_optional_host_path(payload.host_path)
@@ -220,7 +219,6 @@ def create_router(server) -> APIRouter:
         request: Request,
         payload: ImportFolderUpdateRequest = Body(...),
     ):
-        server.auth.require_user_id(request)
 
         def update(session: Session):
             folder = session.get(ImportFolder, folder_id)
@@ -259,7 +257,6 @@ def create_router(server) -> APIRouter:
         response_model=ImportFolderDeleteResponse,
     )
     def delete_import_folder(folder_id: int, request: Request):
-        server.auth.require_user_id(request)
 
         def remove(session: Session):
             folder = session.get(ImportFolder, folder_id)

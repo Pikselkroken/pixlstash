@@ -247,6 +247,98 @@ def strip_env(python_dir: Path) -> None:
     log(f"removed {removed} cache/test directories")
 
 
+# Longest path allowed inside the runtime, relative to the python/ root. Windows
+# caps a classic (non-\\?\-prefixed) path at 259 usable characters, and neither
+# NSIS nor electron-builder's installer/uninstaller are long-path aware. The
+# worst prefix the runtime gets moved under is the OLD UNINSTALLER's atomic
+# rename during an update: %TEMP%\ns?????.tmp\old-install\resources\python\...
+# — about 90 characters with a 20-character Windows user name. 259 - 90, with
+# margin, gives the 150 budget. torch blows this today: its dist-info ships
+# vendored license texts nested ~190 characters deep
+# (…\kineto\…\dynolog\…\prometheus-cpp\…\civetweb\…\duktape-1.5.2\LICENSE.txt),
+# which made the 1.7.0-rc.5 uninstaller's rename overflow MAX_PATH, abort with
+# exit code 2, and hard-fail every subsequent over-the-top update.
+MAX_RELATIVE_PATH = 150
+
+
+def flatten_deep_license_trees(python_dir: Path) -> None:
+    """Cap runtime path depth so Windows installs/updates never hit MAX_PATH.
+
+    Files whose path relative to ``python_dir`` exceeds ``MAX_RELATIVE_PATH``
+    are only tolerated inside a ``*.dist-info/licenses`` tree (vendored license
+    texts — torch is the known offender). Each offending top-level subtree under
+    ``licenses/`` is concatenated into a single ``<subtree>-CONSOLIDATED.txt``
+    beside it (every text is kept, with its original relative path as a header,
+    so license compliance is preserved) and the deep tree is removed. This makes
+    the package's pip RECORD stale for those entries, which pip only notices as
+    a warning on uninstall/upgrade of that dist — never at runtime. Any over-long
+    file OUTSIDE a licenses tree fails the build so a new offender is caught
+    here, at build time, instead of aborting user updates in the field.
+    """
+    root = python_dir.resolve()
+    over = [
+        p
+        for p in root.rglob("*")
+        if p.is_file() and len(str(p.relative_to(root))) > MAX_RELATIVE_PATH
+    ]
+    if not over:
+        log(f"path-depth check OK (all paths <= {MAX_RELATIVE_PATH} chars)")
+        return
+
+    unexpected: list[Path] = []
+    subtrees: set[Path] = set()
+    for p in over:
+        rel_parts = p.relative_to(root).parts
+        subtree = None
+        for i in range(1, len(rel_parts) - 1):
+            if rel_parts[i] == "licenses" and rel_parts[i - 1].endswith(".dist-info"):
+                subtree = root.joinpath(*rel_parts[: i + 2])
+                break
+        if subtree is None:
+            unexpected.append(p)
+        else:
+            subtrees.add(subtree)
+
+    if unexpected:
+        listing = "\n  ".join(str(p.relative_to(root)) for p in unexpected[:10])
+        raise SystemExit(
+            f"{len(unexpected)} file(s) exceed {MAX_RELATIVE_PATH} chars relative "
+            f"to the runtime root and are not vendored license texts, so they "
+            f"cannot be flattened automatically. They would break Windows "
+            f"installs/updates (MAX_PATH). Offenders:\n  {listing}"
+        )
+
+    for subtree in sorted(subtrees):
+        target = subtree.parent / f"{subtree.name}-CONSOLIDATED.txt"
+        files = sorted(p for p in subtree.rglob("*") if p.is_file())
+        with target.open("w", encoding="utf-8") as out:
+            out.write(
+                "Consolidated license texts. The originals lived under the "
+                "directory tree named below; it was flattened into this file "
+                "because its paths exceeded the Windows path-length limit.\n"
+            )
+            for p in files:
+                out.write(f"\n{'=' * 70}\n{p.relative_to(subtree.parent)}\n{'=' * 70}\n")
+                out.write(p.read_text(encoding="utf-8", errors="replace"))
+        shutil.rmtree(subtree)
+        log(
+            f"flattened {len(files)} deep license file(s): "
+            f"{subtree.relative_to(root)} -> {target.relative_to(root)}"
+        )
+
+    still_over = [
+        p
+        for p in root.rglob("*")
+        if p.is_file() and len(str(p.relative_to(root))) > MAX_RELATIVE_PATH
+    ]
+    if still_over:
+        listing = "\n  ".join(str(p.relative_to(root)) for p in still_over[:10])
+        raise SystemExit(
+            f"path-depth check still failing after flattening:\n  {listing}"
+        )
+    log(f"path-depth check OK after flattening (<= {MAX_RELATIVE_PATH} chars)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--wheel", required=True, type=Path)
@@ -308,6 +400,14 @@ def main() -> int:
         py = interpreter(python_dir, args.os)
         populate_env(py, args.wheel, args.accel, cache_dir)
         strip_env(python_dir)
+
+    # Both branches, Windows only: a runtime must never ship over-long paths
+    # (MAX_PATH breaks installs/updates — see flatten_deep_license_trees).
+    # macOS/Linux have no such limit and their torch builds legitimately ship
+    # deep non-license paths (e.g. ARM64 KleidiAI headers under
+    # torch/include/kai/ukernels/), so the check would only false-positive there.
+    if args.os == "win":
+        flatten_deep_license_trees(python_dir)
 
     runtime = {
         "accel": args.accel,

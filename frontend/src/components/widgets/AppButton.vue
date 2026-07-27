@@ -113,10 +113,12 @@ defineProps({
   filter: brightness(1.08);
 }
 
-/* Danger — destructive. */
+/* Danger — destructive. `on-error`, not a hardcoded #fff: white holds 4.86:1 on
+   the light `error` fill but only 3.68:1 on the brighter dark-theme one, so the
+   authored pair flips to the warm near-black there (4.68:1). */
 .app-btn--danger {
   background: rgb(var(--v-theme-error));
-  color: #fff;
+  color: rgb(var(--v-theme-on-error));
 }
 .app-btn--danger:not(:disabled):hover {
   filter: brightness(1.08);

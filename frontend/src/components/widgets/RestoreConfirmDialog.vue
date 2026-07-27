@@ -94,11 +94,6 @@ function summaryLabel(key) {
   return labels[key] ?? key;
 }
 
-function summaryColor(key) {
-  if (key === "pictures_to_delete" || key === "missing_files") return "error";
-  return "on-surface";
-}
-
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 watch(
   () => props.open,

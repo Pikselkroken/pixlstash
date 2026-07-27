@@ -91,7 +91,7 @@
 <script setup>
 import { ref } from "vue";
 
-const props = defineProps({
+defineProps({
   items: { type: Array, default: () => [] },
   canvasStyle: { type: Object, default: () => ({}) },
   hidden: { type: Boolean, default: false },

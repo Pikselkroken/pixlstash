@@ -59,7 +59,8 @@ frontend/src/
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
-│   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid
+│   ├── useVirtualScroll.js      # Virtualised scroll window calculation for ImageGrid (uniform 'square' grid + packed 'justified' rows)
+│   ├── useJustifiedLayout.js    # Pure justified-row (Google-Photos-style) packing arithmetic used by useVirtualScroll (+ *.test.js)
 │   ├── useMultiSelect.js        # Image multi-selection (shift-click, range, touch mode)
 │   ├── useGridDragDrop.js       # Drag-and-drop reordering and import in ImageGrid
 │   ├── useStackOrdering.js      # Stack expand/collapse, reorder, visual mapping in ImageGrid
@@ -68,7 +69,30 @@ frontend/src/
 │   ├── useGridRealtimeSync.js   # WebSocket picture-event decision table for ImageGrid (see §9)
 │   ├── useBreadcrumb.js         # Current-view breadcrumb trail from route + id→name maps; shared by in-grid nav and TitleBar
 │   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
-│   └── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
+│   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
+│   └── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
+│
+├── api/                         # Backend resource modules: the only place URL strings live (see §8)
+│   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config
+│   ├── serverConfig.js          # Server-wide config topics under /server-config/
+│   ├── users.js                 # /users/me/* — account, tokens/share links, watermark
+│   ├── session.js               # /session/context — the current credential's scope
+│   ├── workers.js               # /workers/progress — background-worker poll
+│   ├── snapshots.js             # /snapshots + restore/preview sub-resources
+│   ├── reviews.js               # /reviews — tag-review session bookkeeping
+│   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
+│   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
+│   ├── comfyui.js               # /comfyui/* — workflows, run, abort
+│   ├── taggers.js               # /taggers, /tagger/label-thresholds
+│   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
+│   ├── characters.js            # /characters + faces + reference pictures
+│   ├── projects.js              # /projects + membership
+│   ├── pictureSets.js           # /picture_sets + membership + locked members
+│   ├── tags.js                  # /tags, /pictures/{id}/tags, tag predictions
+│   ├── pictureImport.js         # streaming-staging import session (was useImportService)
+│   ├── stacks.js                # /stacks — create, order, members
+│   └── pictures.js              # /pictures — reads, count, stream, searches, stats
+│                                # every module has a co-located *.test.js
 │
 ├── utils/
 │   ├── apiClient.js             # Axios instance, auth state, session/token helpers
@@ -258,6 +282,18 @@ The core image display engine. Responsibilities:
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
 
+##### Entity-assignment refetch rule (set / project / character)
+
+**An assignment refetches the grid only when the active view is scoped by the thing that changed.** Grouping membership is not part of the grid query in the global view, so assigning a picture to a set or project from **All Pictures** cannot change which pictures match or their sort position, and the card renders no set/project data, so a refetch there is pure churn (flicker, lost scroll position, lost selection). The three handlers each gate on their own view scope:
+
+| Handler | Refetches / mutates the grid when |
+|---|---|
+| `handleSetProjectForSelected` (project) | `isProjectScopedView` (`projectViewMode === "project"`, including the `project_id=UNASSIGNED` pseudo-view). Mirrors `useGridFetch._appendSelectionParams`, the only place that appends `project_id`. |
+| `handleOverlayAddedToSet` (set) | a set view where the removal drops the picture out of the view (overlap view, primary selected set), or the Unassigned view. An **add** never mutates the grid. |
+| `App.handleImagesMoved` (sidebar drag-drop onto a set / project) | `kind === "reference-folder"` or an explicit `refresh: true`; otherwise only the Unassigned view removes cards. |
+
+Every path still emits `refresh-sidebar` (the counts changed) and, under an open overlay, defers its grid work to `pendingOverlayGridRefresh` rather than restructuring the frozen filmstrip (§9.1), but only when a refetch was warranted in the first place, so a deferred redundant reload is not queued either. Regression coverage: `ImageGridProjectAssignRefresh.test.js` (both directions: no refetch in the global view, refetch still fires in the project view).
+
 #### `SideBar.vue` (~9 320 lines)
 Left navigation panel. Responsibilities:
 - Tabs: People, Sets, Projects, Folders.
@@ -266,6 +302,7 @@ Left navigation panel. Responsibilities:
 - Project tree with expandable nodes (people + sets per project); project rows are drop targets — dropping grid pictures assigns them to that project (like character/set rows).
 - Folder browser (import and reference folders).
 - Settings dialog trigger, sort selector.
+- Expansion state (People / Sets headers, the Folders-tab headers, per-project nodes and their People/Sets sub-sections, the reference-folder tree) is owned by `composables/useSidebarExpansion.js` and persisted client-side — see §10.1.
 - Embeds: `ImageImporter`, `CharacterEditor`, `PictureSetEditor`, `ProjectEditor`, `FolderEditor`, `UserSettingsDialog`.
 - Exposes: `refreshSidebar()`, `openSettingsDialog()`, `startLocalImport()`, `currentProjectId`, `openCurrentSelectionEditor()`
 - Emits: 30+ events including `select-character`, `select-set`, `select-folder`, `update:public-url`, `update:theme-mode`, `update:sort-options`, `update:hidden-tags`, `toggle-dock`, `update:project-view-mode`, etc.
@@ -357,6 +394,7 @@ Right-side statistics panel. Responsibilities:
 - Confidence-score histogram.
 - Tag-count histogram.
 - Score distribution.
+- **Agreement matrix** (`score_agreement`): a 5x4 heatmap cross-tabulating the user's star rating (rows 1-5, same order as the Score chart) against the smart-score buckets (columns, same bucketing as the Smart Score chart), **Composite encoding**: hue is a traffic light for how far apart the two scores are, opacity is the count on a sqrt ramp. The gap is measured in **smart-score points, not grid steps** — a star rating is a rounded smart score, so rating 4 covers 3.5-4.5 and matches both the 3-4 and the 4-5 bucket. Distance is from the rating to the nearest edge of the bucket's interval: 0 (green, within half a point), 1 (amber), 2 or more (red). Middle ratings therefore get a two-bucket green band and the end ratings one, which is correct rather than an artefact. Hue is redundant with cell position and every populated cell prints its count, so nothing is carried by colour alone. Status hues come from the theme's own `success`/`warning`/`error` tokens, with the matching `on-*` ink for counts on strong fills. Axis titles ("Your rating" rotated on the left, "Smart score" below) plus Pearson r and Spearman ρ, each named and tooltipped, over a rated-coverage line. A cell click is a **compound** filter (`minScoreFilter` + `maxScoreFilter` + `smartScoreBucketFilter` at once); clicking the active cell clears all three. Keyboard: the grid is one tab stop with roving `tabindex`, arrow keys/Home/End move, Enter/Space activate. **The backend deliberately computes this section with those three filters excluded** so a cell click cannot collapse the matrix to the cell you just clicked (see backend_architecture, `_agreement_scope`); the selected cell is ringed instead. Empty cells are inert, since filtering to one would empty the grid.
 - Filter controls that emit back to `App.vue`: tag filter, score range, resolution bucket, media type.
 - Mirrors the same filter props as `ImageGrid` so its stats always match the active view.
 - Key emits: `toggle`, `filter-tag`, `filter-tags`, `filter-confidence-above`, `update:minScoreFilter`, `update:maxScoreFilter`, `update:smartScoreBucketFilter`, `update:resolutionBucketFilter`
@@ -735,6 +773,8 @@ In the Electron desktop shell a custom 34px title bar (`TitleBar.vue`, `.titleba
 - **The title bar is top-most.** `.titlebar` is `position: relative; z-index: 100000`, above every in-app overlay (the highest is the import-progress modal at `99999`). It is a child of `.app-viewport` alongside the in-app overlays, so this z-index wins over all of them. Bump it if any overlay ever goes higher.
 - **Full-screen overlays anchor their top at `var(--titlebar-h)`.** Any new full-viewport modal backdrop (`position: fixed` + `inset: 0` / `top:0;left:0;right:0;bottom:0` / `100vw`×`100vh`) must start below the title bar: use `inset: var(--titlebar-h) 0 0 0` (or `top: var(--titlebar-h)` with a matching height reduction) so its own top content (close buttons, toolbars) and its centred/scrolled content land in the visible area below the bar. Current insets: `ImageOverlay` `.image-overlay` (via a global `html.is-desktop` rule), `ReviewSessionsOverlay` `.rs-overlay` / `.rs-zoom` (both `inset: var(--titlebar-h) 0 0 0`; its centred child scrims — `.rs-keys-backdrop`, `NewReviewDialog` `.rs-dialog-backdrop`, `ReviewRail` `.rs-abort-backdrop` — stay `inset: 0` because they only centre content and the title bar's higher z-index covers the scrim), `CharacterEditor` `.ref-preview-overlay`, `ImageImporter` `.import-progress-modal`, `SearchOverlay` `.search-overlay`.
 
+**Shell-anchored overlays are the exception, and belong to `.file-manager`.** The auto-hide sidebar drawer (`.sidebar-shell.sidebar-overlay`), its hover trigger, and its click-outside scrim (`.sidebar-backdrop`) are `position: absolute` inside `.file-manager` (`position: relative`), not `fixed` + `--titlebar-h`. `.file-manager` already begins below the title bar *and* below anything hoisted above it (e.g. `ThumbnailUpgradeBanner`), so anchoring structurally stays correct in every combination, whereas the manual `--titlebar-h` offset they used to carry silently painted over that banner. Do not "fix" these three into full-viewport `fixed` overlays. Their z-indexes form one local wedge between `--z-sticky` (100) and `--z-floating` (200): trigger `140` < scrim `145` < drawer `150`. The named rungs cannot express "scrim just below its own drawer", so the wedge stays raw and migrates to the ladder as a set, never one rule at a time.
+
 **Do NOT wrap overlays in a containing-block / `transform` / `contain` element to push them down.** A containing block reparents the viewport coordinate space, which breaks JS-coordinate-positioned popovers (`ImageGridContextMenu`, `AddToEntityControl`, the tag autocomplete dropdowns in `OverlayTagsPanel` / `TbTagPanel`) that position with `position: fixed` using `getBoundingClientRect()` / `clientX`. Leave those JS-positioned popovers, context menus, and tooltips untouched — they read viewport coordinates and are already correct. Inset the backdrop directly instead.
 
 ---
@@ -760,6 +800,49 @@ The Axios request interceptor rewrites all relative URLs:
 
 For `<img :src="...">` bindings and similar direct browser requests that bypass Axios, call `appendShareToken()` to add `?token=` manually.
 
+### The `src/api/` resource layer
+
+`utils/apiClient.js` is the *transport*; `src/api/` is the *contract*. Backend URL strings belong in `src/api/` and nowhere else. Components, stores, and composables import named functions from a resource module instead of calling `apiClient.<verb>('/some/url')` inline, so a contract change is a one-line edit in one file rather than a hunt across the tree.
+
+**Layout:** one module per backend resource, named after the resource, with a co-located `<module>.test.js`.
+
+| Module | Resource |
+|---|---|
+| `api/config.js` | `GET`/`PATCH /users/me/config`, the per-user config blob |
+| `api/serverConfig.js` | `/server-config/*`, the server-wide topics (scrapheap retention, snapshots) |
+| `api/users.js` | `/users/me/*`: the owner account, its tokens and share links, the watermark |
+| `api/session.js` | `/session/context` and `/sort_mechanisms` |
+| `api/workers.js` | `/workers/progress`, the background-worker poll |
+| `api/snapshots.js` | `/snapshots` and its restore/preview sub-resources |
+| `api/reviews.js` | `/reviews`, tag-review session bookkeeping |
+| `api/tagSuggestions.js` | `/tag_suggestions`, the per-card decisions |
+| `api/tagHealth.js` | `/tag_health`, the board and its cache rebuild |
+| `api/comfyui.js` | `/comfyui/*`, PixlStash's own ComfyUI proxy routes |
+| `api/taggers.js` | `/taggers` and `/tagger/label-thresholds` |
+| `api/folders.js` | `/reference-folders`, `/import-folders`, and the `/filesystem/*` picker |
+| `api/characters.js` | `/characters`, including face membership and reference pictures |
+| `api/projects.js` | `/projects` and project membership |
+| `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
+| `api/tags.js` | `/tags` vocabulary, per-picture tag edits, and tag predictions |
+| `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
+| `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
+| `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
+
+Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
+
+**Rules for modules in this directory:**
+
+- **URL strings exist only here.** No `apiClient.<verb>('/url')` outside `src/api/**`, and this is enforced: a `no-restricted-imports` ESLint rule makes importing the `apiClient` named export outside this directory an **error**, as is importing `axios` anywhere but the singleton's own definition. The exemptions are `src/utils/apiClient.js` itself and `*.test.js` files, which import it to mock the transport.
+- **Reuse the `apiClient` singleton; never import `axios` directly.** All the cross-cutting behaviour above (the `/api/v1` prefix, share-token injection, `X-Client-Id`, global 401 → logout) lives in the singleton's interceptors, so a module that re-creates an Axios instance silently loses every one of them.
+- **Every function returns `response.data`,** not the Axios envelope. Where a caller genuinely needs response metadata (e.g. the `content-disposition` filename on an export download), the module parses it and returns a structured value such as `{ blob, filename }`, so the envelope still does not escape the layer.
+- **Modules are pure transport:** no Pinia imports, no Vue reactivity, no notice/snackbar side effects. Callers own state and error presentation.
+- **Non-JSON responses stay explicit:** blob endpoints (thumbnails, overlays, exports) forward `{ responseType: "blob" }` from inside the module.
+- **Failures propagate.** A module never swallows an error into a benign-looking empty value. This is the natural home for the integration-§13 error-shape normalisation once it lands.
+
+**Testing:** each module gets a co-located `.test.js` that mocks `../utils/apiClient` and asserts verb, URL, params/body, and that the function returns the body rather than the envelope. `api/config.test.js` is the pattern.
+
+**Barrel:** there is deliberately no `src/api` barrel. Import the concrete module (`import { getUserConfig } from "@/api/config"`), which keeps imports tree-shakeable and matches the co-located-test convention. A barrel that re-exported `apiClient` would also be a hole in the lint guard above.
+
 ---
 
 ## 9. Real-time Updates (WebSocket)
@@ -770,7 +853,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 
 | `type` | Action |
 |--------|--------|
-| `pictures_changed` | Routed to `useGridRealtimeSync` (see below). If LIKENESS_GROUPS sort is active, emits `wsTagUpdate` instead. |
+| `pictures_changed` | Routed to `useGridRealtimeSync` (see below). If LIKENESS_GROUPS sort is active, emits `wsTagUpdate` instead. Also emits two overlay-only signals off `fields`: `wsSmartScoreUpdate` (field `smart_score`, or an absent/empty `fields` list) and `wsDetectionUpdate` (field `detections`). |
 | `picture_imported` | Routed to `useGridRealtimeSync` → slick insert, foreign-tab insert, or the "New pictures" pill. |
 | `characters_changed` | Immediate `refreshSidebar()`. |
 | `tags_changed` | Emits `wsTagUpdate` with the affected picture IDs **and an `external` flag** (`origin_client_id !== this tab`) so `ImageOverlay` can refresh tags for any origin, while `ImageGrid` only refreshes a tag-filtered grid in place for this tab's **own** edits; an external tag change (background tagging, another tab) raises the "View changed externally" pill instead of reshuffling the filtered view. |
@@ -801,6 +884,8 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
    - `useGridRealtimeSync` knows the overlay is open via `grid.isOverlayOpen()`. Its pill branches (`external-added`, `external-updated-sort-affecting`, `foreign-ui-added`) call `grid.markOverlayDeferredRefresh()` instead of `addPendingExternalImportIds` / `addSortChangedExternalIds`, and raise no pill. **External *removals* are NOT deferred** (they still remove immediately, to avoid a stale 404-clickable card behind the overlay).
    - `ImageGrid`'s `wsTagUpdate` watcher (active only when a tag filter is set) sets `pendingOverlayGridRefresh` instead of running `scheduleWsTagFullRefresh()` while the overlay is open. This is the path that the original bug came through: a tag edit under an active tag filter (e.g. removing "malformed hand" from the only filtered view) used to fire a streaming refetch that dropped the de-tagged picture from the grid mid-view.
    - `useGridFetch`'s **streaming** fetch path (the default for filtered views) now bails to `pendingOverlayGridRefresh` while the overlay is open. The id-list / search modes already reached the shared `overlayOpen` guard that stores results in `pendingGridImages`; the streaming branch wrote `allGridImages` through its own return paths and had to be guarded explicitly.
+
+   - The deferral covers the **grid**, not the overlay's own content. A change to something the lightbox itself renders must therefore reach it through a dedicated signal, or it stays stale until the overlay is closed and reopened: `wsSmartScoreUpdate` (metadata panel score) and `wsDetectionUpdate` (object boxes, re-read from `/pictures/{id}/detections` — otherwise a Segment run started from the overlay context menu showed nothing until reopen) both exist for that reason. Each fires on any distinct signal key while a card is open, without gating on the payload's `picture_ids`, because signals written in one Vue flush coalesce to the last one, which may not name the open card.
 
 3. **On close, reconcile in place (no pill).** `ImageGrid.closeOverlay()` applies the deferred work directly: it swaps in any `pendingGridImages` and, when `pendingOverlayGridRefresh` / `pendingTagFilterRefresh` is set, runs `debouncedFetchAllGridImages()`. So the now-non-matching picture leaves the grid and any re-sort applies as a direct in-place refresh — never as a pill flashing on exit.
 
@@ -842,7 +927,19 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 All persisted keys are prefixed `pixlstash:` to avoid collisions:
 - `pixlstash:statsSidebarOpen`, `pixlstash:sidebarDocked`
 - `pixlstash:characterMultiMode`, `pixlstash:setMultiMode`, `pixlstash:setDifferenceBaseId`
+- `pixlstash:sidebar:expansion` (one JSON blob — see §10.1)
 - `pixlstash:clientId` (per-tab, `sessionStorage` — the `X-Client-Id` / WS `origin_client_id` echo key; in-memory fallback if `sessionStorage` is unavailable)
+
+### 10.1 Sidebar expansion state (`composables/useSidebarExpansion.js`)
+
+Which sidebar sections are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
+
+Two rules keep the restored state honest:
+
+- **Store the non-default choice.** Sections and project nodes are expanded by default, so what is persisted is the *collapsed* set (`collapsedProjectIds`, `projectPeopleCollapsed`, `projectSetsCollapsed`). `expandedProjectIds` stays derived: `syncProjectExpansion(ids)` expands each project the first time it is seen *unless* it is in the persisted collapsed set, so a project created after the preference was written still opens by default and a remembered collapse is not undone on every fetch. Ids for projects that no longer exist are pruned — but never on an empty list, which on boot means "not fetched yet" as often as "none exist". The folder tree defaults to collapsed, so there the *expanded* keys are stored (mixed: reference-folder id numbers and subfolder path strings), capped at 200 entries.
+- **Re-browse what was restored.** `folderBrowseCache` is per-session, so a restored subfolder would render with no children. `fetchReferenceFolders()` calls `browseExpandedFolderPaths()` to fetch a listing for each persisted path, and `browseExpandedFolders()` does the same after the cache is dropped (folder relocate, drag-drop move).
+
+localStorage failures (private mode, disabled storage, quota) warn once per sidebar and fall back to defaults; the sections still toggle for the session.
 
 ---
 

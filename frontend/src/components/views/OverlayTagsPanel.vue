@@ -145,7 +145,10 @@
     </template>
   </div>
 
-  <div v-if="nearMissPredictions.length" class="sidebar-section">
+  <div
+    v-if="nearMissPredictions.length"
+    class="sidebar-section sidebar-section--rejected-tags"
+  >
     <div
       class="section-header section-header--collapsible"
       @click="nearMissesCollapsed = !nearMissesCollapsed"
@@ -256,7 +259,18 @@
  *   refetchPredictions(id) - Re-fetch predictions after parent metadata refresh.
  */
 import { ref, reactive, computed, watch, nextTick, onMounted } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  listTags,
+  removeTagEverywhere,
+  listTagPredictions,
+  confirmTagPrediction,
+  rejectTagPrediction,
+} from "../../api/tags";
+import { resetPictureTags } from "../../api/pictures";
+import { listTaggers } from "../../api/taggers";
+import { getUserConfig } from "../../api/config";
+import { getPenalisedTags } from "../../api/users";
 import {
   dedupeTagList,
   getTagLabel as tagLabel,
@@ -342,18 +356,19 @@ async function fetchPenalisedTags() {
   if (penalisedTagsLoading.value) return;
   penalisedTagsLoading.value = true;
   try {
-    const endpoint = isReadOnly.value
-      ? "/users/me/penalised-tags"
-      : "/users/me/config";
-    const res = await apiClient.get(endpoint);
+    // A READ share session cannot read the whole config blob, so the same
+    // data comes from a narrower endpoint for those sessions.
+    const body = isReadOnly.value
+      ? await getPenalisedTags()
+      : await getUserConfig();
     let list = [];
-    if (Array.isArray(res.data?.smart_score_penalised_tags)) {
-      list = res.data.smart_score_penalised_tags;
+    if (Array.isArray(body?.smart_score_penalised_tags)) {
+      list = body.smart_score_penalised_tags;
     } else if (
-      res.data?.smart_score_penalised_tags &&
-      typeof res.data.smart_score_penalised_tags === "object"
+      body?.smart_score_penalised_tags &&
+      typeof body.smart_score_penalised_tags === "object"
     ) {
-      list = Object.keys(res.data.smart_score_penalised_tags);
+      list = Object.keys(body.smart_score_penalised_tags);
     }
     const d = list
       .map((tag) =>
@@ -436,11 +451,10 @@ function normalizeTagKey(tag) {
 async function fetchTagPredictions(imageId) {
   if (!imageId || !props.backendUrl) return;
   try {
-    const res = await apiClient.get(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions?include_meta=1`,
-    );
+    const payload = await listTagPredictions(imageId, {
+      baseUrl: props.backendUrl,
+    });
     if (!props.image || props.image.id !== imageId) return;
-    const payload = res.data;
     const predictions = Array.isArray(payload)
       ? payload
       : Array.isArray(payload?.tag_predictions)
@@ -477,6 +491,18 @@ watch(
 
 // ── Computed prediction helpers ─────────────────────────────────────────────
 
+// A `model_version === "manual"` row is not a tagger prediction: the human-label
+// ledger synthesises it to hold a manual POS/NEG decision when no real prediction
+// exists, hard-coding confidence to 1.0 (POS) / 0.0 (NEG) as a placeholder (see
+// backend label_ledger.record_human_label). Surfacing its confidence as a model
+// score is the bug: a manually-added penalised tag reads "100%", and after removal
+// the same synthetic row (now REJECTED, still confidence 1.0) lingers in Rejected
+// Tags at 100%. Only genuine tagger rows carry a meaningful confidence, so the
+// confidence UI must ignore synthetic manual rows entirely.
+const modelPredictions = computed(() =>
+  tagPredictions.value.filter((p) => p.model_version !== "manual"),
+);
+
 const confirmedTagNames = computed(() => {
   const names = new Set();
   for (const tag of allImageTags.value) {
@@ -487,7 +513,7 @@ const confirmedTagNames = computed(() => {
 });
 
 const nearMissPredictions = computed(() => {
-  return tagPredictions.value.filter(
+  return modelPredictions.value.filter(
     (p) =>
       p.status === "REJECTED" &&
       p.confidence >= 0.3 &&
@@ -497,7 +523,7 @@ const nearMissPredictions = computed(() => {
 
 const pendingPredictionMap = computed(() => {
   const map = new Map();
-  for (const p of tagPredictions.value) {
+  for (const p of modelPredictions.value) {
     map.set(p.tag.trim().toLowerCase(), p);
   }
   return map;
@@ -572,14 +598,15 @@ async function fetchAllAvailableTags() {
   const now = Date.now();
   if (now - allAvailableTagsFetchedAt < 30_000) return;
   try {
-    const res = await apiClient.get(`${props.backendUrl}/tags`);
-    const data = res.data;
-    if (Array.isArray(data)) {
-      allAvailableTags.value = data;
+    const rows = await listTags({ baseUrl: props.backendUrl });
+    if (Array.isArray(rows)) {
+      allAvailableTags.value = rows;
       allAvailableTagsFetchedAt = now;
     }
-  } catch {
-    // Non-critical — autocomplete just stays empty
+  } catch (e) {
+    // Non-critical: autocomplete just stays empty. Log it so a persistently
+    // failing fetch is visible.
+    console.debug("Failed to refresh the tag autocomplete list", e);
   }
 }
 
@@ -812,10 +839,9 @@ async function removeAllTag(tag) {
   const capturedImageId = props.image?.id ?? null;
   if (capturedImageId && props.backendUrl) {
     try {
-      await apiClient.post(
-        `${props.backendUrl}/pictures/${capturedImageId}/tags/remove_all`,
-        { tag: label },
-      );
+      await removeTagEverywhere(capturedImageId, label, {
+        baseUrl: props.backendUrl,
+      });
     } catch (err) {
       console.warn("Failed to remove tag everywhere:", err);
     }
@@ -860,9 +886,7 @@ async function confirmPrediction(tag) {
   }
 
   try {
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/confirm`,
-    );
+    await confirmTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
     void fetchTagPredictions(imageId);
   } catch (e) {
     emit("update-tags", prevTags);
@@ -876,14 +900,14 @@ async function rejectPrediction(tag) {
   const imageId = props.image.id;
   const key = String(tag).trim().toLowerCase();
   try {
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${imageId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
-    );
+    await rejectTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
     tagPredictions.value = tagPredictions.value.map((p) =>
       p.tag.trim().toLowerCase() === key ? { ...p, status: "REJECTED" } : p,
     );
-  } catch {
-    // Network error — fall through to ensure local entry below.
+  } catch (e) {
+    // Network error: fall through to ensure the local entry below so the chip
+    // still reflects the user's decision. Log it rather than drop it.
+    console.debug(`Failed to reject the prediction "${tag}" server-side`, e);
   }
   if (
     !tagPredictions.value.some(
@@ -906,8 +930,8 @@ async function fetchTagPlugins() {
   if (tagPluginsLoading.value || tagPlugins.value.length) return;
   tagPluginsLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    tagPlugins.value = (res.data?.plugins ?? []).filter((p) => p.supports_tags);
+    const body = await listTaggers();
+    tagPlugins.value = (body?.plugins ?? []).filter((p) => p.supports_tags);
   } catch {
     tagPlugins.value = [];
   } finally {
@@ -923,10 +947,9 @@ async function refreshPictureTags(model = null) {
   isTagsRefreshing.value = true;
   try {
     const body = model ? { model } : {};
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${capturedImageId}/reset_tags`,
-      body,
-    );
+    await resetPictureTags(capturedImageId, body, {
+      baseUrl: props.backendUrl,
+    });
     tagPredictions.value = [];
     emit("update-tags", []);
     emit("overlay-change", {
@@ -954,6 +977,40 @@ defineExpose({
 </script>
 
 <style scoped>
+/* Section layout must live here rather than in ImageOverlay's scoped block.
+   This component has multiple root nodes, so Vue never stamps the parent's
+   scope id onto them (the renderer only forwards it to a *single* root), which
+   means the parent's `.sidebar-section--tags` rules silently never match.
+   OverlayDescriptionPanel carries its own copy for the same reason. Without
+   these, the sections are plain auto-height blocks and the `overflow-y: auto`
+   below can never resolve into a scrollbar. */
+.sidebar-section {
+  margin-bottom: 6px;
+}
+
+/* A definite, shrinkable height is what gives `.tag-list` something to scroll
+   within: the overlay sidebar is a fixed-height flex column, so this section
+   yields down to `min-height` when the column runs out of room. */
+.sidebar-section--tags {
+  display: flex;
+  flex-direction: column;
+  min-height: 104px;
+}
+
+.sidebar-section--tags.sidebar-section--collapsed {
+  min-height: 0;
+}
+
+/* Already bounded by the drop zone's own `max-height`, so it must NOT shrink:
+   a flex item squeezed below its content still paints that content (the zone is
+   `overflow: visible` in its unshrunk state), which drops the rejected chips on
+   top of the Metadata section below. */
+.sidebar-section--rejected-tags {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
 .section-header--collapsible {
   cursor: pointer;
   user-select: none;
@@ -1009,7 +1066,33 @@ defineExpose({
   padding-right: var(--space-2);
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  /* Reserve the bar's lane up front: without it the chips reflow every time a
+     tag is added or removed across the overflow threshold. */
+  scrollbar-gutter: stable;
+}
+
+/* The overlay sidebar is a `dark-surface`, so the scrollbar keys off
+   `on-dark-surface`. The global `.is-desktop` treatment in style.css keys off
+   `on-surface` (the light-chrome pair) and does not apply in a plain browser at
+   all, which left an OS-default bar on a translucent dark panel. The bar is
+   also the whole "there is more below" affordance here, so it stays visible
+   rather than hiding until hover. Track is transparent: the drop zone's dashed
+   border already draws the edge and a second line would compete. */
+.tag-list,
+.tag-drop-zone--predictions {
+  scrollbar-width: thin;
+  /* 0.40 is the floor, not a taste call: over this panel it measures 3.28:1
+     against the surface, clearing WCAG 1.4.11's 3:1 for a UI component. The
+     0.1-0.2 alphas used for borders in this file land near 2:1 and would make
+     the bar decorative rather than perceivable. */
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.tag-list:hover,
+.tag-drop-zone--predictions:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .overlay-lock-note {
@@ -1037,14 +1120,18 @@ defineExpose({
   justify-content: center;
   vertical-align: middle;
   cursor: pointer;
+  /* Flex items floor at min-content, so a single long tag would otherwise force
+     the row wider than the 320px sidebar and get clipped by `overflow-x`. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .overlay-tag--penalised {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
   font-size: var(--text-2xs);
   line-height: 1.2;
-  border: 1px solid rgba(var(--v-theme-error), 0.6);
-  background: rgba(var(--v-theme-error), 0.15);
+  border: 1px solid rgba(var(--v-theme-dark-surface-error), 0.6);
+  background: rgba(var(--v-theme-dark-surface-error), 0.15);
 }
 
 .overlay-tag--sentinel {
@@ -1061,17 +1148,17 @@ defineExpose({
   color: color-mix(
     in srgb,
     rgb(var(--v-theme-on-dark-surface)) calc((1 - var(--ac)) * 100%),
-    rgb(var(--v-theme-error)) calc(var(--ac) * 100%)
+    rgb(var(--v-theme-dark-surface-error)) calc(var(--ac) * 100%)
   );
   border-color: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.2) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.7) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.7) calc(var(--ac) * 100%)
   );
   background: color-mix(
     in srgb,
     rgba(var(--v-theme-on-dark-surface), 0.05) calc((1 - var(--ac)) * 100%),
-    rgba(var(--v-theme-error), 0.2) calc(var(--ac) * 100%)
+    rgba(var(--v-theme-dark-surface-error), 0.2) calc(var(--ac) * 100%)
   );
 }
 
@@ -1125,11 +1212,11 @@ defineExpose({
 }
 
 .tag-pred-btn--confirm:hover {
-  color: rgb(var(--v-theme-success));
+  color: rgb(var(--v-theme-dark-surface-success));
 }
 
 .tag-pred-btn--reject:hover {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 .tag-drop-zone {
@@ -1149,8 +1236,18 @@ defineExpose({
   background: rgba(var(--v-theme-on-dark-surface), 0.08);
 }
 
+/* Secondary list: cap it so a long rejection set cannot push Metadata out of
+   the sidebar, and scroll the remainder. Mirrors `.face-assign-grid`, which
+   already bounds-and-scrolls the Faces section of this same sidebar. */
 .tag-drop-zone--predictions {
   gap: var(--space-2);
+  /* ~4 chip rows: a 11px/1.2 chip is ~17px, plus the --space-2 row gap and the
+     zone's own --space-2 padding. Deliberately shallower than the applied list
+     above it, so the secondary list reads as secondary. */
+  max-height: 92px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .tag-drop-placeholder {

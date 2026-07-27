@@ -156,7 +156,7 @@
 import { ref, computed, watch } from "vue";
 import { isSupportedVideoFile, getOverlayFormat } from "../../utils/media.js";
 import { formatUserDate } from "../../utils/utils.js";
-import { apiClient } from "../../utils/apiClient";
+import { openPictureLocation } from "../../api/pictures";
 import { copyText } from "../../utils/clipboard";
 
 const props = defineProps({
@@ -180,7 +180,7 @@ function parseMetadataValue(value) {
     ) {
       try {
         return JSON.parse(trimmed);
-      } catch (e) {
+      } catch {
         return value;
       }
     }
@@ -270,7 +270,7 @@ function formatDuration(seconds) {
 function stringifyMetadata(value) {
   try {
     return JSON.stringify(value, null, 2);
-  } catch (e) {
+  } catch {
     return String(value);
   }
 }
@@ -299,11 +299,11 @@ async function copyMetadataValue(value) {
 async function openSourceFileLocation() {
   if (!props.image?.id) return;
   try {
-    await apiClient.post(
-      `${props.backendUrl}/pictures/${props.image.id}/open-location`,
-    );
-  } catch {
-    // silently ignore
+    await openPictureLocation(props.image.id, { baseUrl: props.backendUrl });
+  } catch (e) {
+    // Expected on a headless or remote server, which has no desktop file
+    // manager to open. Log it rather than let the click do nothing silently.
+    console.warn("Couldn't open the source file location", e);
   }
 }
 

@@ -613,7 +613,7 @@ function healthBarStyle(r) {
   const pct = Math.min(100, Math.round((score / ABS_FULL_BAR) * 100));
   const heat =
     pct > 55
-      ? "rgb(var(--v-theme-error))"
+      ? "rgb(var(--v-theme-dark-surface-error))"
       : pct > 25
         ? "rgb(var(--v-theme-warning))"
         : "rgb(var(--v-theme-tertiary))";
@@ -834,9 +834,9 @@ const TAIL_TOGGLE_TITLE =
   color: rgb(var(--v-theme-on-dark-surface));
 }
 .rs-board-anomaly-toggle--on {
-  border-color: rgb(var(--v-theme-error));
-  background: color-mix(in srgb, rgb(var(--v-theme-error)) 15%, transparent);
-  color: rgb(var(--v-theme-error));
+  border-color: rgb(var(--v-theme-dark-surface-error));
+  background: color-mix(in srgb, rgb(var(--v-theme-dark-surface-error)) 15%, transparent);
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-board-sort,
 .rs-board-scope {
@@ -1044,7 +1044,7 @@ button.rs-board-hdr {
   min-width: 0;
 }
 .rs-board-tag--anomaly {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-board-tag-name {
   overflow: hidden;
@@ -1107,7 +1107,7 @@ button.rs-board-hdr {
   font-weight: var(--weight-regular);
 }
 .rs-board-num--error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-board-num--primary {
   color: rgb(var(--v-theme-primary));
@@ -1189,7 +1189,7 @@ button.rs-board-hdr {
   line-height: 1.5;
 }
 .rs-legend-error {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-legend-warning {
   color: rgb(var(--v-theme-warning));

@@ -16,6 +16,7 @@ class TaskType(str, Enum):
     TEXT_EMBEDDING = "TextEmbeddingTask"
     IMAGE_EMBEDDING = "ImageEmbeddingTask"
     WATCH_FOLDERS = "WatchFolderImportTask"
+    PICTURE_IMPORT = "PictureImportTask"
     COMFYUI_EXTRACTION = "ComfyUIExtractionTask"
     SOURCE_FACE_LIKENESS = "SourceFaceLikenessTask"
     MISSING_FILE_PURGE = "MissingFilePurgeTask"
@@ -24,6 +25,8 @@ class TaskType(str, Enum):
     TEXT_SCORE = "TextScoreTask"
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
+    SCRAPHEAP_RETENTION_PURGE = "ScrapheapRetentionPurgeTask"
+    THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
 
     @staticmethod
     def all():

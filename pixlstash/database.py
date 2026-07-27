@@ -26,6 +26,7 @@ import numpy as np
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.unprocessable_image_registry import UnprocessableImageRegistry
 
 # These imports are necessary to register the models with SQLModel
 
@@ -495,6 +496,9 @@ def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
             return 0.0
         return float((weights * sims).sum() / denom)
     except Exception:
+        # Best-effort per-row SQL scalar: any decode/maths failure means "no
+        # likeness" for this face, and 0.0 IS the ranking answer. This fires once
+        # per candidate row, so logging would flood (allowlisted in the guardrail).
         return 0.0
 
 
@@ -633,6 +637,10 @@ class VaultDatabase:
     def __init__(self, db_path: str):
         self._db_path = db_path
         self.image_root = os.path.dirname(self._db_path)
+        # In-memory, process-lifetime set of pictures whose image file cannot be
+        # decoded (issue #585). Shared by task threads (marking) and finder
+        # threads (suppression); reachable from both via their ``self._db``.
+        self.unprocessable_images = UnprocessableImageRegistry()
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 

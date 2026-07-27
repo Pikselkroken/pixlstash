@@ -140,12 +140,22 @@
 
 <script setup>
 import { ref, computed, nextTick, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  patchPicture,
+  resetPictureDescription,
+} from "../../api/pictures";
+import { listTaggers } from "../../api/taggers";
 import { copyText } from "../../utils/clipboard";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   isDescriptionSentinel,
   formatDescriptionSentinel,
 } from "../../utils/descriptions";
+
+// Failures report through the notice surface instead of a blocking native
+// alert() (docs/design/notice-surface.md §1).
+const noticeStore = useNoticeStore();
 
 const props = defineProps({
   image: { type: Object, default: null },
@@ -222,14 +232,17 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    await apiClient.patch(
-      `${props.backendUrl}/pictures/${capturedImageId}`,
-      payload,
-    );
+    await patchPicture(capturedImageId, payload, {
+      baseUrl: props.backendUrl,
+    });
     emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
   } catch (err) {
-    alert(`Failed to update description: ${err?.message || err}`);
+    console.error("Failed to update description", err);
+    noticeStore.error(
+      `Couldn't save the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      { key: "description-save" },
+    );
   } finally {
     isSavingDescription.value = false;
   }
@@ -256,7 +269,9 @@ async function copyDescription() {
       resetCopyState();
     }, 2000);
   } else {
-    alert("Unable to copy description.");
+    noticeStore.error("Couldn't copy the description to the clipboard.", {
+      key: "description-copy",
+    });
   }
 }
 
@@ -264,8 +279,8 @@ async function fetchDescPlugins() {
   if (descPluginsLoading.value || descPlugins.value.length) return;
   descPluginsLoading.value = true;
   try {
-    const res = await apiClient.get("/taggers");
-    descPlugins.value = (res.data?.plugins ?? []).filter(
+    const body = await listTaggers();
+    descPlugins.value = (body?.plugins ?? []).filter(
       (p) => p.supports_descriptions,
     );
   } catch {
@@ -282,19 +297,26 @@ async function refreshDescription(model = null) {
   const capturedImageId = props.image.id;
   try {
     if (model) {
-      await apiClient.post(
-        `${props.backendUrl}/pictures/${capturedImageId}/reset_description`,
+      await resetPictureDescription(
+        capturedImageId,
         { model },
+        { baseUrl: props.backendUrl },
       );
     } else {
-      await apiClient.patch(`${props.backendUrl}/pictures/${capturedImageId}`, {
-        description: null,
-      });
+      await patchPicture(
+        capturedImageId,
+        { description: null },
+        { baseUrl: props.backendUrl },
+      );
     }
     emit("update-description", capturedImageId, null);
     cancelEditDescription();
   } catch (err) {
-    alert(`Failed to reset description: ${err?.message || err}`);
+    console.error("Failed to reset description", err);
+    noticeStore.error(
+      `Couldn't reset the description. ${err?.response?.data?.detail || err?.message || "Please try again."}`,
+      { key: "description-reset" },
+    );
   } finally {
     isDescriptionRefreshing.value = false;
   }
@@ -418,6 +440,15 @@ defineExpose({
   color: rgb(var(--v-theme-on-dark-surface));
   padding: 6px;
   resize: vertical;
+  /* Same bar as the sidebar's other scroll regions (the two tag lists and the
+     faces grid). Left on the browser default this is the loudest thing in the
+     panel: a full-width light track with stepper arrows on a dark surface. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.description-editor textarea:hover {
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
 }
 
 .description-actions {

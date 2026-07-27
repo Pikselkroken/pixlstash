@@ -118,6 +118,21 @@ def _seed_human_prediction(server, pic_id, tag, label_state, confidence=0.9):
     server.vault.db.run_task(insert)
 
 
+def _seed_tag(server, pic_id, tag):
+    """Apply *tag* to the picture directly, bypassing the route's ledger side-effects.
+
+    The scorer charges a model prediction only when the defect is visible in the tag
+    list, so a test asserting the *model* path needs a real ``Tag`` row without the human
+    NEG/POS the tag routes would also record.
+    """
+
+    def insert(session):
+        session.add(Tag(picture_id=pic_id, tag=tag))
+        session.commit()
+
+    server.vault.db.run_task(insert)
+
+
 def _wait_for(predicate, timeout=10.0):
     """Poll *predicate* until true; the config-change invalidation runs on the LOW queue."""
     deadline = time.time() + timeout
@@ -265,6 +280,61 @@ def test_confirm_penalised_prediction_invalidates():
         temp_dir.cleanup()
 
 
+def test_confirm_registers_origin_stamped_rescore_refresh():
+    """The user's primary path: confirming a model anomaly prediction with an editing tab
+    must origin-stamp the eventual smart_score refresh so that tab updates the visible score
+    in place, rather than routing to the deferred "view changed externally" bulk path.
+
+    Proves the registry wiring end-to-end: the confirm records the id under the editing tab,
+    and the background recompute completion emits an immediate origin-stamped
+    ``{fields:["smart_score"], origin_client_id}`` event for just that card — independent of
+    the backfill drain gate (a second unscored picture keeps ``count_remaining() > 0``).
+    """
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        pending = _upload_picture(client, "Bad2.png")  # keeps the backfill in flight
+        server.vault._work_planner.stop()
+        _prepare_for_scoring(server, pending)  # embedding + NULL score
+
+        _seed_prediction(server, edited, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, edited, 0.5)
+
+        # Confirm as the editing tab "tab-a".
+        resp = client.post(
+            f"/pictures/{edited}/tag_predictions/{PENALISED_TAG}/confirm",
+            headers={"X-Client-Id": "tab-a"},
+        )
+        assert resp.status_code == 200
+        # The cached score is NULLed and the id is registered under the editing tab.
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score; completion emits the refresh.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # Drain gate NOT reached, yet the card refreshed immediately, origin-stamped.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) > 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        assert edited not in server.vault.interactive_rescore_registry.snapshot()
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_reject_penalised_prediction_invalidates():
     """Rejecting folds the anomaly probability to 0.0 — the cached score is stale."""
     temp_dir, client, server = _setup()
@@ -299,6 +369,55 @@ def test_confirm_content_prediction_does_not_invalidate():
         temp_dir.cleanup()
 
 
+def test_delete_anomaly_prediction_invalidates():
+    """Deleting an anomaly prediction drops its probability — the cached score is stale.
+
+    ``POST /pictures/{id}/tag_predictions/delete`` bulk-removes the model's predictions so
+    the background tagger treats the picture as never seen. Dropping an anomaly-vocabulary
+    prediction removes its penalty input, so the stored ``smart_score`` must be NULLed for
+    recompute — the confirmed invalidation gap this fix closes.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # The tag is applied so the prediction is genuinely a scorer input: the scorer
+        # only charges a model prediction whose defect is visible in the tag list.
+        _seed_tag(server, pic_id, PENALISED_TAG)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_delete_content_prediction_does_not_invalidate():
+    """Deleting a pure content prediction is outside the anomaly vocabulary — score stands.
+
+    Guards the intended narrow scope: over-invalidating here re-scores the whole library on
+    a routine prediction reset.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, CONTENT_TAG, confidence=0.8)
+        _set_smart_score(server, pic_id, 0.5)
+
+        resp = client.post(f"/pictures/{pic_id}/tag_predictions/delete")
+        assert resp.status_code == 200
+
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
     """The tagger's batch prediction write invalidates every affected picture at once.
 
@@ -317,12 +436,21 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
 
         # Two pictures get a fresh anomaly confidence; the third only a content tag,
         # so its anomaly signature — and its cached score — must be untouched.
+        # The anomaly tag is applied to the first two because the scorer only reads a
+        # model prediction whose defect is visible in the tag list; without the Tag row
+        # the prediction write would (correctly) move nothing.
+        for pid in pic_ids[:2]:
+            _seed_tag(server, pid, PENALISED_TAG)
         label_scores = {
             pic_ids[0]: {PENALISED_TAG: 0.7},
             pic_ids[1]: {PENALISED_TAG: 0.4},
             pic_ids[2]: {CONTENT_TAG: 0.9},
         }
-        tags_by_pic = {pid: set() for pid in pic_ids}
+        tags_by_pic = {
+            pic_ids[0]: {PENALISED_TAG},
+            pic_ids[1]: {PENALISED_TAG},
+            pic_ids[2]: set(),
+        }
 
         executed: list[str] = []
 
@@ -364,12 +492,15 @@ def test_bulk_tagger_rewrite_invalidates_batch_in_one_statement():
         temp_dir.cleanup()
 
 
-# --------------------------------------------------------- confidence-gated penalty
+# ------------------------------------------------ applied-tag + confidence-gated penalty
 #
-# A model prediction below the tagger's apply threshold never became a visible ``Tag``,
-# so it must not push the score down. Human decisions are exempt in both directions —
-# which is why the gate lives in ``fetch_anomaly_confidences`` rather than being replaced
-# by a read of the ``Tag`` table, which would silently drop human POS/NEG rows.
+# A model prediction is charged only when the defect is genuinely visible in the picture's
+# tag list: it must clear the tagger's apply threshold **and** have a matching ``Tag`` row.
+# Confidence alone used to stand in for both, but ``TagPredictionBackfillTask`` writes
+# predictions without ever writing a ``Tag`` row, so a high-confidence backfilled row
+# penalised pictures for defects the user could not see. Human decisions stay exempt in
+# both directions, which is why the gate lives in ``fetch_anomaly_confidences`` rather
+# than being replaced wholesale by a read of the ``Tag`` table.
 
 _THRESHOLDS = {"watermark": 0.6, "bad anatomy": 0.62}
 
@@ -385,6 +516,8 @@ def test_sub_threshold_model_prediction_is_not_scored():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        # Tag applied, so the *only* thing keeping it out of the score is the threshold.
+        _seed_tag(server, pic_id, "watermark")
         _seed_prediction(server, pic_id, "watermark", confidence=0.4)  # < 0.6
 
         probs, human = _probs(server, pic_id)
@@ -414,6 +547,7 @@ def test_above_threshold_model_prediction_is_scored():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
         _seed_prediction(server, pic_id, "watermark", confidence=0.8)  # > 0.6
 
         probs, human = _probs(server, pic_id)
@@ -432,7 +566,11 @@ def test_above_threshold_model_prediction_is_scored():
 
 
 def test_human_positive_below_threshold_still_counts():
-    """A human said the defect is there; its model confidence is irrelevant."""
+    """A human said the defect is there; confidence *and* tag membership are irrelevant.
+
+    No ``Tag`` row is seeded on purpose: the applied-tag requirement covers model
+    predictions only, so a human POS must still be charged without one.
+    """
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
@@ -453,10 +591,15 @@ def test_human_positive_below_threshold_still_counts():
 
 
 def test_human_negative_suppresses_even_above_threshold():
-    """A human said the defect is absent; a confident model must not override that."""
+    """A human said the defect is absent; a confident model must not override that.
+
+    The tag is left applied so this asserts the harder direction: a human NEG suppresses
+    even while the ``Tag`` row that would otherwise admit the prediction is still there.
+    """
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, "watermark")
         _seed_human_prediction(server, pic_id, "watermark", NEG, confidence=0.99)
 
         probs, human = _probs(server, pic_id)
@@ -470,6 +613,136 @@ def test_human_negative_suppresses_even_above_threshold():
             )
             == 0.0
         )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_unapplied_model_prediction_is_not_scored():
+    """The backfill regression: a confident prediction with no ``Tag`` row costs nothing.
+
+    ``TagPredictionBackfillTask`` writes predictions against a picture's existing tag set
+    and never writes a ``Tag`` row, so this state is reachable for any picture tagged by
+    a different engine; it penalised ~12k pictures for defects invisible in the UI.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        # Well above the 0.6 threshold, but the defect is nowhere in the tag list.
+        _seed_prediction(
+            server, pic_id, "watermark", confidence=0.99, status="REJECTED"
+        )
+
+        probs, human = _probs(server, pic_id)
+        assert "watermark" not in probs.get(pic_id, {})
+        assert (
+            anomaly_penalty(
+                probs.get(pic_id, {}),
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            == 0.0
+        )
+
+        # Applying the tag admits the very same prediction, proving the missing Tag row
+        # is what removed it, not the threshold or a missing prediction row.
+        _seed_tag(server, pic_id, "watermark")
+        probs, human = _probs(server, pic_id)
+        assert probs[pic_id]["watermark"] == pytest.approx(0.99)
+        assert (
+            anomaly_penalty(
+                probs[pic_id],
+                tag_thresholds=_THRESHOLDS,
+                human_tags=human.get(pic_id),
+            )
+            > 0.0
+        )
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_unapplied_prediction_is_dropped_from_the_ungated_signature_too():
+    """The applied-tag check must not hide behind ``apply_thresholds``.
+
+    ``anomaly_state_signature`` reads with ``apply_thresholds=None``. If the tag check
+    were inside the threshold branch, tag membership would be invisible to the signature
+    and adding or removing an anomaly tag would leave the cached score stale.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_prediction(server, pic_id, "watermark", confidence=0.99)
+
+        raw, _ = server.vault.db.run_task(
+            lambda s: fetch_anomaly_confidences(s, [pic_id])
+        )
+        assert "watermark" not in raw.get(pic_id, {})
+
+        before = server.vault.db.run_task(
+            lambda s: anomaly_state_signature(s, [pic_id])
+        )
+        _seed_tag(server, pic_id, "watermark")
+        after = server.vault.db.run_task(lambda s: anomaly_state_signature(s, [pic_id]))
+        assert before[pic_id] != after[pic_id]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_tagger_rewrite_dropping_anomaly_tag_invalidates_cached_score():
+    """A re-tag that drops an anomaly tag must clear the cached score.
+
+    ``_add_tags_bulk`` commits its ``Tag`` rewrite in its own DB task, *before*
+    ``_write_predictions_from_tags`` takes its anomaly snapshot. Now that an applied tag
+    is a scorer input, the rewrite has to guard its own mutation or the score change goes
+    unobserved. Without the ``invalidate_on_anomaly_change`` wrapper in ``_add_tags_bulk``
+    this test fails.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, PENALISED_TAG)
+        _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
+        _set_smart_score(server, pic_id, 0.5)
+        assert _get_smart_score(server, pic_id) == 0.5
+
+        # The fresh pass no longer finds the defect, so the rewrite drops the tag.
+        server.vault.db.run_task(
+            lambda s: TagTask._add_tags_bulk(
+                s, [{"pic_id": pic_id, "tags": [CONTENT_TAG]}]
+            )
+        )
+
+        remaining = server.vault.db.run_task(
+            lambda s: sorted(
+                s.exec(select(Tag.tag).where(Tag.picture_id == pic_id)).all()
+            )
+        )
+        assert remaining == [CONTENT_TAG]
+        assert _get_smart_score(server, pic_id) is None
+        assert pic_id in _find_missing_ids(server)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_tagger_rewrite_without_anomaly_change_keeps_cached_score():
+    """The other direction: a content-only rewrite must not re-score the picture."""
+    temp_dir, client, server = _setup()
+    try:
+        pic_id = _upload_picture(client)
+        _seed_tag(server, pic_id, CONTENT_TAG)
+        _set_smart_score(server, pic_id, 0.5)
+
+        server.vault.db.run_task(
+            lambda s: TagTask._add_tags_bulk(
+                s, [{"pic_id": pic_id, "tags": [CONTENT_TAG, "sunrise"]}]
+            )
+        )
+
+        assert _get_smart_score(server, pic_id) == 0.5
+        assert pic_id not in _find_missing_ids(server)
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -731,6 +1004,11 @@ def test_background_task_scores_and_honours_the_users_penalised_tags():
     temp_dir, client, server = _setup()
     try:
         pic_id = _upload_picture(client)
+        # The tag must be applied, not just predicted: the scorer only charges a model
+        # prediction whose defect is visible in the picture's tag list. Without the Tag
+        # row the penalty is zero under both tables below and the comparison is float
+        # noise rather than a real difference.
+        _seed_tag(server, pic_id, PENALISED_TAG)
         _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.95)
 
         # Drive the finder by hand: the live WorkPlanner would otherwise claim and score
@@ -809,7 +1087,9 @@ def test_persist_leaves_row_null_when_anomaly_state_changed_mid_scoring():
         )
 
         # A concurrent tag edit lands after compute but before persist, moving the
-        # anomaly signature (adds a penalised prediction).
+        # anomaly signature. Both the tag and the prediction are needed, because the
+        # scorer only reads a model prediction whose defect is in the tag list.
+        _seed_tag(server, pic_id, PENALISED_TAG)
         _seed_prediction(server, pic_id, PENALISED_TAG, confidence=0.9)
 
         # The task now tries to persist a score computed from the now-stale inputs.
@@ -977,6 +1257,123 @@ def test_full_backfill_emits_once_at_drain_not_per_batch():
         temp_dir.cleanup()
 
 
+# --------------------------------------------- own-origin edit must not self-pill at drain
+#
+# Regression (#self-pill): when a user's own anomaly-tag edit is the LAST unscored picture
+# in the vault, its rescore completion reaches the drain gate (``count_remaining() == 0``).
+# The completion first emits an origin-stamped ``smart_score`` refresh for that id (slick
+# in-place update on the editing tab), then emitted an ADDITIONAL origin-less drain event
+# for the WHOLE batch — re-announcing the very same id with no origin. The editing tab
+# therefore also raised the "view changed externally" pill for its own edit. The drain must
+# exclude ids already announced origin-stamped via the interactive registry in this batch,
+# while STILL firing for genuinely unregistered (background) ids — over-suppression is its
+# own regression.
+
+
+def test_own_origin_edit_does_not_also_pill_on_drain():
+    """The editing tab's own edit, even when it drains the vault, gets exactly one
+    origin-stamped refresh and NO origin-less drain event for that id."""
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")
+        # Stop the planner so no background task races us; this edit is the only work.
+        server.vault._work_planner.stop()
+
+        # Score, then a real add-penalised-tag from tab "tab-a" NULLs and registers it.
+        _set_smart_score(server, edited, 0.5)
+        assert (
+            client.post(
+                f"/pictures/{edited}/tags",
+                json={"tag": PENALISED_TAG},
+                headers={"X-Client-Id": "tab-a"},
+            ).status_code
+            == 200
+        )
+        assert _get_smart_score(server, edited) is None
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+
+        events = _capture_smart_score_events(server)
+
+        # The background rescore persists a fresh score; this batch drains the vault.
+        _set_smart_score(server, edited, 0.7)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited], [edited]), None
+        )
+
+        # Drain gate IS reached, yet only the single origin-stamped refresh fired — the
+        # editing tab reconciles in place and never sees its own change as external.
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) == 0
+        assert events == [
+            {
+                "picture_ids": [edited],
+                "fields": ["smart_score"],
+                "origin_client_id": "tab-a",
+            }
+        ]
+        # No origin-less event mentioning the edited id was emitted.
+        assert not [
+            e
+            for e in events
+            if "origin_client_id" not in e and edited in e["picture_ids"]
+        ]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
+def test_drain_still_fires_for_unregistered_ids_alongside_own_origin():
+    """Over-suppression guard: in a draining batch mixing a registered (own-origin) id and
+    an unregistered (background) id, the origin-stamped refresh covers only the registered
+    id and the origin-less drain covers only the background id."""
+    temp_dir, client, server = _setup()
+    try:
+        edited = _upload_picture(client, "Bad1.png")  # registered under tab-a
+        background = _upload_picture(client, "Bad2.png")  # never registered
+        server.vault._work_planner.stop()
+
+        _set_smart_score(server, edited, 0.5)
+        assert (
+            client.post(
+                f"/pictures/{edited}/tags",
+                json={"tag": PENALISED_TAG},
+                headers={"X-Client-Id": "tab-a"},
+            ).status_code
+            == 200
+        )
+        assert (
+            server.vault.interactive_rescore_registry.snapshot().get(edited) == "tab-a"
+        )
+        # background is rescored in the same batch but was never interactively registered.
+        assert not server.vault.interactive_rescore_registry.snapshot().get(background)
+
+        events = _capture_smart_score_events(server)
+
+        # Both persist in the one batch that drains the vault (remaining == 0).
+        _set_smart_score(server, edited, 0.7)
+        _set_smart_score(server, background, 0.6)
+        server.vault._on_task_completed(
+            _fake_smart_score_completion([edited, background], [edited, background]),
+            None,
+        )
+
+        assert server.vault.db.run_task(SmartScoreTask.count_remaining) == 0
+        # The registered id got its immediate origin-stamped refresh.
+        assert {
+            "picture_ids": [edited],
+            "fields": ["smart_score"],
+            "origin_client_id": "tab-a",
+        } in events
+        # The origin-less drain fired for the background id ONLY — the edited id is not
+        # re-announced origin-less (no self-pill), and the background id is not dropped.
+        bulk = [e for e in events if "origin_client_id" not in e]
+        assert bulk == [{"picture_ids": [background], "fields": ["smart_score"]}]
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+
+
 def test_cas_skipped_id_is_not_announced_and_stays_registered():
     """A picture skipped by _persist_scores' CAS is still NULL — never announced rescored."""
     temp_dir, client, server = _setup()
@@ -1067,8 +1464,10 @@ def test_over_cap_demoted_id_falls_back_to_bulk_drain_emit():
             "origin_client_id": "tab-a",
         } in events
         # The demoted id was NOT dropped: it rides the single origin-less bulk drain emit.
+        # The recorded id, already announced origin-stamped, is excluded from that drain
+        # so its editing tab is not self-pilled.
         bulk = [e for e in events if "origin_client_id" not in e]
-        assert bulk == [{"picture_ids": [recorded, demoted], "fields": ["smart_score"]}]
+        assert bulk == [{"picture_ids": [demoted], "fields": ["smart_score"]}]
     finally:
         server.vault.close()
         temp_dir.cleanup()
@@ -1216,13 +1615,17 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
         _seed_prediction(server, carrier, PENALISED_TAG, confidence=0.9)
         _seed_prediction(server, bystander, "bad anatomy", confidence=0.9)
 
-        # Record the priority of every DB task enqueued during the PATCH so we can prove
-        # the invalidation is NOT a separate follow-up task.
-        priorities: list = []
+        # Record the DB tasks enqueued during the PATCH so we can prove the invalidation
+        # is NOT a separate follow-up task. Tasks are captured with their qualname and
+        # filtered to the ones this route submits: the WorkPlanner's finders tick on
+        # their own thread and enqueue unrelated reads of their own (e.g.
+        # MissingWatchFolderImportFinder), so counting every task in flight made this
+        # assertion depend on background timing rather than on the route's behaviour.
+        tasks: list = []
         original_run_task = server.vault.db.run_task
 
         def _spy(func, *args, **kwargs):
-            priorities.append(kwargs.get("priority"))
+            tasks.append((kwargs.get("priority"), getattr(func, "__qualname__", "")))
             return original_run_task(func, *args, **kwargs)
 
         server.vault.db.run_task = _spy
@@ -1243,8 +1646,12 @@ def test_penalised_tag_change_invalidates_atomically_no_second_task():
 
         # No separate LOW task did the reset; exactly one IMMEDIATE task carried both the
         # config write and the invalidation.
-        assert DBPriority.LOW not in priorities
-        assert priorities.count(DBPriority.IMMEDIATE) == 1
+        route_tasks = [
+            priority for priority, name in tasks if "patch_me_config" in name
+        ]
+        assert route_tasks, f"config route enqueued no DB task; saw {tasks}"
+        assert DBPriority.LOW not in route_tasks
+        assert route_tasks.count(DBPriority.IMMEDIATE) == 1
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -72,10 +72,6 @@ export function formatUserDate(dateStr, format) {
   }
 }
 
-export function formatIsoDate(dateStr) {
-  return formatUserDate(dateStr, 'iso');
-}
-
 export function getStackThreshold(value) {
   if (value === null || value === undefined || value === '') return 0.9;
   const parsed = parseFloat(value);

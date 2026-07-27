@@ -548,7 +548,7 @@ async function create() {
   opacity: 0.55;
 }
 .rs-dialog-chip--anomaly {
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 .rs-dialog-chip-flag {
   flex-shrink: 0;
@@ -731,7 +731,7 @@ async function create() {
 
 .rs-dialog-error {
   font-size: 12.5px;
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-dark-surface-error));
 }
 
 .rs-dialog-actions {

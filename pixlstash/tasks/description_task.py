@@ -105,7 +105,13 @@ class DescriptionTask(BaseTask):
     def estimated_vram_mb(self) -> int:
         try:
             return max(0, self._workflow.estimate_vram_mb(len(self._pictures)))
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "DescriptionTask: VRAM estimate failed for %d picture(s); "
+                "assuming 0: %s",
+                len(self._pictures),
+                exc,
+            )
             return 0
 
     def _run_task(self):

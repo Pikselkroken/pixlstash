@@ -15,7 +15,7 @@
 
 import { ref, computed } from "vue";
 import { defineStore } from "pinia";
-import { apiClient } from "../utils/apiClient";
+import { getLockedMembers } from "../api/pictureSets";
 
 // The single source of truth for the lock tooltip copy. Reused verbatim by the
 // grid badge, the overlay chip, and the context-menu gating so the "why is this
@@ -102,8 +102,7 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
     }
     inFlight = true;
     try {
-      const res = await apiClient.get("/picture_sets/locked-members");
-      const data = res.data ?? {};
+      const data = (await getLockedMembers()) ?? {};
       sets.value = Array.isArray(data.sets) ? data.sets : [];
     } catch (e) {
       // Lock badges/gating are advisory over a hard server-side 423 guard, so a

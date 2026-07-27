@@ -93,7 +93,12 @@ class DetectionTask(BaseTask):
                 0,
                 self._engine.description_workflow.estimate_vram_mb(len(self._pictures)),
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "DetectionTask: VRAM estimate failed for %d picture(s); assuming 0: %s",
+                len(self._pictures),
+                exc,
+            )
             return 0
 
     def _run_task(self):

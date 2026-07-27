@@ -25,14 +25,20 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
-import pixlstash.routes.pictures._crud as crud_module
+import pixlstash.routes.pictures._character_likeness as likeness_module
 from pixlstash.auth import READ_SAFE_POST_PATHS
 from pixlstash.server import Server
+from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.utils import upload_pictures_and_wait
 
 API = "/api/v1"
+
+# The SPA catch-all answers unmatched GETs with 200, so a wrong URL can make a
+# positive assertion vacuous. See tests/authz_guard.py.
+pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _good_picture_files():
@@ -165,7 +171,7 @@ def test_scoped_token_denies_out_of_scope_ids(monkeypatch):
 
         # Pretend the request carries a token scoped to a single allowed picture.
         monkeypatch.setattr(
-            crud_module,
+            likeness_module,
             "fetch_scope_allowed_picture_ids",
             lambda server, request: {in_scope},
         )
@@ -212,7 +218,7 @@ def test_unscoped_owner_token_sees_all_ids(monkeypatch):
     try:
         # None == unscoped/owner: no id is filtered out.
         monkeypatch.setattr(
-            crud_module,
+            likeness_module,
             "fetch_scope_allowed_picture_ids",
             lambda server, request: None,
         )

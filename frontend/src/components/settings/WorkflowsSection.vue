@@ -1,6 +1,12 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { apiClient, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
+import {
+  listWorkflows,
+  deleteWorkflow as deleteWorkflowRequest,
+  importWorkflow,
+} from "../../api/comfyui";
+import { getUserConfig, patchUserConfig } from "../../api/config";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -66,15 +72,15 @@ function parseComfyuiUrl(value) {
     const host = parsed.hostname || "127.0.0.1";
     const port = parsed.port || "8188";
     return { host, port };
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
 async function fetchComfyuiUrl() {
   try {
-    const res = await apiClient.get("/users/me/config");
-    const comfyUrl = String(res.data?.comfyui_url || "").trim();
+    const cfg = await getUserConfig();
+    const comfyUrl = String(cfg?.comfyui_url || "").trim();
     if (comfyUrl) {
       const parsed = parseComfyuiUrl(comfyUrl);
       if (parsed) {
@@ -85,7 +91,7 @@ async function fetchComfyuiUrl() {
     }
     comfyuiHost.value = "";
     comfyuiPort.value = "";
-  } catch (e) {
+  } catch {
     // Leave state untouched on failure.
   }
 }
@@ -107,7 +113,7 @@ async function saveComfyuiUrl() {
   // Empty host is treated as "not configured" — save null.
   if (!host) {
     try {
-      await apiClient.patch("/users/me/config", { comfyui_url: null });
+      await patchUserConfig({ comfyui_url: null });
       comfyuiHost.value = "";
       comfyuiPort.value = "";
       emit("update:comfyui-configured", false);
@@ -130,7 +136,7 @@ async function saveComfyuiUrl() {
   }
   const nextUrl = `http://${host}:${portNumber}/`;
   try {
-    await apiClient.patch("/users/me/config", { comfyui_url: nextUrl });
+    await patchUserConfig({ comfyui_url: nextUrl });
     comfyuiHost.value = host;
     comfyuiPort.value = String(portNumber);
     emit("update:comfyui-configured", true);
@@ -156,7 +162,7 @@ async function clearComfyuiUrl() {
   comfyuiUrlError.value = "";
   comfyuiUrlSuccess.value = "";
   try {
-    await apiClient.patch("/users/me/config", { comfyui_url: null });
+    await patchUserConfig({ comfyui_url: null });
     comfyuiHost.value = "";
     comfyuiPort.value = "";
     comfyuiEditHost.value = "";
@@ -175,11 +181,9 @@ async function fetchWorkflowList() {
   workflowListLoading.value = true;
   workflowListError.value = "";
   try {
-    const res = await apiClient.get("/comfyui/workflows");
-    workflowList.value = Array.isArray(res.data?.workflows)
-      ? res.data.workflows
-      : [];
-  } catch (e) {
+    const body = await listWorkflows();
+    workflowList.value = Array.isArray(body?.workflows) ? body.workflows : [];
+  } catch {
     workflowListError.value = "Failed to load workflows.";
   } finally {
     workflowListLoading.value = false;
@@ -193,9 +197,7 @@ async function deleteWorkflow(workflow) {
   );
   if (!confirmed) return;
   try {
-    await apiClient.delete(
-      `/comfyui/workflows/${encodeURIComponent(workflow.name)}`,
-    );
+    await deleteWorkflowRequest(workflow.name);
     await fetchWorkflowList();
   } catch (e) {
     workflowListError.value =
@@ -241,7 +243,7 @@ async function handleWorkflowFileChange(event) {
       outputs,
     );
     workflowImportDialogOpen.value = true;
-  } catch (e) {
+  } catch {
     workflowImportError.value = "Failed to parse workflow JSON.";
   } finally {
     event.target.value = "";
@@ -568,9 +570,9 @@ async function confirmWorkflowImport() {
   workflowImportSaving.value = true;
   workflowImportError.value = "";
   try {
-    const listRes = await apiClient.get("/comfyui/workflows");
-    const existing = Array.isArray(listRes.data?.workflows)
-      ? listRes.data.workflows
+    const listBody = await listWorkflows();
+    const existing = Array.isArray(listBody?.workflows)
+      ? listBody.workflows
       : [];
     const exists = existing.some(
       (workflow) =>
@@ -597,7 +599,7 @@ async function confirmWorkflowImport() {
       updated,
       outputTargets,
     );
-    await apiClient.post("/comfyui/workflows/import", {
+    await importWorkflow({
       name,
       workflow: updatedWithOutputs,
       overwrite,

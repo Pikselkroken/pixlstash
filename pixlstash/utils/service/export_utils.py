@@ -593,6 +593,9 @@ class ExportUtils:
                                                             value.decode("utf-8"),
                                                         )
                                                     except Exception:
+                                                        # Skip a non-UTF-8 PNG text
+                                                        # chunk; dropping an
+                                                        # undecodable key IS correct.
                                                         continue
                                             save_kwargs["pnginfo"] = pnginfo
                                         ExportUtils._write_image_to_zip(

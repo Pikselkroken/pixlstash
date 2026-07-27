@@ -268,7 +268,30 @@ class LikenessParameterUtils:
         """
         if not updates:
             return
-        session.execute(sa_update(Picture), updates)
+        # A picture in the batch may have been hard-deleted between blob
+        # computation and this write (e.g. an owner emptying the scrapheap with
+        # "delete forever" while a LikenessParametersTask is queued). The ORM
+        # bulk update asserts every id matches a live row and raises
+        # StaleDataError on a short match count, which would fail the whole
+        # batch and lose the surviving pictures' updates. This runs inside the
+        # serialised DB task worker, so no delete can interleave mid-call:
+        # restrict the write to ids that still exist and skip the rest.
+        ids = [u["id"] for u in updates]
+        existing = set(
+            session.exec(select(Picture.id).where(Picture.id.in_(ids))).all()
+        )
+        live_updates = [u for u in updates if u["id"] in existing]
+        missing = [pid for pid in ids if pid not in existing]
+        if missing:
+            logger.warning(
+                "Skipping likeness parameter writes for %d picture(s) deleted "
+                "mid-batch (no longer in the database): %s",
+                len(missing),
+                missing,
+            )
+        if not live_updates:
+            return
+        session.execute(sa_update(Picture), live_updates)
         session.commit()
 
     @staticmethod
@@ -456,7 +479,8 @@ class LikenessParameterUtils:
             for bit in bits:
                 value = (value << 1) | int(bit)
             return f"{value:0{hash_size * hash_size // 4}x}"
-        except Exception:
+        except Exception as exc:
+            logger.debug("Could not compute dHash for image (%s).", exc)
             return None
 
     def compute_phash_from_file(

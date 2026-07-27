@@ -636,8 +636,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import { computed, nextTick, ref, watch, onUnmounted } from "vue";
+import {
+  createFolder,
+  patchFolder,
+  deleteFolder,
+  // Aliased: this component wraps it in its own debounced detectSidecars().
+  detectSidecars as fetchSidecarConvention,
+} from "../../api/folders";
 import { copyText } from "../../utils/clipboard";
 import {
   buildDockerRestartCommand,
@@ -680,9 +686,7 @@ const emit = defineEmits(["close", "saved", "deleted", "relocate"]);
 // --- Type-derived helpers ---
 
 const isImport = computed(() => props.type === "import");
-const apiBase = computed(() =>
-  isImport.value ? "/import-folders" : "/reference-folders",
-);
+const folderKind = computed(() => (isImport.value ? "import" : "reference"));
 const containerPrefix = computed(() =>
   isImport.value ? "/data/import/pictures-" : "/data/ref/pictures-",
 );
@@ -1097,9 +1101,7 @@ async function detectSidecars(path) {
   const trimmed = String(path || "").trim();
   if (!trimmed) return;
   try {
-    const { data } = await apiClient.get("/reference-folders/detect-sidecars", {
-      params: { path: trimmed },
-    });
+    const data = await fetchSidecarConvention(trimmed);
     // Ignore a stale response if the path changed while the request was in flight.
     if (String(localPath.value || "").trim() !== trimmed) return;
     const found = [];
@@ -1156,6 +1158,9 @@ watch(
   },
 );
 
+// Guard against leaking the listener if the component unmounts while open.
+onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
+
 // --- API actions ---
 
 // Return the suffix to submit, or undefined to leave it unset. An unmodified
@@ -1198,8 +1203,9 @@ async function save() {
             DEFAULT_DESCRIPTION_SUFFIX,
           ) ?? null;
       }
-      savedResponse = await apiClient.patch(
-        `${apiBase.value}/${editingFolder.id}`,
+      savedResponse = await patchFolder(
+        folderKind.value,
+        editingFolder.id,
         patchData,
       );
     } else {
@@ -1229,9 +1235,9 @@ async function save() {
           DEFAULT_DESCRIPTION_SUFFIX,
         );
       }
-      savedResponse = await apiClient.post(apiBase.value, createData);
+      savedResponse = await createFolder(folderKind.value, createData);
     }
-    emit("saved", savedResponse?.data || null);
+    emit("saved", savedResponse || null);
   } catch (error) {
     saveError.value =
       error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
@@ -1245,7 +1251,7 @@ async function doDelete() {
   if (!editingFolder) return;
   deleteLoading.value = true;
   try {
-    await apiClient.delete(`${apiBase.value}/${editingFolder.id}`);
+    await deleteFolder(folderKind.value, editingFolder.id);
     emit("deleted");
   } catch (error) {
     saveError.value =

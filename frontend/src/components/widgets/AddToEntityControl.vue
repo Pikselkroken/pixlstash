@@ -120,7 +120,19 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { apiClient } from "../../utils/apiClient";
+import {
+  listPictureSets,
+  getPictureSetMembership,
+  addPictureToSet,
+  removePictureFromSet,
+} from "../../api/pictureSets";
+import { listProjects, getProjectMembership } from "../../api/projects";
+import {
+  listCharacters,
+  getCharacterMembership,
+  addCharacterFaces,
+  removeCharacterFaces,
+} from "../../api/characters";
 
 const props = defineProps({
   type: { type: String, required: true }, // 'set' | 'project' | 'character'
@@ -223,9 +235,9 @@ const baseUrl = computed(() =>
   props.backendUrl ? String(props.backendUrl).replace(/\/$/, "") : "",
 );
 
-function resolveUrl(path) {
-  return baseUrl.value ? `${baseUrl.value}${path}` : path;
-}
+// The resource modules take the backend base as an option; an empty string
+// means "address the API relatively", which is what a missing prop implies.
+const apiOpts = computed(() => ({ baseUrl: baseUrl.value || "" }));
 
 // --- Normalised picture IDs ---
 const normalisedPictureIds = computed(() =>
@@ -379,11 +391,11 @@ async function fetchItems(force = false) {
 }
 
 async function fetchSetData() {
-  const [listRes] = await Promise.all([
-    apiClient.get(resolveUrl("/picture_sets")),
+  const [rows] = await Promise.all([
+    listPictureSets(apiOpts.value),
     fetchSetMembers(),
   ]);
-  const list = (Array.isArray(listRes.data) ? listRes.data : []).filter(
+  const list = (Array.isArray(rows) ? rows : []).filter(
     (s) => !s?.reference_character,
   );
   items.value = list.map((s) => ({
@@ -407,11 +419,11 @@ async function fetchSetMembers() {
     return;
   }
   try {
-    const res = await apiClient.post(resolveUrl("/picture_sets/membership"), {
-      picture_ids: ids,
-      include_deleted: props.includeDeletedMembers ?? false,
-    });
-    const data = res.data ?? {};
+    const data =
+      (await getPictureSetMembership(ids, {
+        ...apiOpts.value,
+        includeDeleted: props.includeDeletedMembers ?? false,
+      })) ?? {};
     const next = {};
     Object.entries(data).forEach(([setId, memberIds]) => {
       next[String(setId)] = new Set(
@@ -425,11 +437,11 @@ async function fetchSetMembers() {
 }
 
 async function fetchProjectData() {
-  const [listRes] = await Promise.all([
-    apiClient.get(resolveUrl("/projects")),
+  const [rows] = await Promise.all([
+    listProjects(apiOpts.value),
     fetchProjectMembers(),
   ]);
-  const data = Array.isArray(listRes.data) ? listRes.data : [];
+  const data = Array.isArray(rows) ? rows : [];
   const projs = data
     .map((row) => ({
       id: Number(row?.id),
@@ -460,10 +472,7 @@ async function fetchProjectMembers() {
     return;
   }
   try {
-    const res = await apiClient.post(resolveUrl("/projects/membership"), {
-      picture_ids: ids,
-    });
-    const data = res.data ?? {};
+    const data = (await getProjectMembership(ids, apiOpts.value)) ?? {};
     const assignments = data.project_assignments ?? {};
     const unassignedIds = data.unassigned_picture_ids ?? [];
     const next = { unassigned: new Set(unassignedIds.map(String)) };
@@ -477,11 +486,11 @@ async function fetchProjectMembers() {
 }
 
 async function fetchCharacterData() {
-  const [listRes] = await Promise.all([
-    apiClient.get(resolveUrl("/characters")),
+  const [rows] = await Promise.all([
+    listCharacters(apiOpts.value),
     fetchCharacterMembers(),
   ]);
-  const list = Array.isArray(listRes.data) ? listRes.data : [];
+  const list = Array.isArray(rows) ? rows : [];
   items.value = [...list]
     .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")))
     .map((c) => ({ id: c.id, key: String(c.id), name: c.name, count: null }));
@@ -495,10 +504,7 @@ async function fetchCharacterMembers() {
     return;
   }
   try {
-    const res = await apiClient.post(resolveUrl("/characters/membership"), {
-      picture_ids: ids,
-    });
-    const data = res.data ?? {};
+    const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
     picturesWithFaces.value = new Set(
       (data.pictures_with_faces ?? []).map(String),
     );
@@ -547,9 +553,7 @@ async function toggleSet(item) {
     if (shouldRemove) {
       await Promise.all(
         idsToRemove.map((id) =>
-          apiClient.delete(
-            resolveUrl(`/picture_sets/${item.id}/members/${id}`),
-          ),
+          removePictureFromSet(item.id, id, apiOpts.value),
         ),
       );
       statusMessage.value = `Removed from ${item.name}`;
@@ -561,9 +565,7 @@ async function toggleSet(item) {
       if (members) idsToRemove.forEach((id) => members.delete(String(id)));
     } else {
       await Promise.all(
-        idsToAdd.map((id) =>
-          apiClient.post(resolveUrl(`/picture_sets/${item.id}/members/${id}`)),
-        ),
+        idsToAdd.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
       );
       statusMessage.value = `Added to ${item.name}`;
       emit("added", { setId: item.id, pictureIds: idsToAdd, action: "added" });
@@ -655,9 +657,7 @@ async function toggleCharacter(item) {
   if (state === "checked") {
     statusMessage.value = "Removing...";
     try {
-      await apiClient.delete(resolveUrl(`/characters/${item.id}/faces`), {
-        data: { picture_ids: ids },
-      });
+      await removeCharacterFaces(item.id, ids, apiOpts.value);
       statusMessage.value = `Removed from ${item.name}`;
       emit("removed", { characterId: item.id, pictureIds: ids });
       const members = membersById.value?.[item.key];
@@ -675,9 +675,7 @@ async function toggleCharacter(item) {
     if (!idsToAdd.length) return;
     statusMessage.value = "Assigning...";
     try {
-      await apiClient.post(resolveUrl(`/characters/${item.id}/faces`), {
-        picture_ids: idsToAdd,
-      });
+      await addCharacterFaces(item.id, idsToAdd, apiOpts.value);
       statusMessage.value = `Assigned to ${item.name}`;
       emit("added", { characterId: item.id, pictureIds: ids });
       // Only update the optimistic member cache for pictures that actually have
@@ -712,9 +710,7 @@ async function addToLastSet() {
   statusMessage.value = `Adding to ${item.name}...`;
   try {
     await Promise.all(
-      ids.map((id) =>
-        apiClient.post(resolveUrl(`/picture_sets/${item.id}/members/${id}`)),
-      ),
+      ids.map((id) => addPictureToSet(item.id, id, apiOpts.value)),
     );
     statusMessage.value = `Added to ${item.name}`;
     const members = membersById.value?.[String(item.id)];
