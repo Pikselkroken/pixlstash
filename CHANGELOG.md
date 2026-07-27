@@ -21,6 +21,7 @@ Smart Scores are recomputed for your whole library the first time you open 1.8.0
 - Fix watch folders importing the same picture twice when it was picked up while the file was still being copied in.
 - Every API route now goes through one deny-by-default authorization gate that enforces object access from a declared policy, and routes that declare nothing are refused instead of served [Security:Moderate]
 - Fixed: Locality checks fail closed on IPs they cannot parse, and the test-hooks route is loopback-only [Security:Low]
+- Fix Windows updates failing with "Failed to uninstall old application files: 2" (often preceded by a misleading "PixlStash cannot be closed" prompt). The bundled torch ships license files nested so deeply that the previous version's uninstaller pushed them past the Windows 260-character path limit and aborted, killing every update. The installer now detects this and updates over the existing files instead, a failing old uninstaller no longer aborts the update, and new runtimes no longer bundle over-long paths.
 
 # [1.7.2] [Security:Critical]
 
