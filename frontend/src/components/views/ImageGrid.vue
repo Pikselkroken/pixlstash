@@ -4103,18 +4103,29 @@ function showSnapshotsWithDeleted(response) {
   }
 }
 
+// Only re-entrancy blocks this. It must NOT be gated on `scrapheapEmptyDisabled`:
+// that computed exists for the placeholder button's `:disabled` state, and its
+// `imagesLoading || filteredGridCount === 0` terms describe the loaded grid, not
+// the heap. The sidebar context menu navigates here and asks for the confirm in
+// the same gesture, so it always arrives while the view-switch fetch is still in
+// flight and the grid has just been reset — the request was silently dropped and
+// the menu item looked like it only navigated. What is actually in the heap is
+// decided one step later by the AUTHORITATIVE server preview, which counts the
+// whole heap (the grid can undercount) and declines to open the dialog when
+// there is nothing to delete.
 function confirmEmptyScrapheap() {
-  if (scrapheapEmptyDisabled.value) return;
+  if (scrapheapEmptying.value) return;
   // Route through the tokenized Delete-forever confirm (names any reference-folder
   // originals being destroyed); the purge runs on @confirm.
   openDeleteForeverForAll();
 }
 
 async function runEmptyScrapheap(includeProtected) {
-  if (scrapheapEmptyDisabled.value) {
-    deleteForeverOpen.value = false;
-    return;
-  }
+  // Re-entrancy only. The user has typed the confirm and we hold a single-use
+  // server token for exactly this purge; the grid's load state must not veto it,
+  // or a refetch that lands while the dialog is open would swallow a confirmed
+  // deletion. The server re-validates the token and the scope.
+  if (scrapheapEmptying.value) return;
   scrapheapEmptying.value = true;
   deleteForeverBusy.value = true;
   try {
@@ -7020,6 +7031,8 @@ defineExpose({
   // Lets the sidebar's Scrapheap context menu reach the same consent-gated
   // empty-scrapheap flow the empty-state placeholder uses. The caller navigates
   // to the scrapheap view first, so the post-confirm grid refetch is correct.
+  // It arrives mid-fetch by construction, which is why the confirm gates on a
+  // purge already running rather than on the grid's load state.
   confirmEmptyScrapheap,
 });
 

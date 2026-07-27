@@ -1308,7 +1308,9 @@ function handleUpdateSidebarThumbnailSize(value) {
 // The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
 // already switched the view to the scrapheap; defer to the next tick so the grid
 // is showing that view before we open its existing consent-gated empty-forever
-// confirm (whose post-confirm refetch then reconciles the right view).
+// confirm (whose post-confirm refetch then reconciles the right view). The grid
+// is still fetching that view at this point, by construction — the confirm is
+// deliberately not gated on that, and takes its counts from the server preview.
 function handleEmptyScrapheapFromSidebar() {
   nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
 }
