@@ -401,9 +401,13 @@ def main() -> int:
         populate_env(py, args.wheel, args.accel, cache_dir)
         strip_env(python_dir)
 
-    # Both branches: a runtime must never ship over-long paths (Windows
-    # MAX_PATH breaks installs/updates — see flatten_deep_license_trees).
-    flatten_deep_license_trees(python_dir)
+    # Both branches, Windows only: a runtime must never ship over-long paths
+    # (MAX_PATH breaks installs/updates — see flatten_deep_license_trees).
+    # macOS/Linux have no such limit and their torch builds legitimately ship
+    # deep non-license paths (e.g. ARM64 KleidiAI headers under
+    # torch/include/kai/ukernels/), so the check would only false-positive there.
+    if args.os == "win":
+        flatten_deep_license_trees(python_dir)
 
     runtime = {
         "accel": args.accel,
