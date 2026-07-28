@@ -667,6 +667,13 @@ def _set_payloads(client, env, headers=None, project_label=None):
     r = client.get(f"{API}/picture_sets/{env['set_id']}?sort=SMART_SCORE", **kw)
     assert r.status_code == 200, r.text
     out["pictures_smart_sort"] = r.json()["set"]
+    r = client.get(
+        f"{API}/picture_sets/{env['set_id']}?sort=CHARACTER_LIKENESS"
+        f"&reference_character_id={env['char_id']}",
+        **kw,
+    )
+    assert r.status_code == 200, r.text
+    out["pictures_likeness_sort"] = r.json()["set"]
     listed = {s["id"]: s for s in client.get(f"{API}/picture_sets", **kw).json()}
     out["list"] = listed[env["set_id"]]
     if project_label is not None:
