@@ -19,7 +19,19 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
-from pixlstash.utils.comfyui_utilities import extract_comfy_workflow_info
+from pixlstash.utils.comfyui_utilities import (
+    collect_seed_inputs,
+    extract_comfy_workflow_info,
+    extract_generation_info,
+    find_comfy_api_prompt,
+    summarize_comfy_workflow,
+)
+from pixlstash.services.comfyui_recipe_service import (
+    fetch_object_info,
+    preflight_prompt,
+    sanitize_prompt_graph,
+    unchecked_preflight,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.stacking import (
@@ -182,6 +194,63 @@ def _find_placeholder_usage(payload: dict) -> tuple[bool, list[str]]:
     return valid, missing
 
 
+def _resolve_picture_file(server, pic_id: int) -> str:
+    """Return the on-disk path for *pic_id*, or raise the matching HTTP error."""
+    pics = server.vault.db.run_immediate_read_task(
+        Picture.find, id=pic_id, select_fields=["id", "file_path"]
+    )
+    if not pics:
+        raise HTTPException(status_code=404, detail="Picture not found")
+    file_path = ImageUtils.resolve_picture_path(
+        server.vault.image_root, pics[0].file_path
+    )
+    if not file_path:
+        raise HTTPException(
+            status_code=404, detail="Picture file path could not be resolved"
+        )
+    return file_path
+
+
+def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
+    """Return the picture's embedded API-format ``prompt`` graph, or ``None``.
+
+    ``None`` covers every honest "there is nothing to replay" case: a UI-graph
+    only file, A1111 metadata, a stripped PNG, or a JPEG. It is not an error.
+
+    Raises:
+        HTTPException: 404 when the picture or its file cannot be resolved,
+            500 when the file exists but its metadata cannot be read.
+    """
+    file_path = _resolve_picture_file(server, pic_id)
+    try:
+        embedded_metadata = ImageUtils.extract_embedded_metadata(file_path)
+    except Exception as exc:
+        logger.warning(
+            "[comfyui] Failed to read embedded metadata for picture id=%s (%s): %s",
+            pic_id,
+            file_path,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to read embedded metadata"
+        ) from exc
+    return find_comfy_api_prompt(embedded_metadata)
+
+
+def _run_preflight(comfyui_url: str, prompt_graph: dict) -> dict:
+    """Pre-flight *prompt_graph*, degrading to "unchecked" if ComfyUI is down."""
+    try:
+        object_info = fetch_object_info(comfyui_url)
+    except RuntimeError as exc:
+        logger.info(
+            "[comfyui] Recipe pre-flight skipped, ComfyUI not reachable at %s: %s",
+            comfyui_url,
+            exc,
+        )
+        return unchecked_preflight(str(exc))
+    return preflight_prompt(prompt_graph, object_info)
+
+
 class ComfyUIWorkflowItemResponse(BaseModel):
     """A single discovered ComfyUI workflow with placeholder validation metadata."""
 
@@ -265,6 +334,41 @@ class ComfyUIPictureWorkflowResponse(BaseModel):
     loras: list[str] = []
     positive_prompt: Optional[str] = None
     seed: Optional[int] = None
+
+
+class ComfyUIPreflightResponse(BaseModel):
+    """Result of checking an embedded recipe against the target ComfyUI.
+
+    ``checked=False`` means the question could not be asked (ComfyUI
+    unreachable) — NOT that the recipe passed. ``ok`` stays True in that case
+    because the only thing actually known is that the check did not run.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    ok: bool = True
+    checked: bool = False
+    error: Optional[str] = None
+    missing_node_classes: list[str] = []
+    missing_models: list[dict] = []
+    unchecked_fields: int = 0
+
+
+class ComfyUIPictureRecipeResponse(BaseModel):
+    """Whether a picture carries a replayable ComfyUI recipe, and its state."""
+
+    model_config = ConfigDict(extra="allow")
+
+    available: bool = False
+    reason: Optional[str] = None
+    summary: Optional[str] = None
+    positive_prompt: Optional[str] = None
+    seed: Optional[int] = None
+    models: list[str] = []
+    loras: list[str] = []
+    node_count: int = 0
+    seed_inputs: list[dict] = []
+    preflight: Optional[ComfyUIPreflightResponse] = None
 
 
 def create_router(server) -> APIRouter:
@@ -795,5 +899,165 @@ def create_router(server) -> APIRouter:
             )
 
         return workflow_info
+
+    @router.get(
+        "/comfyui/pictures/{picture_id}/recipe",
+        summary="Get the replayable ComfyUI recipe for a picture",
+        description=(
+            "Reports whether a picture carries a replayable recipe — the "
+            "embedded API-format `prompt` chunk, i.e. the graph the ComfyUI "
+            "server actually executed — and pre-flights it against the target "
+            "ComfyUI's /object_info. The UI `workflow` chunk is deliberately "
+            "NOT considered: it is not submittable and is never converted. "
+            '`available: false` with `reason: "no_prompt_chunk"` is the normal '
+            "answer for imported photos, A1111 output and stripped files, not an "
+            "error. A `preflight` with `checked: false` means ComfyUI could not "
+            "be reached, not that the recipe passed."
+        ),
+        response_model=ComfyUIPictureRecipeResponse,
+    )
+    def get_picture_comfyui_recipe(request: Request, picture_id: str):
+        try:
+            pic_id = int(picture_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        prompt_graph = _load_embedded_api_prompt(server, pic_id)
+        if not prompt_graph:
+            return {"available": False, "reason": "no_prompt_chunk"}
+
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+        gen_info = extract_generation_info(prompt_graph)
+        stats = summarize_comfy_workflow(prompt_graph)
+        return {
+            "available": True,
+            "reason": None,
+            "summary": f"API Workflow · {stats['node_count']} nodes",
+            "positive_prompt": gen_info["positive_prompt"],
+            "seed": gen_info["seed"],
+            "models": gen_info["models"],
+            "loras": gen_info["loras"],
+            "node_count": stats["node_count"],
+            "seed_inputs": collect_seed_inputs(prompt_graph),
+            "preflight": _run_preflight(comfyui_url, prompt_graph),
+        }
+
+    @router.post(
+        "/comfyui/run_recipe",
+        summary="Re-run a picture's embedded ComfyUI recipe",
+        description=(
+            "Replays the API-format `prompt` graph embedded in a picture, with "
+            "fresh (or pinned) seeds. The graph is re-extracted from the file "
+            "server-side on every call — a client-supplied graph is never "
+            "accepted — and pre-flighted first; a pre-flight that finds missing "
+            "node classes or model files fails the request with 400 and names "
+            "them. Outputs land in the source picture's stack, exactly as "
+            "run_i2i does."
+        ),
+        response_model=ComfyUIRunResponse,
+    )
+    async def run_comfyui_recipe(request: Request, payload: dict = Body(...)):
+        raw_id = payload.get("picture_id")
+        if raw_id is None:
+            raise HTTPException(status_code=400, detail="picture_id is required")
+        try:
+            pic_id = int(raw_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid picture id")
+
+        client_id = payload.get("client_id") or payload.get("clientId") or None
+        if client_id is not None:
+            client_id = str(client_id)
+        should_stack = bool(payload.get("stack", True))
+        fixed_seed = _resolve_fixed_seed(payload)
+
+        prompt_graph = _load_embedded_api_prompt(server, pic_id)
+        if not prompt_graph:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This image has no executable workflow embedded, so it "
+                    "cannot be re-run. Use a template instead."
+                ),
+            )
+        workflow_instance = sanitize_prompt_graph(prompt_graph)
+
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = getattr(user, "comfyui_url", None) if user else None
+        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+
+        preflight = _run_preflight(comfyui_url, workflow_instance)
+        if not preflight.get("ok", True):
+            missing = list(preflight.get("missing_node_classes") or [])
+            missing += [
+                item.get("value")
+                for item in preflight.get("missing_models") or []
+                if item.get("value")
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Your ComfyUI is missing: " + ", ".join(str(m) for m in missing)
+                ),
+            )
+
+        output_node_ids = _extract_output_node_ids(workflow_instance, payload)
+        if fixed_seed is not None:
+            _apply_fixed_seed(workflow_instance, fixed_seed)
+        else:
+            _randomize_seeds(workflow_instance)
+
+        stack_id: int | None = None
+        if should_stack:
+            stack_id = server.vault.db.run_task(get_or_create_stack_for_picture, pic_id)
+            if stack_id:
+                prefix_seed = ""
+                for node in workflow_instance.values():
+                    if not isinstance(node, dict):
+                        continue
+                    if node.get("class_type") != "SaveImage":
+                        continue
+                    prefix_seed = str(
+                        (node.get("inputs") or {}).get("filename_prefix") or ""
+                    )
+                    break
+                prefix_value = build_stack_filename_prefix(
+                    prefix_seed, stack_id, pic_id
+                )
+                if not _apply_filename_prefix(workflow_instance, prefix_value):
+                    logger.warning(
+                        "Embedded recipe for picture %s has no SaveImage node to tag "
+                        "for stack %s; the output will import unstacked.",
+                        pic_id,
+                        stack_id,
+                    )
+
+        response_payload = _submit_comfyui_prompt(
+            comfyui_url, workflow_instance, client_id
+        )
+        prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
+        if prompt_id:
+            worker = threading.Thread(
+                target=_process_comfyui_outputs,
+                args=(
+                    server,
+                    comfyui_url,
+                    str(prompt_id),
+                    output_node_ids,
+                    stack_id,
+                    pic_id,
+                ),
+                kwargs={"is_i2i": True},
+                daemon=True,
+            )
+            worker.start()
+
+        return {
+            "status": "success",
+            "prompts": [{"picture_id": pic_id, "prompt_id": prompt_id}],
+        }
 
     return router
