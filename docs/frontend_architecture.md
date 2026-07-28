@@ -82,7 +82,7 @@ frontend/src/
 │   ├── reviews.js               # /reviews — tag-review session bookkeeping
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
-│   ├── comfyui.js               # /comfyui/* — workflows, run, abort
+│   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
 │   ├── taggers.js               # /taggers, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
@@ -128,7 +128,7 @@ frontend/src/
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
-    ├── io/          # Import / export / external-service connection
+    ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
     └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel)
 ```
 
@@ -509,6 +509,26 @@ Table of description-capable plugins (`supports_descriptions = true`). Columns: 
 ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects to the ComfyUI WebSocket for real-time progress. Props: `workflowId`, `clientId`, `imageIds`, `backendUrl`. Emits progress and completion events.
 
 **Grid refresh contract (in-app ComfyUI output):** the new grid card for an in-app ComfyUI result appears via the origin-aware WebSocket `picture_imported` insert (`useGridRealtimeSync.handleForeignUi` → `insertGridImagesById`, [§9](#9-real-time-updates-websocket)), **not** via a full grid refetch. `routes/comfyui.py` broadcasts the import with `source: "ui"` and no origin id, so every owner tab (including the originating one) does a targeted in-place insert at the sorted position with no pill and no reload — the old "image pops in → disappears → comes back" flicker is gone. The runner's `refresh-grid` emit is therefore **no longer wired to a grid refetch**: `ImageGrid.onComfyuiRefreshGrid` now only reconciles an **open** overlay (i2i/upscale) to the freshly-stacked output via `maybeRefreshOverlayForComfyui` (a guarded no-op when the overlay is closed or no comfyui refresh is pending). The same overlay reconcile is also kicked from `insertGridImagesById` after the WS insert lands, so the lightbox catches the new stack member without waiting for the runner's retry backoff. What the runner still drives unchanged: the ComfyUI **progress banner**, the **`refresh-sidebar`** emit (sidebar count), and the open-overlay refresh (including the failure path, which hides the banner / shows the error and no longer refetches the grid).
+
+#### `RemixDialog.vue` (`io/`, ~600 lines)
+The **"Generate variants…"** modal (Remix v1, v1.9). Opened from `ImageGridContextMenu`'s `open-remix-dialog` emit and mounted in `ImageGrid`. Props: `open`, `image` (the right-clicked picture), `selectedImageIds`, `clientId`, `backendUrl`, `stackOutputs`. Emits: `close`, `run` (`{prompts, pictureId, pictureIds}` — handed straight to `ComfyUiRunner.handleComfyuiRun`), `use-batch`.
+
+Two modes, chosen from a **vertical radio list** rather than a segmented control, specifically so v1.11's third mode (lock-replay: reproduce the original exactly) appends a row instead of forcing a redesign — and because only a list has room for a per-option reason:
+
+| Mode | What it runs | When it is offered |
+|---|---|---|
+| `template` | `POST /comfyui/run_i2i` with a chosen i2i workflow, the prompt, and a seed | always |
+| `recipe` | `POST /comfyui/run_recipe` — replays the executable graph embedded in the source file with a new seed | only when `GET /comfyui/pictures/{id}/recipe` returns `available` **and** the server's pre-flight passed |
+
+Load-bearing behaviours, each of which is a deliberate decision rather than an incidental one:
+
+- **An unavailable mode is shown disabled with a visible reason, never hidden and never a `title` tooltip.** The row carries `aria-disabled` (not the `disabled` attribute) so keyboard traversal still reaches it and the reason is discoverable; only activation is blocked. The reason text is deliberately NOT at the 38% disabled opacity — it is the one thing on that row that must be read. Three causes are worded differently on purpose, because they send the user to three different places: no embedded workflow, ComfyUI is missing named things, and ComfyUI could not be reached to check at all.
+- **"Could not check" is not "checked and broken."** An unreachable ComfyUI leaves recipe mode *selectable* with a caveat; the run's own error is then the authority. Reporting it as a failure would block a run that would have worked.
+- **No mode is preselected until the check resolves**, so the dialog cannot change its own state under a user who has already committed attention to it. Recipe wins the default when it is genuinely runnable (the user right-clicked *this* image; the recipe is the highest-fidelity expression of "from this"), and the choice is session-sticky under `comfyui_remix_mode`.
+- **There is no strength/denoise slider, on purpose.** No shipped template exposes a denoise input — the Flux2 Klein edit graph samples from an empty latent with the source entering as reference conditioning — so the control would move nothing. A slider that silently does nothing is worse than an absent one: it teaches a false model of cause and effect. Adding one means adding a template that actually has the input.
+- **The prompt's provenance decays.** Prefilled from the picture's Florence-2 `description` with a quiet "from image description" note; the note is replaced by a "Reset to description" button the moment the user types. A pending-description sentinel (`__description::…`) is never prefilled. The prompt field is hidden entirely when the selected workflow's `missing_placeholders` includes `{{caption}}`, mirroring `SelectionBar` — otherwise a user writes carefully into a void.
+- **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
+- **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
 
 #### `SearchOverlay.vue` (273 lines)
 Full-screen search input with history. Props: `modelValue`, `history`. Emits: `search`, `close`, `clear-history`. Keyboard: Enter to search, Escape to close.
