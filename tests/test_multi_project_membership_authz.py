@@ -636,6 +636,94 @@ def test_project_ids_is_empty_for_entity_scoped_tokens(env):
             )
 
 
+def _char_payloads(client, env, headers=None, project_label=None):
+    """Every character payload that serialises the scalar ``project_id``."""
+    kw = {"headers": headers} if headers else {}
+    out = {}
+    r = client.get(f"{API}/characters/{env['char_id']}", **kw)
+    assert r.status_code == 200, r.text
+    out["by_id"] = r.json()
+    listed = {c["id"]: c for c in client.get(f"{API}/characters", **kw).json()}
+    out["list"] = listed[env["char_id"]]
+    if project_label is not None:
+        r = client.get(f"{API}/projects/{project_label}/characters/SharedChar", **kw)
+        assert r.status_code == 200, r.text
+        out["by_name"] = r.json()
+    return out
+
+
+def _set_payloads(client, env, headers=None, project_label=None):
+    """Every picture-set payload that serialises the scalar ``project_id``,
+    including the sort-variant siblings of ``GET /picture_sets/{id}`` which
+    build their ``set`` payload on separate return paths."""
+    kw = {"headers": headers} if headers else {}
+    out = {}
+    r = client.get(f"{API}/picture_sets/{env['set_id']}?info=true", **kw)
+    assert r.status_code == 200, r.text
+    out["info"] = r.json()
+    r = client.get(f"{API}/picture_sets/{env['set_id']}", **kw)
+    assert r.status_code == 200, r.text
+    out["pictures"] = r.json()["set"]
+    r = client.get(f"{API}/picture_sets/{env['set_id']}?sort=SMART_SCORE", **kw)
+    assert r.status_code == 200, r.text
+    out["pictures_smart_sort"] = r.json()["set"]
+    listed = {s["id"]: s for s in client.get(f"{API}/picture_sets", **kw).json()}
+    out["list"] = listed[env["set_id"]]
+    if project_label is not None:
+        r = client.get(f"{API}/projects/{project_label}/picture_sets/SharedSet", **kw)
+        assert r.status_code == 200, r.text
+        out["by_name"] = r.json()
+    return out
+
+
+def test_scalar_project_id_is_derived_from_the_narrowed_list(env):
+    """R1b: the legacy scalar ``project_id`` must never name a project the token
+    has no grant for. It is derived from the narrowed ``project_ids`` at every
+    serialisation site — the primary project for the owner, the token's own
+    project for a project token, ``None`` for an entity-scoped token — never
+    read straight off the model."""
+    owner, anon, tokens, projects, mint = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+        env["mint"],
+    )
+    both = sorted([projects["P1"], projects["P2"]])
+
+    for site, payload in {
+        **_char_payloads(owner, env, project_label="P1"),
+        **_set_payloads(owner, env, project_label="P1"),
+    }.items():
+        assert payload["project_ids"] == both, f"owner narrowed on {site}"
+        assert payload["project_id"] == both[0], (
+            f"{site}: the owner's scalar must stay the primary project"
+        )
+
+    with _enforcing(env["server"]):
+        headers = _bearer(tokens["P2"])
+        for site, payload in {
+            **_char_payloads(anon, env, headers, project_label="P2"),
+            **_set_payloads(anon, env, headers, project_label="P2"),
+        }.items():
+            assert payload["project_ids"] == [projects["P2"]], site
+            assert payload["project_id"] == projects["P2"], (
+                f"{site}: scalar project_id named a project the P2 token has "
+                f"no grant for ({payload['project_id']})"
+            )
+
+        char_headers = _bearer(mint("character", env["char_id"]))
+        for site, payload in _char_payloads(anon, env, char_headers).items():
+            assert payload["project_id"] is None, (
+                f"characters.{site}: scalar leaked to a character token"
+            )
+        set_headers = _bearer(mint("picture_set", env["set_id"]))
+        for site, payload in _set_payloads(anon, env, set_headers).items():
+            assert payload["project_id"] is None, (
+                f"picture_sets.{site}: scalar leaked to a set token"
+            )
+
+
 # ---------------------------------------------------------------------------
 # R2 — a picture added to an already-multi-project entity joins *every* project
 # ---------------------------------------------------------------------------

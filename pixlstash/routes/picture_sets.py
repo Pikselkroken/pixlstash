@@ -40,6 +40,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     filter_visible_project_ids,
+    narrow_project_fields,
     visible_project_ids,
 )
 from pixlstash.picture_scoring import (
@@ -495,8 +496,8 @@ def create_router(server) -> APIRouter:
                 )
                 count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
-                set_dict["project_ids"] = filter_visible_project_ids(
-                    project_ids_by_set.get(int(s.id), []), visible_projects
+                narrow_project_fields(
+                    set_dict, project_ids_by_set.get(int(s.id), []), visible_projects
                 )
                 set_dict["picture_count"] = count
                 top_picture_ids = []
@@ -609,8 +610,10 @@ def create_router(server) -> APIRouter:
             if picture_set is None:
                 raise HTTPException(status_code=404, detail="Picture set not found")
             payload = safe_model_dict(picture_set)
-            payload["project_ids"] = filter_visible_project_ids(
-                picture_set_project_ids(session, int(picture_set.id)), visible_projects
+            narrow_project_fields(
+                payload,
+                picture_set_project_ids(session, int(picture_set.id)),
+                visible_projects,
             )
             return payload
 
@@ -1219,7 +1222,7 @@ def create_router(server) -> APIRouter:
 
         if info:
             set_dict = picture_set.dict()
-            set_dict["project_ids"] = set_project_ids
+            narrow_project_fields(set_dict, set_project_ids, visible_projects)
             set_dict["picture_count"] = len(picture_ids)
             return set_dict
 
@@ -1239,7 +1242,12 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
-            return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+            return {
+                "pictures": pictures,
+                "set": narrow_project_fields(
+                    safe_model_dict(picture_set), set_project_ids, visible_projects
+                ),
+            }
 
         if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
             if not reference_character_id:
@@ -1259,7 +1267,12 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
-            return {"pictures": pictures, "set": safe_model_dict(picture_set)}
+            return {
+                "pictures": pictures,
+                "set": narrow_project_fields(
+                    safe_model_dict(picture_set), set_project_ids, visible_projects
+                ),
+            }
 
         def fetch_pics(session, picture_ids):
             pics = Picture.find(
@@ -1294,7 +1307,7 @@ def create_router(server) -> APIRouter:
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
         pictures = _enrich_with_stack_counts(pictures)
         set_payload = safe_model_dict(picture_set)
-        set_payload["project_ids"] = set_project_ids
+        narrow_project_fields(set_payload, set_project_ids, visible_projects)
         return {"pictures": pictures, "set": set_payload}
 
     @router.patch(

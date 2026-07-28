@@ -507,6 +507,32 @@ def filter_visible_project_ids(
     return [pid for pid in ids if pid in visible]
 
 
+def narrow_project_fields(
+    payload: dict, project_ids: Iterable[int] | None, visible: set[int] | None
+) -> dict:
+    """Set scope-narrowed ``project_ids`` *and* ``project_id`` on *payload*.
+
+    The legacy scalar ``project_id`` must be derived from the narrowed list,
+    never serialised straight off the model: the stored scalar names the
+    entity's *primary* project, which a token scoped to a secondary project
+    (or to the entity itself) has no grant to learn (issue #125 / R1b).
+
+    Args:
+        payload: The response dict being built; mutated in place.
+        project_ids: The entity's full project membership, from the join table.
+        visible: The result of :func:`visible_project_ids`.
+
+    Returns:
+        The same *payload*, with ``project_ids`` narrowed and ``project_id``
+        set to the first narrowed id (the primary project when the caller may
+        see it) or ``None`` when none are visible.
+    """
+    narrowed = filter_visible_project_ids(project_ids, visible)
+    payload["project_ids"] = narrowed
+    payload["project_id"] = narrowed[0] if narrowed else None
+    return payload
+
+
 def _project_scope_picture_ids(session: Session, project_id: int) -> set[int]:
     """Picture ids that are members of *project_id* (excluding soft-deleted)."""
     rows = session.exec(

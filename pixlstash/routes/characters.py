@@ -59,7 +59,7 @@ from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
-    filter_visible_project_ids,
+    narrow_project_fields,
     VALID_COMBINE_MODES,
     visible_project_ids,
 )
@@ -848,8 +848,8 @@ def create_router(server) -> APIRouter:
                 if not found:
                     return None
                 payload = safe_model_dict(found[0])
-                payload["project_ids"] = filter_visible_project_ids(
-                    character_project_ids(session, id), visible_projects
+                narrow_project_fields(
+                    payload, character_project_ids(session, id), visible_projects
                 )
                 return payload
 
@@ -883,8 +883,10 @@ def create_router(server) -> APIRouter:
             if character is None:
                 raise HTTPException(status_code=404, detail="Character not found")
             payload = safe_model_dict(character)
-            payload["project_ids"] = filter_visible_project_ids(
-                character_project_ids(session, int(character.id)), visible_projects
+            narrow_project_fields(
+                payload,
+                character_project_ids(session, int(character.id)),
+                visible_projects,
             )
             return payload
 
@@ -1215,13 +1217,14 @@ def create_router(server) -> APIRouter:
                         project_ids_by_char.setdefault(int(cid), []).append(int(pid))
 
                 return [
-                    {
-                        **c.model_dump(exclude_unset=False),
-                        "has_reference_faces": c.id in chars_with_faces,
-                        "project_ids": filter_visible_project_ids(
-                            project_ids_by_char.get(int(c.id), []), visible_projects
-                        ),
-                    }
+                    narrow_project_fields(
+                        {
+                            **c.model_dump(exclude_unset=False),
+                            "has_reference_faces": c.id in chars_with_faces,
+                        },
+                        project_ids_by_char.get(int(c.id), []),
+                        visible_projects,
+                    )
                     for c in characters
                 ]
 
