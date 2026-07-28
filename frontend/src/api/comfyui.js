@@ -114,14 +114,21 @@ export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
  *
  * The response is
  * `{available, reason, summary, positive_prompt, seed, models, loras,
- * node_count, seed_inputs, preflight}`. A picture with no recipe is a normal
- * answer, not an error: the call resolves with `available: false` and
- * `reason: "no_prompt_chunk"` for imported photos, so callers should read
- * `available` rather than rely on a rejection.
+ * node_count, node_classes, source_is_imported, source_label, seed_inputs,
+ * preflight}`. A picture with no recipe is a normal answer, not an error: the
+ * call resolves with `available: false` and `reason: "no_prompt_chunk"` for
+ * imported photos, so callers should read `available` rather than rely on a
+ * rejection.
  *
  * `preflight` reports whether the recipe's models and LoRAs are present on the
  * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
  * reached at all — it does NOT mean the recipe passed its checks.
+ *
+ * `node_classes` is the distinct list of ComfyUI node classes the graph would
+ * execute. It is read from the file, so it is populated even when the
+ * pre-flight could not run, which is exactly when the user has nothing else to
+ * judge the graph by. `source_is_imported` / `source_label` say whether the
+ * file came from outside this PixlStash instance, and by which route.
  *
  * @param {number|string} pictureId
  * @param {Object} [options]
@@ -149,6 +156,11 @@ export async function getPictureRecipe(pictureId, { baseUrl = "" } = {}) {
  * @param {number} [body.seed] - the explicit seed, when `seed_mode` needs one.
  * @param {string} [body.client_id] - ties progress events back to this tab.
  * @param {boolean} [body.stack] - stack the outputs with their source.
+ * @param {boolean} [body.allow_unchecked] - the user's explicit acknowledgement
+ *   that they want to run a graph the server could not inspect. The backend
+ *   refuses the run with a 400 without it whenever `preflight.checked` is
+ *   false, so this must only ever be sent for a run the user acknowledged, and
+ *   never as a constant.
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
