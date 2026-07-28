@@ -26,13 +26,13 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (217 total)
+## Policy distribution (219 total)
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 16 |
-| `owner_only` | 83 |
+| `owner_only` | 85 |
 | `picture_scoped` | 33 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
@@ -241,6 +241,19 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/stacks/{stack_id}/members/{picture_id}` | owner_only |  | Set member position; PATCH blocked for READ tokens; owner only |
 | PATCH | `/api/v1/stacks/{stack_id}/order` | owner_only |  | Reorder stack; PATCH blocked for READ tokens; owner only |
 | GET | `/api/v1/stacks/{stack_id}/pictures` | scoped_list |  |  |
+
+### dedup.py
+
+Added 2026-07-28 with the v1.9 near-duplicate sweep (Lane E). Both routes are new,
+carry no inline authz code (the gate is the sole enforcement, §16.1), and are
+covered in both directions by `tests/test_dedup_sweep_api.py`
+(`test_scoped_read_token_is_denied_on_both_routes` /
+`test_owner_reaches_both_routes`).
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/sweep/policy` | owner_only |  | Sweep policy defaults/bounds; operator surface, returns no per-object data |
+| POST | `/api/v1/dedup/sweep/dry-run` | owner_only |  | Vault-wide near-duplicate plan (counts + picture ids across the whole library); cannot be narrowed to a share token's scope without leaking out-of-scope counts, same reasoning as tag_health. POST also blocked for READ tokens |
 
 ### characters.py
 
