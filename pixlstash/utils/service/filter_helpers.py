@@ -7,12 +7,12 @@ from sqlmodel import Session
 import numpy as np
 
 from pixlstash.db_models import (
-    Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
-    PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
 )
 from pixlstash.pixl_logging import get_logger
 
@@ -330,10 +330,14 @@ def fetch_scope_allowed_set_ids(server, request) -> set[int] | None:
     if token_scope.resource_type == "project":
 
         def _fetch_project_sets(session: Session, project_id: int) -> set[int]:
+            # Issue #125: a set may be in several projects, so membership comes
+            # from the join table, not the primary-project FK.
             return {
                 int(r[0])
                 for r in session.exec(
-                    select(PictureSet.id).where(PictureSet.project_id == project_id)
+                    select(PictureSetProjectMember.set_id).where(
+                        PictureSetProjectMember.project_id == project_id
+                    )
                 ).all()
             }
 
@@ -374,10 +378,14 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
     if token_scope.resource_type == "project":
 
         def _fetch_project_chars(session: Session, project_id: int) -> set[int]:
+            # Issue #125: a character may be in several projects, so membership
+            # comes from the join table, not the primary-project FK.
             return {
                 int(r[0])
                 for r in session.exec(
-                    select(Character.id).where(Character.project_id == project_id)
+                    select(CharacterProjectMember.character_id).where(
+                        CharacterProjectMember.project_id == project_id
+                    )
                 ).all()
             }
 
