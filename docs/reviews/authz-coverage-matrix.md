@@ -2,6 +2,7 @@
 
 - **Branch:** `backend-refactoring`
 - **Scope:** Phase 1 **Step 2 only** of the centralised-authz refactor (backend refactor plan §3.5). This PR **declares** the access policy of every mounted HTTP route in `pixlstash/authz/registry.py::ROUTE_POLICIES`. It does **not** enforce anything (`AUTHZ_GATE_ENFORCING = False`), remove any inline check, or change any handler. It is the regenerated coverage matrix the adversarial security review consumes.
+- **Arithmetic completeness (updated 2026-07-28):** **224 declared**, covering the **223** routes mounted in the default configuration plus **1 conditionally-mounted** route. The v1.9 delta is **+7 `owner_only`** rows for the DAM 1.2 operation log (`operations.py`, table below), taking `owner_only` 83 → **90**. No existing declaration changed. Original Step-2 text follows.
 - **Arithmetic completeness:** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
 - **WebSockets:** the 2 WS routes (`/ws/comfyui`, `/api/v1/ws/updates`) are **out of the HTTP registry by design** — their chokepoint is `authenticate_websocket` (plan §6). They remain acknowledged in `tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged`, and `registry.py` carries the `# WS routes: see authn/websocket.py` sentinel.
 
@@ -349,6 +350,30 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/reviews/{review_id}/archive` | owner_only |  | Owner-only review surface; write |
 | POST | `/api/v1/reviews/{review_id}/refresh` | owner_only |  | Owner-only review surface; write |
 | GET | `/api/v1/reviews/{review_id}/suggestions` | owner_only |  | Owner-only review read (inline rejects scoped tokens) |
+
+### operations.py (added 2026-07-28 — DAM 1.2 operation log)
+
+Vault-wide change history plus the undo/redo stack. `owner_only` throughout: the
+log enumerates every change to the **whole library** (a resource-scoped share
+token must not read it), and undo/redo write metadata back onto arbitrary
+pictures across the vault, which no resource-scoped grant can bound. Every write
+here is a POST outside `READ_SAFE_POST_PATHS`, so a READ (⇒ scoped) token is
+already middleware-blocked; the reads are the rows `owner_only` actually
+tightens. **No inline authz check exists in these handlers** — the gate is the
+sole enforcement (pinned by
+`tests/test_operation_log.py::test_operations_routes_have_no_inline_authz_check`),
+and the declarations themselves are pinned by
+`tests/test_operation_log.py::test_every_operations_route_is_declared_owner_only`.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/operations` | owner_only |  | Vault-wide change history; owner-only read |
+| GET | `/api/v1/operations/undo-state` | owner_only |  | Vault-wide undo/redo availability; owner-only read |
+| GET | `/api/v1/operations/{operation_id}` | owner_only |  | One operation incl. the recorded before/after metadata of its targets (arbitrary vault pictures); owner-only read |
+| POST | `/api/v1/operations/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/redo` | owner_only |  | Re-applies metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/{operation_id}/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/batches/{batch_id}/undo` | owner_only |  | Reverts a whole bulk action across the vault; owner-only write |
 
 ### tag_health.py
 
