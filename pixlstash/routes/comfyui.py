@@ -1124,8 +1124,11 @@ def create_router(server) -> APIRouter:
         if client_id is not None:
             client_id = str(client_id)
         should_stack = bool(payload.get("stack", True))
-        allow_unchecked = bool(
-            payload.get("allow_unchecked") or payload.get("allowUnchecked")
+        # Consent must be the literal JSON true: any string — including
+        # "false" — is truthy in Python and must not read as an acknowledgement.
+        allow_unchecked = (
+            payload.get("allow_unchecked") is True
+            or payload.get("allowUnchecked") is True
         )
         # Replay allows the full 64-bit range the core samplers declare; the
         # template paths keep the 32-bit ceiling. See _resolve_fixed_seed.

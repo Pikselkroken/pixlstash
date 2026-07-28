@@ -285,6 +285,24 @@ class TestRunRecipeRefusesAnUncheckedPreflight:
         assert r.status_code == 400, r.text
         assert submitted == []
 
+    def test_only_the_literal_true_is_consent(self, env, monkeypatch):
+        """R3b: consent is the JSON boolean ``true`` and nothing else. The
+        string ``"false"`` is truthy in Python, and ``"true"``/``1``/``[true]``
+        are the sibling spellings a lenient cast would also let through."""
+        server, client, pic_id = env
+        _comfyui_unreachable(monkeypatch)
+        submitted = _capture_submissions(monkeypatch)
+        for value in ("false", "true", 1, "yes", [True], {"v": True}):
+            for key in ("allow_unchecked", "allowUnchecked"):
+                r = client.post(
+                    f"{API}/comfyui/run_recipe",
+                    json={"picture_id": pic_id, key: value},
+                )
+                assert r.status_code == 400, (
+                    f"{key}={value!r} must not read as consent: {r.text}"
+                )
+        assert submitted == []
+
     def test_the_explicit_override_runs_it(self, env, monkeypatch):
         server, client, pic_id = env
         _comfyui_unreachable(monkeypatch)
