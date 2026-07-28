@@ -11,6 +11,8 @@ import {
   importWorkflow,
   runImageToImage,
   abortRun,
+  getPictureRecipe,
+  runRecipe,
 } from "./comfyui";
 
 beforeEach(() => {
@@ -77,5 +79,58 @@ describe("api/comfyui", () => {
     apiClient.post.mockResolvedValue({ data: {} });
     await abortRun();
     expect(apiClient.post).toHaveBeenCalledWith("/comfyui/abort");
+  });
+});
+
+describe("api/comfyui getPictureRecipe", () => {
+  it("GETs the relative route by default", async () => {
+    apiClient.get.mockResolvedValue({ data: { available: true } });
+    await getPictureRecipe(7);
+    expect(apiClient.get).toHaveBeenCalledWith("/comfyui/pictures/7/recipe");
+  });
+
+  it("prefixes an explicit backend base", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    await getPictureRecipe(7, { baseUrl: "http://host:9000" });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "http://host:9000/comfyui/pictures/7/recipe",
+    );
+  });
+
+  // A picture without a recipe is a normal answer, so the body is returned as
+  // it stands rather than being turned into an error.
+  it("returns the response body", async () => {
+    const body = { available: false, reason: "no_prompt_chunk" };
+    apiClient.get.mockResolvedValue({ data: body });
+    const result = await getPictureRecipe(7);
+    expect(result).toEqual(body);
+  });
+});
+
+describe("api/comfyui runRecipe", () => {
+  it("POSTs the payload to the relative route by default", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    const payload = { picture_id: 7, seed_mode: "randomize" };
+    await runRecipe(payload);
+    expect(apiClient.post).toHaveBeenCalledWith("/comfyui/run_recipe", payload);
+  });
+
+  it("prefixes an explicit backend base", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await runRecipe({ picture_id: 7 }, { baseUrl: "http://host:9000" });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "http://host:9000/comfyui/run_recipe",
+      { picture_id: 7 },
+    );
+  });
+
+  it("returns the response body", async () => {
+    const body = {
+      status: "queued",
+      prompts: [{ picture_id: 7, prompt_id: "p1" }],
+    };
+    apiClient.post.mockResolvedValue({ data: body });
+    const result = await runRecipe({ picture_id: 7 });
+    expect(result).toEqual(body);
   });
 });

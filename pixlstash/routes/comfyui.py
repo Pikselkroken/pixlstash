@@ -27,6 +27,9 @@ from pixlstash.utils.comfyui_utilities import (
     summarize_comfy_workflow,
 )
 from pixlstash.services.comfyui_recipe_service import (
+    MAX_SEED_64,
+    apply_seeds,
+    detect_seed_targets,
     fetch_object_info,
     preflight_prompt,
     sanitize_prompt_graph,
@@ -137,20 +140,23 @@ def _save_workflow_json(path: str, payload: dict) -> None:
 
 
 MAX_SEED = 2**32 - 1
-_SEED_RANGE_DETAIL = (
-    "Invalid seed: when seed_mode is 'fixed', seed must be an integer "
-    f"between 0 and {MAX_SEED}."
-)
 
 
-def _resolve_fixed_seed(payload: dict) -> int | None:
+def _resolve_fixed_seed(payload: dict, max_seed: int = MAX_SEED) -> int | None:
     """Return the validated fixed seed, or ``None`` when seeds should randomize.
 
     Shared by the t2i, i2i and recipe run handlers so all three accept the same
     ``seed_mode`` / ``seed`` pair.
 
+    ``max_seed`` differs by caller on purpose. The template paths keep the
+    historical 32-bit ceiling, which every sampler accepts. Recipe replay must
+    allow the full 64-bit range ComfyUI's core samplers declare: the shipped
+    ``Flux2-Klein-Image-Edit`` template's own ``noise_seed`` is 432262096973502,
+    so a 32-bit check would reject reproducing our own built-in's default.
+
     Args:
         payload: The raw request body.
+        max_seed: Inclusive upper bound to accept.
 
     Returns:
         The seed to pin, or ``None`` for ``seed_mode`` other than ``"fixed"``.
@@ -161,17 +167,21 @@ def _resolve_fixed_seed(payload: dict) -> int | None:
     """
     if payload.get("seed_mode", "random") != "fixed":
         return None
+    detail = (
+        "Invalid seed: when seed_mode is 'fixed', seed must be an integer "
+        f"between 0 and {max_seed}."
+    )
     raw_seed = payload.get("seed")
     if raw_seed is None or (isinstance(raw_seed, str) and raw_seed.strip() == ""):
-        raise HTTPException(status_code=400, detail=_SEED_RANGE_DETAIL)
+        raise HTTPException(status_code=400, detail=detail)
     try:
         seed_int = int(raw_seed)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail=_SEED_RANGE_DETAIL)
-    if not (0 <= seed_int <= MAX_SEED):
+        raise HTTPException(status_code=400, detail=detail)
+    if not (0 <= seed_int <= max_seed):
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid seed: must be between 0 and {MAX_SEED}.",
+            detail=f"Invalid seed: must be between 0 and {max_seed}.",
         )
     return seed_int
 
@@ -237,8 +247,46 @@ def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
     return find_comfy_api_prompt(embedded_metadata)
 
 
-def _run_preflight(comfyui_url: str, prompt_graph: dict) -> dict:
-    """Pre-flight *prompt_graph*, degrading to "unchecked" if ComfyUI is down."""
+def _describe_preflight_failure(preflight: dict) -> str:
+    """Turn a failed pre-flight into a sentence naming what to go and fix.
+
+    The three buckets get three different sentences on purpose: a missing node
+    pack, a missing model file and a missing input image send the user to three
+    different places, and collapsing them into "something is missing" is the
+    difference between an actionable message and a support ticket.
+    """
+    parts: list[str] = []
+    classes = preflight.get("missing_node_classes") or []
+    if classes:
+        parts.append("missing node types: " + ", ".join(str(c) for c in classes))
+    models = [
+        str(item.get("value")) for item in preflight.get("missing_models") or [] if item
+    ]
+    if models:
+        parts.append("missing models: " + ", ".join(models))
+    inputs = [
+        str(item.get("value"))
+        for item in preflight.get("missing_input_images") or []
+        if item
+    ]
+    if inputs:
+        parts.append(
+            "the source image this recipe loads is no longer in ComfyUI's input "
+            "folder: " + ", ".join(inputs)
+        )
+    if not parts:
+        return "This recipe cannot run on your ComfyUI."
+    return "Your ComfyUI cannot run this recipe — " + "; ".join(parts) + "."
+
+
+def _inspect_recipe(comfyui_url: str, prompt_graph: dict) -> tuple[dict, list[dict]]:
+    """Return ``(preflight, seed_targets)`` for *prompt_graph*.
+
+    Both answers come from the same ``/object_info`` fetch, so they are made
+    together. When ComfyUI is unreachable the pre-flight degrades to
+    *unchecked* (not *failed*) and seed detection falls back to the static
+    class list, which covers the core samplers but not custom node packs.
+    """
     try:
         object_info = fetch_object_info(comfyui_url)
     except RuntimeError as exc:
@@ -247,8 +295,11 @@ def _run_preflight(comfyui_url: str, prompt_graph: dict) -> dict:
             comfyui_url,
             exc,
         )
-        return unchecked_preflight(str(exc))
-    return preflight_prompt(prompt_graph, object_info)
+        return unchecked_preflight(str(exc)), collect_seed_inputs(prompt_graph)
+    return (
+        preflight_prompt(prompt_graph, object_info),
+        detect_seed_targets(prompt_graph, object_info),
+    )
 
 
 class ComfyUIWorkflowItemResponse(BaseModel):
@@ -351,6 +402,8 @@ class ComfyUIPreflightResponse(BaseModel):
     error: Optional[str] = None
     missing_node_classes: list[str] = []
     missing_models: list[dict] = []
+    missing_input_images: list[dict] = []
+    has_save_image: bool = False
     unchecked_fields: int = 0
 
 
@@ -930,19 +983,25 @@ def create_router(server) -> APIRouter:
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
 
-        gen_info = extract_generation_info(prompt_graph)
-        stats = summarize_comfy_workflow(prompt_graph)
+        graph = sanitize_prompt_graph(prompt_graph)
+        gen_info = extract_generation_info(graph)
+        stats = summarize_comfy_workflow(graph)
+        preflight, seed_targets = _inspect_recipe(comfyui_url, graph)
         return {
-            "available": True,
-            "reason": None,
+            # "Same workflow, new seed" is only a meaningful offer when there
+            # IS a seed to change. Without one the re-run is byte-identical,
+            # the import dedupes it on pixel_sha, and the user sees nothing
+            # happen at all — so report it as unavailable, with the reason.
+            "available": bool(seed_targets),
+            "reason": None if seed_targets else "no_seed_input",
             "summary": f"API Workflow · {stats['node_count']} nodes",
             "positive_prompt": gen_info["positive_prompt"],
             "seed": gen_info["seed"],
             "models": gen_info["models"],
             "loras": gen_info["loras"],
             "node_count": stats["node_count"],
-            "seed_inputs": collect_seed_inputs(prompt_graph),
-            "preflight": _run_preflight(comfyui_url, prompt_graph),
+            "seed_inputs": seed_targets,
+            "preflight": preflight,
         }
 
     @router.post(
@@ -972,7 +1031,9 @@ def create_router(server) -> APIRouter:
         if client_id is not None:
             client_id = str(client_id)
         should_stack = bool(payload.get("stack", True))
-        fixed_seed = _resolve_fixed_seed(payload)
+        # Replay allows the full 64-bit range the core samplers declare; the
+        # template paths keep the 32-bit ceiling. See _resolve_fixed_seed.
+        fixed_seed = _resolve_fixed_seed(payload, max_seed=MAX_SEED_64)
 
         prompt_graph = _load_embedded_api_prompt(server, pic_id)
         if not prompt_graph:
@@ -989,26 +1050,33 @@ def create_router(server) -> APIRouter:
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
 
-        preflight = _run_preflight(comfyui_url, workflow_instance)
+        preflight, seed_targets = _inspect_recipe(comfyui_url, workflow_instance)
         if not preflight.get("ok", True):
-            missing = list(preflight.get("missing_node_classes") or [])
-            missing += [
-                item.get("value")
-                for item in preflight.get("missing_models") or []
-                if item.get("value")
-            ]
+            raise HTTPException(
+                status_code=400, detail=_describe_preflight_failure(preflight)
+            )
+        if preflight.get("checked") and not preflight.get("has_save_image"):
+            # Would run to completion and import nothing — refuse now rather
+            # than after the full generation wait.
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Your ComfyUI is missing: " + ", ".join(str(m) for m in missing)
+                    "This workflow has no SaveImage node, so it produces nothing "
+                    "PixlStash can import."
+                ),
+            )
+        if not seed_targets:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This workflow has no random seed, so re-running it would "
+                    "produce the identical image. Edit the prompt or use a "
+                    "template instead."
                 ),
             )
 
         output_node_ids = _extract_output_node_ids(workflow_instance, payload)
-        if fixed_seed is not None:
-            _apply_fixed_seed(workflow_instance, fixed_seed)
-        else:
-            _randomize_seeds(workflow_instance)
+        apply_seeds(workflow_instance, seed_targets, fixed_seed)
 
         stack_id: int | None = None
         if should_stack:

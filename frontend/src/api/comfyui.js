@@ -110,6 +110,56 @@ export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Read whether a picture carries a replayable ComfyUI recipe.
+ *
+ * The response is
+ * `{available, reason, summary, positive_prompt, seed, models, loras,
+ * node_count, seed_inputs, preflight}`. A picture with no recipe is a normal
+ * answer, not an error: the call resolves with `available: false` and
+ * `reason: "no_prompt_chunk"` for imported photos, so callers should read
+ * `available` rather than rely on a rejection.
+ *
+ * `preflight` reports whether the recipe's models and LoRAs are present on the
+ * ComfyUI server. `preflight.checked === false` means ComfyUI could not be
+ * reached at all — it does NOT mean the recipe passed its checks.
+ *
+ * @param {number|string} pictureId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""] - explicit backend base, if the caller
+ *   has one.
+ * @returns {Promise<Object>} the response body described above.
+ */
+export async function getPictureRecipe(pictureId, { baseUrl = "" } = {}) {
+  const res = await apiClient.get(
+    comfyUrl(`/pictures/${pictureId}/recipe`, baseUrl),
+  );
+  return res.data;
+}
+
+/**
+ * Re-run a picture's own recipe to generate variants of it.
+ *
+ * The graph itself is never sent by the client: the backend re-extracts it from
+ * the picture on every call, so a run always replays what the picture actually
+ * carries rather than a copy the client may have gone stale on.
+ *
+ * @param {Object} body
+ * @param {number|string} body.picture_id - the picture whose recipe to replay.
+ * @param {string} body.seed_mode - how the seed is chosen for the variants.
+ * @param {number} [body.seed] - the explicit seed, when `seed_mode` needs one.
+ * @param {string} [body.client_id] - ties progress events back to this tab.
+ * @param {boolean} [body.stack] - stack the outputs with their source.
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body:
+ *   `{status, prompts: [{picture_id, prompt_id}]}`.
+ */
+export async function runRecipe(body, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(comfyUrl("/run_recipe", baseUrl), body);
+  return res.data;
+}
+
+/**
  * Run a text-to-image workflow.
  *
  * @param {Object} body - the prompt, workflow name, and the view context
