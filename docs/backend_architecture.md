@@ -602,6 +602,14 @@ stay, holding the entity's **primary** project (lowest member project id, or
   entity becomes invisible to every project-scoped read and authorization check.
   Member pictures follow via `reconcile_entity_projects_change` (the multi-project
   generalisation of `reconcile_entity_project_change`, which is now a shim).
+- **Write-propagation:** every path that adds a picture to an entity (set member
+  add / bulk add / bulk replace, face assignment, the import task's set and
+  character drop targets) must anchor it in **all** the entity's projects, via
+  `picture_set_project_ids` / `character_project_ids` +
+  `reconcile_entity_projects_change`. Reading the scalar FK there joins the
+  picture to the primary project only, so a secondary project's token is 403'd on
+  a picture its set legitimately shares (finding R2,
+  `docs/reviews/v1.9-authz-signoff.md`).
 - **Read:** use the correlated predicates in
   [`db_models/entity_project.py`](../pixlstash/db_models/entity_project.py) —
   `character_in_project` / `character_in_no_project` /
@@ -611,6 +619,13 @@ stay, holding the entity's **primary** project (lowest member project id, or
   reads and on `POST`/`PATCH` payloads; the legacy scalar `project_id` is still
   accepted on write and still returned on read. `project_ids` wins when both are
   sent. No routes were added.
+- **Serialisation is scope-narrowed.** `project_ids` is membership metadata about
+  *other* projects, not part of the granted object, so every site that serialises
+  it intersects it with `visible_project_ids(server, request)`
+  (`utils/service/filter_helpers.py`) — same ladder as
+  `fetch_scope_allowed_set_ids`: a project token sees only its own id, a
+  character / set / picture token sees `[]`, the owner sees everything (finding
+  R1, `docs/reviews/v1.9-authz-signoff.md`).
 - The FK is retired by a post-1.12 cleanup, not here; migration
   `0086_add_entity_project_membership` is purely additive and backfills the join
   from the existing FKs.

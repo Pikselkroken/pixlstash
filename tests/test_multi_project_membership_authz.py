@@ -29,13 +29,17 @@ Fixture shape (deliberately three projects, not two): set ``S`` and character
 
 import contextlib
 import gc
+import io
 import json
 import os
 import tempfile
+import time
 
 import pytest
+from PIL import Image
 from starlette.testclient import TestClient
 
+from pixlstash.db_models import Face
 from pixlstash.server import Server
 from tests.authz_guard import (  # noqa: F401
     assert_real_route,
@@ -176,6 +180,9 @@ def env():
             "p1_only_set_id": p1_only_set_id,
             "p1_only_char_id": p1_only_char_id,
             "tokens": {label: mint("project", pid) for label, pid in projects.items()},
+            # Exposed so a test can mint a character- / set-scoped token too: the
+            # `project_ids` narrowing (R1) has a different rung for those.
+            "mint": mint,
         }
     finally:
         server.__exit__(None, None, None)
@@ -511,3 +518,300 @@ def test_deleting_a_project_leaves_the_other_membership_intact(env):
             ).status_code
             == 200
         )
+
+
+# ---------------------------------------------------------------------------
+# R1 — `project_ids` is membership metadata about *other* projects
+# ---------------------------------------------------------------------------
+#
+# Every serialisation of a multi-project entity carries the full membership list.
+# The entity itself is in scope for the token reading it; the ids of the *other*
+# projects it is filed under are not, and are obtainable from no endpoint that
+# token may call (``GET /projects/{other_id}`` is project-scoped and 403s). So the
+# list is intersected with the token's visible projects, on the same ladder
+# ``fetch_scope_allowed_set_ids`` implements. The owner is never narrowed.
+
+
+def _char_project_ids(client, env, headers=None):
+    """``project_ids`` for the shared character on every route that serialises it."""
+    kw = {"headers": headers} if headers else {}
+    out = {}
+    r = client.get(f"{API}/characters/{env['char_id']}", **kw)
+    assert r.status_code == 200, r.text
+    out["by_id"] = r.json()["project_ids"]
+    listed = {c["id"]: c for c in client.get(f"{API}/characters", **kw).json()}
+    assert env["char_id"] in listed, "the shared character must still be listed"
+    out["list"] = listed[env["char_id"]]["project_ids"]
+    return out
+
+
+def _set_project_ids(client, env, headers=None):
+    """``project_ids`` for the shared set on every route that serialises it."""
+    kw = {"headers": headers} if headers else {}
+    out = {}
+    r = client.get(f"{API}/picture_sets/{env['set_id']}?info=true", **kw)
+    assert r.status_code == 200, r.text
+    out["info"] = r.json()["project_ids"]
+    r = client.get(f"{API}/picture_sets/{env['set_id']}", **kw)
+    assert r.status_code == 200, r.text
+    out["pictures"] = r.json()["set"]["project_ids"]
+    listed = {s["id"]: s for s in client.get(f"{API}/picture_sets", **kw).json()}
+    assert env["set_id"] in listed, "the shared set must still be listed"
+    out["list"] = listed[env["set_id"]]["project_ids"]
+    return out
+
+
+def test_project_ids_narrowed_to_the_tokens_own_project(env):
+    """A project-scoped token reads the shared entity (200 — over-blocking would
+    be its own regression) but learns only its own project id from
+    ``project_ids``; the owner keeps the full membership list."""
+    owner, anon, tokens, projects = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+    )
+    both = sorted([projects["P1"], projects["P2"]])
+
+    for site, ids in _char_project_ids(owner, env).items():
+        assert ids == both, f"owner must not be narrowed on characters.{site}"
+    for site, ids in _set_project_ids(owner, env).items():
+        assert ids == both, f"owner must not be narrowed on picture_sets.{site}"
+    assert (
+        owner.get(f"{API}/projects/P1/characters/SharedChar").json()["project_ids"]
+        == both
+    )
+    assert (
+        owner.get(f"{API}/projects/P1/picture_sets/SharedSet").json()["project_ids"]
+        == both
+    )
+
+    with _enforcing(env["server"]):
+        for label in ("P1", "P2"):
+            headers = _bearer(tokens[label])
+            mine = [projects[label]]
+
+            for site, ids in _char_project_ids(anon, env, headers).items():
+                assert ids == mine, (
+                    f"{label} token must not learn the other project's id from "
+                    f"characters.{site}; got {ids}"
+                )
+            for site, ids in _set_project_ids(anon, env, headers).items():
+                assert ids == mine, (
+                    f"{label} token must not learn the other project's id from "
+                    f"picture_sets.{site}; got {ids}"
+                )
+
+            # The name-derived siblings serialise it too.
+            r = anon.get(
+                f"{API}/projects/{label}/characters/SharedChar", headers=headers
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["project_ids"] == mine
+            r = anon.get(
+                f"{API}/projects/{label}/picture_sets/SharedSet", headers=headers
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["project_ids"] == mine
+
+
+def test_project_ids_is_empty_for_entity_scoped_tokens(env):
+    """The other rung of the ladder: a character- or picture-set-scoped token has
+    no project visibility at all, so ``project_ids`` serialises as ``[]``. It
+    still reads its own entity — the narrowing must not turn into a refusal."""
+    anon, mint = env["anon"], env["mint"]
+    char_headers = _bearer(mint("character", env["char_id"]))
+    set_headers = _bearer(mint("picture_set", env["set_id"]))
+
+    with _enforcing(env["server"]):
+        for site, ids in _char_project_ids(anon, env, char_headers).items():
+            assert ids == [], (
+                f"a character token has no project visibility; characters.{site} "
+                f"leaked {ids}"
+            )
+        for site, ids in _set_project_ids(anon, env, set_headers).items():
+            assert ids == [], (
+                f"a set token has no project visibility; picture_sets.{site} "
+                f"leaked {ids}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# R2 — a picture added to an already-multi-project entity joins *every* project
+# ---------------------------------------------------------------------------
+#
+# Six write paths used to read the scalar primary FK to decide which
+# ``PictureProjectMember`` row to create, so a picture added *after* the entity
+# went multi-project silently joined the primary project only: the secondary
+# project's token was 403'd and the owner's own ``?project_id=`` listing omitted
+# it. That is an under-grant, never a leak — but it is the feature's headline case
+# and invisible to the operator. Each path is pinned in both directions.
+
+
+def _assert_picture_reaches_both_projects(env, picture_id, where):
+    """The picture is anchored in P1 *and* P2 — and still not in P3."""
+    owner, anon, tokens, projects = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+    )
+    for label in ("P1", "P2"):
+        r = owner.get(f"{API}/pictures?project_id={projects[label]}")
+        assert r.status_code == 200, r.text
+        ids = {p["id"] for p in r.json()}
+        assert picture_id in ids, (
+            f"{where}: the owner's {label} listing must contain picture "
+            f"{picture_id}; got {sorted(ids)}"
+        )
+    ids = {
+        p["id"] for p in owner.get(f"{API}/pictures?project_id={projects['P3']}").json()
+    }
+    assert picture_id not in ids, (
+        f"{where}: an unrelated project must not gain the picture"
+    )
+
+    with _enforcing(env["server"]):
+        for label in ("P1", "P2"):
+            r = anon.get(
+                f"{API}/pictures/{picture_id}/metadata", headers=_bearer(tokens[label])
+            )
+            assert r.status_code == 200, (
+                f"{where}: the {label} token must reach the picture; got "
+                f"{r.status_code}: {r.text}"
+            )
+        r = anon.get(
+            f"{API}/pictures/{picture_id}/metadata", headers=_bearer(tokens["P3"])
+        )
+        assert r.status_code == 403, f"{where}: unrelated project must 403: {r.text}"
+
+
+def test_add_member_to_shared_set_joins_every_project(env):
+    """``POST /picture_sets/{id}/members/{picture_id}`` — the reviewer's original
+    reproduction: a picture added *after* the set became P1+P2."""
+    r = env["owner"].post(f"{API}/picture_sets/{env['set_id']}/members/{env['pic_b']}")
+    assert r.status_code in (200, 201), r.text
+    _assert_picture_reaches_both_projects(
+        env, env["pic_b"], "POST /picture_sets/{id}/members/{picture_id}"
+    )
+
+
+def test_bulk_add_to_shared_set_joins_every_project(env):
+    """``POST /picture_sets/{id}/members`` (bulk add), same semantics."""
+    r = env["owner"].post(
+        f"{API}/picture_sets/{env['set_id']}/members",
+        json={"picture_ids": [env["pic_b"]]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["added"] >= 1, r.text
+    _assert_picture_reaches_both_projects(
+        env, env["pic_b"], "POST /picture_sets/{id}/members"
+    )
+
+
+def test_bulk_replace_members_joins_every_project(env):
+    """``PUT /picture_sets/{id}/members`` (replace) rebuilds the whole member
+    list, so every member must be re-anchored in every project."""
+    r = env["owner"].put(
+        f"{API}/picture_sets/{env['set_id']}/members",
+        json={"picture_ids": [env["pic_a"], env["pic_b"]]},
+    )
+    assert r.status_code == 200, r.text
+    for pic_id in (env["pic_a"], env["pic_b"]):
+        _assert_picture_reaches_both_projects(
+            env, pic_id, "PUT /picture_sets/{id}/members"
+        )
+
+
+def _make_face(server, picture_id: int) -> int:
+    """Insert a synthetic face row on *picture_id*.
+
+    The face-assign path is exercised through its ``face_ids`` branch so the test
+    does not depend on the detector finding a face in the CPU test profile (the
+    reviewer's own probe failed twice for exactly that reason). ``face_index`` is
+    deliberately far outside the detector's range so a real extraction running in
+    the background cannot collide with the (picture, frame, face) unique
+    constraint.
+    """
+
+    def _do(session):
+        face = Face(
+            picture_id=int(picture_id),
+            frame_index=0,
+            face_index=900,
+            bbox=[0, 0, 16, 16],
+        )
+        session.add(face)
+        session.commit()
+        session.refresh(face)
+        return int(face.id)
+
+    return server.vault.db.run_task(_do)
+
+
+def test_face_assignment_to_shared_character_joins_every_project(env):
+    """``POST /characters/{id}/faces`` — the character twin of the set paths."""
+    face_id = _make_face(env["server"], env["pic_b"])
+    r = env["owner"].post(
+        f"{API}/characters/{env['char_id']}/faces", json={"face_ids": [face_id]}
+    )
+    assert r.status_code == 200, r.text
+    _assert_picture_reaches_both_projects(
+        env, env["pic_b"], "POST /characters/{id}/faces"
+    )
+
+
+def _png_bytes(color=(11, 99, 200)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (48, 48), color=color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _staged_import(client, open_body, filename, timeout_s=60) -> None:
+    """Run one staging import (open → stream → commit → wait) to completion."""
+    r = client.post(f"{API}/pictures/import/staging", json=open_body)
+    assert r.status_code == 200, r.text
+    staging_id = r.json()["staging_id"]
+    r = client.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", (filename, _png_bytes(), "image/png"))],
+    )
+    assert r.status_code == 200, r.text
+    r = client.post(f"{API}/pictures/import/staging/{staging_id}/commit")
+    assert r.status_code == 200, r.text
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        last = client.get(f"{API}/pictures/import/staging/{staging_id}/status").json()
+        if last["stage"] in ("completed", "failed"):
+            assert last["stage"] == "completed", last
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"staging {staging_id} never finished: {last}")
+
+
+def _imported_picture_id(env):
+    """The one picture id that is not part of the fixture's two uploads."""
+    ids = {p["id"] for p in env["owner"].get(f"{API}/pictures").json()}
+    fresh = ids - {env["pic_a"], env["pic_b"]}
+    assert len(fresh) == 1, f"expected exactly one newly imported picture, got {fresh}"
+    return fresh.pop()
+
+
+def test_import_into_shared_set_joins_every_project(env):
+    """``PictureImportTask._apply_set`` — the drop-target import path must read the
+    same membership as the route it mirrors."""
+    _staged_import(env["owner"], {"set_id": env["set_id"]}, "import-into-set.png")
+    _assert_picture_reaches_both_projects(
+        env, _imported_picture_id(env), "import with set_id drop target"
+    )
+
+
+def test_import_into_shared_character_joins_every_project(env):
+    """``PictureImportTask._apply_character`` — the character drop target."""
+    _staged_import(
+        env["owner"], {"character_id": env["char_id"]}, "import-into-char.png"
+    )
+    _assert_picture_reaches_both_projects(
+        env, _imported_picture_id(env), "import with character_id drop target"
+    )

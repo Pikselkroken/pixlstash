@@ -37,7 +37,11 @@ from pixlstash.services.set_lock_service import (
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.pixl_logging import get_logger
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    filter_visible_project_ids,
+    visible_project_ids,
+)
 from pixlstash.picture_scoring import (
     find_pictures_by_character_likeness,
     find_pictures_by_smart_score,
@@ -429,6 +433,9 @@ def create_router(server) -> APIRouter:
         elif token_scope is not None and token_scope.resource_type is not None:
             # Any other scoped token (e.g. character) has no access to picture sets
             return []
+        # A scoped token may read the set but must not learn which *other*
+        # projects it belongs to (issue #125 / R1).
+        visible_projects = visible_project_ids(server, request)
         hidden_tags = _get_hidden_tags_from_request(request)
 
         project_filter = None
@@ -488,7 +495,9 @@ def create_router(server) -> APIRouter:
                 )
                 count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
-                set_dict["project_ids"] = sorted(project_ids_by_set.get(int(s.id), []))
+                set_dict["project_ids"] = filter_visible_project_ids(
+                    project_ids_by_set.get(int(s.id), []), visible_projects
+                )
                 set_dict["picture_count"] = count
                 top_picture_ids = []
                 if filtered_ids:
@@ -583,6 +592,8 @@ def create_router(server) -> APIRouter:
     def get_picture_set_by_name(
         request: Request, project_name: str, picture_set_name: str
     ):
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -598,8 +609,8 @@ def create_router(server) -> APIRouter:
             if picture_set is None:
                 raise HTTPException(status_code=404, detail="Picture set not found")
             payload = safe_model_dict(picture_set)
-            payload["project_ids"] = picture_set_project_ids(
-                session, int(picture_set.id)
+            payload["project_ids"] = filter_visible_project_ids(
+                picture_set_project_ids(session, int(picture_set.id)), visible_projects
             )
             return payload
 
@@ -1122,6 +1133,11 @@ def create_router(server) -> APIRouter:
                 except (TypeError, ValueError):
                     raise HTTPException(status_code=400, detail="Invalid project_id")
 
+        # A scoped token may read the set but must not learn which *other*
+        # projects it belongs to (issue #125 / R1). Both serialisation sites
+        # below reuse the narrowed list returned here.
+        visible_projects = visible_project_ids(server, request)
+
         def fetch_set(session, id):
             picture_set = session.get(PictureSet, id)
             if not picture_set:
@@ -1146,7 +1162,13 @@ def create_router(server) -> APIRouter:
                     continue
                 seen.add(pic_id)
                 picture_ids.append(pic_id)
-            return picture_set, picture_ids, picture_set_project_ids(session, id)
+            return (
+                picture_set,
+                picture_ids,
+                filter_visible_project_ids(
+                    picture_set_project_ids(session, id), visible_projects
+                ),
+            )
 
         picture_set, picture_ids, set_project_ids = (
             server.vault.db.run_immediate_read_task(fetch_set, id)
@@ -1594,23 +1616,15 @@ def create_router(server) -> APIRouter:
                 if exists is None:
                     session.add(PictureSetMember(set_id=id, picture_id=picture.id))
                     added_any = True
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == picture.id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=picture.id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    if picture.project_id != picture_set.project_id:
-                        picture.project_id = picture_set.project_id
-                    session.add(picture)
+            # Issue #125: the set may belong to several projects, so the picture
+            # joins *all* of them. Reading the primary FK here would leave the
+            # picture out of every secondary project the set is shared with.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=[picture.id for picture in pictures],
+                ensure_project_ids=picture_set_project_ids(session, id),
+                remove_project_ids=[],
+            )
             session.add(picture_set)
             session.commit()
             return added_any
@@ -1742,6 +1756,7 @@ def create_router(server) -> APIRouter:
                 ).all()
             )
             added = 0
+            added_ids: list[int] = []
             for pic_id in picture_ids:
                 if pic_id in existing:
                     continue
@@ -1749,24 +1764,17 @@ def create_router(server) -> APIRouter:
                 if not pic or pic.deleted:
                     continue
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic_id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic_id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    pic.project_id = picture_set.project_id
-                    session.add(pic)
+                added_ids.append(pic_id)
                 existing.add(pic_id)
                 added += 1
+            # Issue #125: propagate to every project the set belongs to, not just
+            # the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=added_ids,
+                ensure_project_ids=picture_set_project_ids(session, set_id),
+                remove_project_ids=[],
+            )
             session.commit()
             return added
 
@@ -1826,6 +1834,7 @@ def create_router(server) -> APIRouter:
             # Add new members
             added = 0
             seen = set()
+            member_ids: list[int] = []
             for pic_id in picture_ids:
                 if pic_id in seen:
                     continue
@@ -1834,23 +1843,16 @@ def create_router(server) -> APIRouter:
                 if not pic or pic.deleted:
                     continue
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-                if picture_set.project_id is not None:
-                    membership = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic_id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if membership is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic_id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    pic.project_id = picture_set.project_id
-                    session.add(pic)
+                member_ids.append(pic_id)
                 added += 1
+            # Issue #125: propagate to every project the set belongs to, not just
+            # the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=member_ids,
+                ensure_project_ids=picture_set_project_ids(session, set_id),
+                remove_project_ids=[],
+            )
             session.commit()
             return added
 

@@ -59,7 +59,9 @@ from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    filter_visible_project_ids,
     VALID_COMBINE_MODES,
+    visible_project_ids,
 )
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -837,13 +839,18 @@ def create_router(server) -> APIRouter:
     )
     def get_character_by_id(request: Request, id: int):
         try:
+            # A scoped token may read the character but must not learn which
+            # *other* projects it belongs to (issue #125 / R1).
+            visible_projects = visible_project_ids(server, request)
 
             def fetch(session):
                 found = Character.find(session, id=id)
                 if not found:
                     return None
                 payload = safe_model_dict(found[0])
-                payload["project_ids"] = character_project_ids(session, id)
+                payload["project_ids"] = filter_visible_project_ids(
+                    character_project_ids(session, id), visible_projects
+                )
                 return payload
 
             return server.vault.db.run_immediate_read_task(fetch)
@@ -859,6 +866,8 @@ def create_router(server) -> APIRouter:
     def get_character_by_project_and_name(
         request: Request, project_name: str, character_name: str
     ):
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session):
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
@@ -874,7 +883,9 @@ def create_router(server) -> APIRouter:
             if character is None:
                 raise HTTPException(status_code=404, detail="Character not found")
             payload = safe_model_dict(character)
-            payload["project_ids"] = character_project_ids(session, int(character.id))
+            payload["project_ids"] = filter_visible_project_ids(
+                character_project_ids(session, int(character.id)), visible_projects
+            )
             return payload
 
         result = server.vault.db.run_immediate_read_task(fetch)
@@ -1141,6 +1152,7 @@ def create_router(server) -> APIRouter:
         project_id: str | None = Query(default=None),
     ):
         token_scope = getattr(request.state, "token_scope", None)
+        visible_projects = visible_project_ids(server, request)
         try:
             logger.debug(
                 f"Fetching characters with name: {name}, project_id: {project_id}"
@@ -1206,7 +1218,9 @@ def create_router(server) -> APIRouter:
                     {
                         **c.model_dump(exclude_unset=False),
                         "has_reference_faces": c.id in chars_with_faces,
-                        "project_ids": sorted(project_ids_by_char.get(int(c.id), [])),
+                        "project_ids": filter_visible_project_ids(
+                            project_ids_by_char.get(int(c.id), []), visible_projects
+                        ),
                     }
                     for c in characters
                 ]
