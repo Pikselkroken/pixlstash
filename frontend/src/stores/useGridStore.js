@@ -21,7 +21,11 @@ export const useGridStore = defineStore("grid", () => {
   // display preference persisted like `columns`; the justified path is driven
   // by useJustifiedLayout + useVirtualScroll and consumed by ImageGrid's
   // `thumbnailMode` prop.
-  const thumbnailMode = ref("square");
+  // Read-only starts justified: those sessions never fetch /users/me/config
+  // (fetchConfig returns early), so this default is the whole setting for them,
+  // and justified is how the demo is meant to look. Owner sessions keep square
+  // and are overwritten by the stored preference as soon as the config lands.
+  const thumbnailMode = ref(isReadOnly.value ? "justified" : "square");
   const compactMode = ref(isReadOnly.value);
   const showStars = ref(!isReadOnly.value);
   const showFaceBboxes = ref(false);
