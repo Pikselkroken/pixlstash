@@ -349,3 +349,128 @@ def test_watch_folder_retries_after_transient_hash_failure(monkeypatch):
                     "Expected the watched file to be imported after a transient "
                     "hash failure (retry on a later scan)"
                 )
+
+
+def test_watch_folder_waits_for_a_file_to_finish_being_written():
+    """A file still being written must not be imported until it settles.
+
+    Regression test: the finder scans every 50ms, so it can see a file that is
+    still being copied into the watch folder. ``pixel_sha`` is a digest of the
+    raw file bytes, so hashing a half-written file yields a hash that does not
+    describe the finished file. The duplicate check therefore missed it and the
+    settled file was imported a *second* time, leaving one truncated picture
+    plus a duplicate. This reproduced as an intermittent CI failure in
+    ``test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan``
+    (3 pictures for 2 files).
+
+    Rather than racing the planner (which backs off to 10s when idle), the file
+    is left incomplete *before* the folder is registered, so the very first scan
+    is guaranteed to see it still growing. It is short by only its last few
+    bytes, which keeps it decodable — that is precisely the case the duplicate
+    check cannot catch, because a truncated file that fails to decode is already
+    handled as a transient failure and retried.
+    """
+    from pixlstash.db_models.import_folder import ImportFolder
+    from pixlstash.utils.image_processing.image_utils import ImageUtils
+    from sqlmodel import select
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = f"{temp_dir}/server-config.json"
+        source_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "pictures")
+        )
+        assert os.path.isdir(source_dir), "Pictures directory not found"
+        image_files = [
+            os.path.join(dirpath, f)
+            for dirpath, _, filenames in os.walk(source_dir)
+            for f in filenames
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
+        assert image_files, "No images found in pictures directory"
+
+        watch_dir = os.path.join(temp_dir, "watch")
+        os.makedirs(watch_dir, exist_ok=True)
+
+        src = image_files[0]
+        dst = os.path.join(watch_dir, os.path.basename(src))
+
+        with open(src, "rb") as source_handle:
+            payload = source_handle.read()
+        assert len(payload) > 4, "Need a non-trivial image for this test"
+
+        # The copy is "in flight": everything but the last few bytes is on disk.
+        with open(dst, "wb") as out:
+            out.write(payload[:-4])
+            out.flush()
+            os.fsync(out.fileno())
+
+        with Server(server_config_path) as server:
+            with TestClient(server.api) as client:
+                response = client.post(
+                    f"{API_PREFIX}/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                )
+                assert response.status_code == 200
+
+                create_folder = client.post(
+                    f"{API_PREFIX}/import-folders",
+                    json={
+                        "folder": watch_dir,
+                        "delete_after_import": False,
+                    },
+                )
+                assert create_folder.status_code == 200
+
+                # ``last_checked`` only advances once a scan has completed, so
+                # this proves the finder has already looked at the partial file.
+                def read_folder(session):
+                    return session.exec(select(ImportFolder)).first()
+
+                scanned = False
+                start = time.monotonic()
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                    folder_row = server.vault.db.run_task(read_folder)
+                    if folder_row is not None and (folder_row.last_checked or 0) > 0:
+                        scanned = True
+                        break
+                    time.sleep(0.1)
+                assert scanned, "Finder never completed a scan of the partial file"
+
+                # Finish the copy, then mimic a file manager restoring the source
+                # mtime (which bumps ctime and re-exposes the file to the finder).
+                with open(dst, "ab") as out:
+                    out.write(payload[-4:])
+                    out.flush()
+                    os.fsync(out.fileno())
+                old_ts = time.time() - (7 * 24 * 60 * 60)
+                os.utime(dst, (old_ts, old_ts))
+
+                start = time.monotonic()
+                pictures = []
+                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                    pictures = server.vault.db.run_task(
+                        lambda session: Picture.find(session)
+                    )
+                    if len(pictures) >= 1:
+                        break
+                    time.sleep(0.25)
+
+                # Give a second, erroneous import a chance to land before
+                # asserting there is only one picture.
+                time.sleep(3.0)
+                pictures = server.vault.db.run_task(
+                    lambda session: Picture.find(session)
+                )
+
+                assert len(pictures) == 1, (
+                    "Expected exactly one picture for one watched file; a "
+                    f"half-written import would add a duplicate (got {len(pictures)})"
+                )
+                settled_sha = ImageUtils.calculate_hash_from_file_path(dst)
+                assert pictures[0].pixel_sha == settled_sha, (
+                    "Imported picture must carry the hash of the settled file, "
+                    "not of the bytes written so far"
+                )
+                assert pictures[0].size_bytes == os.path.getsize(dst), (
+                    "Imported picture must record the settled file size"
+                )

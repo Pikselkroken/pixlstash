@@ -25,9 +25,14 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         folder (str): Absolute path to the directory to monitor recursively.
         delete_after_import (bool): When True, source files are deleted from
             the watch folder after a successful import. Defaults to False.
-        last_checked (float): Unix timestamp of the last scan. Updated
-            automatically after each scan; do not set this manually.
+        last_checked (float): Unix timestamp of the last scan. Reported for
+            operators only; candidacy is decided from per-path stat signatures,
+            not from this value. Updated automatically after each scan; do not
+            set this manually.
 
+    A file is only imported once its size and timestamps have stopped changing,
+    so a copy that is still in flight is never read half-written. See
+    ``_claim_if_settled``.
     """
 
     _supported_image_exts = {
@@ -44,16 +49,25 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
     def __init__(self, database):
         super().__init__()
         self._db = database
-        # Normalized paths seen in a previous scan cycle.  Any path not in this
-        # set is treated as newly discovered regardless of its mtime/ctime, which
-        # handles copy tools (e.g. shutil.copy2 on Windows) that preserve old
-        # timestamps on the destination file.
+        # Candidacy is decided from a per-path *stat signature* rather than from
+        # timestamps compared against ``last_checked``.  Timestamps are not a
+        # reliable "is this file new" signal in a watch folder: copy tools
+        # (e.g. shutil.copy2) preserve the source mtime on the destination, and
+        # on Windows ctime is the creation time and never moves at all.
         #
-        # This set is read/written by the finder on the WorkPlanner thread and
+        # ``_pending_stats`` holds the signature observed on the previous scan
+        # for paths that have not been handed to an import task yet.
+        # ``_dispatched_stats`` holds the signature a path had when it *was*
+        # handed over.  A path only becomes a candidate once its signature is
+        # identical on two consecutive scans, which is what keeps a file that is
+        # still being written out of the import (see ``_claim_if_settled``).
+        #
+        # Both dicts are read/written by the finder on the WorkPlanner thread and
         # also mutated by WatchFolderImportTask (via ``discard_seen_paths``) on
         # the TaskRunner thread when a candidate fails to import, so all access
         # is guarded by ``_seen_lock`` to avoid a concurrent-mutation race.
-        self._seen_file_paths: set[str] = set()
+        self._pending_stats: dict[str, tuple[int, float, float]] = {}
+        self._dispatched_stats: dict[str, tuple[int, float, float]] = {}
         self._seen_lock = threading.Lock()
 
     def finder_name(self) -> str:
@@ -85,41 +99,29 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         candidate_files = []
         total_candidates = 0
         last_checked_updates = {}
+        observed_paths: set[str] = set()
 
         for entry in watch_folders:
             if entry.id is None:
                 continue
             folder = entry.folder
-            last_checked = float(entry.last_checked or 0)
             delete_after_import = bool(entry.delete_after_import)
 
             if not folder or not os.path.isdir(folder):
                 continue
 
-            latest_seen = last_checked
             for root, _, files in os.walk(folder):
                 for file_name in files:
                     file_path = os.path.join(root, file_name)
-                    normalized = os.path.normcase(os.path.abspath(file_path))
-                    try:
-                        mtime = os.path.getmtime(file_path)
-                        ctime = os.path.getctime(file_path)
-                    except OSError:
-                        continue
                     if not self._is_supported_file(file_path):
                         continue
-                    # Some copy workflows preserve mtime from the source file,
-                    # so rely on the newer of mtime/ctime when deciding whether
-                    # this file is new relative to last_checked.
-                    seen_ts = max(mtime, ctime)
-                    # A path not seen in any previous scan cycle is always a
-                    # candidate, even when both timestamps predate last_checked.
-                    # This handles shutil.copy2 on Windows, which copies ctime
-                    # from the source, making it equally old as mtime.
-                    with self._seen_lock:
-                        is_new_path = normalized not in self._seen_file_paths
-                        self._seen_file_paths.add(normalized)
-                    if seen_ts > last_checked or is_new_path:
+                    signature = self._stat_signature(file_path)
+                    if signature is None:
+                        continue
+                    normalized = os.path.normcase(os.path.abspath(file_path))
+                    observed_paths.add(normalized)
+
+                    if self._claim_if_settled(normalized, signature):
                         total_candidates += 1
                         candidate_files.append(
                             {
@@ -128,10 +130,10 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
                                 "import_source_folder": folder,
                             }
                         )
-                    if seen_ts > latest_seen:
-                        latest_seen = seen_ts
 
-            last_checked_updates[int(entry.id)] = max(latest_seen, now_ts)
+            last_checked_updates[int(entry.id)] = now_ts
+
+        self._forget_vanished_paths(observed_paths)
 
         if last_checked_updates and not candidate_files:
             self._persist_db_last_checked(last_checked_updates)
@@ -152,11 +154,10 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         """Forget paths so a later scan re-discovers them as new.
 
         Called by :class:`WatchFolderImportTask` for candidate files that failed
-        to process (hash or import error). A file is normally added to
-        ``_seen_file_paths`` at discovery time; if it then fails to import and
-        also carries a copy-preserved old mtime (``seen_ts <= last_checked``),
-        it would never become a candidate again. Removing it here makes the
-        failure transient: the next scan sees the path as new and retries it.
+        to process (hash or import error). A file is recorded as dispatched when
+        it is handed to an import task; dropping that record here makes the
+        failure transient, because the next scans re-observe the path, wait for
+        it to settle again and retry it.
         """
         if not file_paths:
             return
@@ -166,7 +167,85 @@ class MissingWatchFolderImportFinder(BaseTaskFinder):
         if not normalized:
             return
         with self._seen_lock:
-            self._seen_file_paths.difference_update(normalized)
+            for path in normalized:
+                self._pending_stats.pop(path, None)
+                self._dispatched_stats.pop(path, None)
+
+    @staticmethod
+    def _stat_signature(file_path: str) -> tuple[int, float, float] | None:
+        """Return ``(size, mtime, ctime)`` for *file_path*, or None if unreadable.
+
+        A single ``os.stat`` call so all three values describe the same moment;
+        comparing this tuple across scans is what detects a file that is still
+        being written into the watch folder.
+        """
+        try:
+            stat_result = os.stat(file_path)
+        except OSError as exc:
+            logger.debug(
+                "MissingWatchFolderImportFinder: cannot stat %s, skipping this "
+                "scan: %s",
+                file_path,
+                exc,
+            )
+            return None
+        return (stat_result.st_size, stat_result.st_mtime, stat_result.st_ctime)
+
+    def _claim_if_settled(
+        self, normalized: str, signature: tuple[int, float, float]
+    ) -> bool:
+        """Claim *normalized* for import if it has stopped changing on disk.
+
+        Returns True when the path is ready to be handed to an import task,
+        recording it as dispatched so a later scan does not offer it again.
+
+        A path qualifies only once the same stat signature has been observed on
+        two consecutive scans. A file that is still being copied into the watch
+        folder changes size (and mtime) between scans, so it is held back until
+        the copy finishes. Without this, the importer hashes the bytes written so
+        far, stores a ``pixel_sha`` that does not describe the finished file, and
+        then imports the file a second time once it settles, because the settled
+        content hashes differently and the duplicate check misses it.
+
+        The cost is that a newly arrived file waits one extra planner cycle
+        before it is imported.
+
+        A file that changes after it was imported goes back through the same
+        wait, so an in-place overwrite is never read half-written either.
+        """
+        with self._seen_lock:
+            dispatched = self._dispatched_stats.get(normalized)
+            if dispatched is not None:
+                if dispatched == signature:
+                    return False
+                # Changed on disk since it was imported: re-settle before it is
+                # offered again.
+                del self._dispatched_stats[normalized]
+                self._pending_stats[normalized] = signature
+                return False
+
+            previous = self._pending_stats.get(normalized)
+            if previous != signature:
+                # First sighting, or still being written.
+                self._pending_stats[normalized] = signature
+                return False
+
+            del self._pending_stats[normalized]
+            self._dispatched_stats[normalized] = signature
+            return True
+
+    def _forget_vanished_paths(self, observed_paths: set[str]) -> None:
+        """Drop bookkeeping for paths that are no longer in any watch folder.
+
+        Keeps the tracking dicts bounded on a long-running server, which matters
+        most with ``delete_after_import`` where every imported file is removed
+        from the folder straight away.
+        """
+        with self._seen_lock:
+            for tracked in (self._pending_stats, self._dispatched_stats):
+                vanished = tracked.keys() - observed_paths
+                for path in vanished:
+                    del tracked[path]
 
     def _persist_db_last_checked(self, updates: dict[int, float]):
         def update(session: Session, values: dict[int, float]):
