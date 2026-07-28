@@ -452,6 +452,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
+    # ── dedup.py (near-duplicate sweep, dry run) ────────────────────────────
+    ("GET", "/api/v1/dedup/sweep/policy"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Sweep policy defaults/bounds for the vault-wide sweep; an "
+            "owner-only operator surface returning no per-object data"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/sweep/dry-run"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Vault-wide near-duplicate plan: counts and picture ids across the "
+            "whole library, which cannot be narrowed to a share token's scope "
+            "without leaking counts about out-of-scope pictures (same reasoning "
+            "as tag_health). POST is also blocked for READ tokens"
+        ),
+    ),
     # ── characters.py ───────────────────────────────────────────────────────
     ("GET", "/api/v1/characters"): _LIST_AWARE,
     ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),
