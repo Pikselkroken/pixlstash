@@ -124,6 +124,46 @@ def _save_workflow_json(path: str, payload: dict) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=True)
 
 
+MAX_SEED = 2**32 - 1
+_SEED_RANGE_DETAIL = (
+    "Invalid seed: when seed_mode is 'fixed', seed must be an integer "
+    f"between 0 and {MAX_SEED}."
+)
+
+
+def _resolve_fixed_seed(payload: dict) -> int | None:
+    """Return the validated fixed seed, or ``None`` when seeds should randomize.
+
+    Shared by the t2i, i2i and recipe run handlers so all three accept the same
+    ``seed_mode`` / ``seed`` pair.
+
+    Args:
+        payload: The raw request body.
+
+    Returns:
+        The seed to pin, or ``None`` for ``seed_mode`` other than ``"fixed"``.
+
+    Raises:
+        HTTPException: 400 when ``seed_mode`` is ``"fixed"`` and ``seed`` is
+            missing, non-numeric, or out of range.
+    """
+    if payload.get("seed_mode", "random") != "fixed":
+        return None
+    raw_seed = payload.get("seed")
+    if raw_seed is None or (isinstance(raw_seed, str) and raw_seed.strip() == ""):
+        raise HTTPException(status_code=400, detail=_SEED_RANGE_DETAIL)
+    try:
+        seed_int = int(raw_seed)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=_SEED_RANGE_DETAIL)
+    if not (0 <= seed_int <= MAX_SEED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid seed: must be between 0 and {MAX_SEED}.",
+        )
+    return seed_int
+
+
 def _find_placeholder_usage(payload: dict) -> tuple[bool, list[str]]:
     dump = json.dumps(payload, ensure_ascii=False)
     missing = []
@@ -413,7 +453,14 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/comfyui/run_i2i",
         summary="Run ComfyUI image-to-image",
-        description="Submits i2i prompts for one or more picture ids and imports generated outputs back into PixlStash. Outputs are placed in each source picture's stack by default; pass stack=false to skip stacking while still copying the source's character/set/project associations.",
+        description=(
+            "Submits i2i prompts for one or more picture ids and imports generated "
+            "outputs back into PixlStash. Outputs are placed in each source "
+            "picture's stack by default; pass stack=false to skip stacking while "
+            "still copying the source's character/set/project associations. Seeds "
+            "randomize unless seed_mode='fixed' is sent with an integer seed "
+            "(0-4294967295), in which case every sampler node is pinned to it."
+        ),
         response_model=ComfyUIRunResponse,
     )
     async def run_comfyui_i2i(request: Request, payload: dict = Body(...)):
@@ -443,6 +490,9 @@ def create_router(server) -> APIRouter:
         # the historical behaviour; when false, outputs skip the stack entirely
         # but still inherit the source's character/set/project associations.
         should_stack = bool(payload.get("stack", True))
+        # Remix (v1.9) submits a seed from the "Generate from this" modal; the
+        # historical callers send neither key and keep randomizing.
+        fixed_seed = _resolve_fixed_seed(payload)
 
         workflow_path, workflow_source = _resolve_workflow_path(workflow_name)
         if not workflow_path:
@@ -486,7 +536,10 @@ def create_router(server) -> APIRouter:
             workflow_instance = _replace_placeholders(
                 deepcopy(workflow_payload), replacements
             )
-            _randomize_seeds(workflow_instance)
+            if fixed_seed is not None:
+                _apply_fixed_seed(workflow_instance, fixed_seed)
+            else:
+                _randomize_seeds(workflow_instance)
             # Only create/join a stack and tag the SaveImage filename when
             # stacking is requested. When disabled, stack_id stays None so the
             # worker places nothing in a stack; associations are still copied
@@ -618,34 +671,14 @@ def create_router(server) -> APIRouter:
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
 
-        seed_mode = payload.get("seed_mode", "random")
-        fixed_seed = payload.get("seed")
+        fixed_seed = _resolve_fixed_seed(payload)
 
         replacements = {PLACEHOLDER_CAPTION: caption}
         workflow_instance = _replace_placeholders(
             deepcopy(workflow_payload), replacements
         )
-        if seed_mode == "fixed":
-            if fixed_seed is None or (
-                isinstance(fixed_seed, str) and fixed_seed.strip() == ""
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid seed: when seed_mode is 'fixed', seed must be an integer between 0 and 4294967295.",
-                )
-            try:
-                seed_int = int(fixed_seed)
-            except (TypeError, ValueError):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid seed: when seed_mode is 'fixed', seed must be an integer between 0 and 4294967295.",
-                )
-            if not (0 <= seed_int <= 2**32 - 1):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid seed: must be between 0 and 4294967295.",
-                )
-            _apply_fixed_seed(workflow_instance, seed_int)
+        if fixed_seed is not None:
+            _apply_fixed_seed(workflow_instance, fixed_seed)
         else:
             _randomize_seeds(workflow_instance)
 
