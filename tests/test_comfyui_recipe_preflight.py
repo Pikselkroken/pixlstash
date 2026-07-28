@@ -11,6 +11,7 @@ from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
     apply_seeds,
+    collect_node_classes,
     detect_seed_targets,
     format_prompt_rejection,
     preflight_prompt,
@@ -190,6 +191,49 @@ class TestUncheckedPreflight:
         # ok stays True: the only thing we know is the check did not run.
         assert result["ok"] is True
         assert "Could not reach" in result["error"]
+
+
+class TestCollectNodeClasses:
+    """The consent disclosure (R3): what the owner is actually approving.
+
+    A node *count* is not an answer to "what will this run"; the class list is.
+    """
+
+    def test_lists_each_class_once_sorted(self):
+        graph = {
+            "9": {"class_type": "SaveImage", "inputs": {}},
+            "3": {"class_type": "KSampler", "inputs": {}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {}},
+        }
+        assert collect_node_classes(graph) == [
+            "CLIPTextEncode",
+            "KSampler",
+            "SaveImage",
+        ]
+
+    def test_sorts_case_insensitively_rather_than_by_byte(self):
+        # ASCII order would put every capitalised class before "reroute"; a
+        # reader scanning for an unfamiliar node needs one alphabet, not two.
+        graph = {
+            "1": {"class_type": "reroute", "inputs": {}},
+            "2": {"class_type": "SaveImage", "inputs": {}},
+        }
+        assert collect_node_classes(graph) == ["reroute", "SaveImage"]
+
+    def test_ignores_entries_that_are_not_nodes(self):
+        graph = {
+            "3": {"class_type": "KSampler", "inputs": {}},
+            "extra_pnginfo": {"anything": 1},
+            "4": {"inputs": {}},
+            "5": {"class_type": "", "inputs": {}},
+            "6": "junk",
+        }
+        assert collect_node_classes(graph) == ["KSampler"]
+
+    def test_tolerates_junk(self):
+        assert collect_node_classes({}) == []
+        assert collect_node_classes(None) == []
 
 
 class TestSanitizePromptGraph:

@@ -29,6 +29,7 @@ from pixlstash.utils.comfyui_utilities import (
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     apply_seeds,
+    collect_node_classes,
     detect_seed_targets,
     fetch_object_info,
     preflight_prompt,
@@ -221,6 +222,74 @@ def _resolve_picture_file(server, pic_id: int) -> str:
     return file_path
 
 
+def _picture_source_origin(server, pic_id: int) -> tuple[bool, str | None]:
+    """Classify how *pic_id*'s file entered the vault.
+
+    A replayed recipe is file metadata, so it is only as trustworthy as the file
+    is. There is no dedicated provenance column, so this reads the three fields
+    that are only ever written on an *inbound* path and are left NULL by
+    PixlStash's own ComfyUI import (``_import_comfyui_outputs`` calls
+    ``create_picture_from_bytes`` without any of them):
+
+    - ``reference_folder_id`` — the reference folder the file is tracked in.
+    - ``import_source_folder`` — the watch-folder root that produced the file.
+    - ``original_file_name`` — stamped by the upload and staged-import paths and
+      by the reference-folder scan, i.e. every file that arrived with a name of
+      its own.
+
+    Read in that order because it runs most-specific first: a reference-folder
+    picture also carries an ``original_file_name``, and naming the folder it
+    came from is the more useful answer.
+
+    The label names the *route in*, never the path itself: a watch-folder root
+    is a filesystem path on the owner's machine and the dialog does not need it
+    to make its point.
+
+    Deliberately fails toward "not imported": an unreadable picture row is
+    reported as not-imported rather than raising, because this drives an
+    advisory banner and must never be the thing that breaks the dialog. The
+    control that actually gates a run is the unchecked-pre-flight refusal, which
+    fails closed.
+
+    Args:
+        server: The running server, for vault DB access.
+        pic_id: The picture whose origin to classify.
+
+    Returns:
+        ``(came_from_outside, label)``; the label is None when it did not.
+    """
+    try:
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find,
+            id=pic_id,
+            select_fields=[
+                "id",
+                "original_file_name",
+                "import_source_folder",
+                "reference_folder_id",
+            ],
+        )
+    except Exception as exc:
+        logger.warning(
+            "[comfyui] Could not read the origin fields for picture id=%s (%s); "
+            "reporting the recipe source as not-imported, so the dialog will "
+            "show no external-workflow warning for it.",
+            pic_id,
+            exc,
+        )
+        return False, None
+    if not pics:
+        return False, None
+    pic = pics[0]
+    if getattr(pic, "reference_folder_id", None):
+        return True, "Reference folder"
+    if getattr(pic, "import_source_folder", None):
+        return True, "Watched folder"
+    if getattr(pic, "original_file_name", None):
+        return True, "Imported file"
+    return False, None
+
+
 def _load_embedded_api_prompt(server, pic_id: int) -> dict | None:
     """Return the picture's embedded API-format ``prompt`` graph, or ``None``.
 
@@ -408,7 +477,13 @@ class ComfyUIPreflightResponse(BaseModel):
 
 
 class ComfyUIPictureRecipeResponse(BaseModel):
-    """Whether a picture carries a replayable ComfyUI recipe, and its state."""
+    """Whether a picture carries a replayable ComfyUI recipe, and its state.
+
+    ``node_classes`` and ``source_is_imported`` exist for the owner's *consent*
+    decision, not for display polish: the graph is attacker-authorable file
+    metadata, so the confirm step has to say which node classes will run and
+    whether the file came from outside this instance.
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -420,6 +495,14 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     models: list[str] = []
     loras: list[str] = []
     node_count: int = 0
+    # Distinct class_type names the graph would execute, sorted.
+    node_classes: list[str] = []
+    # True when the source file entered the vault from outside this instance
+    # (upload, watch folder, reference folder) rather than being generated here.
+    source_is_imported: bool = False
+    # How it got in ("Imported file" / "Watched folder" / "Reference folder"),
+    # None when it was generated here. Names the route, never the path.
+    source_label: Optional[str] = None
     seed_inputs: list[dict] = []
     preflight: Optional[ComfyUIPreflightResponse] = None
 
@@ -987,6 +1070,7 @@ def create_router(server) -> APIRouter:
         gen_info = extract_generation_info(graph)
         stats = summarize_comfy_workflow(graph)
         preflight, seed_targets = _inspect_recipe(comfyui_url, graph)
+        source_is_imported, source_label = _picture_source_origin(server, pic_id)
         return {
             # "Same workflow, new seed" is only a meaningful offer when there
             # IS a seed to change. Without one the re-run is byte-identical,
@@ -1000,6 +1084,12 @@ def create_router(server) -> APIRouter:
             "models": gen_info["models"],
             "loras": gen_info["loras"],
             "node_count": stats["node_count"],
+            # The consent disclosure: what will actually run, and whether the
+            # file that carries it came from outside. See R3 in
+            # docs/reviews/v1.9-authz-signoff.md.
+            "node_classes": collect_node_classes(graph),
+            "source_is_imported": source_is_imported,
+            "source_label": source_label,
             "seed_inputs": seed_targets,
             "preflight": preflight,
         }
@@ -1013,8 +1103,11 @@ def create_router(server) -> APIRouter:
             "server-side on every call — a client-supplied graph is never "
             "accepted — and pre-flighted first; a pre-flight that finds missing "
             "node classes or model files fails the request with 400 and names "
-            "them. Outputs land in the source picture's stack, exactly as "
-            "run_i2i does."
+            "them. A pre-flight that could not run at all (ComfyUI unreachable, "
+            "`preflight.checked: false`) also fails with 400 unless the caller "
+            "sends `allow_unchecked: true`, which records that the owner "
+            "knowingly approved an uninspected graph. Outputs land in the "
+            "source picture's stack, exactly as run_i2i does."
         ),
         response_model=ComfyUIRunResponse,
     )
@@ -1031,6 +1124,9 @@ def create_router(server) -> APIRouter:
         if client_id is not None:
             client_id = str(client_id)
         should_stack = bool(payload.get("stack", True))
+        allow_unchecked = bool(
+            payload.get("allow_unchecked") or payload.get("allowUnchecked")
+        )
         # Replay allows the full 64-bit range the core samplers declare; the
         # template paths keep the 32-bit ceiling. See _resolve_fixed_seed.
         fixed_seed = _resolve_fixed_seed(payload, max_seed=MAX_SEED_64)
@@ -1054,6 +1150,40 @@ def create_router(server) -> APIRouter:
         if not preflight.get("ok", True):
             raise HTTPException(
                 status_code=400, detail=_describe_preflight_failure(preflight)
+            )
+        if not preflight.get("checked") and not allow_unchecked:
+            # The graph is file metadata: whoever made the image authored it,
+            # and it executes on the owner's ComfyUI. When the pre-flight could
+            # not run, nothing at all is known about it — not even which node
+            # classes exist on this install. Fail CLOSED and make the owner say
+            # so explicitly, rather than letting an unreachable ComfyUI silently
+            # read as "ok". Enforced here and not only in the dialog, because a
+            # UI-only gate is not a gate.
+            logger.warning(
+                "[comfyui] Refusing recipe replay for picture id=%s: the "
+                "pre-flight could not run (%s) and the request carried no "
+                "allow_unchecked acknowledgement.",
+                pic_id,
+                preflight.get("error") or "ComfyUI unreachable",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "PixlStash could not reach ComfyUI to check this workflow, "
+                    "so it has not been inspected. Embedded workflows come from "
+                    "the image file itself and can run anything your ComfyUI "
+                    "has installed. Start ComfyUI and try again, or confirm you "
+                    "want to run it unchecked."
+                ),
+            )
+        if allow_unchecked and not preflight.get("checked"):
+            logger.warning(
+                "[comfyui] Replaying an UNINSPECTED recipe for picture id=%s "
+                "(node classes: %s) on the owner's explicit acknowledgement; "
+                "the pre-flight could not run (%s).",
+                pic_id,
+                ", ".join(collect_node_classes(workflow_instance)) or "none",
+                preflight.get("error") or "ComfyUI unreachable",
             )
         if preflight.get("checked") and not preflight.get("has_save_image"):
             # Would run to completion and import nothing — refuse now rather

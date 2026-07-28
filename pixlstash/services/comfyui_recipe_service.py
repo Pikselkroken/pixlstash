@@ -236,6 +236,36 @@ def _match_option(value: str, options: list[str]) -> str | None:
     return "not available on this ComfyUI"
 
 
+def collect_node_classes(prompt_graph: dict) -> list[str]:
+    """Return the distinct ``class_type`` names *prompt_graph* would execute.
+
+    This is a **security** disclosure, not a statistic. The graph is authored by
+    whoever made the image file, not by the owner replaying it, and PixlStash's
+    premise is importing images from elsewhere. What that graph can do on the
+    owner's ComfyUI is bounded only by which node packs are installed, so the
+    owner — the only trust anchor in the loop — has to be able to see *which*
+    node classes will run before approving the run. A node *count* does not
+    answer that question; the class list does.
+
+    Sorted case-insensitively for a stable, scannable list: the graph's own key
+    order is ComfyUI's internal node ids and carries no meaning for a reader.
+
+    Args:
+        prompt_graph: The API-format graph, sanitized or raw.
+
+    Returns:
+        The distinct class names, sorted. Empty for a junk or empty graph.
+    """
+    classes: set[str] = set()
+    for node in (prompt_graph or {}).values():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if isinstance(class_type, str) and class_type:
+            classes.add(class_type)
+    return sorted(classes, key=lambda name: (name.lower(), name))
+
+
 def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
     """Check *prompt_graph* against *object_info* and report what is missing.
 
