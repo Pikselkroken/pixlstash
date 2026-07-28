@@ -1,5 +1,13 @@
 from .character import Character  # noqa: F401
 from .deleted_file_log import DeletedFileLog  # noqa: F401
+from .entity_project import (  # noqa: F401
+    CharacterProjectMember,
+    PictureSetProjectMember,
+    character_in_no_project,
+    character_in_project,
+    picture_set_in_no_project,
+    picture_set_in_project,
+)
 from .detection import Detection  # noqa: F401
 from .face import Face  # noqa: F401
 from .picture import Picture, SortMechanism  # noqa: F401
