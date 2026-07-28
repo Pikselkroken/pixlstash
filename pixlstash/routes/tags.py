@@ -29,6 +29,7 @@ from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.services import operation_log_service
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.impossible_tag_clear_service import (
     VALID_FILTERS,
@@ -220,7 +221,19 @@ def create_router(server) -> APIRouter:
                     session.refresh(pic)
                     return pic
 
-                server.vault.db.run_task(update_picture, pic.id, tag)
+                # Recorded in the operation log so Ctrl+Z can revert it: the
+                # before/after tag state of this picture is captured inside the
+                # same DB task as the write (see operation_log_service).
+                operation_log_service.run_recorded_metadata_task(
+                    server.vault,
+                    update_picture,
+                    pic.id,
+                    tag,
+                    op_type="pictures.tags.add",
+                    picture_ids=[pic_id],
+                    summary=f"Added tag '{tag}'",
+                    **operation_log_service.request_context(request),
+                )
                 server.vault.notify(
                     EventType.CHANGED_TAGS,
                     {
@@ -333,7 +346,16 @@ def create_router(server) -> APIRouter:
                 session.refresh(pic)
                 return pic
 
-            server.vault.db.run_task(update_picture, pic_id, tag_id_int)
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                update_picture,
+                pic_id,
+                tag_id_int,
+                op_type="pictures.tags.remove",
+                picture_ids=[pic_id],
+                summary="Removed a tag",
+                **operation_log_service.request_context(request),
+            )
             server.vault.notify(
                 EventType.CHANGED_TAGS,
                 {
@@ -407,7 +429,16 @@ def create_router(server) -> APIRouter:
             session.refresh(pic)
             return pic
 
-        server.vault.db.run_task(update_picture, pic_id, tag_value)
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            update_picture,
+            pic_id,
+            tag_value,
+            op_type="pictures.tags.remove_all",
+            picture_ids=[pic_id],
+            summary=f"Removed tag '{tag_value}' from the picture",
+            **operation_log_service.request_context(request),
+        )
         server.vault.notify(
             EventType.CHANGED_TAGS,
             {
@@ -466,7 +497,15 @@ def create_router(server) -> APIRouter:
             session.refresh(pic)
             return pic
 
-        server.vault.db.run_task(do_clear, pic_id)
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            do_clear,
+            pic_id,
+            op_type="pictures.tags.clear",
+            picture_ids=[pic_id],
+            summary="Cleared all tags on the picture",
+            **operation_log_service.request_context(request),
+        )
         server.vault.notify(
             EventType.CHANGED_TAGS,
             {
