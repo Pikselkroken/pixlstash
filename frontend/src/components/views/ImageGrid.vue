@@ -218,8 +218,8 @@
         </v-card-title>
         <v-card-text style="padding: 0 20px 4px">
           <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
-            Leave the label empty for dense object detection, or type a phrase to
-            detect only that (e.g. "dog").
+            Leave the label empty for dense object detection, or type a phrase
+            to detect only that (e.g. "dog").
           </div>
           <v-text-field
             v-model="segmentPrompt"
@@ -231,7 +231,9 @@
           />
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="segmentDialogOpen = false">Cancel</v-btn>
+          <v-btn variant="text" @click="segmentDialogOpen = false"
+            >Cancel</v-btn
+          >
           <v-spacer />
           <v-btn color="primary" variant="tonal" @click="confirmSegment">
             Detect
@@ -266,7 +268,9 @@
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
       :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
-      @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
+      @update:dont-show-again="
+        userPrefsStore.setHidePurgeSnapshotWarning($event)
+      "
     />
     <DeleteForeverDialog
       v-model:open="deleteForeverOpen"
@@ -998,6 +1002,9 @@
       @reverse-image-search="handleReverseImageSearch"
       @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
+    <!-- The action receipt shares the selection pill's slot and lifts clear of
+         it when both are up. Owner-only, like the toolbar control. -->
+    <ActionReceipt v-if="!isReadOnly" :lift-px="actionReceiptLift" />
   </div>
 </template>
 
@@ -1017,12 +1024,13 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
-import {
-  useNoticeStore,
-  DEFAULT_TIMEOUTS,
-} from "../../stores/useNoticeStore";
+import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
-import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import {
+  useAnchorHeight,
+  useBottomAnchor,
+} from "../../composables/useBottomAnchor";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
@@ -1044,6 +1052,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
@@ -1085,7 +1094,11 @@ import {
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
-import { getPictureSet, addPictureToSet, removePictureFromSet } from "../../api/pictureSets";
+import {
+  getPictureSet,
+  addPictureToSet,
+  removePictureFromSet,
+} from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { runTextToImage } from "../../api/comfyui";
@@ -2414,9 +2427,7 @@ function getVideoThumbnailSrc(img) {
 // yet been populated falls back to cover centring until they arrive.
 function isSquareCropActive(img) {
   return (
-    !isJustifiedMode.value &&
-    !isVideo(img) &&
-    squareCropParams(img) !== null
+    !isJustifiedMode.value && !isVideo(img) && squareCropParams(img) !== null
   );
 }
 
@@ -2821,8 +2832,7 @@ const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
 // In the desktop shell the breadcrumb renders in the title bar instead, so the
 // in-grid overlay below is gated on !isDesktop.
-const isDesktop =
-  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
@@ -2831,6 +2841,18 @@ const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 // which is what `narrowOnly` encodes.
 const breadcrumbEl = ref(null);
 useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
+
+// The action receipt shares the selection pill's slot, so when the pill is up
+// the receipt sits above it. The lift is the pill's MEASURED height plus the
+// standard gap — never a constant, because the pill wraps and grows on coarse
+// pointers (the 56px in floatingBottom.js is a first-frame fallback, not a
+// design token).
+const { height: selectionBarHeight } = useAnchorHeight("selection-bar");
+const actionReceiptLift = computed(() =>
+  selectionBarHeight.value > 0
+    ? selectionBarHeight.value + FLOATING_BOTTOM_GAP_PX
+    : 0,
+);
 
 watch(
   visibleRangeLabel,
@@ -3751,7 +3773,9 @@ const partialStackGroupingReason = computed(() => {
   const idSet = new Set(ids);
   const images = allGridImages.value || [];
   const byId = new Map(
-    images.filter((img) => img && img.id != null).map((img) => [String(img.id), img]),
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
   );
 
   // Which stacks does the selection touch? (Members share stack_id even when
@@ -3771,7 +3795,9 @@ const partialStackGroupingReason = computed(() => {
     // An expanded stack is whole-stack only when every rendered member is
     // selected.
     const memberIds = images
-      .filter((img) => img && img.id != null && getPictureStackId(img) === stackId)
+      .filter(
+        (img) => img && img.id != null && getPictureStackId(img) === stackId,
+      )
       .map((img) => Number(img.id));
     const allSelected =
       memberIds.length > 0 && memberIds.every((mid) => idSet.has(mid));
@@ -4081,10 +4107,9 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     );
   } catch (err) {
     console.error("Scrapheap purge failed", err);
-    noticeStore.error(
-      `Couldn't delete those pictures. ${errorDetail(err)}`,
-      { key: "scrapheap-purge" },
-    );
+    noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
+      key: "scrapheap-purge",
+    });
   } finally {
     // The server spends the confirmation on the first attempt, so a retry must
     // go back through the preview rather than replaying a dead token.

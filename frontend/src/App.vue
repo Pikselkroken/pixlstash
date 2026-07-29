@@ -32,6 +32,8 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
+import { useOperationStore } from "./stores/useOperationStore";
+import { redoKeyHint, undoKeyHint } from "./utils/shortcutHints";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -71,6 +73,11 @@ const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const lockedSetsStore = useLockedSetsStore();
+const operationStore = useOperationStore();
+// Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
+// everywhere; only the hint is platform-specific.
+const undoKeyHintKeys = undoKeyHint();
+const redoKeyHintKeys = redoKeyHint();
 
 // --- Router ---
 const route = useRoute();
@@ -199,6 +206,16 @@ const activeCategoryLabel = computed(() => {
 });
 
 // --- WebSocket ---
+// Event types that can carry a recorded operation (the reversible metadata
+// facets of backend_architecture.md §21). `picture_imported` is deliberately
+// absent: imports are not undoable in v1.9, so they never appear in the stack.
+const OPERATION_BEARING_EVENTS = new Set([
+  "pictures_changed",
+  "tags_changed",
+  "characters_changed",
+  "descriptions_changed",
+]);
+
 function buildUpdatesSocketUrl() {
   if (!BACKEND_URL) return "";
   const wsBase = BACKEND_URL.replace(/^http/i, "ws");
@@ -324,6 +341,14 @@ function connectUpdatesSocket() {
       payload = JSON.parse(event.data);
     } catch {
       return;
+    }
+    // The operation log has no WS event of its own: a metadata mutation
+    // announces itself as a picture/tag/character change, and that is the
+    // signal the undo stack may have moved. Origin is read from the event
+    // `data` (never a contextvar) and only decides whether the change may
+    // narrate itself — an external one updates the stack silently.
+    if (OPERATION_BEARING_EVENTS.has(payload?.type)) {
+      operationStore.onPictureEvent(payload);
     }
     const isPictureChange =
       payload?.type === "pictures_changed" ||
@@ -1453,9 +1478,7 @@ async function fetchConfig() {
       cfg.similarity_character ?? cfg.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    const newHiddenTags = Array.isArray(cfg.hidden_tags)
-      ? cfg.hidden_tags
-      : [];
+    const newHiddenTags = Array.isArray(cfg.hidden_tags) ? cfg.hidden_tags : [];
     if (
       userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
       userPrefsStore.hiddenTags.some((tag, i) => tag !== newHiddenTags[i])
@@ -1503,9 +1526,7 @@ async function fetchConfig() {
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
-        cfg.stack_strictness != null
-          ? Number(cfg.stack_strictness)
-          : null,
+        cfg.stack_strictness != null ? Number(cfg.stack_strictness) : null,
       hidden_tags: userPrefsStore.hiddenTags,
       apply_tag_filter: userPrefsStore.applyTagFilter,
     };
@@ -1636,6 +1657,28 @@ function handleGlobalKeydown(e) {
     sidebarStore.sidebarVisible
   ) {
     sidebarStore.hideAutoSidebar();
+  }
+
+  // Undo / redo. Global by design: the shortcut has to work with no receipt on
+  // screen, and every undo raises one, so the result is always narrated. Ctrl
+  // and Meta are both accepted (the HINT is platform-specific, the binding is
+  // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
+  // Skipped while typing, so a text field keeps its own native undo stack, and
+  // skipped for a read-only session, where the endpoints are owner-only anyway.
+  if (
+    (e.ctrlKey || e.metaKey) &&
+    !e.altKey &&
+    !isEditable &&
+    !isReadOnly.value
+  ) {
+    const key = e.key?.toLowerCase();
+    if (key === "z" && !e.shiftKey) {
+      e.preventDefault();
+      operationStore.undo();
+    } else if (key === "y" || (key === "z" && e.shiftKey)) {
+      e.preventDefault();
+      operationStore.redo();
+    }
   }
 
   const keys = ["Home", "End", "PageUp", "PageDown"];
@@ -2016,6 +2059,11 @@ onMounted(async () => {
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
     snapshotsStore.fetchSnapshots();
+    // Seed the undo stack so the toolbar control is correctly enabled on the
+    // first frame. This read establishes the "already seen" watermark, so the
+    // history it returns cannot pop a receipt for something that happened
+    // before the tab existed.
+    operationStore.refresh({ narrate: false });
   }
   // Navigate to the scoped resource when a share token is active
   const ctx = sessionContext.value;
@@ -2416,108 +2464,108 @@ defineExpose({
         <!-- Peer of the left sidebar, NOT nested in the grid column: both rails
              then span the full height of `.file-manager` and nothing stacked in
              the main area can push one rail down without the other. -->
-          <StatsSidebar
-            ref="statsSidebarRef"
-            :open="sidebarStore.statsOpen"
-            :backendUrl="BACKEND_URL"
-            :selectedCharacter="selectionStore.selectedCharacter"
-            :selectedCharacterIds="selectionStore.selectedCharacterIds"
-            :characterMode="selectionStore.characterMultiMode"
-            :selectedSet="selectionStore.selectedSet"
-            :selectedSetIds="selectionStore.selectedSetIds"
-            :setMode="selectionStore.setMultiMode"
-            :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-            :projectViewMode="projectStore.projectViewMode"
-            :selectedProjectId="projectStore.selectedProjectId"
-            :tagFilter="filterStore.tagFilter"
-            :tagRejectedFilter="filterStore.tagRejectedFilter"
-            :mediaTypeFilter="filterStore.mediaTypeFilter"
-            :minScoreFilter="filterStore.minScoreFilter"
-            :maxScoreFilter="filterStore.maxScoreFilter"
-            :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
-            :resolutionBucketFilter="filterStore.resolutionBucketFilter"
-            :faceBboxFilter="filterStore.faceBboxFilter"
-            :sharedOnlyFilter="filterStore.sharedOnlyFilter"
-            :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
-            :filePathPrefixFilter="
-              selectionStore.selectedFolderFilter?.pathPrefix ?? null
-            "
-            :importSourceFolderFilter="
-              selectionStore.selectedFolderFilter?.importSourceFolder ?? null
-            "
-            :allPicturesId="ALL_PICTURES_ID"
-            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-            :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
-            :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
-            :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
-            :wsTagUpdate="wsStore.wsTagUpdate"
-            @filter-tag="
-              (tag) => {
-                if (filterStore.tagFilter.includes(tag))
-                  filterStore.tagFilter = filterStore.tagFilter.filter(
-                    (t) => t !== tag,
-                  );
-                else filterStore.tagFilter = [...filterStore.tagFilter, tag];
-              }
-            "
-            @filter-tags="
-              (tags) => {
-                const allPresent = tags.every((t) =>
-                  filterStore.tagFilter.includes(t),
+        <StatsSidebar
+          ref="statsSidebarRef"
+          :open="sidebarStore.statsOpen"
+          :backendUrl="BACKEND_URL"
+          :selectedCharacter="selectionStore.selectedCharacter"
+          :selectedCharacterIds="selectionStore.selectedCharacterIds"
+          :characterMode="selectionStore.characterMultiMode"
+          :selectedSet="selectionStore.selectedSet"
+          :selectedSetIds="selectionStore.selectedSetIds"
+          :setMode="selectionStore.setMultiMode"
+          :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+          :projectViewMode="projectStore.projectViewMode"
+          :selectedProjectId="projectStore.selectedProjectId"
+          :tagFilter="filterStore.tagFilter"
+          :tagRejectedFilter="filterStore.tagRejectedFilter"
+          :mediaTypeFilter="filterStore.mediaTypeFilter"
+          :minScoreFilter="filterStore.minScoreFilter"
+          :maxScoreFilter="filterStore.maxScoreFilter"
+          :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+          :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+          :faceBboxFilter="filterStore.faceBboxFilter"
+          :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+          :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+          :filePathPrefixFilter="
+            selectionStore.selectedFolderFilter?.pathPrefix ?? null
+          "
+          :importSourceFolderFilter="
+            selectionStore.selectedFolderFilter?.importSourceFolder ?? null
+          "
+          :allPicturesId="ALL_PICTURES_ID"
+          :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+          :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+          :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+          :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+          :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+          :wsTagUpdate="wsStore.wsTagUpdate"
+          @filter-tag="
+            (tag) => {
+              if (filterStore.tagFilter.includes(tag))
+                filterStore.tagFilter = filterStore.tagFilter.filter(
+                  (t) => t !== tag,
                 );
-                if (allPresent)
-                  filterStore.tagFilter = filterStore.tagFilter.filter(
-                    (t) => !tags.includes(t),
-                  );
-                else
-                  filterStore.tagFilter = [
-                    ...new Set([...filterStore.tagFilter, ...tags]),
-                  ];
-              }
-            "
-            @filter-confidence-above="
-              (entry) => {
-                if (filterStore.tagConfidenceAboveFilter.includes(entry))
-                  filterStore.tagConfidenceAboveFilter =
-                    filterStore.tagConfidenceAboveFilter.filter(
-                      (e) => e !== entry,
-                    );
-                else
-                  filterStore.tagConfidenceAboveFilter = [
-                    ...filterStore.tagConfidenceAboveFilter,
-                    entry,
-                  ];
-              }
-            "
-            @clear-tag-filter="
-              (tags) => {
+              else filterStore.tagFilter = [...filterStore.tagFilter, tag];
+            }
+          "
+          @filter-tags="
+            (tags) => {
+              const allPresent = tags.every((t) =>
+                filterStore.tagFilter.includes(t),
+              );
+              if (allPresent)
                 filterStore.tagFilter = filterStore.tagFilter.filter(
                   (t) => !tags.includes(t),
                 );
-              }
-            "
-            @clear-confidence-filter="
-              (entries) => {
+              else
+                filterStore.tagFilter = [
+                  ...new Set([...filterStore.tagFilter, ...tags]),
+                ];
+            }
+          "
+          @filter-confidence-above="
+            (entry) => {
+              if (filterStore.tagConfidenceAboveFilter.includes(entry))
                 filterStore.tagConfidenceAboveFilter =
                   filterStore.tagConfidenceAboveFilter.filter(
-                    (e) => !entries.includes(e),
+                    (e) => e !== entry,
                   );
-              }
-            "
-            @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
-            @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
-            @update:smartScoreBucketFilter="
-              (v) => (filterStore.smartScoreBucketFilter = v)
-            "
-            @update:resolutionBucketFilter="
-              (v) => (filterStore.resolutionBucketFilter = v)
-            "
-            @toggle="
-              sidebarStore.toggleStats();
-              updateIsMobile();
-            "
-          />
+              else
+                filterStore.tagConfidenceAboveFilter = [
+                  ...filterStore.tagConfidenceAboveFilter,
+                  entry,
+                ];
+            }
+          "
+          @clear-tag-filter="
+            (tags) => {
+              filterStore.tagFilter = filterStore.tagFilter.filter(
+                (t) => !tags.includes(t),
+              );
+            }
+          "
+          @clear-confidence-filter="
+            (entries) => {
+              filterStore.tagConfidenceAboveFilter =
+                filterStore.tagConfidenceAboveFilter.filter(
+                  (e) => !entries.includes(e),
+                );
+            }
+          "
+          @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
+          @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
+          @update:smartScoreBucketFilter="
+            (v) => (filterStore.smartScoreBucketFilter = v)
+          "
+          @update:resolutionBucketFilter="
+            (v) => (filterStore.resolutionBucketFilter = v)
+          "
+          @toggle="
+            sidebarStore.toggleStats();
+            updateIsMobile();
+          "
+        />
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
@@ -2572,6 +2620,22 @@ defineExpose({
               <tr>
                 <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
                 <td>Select all images</td>
+              </tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
+                <td>
+                  <template v-for="(key, i) in undoKeyHintKeys" :key="key"
+                    ><span v-if="i > 0">+</span><kbd>{{ key }}</kbd></template
+                  >
+                </td>
+                <td>Undo the last change</td>
+              </tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
+                <td>
+                  <template v-for="(key, i) in redoKeyHintKeys" :key="key"
+                    ><span v-if="i > 0">+</span><kbd>{{ key }}</kbd></template
+                  >
+                </td>
+                <td>Redo the change you just undid</td>
               </tr>
               <tr>
                 <td><kbd>G</kbd></td>
