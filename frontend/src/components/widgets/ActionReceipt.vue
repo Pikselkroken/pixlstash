@@ -27,25 +27,10 @@
  * measured border box is the FULL height this component occupies on the bottom
  * edge — which is exactly what the anchor registry needs to report.
  */
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  watch,
-} from "vue";
+import { computed, ref } from "vue";
 
+import { useActionReceipt } from "../../composables/useActionReceipt";
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
-import { useOperationStore } from "../../stores/useOperationStore";
-import {
-  isApplePlatform,
-  redoKeyHint,
-  undoKeyHint,
-} from "../../utils/shortcutHints";
-
-/** Settling window before the live region speaks, so a burst reads once. */
-const ANNOUNCE_THROTTLE_MS = 350;
 
 const props = defineProps({
   /**
@@ -56,57 +41,28 @@ const props = defineProps({
   liftPx: { type: Number, default: 0 },
 });
 
-const store = useOperationStore();
-
-const receipt = computed(() => store.receipt);
-const undone = computed(() => receipt.value?.mode === "undone");
-const blocked = computed(() => receipt.value?.mode === "blocked");
-
-/** The glyph: the action's own icon, or the undo/limit glyph once it flips. */
-const glyph = computed(() => {
-  if (!receipt.value) return "";
-  if (undone.value) return "mdi-undo-variant";
-  if (blocked.value) return "mdi-information-outline";
-  return receipt.value.icon;
-});
-
-const actionLabel = computed(() => (undone.value ? "Redo" : "Undo"));
-const actionGlyph = computed(() =>
-  undone.value ? "mdi-redo-variant" : "mdi-undo-variant",
-);
-const keyHint = computed(() => (undone.value ? redoKeyHint() : undoKeyHint()));
-
-/**
- * The sentence. A multi-step undo says how far it went instead of naming only
- * the oldest step it reverted, which would understate what just happened.
- */
-const text = computed(() => {
-  const entry = receipt.value;
-  if (!entry) return "";
-  if (undone.value && entry.steps > 1) {
-    return `Undone ${entry.steps} steps: ${entry.summary}`;
-  }
-  if (undone.value) return `Undone: ${entry.summary}`;
-  return entry.summary;
-});
-
-/** The standard attribute for "this control has a keyboard shortcut". */
-const actionKeyShortcut = computed(() =>
-  undone.value
-    ? isApplePlatform()
-      ? "Shift+Meta+Z"
-      : "Control+Y"
-    : isApplePlatform()
-      ? "Meta+Z"
-      : "Control+Z",
-);
-
-// The drain's duration is a dismissal timeout, not a motion token: the motion
-// scale tops out at 420ms. It is handed to CSS as a custom property so the
-// hairline and the store's timer always describe the same window.
-const drainStyle = computed(() => ({
-  "--r-drain-dur": `${receipt.value?.durationMs ?? 0}ms`,
-}));
+// The receipt contract — wording, glyphs, keycaps, the drain window, the
+// hover/focus/hidden-tab pause and the focus-preserving action — is shared with
+// the lightbox's own narration (`OverlayActionReceipt.vue`). This surface owns
+// the single app-wide live region; the lightbox's does not announce.
+const {
+  store,
+  receipt,
+  undone,
+  blocked,
+  glyph,
+  actionLabel,
+  actionGlyph,
+  keyHint,
+  text,
+  actionKeyShortcut,
+  drainStyle,
+  pillKey,
+  announcement,
+  pause,
+  resume,
+  takeAction,
+} = useActionReceipt();
 
 const wrapperStyle = computed(() => ({
   paddingBottom: `${Math.max(0, props.liftPx)}px`,
@@ -117,86 +73,16 @@ const wrapperStyle = computed(() => ({
 const wrapperEl = ref(null);
 useBottomAnchor("action-receipt", wrapperEl);
 
-/**
- * Take the action and keep the keyboard where it was.
- *
- * The pill is REPLACED (a new node, keyed on the store's raise counter) when
- * undo flips it to "Undone … Redo". Without this, a user who reached Undo with
- * the keyboard has focus dropped to `<body>` and has to tab from the top of the
- * document to reach the Redo the flip just produced — WCAG 2.4.3. The button is
- * `aria-disabled` rather than `disabled` for the same reason: disabling a
- * focused control moves focus off it.
- */
-async function onUndo(event) {
-  if (store.busy) return;
-  const hadFocus = event?.currentTarget === document.activeElement;
-  await (undone.value ? store.redo() : store.undo());
-  if (!hadFocus) return;
-  await nextTick();
-  wrapperEl.value?.querySelector?.(".r-btn")?.focus?.();
+// The pill is REPLACED (a new node, keyed on the store's raise counter) when
+// undo flips it to "Undone … Redo", so the keyboard has to be put back on the
+// button the flip produced (WCAG 2.4.3). The button is `aria-disabled` rather
+// than `disabled` for the same reason: disabling a focused control moves focus
+// off it.
+function onUndo(event) {
+  return takeAction(event, () =>
+    wrapperEl.value?.querySelector?.(".r-btn")?.focus?.(),
+  );
 }
-
-// WCAG 2.2.1 — the countdown freezes on hover and on focus-within, and the CSS
-// pauses the hairline on the same two conditions so the two never disagree.
-function pause() {
-  store.pauseReceipt();
-}
-function resume() {
-  store.resumeReceipt();
-}
-
-// …and while the tab is hidden, or a receipt raised just before a tab switch
-// expires unread. Mirrors NoticeHost's handling of the same hazard.
-function onVisibilityChange() {
-  if (typeof document === "undefined") return;
-  if (document.hidden) store.pauseReceipt();
-  else store.resumeReceipt();
-}
-
-onMounted(() => {
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", onVisibilityChange);
-  }
-});
-
-onBeforeUnmount(() => {
-  if (typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", onVisibilityChange);
-  }
-  if (announceTimer != null) clearTimeout(announceTimer);
-});
-
-// Keyed on the store's raise counter so a receipt REPLACED in place still
-// remounts and the drain restarts from full. The pill is deliberately NOT the
-// live region: a region created at the same moment as its content announces
-// unreliably, and a burst of actions would create one region per action and
-// queue a backlog of stale sentences. The announcement rides a single
-// persistent region instead (notice-surface.md §8).
-const pillKey = computed(() => receipt.value?.key ?? 0);
-
-// What the persistent region says. Throttled so a burst announces the outcome
-// once, rather than reading every intermediate step aloud.
-const announcement = ref("");
-let announceTimer = null;
-watch(text, (value) => {
-  if (announceTimer != null) clearTimeout(announceTimer);
-  if (!value) {
-    announcement.value = "";
-    return;
-  }
-  announceTimer = setTimeout(() => {
-    announceTimer = null;
-    announcement.value = value;
-  }, ANNOUNCE_THROTTLE_MS);
-});
-
-// A receipt raised while the tab is hidden starts with a running countdown
-// (the store arms it unconditionally). Re-apply the hidden-tab pause so it does
-// not expire unseen — the same hazard `onVisibilityChange` covers for the pill
-// that was already up.
-watch(pillKey, () => {
-  if (typeof document !== "undefined" && document.hidden) store.pauseReceipt();
-});
 </script>
 
 <template>
