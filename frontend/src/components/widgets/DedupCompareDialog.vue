@@ -108,6 +108,18 @@ const bestTagCount = computed(() =>
   bestOf(candidates.value, (c) => c.tag_count),
 );
 
+/**
+ * Whether ANY copy in this group carries a path worth showing.
+ *
+ * The Location row is a whole extra line in the meta grid, and the meta grid is
+ * what the image area gives its leftover height to. With the row rendered per
+ * candidate, one reference-folder copy next to a library-managed one produced
+ * two cards whose pictures started and ended at different heights — the
+ * comparison's whole premise is that the images are registered against each
+ * other, so the row is a group-level decision: every card gets it, or none do.
+ */
+const anyPathShown = computed(() => candidates.value.some(showsPath));
+
 /** How many pictures the Stack verdict would collapse. */
 const stackCount = computed(
   () => candidates.value.length - props.excludedIds.length,
@@ -452,10 +464,16 @@ function onZoomContextMenu() {
           </span>
           <!-- The path is shown only for a reference-folder picture, where the
                user manages the files and needs to know which copy is which.
-               Full width: paths do not fit half a column. -->
-          <span v-if="showsPath(candidate)" class="dc-cell dc-cell--wide">
+               Full width: paths do not fit half a column. The row appears on
+               every card as soon as ONE copy has a path, so the cards stay the
+               same shape and the pictures stay aligned. -->
+          <span v-if="anyPathShown" class="dc-cell dc-cell--wide">
             <span class="dc-label">Location</span>
-            <span class="dc-val dc-path" :title="candidatePath(candidate)">
+            <span
+              v-if="showsPath(candidate)"
+              class="dc-val dc-path"
+              :title="candidatePath(candidate)"
+            >
               <v-icon
                 size="13"
                 class="dc-path-icon"
@@ -463,6 +481,16 @@ function onZoomContextMenu() {
                 >mdi-folder-eye-outline</v-icon
               >
               {{ shortenPath(candidatePath(candidate)) }}
+            </span>
+            <span
+              v-else
+              class="dc-val dc-path"
+              title="Stored in your PixlStash library, not in a reference folder"
+            >
+              <v-icon size="13" class="dc-path-icon"
+                >mdi-image-multiple-outline</v-icon
+              >
+              In your library
             </span>
           </span>
         </span>
@@ -788,6 +816,11 @@ function onZoomContextMenu() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* The best-value chip below draws a border. Reserving its vertical space on
+     every value keeps the meta rows the same height from card to card, and the
+     meta block is what the picture above it gives its leftover height to: a
+     card that wins three columns must not end up with a shorter picture. */
+  border-block: 1px solid transparent;
 }
 
 /* The winner of a column reads first: a quiet primary-tinted chip. */

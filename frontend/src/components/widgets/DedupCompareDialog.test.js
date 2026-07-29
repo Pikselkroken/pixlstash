@@ -139,12 +139,41 @@ describe("DedupCompareDialog: the comparison", () => {
     // A managed-library path is an implementation detail; showing it everywhere
     // buries the values that matter under noise.
     const cards = mountDialog().findAll(".dc-card");
-    expect(cards[0].find(".dc-path").exists()).toBe(false);
-    expect(cards[1].find(".dc-path").exists()).toBe(false);
+    expect(cards[0].text()).not.toContain("/mnt/ref");
+    expect(cards[1].text()).not.toContain("/mnt/ref");
 
     const path = cards[2].find(".dc-path");
     expect(path.text()).toContain("…/2024/img.jpg");
     expect(path.attributes("title")).toBe("/mnt/ref/2024/img.jpg");
+  });
+
+  it("keeps the Location row on every card once one copy has a path", () => {
+    // The regression this pins is a visual one with teeth: the row is an extra
+    // line in the meta grid, the meta grid takes its height off the image, so
+    // rendering it per candidate left the pictures at different heights and the
+    // copies could no longer be compared against each other.
+    const cards = mountDialog().findAll(".dc-card");
+    for (const card of cards) {
+      expect(card.findAll(".dc-cell--wide")).toHaveLength(1);
+    }
+    expect(cards[0].find(".dc-cell--wide").text()).toContain("In your library");
+  });
+
+  it("drops the Location row entirely when no copy is in a reference folder", () => {
+    // Nothing to say about location, so nothing is said: the row exists for the
+    // user who manages their own files, not as a permanent empty field.
+    const managed = {
+      ...GROUP,
+      candidates: GROUP.candidates.map((c) => ({
+        ...c,
+        file_path: null,
+        reference_folder_id: null,
+      })),
+    };
+    const cards = mountDialog({ group: managed }).findAll(".dc-card");
+    for (const card of cards) {
+      expect(card.find(".dc-cell--wide").exists()).toBe(false);
+    }
   });
 
   it("renders the counter-evidence pill first", () => {
