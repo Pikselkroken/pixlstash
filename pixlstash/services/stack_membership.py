@@ -29,12 +29,24 @@ from pixlstash.db_models import (
 )
 
 
-def expand_picture_ids_to_stacks(session: Session, picture_ids) -> list[int]:
+def expand_picture_ids_to_stacks(
+    session: Session, picture_ids, include_deleted: bool = False
+) -> list[int]:
     """Return *picture_ids* plus every non-deleted co-member of any stack they
     belong to.
 
     Grouping mutations call this first so an action on a single stacked picture
     (e.g. a collapsed-stack leader) is applied to the whole stack.
+
+    Args:
+        session: Pre-opened DB session.
+        picture_ids: Seed ids whose stacks should be expanded.
+        include_deleted: Also return soft-deleted (scrapheaped) co-members.
+            Grouping mutations leave those alone and keep the default; the
+            scrapheap operations pass ``True`` because
+            :func:`~pixlstash.stacking.normalize_stack_positions` renumbers
+            **every** member of a stack, deleted ones included, so the operation
+            log has to snapshot them or an undo would restore the wrong order.
     """
     ids: set[int] = {int(pid) for pid in picture_ids if pid is not None}
     if not ids:
@@ -51,12 +63,10 @@ def expand_picture_ids_to_stacks(session: Session, picture_ids) -> list[int]:
         if stack_id is not None
     }
     if stack_ids:
-        member_ids = session.exec(
-            select(Picture.id).where(
-                Picture.stack_id.in_(stack_ids),
-                Picture.deleted.is_(False),
-            )
-        ).all()
+        member_query = select(Picture.id).where(Picture.stack_id.in_(stack_ids))
+        if not include_deleted:
+            member_query = member_query.where(Picture.deleted.is_(False))
+        member_ids = session.exec(member_query).all()
         ids.update(int(mid) for mid in member_ids if mid is not None)
 
     return sorted(ids)

@@ -1087,7 +1087,16 @@ def register_routes(router, server):
     @router.post(
         "/pictures/scrapheap/restore",
         summary="Restore deleted pictures",
-        description="Restores deleted pictures from scrapheap, either all deleted pictures or a provided picture id subset.",
+        description=(
+            "Restores deleted pictures from scrapheap, either all deleted "
+            "pictures or a provided picture id subset.\n\n"
+            "Recorded in the operation log as a single "
+            "`pictures.scrapheap.restore` operation with a `batch_id`, and it is "
+            "the symmetric partner of `pictures.scrapheap.move`: undoing a "
+            "restore puts the pictures back in the Scrapheap with the retention "
+            "stamp they had, so the history stack stays coherent in both "
+            "directions."
+        ),
         response_model=ScrapheapRestoreResponse,
     )
     def restore_scrapheap(request: Request, payload: dict | None = Body(None)):
@@ -1130,10 +1139,31 @@ def register_routes(router, server):
             session.commit()
             return restored_count
 
-        restored_count = server.vault.db.run_task(
+        def _scrapheaped_targets(session: Session):
+            # The endpoint's targets are not knowable from the request: an absent
+            # picture_ids means "restore the entire scrapheap", and even a named
+            # subset may include already-live ids that will not change. Resolve
+            # the real set on the mutation's own session so the snapshot covers
+            # exactly what the write is about to touch.
+            query = select(Picture.id).where(Picture.deleted.is_(True))
+            if picture_ids is not None:
+                query = query.where(Picture.id.in_(picture_ids))
+            return list(session.exec(query).all())
+
+        restored_count, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             restore_pictures,
             picture_ids,
-            priority=DBPriority.IMMEDIATE,
+            op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
+            picture_ids=[],
+            resolve_picture_ids=_scrapheaped_targets,
+            batch_id=operation_log_service.new_batch_id(),
+            # Same stack caveat as the soft-delete: normalize_stack_positions
+            # renumbers every member of an affected stack, deleted ones included.
+            expand_stacks=True,
+            expand_stacks_include_deleted=True,
+            summary=operation_log_service.scrapheap_restore_summary,
+            **operation_log_service.request_context(request),
         )
         # A restored picture re-enters active views. ``picture_ids`` is the
         # caller-supplied subset (None == "restore all"); pass it through when
@@ -1333,7 +1363,13 @@ def register_routes(router, server):
     @router.delete(
         "/pictures/{id}",
         summary="Move picture to scrapheap",
-        description="Soft-deletes a picture by marking it deleted, making it appear in scrapheap views.",
+        description=(
+            "Soft-deletes a picture by marking it deleted, making it appear in "
+            "scrapheap views. Recorded in the operation log as "
+            "`pictures.scrapheap.move` and **undoable**: undo restores the "
+            "picture, redo moves it back. (A *permanent* delete — "
+            "`DELETE /pictures/scrapheap` — is not recorded and cannot be undone.)"
+        ),
         response_model=PictureDeleteResponse,
     )
     def delete_picture(request: Request, id: str):
@@ -1366,7 +1402,23 @@ def register_routes(router, server):
             session.commit()
             return True
 
-        success = server.vault.db.run_task(delete_pic, id)
+        # The soft-delete is a recorded, reversible operation: the `deleted`
+        # facet carries the flag and the retention stamp, so undo puts the
+        # picture back with the purge deadline it had. The snapshot expands to
+        # the whole stack INCLUDING its scrapheaped members, because
+        # normalize_stack_positions renumbers every member and an unsnapshotted
+        # renumber is a change undo could not reverse.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            delete_pic,
+            id,
+            op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
+            picture_ids=[id],
+            expand_stacks=True,
+            expand_stacks_include_deleted=True,
+            summary=operation_log_service.scrapheap_move_summary,
+            **operation_log_service.request_context(request),
+        )
         if not success:
             raise HTTPException(status_code=404, detail="Picture not found")
         # Soft-delete removes the card from active grid views. Broadcast a
@@ -1399,7 +1451,13 @@ def register_routes(router, server):
             "Soft-deletes multiple pictures in one request by marking them deleted "
             '(they appear in scrapheap views). Body: {"picture_ids": [int, ...]}. '
             "Single-round-trip replacement for issuing one DELETE /pictures/{id} per "
-            "id, which floods the client connection pool on large selections."
+            "id, which floods the client connection pool on large selections.\n\n"
+            "Recorded in the operation log as a single `pictures.scrapheap.move` "
+            "operation carrying a `batch_id`, so the whole bulk move is **one** "
+            "undo: `POST /operations/undo` or "
+            "`POST /operations/batches/{batch_id}/undo` restores every picture it "
+            "moved. Pictures skipped for a locked set are not in the recorded "
+            "change and are unaffected by the undo."
         ),
         response_model=BulkPictureDeleteResponse,
     )
@@ -1458,7 +1516,23 @@ def register_routes(router, server):
             session.commit()
             return newly_deleted, sorted(locked)
 
-        deleted_ids, skipped_locked = server.vault.db.run_task(delete_pics, pic_ids)
+        # One bulk action, one operation row, one batch id — so the client can
+        # offer a single "Undo" for the whole move, by batch id or by simply
+        # popping the newest operation.
+        (deleted_ids, skipped_locked), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                delete_pics,
+                pic_ids,
+                op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
+                picture_ids=pic_ids,
+                batch_id=operation_log_service.new_batch_id(),
+                expand_stacks=True,
+                expand_stacks_include_deleted=True,
+                summary=operation_log_service.scrapheap_move_summary,
+                **operation_log_service.request_context(request),
+            )
+        )
         # Soft-delete removes the cards from active grid views. Broadcast a single
         # ``removed`` event so other tabs drop the stale cards in one update.
         if deleted_ids:

@@ -11,9 +11,12 @@ specifies for the audit log.
 
 Scope discipline (DAM 1.2, binding): only the **metadata** facets in
 :data:`FACETS` are captured and reversible — tags, caption/description, rating,
-picture-set / project / character membership, and stacking. File-mutating
-operations may be *recorded* for audit with ``undoable=False``, but they are not
-reversible until copy-on-write versions land (Stage 2 / v2.1).
+picture-set / project / character membership, stacking, and the scrapheap
+soft-delete state. File-mutating operations may be *recorded* for audit with
+``undoable=False``, but they are not reversible until copy-on-write versions land
+(Stage 2 / v2.1). A **permanent** delete (scrapheap purge, Empty Scrapheap,
+retention auto-purge) destroys the file and is deliberately *not* recorded here:
+there is nothing an undo could put back.
 
 Atomicity: :func:`run_recorded_metadata_task` runs capture → mutation → capture →
 record inside **one** DB-queue task, so the ``Operation`` row and the change it
@@ -34,9 +37,10 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Union
 
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -77,6 +81,7 @@ FACET_PROJECT_ID = "project_id"
 FACET_CHARACTERS = "characters"
 FACET_PENDING_CHARACTER_ID = "pending_character_id"
 FACET_STACK = "stack"
+FACET_DELETED = "deleted"
 
 FACETS = (
     FACET_TAGS,
@@ -88,7 +93,19 @@ FACETS = (
     FACET_CHARACTERS,
     FACET_PENDING_CHARACTER_ID,
     FACET_STACK,
+    FACET_DELETED,
 )
+
+# Operation types the scrapheap lifecycle records. Named constants because the
+# frontend keys its undo affordances off them and they are part of the API
+# contract (docs/backend_architecture.md §21).
+OP_SCRAPHEAP_MOVE = "pictures.scrapheap.move"
+OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
+
+# HTTP status for "an undo target was permanently purged and cannot come back".
+# 410 Gone, not 404: the picture demonstrably existed and was destroyed, and the
+# operation row that named it is still there.
+PURGED_STATUS_CODE = 410
 
 # How many operations the API will ever return in one page.
 MAX_LIST_LIMIT = 500
@@ -106,6 +123,7 @@ _FACET_EVENTS = {
     FACET_CHARACTERS: (EventType.CHANGED_CHARACTERS, EventType.CHANGED_PICTURES),
     FACET_PENDING_CHARACTER_ID: (EventType.CHANGED_CHARACTERS,),
     FACET_STACK: (EventType.CHANGED_PICTURES,),
+    FACET_DELETED: (EventType.CHANGED_PICTURES,),
 }
 
 
@@ -133,6 +151,45 @@ def _normalize_ids(picture_ids: Iterable[Any]) -> list[int]:
         if value > 0:
             ids.add(value)
     return sorted(ids)
+
+
+def _naive_utc_iso(value: Optional[datetime]) -> Optional[str]:
+    """Serialise a ``deleted_at`` stamp for the recorded state.
+
+    Every ``Picture.deleted_at`` in the DB is **naive UTC** (SQLAlchemy's SQLite
+    ``DateTime`` drops the offset on write — see ``scrapheap_service._naive_utc``),
+    but a value just assigned in-session is still aware. Normalising both to
+    naive-UTC ISO here keeps the before/after comparison honest: without it the
+    same instant would compare unequal across a commit boundary and every capture
+    would look like a change.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.isoformat()
+
+
+def _parse_naive_utc(value) -> Optional[datetime]:
+    """Inverse of :func:`_naive_utc_iso`, tolerant of a malformed stored value."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            logger.error(
+                "operation_log: could not parse recorded deleted_at %r; restoring "
+                "the picture without a retention stamp (it will never auto-purge "
+                "until it is re-deleted)",
+                value,
+            )
+            return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
@@ -169,6 +226,14 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
                 "id": picture.stack_id,
                 "name": None,
                 "position": picture.stack_position,
+            },
+            # The scrapheap lifecycle: the soft-delete flag and the retention
+            # stamp travel together, because restoring one without the other
+            # either loses the purge deadline or leaves a live picture carrying
+            # a stale one.
+            FACET_DELETED: {
+                "deleted": bool(picture.deleted),
+                "deleted_at": _naive_utc_iso(picture.deleted_at),
             },
         }
     if not state:
@@ -277,9 +342,62 @@ def diff_states(
 # ---------------------------------------------------------------------------
 
 
+# A summary is either a fixed sentence or a ``(before_delta, after_delta) -> str``
+# builder evaluated once the diff is known. The callable form exists for handlers
+# whose real target count is not knowable at call time — a bulk soft-delete that
+# skips locked pictures, or a "restore everything" that never named an id.
+SummarySpec = Union[str, Callable[[dict, dict], Optional[str]], None]
+
+
 def new_batch_id() -> str:
     """Return a fresh opaque batch id grouping one bulk action's operations."""
     return uuid.uuid4().hex
+
+
+def lifecycle_split(state: dict[str, dict]) -> tuple[list[int], list[int]]:
+    """Split *state* into the pictures it scrapheaps and the ones it restores.
+
+    Args:
+        state: A recorded (already-diffed) state — the side about to be written.
+
+    Returns:
+        ``(scrapheaped_ids, restored_ids)``: pictures whose :data:`FACET_DELETED`
+        target value is ``True`` and ``False`` respectively. Pictures the state
+        does not move in or out of the scrapheap appear in neither list.
+    """
+    scrapheaped: list[int] = []
+    restored: list[int] = []
+    for picture_id, facets in (state or {}).items():
+        lifecycle = (facets or {}).get(FACET_DELETED)
+        if not isinstance(lifecycle, dict):
+            continue
+        (scrapheaped if lifecycle.get("deleted") else restored).append(int(picture_id))
+    return sorted(scrapheaped), sorted(restored)
+
+
+def _pictures(count: int) -> str:
+    return f"{count} picture" if count == 1 else f"{count} pictures"
+
+
+def scrapheap_move_summary(before: dict, after: dict) -> Optional[str]:
+    """Build ``Moved 5 pictures to the Scrapheap`` from the recorded diff.
+
+    Counting the diff rather than the request is what makes the sentence true:
+    a bulk soft-delete silently skips pictures frozen by a locked set and
+    already-scrapheaped ones, and neither shows up in the recorded change.
+    """
+    moved, _restored = lifecycle_split(after)
+    if not moved:
+        return None
+    return f"Moved {_pictures(len(moved))} to the Scrapheap"
+
+
+def scrapheap_restore_summary(before: dict, after: dict) -> Optional[str]:
+    """Build ``Restored 5 pictures from the Scrapheap`` from the recorded diff."""
+    _moved, restored = lifecycle_split(after)
+    if not restored:
+        return None
+    return f"Restored {_pictures(len(restored))} from the Scrapheap"
 
 
 def request_context(request) -> dict:
@@ -320,7 +438,7 @@ def record_operation_in_session(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     batch_id: Optional[str] = None,
-    summary: Optional[str] = None,
+    summary: SummarySpec = None,
     undoable: bool = True,
     target_type: str = TARGET_PICTURE,
 ) -> Optional[Operation]:
@@ -335,7 +453,9 @@ def record_operation_in_session(
         source: WS-envelope source, passed in explicitly by the caller.
         origin_client_id: WS-envelope per-tab origin, likewise explicit.
         batch_id: Group id when this row is part of a bulk action.
-        summary: Short human sentence for the undo toast / activity feed.
+        summary: Short human sentence for the undo toast / activity feed, or a
+            ``(before_delta, after_delta) -> str | None`` builder evaluated here,
+            once the real extent of the change is known (see :data:`SummarySpec`).
         undoable: ``False`` records the change for audit without offering undo
             (the DAM 1.2 rule for file-mutating operations).
         target_type: Kind of object the target ids refer to.
@@ -346,6 +466,18 @@ def record_operation_in_session(
     before_delta, after_delta = diff_states(before, after)
     if not before_delta and not after_delta:
         return None
+
+    if callable(summary):
+        try:
+            summary = summary(before_delta, after_delta)
+        except Exception:
+            logger.exception(
+                "operation_log: summary builder for %s failed over %d changed "
+                "picture(s); recording the operation without a summary",
+                op_type,
+                len(after_delta),
+            )
+            summary = None
 
     target_ids = sorted(
         {int(pid) for pid in after_delta} | {int(pid) for pid in before_delta}
@@ -401,9 +533,10 @@ def run_recorded_metadata_task(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     batch_id: Optional[str] = None,
-    summary: Optional[str] = None,
+    summary: SummarySpec = None,
     undoable: bool = True,
     expand_stacks: bool = False,
+    expand_stacks_include_deleted: bool = False,
     resolve_picture_ids: Optional[Callable[[Session], Iterable[Any]]] = None,
     **kwargs,
 ) -> tuple[Any, Optional[dict]]:
@@ -424,10 +557,15 @@ def run_recorded_metadata_task(
         source: WS-envelope source, read from the request by the caller.
         origin_client_id: WS-envelope per-tab origin, likewise.
         batch_id: Group id when this call is one step of a bulk action.
-        summary: Short human sentence for the undo toast.
+        summary: Short human sentence for the undo toast, or a
+            ``(before_delta, after_delta) -> str | None`` builder (:data:`SummarySpec`).
         undoable: ``False`` records for audit only.
         expand_stacks: Snapshot the whole stack of every target picture, for
             mutations that are stack-atomic (project/set membership).
+        expand_stacks_include_deleted: With *expand_stacks*, also pull in
+            soft-deleted stack members. The scrapheap operations need it because
+            ``normalize_stack_positions`` renumbers deleted members too, and an
+            unsnapshotted renumber is a change undo could not reverse.
         resolve_picture_ids: Optional ``(session) -> ids`` run **before** the
             mutation, on the mutation's own session, for handlers whose targets
             are not knowable from the request alone — a request addressed by face
@@ -446,7 +584,11 @@ def run_recorded_metadata_task(
         if resolve_picture_ids is not None:
             ids = _normalize_ids([*ids, *(resolve_picture_ids(session) or ())])
         if expand_stacks and ids:
-            ids = _normalize_ids(expand_picture_ids_to_stacks(session, ids))
+            ids = _normalize_ids(
+                expand_picture_ids_to_stacks(
+                    session, ids, include_deleted=expand_stacks_include_deleted
+                )
+            )
         before = capture_state_in_session(session, ids)
         result = work(session, *args, **kwargs)
         after = capture_state_in_session(session, ids)
@@ -570,6 +712,84 @@ def _apply_stack(session: Session, picture: Picture, stack) -> None:
     session.add(picture)
 
 
+def _apply_deleted(session: Session, picture: Picture, lifecycle) -> None:
+    """Restore a picture's scrapheap state (the soft-delete flag + its stamp)."""
+    if not isinstance(lifecycle, dict):
+        return
+    picture.deleted = bool(lifecycle.get("deleted"))
+    # Written back verbatim rather than re-stamped to "now": the recorded value
+    # IS the retention deadline this state had, and re-stamping would silently
+    # extend (or invent) a purge window on every undo.
+    picture.deleted_at = _parse_naive_utc(lifecycle.get("deleted_at"))
+    session.add(picture)
+
+
+def _enforce_scrapheap_targets_exist(
+    session: Session, state: dict[str, dict], action: str
+) -> None:
+    """Raise ``410`` if a picture this state would move in/out of the scrapheap is gone.
+
+    The one edge case a scrapheap undo has that a metadata undo does not: the
+    picture may have been **permanently purged** since — by the 30-day retention
+    sweep or by Empty Scrapheap — and a purge destroys the file, so no undo can
+    bring it back. Fail closed and refuse the whole request, exactly as the
+    locked-set guard above does: the operation stays ``applied``, nothing is
+    committed, and the caller is told which pictures are gone rather than being
+    handed a half-restored batch it would have to reconcile itself.
+
+    Only pictures carrying the :data:`FACET_DELETED` facet are checked. A purged
+    picture that merely appears in some *other* operation's recorded state (a tag
+    edit, a stack renumber) keeps the long-standing skip-with-a-warning
+    behaviour — there is no lifecycle promise to break there.
+
+    Args:
+        session: Pre-opened DB session.
+        state: The recorded state about to be applied.
+        action: Human verb phrase echoed in the error detail.
+
+    Raises:
+        HTTPException: :data:`PURGED_STATUS_CODE` naming the missing pictures.
+    """
+    wanted = sorted(
+        int(picture_id)
+        for picture_id, facets in (state or {}).items()
+        if isinstance((facets or {}).get(FACET_DELETED), dict)
+    )
+    if not wanted:
+        return
+    alive = {
+        int(picture_id)
+        for picture_id in session.exec(
+            select(Picture.id).where(Picture.id.in_(wanted))
+        ).all()
+        if picture_id is not None
+    }
+    missing = [picture_id for picture_id in wanted if picture_id not in alive]
+    if not missing:
+        return
+    logger.warning(
+        "operation_log: refusing to %s — %d of %d scrapheap target(s) %s were "
+        "permanently purged and cannot be brought back; the operation stays "
+        "applied and nothing was written",
+        action,
+        len(missing),
+        len(wanted),
+        missing,
+    )
+    raise HTTPException(
+        status_code=PURGED_STATUS_CODE,
+        detail={
+            "code": "pictures_purged",
+            "action": action,
+            "picture_ids": missing,
+            "message": (
+                f"{len(missing)} of these pictures were permanently deleted from "
+                "the Scrapheap and cannot be restored. Nothing was changed."
+            ),
+        },
+    )
+
+
 def apply_state_in_session(
     session: Session, state: dict[str, dict], action: str = "restore metadata"
 ) -> list[int]:
@@ -577,7 +797,9 @@ def apply_state_in_session(
 
     A locked picture set is a hard freeze on its members' label data; undo/redo
     must not become the one write path that walks around it. The guard runs here,
-    at the single sink every restore goes through, and covers every facet.
+    at the single sink every restore goes through, and covers every facet. The
+    purged-target guard (:func:`_enforce_scrapheap_targets_exist`) sits beside it
+    on the same fail-closed contract.
 
     Args:
         session: Pre-opened DB session; the caller commits.
@@ -590,9 +812,11 @@ def apply_state_in_session(
         The picture ids actually written.
 
     Raises:
-        HTTPException: ``423`` when a locked picture set freezes any target.
+        HTTPException: ``423`` when a locked picture set freezes any target;
+            ``410`` when a scrapheap target has since been permanently purged.
     """
     enforce_pictures_not_locked(session, [int(pid) for pid in (state or {})], action)
+    _enforce_scrapheap_targets_exist(session, state, action)
     touched: list[int] = []
     for picture_id_raw, facets in (state or {}).items():
         picture_id = int(picture_id_raw)
@@ -632,6 +856,9 @@ def apply_state_in_session(
             elif facet == FACET_STACK:
                 if value is not None:
                     _apply_stack(session, picture, value)
+            elif facet == FACET_DELETED:
+                if value is not None:
+                    _apply_deleted(session, picture, value)
             else:
                 logger.warning(
                     "operation_log: unknown facet %r on picture %d was recorded "
@@ -727,11 +954,20 @@ def _restore(
     operations: list[Operation],
     *,
     to_before: bool,
-) -> tuple[list[int], set[str]]:
-    """Apply the before- (undo) or after- (redo) state of *operations* in order."""
+) -> tuple[list[int], set[str], dict[str, list[int]]]:
+    """Apply the before- (undo) or after- (redo) state of *operations* in order.
+
+    Returns:
+        ``(touched_ids, facets, lifecycle)`` where *lifecycle* is
+        ``{"scrapheaped": [...], "restored": [...]}`` — the pictures this
+        restoration moves into and out of the scrapheap, so the caller can
+        announce them as ``removed`` / ``added`` instead of ``updated``.
+    """
     action = "undo an operation" if to_before else "redo an operation"
     touched: set[int] = set()
     facets: set[str] = set()
+    scrapheaped: set[int] = set()
+    restored: set[int] = set()
     for operation in operations:
         state = _loads(
             operation.before_state if to_before else operation.after_state, {}
@@ -739,20 +975,42 @@ def _restore(
         touched.update(apply_state_in_session(session, state, action))
         for picture_facets in state.values():
             facets.update(picture_facets or {})
-    return sorted(touched), facets
+        moved_out, moved_in = lifecycle_split(state)
+        scrapheaped.update(moved_out)
+        restored.update(moved_in)
+    lifecycle = {
+        "scrapheaped": sorted(scrapheaped),
+        "restored": sorted(restored),
+    }
+    return sorted(touched), facets, lifecycle
 
 
 def _emit(
-    vault: "Vault", picture_ids: list[int], facets: set[str], origin_client_id
+    vault: "Vault",
+    picture_ids: list[int],
+    facets: set[str],
+    origin_client_id,
+    lifecycle: Optional[dict[str, list[int]]] = None,
 ) -> None:
     """Announce a restored state on the WS envelope.
 
     ``origin_client_id`` is carried in the event ``data`` dict, never read from a
     contextvar — this runs on the DB worker thread where the contextvar is dead
     (§15, ``test_source_origin_read_from_data_only``).
+
+    ``change_kind`` follows the scrapheap lifecycle rather than being a blanket
+    ``"updated"``: undoing a move-to-Scrapheap puts a card back (``added``) and
+    redoing it takes the card away (``removed``), which is what the delete and
+    restore endpoints themselves broadcast. Telling the grid a vanished picture
+    was merely "updated" leaves a 404-clickable thumbnail behind.
     """
     if not picture_ids:
         return
+    scrapheaped = list((lifecycle or {}).get("scrapheaped") or [])
+    restored = list((lifecycle or {}).get("restored") or [])
+    moved = set(scrapheaped) | set(restored)
+    updated = [picture_id for picture_id in picture_ids if picture_id not in moved]
+
     events: list[EventType] = []
     for facet in facets:
         for event in _FACET_EVENTS.get(facet, (EventType.CHANGED_PICTURES,)):
@@ -760,16 +1018,24 @@ def _emit(
                 events.append(event)
     if not events:
         events = [EventType.CHANGED_PICTURES]
-    for event in events:
+
+    def _notify(event: EventType, ids: list[int], change_kind: str) -> None:
+        if not ids:
+            return
         vault.notify(
             event,
             {
-                "picture_ids": picture_ids,
+                "picture_ids": ids,
                 "origin_client_id": origin_client_id,
-                "change_kind": "updated",
+                "change_kind": change_kind,
                 "source": "ui",
             },
         )
+
+    for event in events:
+        _notify(event, updated, "updated")
+    _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
+    _notify(EventType.CHANGED_PICTURES, restored, "added")
 
 
 def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operation:
@@ -808,7 +1074,7 @@ def _mark_undone(session: Session, members: list[Operation]) -> None:
 
 def undo_in_session(
     session: Session, operation_id: Optional[int] = None
-) -> tuple[list[dict], list[int], list[str]]:
+) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo one operation (and its whole batch), returning what it touched.
 
     Rows are serialized *inside* the session: the DB worker closes it when the
@@ -820,15 +1086,15 @@ def undo_in_session(
     members = [member for member in members if member.undoable]
     if not members:
         raise OperationLogError("Nothing to undo")
-    touched, facets = _restore(session, members, to_before=True)
+    touched, facets, lifecycle = _restore(session, members, to_before=True)
     _mark_undone(session, members)
     session.commit()
-    return [serialize(member) for member in members], touched, sorted(facets)
+    return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
 def undo_batch_in_session(
     session: Session, batch_id: str
-) -> tuple[list[dict], list[int], list[str]]:
+) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo every still-applied operation of one batch (the sweep's Undo)."""
     members = list(
         session.exec(
@@ -841,13 +1107,15 @@ def undo_batch_in_session(
     )
     if not members:
         raise OperationLogError(f"Batch {batch_id} has nothing to undo")
-    touched, facets = _restore(session, members, to_before=True)
+    touched, facets, lifecycle = _restore(session, members, to_before=True)
     _mark_undone(session, members)
     session.commit()
-    return [serialize(member) for member in members], touched, sorted(facets)
+    return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
-def redo_in_session(session: Session) -> tuple[list[dict], list[int], list[str]]:
+def redo_in_session(
+    session: Session,
+) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Re-apply the most recently undone operation (and its whole batch)."""
     operation = session.exec(
         select(Operation)
@@ -859,13 +1127,13 @@ def redo_in_session(session: Session) -> tuple[list[dict], list[int], list[str]]
     members = _batch_members_in_session(session, operation, STATUS_UNDONE)
     # Redo replays in application order, the mirror of undo's reverse order.
     members = sorted(members, key=lambda op: op.id or 0)
-    touched, facets = _restore(session, members, to_before=False)
+    touched, facets, lifecycle = _restore(session, members, to_before=False)
     for member in members:
         member.status = STATUS_APPLIED
         member.undone_at = None
         session.add(member)
     session.commit()
-    return [serialize(member) for member in members], touched, sorted(facets)
+    return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
 def list_operations_in_session(
@@ -938,12 +1206,18 @@ def get_operation(vault: "Vault", operation_id: int) -> Optional[dict]:
     return vault.db.run_task(_fetch)
 
 
-def _finish(vault: "Vault", members, touched, facets, origin_client_id) -> dict:
-    _emit(vault, touched, set(facets), origin_client_id)
+def _finish(
+    vault: "Vault", members, touched, facets, lifecycle, origin_client_id
+) -> dict:
+    _emit(vault, touched, set(facets), origin_client_id, lifecycle)
     return {
         "operations": members,
         "picture_ids": touched,
         "picture_count": len(touched),
+        # Which of those pictures left / re-entered the scrapheap, so the client
+        # can drop or re-add cards without diffing the whole grid.
+        "scrapheaped_picture_ids": list((lifecycle or {}).get("scrapheaped") or []),
+        "restored_picture_ids": list((lifecycle or {}).get("restored") or []),
     }
 
 
@@ -953,19 +1227,23 @@ def undo(
     origin_client_id: Optional[str] = None,
 ) -> dict:
     """Undo the newest reversible operation, or a named one, plus its batch."""
-    members, touched, facets = vault.db.run_task(undo_in_session, operation_id)
-    return _finish(vault, members, touched, facets, origin_client_id)
+    members, touched, facets, lifecycle = vault.db.run_task(
+        undo_in_session, operation_id
+    )
+    return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
 
 def undo_batch(
     vault: "Vault", batch_id: str, origin_client_id: Optional[str] = None
 ) -> dict:
     """Undo one whole bulk action by its batch id (the sweep's report Undo)."""
-    members, touched, facets = vault.db.run_task(undo_batch_in_session, batch_id)
-    return _finish(vault, members, touched, facets, origin_client_id)
+    members, touched, facets, lifecycle = vault.db.run_task(
+        undo_batch_in_session, batch_id
+    )
+    return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
 
 def redo(vault: "Vault", origin_client_id: Optional[str] = None) -> dict:
     """Re-apply the most recently undone operation (and its batch)."""
-    members, touched, facets = vault.db.run_task(redo_in_session)
-    return _finish(vault, members, touched, facets, origin_client_id)
+    members, touched, facets, lifecycle = vault.db.run_task(redo_in_session)
+    return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
