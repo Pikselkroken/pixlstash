@@ -963,7 +963,9 @@ Selected milestones:
 
 | 0086 | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
 
-Current head: `0086_add_operation_log`.
+| 0087 | `characterprojectmember` / `picturesetprojectmember` join tables — many-to-many characters and picture sets across projects (#125). Additive: the scalar `project_id` FKs stay and stay populated as the primary project, and the migration backfills one join row per existing assignment |
+
+Current head: `0087_add_entity_project_membership`.
 
 ---
 
