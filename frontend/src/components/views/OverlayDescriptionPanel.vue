@@ -171,7 +171,7 @@ const props = defineProps({
 // read-only.
 const readOnly = computed(() => isReadOnly.value || props.locked);
 
-const emit = defineEmits(["update-description"]);
+const emit = defineEmits(["update-description", "editing-finished"]);
 
 const descriptionCollapsed = ref(false);
 const isEditingDescription = ref(false);
@@ -223,6 +223,11 @@ function cancelEditDescription() {
   isSavingDescription.value = false;
   descriptionDraft.value =
     formatDescriptionSentinel(props.image?.description) || "";
+  // Editing is over, so the keyboard must leave the field: a textarea that
+  // keeps DOM focus after Escape still reads as a typing target, and the
+  // overlay's Ctrl+Z (and every other shortcut) stays dead until a click.
+  descriptionEditorRef.value?.blur?.();
+  emit("editing-finished");
 }
 
 async function saveDescription() {
@@ -237,6 +242,10 @@ async function saveDescription() {
     });
     emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
+    // Same contract as cancel: a save ends the edit, so the keyboard goes
+    // back to the overlay (the parent refocuses its canvas on this signal).
+    descriptionEditorRef.value?.blur?.();
+    emit("editing-finished");
   } catch (err) {
     console.error("Failed to update description", err);
     noticeStore.error(

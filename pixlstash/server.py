@@ -64,6 +64,7 @@ from pixlstash.routes.tag_predictions import (
 from pixlstash.routes.tag_suggestions import (
     create_router as create_tag_suggestions_router,
 )
+from pixlstash.routes.operations import create_router as create_operations_router
 from pixlstash.routes.reviews import create_router as create_reviews_router
 from pixlstash.routes.tag_health import create_router as create_tag_health_router
 from pixlstash.routes.tagger_runs import (
@@ -1098,6 +1099,12 @@ class Server(
             create_reviews_router(self),
             prefix=API_V1_PREFIX,
             tags=["reviews"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_operations_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["operations"],
             dependencies=gate,
         )
         self.api.include_router(

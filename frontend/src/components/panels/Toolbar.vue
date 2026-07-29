@@ -169,6 +169,11 @@
             </div>
           </div>
         </v-menu>
+        <!-- ── Undo / redo + History ──────────────────────────────── -->
+        <!-- Same position in the Electron shell and in the browser, which is
+             the whole reason it is here and not in the breadcrumb. Owner-only
+             on the server, so a read-only session never sees it. -->
+        <UndoControl v-if="!isReadOnly" />
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -548,6 +553,7 @@ import GbFilterPanel from "./GbFilterPanel.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
+import UndoControl from "./UndoControl.vue";
 const props = defineProps({
   selectedCount: Number,
   selectedCharacter: String,

@@ -35,6 +35,17 @@ def test_change_kind_and_picture_ids_read_from_data():
     assert WsBroadcasterMixin._change_kind_from({"change_kind": "bogus"}) is None
     assert WsBroadcasterMixin._change_kind_from([1, 2]) is None
 
+    # Every declared wire value survives the allowlist. The gate DROPS an
+    # unrecognised value rather than raising, so a kind missing from
+    # ``CHANGE_KINDS`` fails silently and the SPA falls back to "updated" —
+    # which for a lifecycle change leaves a 404-clickable card behind.
+    for kind in WsBroadcasterMixin.CHANGE_KINDS:
+        assert WsBroadcasterMixin._change_kind_from({"change_kind": kind}) == kind
+    # ``restored`` in particular: a scrapheap undo/restore is NOT an import.
+    assert (
+        WsBroadcasterMixin._change_kind_from({"change_kind": "restored"}) == "restored"
+    )
+
     assert WsBroadcasterMixin._picture_ids_from({"picture_ids": [1, 2]}) == [1, 2]
     assert WsBroadcasterMixin._picture_ids_from({"ids": [3]}) == [3]
     assert WsBroadcasterMixin._picture_ids_from([4, 5]) == [4, 5]
@@ -56,3 +67,107 @@ def test_broadcaster_ignores_contextvar_reads_data_only():
         )
     finally:
         origin_client_id_var.reset(token)
+
+
+def test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar():
+    """The same §15 invariant for the operation log's undo/redo emissions.
+
+    Undo runs on the DB worker thread, so the ``origin_client_id`` contextvar is
+    dead there exactly as it is on the broadcaster's loop. The op-log therefore
+    receives the origin explicitly from the handler and puts it in the event
+    ``data`` dict; a contextvar read anywhere on that path would silently
+    misattribute every undo to whichever tab last touched the contextvar. This
+    pins the *producer* side of the contract the assertions above pin for the
+    consumer.
+    """
+    from pixlstash.event_types import EventType
+    from pixlstash.services import operation_log_service
+
+    emitted: list[tuple] = []
+
+    class _Vault:
+        def notify(self, event_type, data=None):
+            emitted.append((event_type, data))
+
+    token = origin_client_id_var.set("contextvar-tab-should-be-ignored")
+    try:
+        operation_log_service._emit(
+            _Vault(), [1, 2], {operation_log_service.FACET_TAGS}, "undo-tab"
+        )
+        # Nothing was emitted with the contextvar's value...
+        operation_log_service._emit(_Vault(), [3], {"score"}, None)
+    finally:
+        origin_client_id_var.reset(token)
+
+    assert emitted, "undo emitted no event"
+    with_origin = [
+        data for _event, data in emitted if data.get("picture_ids") == [1, 2]
+    ]
+    assert with_origin
+    for data in with_origin:
+        assert data["origin_client_id"] == "undo-tab"
+        # And the broadcaster derives the envelope from exactly this dict.
+        assert WsBroadcasterMixin._origin_from(data) == "undo-tab"
+        assert WsBroadcasterMixin._source_from(data) == "ui"
+
+    # An undo with no originating tab defaults to no origin — never the
+    # contextvar's live value.
+    without_origin = [
+        data for _event, data in emitted if data.get("picture_ids") == [3]
+    ]
+    assert without_origin
+    for data in without_origin:
+        assert data["origin_client_id"] is None
+        assert WsBroadcasterMixin._origin_from(data) is None
+
+    # A tag restoration announces both the tag and the grid event.
+    assert EventType.CHANGED_TAGS in {event for event, _data in emitted}
+
+
+def test_operation_log_emit_announces_the_scrapheap_lifecycle():
+    """The producer side of the ``change_kind`` contract for scrapheap undo/redo.
+
+    ``_emit`` splits one restoration into three announcements: pictures the
+    restoration puts BACK are ``restored``, pictures it moves INTO the scrapheap
+    are ``removed``, and everything else is an ordinary ``updated``.
+
+    ``restored`` must not be ``added``. Both bring a card back, but the SPA
+    reads ``added`` as "new to the vault" and flashes the sidebar's NEW marker
+    on the counts that grew — a lie for a picture that was in the library the
+    whole time (the reported bug). The value must also survive the broadcaster's
+    allowlist, or the hint is dropped and the grid falls back to ``updated``.
+    """
+    from pixlstash.event_types import EventType
+    from pixlstash.services import operation_log_service
+
+    emitted: list[tuple] = []
+
+    class _Vault:
+        def notify(self, event_type, data=None):
+            emitted.append((event_type, data))
+
+    operation_log_service._emit(
+        _Vault(),
+        [1, 2, 3],
+        {operation_log_service.FACET_DELETED},
+        "undo-tab",
+        lifecycle={"scrapheaped": [3], "restored": [1]},
+    )
+
+    by_ids = {tuple(data["picture_ids"]): data for _event, data in emitted}
+    assert by_ids[(1,)]["change_kind"] == "restored"
+    assert by_ids[(3,)]["change_kind"] == "removed"
+    assert by_ids[(2,)]["change_kind"] == "updated"
+
+    for data in by_ids.values():
+        # Every kind survives the envelope gate — a dropped hint is the silent
+        # failure mode this whole test exists to catch.
+        assert WsBroadcasterMixin._change_kind_from(data) == data["change_kind"]
+        assert data["origin_client_id"] == "undo-tab"
+        assert WsBroadcasterMixin._source_from(data) == "ui"
+
+    assert all(
+        event == EventType.CHANGED_PICTURES
+        for event, data in emitted
+        if data["change_kind"] in ("restored", "removed")
+    )

@@ -116,6 +116,11 @@
      --------------------------------------------------------------------------- */
   --badge-size: 16px; /* min height/width of a count pill (was an ad-hoc 15px) */
   --badge-size-dot: 8px; /* the no-count activity dot (was an ad-hoc 7px) */
+  /* The countdown drain hairline on a self-dismissing transient surface (the
+     action receipt today; the notice card is the obvious second consumer, and
+     naming it now is what stops that surface picking 3px). It is a rendered
+     height, not padding, so it cannot borrow from the spacing scale. */
+  --countdown-h: 2px;
   --bar-height: 48px; /* contextual action-bar / toolbar band height */
   /* The right-hand stats rail's fixed column width. Not invented: it is already
      the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in

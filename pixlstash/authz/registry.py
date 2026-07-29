@@ -727,6 +727,38 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/reviews/{review_id}/suggestions"): RoutePolicy(
         _OWNER, justification="Owner-only review read (inline rejects scoped tokens)"
     ),
+    # ── operations.py (the append-only operation log: history + undo/redo) ──
+    # Vault-wide change history and the undo/redo stack. OWNER_ONLY across the
+    # board: the log enumerates every change to the whole library (a scoped
+    # share token must not read it), and undo/redo write metadata back onto
+    # arbitrary pictures across the vault, which no scoped grant can bound. The
+    # handlers carry NO authz code — the gate is the only enforcement (§16.1).
+    ("GET", "/api/v1/operations"): RoutePolicy(
+        _OWNER, justification="Vault-wide change history; owner-only read"
+    ),
+    ("GET", "/api/v1/operations/undo-state"): RoutePolicy(
+        _OWNER, justification="Vault-wide undo/redo availability; owner-only read"
+    ),
+    ("GET", "/api/v1/operations/{operation_id}"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "One operation incl. the recorded before/after metadata of its "
+            "targets (arbitrary vault pictures); owner-only read"
+        ),
+    ),
+    ("POST", "/api/v1/operations/undo"): RoutePolicy(
+        _OWNER, justification="Reverts metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/redo"): RoutePolicy(
+        _OWNER, justification="Re-applies metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/{operation_id}/undo"): RoutePolicy(
+        _OWNER, justification="Reverts metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/batches/{batch_id}/undo"): RoutePolicy(
+        _OWNER,
+        justification="Reverts a whole bulk action across the vault; owner-only write",
+    ),
     # ── tag_health.py (bespoke "reject resource-scoped" gate; owner-only) ────
     # Same unscoped-READ nuance as reviews (see NEEDS REVIEW above).
     ("GET", "/api/v1/tag_health"): RoutePolicy(

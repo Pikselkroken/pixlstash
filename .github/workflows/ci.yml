@@ -231,6 +231,7 @@ jobs:
           tests/test_metadata_hash.py
           tests/test_migrations.py
           tests/test_openapi_response_schemas.py
+          tests/test_operation_log.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
           tests/test_picture_set_locking.py

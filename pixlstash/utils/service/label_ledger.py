@@ -40,6 +40,12 @@ HUMAN = "human"
 PROPAGATED = "propagated"
 MODEL = "model"
 
+# ``model_version`` of the synthetic row :func:`record_human_label` invents when a human
+# decides about a tag the tagger never predicted. Named because two other modules have to
+# recognise such a row: the tagger's bulk writes skip it, and the operation log may delete
+# one on undo (it is the only prediction row a user action can create).
+MANUAL_MODEL_VERSION = "manual"
+
 # The tagger's anomaly vocabulary — the tags a human POS/NEG is worth recording for even
 # when no prediction row exists yet. Generic content tags (character names, scenes) are
 # outside the tagger's label space, so recording them would only pollute the prediction
@@ -106,7 +112,7 @@ def record_human_label(
             picture_id=picture_id,
             tag=tag,
             confidence=1.0 if state == POS else 0.0,
-            model_version="manual",
+            model_version=MANUAL_MODEL_VERSION,
             status="CONFIRMED" if state == POS else "REJECTED",
             predicted_at=now,
         )
@@ -114,7 +120,7 @@ def record_human_label(
     else:
         # Snapshot what the human adjudicated, but only when it was a real tagger
         # prediction (not our own synthetic 'manual' row) so re-recording is stable.
-        if pred.model_version and pred.model_version != "manual":
+        if pred.model_version and pred.model_version != MANUAL_MODEL_VERSION:
             pred.label_model_version = pred.model_version
             pred.label_confidence = pred.confidence
         pred.status = "CONFIRMED" if state == POS else "REJECTED"

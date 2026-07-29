@@ -571,6 +571,20 @@ kbd {
 .tbm-spacer {
   flex: 1 1 auto;
 }
+
+/* Hint strip closing a menu — `.tbm-header` mirrored (same padding and gap, a
+   top rule instead of a bottom one) with quieter type, because it states what a
+   click would do rather than titling the panel. Lives here beside the header so
+   the next menu that needs a footer finds it instead of rolling its own. */
+.tbm-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), 0.6);
+}
 .tbm-count {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

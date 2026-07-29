@@ -310,7 +310,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
-import { isReadOnly } from "../../utils/apiClient";
+import { isReadOnly, newOperationBatchId } from "../../utils/apiClient";
 import {
   listTags,
   addPictureTag,
@@ -590,7 +590,22 @@ const aggregatedPredictions = computed(() => {
 
 const predActionLoading = ref([]);
 
-async function confirmPredictionOnAll(predEntry) {
+/**
+ * Confirm one predicted tag on every picture that carries the prediction.
+ *
+ * The fan-out records one operation per picture; they share a gesture batch id
+ * so the whole confirm is one history step (the receipt shows it as one entry
+ * with its `+N` count) and one Ctrl+Z walks all of it back.
+ *
+ * @param {Object} predEntry - the aggregated prediction row (`tag`, `ids`).
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - an id from a caller that is already part
+ *   of a larger gesture; a fresh one is minted otherwise.
+ */
+async function confirmPredictionOnAll(
+  predEntry,
+  { batchId = newOperationBatchId() } = {},
+) {
   if (predActionLoading.value.includes(predEntry.tag)) return;
   predActionLoading.value = [...predActionLoading.value, predEntry.tag];
   tagError.value = "";
@@ -599,6 +614,7 @@ async function confirmPredictionOnAll(predEntry) {
       predEntry.ids.map((id) =>
         confirmTagPrediction(id, predEntry.tag, {
           baseUrl: props.backendUrl,
+          batchId,
         }),
       ),
     );
@@ -630,7 +646,19 @@ const tagsOnSomeHiddenCount = computed(() => {
   ).length;
 });
 
-async function removeTagFromAll(tagEntry) {
+/**
+ * Remove one tag from every selected picture that carries it.
+ *
+ * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - gesture batch id shared across the
+ *   fan-out (and with the reject that follows it on a drag), so the whole
+ *   gesture is one history step and one Ctrl+Z.
+ */
+async function removeTagFromAll(
+  tagEntry,
+  { batchId = newOperationBatchId() } = {},
+) {
   if (tagActionLoading.value.includes(tagEntry.name)) return;
   tagActionLoading.value = [...tagActionLoading.value, tagEntry.name];
   tagError.value = "";
@@ -639,7 +667,10 @@ async function removeTagFromAll(tagEntry) {
       [...tagEntry.tagsByImageId.entries()]
         .filter(([, tagId]) => tagId != null)
         .map(([imgId, tagId]) =>
-          removePictureTag(imgId, tagId, { baseUrl: props.backendUrl }),
+          removePictureTag(imgId, tagId, {
+            baseUrl: props.backendUrl,
+            batchId,
+          }),
         ),
     );
     emit("tags-applied", {
@@ -958,13 +989,24 @@ async function onDropToCurrent() {
   await confirmPredictionOnAll(payload);
 }
 
-async function rejectTagOnAll(tagEntry) {
+/**
+ * Record the human NEG for a tag on every picture it was just removed from.
+ *
+ * @param {Object} tagEntry - the aggregated tag row (`name`, `tagsByImageId`).
+ * @param {Object} [options]
+ * @param {string} [options.batchId] - the gesture batch id of the removal this
+ *   reject belongs to.
+ */
+async function rejectTagOnAll(tagEntry, { batchId } = {}) {
   const imageIds = [...tagEntry.tagsByImageId.keys()];
   if (!imageIds.length) return;
   try {
     await Promise.all(
       imageIds.map((id) =>
-        rejectTagPrediction(id, tagEntry.name, { baseUrl: props.backendUrl }),
+        rejectTagPrediction(id, tagEntry.name, {
+          baseUrl: props.backendUrl,
+          batchId,
+        }),
       ),
     );
     await fetchSelectedImagePredictions();
@@ -977,8 +1019,11 @@ async function onDropToRejected() {
   if (dragSource.value !== "current" || !dragPayload.value) return;
   const payload = dragPayload.value;
   onDragEnd();
-  await removeTagFromAll(payload);
-  await rejectTagOnAll(payload);
+  // One drag, one undo step: the removals and the rejects they make durable
+  // share a batch id (docs/backend_architecture.md §21.2).
+  const batchId = newOperationBatchId();
+  await removeTagFromAll(payload, { batchId });
+  await rejectTagOnAll(payload, { batchId });
 }
 
 defineExpose({ focus: () => tagInputRef.value?.focus() });
