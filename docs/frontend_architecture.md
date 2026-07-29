@@ -83,7 +83,7 @@ frontend/src/
 │   ├── reviews.js               # /reviews — tag-review session bookkeeping
 │   ├── tagSuggestions.js        # /tag_suggestions — per-card review decisions
 │   ├── tagHealth.js             # /tag_health — board rows + cache rebuild
-│   ├── comfyui.js               # /comfyui/* — workflows, run, abort
+│   ├── comfyui.js               # /comfyui/* — workflows, run, recipe read/replay, abort
 │   ├── taggers.js               # /taggers, /tagger/label-thresholds
 │   ├── folders.js               # /reference-folders, /import-folders, /filesystem/*
 │   ├── characters.js            # /characters + faces + reference pictures
@@ -129,7 +129,7 @@ frontend/src/
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
-    ├── io/          # Import / export / external-service connection
+    ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
     └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel)
 ```
 
@@ -528,6 +528,36 @@ Table of description-capable plugins (`supports_descriptions = true`). Columns: 
 ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects to the ComfyUI WebSocket for real-time progress. Props: `workflowId`, `clientId`, `imageIds`, `backendUrl`. Emits progress and completion events.
 
 **Grid refresh contract (in-app ComfyUI output):** the new grid card for an in-app ComfyUI result appears via the origin-aware WebSocket `picture_imported` insert (`useGridRealtimeSync.handleForeignUi` → `insertGridImagesById`, [§9](#9-real-time-updates-websocket)), **not** via a full grid refetch. `routes/comfyui.py` broadcasts the import with `source: "ui"` and no origin id, so every owner tab (including the originating one) does a targeted in-place insert at the sorted position with no pill and no reload — the old "image pops in → disappears → comes back" flicker is gone. The runner's `refresh-grid` emit is therefore **no longer wired to a grid refetch**: `ImageGrid.onComfyuiRefreshGrid` now only reconciles an **open** overlay (i2i/upscale) to the freshly-stacked output via `maybeRefreshOverlayForComfyui` (a guarded no-op when the overlay is closed or no comfyui refresh is pending). The same overlay reconcile is also kicked from `insertGridImagesById` after the WS insert lands, so the lightbox catches the new stack member without waiting for the runner's retry backoff. What the runner still drives unchanged: the ComfyUI **progress banner**, the **`refresh-sidebar`** emit (sidebar count), and the open-overlay refresh (including the failure path, which hides the banner / shows the error and no longer refetches the grid).
+
+#### `RemixDialog.vue` (`io/`, ~600 lines)
+The **"Generate variants…"** modal (Remix v1, v1.9). Opened from `ImageGridContextMenu`'s `open-remix-dialog` emit and mounted in `ImageGrid`. Props: `open`, `image` (the right-clicked picture), `selectedImageIds`, `clientId`, `backendUrl`, `stackOutputs`. Emits: `close`, `run` (`{prompts, pictureId, pictureIds}` — handed straight to `ComfyUiRunner.handleComfyuiRun`), `use-batch`.
+
+Two modes, chosen from a **vertical radio list** rather than a segmented control, specifically so v1.11's third mode (lock-replay: reproduce the original exactly) appends a row instead of forcing a redesign — and because only a list has room for a per-option reason:
+
+| Mode | What it runs | When it is offered |
+|---|---|---|
+| `template` | `POST /comfyui/run_i2i` with a chosen i2i workflow, the prompt, and a seed | always |
+| `recipe` | `POST /comfyui/run_recipe` — replays the executable graph embedded in the source file with a new seed | only when `GET /comfyui/pictures/{id}/recipe` returns `available` **and** the server's pre-flight passed |
+
+Load-bearing behaviours, each of which is a deliberate decision rather than an incidental one:
+
+- **An unavailable mode is shown disabled with a visible reason, never hidden and never a `title` tooltip.** The row carries `aria-disabled` (not the `disabled` attribute) so keyboard traversal still reaches it and the reason is discoverable; only activation is blocked. The reason text is deliberately NOT at the 38% disabled opacity — it is the one thing on that row that must be read. Three causes are worded differently on purpose, because they send the user to three different places: no embedded workflow, ComfyUI is missing named things, and ComfyUI could not be reached to check at all.
+- **The recipe row has four states, not two** (`recipeState`: `loading` / `blocked` / `needs_ack` / `ready`). One computed rather than a pair of booleans, because a pair drifts out of sync. `blocked` is `remix-mode--off` + `aria-disabled`; `needs_ack` is `remix-mode--caution` and stays selectable.
+- **"Could not check" is not "checked and broken."** They stay different sentences — but an unreachable ComfyUI is now a *refusal*, not a caveat (see the consent section below). Reporting it as a pre-flight *failure* would still be wrong: it would name missing things that are not missing.
+- **No mode is preselected until the check resolves**, so the dialog cannot change its own state under a user who has already committed attention to it. Recipe wins the default only when `recipeState === "ready"` — not merely selectable — and the session-sticky `comfyui_remix_mode` preference does not get to skip that either: landing a user inside the override UI is the habituation path.
+- **There is no strength/denoise slider, on purpose.** No shipped template exposes a denoise input — the Flux2 Klein edit graph samples from an empty latent with the source entering as reference conditioning — so the control would move nothing. A slider that silently does nothing is worse than an absent one: it teaches a false model of cause and effect. Adding one means adding a template that actually has the input.
+- **The prompt's provenance decays.** Prefilled from the picture's Florence-2 `description` with a quiet "from image description" note; the note is replaced by a "Reset to description" button the moment the user types. A pending-description sentinel (`__description::…`) is never prefilled. The prompt field is hidden entirely when the selected workflow's `missing_placeholders` includes `{{caption}}`, mirroring `SelectionBar` — otherwise a user writes carefully into a void.
+- **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
+- **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
+
+**Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
+
+- **The node classes are disclosed, not just counted.** `node_classes` is the first row of the `<details>` disclosure, above Prompt, because the summary asks "what will this run" and the class list is the literal answer. Rendered as mono text rather than chips (twenty chips in a 560px dialog is noise and implies an interactivity that is not there), truncated at 12 with an in-place `+n more` expander.
+- **An uninspected graph is refused by default and needs an explicit tick.** `preflight.checked === false` puts the row in `needs_ack`: it stays selectable — `aria-disabled` would be a lie to assistive tech *and* would hide the very override it gates — and the block moves to the Generate button, released by a `.remix-ack` checkbox. `allow_unchecked: true` is then sent on that one request, never as a constant. **The backend enforces the same refusal**, so this is a second line, not the line. The tick is never persisted and is cleared on open and on every re-check, so it can never approve a state the user did not see.
+- **"Check again" is offered above the override.** An unreachable ComfyUI means the run would probably fail anyway, so the cheap path is the safe one. That single ordering does more against click-through than any friction on the checkbox.
+- **An imported source warns but never gates.** `source_is_imported` renders a `.remix-alert` and force-opens the disclosure with the list untruncated. It gets no checkbox on purpose: every imported ComfyUI PNG trips it, and gating a state most of a library is in is exactly what turns an acknowledgement into a reflex — it would drag the rare unchecked gate down with it. Salience, not clicks, is the right response to "more scrutiny warranted".
+- **The caution styling is not the disabled styling.** `.remix-mode--caution` takes a warning-toned border and an `mdi-alert-outline` glyph (status never rides on colour alone) with **no** opacity drop, because the row can still be chosen. `.remix-alert` text is `on-surface`, never `on-warning`: `on-<x>` is only correct on a solid `<x>` fill and measures ~1.4:1 over an 8% tint.
+- **Nothing fails silently.** The live region announces `needs_ack` on resolve, both outcomes of "Check again" (the failure especially — nothing visible changes), and a Ctrl+Enter that the acknowledgement is blocking.
 
 #### `SearchOverlay.vue` (273 lines)
 Full-screen search input with history. Props: `modelValue`, `history`. Emits: `search`, `close`, `clear-history`. Keyboard: Enter to search, Escape to close.

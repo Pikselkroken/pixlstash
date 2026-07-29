@@ -510,3 +510,55 @@ def test_comfyui_t2i_source_picture_scoped_token_blocked(env, scoped):
         headers=_bearer(tok),
     )
     assert r.status_code == 403, r.text
+
+
+# ---------------------------------------------------------------------------
+# Remix recipe routes (v1.9). Both read and replay the graph embedded in one
+# picture's FILE, so both are per-object reads of that picture's contents and
+# both must be scoped. Tested in both directions: over-blocking the owner is
+# its own regression.
+# ---------------------------------------------------------------------------
+
+
+def test_comfyui_recipe_read_scoped_token_blocked(env, scoped):
+    server, client, picture_ids, _ = env
+    anon, tok = scoped
+    r = anon.get(
+        f"{API}/comfyui/pictures/{picture_ids[1]}/recipe", headers=_bearer(tok)
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_comfyui_recipe_read_owner_succeeds(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [comfyui_module], None)
+    r = client.get(f"{API}/comfyui/pictures/{picture_ids[1]}/recipe")
+    # The test fixtures are ordinary photos with no embedded graph, so the
+    # honest answer is a 200 saying so — NOT an error.
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["available"] is False
+    assert body["reason"] == "no_prompt_chunk"
+
+
+def test_comfyui_run_recipe_scoped_token_blocked(env, scoped):
+    server, client, picture_ids, _ = env
+    anon, tok = scoped
+    r = anon.post(
+        f"{API}/comfyui/run_recipe",
+        json={"picture_id": picture_ids[1]},
+        headers=_bearer(tok),
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_comfyui_run_recipe_owner_passes_scope_guard(env, monkeypatch):
+    server, client, picture_ids, _ = env
+    _scope_to(monkeypatch, [comfyui_module], None)
+    r = client.post(f"{API}/comfyui/run_recipe", json={"picture_id": picture_ids[1]})
+    # Owner is not scope-blocked; it reaches the handler and is refused for the
+    # real reason — the picture carries no executable graph. Asserting the exact
+    # status and detail rather than a bare `!= 403` keeps this from passing
+    # after the handler it targets stops existing.
+    assert r.status_code == 400, r.text
+    assert "no executable workflow embedded" in r.json()["detail"]

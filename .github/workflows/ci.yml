@@ -212,11 +212,15 @@ jobs:
           tests/test_batch_character_likeness_scope.py
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
+          tests/test_comfyui_api_prompt_extraction.py
+          tests/test_comfyui_recipe_preflight.py
+          tests/test_comfyui_recipe_route.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_detections_scope.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
           tests/test_florence.py
+          tests/test_florence_model_variant.py
           tests/test_image_embedding_worker.py
           tests/test_impossible_clear_authz.py
           tests/test_invalid_image_endless_retry.py
@@ -580,6 +584,9 @@ jobs:
           tests/test_picture_sets.py
           tests/test_picture_stack_utils.py
           tests/test_picture_plugins.py
+          tests/test_comfyui_api_prompt_extraction.py
+          tests/test_comfyui_recipe_preflight.py
+          tests/test_comfyui_recipe_route.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
