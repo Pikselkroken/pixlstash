@@ -339,9 +339,9 @@ const WINDOW_AFTER = 8;
 /**
  * The spacer height a windowed-out row stands in for, refined to the real row
  * pitch once two rows have rendered. It only has to keep the scrollbar honest,
- * not pixel-accurate.
+ * not pixel-accurate: the measured pitch is a 132px row plus the 8px list gap.
  */
-const ROW_ESTIMATE_PX = 148;
+const ROW_ESTIMATE_PX = 140;
 
 /**
  * What the queue says when `X` is refused at the stack floor.
@@ -1128,7 +1128,7 @@ defineExpose({ windowedGroups, tierLabel });
   align-items: center;
   gap: var(--space-4);
   flex-wrap: wrap;
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-2) var(--space-5) var(--space-3);
 }
 
 .qtitle {
@@ -1226,7 +1226,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: 0 var(--space-5) var(--space-6);
+  padding: 0 var(--space-5) var(--space-4);
   overflow-y: auto;
   min-height: 0;
   flex: 1;

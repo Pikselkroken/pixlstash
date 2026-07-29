@@ -552,7 +552,7 @@ describe("DuplicateQueue — the render window", () => {
 
     const list = wrapper.find(".qlist");
     // ~row 15 at the estimate pitch (happy-dom never refines the measure).
-    list.element.scrollTop = 15 * 148;
+    list.element.scrollTop = 15 * 140;
     await list.trigger("scroll");
     await wrapper.vm.$nextTick();
     const after = wrapper.vm.windowedGroups.map((e) => e.index);

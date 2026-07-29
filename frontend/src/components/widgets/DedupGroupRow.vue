@@ -279,8 +279,14 @@ function thumbUrl(candidate) {
   });
 }
 
-/** How tall every strip thumbnail is; widths follow each picture's shape. */
-const THUMB_HEIGHT_PX = 96;
+/**
+ * How tall every strip thumbnail is; widths follow each picture's shape.
+ *
+ * Must stay in step with `.gthumb { height }` below — the placeholder is sized
+ * from here and the box from there, and a mismatch makes every row jump as the
+ * images decode.
+ */
+const THUMB_HEIGHT_PX = 112;
 
 /**
  * The PLACEHOLDER's estimated shape, from stored dimensions. Only an
@@ -374,7 +380,12 @@ function onToggle(candidate) {
   grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-3) var(--space-5);
-  padding: var(--space-4);
+  /* Tight vertically, comfortable horizontally. The row's height is spent on
+     the pictures — the one thing in it the user actually has to look at — so
+     the vertical padding is the smallest step that still reads as a card
+     (owner call, 2026-07-29: the previous --space-4 was padding the strip out
+     of the room it needed). */
+  padding: var(--space-3) var(--space-4);
   padding-left: var(--space-5);
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-divider));
@@ -476,7 +487,8 @@ function onToggle(candidate) {
      corrected shape) or the placeholder's metadata estimate. */
   width: auto;
   min-width: 44px;
-  height: 96px;
+  /* Keep in step with THUMB_HEIGHT_PX in the script above. */
+  height: 112px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -504,13 +516,15 @@ function onToggle(candidate) {
   display: block;
   width: auto;
   height: 100%;
-  /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. */
-  max-width: 230px;
+  /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. Scaled
+     with the height so the widest allowed shape stays the same 2.4:1. */
+  max-width: 268px;
   object-fit: cover;
 }
 
+/* The unknown-shape fallback: a 4:3 box at the strip's height. */
 .gt--placeholder {
-  width: 128px;
+  width: 150px;
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
