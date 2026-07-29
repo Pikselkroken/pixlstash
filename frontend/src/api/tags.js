@@ -5,7 +5,7 @@
 // are grouped here because callers reason about them together; the tag-review
 // workflow is a separate resource (see api/tagSuggestions.js).
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, operationBatchHeaders } from "../utils/apiClient";
 
 /**
  * List the tag vocabulary.
@@ -48,15 +48,18 @@ export async function addPictureTag(pictureId, tag, { baseUrl = "" } = {}) {
  * @param {number|string} tagId
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
+ * @param {string} [options.batchId] - gesture batch id; every request of one
+ *   user gesture shares it so the whole gesture is one undo step.
  * @returns {Promise<Object>} the response body.
  */
 export async function removePictureTag(
   pictureId,
   tagId,
-  { baseUrl = "" } = {},
+  { baseUrl = "", batchId } = {},
 ) {
   const res = await apiClient.delete(
     `${baseUrl}/pictures/${pictureId}/tags/${tagId}`,
+    operationBatchHeaders(batchId),
   );
   return res.data;
 }
@@ -85,16 +88,20 @@ export async function bulkFetchTags(pictureIds, { baseUrl = "" } = {}) {
  * @param {string} tag
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
+ * @param {string} [options.batchId] - gesture batch id; the overlay's chip
+ *   delete shares one with the reject that follows it, so both are undone by a
+ *   single Ctrl+Z.
  * @returns {Promise<Object>} the response body.
  */
 export async function removeTagEverywhere(
   pictureId,
   tag,
-  { baseUrl = "" } = {},
+  { baseUrl = "", batchId } = {},
 ) {
   const res = await apiClient.post(
     `${baseUrl}/pictures/${pictureId}/tags/remove_all`,
     { tag },
+    operationBatchHeaders(batchId),
   );
   return res.data;
 }
@@ -134,15 +141,19 @@ export async function listTagPredictions(
  * @param {string} tag
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
+ * @param {string} [options.batchId] - gesture batch id; a confirm-on-all fans
+ *   out over N pictures and shares one, so it is one history step.
  * @returns {Promise<Object>} the response body.
  */
 export async function confirmTagPrediction(
   pictureId,
   tag,
-  { baseUrl = "" } = {},
+  { baseUrl = "", batchId } = {},
 ) {
   const res = await apiClient.post(
     `${baseUrl}/pictures/${pictureId}/tag_predictions/${encodeURIComponent(tag)}/confirm`,
+    undefined,
+    operationBatchHeaders(batchId),
   );
   return res.data;
 }
@@ -154,15 +165,19 @@ export async function confirmTagPrediction(
  * @param {string} tag
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
+ * @param {string} [options.batchId] - gesture batch id, shared with the tag
+ *   removal this reject makes durable.
  * @returns {Promise<Object>} the response body.
  */
 export async function rejectTagPrediction(
   pictureId,
   tag,
-  { baseUrl = "" } = {},
+  { baseUrl = "", batchId } = {},
 ) {
   const res = await apiClient.post(
     `${baseUrl}/pictures/${pictureId}/tag_predictions/${encodeURIComponent(tag)}/reject`,
+    undefined,
+    operationBatchHeaders(batchId),
   );
   return res.data;
 }

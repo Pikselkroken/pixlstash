@@ -265,6 +265,36 @@ describe("useOperationStore — receipts narrate this client only", () => {
     expect(store.receipt.mergedCount).toBe(2);
   });
 
+  // The chip-delete gesture: `tags/remove_all` + the reject that makes it
+  // durable, both stamped with one client gesture id. Two operations land at
+  // once and the user must see ONE receipt for the one thing they did.
+  it("narrates a compound gesture as a single receipt", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([
+      op({
+        id: 11,
+        batch_id: "cli-gesture-1",
+        op_type: "pictures.tags.reject",
+        summary: "Removed tag 'sunset'",
+      }),
+      op({
+        id: 10,
+        batch_id: "cli-gesture-1",
+        op_type: "pictures.tags.remove_all",
+        summary: "Removed tag 'sunset' from 2 pictures",
+      }),
+      op({ id: 9 }),
+    ]);
+    await store.refresh();
+
+    expect(store.receipt).toMatchObject({
+      mode: "did",
+      operationId: 11,
+      batchId: "cli-gesture-1",
+      mergedCount: 1,
+    });
+  });
+
   it("reports no +N for a lone operation", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10 }), op({ id: 9 })]);
