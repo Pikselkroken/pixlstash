@@ -1152,7 +1152,14 @@ defineExpose({ windowedGroups, tierLabel });
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: var(--bar-height);
+  /* The shell's top band, which in the browser is 36px: the grid toolbar
+     (`.selection-bar-overlay`), the sidebar's brand row and its tab row all
+     sit on it, so this bar has to as well or the columns step. This is NOT
+     `--bar-height` (48px): that token is the design manual's target for the
+     band, and unifying the shipped 34/36/40/48/56 onto it is the open,
+     UI/UX-gated reconciliation item in visual-language.md §5 — a bar that
+     jumped there alone would just be drift in the other direction. */
+  min-height: 36px;
   padding: var(--space-2) var(--space-5);
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
@@ -1191,6 +1198,14 @@ defineExpose({ windowedGroups, tierLabel });
 .dq-size-slider {
   width: 96px;
   flex: 0 0 96px;
+}
+
+/* Vuetify's compact slider still reserves a form-control's worth of height,
+   which is taller than the whole band it sits in and pushed the toolbar off
+   the shell's 36px strip. The track and thumb need none of it. */
+.dq-size-slider :deep(.v-input__control) {
+  min-height: 0;
+  height: 20px;
 }
 
 /* Fixed width: the label changes on every notch, and one that resizes with its

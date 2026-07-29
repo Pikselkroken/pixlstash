@@ -7829,11 +7829,20 @@ defineExpose({
   object-fit: contain;
 }
 
+/* The brand row is the browser shell's top band, so it takes the band's height
+   and the columns line up: its bottom edge is the toolbar's bottom edge, and
+   the tab row below it starts where the grid does. MUST stay in sync with the
+   toolbar height (`.selection-bar-overlay` in Toolbar.vue) — the same pairing
+   `html.is-desktop .sidebar-view-header` already states in style.css.
+   `min-height`, not `height`: the "new version available" line flows under the
+   wordmark and must be allowed to grow the row rather than be clipped. */
 .sidebar-brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1);
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0 var(--space-2) 0 var(--space-1);
   background: transparent;
 }
 
@@ -7841,12 +7850,14 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  padding: 0 var(--space-1) 0 var(--space-3);
 }
 
 .sidebar-brand-logo {
-  width: 40px;
-  height: 40px;
+  /* Sized to the band, not to itself: at 40px the mark alone was taller than
+     the whole strip it sits in. */
+  width: 28px;
+  height: 28px;
   object-fit: contain;
   transition:
     filter 0.2s ease,
