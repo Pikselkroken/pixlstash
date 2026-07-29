@@ -40,11 +40,11 @@ from fastapi import HTTPException, Request
 from sqlmodel import select
 
 from pixlstash.db_models import (
-    Character,
+    CharacterProjectMember,
     Face,
     PictureProjectMember,
-    PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     TagSuggestion,
 )
 from pixlstash.pixl_logging import get_logger
@@ -155,6 +155,11 @@ def enforce_set_scope(server, request: Request, set_id: int) -> None:
     A ``picture_set`` token reaches only its own set; a ``project`` token reaches
     a set that belongs to its project; every other scoped ``resource_type`` is
     refused. An owner / unscoped token (``scope is None``) passes.
+
+    Since issue #125 a set may belong to several projects, so the project branch
+    tests the ``PictureSetProjectMember`` join rather than the scalar
+    ``PictureSet.project_id`` (which now names only the *primary* project and
+    would under-grant a legitimately shared set).
     """
     scope = getattr(request.state, "token_scope", None)
     if scope is None:
@@ -167,17 +172,24 @@ def enforce_set_scope(server, request: Request, set_id: int) -> None:
             )
     elif scope.resource_type == "project":
 
-        def _check_set_in_project(session, sid: int, pid: int):
-            ps = session.get(PictureSet, sid)
-            if ps is None or ps.project_id != pid:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Token is not authorised for this picture set",
-                )
+        def _check_set_in_project(session, sid: int, pid: int) -> bool:
+            return (
+                session.exec(
+                    select(PictureSetProjectMember).where(
+                        PictureSetProjectMember.set_id == sid,
+                        PictureSetProjectMember.project_id == pid,
+                    )
+                ).first()
+                is not None
+            )
 
-        server.vault.db.run_immediate_read_task(
+        if not server.vault.db.run_immediate_read_task(
             _check_set_in_project, set_id, scope.resource_id
-        )
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Token is not authorised for this picture set",
+            )
     elif scope.resource_type is not None:
         raise HTTPException(
             status_code=403,
@@ -196,6 +208,11 @@ def enforce_character_scope(server, request: Request, character_id: int) -> None
     A ``character`` token reaches only its own character; a ``project`` token
     reaches a character that belongs to its project; every other scoped
     ``resource_type`` is refused. An owner / unscoped token passes.
+
+    Since issue #125 a character may belong to several projects, so the project
+    branch tests the ``CharacterProjectMember`` join rather than the scalar
+    ``Character.project_id`` (which now names only the *primary* project and would
+    under-grant a legitimately shared character).
     """
     scope = getattr(request.state, "token_scope", None)
     if scope is None:
@@ -209,8 +226,15 @@ def enforce_character_scope(server, request: Request, character_id: int) -> None
     elif scope.resource_type == "project":
 
         def check_char_project(session, cid: int, pid: int) -> bool:
-            char = session.get(Character, cid)
-            return char is not None and char.project_id == pid
+            return (
+                session.exec(
+                    select(CharacterProjectMember).where(
+                        CharacterProjectMember.character_id == cid,
+                        CharacterProjectMember.project_id == pid,
+                    )
+                ).first()
+                is not None
+            )
 
         if not server.vault.db.run_immediate_read_task(
             check_char_project, character_id, scope.resource_id

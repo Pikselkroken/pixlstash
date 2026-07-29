@@ -318,3 +318,102 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
             assert row[2].startswith("1970-01-01")
         finally:
             conn.close()
+
+
+def test_alembic_0087_backfills_entity_project_membership():
+    """A deployed DB whose characters / picture sets carry the legacy single
+    ``project_id`` FK gains one join row per assignment (issue #125).
+
+    The migration is additive: the scalar FKs must survive untouched, because
+    they stay the "primary project" pointer until a post-1.12 cleanup drops them.
+    A dangling FK (a project row that no longer exists) must be skipped rather
+    than inserted, or the new foreign key would be violated.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE project (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    description VARCHAR,
+                    cover_image_path VARCHAR,
+                    extra_metadata VARCHAR,
+                    created_at DATETIME NOT NULL
+                );
+                CREATE TABLE character (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    description VARCHAR,
+                    extra_metadata VARCHAR,
+                    reference_picture_set_id INTEGER,
+                    project_id INTEGER
+                );
+                CREATE TABLE pictureset (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    description VARCHAR,
+                    project_id INTEGER,
+                    set_icon VARCHAR,
+                    set_color VARCHAR,
+                    locked BOOLEAN NOT NULL DEFAULT 0
+                );
+                CREATE TABLE alembic_version (version_num VARCHAR NOT NULL);
+                INSERT INTO alembic_version (version_num)
+                    VALUES ('0085_recompute_smart_score_restored_builtin_anchors');
+                INSERT INTO project (id, name, created_at)
+                    VALUES (1, 'Alpha', '2026-01-01 00:00:00');
+                INSERT INTO project (id, name, created_at)
+                    VALUES (2, 'Beta', '2026-01-01 00:00:00');
+                INSERT INTO character (id, name, project_id) VALUES (10, 'C1', 1);
+                INSERT INTO character (id, name, project_id) VALUES (11, 'C2', 2);
+                INSERT INTO character (id, name, project_id) VALUES (12, 'C3', NULL);
+                -- Dangling pointer at a project that no longer exists.
+                INSERT INTO character (id, name, project_id) VALUES (13, 'C4', 999);
+                INSERT INTO pictureset (id, name, project_id) VALUES (20, 'S1', 1);
+                INSERT INTO pictureset (id, name, project_id) VALUES (21, 'S2', NULL);
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"upgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        conn = sqlite3.connect(db_path)
+        try:
+            char_rows = set(
+                conn.execute(
+                    "SELECT character_id, project_id FROM characterprojectmember"
+                ).fetchall()
+            )
+            assert char_rows == {(10, 1), (11, 2)}, (
+                f"unexpected character membership backfill: {sorted(char_rows)}"
+            )
+
+            set_rows = set(
+                conn.execute(
+                    "SELECT set_id, project_id FROM picturesetprojectmember"
+                ).fetchall()
+            )
+            assert set_rows == {(20, 1)}, (
+                f"unexpected set membership backfill: {sorted(set_rows)}"
+            )
+
+            # Additive: the legacy pointers are untouched, including the dangling
+            # one (the migration never rewrites application data).
+            assert conn.execute(
+                "SELECT project_id FROM character ORDER BY id"
+            ).fetchall() == [(1,), (2,), (None,), (999,)]
+            assert conn.execute(
+                "SELECT project_id FROM pictureset ORDER BY id"
+            ).fetchall() == [(1,), (None,)]
+        finally:
+            conn.close()

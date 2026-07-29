@@ -616,7 +616,49 @@ PictureLikeness: picture_id_a, picture_id_b (a < b), likeness, metric
 PictureSet / PictureSetMember
 PictureStack       (Picture.stack_id links members)
 Project / PictureProjectMember
+CharacterProjectMember     (character ↔ project, many-to-many)
+PictureSetProjectMember    (picture set ↔ project, many-to-many)
 ```
+
+**Multi-project characters and picture sets (issue #125, v1.9).** A character or
+picture set may belong to **several** projects. The join tables above are the read
+model; the scalar `Character.project_id` / `PictureSet.project_id` foreign keys
+stay, holding the entity's **primary** project (lowest member project id, or
+`NULL`). The contract is **write both, read the join**:
+
+- **Write:** only `services/project_membership_service.py::set_character_projects`
+  / `set_picture_set_projects` may change membership. They write the join rows and
+  re-derive the scalar pointer together. Assigning the FK directly is a bug — the
+  entity becomes invisible to every project-scoped read and authorization check.
+  Member pictures follow via `reconcile_entity_projects_change` (the multi-project
+  generalisation of `reconcile_entity_project_change`, which is now a shim).
+- **Write-propagation:** every path that adds a picture to an entity (set member
+  add / bulk add / bulk replace, face assignment, the import task's set and
+  character drop targets) must anchor it in **all** the entity's projects, via
+  `picture_set_project_ids` / `character_project_ids` +
+  `reconcile_entity_projects_change`. Reading the scalar FK there joins the
+  picture to the primary project only, so a secondary project's token is 403'd on
+  a picture its set legitimately shares (finding R2,
+  `docs/reviews/v1.9-authz-signoff.md`).
+- **Read:** use the correlated predicates in
+  [`db_models/entity_project.py`](../pixlstash/db_models/entity_project.py) —
+  `character_in_project` / `character_in_no_project` /
+  `picture_set_in_project` / `picture_set_in_no_project` — never
+  `Character.project_id == pid`, which only matches the primary project.
+- **API:** `project_ids` (a list) is the new field on character / picture-set
+  reads and on `POST`/`PATCH` payloads; the legacy scalar `project_id` is still
+  accepted on write and still returned on read. `project_ids` wins when both are
+  sent. No routes were added.
+- **Serialisation is scope-narrowed.** `project_ids` is membership metadata about
+  *other* projects, not part of the granted object, so every site that serialises
+  it intersects it with `visible_project_ids(server, request)`
+  (`utils/service/filter_helpers.py`) — same ladder as
+  `fetch_scope_allowed_set_ids`: a project token sees only its own id, a
+  character / set / picture token sees `[]`, the owner sees everything (finding
+  R1, `docs/reviews/v1.9-authz-signoff.md`).
+- The FK is retired by a post-1.12 cleanup, not here; migration
+  `0087_add_entity_project_membership` is purely additive and backfills the join
+  from the existing FKs.
 
 ### Users & sharing
 
@@ -1084,6 +1126,8 @@ In addition, `READ`-scoped tokens are blocked from non-GET methods (except a sma
 - **An undeclared data route is denied at runtime (403) and fails the build.** The startup assertion (`AuthzGate.enforce_startup`) aborts boot and the CI guardrail (`tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy`) goes red on any undeclared route. There is no "I forgot" state.
 - `PUBLIC` / `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` declarations require a machine-checked `justification=`. Exemptions are recorded decisions, not blanks.
 - The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
+
+**Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
 
 **Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline `_require_scope_allows_{character,picture_set,project}` check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
 
