@@ -332,7 +332,11 @@ describe("RemixDialog imported-source warning", () => {
   });
 });
 
-describe("RemixDialog unchecked pre-flight", () => {
+describe("RemixDialog unreachable ComfyUI", () => {
+  // Owner decision, 2026-07-29: no contact with ComfyUI means nothing
+  // generates, in either mode. The former run-unchecked acknowledgement is
+  // gone from this surface; the only way forward is "Check again".
+
   it("does not preselect recipe mode when the graph was never inspected", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
@@ -342,14 +346,14 @@ describe("RemixDialog unchecked pre-flight", () => {
     );
   });
 
-  it("ignores a sticky recipe preference rather than landing in the override", async () => {
+  it("ignores a sticky recipe preference rather than landing on a dead row", async () => {
     sessionStorage.setItem("comfyui_remix_mode", "recipe");
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     expect(rowFor(w, "Pick a template").attributes("aria-checked")).toBe("true");
   });
 
-  it("keeps the row selectable: aria-disabled would be a lie and would hide the override", async () => {
+  it("keeps the row selectable: aria-disabled would hide Check again", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     const row = rowFor(w, "Same workflow, new seed");
@@ -363,91 +367,49 @@ describe("RemixDialog unchecked pre-flight", () => {
     );
   });
 
-  it("refuses to run until the override is ticked", async () => {
+  it("disables Generate in recipe mode, with no override to tick", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     await rowFor(w, "Same workflow, new seed").trigger("click");
     await nextTick();
     expect(w.find("#remix-alert-unchecked").exists()).toBe(true);
+    expect(w.find(".remix-ack").exists()).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 
-  it("sends allow_unchecked only for the run the user acknowledged", async () => {
+  it("disables Generate in template mode too — no contact, no generation", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-    await w.find(".app-btn:last-child").trigger("click");
-    await settle(w);
-    expect(runRecipe).toHaveBeenCalledWith(
-      expect.objectContaining({ picture_id: 42, allow_unchecked: true }),
-      expect.anything(),
-    );
+    // Template mode is the preselected fallback; the block still applies.
+    expect(rowFor(w, "Pick a template").attributes("aria-checked")).toBe("true");
+    expect(w.find(".remix-alert").text()).toContain("could not be reached");
+    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
   });
 
-  it("never sends allow_unchecked on a clean pre-flight", async () => {
+  it("never sends allow_unchecked", async () => {
     const w = await settle(mountDialog());
     await w.find(".app-btn:last-child").trigger("click");
     await settle(w);
     expect(runRecipe.mock.calls[0][0].allow_unchecked).toBeUndefined();
   });
 
-  it("forgets the acknowledgement when the dialog is reopened", async () => {
+  it("offers Check again, and clears the block when ComfyUI answers", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     await rowFor(w, "Same workflow, new seed").trigger("click");
     await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-
-    await w.setProps({ open: false });
-    await w.setProps({ open: true });
-    await settle(w);
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    expect(w.find(".remix-ack-box").element.checked).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-  });
-
-  it("offers Check again first, and clears the gate when ComfyUI answers", async () => {
-    getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
-    const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
 
     getPictureRecipe.mockResolvedValue(CLEAN_RECIPE);
     await w.find("#remix-alert-unchecked button").trigger("click");
     await settle(w);
     expect(w.find("#remix-alert-unchecked").exists()).toBe(false);
-    expect(w.find(".remix-ack").exists()).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 
-  it("drops a tick that a re-check made stale", async () => {
-    // An acknowledgement approves the graph the user was shown. Surviving a
-    // re-check would make it approve a state they never saw.
-    getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
-    const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-
-    await w.find("#remix-alert-unchecked button").trigger("click");
-    await settle(w);
-    expect(w.find(".remix-ack-box").element.checked).toBe(false);
-    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-  });
-
-  it("gives a failed pre-flight no override at all", async () => {
+  it("gives a failed pre-flight the disabled row, not the caution row", async () => {
     // Over-blocking and under-blocking are both regressions: a pre-flight that
-    // RAN and found a missing node pack is not a consent question.
+    // RAN and found a missing node pack is a hard blocker with named causes.
     getPictureRecipe.mockResolvedValue({
       ...CLEAN_RECIPE,
       preflight: {
@@ -463,7 +425,8 @@ describe("RemixDialog unchecked pre-flight", () => {
     const row = rowFor(w, "Same workflow, new seed");
     expect(row.attributes("aria-disabled")).toBe("true");
     expect(row.classes()).toContain("remix-mode--off");
-    expect(w.find(".remix-ack").exists()).toBe(false);
+    // Template mode still works: ComfyUI answered, it is just missing things.
+    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 });
 

@@ -120,6 +120,24 @@
             than to a description of the picture.
           </p>
         </div>
+
+        <!-- Reachability is only knowable when the recipe pre-flight ran, but
+             once known it blocks template runs just the same: no contact with
+             ComfyUI means nothing generates (owner decision, 2026-07-29). -->
+        <p v-if="comfyuiUnreachable" class="remix-alert">
+          <v-icon size="16" class="remix-alert-icon">mdi-alert-outline</v-icon>
+          <span>
+            ComfyUI could not be reached, so nothing can be generated.
+            <button
+              type="button"
+              class="remix-link"
+              :disabled="recipeLoading"
+              @click="recheckRecipe"
+            >
+              Check again
+            </button>
+          </span>
+        </p>
       </template>
 
       <!-- ── Recipe mode ─────────────────────────────────────────────────
@@ -135,11 +153,10 @@
           </span>
         </p>
 
-        <p v-if="needsAck" id="remix-alert-unchecked" class="remix-alert">
+        <p v-if="comfyuiUnreachable" id="remix-alert-unchecked" class="remix-alert">
           <v-icon size="16" class="remix-alert-icon">mdi-alert-outline</v-icon>
           <span>
-            ComfyUI could not be reached, so nothing in this file has been
-            checked.
+            ComfyUI could not be reached, so nothing can be generated.
             <button
               type="button"
               class="remix-link"
@@ -192,23 +209,6 @@
             <dd>{{ seedTargetLabel }}</dd>
           </dl>
         </details>
-
-        <!-- Only ever rendered for an UNCHECKED pre-flight. The common
-             imported case deliberately gets no checkbox: gating a state that
-             most of a library is in is what turns an acknowledgement into a
-             reflex, and it would drag this rare gate down with it. -->
-        <label v-if="needsAck" class="remix-ack">
-          <input
-            ref="ackRef"
-            v-model="ackUnchecked"
-            type="checkbox"
-            class="remix-ack-box"
-          />
-          <span>
-            I have read the node types above and want to run this workflow
-            unchecked on my ComfyUI.
-          </span>
-        </label>
 
         <p v-if="preflightPartial" class="remix-note">
           {{ preflightPartial }}
@@ -304,10 +304,13 @@
  * R3, CWE-829). The graph is file metadata: whoever made the image authored it,
  * and replaying it executes it on the owner's ComfyUI, bounded only by which
  * node packs are installed. So the confirm step names the node classes that
- * will run, says when the file came from outside this instance, and — when the
- * pre-flight could not run at all — refuses by default and requires an explicit
- * acknowledgement. The backend enforces that same refusal, because a gate that
- * only exists here is not a gate.
+ * will run and says when the file came from outside this instance. When the
+ * pre-flight could not run at all — ComfyUI unreachable — the dialog refuses
+ * outright: Generate is disabled in BOTH modes until "Check again" succeeds
+ * (owner decision, 2026-07-29; the run would fail against a dead ComfyUI
+ * anyway). The former run-unchecked acknowledgement is gone from this surface;
+ * the API keeps `allow_unchecked` for programmatic callers and the backend
+ * still refuses uninspected graphs without it.
  *
  * Deliberately absent: a strength/denoise slider. None of the shipped
  * templates exposes a denoise input — the Flux2 Klein edit graph samples from
@@ -369,12 +372,6 @@ const promptTouched = ref(false);
 const recipe = ref(null);
 const recipeLoading = ref(false);
 const recipeError = ref("");
-/**
- * The user's explicit "run it unchecked anyway". Deliberately a plain ref:
- * never persisted, and reset on open and on every re-check, so a tick can never
- * ride along into a later run the user did not look at.
- */
-const ackUnchecked = ref(false);
 const nodeClassesExpanded = ref(false);
 const disclosureOpen = ref(false);
 
@@ -397,7 +394,6 @@ const submitError = ref("");
 
 const promptRef = ref(null);
 const generateRef = ref(null);
-const ackRef = ref(null);
 /** The element focus returns to on close — never document.body. */
 let returnFocusEl = null;
 
@@ -500,24 +496,35 @@ const recipeReason = computed(() => {
   if (pre.checked === false) {
     return (
       "Could not reach ComfyUI, so the workflow in this file was not checked. " +
-      "Select this mode to review it and confirm."
+      "Generate is disabled until ComfyUI can be reached."
     );
   }
   return "";
 });
 
 /**
+ * No contact with ComfyUI means nothing generates, in either mode (owner
+ * decision, 2026-07-29). Only knowable when the pre-flight actually ran; a
+ * picture with no embedded recipe reports nothing, and a template run then
+ * fails at submit with the error kept in the form.
+ */
+const comfyuiUnreachable = computed(
+  () => recipe.value?.preflight?.checked === false,
+);
+
+/**
  * The recipe row has four states, not two. One computed rather than a pair of
  * booleans, because a pair drifts out of sync:
  *
- * - `loading`   — the check is in flight.
- * - `blocked`   — no graph, no seed, or a pre-flight that ran and FAILED. The
- *                 row is aria-disabled: the option genuinely cannot be chosen.
- * - `needs_ack` — the pre-flight could not run, so the graph was never
- *                 inspected. The row stays selectable (marking it disabled
- *                 would be a lie to assistive tech, and would hide the override
- *                 it gates), and the block moves to the Generate button.
- * - `ready`     — checked and clean.
+ * - `loading`     — the check is in flight.
+ * - `blocked`     — no graph, no seed, or a pre-flight that ran and FAILED.
+ *                   The row is aria-disabled: the option genuinely cannot be
+ *                   chosen.
+ * - `unreachable` — the pre-flight could not run at all. The row stays
+ *                   selectable (marking it disabled would be a lie to
+ *                   assistive tech and would hide "Check again"), but Generate
+ *                   is disabled in both modes until a re-check succeeds.
+ * - `ready`       — checked and clean.
  */
 const recipeState = computed(() => {
   if (recipeLoading.value) return "loading";
@@ -525,16 +532,13 @@ const recipeState = computed(() => {
   const info = recipe.value;
   if (!info?.available) return "blocked";
   if (info.preflight?.ok === false) return "blocked";
-  if (info.preflight?.checked === false) return "needs_ack";
+  if (info.preflight?.checked === false) return "unreachable";
   return "ready";
 });
 
-/** The pre-flight could not run, so running is a decision, not a default. */
-const needsAck = computed(() => recipeState.value === "needs_ack");
-
 /** Selectable, which is NOT the same as runnable. See `canSubmit`. */
 const recipeSelectable = computed(
-  () => recipeState.value === "ready" || recipeState.value === "needs_ack",
+  () => recipeState.value === "ready" || recipeState.value === "unreachable",
 );
 
 const sourceIsImported = computed(() =>
@@ -583,7 +587,7 @@ const modes = computed(() => [
     available: recipeSelectable.value,
     // Offered, with a warning. Distinct from unavailable: it must not take the
     // 38% opacity that says "you cannot have this".
-    caution: needsAck.value,
+    caution: recipeState.value === "unreachable",
     busy: recipeLoading.value,
     reason: recipeReason.value,
   },
@@ -607,7 +611,7 @@ function describedByFor(mode) {
   if (mode.reason) ids.push(`remix-reason-${mode.id}`);
   if (mode.id === "recipe" && selectedMode.value === "recipe") {
     if (sourceIsImported.value) ids.push("remix-alert-imported");
-    if (needsAck.value) ids.push("remix-alert-unchecked");
+    if (comfyuiUnreachable.value) ids.push("remix-alert-unchecked");
   }
   return ids.length ? ids.join(" ") : undefined;
 }
@@ -638,12 +642,9 @@ const promptPlaceholder = computed(() =>
 
 const canSubmit = computed(() => {
   if (submitting.value || !props.image?.id) return false;
-  if (selectedMode.value === "recipe") {
-    if (recipeState.value === "ready") return true;
-    // The block lives here, not on the row: an uninspected graph is selectable
-    // so the user can read it, and runnable only once they say so.
-    return needsAck.value && ackUnchecked.value;
-  }
+  // No contact with ComfyUI, no generation — in either mode.
+  if (comfyuiUnreachable.value) return false;
+  if (selectedMode.value === "recipe") return recipeState.value === "ready";
   if (selectedMode.value === "template") return Boolean(selectedWorkflow.value);
   return false;
 });
@@ -659,10 +660,10 @@ watch(recipeState, (state) => {
   if (state === "loading") return;
   if (state === "blocked") {
     liveMessage.value = `Same workflow, new seed is unavailable. ${recipeReason.value}`;
-  } else if (state === "needs_ack") {
+  } else if (state === "unreachable") {
     liveMessage.value =
-      "Same workflow, new seed was not checked: could not reach ComfyUI. " +
-      "Select it to review the workflow and confirm before running.";
+      "ComfyUI could not be reached. Generate is disabled until it can be; " +
+      "use Check again once ComfyUI is up.";
   } else {
     liveMessage.value = "";
   }
@@ -688,7 +689,6 @@ async function onOpen() {
   promptTouched.value = false;
   recipe.value = null;
   recipeError.value = "";
-  ackUnchecked.value = false;
   description.value = normaliseDescription(props.image?.description);
   prompt.value = description.value;
   // Nothing is preselected until the check resolves: a mode that flips out
@@ -740,9 +740,8 @@ async function loadDescription() {
 }
 
 function resolveInitialMode() {
-  // `ready`, not merely selectable: landing the user inside the override UI is
-  // the habituation path. Reaching an uninspected graph must be a deliberate
-  // act, and the sticky preference does not get to skip it either.
+  // `ready`, not merely selectable: an unreachable-ComfyUI recipe row cannot
+  // run, and the sticky preference does not get to land the user there either.
   const runnable = recipeState.value === "ready";
   const sticky = sessionStorage.getItem(MODE_KEY);
   if (sticky === "recipe" && runnable) return "recipe";
@@ -760,10 +759,10 @@ function focusInitial() {
     return;
   }
   // A disabled Generate is not focusable and focus would fall to document.body,
-  // which this dialog never allows. Land on the acknowledgement when that is
-  // the thing standing in the way.
-  if (!canSubmit.value && ackRef.value) {
-    ackRef.value.focus();
+  // which this dialog never allows. Land on the selected mode row instead — the
+  // reason Generate is disabled is written on it.
+  if (!canSubmit.value) {
+    modeEls.value[focusedModeIndex.value]?.focus?.();
     return;
   }
   generateRef.value?.$el?.focus?.();
@@ -807,35 +806,25 @@ async function loadRecipe() {
 }
 
 /**
- * Re-seed everything that describes the freshly-read recipe.
- *
- * The acknowledgement is cleared unconditionally: a tick that survived a
- * re-check would be an approval of a graph the user never saw in that state.
- * The disclosure opens itself when the graph is untrusted or uninspected —
- * progressive disclosure is only correct when the default is known safe, and
- * the acknowledgement copy points at "the node types above", so they have to be
- * on screen.
+ * Re-seed everything that describes the freshly-read recipe. The disclosure
+ * opens itself when the graph is untrusted or uninspected — progressive
+ * disclosure is only correct when the default is known safe.
  */
 function resetRecipeDisclosure() {
-  ackUnchecked.value = false;
-  const scrutinise = sourceIsImported.value || needsAck.value;
+  const scrutinise = sourceIsImported.value || comfyuiUnreachable.value;
   nodeClassesExpanded.value = scrutinise;
   disclosureOpen.value = scrutinise;
 }
 
-/**
- * Retry the pre-flight. Offered above the override on purpose: an unreachable
- * ComfyUI means the run would probably fail anyway, so the cheap path should be
- * the safe one rather than the acknowledgement.
- */
+/** Retry the pre-flight — the only way out of the unreachable refusal. */
 async function recheckRecipe() {
   if (recipeLoading.value) return;
   // Cleared first so an unchanged outcome still re-announces.
   liveMessage.value = "";
   await loadRecipe();
   await nextTick();
-  if (recipeState.value === "needs_ack") {
-    liveMessage.value = "Still could not reach ComfyUI.";
+  if (recipeState.value === "unreachable") {
+    liveMessage.value = "Still could not reach ComfyUI. Generate stays disabled.";
     return;
   }
   if (recipeState.value === "ready") {
@@ -916,11 +905,10 @@ function close() {
 
 async function submit() {
   if (!canSubmit.value) {
-    // Ctrl+Enter must not fail silently: without this the keyboard path just
-    // does nothing and the user has no idea the acknowledgement is the blocker.
-    if (selectedMode.value === "recipe" && needsAck.value && !ackUnchecked.value) {
+    // Enter / Ctrl+Enter must not fail silently: name the blocker.
+    if (comfyuiUnreachable.value) {
       liveMessage.value =
-        "Confirm you want to run this unchecked workflow before generating.";
+        "Generate is disabled: ComfyUI could not be reached.";
     }
     return;
   }
@@ -943,11 +931,9 @@ async function submit() {
                     : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
-              // Sent only for the run the user actually acknowledged. Never a
-              // constant: the backend refuses an uninspected graph without it,
-              // and a hardcoded true here would silently undo that.
-              allow_unchecked:
-                needsAck.value && ackUnchecked.value ? true : undefined,
+              // Deliberately no allow_unchecked: an uninspected graph cannot
+              // be submitted from this surface at all, and the backend
+              // refuses it independently.
             },
             { baseUrl: props.backendUrl },
           )
@@ -1273,39 +1259,6 @@ async function submit() {
   flex-shrink: 0;
   margin-top: var(--space-1);
   color: rgb(var(--v-theme-warning));
-}
-
-/* The whole label is the hit target; two lines of copy put it well past 44px. */
-.remix-ack {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-
-.remix-ack:hover {
-  background: var(--hover-wash);
-}
-
-.remix-ack-box {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  /* Optical alignment with the first line of the label. */
-  margin-top: var(--space-1);
-  accent-color: rgb(var(--v-theme-accent));
-  cursor: pointer;
-}
-
-.remix-ack-box:focus-visible {
-  outline: none;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--focus-ring);
 }
 
 /* ── Seed ──────────────────────────────────────────────────────────────── */
