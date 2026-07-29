@@ -278,6 +278,7 @@ def test_request_context_reads_the_request_never_a_contextvar():
         "actor": "7",
         "source": "ui",
         "origin_client_id": "tab-from-request",
+        "batch_id": None,
     }
 
     # No X-Client-Id on the request -> the envelope's own defaults, still not
@@ -293,7 +294,85 @@ def test_request_context_reads_the_request_never_a_contextvar():
         bare = operation_log_service.request_context(_BareRequest())
     finally:
         origin_client_id_var.reset(token)
-    assert bare == {"actor": None, "source": "external", "origin_client_id": None}
+    assert bare == {
+        "actor": None,
+        "source": "external",
+        "origin_client_id": None,
+        "batch_id": None,
+    }
+
+
+def test_request_context_takes_the_gesture_batch_id_from_the_request():
+    """One gesture, one batch: the correlation id rides the request, too.
+
+    ``fallback_batch_id`` is what a handler that is a bulk action in its own
+    right passes so it stays batched when the caller sent no header; a header
+    the middleware accepted wins over it, which is what makes a compound client
+    gesture a single undo unit.
+    """
+
+    class _State:
+        auth_user_id = 7
+        origin_client_id = "tab-1"
+        operation_batch_id = "cli-gesture-1"
+
+    class _Request:
+        state = _State()
+
+    assert operation_log_service.request_context(_Request())["batch_id"] == (
+        "cli-gesture-1"
+    )
+    assert operation_log_service.request_context(
+        _Request(), fallback_batch_id="srv-abc"
+    )["batch_id"] == ("cli-gesture-1")
+
+    class _BareState:
+        pass
+
+    class _BareRequest:
+        state = _BareState()
+
+    assert operation_log_service.request_context(_BareRequest())["batch_id"] is None
+    assert (
+        operation_log_service.request_context(
+            _BareRequest(), fallback_batch_id="srv-abc"
+        )["batch_id"]
+        == "srv-abc"
+    )
+
+
+def test_a_client_batch_id_can_never_impersonate_a_server_minted_one():
+    """The namespace guard: ``cli-`` is the client's, ``srv-`` is the server's.
+
+    A caller-supplied correlation id is a grouping hint over its own history
+    (§21.2), but it must not be able to attach its requests to a batch the
+    server created — so the validator only accepts the ``cli-`` namespace and
+    ``new_batch_id`` only mints ``srv-``.
+    """
+    from pixlstash.utils.request_origin import (
+        MAX_OPERATION_BATCH_ID_LENGTH,
+        sanitize_operation_batch_id,
+    )
+
+    server_minted = operation_log_service.new_batch_id()
+    assert server_minted.startswith(operation_log_service.SERVER_BATCH_ID_PREFIX)
+    assert sanitize_operation_batch_id(server_minted) is None
+
+    assert sanitize_operation_batch_id("cli-abcd1234") == "cli-abcd1234"
+    # Rejected, never raised and never truncated: a bad header must not 500 and
+    # a crafted long value must not collide with a legitimate short one.
+    for rejected in (
+        None,
+        "",
+        "srv-deadbeef",
+        "abcd1234",
+        "cli-",
+        "cli-a",
+        "cli-has spaces",
+        "cli-../../etc/passwd",
+        "cli-" + "a" * MAX_OPERATION_BATCH_ID_LENGTH,
+    ):
+        assert sanitize_operation_batch_id(rejected) is None, rejected
 
 
 def test_service_module_never_reads_the_origin_contextvar():
@@ -1180,6 +1259,11 @@ def test_removing_a_tag_chip_end_to_end_is_fully_undoable():
     makes the removal durable supervision. Each records its own operation (no
     batch id, exactly like the other single-picture tag ops), and walking both
     back leaves the tag applied with **no** rejection on file.
+
+    This is the *unbatched* path — no ``X-Operation-Batch-Id``, as an external
+    caller would issue it. The in-app gesture stamps both requests with one id
+    and takes a single Ctrl+Z; see
+    ``test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step``.
     """
     temp_dir, client, server = _setup()
     try:
@@ -1216,6 +1300,162 @@ def test_removing_a_tag_chip_end_to_end_is_fully_undoable():
         assert client.post(f"{API}/operations/undo").status_code == 200
         assert _tags(server, picture_id) == ["sunset"]
         assert _prediction(server, picture_id, "sunset") is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_removing_a_tag_chip_with_a_gesture_batch_id_is_one_undo_step():
+    """The fix: one user gesture, one history step, one Ctrl+Z.
+
+    The overlay stamps both requests of the chip delete with the same
+    ``X-Operation-Batch-Id``. They still record two operations — the log stays a
+    faithful record of what happened — but they share a batch, and undoing the
+    newest reverts the whole batch, so a single Ctrl+Z brings the tag back AND
+    clears the human NEG the reject wrote.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "sunset"})
+        assert _tags(server, picture_id) == ["sunset"]
+
+        headers = {"X-Operation-Batch-Id": "cli-gesture-abc123"}
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tags/remove_all",
+                json={"tag": "sunset"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tag_predictions/sunset/reject",
+                headers=headers,
+            ).status_code
+            == 200
+        )
+        assert _tags(server, picture_id) == []
+        assert _prediction(server, picture_id, "sunset")["label_state"] == "NEG"
+
+        gesture = _operations(server, batch_id="cli-gesture-abc123")
+        assert [op["op_type"] for op in gesture] == [
+            "pictures.tags.reject",
+            "pictures.tags.remove_all",
+        ]
+        # The `pictures.tags.add` that seeded the tag is a different gesture and
+        # must stay out of the batch.
+        assert [op["batch_id"] for op in _operations(server)] == [
+            "cli-gesture-abc123",
+            "cli-gesture-abc123",
+            None,
+        ]
+
+        # ONE Ctrl+Z: the tag is back and the ledger with it.
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _tags(server, picture_id) == ["sunset"]
+        assert _prediction(server, picture_id, "sunset") is None
+        assert all(
+            op["status"] == "undone"
+            for op in _operations(server, batch_id="cli-gesture-abc123")
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_batch_undo_endpoint_reverts_a_client_gesture_in_one_call():
+    """``POST /operations/batches/{batch_id}/undo`` over a client-supplied id.
+
+    Same unit as the implicit undo above, reached the other way — the receipt's
+    Undo button knows the batch id it just created and reverts by it.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "sunset"})
+        headers = {"X-Operation-Batch-Id": "cli-gesture-xyz789"}
+        client.post(
+            f"{API}/pictures/{picture_id}/tags/remove_all",
+            json={"tag": "sunset"},
+            headers=headers,
+        )
+        client.post(
+            f"{API}/pictures/{picture_id}/tag_predictions/sunset/reject",
+            headers=headers,
+        )
+
+        reverted = client.post(f"{API}/operations/batches/cli-gesture-xyz789/undo")
+        assert reverted.status_code == 200, reverted.text
+        assert len(reverted.json()["operations"]) == 2
+        assert _tags(server, picture_id) == ["sunset"]
+        assert _prediction(server, picture_id, "sunset") is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_malformed_gesture_batch_header_is_ignored_never_a_500():
+    """A header is attacker-controllable: bad values degrade, they do not fail.
+
+    Each rejected value records an unbatched operation — exactly the behaviour
+    every caller had before the header existed.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        for i, bad in enumerate(
+            (
+                "srv-" + "0" * 32,  # cannot impersonate a server-minted batch
+                "no-namespace",
+                "cli-" + "a" * 200,  # oversized
+                "cli-has spaces",
+            )
+        ):
+            resp = client.post(
+                f"{API}/pictures/{picture_id}/tags",
+                json={"tag": f"t{i}"},
+                headers={"X-Operation-Batch-Id": bad},
+            )
+            assert resp.status_code == 200, resp.text
+
+        recorded = _operations(server, op_type="pictures.tags.add")
+        assert len(recorded) == 4
+        assert all(op["batch_id"] is None for op in recorded), recorded
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_bulk_confirm_gesture_is_one_batch_over_many_pictures():
+    """The tag-panel fan-out: N confirms, one gesture id, one undo unit.
+
+    This is what gives the receipt its ``+N`` count and makes "confirm on all"
+    reversible in one press instead of N.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_ids = [_upload(client) for _ in range(3)]
+        for picture_id in picture_ids:
+            _seed_prediction(server, picture_id, "sunset", confidence=0.99)
+
+        headers = {"X-Operation-Batch-Id": "cli-confirm-all-1"}
+        for picture_id in picture_ids:
+            assert (
+                client.post(
+                    f"{API}/pictures/{picture_id}/tag_predictions/sunset/confirm",
+                    headers=headers,
+                ).status_code
+                == 200
+            )
+        assert all(_tags(server, pid) == ["sunset"] for pid in picture_ids)
+
+        batch = _operations(server, batch_id="cli-confirm-all-1")
+        assert len(batch) == 3
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert all(_tags(server, pid) == [] for pid in picture_ids)
+        assert all(
+            _prediction(server, pid, "sunset")["label_source"] is None
+            for pid in picture_ids
+        )
     finally:
         _teardown(temp_dir, server)
 
