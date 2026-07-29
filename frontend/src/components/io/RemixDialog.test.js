@@ -16,12 +16,17 @@ const listWorkflows = vi.fn();
 const getPictureRecipe = vi.fn();
 const runImageToImage = vi.fn();
 const runRecipe = vi.fn();
+const getPictureMetadata = vi.fn();
 
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...a) => listWorkflows(...a),
   getPictureRecipe: (...a) => getPictureRecipe(...a),
   runImageToImage: (...a) => runImageToImage(...a),
   runRecipe: (...a) => runRecipe(...a),
+}));
+
+vi.mock("../../api/pictures", () => ({
+  getPictureMetadata: (...a) => getPictureMetadata(...a),
 }));
 
 // The dialog and the App* widgets it embeds import Vuetify components
@@ -167,6 +172,7 @@ beforeEach(() => {
   getPictureRecipe.mockResolvedValue(CLEAN_RECIPE);
   runImageToImage.mockResolvedValue({ prompts: [{ prompt_id: "p1" }] });
   runRecipe.mockResolvedValue({ prompts: [{ prompt_id: "p2" }] });
+  getPictureMetadata.mockResolvedValue({});
 });
 
 describe("RemixDialog mode availability", () => {
@@ -326,7 +332,11 @@ describe("RemixDialog imported-source warning", () => {
   });
 });
 
-describe("RemixDialog unchecked pre-flight", () => {
+describe("RemixDialog unreachable ComfyUI", () => {
+  // Owner decision, 2026-07-29: no contact with ComfyUI means nothing
+  // generates, in either mode. The former run-unchecked acknowledgement is
+  // gone from this surface; the only way forward is "Check again".
+
   it("does not preselect recipe mode when the graph was never inspected", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
@@ -336,14 +346,14 @@ describe("RemixDialog unchecked pre-flight", () => {
     );
   });
 
-  it("ignores a sticky recipe preference rather than landing in the override", async () => {
+  it("ignores a sticky recipe preference rather than landing on a dead row", async () => {
     sessionStorage.setItem("comfyui_remix_mode", "recipe");
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     expect(rowFor(w, "Pick a template").attributes("aria-checked")).toBe("true");
   });
 
-  it("keeps the row selectable: aria-disabled would be a lie and would hide the override", async () => {
+  it("keeps the row selectable: aria-disabled would hide Check again", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     const row = rowFor(w, "Same workflow, new seed");
@@ -357,91 +367,49 @@ describe("RemixDialog unchecked pre-flight", () => {
     );
   });
 
-  it("refuses to run until the override is ticked", async () => {
+  it("disables Generate in recipe mode, with no override to tick", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     await rowFor(w, "Same workflow, new seed").trigger("click");
     await nextTick();
     expect(w.find("#remix-alert-unchecked").exists()).toBe(true);
+    expect(w.find(".remix-ack").exists()).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 
-  it("sends allow_unchecked only for the run the user acknowledged", async () => {
+  it("disables Generate in template mode too — no contact, no generation", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-    await w.find(".app-btn:last-child").trigger("click");
-    await settle(w);
-    expect(runRecipe).toHaveBeenCalledWith(
-      expect.objectContaining({ picture_id: 42, allow_unchecked: true }),
-      expect.anything(),
-    );
+    // Template mode is the preselected fallback; the block still applies.
+    expect(rowFor(w, "Pick a template").attributes("aria-checked")).toBe("true");
+    expect(w.find(".remix-alert").text()).toContain("could not be reached");
+    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
   });
 
-  it("never sends allow_unchecked on a clean pre-flight", async () => {
+  it("never sends allow_unchecked", async () => {
     const w = await settle(mountDialog());
     await w.find(".app-btn:last-child").trigger("click");
     await settle(w);
     expect(runRecipe.mock.calls[0][0].allow_unchecked).toBeUndefined();
   });
 
-  it("forgets the acknowledgement when the dialog is reopened", async () => {
+  it("offers Check again, and clears the block when ComfyUI answers", async () => {
     getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
     const w = await settle(mountDialog());
     await rowFor(w, "Same workflow, new seed").trigger("click");
     await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-
-    await w.setProps({ open: false });
-    await w.setProps({ open: true });
-    await settle(w);
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    expect(w.find(".remix-ack-box").element.checked).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-  });
-
-  it("offers Check again first, and clears the gate when ComfyUI answers", async () => {
-    getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
-    const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
 
     getPictureRecipe.mockResolvedValue(CLEAN_RECIPE);
     await w.find("#remix-alert-unchecked button").trigger("click");
     await settle(w);
     expect(w.find("#remix-alert-unchecked").exists()).toBe(false);
-    expect(w.find(".remix-ack").exists()).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 
-  it("drops a tick that a re-check made stale", async () => {
-    // An acknowledgement approves the graph the user was shown. Surviving a
-    // re-check would make it approve a state they never saw.
-    getPictureRecipe.mockResolvedValue(UNCHECKED_RECIPE);
-    const w = await settle(mountDialog());
-    await rowFor(w, "Same workflow, new seed").trigger("click");
-    await nextTick();
-    await w.find(".remix-ack-box").setValue(true);
-    await nextTick();
-
-    await w.find("#remix-alert-unchecked button").trigger("click");
-    await settle(w);
-    expect(w.find(".remix-ack-box").element.checked).toBe(false);
-    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeDefined();
-  });
-
-  it("gives a failed pre-flight no override at all", async () => {
+  it("gives a failed pre-flight the disabled row, not the caution row", async () => {
     // Over-blocking and under-blocking are both regressions: a pre-flight that
-    // RAN and found a missing node pack is not a consent question.
+    // RAN and found a missing node pack is a hard blocker with named causes.
     getPictureRecipe.mockResolvedValue({
       ...CLEAN_RECIPE,
       preflight: {
@@ -457,7 +425,8 @@ describe("RemixDialog unchecked pre-flight", () => {
     const row = rowFor(w, "Same workflow, new seed");
     expect(row.attributes("aria-disabled")).toBe("true");
     expect(row.classes()).toContain("remix-mode--off");
-    expect(w.find(".remix-ack").exists()).toBe(false);
+    // Template mode still works: ComfyUI answered, it is just missing things.
+    expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
   });
 });
 
@@ -488,6 +457,31 @@ describe("RemixDialog prompt prefill", () => {
     expect(w.find("textarea").element.value).toBe("a cat on a mat");
   });
 
+  it("fetches the description when the grid row does not carry one", async () => {
+    // The grid LISTING has no description field, so the prop is routinely
+    // undefined for pictures that plainly have a description.
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    getPictureMetadata.mockResolvedValue({ description: "a cat on a mat" });
+    const w = await settle(
+      mountDialog({ image: { id: 42, file_name: "cat.png" } }),
+    );
+    expect(getPictureMetadata).toHaveBeenCalledWith(42, expect.anything());
+    expect(w.find("textarea").element.value).toBe("a cat on a mat");
+    expect(w.find(".remix-provenance").text()).toContain("from image description");
+  });
+
+  it("does not fetch when the prop already provides a description", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    await settle(mountDialog());
+    expect(getPictureMetadata).not.toHaveBeenCalled();
+  });
+
   it("ignores a pending-description sentinel rather than prefilling it", async () => {
     getPictureRecipe.mockResolvedValue({
       available: false,
@@ -497,6 +491,92 @@ describe("RemixDialog prompt prefill", () => {
       mountDialog({ image: { ...IMAGE, description: "__description::joycaption" } }),
     );
     expect(w.find("textarea").element.value).toBe("");
+  });
+});
+
+describe("RemixDialog seeds", () => {
+  function segButtons(w) {
+    return w.findAll(".remix-seg-btn");
+  }
+
+  /** Button labels with the stubbed v-icon's "mdi-…" text stripped. */
+  function segLabels(w) {
+    return segButtons(w).map((b) => b.text().replace(/mdi-\S+\s*/, ""));
+  }
+
+  function segButton(w, label) {
+    return segButtons(w).find((b) => b.text().includes(label));
+  }
+
+  it("offers Incremented only where an original seed exists to increment", async () => {
+    const w = await settle(mountDialog());
+    expect(segLabels(w)).toEqual(["Random", "Incremented", "Fixed"]);
+  });
+
+  it("does not offer Incremented in template mode", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    const w = await settle(mountDialog());
+    expect(segLabels(w)).toEqual(["Random", "Fixed"]);
+  });
+
+  it("defaults Fixed to the original seed and flags it until changed", async () => {
+    const w = await settle(mountDialog());
+    await segButton(w, "Fixed").trigger("click");
+    await nextTick();
+    const input = w.find('input[aria-label="Seed value"]');
+    expect(Number(input.element.value)).toBe(1);
+    expect(w.find(".remix-seed-note--warn").text()).toContain("same as original");
+
+    await input.setValue(2);
+    await nextTick();
+    expect(w.find(".remix-seed-note--warn").exists()).toBe(false);
+  });
+
+  it("submits Incremented as a fixed seed at original + delta", async () => {
+    const w = await settle(mountDialog());
+    await segButton(w, "Incremented").trigger("click");
+    await nextTick();
+    await w.find('input[aria-label="Delta from the original seed"]').setValue(5);
+    await nextTick();
+    expect(w.find(".remix-seed-note").text()).toContain("= 6");
+
+    await w.find(".app-btn:last-child").trigger("click");
+    await settle(w);
+    expect(runRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ seed_mode: "fixed", seed: 6 }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts a negative delta", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      seed: 100,
+    });
+    const w = await settle(mountDialog());
+    await segButton(w, "Incremented").trigger("click");
+    await nextTick();
+    await w.find('input[aria-label="Delta from the original seed"]').setValue(-3);
+    await nextTick();
+    await w.find(".app-btn:last-child").trigger("click");
+    await settle(w);
+    expect(runRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ seed_mode: "fixed", seed: 97 }),
+      expect.anything(),
+    );
+  });
+
+  it("drops a sticky Incremented preference where it cannot be honoured", async () => {
+    sessionStorage.setItem("comfyui_remix_seed_mode", "incremented");
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    const w = await settle(mountDialog());
+    expect(segButton(w, "Random").attributes("aria-checked")).toBe("true");
   });
 });
 
