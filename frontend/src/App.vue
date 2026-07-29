@@ -1633,15 +1633,35 @@ async function patchConfigUIOptions() {
   }
 }
 
+/**
+ * Is a modal surface (a dialog, the lightbox) currently covering the app?
+ *
+ * There is no shared flag for this — every dialog owns its own `open` ref —
+ * so the honest single source is the scrim Vuetify renders for every active
+ * overlay. Used to decline global shortcuts whose feedback would be invisible
+ * behind it.
+ */
+function isModalOverlayOpen() {
+  if (typeof document === "undefined") return false;
+  return document.querySelector(".v-overlay--active .v-overlay__scrim") != null;
+}
+
 function handleGlobalKeydown(e) {
   // The review overlay is modal and owns its own keyboard handler; don't
   // run the app/grid shortcuts (scroll, search, help) behind it.
   if (reviewSessionsStore.overlayOpen) return;
-  const tag = document.activeElement?.tagName?.toLowerCase();
-  const isEditable =
-    tag === "input" ||
-    tag === "textarea" ||
-    document.activeElement?.isContentEditable;
+  const target = e.target;
+  const active = document.activeElement;
+  // Match the strictness the grid and the lightbox already use: a SELECT and an
+  // ARIA textbox are typing surfaces too, and the event target matters as much
+  // as `document.activeElement` (a Vuetify combobox moves focus around).
+  const isEditable = [target, active].some(
+    (el) =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
+        el.getAttribute("role") === "textbox"),
+  );
 
   // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
   // "Content on Hover or Focus" applies: it must be dismissible without moving
@@ -1663,13 +1683,24 @@ function handleGlobalKeydown(e) {
   // screen, and every undo raises one, so the result is always narrated. Ctrl
   // and Meta are both accepted (the HINT is platform-specific, the binding is
   // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
-  // Skipped while typing, so a text field keeps its own native undo stack, and
-  // skipped for a read-only session, where the endpoints are owner-only anyway.
+  //
+  // Four guards, each for its own reason:
+  //   • typing — a text field keeps its own native undo stack;
+  //   • read-only — the endpoints are owner-only anyway;
+  //   • auto-repeat — a HELD Ctrl+Z must not walk the whole stack;
+  //   • a modal overlay owns the screen — the receipt lives on --z-floating,
+  //     under the lightbox and under any dialog, so an undo fired from there
+  //     would mutate the library with no visible narration. That breaks the
+  //     design's own "every undo raises a receipt" invariant, so the shortcut
+  //     declines rather than acting blind. Promoting the receipt above those
+  //     layers is the recorded follow-up.
   if (
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&
+    !e.repeat &&
     !isEditable &&
-    !isReadOnly.value
+    !isReadOnly.value &&
+    !isModalOverlayOpen()
   ) {
     const key = e.key?.toLowerCase();
     if (key === "z" && !e.shiftKey) {

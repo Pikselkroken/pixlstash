@@ -33,14 +33,32 @@ import {
   summarizeOperation,
   useOperationStore,
 } from "../../stores/useOperationStore";
-import { redoKeyHint, undoKeyHint } from "../../utils/shortcutHints";
+import {
+  isApplePlatform,
+  redoKeyHint,
+  undoKeyHint,
+} from "../../utils/shortcutHints";
 
 const store = useOperationStore();
 
 const menuOpen = ref(false);
-/** Index into `past` of the oldest step the pointer/focus is previewing. */
-const previewIndex = ref(null);
+/**
+ * The oldest step the pointer/focus is previewing, held by operation ID rather
+ * than by list position: a refresh landing while the popover is open would
+ * otherwise leave the highlight describing a different range than the one the
+ * user is looking at.
+ */
+const previewId = ref(null);
 const listEl = ref(null);
+// The chevron cannot carry its own template ref: Vuetify's activator slot props
+// already bind one (`mergeProps({ ref: activatorRef }, …)` in VOverlay), and a
+// literal `ref` on the same element would win and break the menu's anchoring.
+// Reach it through the component root instead.
+const rootEl = ref(null);
+
+function focusChevron() {
+  rootEl.value?.querySelector?.(".uc-btn--chevron")?.focus?.();
+}
 
 const past = computed(() => store.past);
 const future = computed(() => store.future);
@@ -59,12 +77,26 @@ const redoLabel = computed(() =>
   store.nextRedo ? summarizeOperation(store.nextRedo) : "Nothing to redo",
 );
 
-const undoTitle = computed(
-  () => `Undo: ${undoLabel.value} (${undoKeys.join("+")})`,
+// The undo target can quietly become another tab's action: an external
+// operation updates the stack silently (the receipt only narrates this
+// client's own work), so the affordance has to say so before it reverts
+// something the user never did.
+const undoTitle = computed(() => {
+  if (!store.nextUndo) return `Nothing to undo (${undoKeys.join("+")})`;
+  const where = store.nextUndoIsExternal ? "Changed elsewhere: " : "";
+  return `Undo: ${where}${undoLabel.value} (${undoKeys.join("+")})`;
+});
+const redoTitle = computed(() =>
+  store.nextRedo
+    ? `Redo: ${redoLabel.value} (${redoKeys.join("+")})`
+    : `Nothing to redo (${redoKeys.join("+")})`,
 );
-const redoTitle = computed(
-  () => `Redo: ${redoLabel.value} (${redoKeys.join("+")})`,
-);
+
+// The standard attribute for "this control has a keyboard shortcut". It
+// survives the visual keycaps being aria-hidden and is read on focus, which
+// `title` never is.
+const undoKeyShortcut = isApplePlatform() ? "Meta+Z" : "Control+Z";
+const redoKeyShortcut = isApplePlatform() ? "Shift+Meta+Z" : "Control+Y";
 
 /** Rows, newest first: the redo side struck through, then the undo stack. */
 const rows = computed(() => {
@@ -81,21 +113,39 @@ const rows = computed(() => {
   return [...undoneRows, ...appliedRows];
 });
 
-/** How many steps the footer says the current preview would undo. */
+/** Where the previewed step currently sits in the stack, or -1. */
+const previewIndex = computed(() =>
+  previewId.value == null
+    ? -1
+    : past.value.findIndex((op) => op?.id === previewId.value),
+);
+
+/** How many steps the current preview would undo. */
 const previewSteps = computed(() =>
-  previewIndex.value == null ? 0 : previewIndex.value + 1,
+  previewIndex.value < 0 ? 0 : previewIndex.value + 1,
 );
 
 const footerText = computed(() => {
-  if (previewSteps.value === 0) return "Click a step to undo back to it";
+  // "Choose", not "Click": the list is fully keyboard-operable and this is the
+  // only sentence that says how to use it.
+  if (previewSteps.value === 0) return "Choose a step to undo back to it";
   return `Undo ${previewSteps.value} step${previewSteps.value === 1 ? "" : "s"}`;
 });
 
-/** A past row is in the preview range when it is at or above the hovered one. */
+/** A past row is in the preview range when it is at or above the previewed one. */
 function willUndo(row) {
   if (row.kind !== "past") return false;
-  if (previewIndex.value == null) return false;
+  if (previewIndex.value < 0) return false;
   return row.index <= previewIndex.value;
+}
+
+/** How many steps activating this row would undo (for its accessible name). */
+function rowSteps(row) {
+  return row.kind === "past" ? row.index + 1 : 0;
+}
+
+function preview(row) {
+  previewId.value = row.kind === "past" ? row.op.id : null;
 }
 
 function rowIcon(op) {
@@ -121,9 +171,14 @@ function onRedo() {
 }
 
 async function onPick(row) {
-  if (row.kind !== "past") return;
+  if (row.kind !== "past" || store.busy) return;
   menuOpen.value = false;
-  previewIndex.value = null;
+  previewId.value = null;
+  // Vuetify restores focus to the activator on Esc and on Tab-past-the-last
+  // focusable, but not on a programmatic close: without this the row button is
+  // unmounted under the keyboard and focus lands on <body> (WCAG 2.4.3).
+  await nextTick();
+  focusChevron();
   await store.undoTo(row.op.id);
 }
 
@@ -134,7 +189,7 @@ async function onPick(row) {
  * like the first time it was opened.
  */
 watch(menuOpen, async (isOpen) => {
-  previewIndex.value = null;
+  previewId.value = null;
   if (!isOpen) return;
   store.refresh({ narrate: false });
   await nextTick();
@@ -152,7 +207,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="uc" role="group" aria-label="History">
+  <div ref="rootEl" class="uc" role="group" aria-label="Undo and redo">
     <div class="uc-group" :class="{ 'uc-group--open': menuOpen }">
       <button
         type="button"
@@ -160,6 +215,7 @@ defineExpose({
         :aria-disabled="!canUndo"
         :title="undoTitle"
         :aria-label="undoTitle"
+        :aria-keyshortcuts="undoKeyShortcut"
         @click="onUndo"
       >
         <v-icon size="19">mdi-undo-variant</v-icon>
@@ -170,6 +226,7 @@ defineExpose({
         :aria-disabled="!canRedo"
         :title="redoTitle"
         :aria-label="redoTitle"
+        :aria-keyshortcuts="redoKeyShortcut"
         @click="onRedo"
       >
         <v-icon size="19">mdi-redo-variant</v-icon>
@@ -181,6 +238,7 @@ defineExpose({
         origin="top start"
         :offset="8"
         transition="scale-transition"
+        :activator-props="{ 'aria-haspopup': 'dialog' }"
       >
         <template #activator="{ props: menuProps }">
           <button
@@ -189,13 +247,17 @@ defineExpose({
             class="uc-btn uc-btn--chevron"
             title="History"
             aria-label="History"
-            aria-haspopup="menu"
             :aria-expanded="menuOpen"
           >
             <v-icon size="18" class="uc-chevron">mdi-menu-down</v-icon>
           </button>
         </template>
-        <div class="tbm uc-panel">
+        <div
+          class="tbm uc-panel"
+          role="dialog"
+          aria-label="History"
+          @mouseleave="previewId = null"
+        >
           <span class="tbm-caret tbm-caret--start"></span>
           <div class="tbm-header">
             <v-icon size="18" class="tbm-header-icon">mdi-history</v-icon>
@@ -207,7 +269,7 @@ defineExpose({
               }}</span
             >
           </div>
-          <div ref="listEl" class="uc-list" @mouseleave="previewIndex = null">
+          <div ref="listEl" class="uc-list">
             <p v-if="!rows.length" class="uc-empty">
               Nothing recorded yet. Your next change lands here.
             </p>
@@ -224,12 +286,15 @@ defineExpose({
               :disabled="row.kind !== 'past'"
               :aria-label="
                 row.kind === 'past'
-                  ? `Undo back to: ${rowLabel(row.op)}`
+                  ? `Undo back to: ${rowLabel(row.op)} (${rowSteps(row)} step${
+                      rowSteps(row) === 1 ? '' : 's'
+                    })`
                   : `${rowLabel(row.op)} (undone)`
               "
-              @mouseenter="previewIndex = row.index >= 0 ? row.index : null"
-              @focus="previewIndex = row.index >= 0 ? row.index : null"
+              @mouseenter="preview(row)"
+              @focus="preview(row)"
               @click="onPick(row)"
+              @keydown.enter.stop.prevent="onPick(row)"
             >
               <v-icon size="18" class="uc-row-icon">{{
                 rowIcon(row.op)
@@ -238,8 +303,8 @@ defineExpose({
               <span class="uc-row-time">{{ rowTime(row.op) }}</span>
             </button>
           </div>
-          <div class="tbm-footer" aria-live="polite">
-            <v-icon size="16">mdi-cursor-default-click-outline</v-icon>
+          <div class="tbm-footer">
+            <v-icon size="16">mdi-gesture-tap</v-icon>
             <span>{{ footerText }}</span>
           </div>
         </div>

@@ -32,12 +32,14 @@ import {
 import {
   DESTRUCTIVE_RECEIPT_MS,
   RECEIPT_MS,
+  WS_REFRESH_DEBOUNCE_MS,
   formatOperationTime,
   iconForOpType,
   isDestructiveOpType,
   summarizeOperation,
   useOperationStore,
 } from "./useOperationStore";
+import { useNoticeStore } from "./useNoticeStore";
 import { useWsStore } from "./useWsStore";
 
 const MY_CLIENT = "client-me";
@@ -142,6 +144,12 @@ describe("summarizeOperation", () => {
   it("appends the target count when more than one picture is touched", () => {
     expect(summarizeOperation(op({ target_count: 12 }))).toBe(
       "Added tag 'portrait' · 12",
+    );
+  });
+
+  it("groups a bulk count the way the rest of the product does", () => {
+    expect(summarizeOperation(op({ target_count: 2700 }))).toBe(
+      `Added tag 'portrait' · ${(2700).toLocaleString()}`,
     );
   });
 
@@ -452,10 +460,17 @@ describe("useOperationStore — undoTo walks the stack", () => {
 });
 
 describe("useOperationStore — WebSocket reconciliation", () => {
+  /** Fire an event and let the trailing-edge debounce elapse. */
+  async function fire(store, payload) {
+    const settled = store.onPictureEvent(payload);
+    await vi.advanceTimersByTimeAsync(WS_REFRESH_DEBOUNCE_MS);
+    await settled;
+  }
+
   it("narrates an own-origin picture event", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10 }), op({ id: 9 })]);
-    await store.onPictureEvent({
+    await fire(store, {
       type: "pictures_changed",
       origin_client_id: MY_CLIENT,
     });
@@ -465,7 +480,7 @@ describe("useOperationStore — WebSocket reconciliation", () => {
   it("updates the stack silently for an external picture event", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10, origin_client_id: OTHER_CLIENT }), op({ id: 9 })]);
-    await store.onPictureEvent({
+    await fire(store, {
       type: "pictures_changed",
       origin_client_id: OTHER_CLIENT,
     });
@@ -473,11 +488,143 @@ describe("useOperationStore — WebSocket reconciliation", () => {
     expect(store.past.map((o) => o.id)).toEqual([10, 9]);
   });
 
+  it("collapses a burst into one re-read", async () => {
+    const store = await primed([op({ id: 9 })]);
+    listOperations.mockClear();
+    serve([op({ id: 10 }), op({ id: 9 })]);
+
+    // A bulk action emits a continuous stream of these; without the debounce
+    // the two reads would poll back to back for the whole run.
+    for (let i = 0; i < 20; i += 1) {
+      store.onPictureEvent({
+        type: "pictures_changed",
+        origin_client_id: MY_CLIENT,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await vi.advanceTimersByTimeAsync(WS_REFRESH_DEBOUNCE_MS);
+    expect(listOperations).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the window narratable when a background event lands last", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+
+    // The user's own change, then a background job's echo inside the same
+    // window. Dropping the flag would silently swallow the user's receipt.
+    store.onPictureEvent({
+      type: "tags_changed",
+      origin_client_id: MY_CLIENT,
+    });
+    const settled = store.onPictureEvent({ type: "pictures_changed" });
+    await vi.advanceTimersByTimeAsync(WS_REFRESH_DEBOUNCE_MS);
+    await settled;
+
+    expect(store.receipt).not.toBeNull();
+  });
+
   it("stays off the wire in a read-only session", async () => {
     readOnly.value = true;
     const store = useOperationStore();
     await store.onPictureEvent({ type: "pictures_changed" });
+    await vi.advanceTimersByTimeAsync(WS_REFRESH_DEBOUNCE_MS);
     expect(listOperations).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOperationStore — a shortcut never does nothing silently", () => {
+  it("says so when there is nothing to undo", async () => {
+    const store = useOperationStore();
+    serve([]);
+    await store.refresh();
+    await store.undo();
+
+    expect(undoLastOperation).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain(
+      "Nothing to undo.",
+    );
+  });
+
+  it("says so when there is nothing to redo", async () => {
+    const store = useOperationStore();
+    serve([]);
+    await store.refresh();
+    await store.redo();
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain(
+      "Nothing to redo.",
+    );
+  });
+
+  it("queues repeated presses instead of dropping them", async () => {
+    const store = await primed([op({ id: 12 }), op({ id: 11 })]);
+    let resolveFirst;
+    undoLastOperation
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (resolveFirst = resolve)),
+      )
+      .mockResolvedValue({ operations: [] });
+
+    const first = store.undo();
+    // Hammering Ctrl+Z is the canonical idiom; a press landing mid-flight
+    // must not be swallowed.
+    store.undo();
+    resolveFirst({ operations: [op({ id: 12 })] });
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(undoLastOperation).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useOperationStore — failure shapes", () => {
+  it("reports a locked picture set as a state, not as an error", async () => {
+    const store = await primed([op({ id: 10 })]);
+    undoLastOperation.mockRejectedValue({
+      response: { status: 423, data: { detail: "Set 'Eval slice' is locked" } },
+    });
+    serve([op({ id: 10 })]);
+
+    await store.undo();
+
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("locked");
+  });
+
+  it("retires a receipt that would still offer the action that failed", async () => {
+    const store = await primed([op({ id: 10 })]);
+    store.showReceipt(store.buildReceipt(op({ id: 10 }), "did"));
+    undoLastOperation.mockRejectedValue({
+      response: { status: 409, data: { detail: "Nothing to undo" } },
+    });
+    serve([op({ id: 10 })]);
+
+    await store.undo();
+    expect(store.receipt).toBeNull();
+  });
+});
+
+describe("useOperationStore — nextUndoIsExternal", () => {
+  it("is false for this client's own step", async () => {
+    const store = await primed([op({ id: 10 })]);
+    expect(store.nextUndoIsExternal).toBe(false);
+  });
+
+  it("is true for another tab's step and for a background job", async () => {
+    const store = await primed([
+      op({ id: 10, origin_client_id: OTHER_CLIENT }),
+    ]);
+    expect(store.nextUndoIsExternal).toBe(true);
+
+    const other = await primed([op({ id: 11, origin_client_id: null })]);
+    expect(other.nextUndoIsExternal).toBe(true);
+  });
+
+  it("is false when there is nothing to undo at all", async () => {
+    const store = useOperationStore();
+    serve([]);
+    await store.refresh();
+    expect(store.nextUndoIsExternal).toBe(false);
   });
 });
 

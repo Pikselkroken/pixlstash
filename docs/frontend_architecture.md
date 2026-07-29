@@ -56,6 +56,7 @@ frontend/src/
 │   ├── useLockedSetsStore.js    # which pictures are frozen by a locked picture set
 │   ├── useReviewSessionsStore.js # tag-review sessions, health board, and sticker gamification
 │   ├── useEntityNamesStore.js   # id→name maps for the ImageGrid breadcrumb
+│   ├── useOperationStore.js     # the undo/redo stack + the action receipt (backend §21)
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
@@ -90,6 +91,7 @@ frontend/src/
 │   ├── pictureSets.js           # /picture_sets + membership + locked members
 │   ├── tags.js                  # /tags, /pictures/{id}/tags, tag predictions
 │   ├── pictureImport.js         # streaming-staging import session (was useImportService)
+│   ├── operations.js            # /operations — the undo/redo log, undo-state, undo/redo
 │   ├── stacks.js                # /stacks — create, order, members
 │   └── pictures.js              # /pictures — reads, count, stream, searches, stats
 │                                # every module has a co-located *.test.js
@@ -113,7 +115,7 @@ frontend/src/
     ├── TitleBar.vue             # Desktop-only custom window title bar (Electron): wordmark, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
     ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, LoginScreen
-    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
+    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
     │   ├── ReviewRail.vue             # Rail of open review sessions
@@ -129,7 +131,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel) and ActionReceipt (the transient undo pill)
 ```
 
 ---
@@ -140,7 +142,7 @@ frontend/src/
 |---------|--------|
 | Framework | Vue 3 (Composition API, `<script setup>`) |
 | UI component library | Vuetify 3 |
-| State management | **Pinia** — 16 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
+| State management | **Pinia** — 21 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
 | Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `App.vue` watches the route and syncs params to Pinia stores; nav handlers call `router.push()` to update the URL. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
@@ -184,7 +186,7 @@ The application shell. Responsibilities:
 - Renders the three-panel layout: `SideBar` | `ImageGrid` (+ `Toolbar`) | `StatsSidebar`.
 - Manages the `PhotosImportDialog`.
 - Owns the **WebSocket lifecycle only** (connect / reconnect / close / `set_filters`); the picture-event decision table is delegated to `useGridRealtimeSync` (see §9).
-- Handles global keyboard shortcuts, window drag/drop, paste events.
+- Handles global keyboard shortcuts, window drag/drop, paste events. Undo/redo (`Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`, Meta accepted everywhere) lives in `handleGlobalKeydown` and declines in four cases, each for its own reason: while typing (a text field keeps its native undo stack), in a read-only session, on key auto-repeat (a held `Ctrl+Z` must not walk the stack), and while a modal overlay owns the screen — the receipt sits on `--z-floating`, under the lightbox and under every dialog, so an undo fired from there would mutate the library with no visible narration. Promoting the receipt above those layers is the recorded follow-up that would lift the last guard.
 - Fetches user config on startup (`GET /users/me/config`) and applies persisted preferences via the relevant stores.
 - Persists sidebar/stats open state to `localStorage`.
 
@@ -215,6 +217,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
+| `useOperationStore` | `useOperationStore.js` | The undo/redo stack, mirrored from the backend's append-only operation log (`backend_architecture.md` §21): `operations` (newest 50, newest first), `canUndo`/`canRedo`/`nextUndo`/`nextRedo` from `GET /operations/undo-state`, and the single live `receipt` that narrates what just happened. Computeds `past` (applied steps), `future` (undone, redoable), `historyCount`, `nextUndoIsExternal`. Owns the receipt's dwell timer (5s, 8s destructive, paused on hover/focus/hidden tab) and the multi-step `undoTo` walk. Refreshed on a debounced WS picture/tag/character/description event; the receipt narrates THIS client's operations only (origin read from the event `data`), so another tab's work updates the stack silently. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
@@ -480,6 +483,12 @@ Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPictu
 
 #### App* design-system layer (`widgets/`)
 The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (~140 lines), `AppDialog.vue` (~165 lines), `AppInput.vue` (~95 lines), `AppSelect.vue` (~95 lines), `AppStepper.vue` (~125 lines), `AppTextarea.vue` (~60 lines), plus `FieldLabel.vue` (~15 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
+
+#### `ActionReceipt.vue` (465 lines, `widgets/`)
+The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
+
+#### `UndoControl.vue` (511 lines, `panels/`)
+The toolbar undo/redo pair plus a chevron opening the History popover. Mounted by `Toolbar` next to the sort split-button — the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
 
 #### `AddToEntityControl.vue` (966 lines)
 Reusable control for assigning images to/from characters and sets. Props: `type` (`'character'`|`'set'`), `imageIds`, `selectedCharacter`, `selectedSet`. Emits: `added`, `removed`, `selected`. Used in `Toolbar`, `ImageOverlay`, `ImageGridContextMenu`.
@@ -825,6 +834,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/pictureSets.js` | `/picture_sets`, membership, and locked members |
 | `api/tags.js` | `/tags` vocabulary, per-picture tag edits, and tag predictions |
 | `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
+| `api/operations.js` | `/operations`: the append-only change log, `undo-state`, and undo / redo / per-operation undo / batch undo (all OWNER_ONLY — callers guard on `isReadOnly`) |
 | `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
@@ -873,6 +883,10 @@ Both reuse the primary-coloured `pending-imports-pill` styling and never reshuff
 
 - **"New pictures"** — raised for `source: "external", change_kind: "added"` (or foreign-UI adds that arrive mid-streaming-fetch). Backed by `useWsStore.pendingExternalImportIds`; click splices the new ids in. Replaces the old import-only "pending imports" pill.
 - **"View changed externally — click to refresh"** — a sibling pill raised when an external `updated` event has `pictureChangeAffectsView(fields) === true`, **or** when an external `tags_changed` arrives while a tag filter is active (`ImageGrid`'s `wsTagUpdate` watcher emits `flag-sort-changed`; `App.vue` skips ids already queued in the "New pictures" pill so a just-imported batch being tagged doesn't double-pill). Backed by `useWsStore.sortChangedExternalIds`; click reconciles/re-sorts.
+
+### The undo stack's WS hook
+
+The operation log has **no WS event of its own** — a recorded metadata mutation announces itself as an ordinary `pictures_changed` / `tags_changed` / `characters_changed` / `descriptions_changed` event, and that is the signal the undo stack may have moved. `App.vue` routes those four types (and deliberately not `picture_imported`: imports are not undoable in v1.9) to `useOperationStore.onPictureEvent`, which re-reads `GET /operations` + `GET /operations/undo-state` on a 400 ms trailing edge, because a bulk action over thousands of pictures would otherwise poll back to back for the whole run. Origin is read from the event `data` and used for one thing only: whether the change may narrate itself. An own-origin event raises the receipt; anything external updates the stack **silently**, and the toolbar tooltip then says "Changed elsewhere: …" so a later `Ctrl+Z` cannot revert another tab's work unannounced.
 
 ### 9.1 Overlay-open deferral contract
 

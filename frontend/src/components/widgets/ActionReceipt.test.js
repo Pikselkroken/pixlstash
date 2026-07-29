@@ -80,12 +80,40 @@ describe("ActionReceipt — states", () => {
     expect(wrapper.find(".kbdhint").attributes("aria-hidden")).toBe("true");
   });
 
-  it("is a polite live region so the outcome is announced, once", async () => {
+  it("announces through one persistent region, not the pill itself", async () => {
     const { wrapper } = mountWith(op());
     await wrapper.vm.$nextTick();
+
+    // The pill carries no live region: a region created at the same moment as
+    // its content announces unreliably, and a burst would create one region
+    // per action and queue a backlog of stale sentences.
     const pill = wrapper.find(".receipt");
-    expect(pill.attributes("role")).toBe("status");
-    expect(pill.attributes("aria-live")).toBe("polite");
+    expect(pill.attributes("role")).toBeUndefined();
+    expect(pill.attributes("aria-live")).toBeUndefined();
+
+    const region = wrapper.find('[data-testid="action-receipt-announcement"]');
+    expect(region.attributes("role")).toBe("status");
+    expect(region.attributes("aria-live")).toBe("polite");
+    expect(region.attributes("aria-atomic")).toBe("true");
+  });
+
+  it("speaks once for a burst rather than reading every step aloud", async () => {
+    const { store, wrapper } = mountWith(op({ summary: "First" }));
+    await wrapper.vm.$nextTick();
+    const region = () =>
+      wrapper.find('[data-testid="action-receipt-announcement"]').text();
+    expect(region()).toBe("");
+
+    store.showReceipt(store.buildReceipt(op({ summary: "Second" }), "did"));
+    await wrapper.vm.$nextTick();
+    vi.advanceTimersByTime(200);
+    store.showReceipt(store.buildReceipt(op({ summary: "Third" }), "did"));
+    await wrapper.vm.$nextTick();
+    expect(region()).toBe("");
+
+    vi.advanceTimersByTime(400);
+    await wrapper.vm.$nextTick();
+    expect(region()).toBe("Third \u00b7 12");
   });
 
   it("shows the coalesced +N when the step carries batch siblings", async () => {
@@ -115,7 +143,7 @@ describe("ActionReceipt — states", () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find(".r-text").text()).toBe(
-      "Undone — Added tag 'portrait' · 12",
+      "Undone: Added tag 'portrait' · 12",
     );
     expect(wrapper.find(".r-btn").text()).toContain("Redo");
     // One pill, never a second stacked below it.
@@ -126,7 +154,7 @@ describe("ActionReceipt — states", () => {
     const { wrapper } = mountWith(op(), "undone", 3);
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".r-text").text()).toBe(
-      "Undone 3 steps — Added tag 'portrait' · 12",
+      "Undone 3 steps: Added tag 'portrait' · 12",
     );
   });
 
@@ -186,6 +214,51 @@ describe("ActionReceipt — pause on hover and focus (WCAG 2.2.1)", () => {
 });
 
 describe("ActionReceipt — the action button", () => {
+  it("keeps the keyboard on the button when the pill flips to Redo", async () => {
+    // Attached to the document: `document.activeElement` only tracks a focus()
+    // call on an element that is actually in the page.
+    const store = useOperationStore();
+    const wrapper = mount(ActionReceipt, {
+      ...globalOpts,
+      attachTo: document.body,
+    });
+    store.showReceipt(store.buildReceipt(op(), "did"));
+    // The pill is REPLACED on flip; without focus restoration the user who
+    // reached Undo by keyboard is dropped to <body> (WCAG 2.4.3).
+    vi.spyOn(store, "undo").mockImplementation(async () => {
+      store.showReceipt(store.buildReceipt(op(), "undone"));
+      return {};
+    });
+    await wrapper.vm.$nextTick();
+
+    const button = wrapper.find(".r-btn");
+    button.element.focus();
+    await button.trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".r-btn").text()).toContain("Redo");
+    expect(document.activeElement).toBe(wrapper.find(".r-btn").element);
+  });
+
+  it("marks itself busy with aria-disabled, never the attribute", async () => {
+    const { store, wrapper } = mountWith(op());
+    store.busy = true;
+    await wrapper.vm.$nextTick();
+    const button = wrapper.find(".r-btn");
+    // A `disabled` button loses focus to <body> the instant it is disabled.
+    expect(button.attributes("disabled")).toBeUndefined();
+    expect(button.attributes("aria-disabled")).toBe("true");
+  });
+
+  it("advertises its shortcut in a way that survives the hidden keycaps", async () => {
+    const { wrapper } = mountWith(op());
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".r-btn").attributes("aria-keyshortcuts")).toMatch(
+      /Control\+Z|Meta\+Z/,
+    );
+  });
+
   it("undoes from the default state", async () => {
     const { store, wrapper } = mountWith(op());
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);

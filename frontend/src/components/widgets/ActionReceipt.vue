@@ -27,11 +27,25 @@
  * measured border box is the FULL height this component occupies on the bottom
  * edge — which is exactly what the anchor registry needs to report.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 
 import { useBottomAnchor } from "../../composables/useBottomAnchor";
 import { useOperationStore } from "../../stores/useOperationStore";
-import { redoKeyHint, undoKeyHint } from "../../utils/shortcutHints";
+import {
+  isApplePlatform,
+  redoKeyHint,
+  undoKeyHint,
+} from "../../utils/shortcutHints";
+
+/** Settling window before the live region speaks, so a burst reads once. */
+const ANNOUNCE_THROTTLE_MS = 350;
 
 const props = defineProps({
   /**
@@ -70,11 +84,22 @@ const text = computed(() => {
   const entry = receipt.value;
   if (!entry) return "";
   if (undone.value && entry.steps > 1) {
-    return `Undone ${entry.steps} steps — ${entry.summary}`;
+    return `Undone ${entry.steps} steps: ${entry.summary}`;
   }
-  if (undone.value) return `Undone — ${entry.summary}`;
+  if (undone.value) return `Undone: ${entry.summary}`;
   return entry.summary;
 });
+
+/** The standard attribute for "this control has a keyboard shortcut". */
+const actionKeyShortcut = computed(() =>
+  undone.value
+    ? isApplePlatform()
+      ? "Shift+Meta+Z"
+      : "Control+Y"
+    : isApplePlatform()
+      ? "Meta+Z"
+      : "Control+Z",
+);
 
 // The drain's duration is a dismissal timeout, not a motion token: the motion
 // scale tops out at 420ms. It is handed to CSS as a custom property so the
@@ -92,9 +117,23 @@ const wrapperStyle = computed(() => ({
 const wrapperEl = ref(null);
 useBottomAnchor("action-receipt", wrapperEl);
 
-function onUndo() {
-  if (undone.value) store.redo();
-  else store.undo();
+/**
+ * Take the action and keep the keyboard where it was.
+ *
+ * The pill is REPLACED (a new node, keyed on the store's raise counter) when
+ * undo flips it to "Undone … Redo". Without this, a user who reached Undo with
+ * the keyboard has focus dropped to `<body>` and has to tab from the top of the
+ * document to reach the Redo the flip just produced — WCAG 2.4.3. The button is
+ * `aria-disabled` rather than `disabled` for the same reason: disabling a
+ * focused control moves focus off it.
+ */
+async function onUndo(event) {
+  if (store.busy) return;
+  const hadFocus = event?.currentTarget === document.activeElement;
+  await (undone.value ? store.redo() : store.undo());
+  if (!hadFocus) return;
+  await nextTick();
+  wrapperEl.value?.querySelector?.(".r-btn")?.focus?.();
 }
 
 // WCAG 2.2.1 — the countdown freezes on hover and on focus-within, and the CSS
@@ -124,13 +163,32 @@ onBeforeUnmount(() => {
   if (typeof document !== "undefined") {
     document.removeEventListener("visibilitychange", onVisibilityChange);
   }
+  if (announceTimer != null) clearTimeout(announceTimer);
 });
 
 // Keyed on the store's raise counter so a receipt REPLACED in place still
-// remounts: the drain has to restart, and a live region whose text is swapped
-// without a node change is announced unreliably. Nothing autofocuses, so the
-// remount cannot steal focus from the grid.
+// remounts and the drain restarts from full. The pill is deliberately NOT the
+// live region: a region created at the same moment as its content announces
+// unreliably, and a burst of actions would create one region per action and
+// queue a backlog of stale sentences. The announcement rides a single
+// persistent region instead (notice-surface.md §8).
 const pillKey = computed(() => receipt.value?.key ?? 0);
+
+// What the persistent region says. Throttled so a burst announces the outcome
+// once, rather than reading every intermediate step aloud.
+const announcement = ref("");
+let announceTimer = null;
+watch(text, (value) => {
+  if (announceTimer != null) clearTimeout(announceTimer);
+  if (!value) {
+    announcement.value = "";
+    return;
+  }
+  announceTimer = setTimeout(() => {
+    announceTimer = null;
+    announcement.value = value;
+  }, ANNOUNCE_THROTTLE_MS);
+});
 
 // A receipt raised while the tab is hidden starts with a running countdown
 // (the store arms it unconditionally). Re-apply the hidden-tab pause so it does
@@ -148,6 +206,16 @@ watch(pillKey, () => {
     :style="wrapperStyle"
     data-testid="action-receipt-slot"
   >
+    <!-- One persistent region, always mounted, so an announcement is never
+         raced by the node that carries it. -->
+    <span
+      class="visually-hidden"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      data-testid="action-receipt-announcement"
+      >{{ announcement }}</span
+    >
     <transition name="receipt">
       <div
         v-if="receipt"
@@ -155,8 +223,6 @@ watch(pillKey, () => {
         class="receipt"
         :class="{ 'receipt--undone': undone, 'receipt--blocked': blocked }"
         :style="drainStyle"
-        role="status"
-        aria-live="polite"
         @mouseenter="pause"
         @mouseleave="resume"
         @focusin="pause"
@@ -172,7 +238,8 @@ watch(pillKey, () => {
           <button
             type="button"
             class="r-btn"
-            :disabled="store.busy"
+            :aria-disabled="store.busy"
+            :aria-keyshortcuts="actionKeyShortcut"
             @click="onUndo"
           >
             <v-icon size="16">{{ actionGlyph }}</v-icon>
@@ -201,6 +268,9 @@ watch(pillKey, () => {
   display: flex;
   justify-content: center;
   pointer-events: none;
+  /* The lift changes when the selection pill appears or leaves; without this
+     the receipt jumps instead of moving with it. */
+  transition: padding-bottom var(--dur-2) var(--ease-standard);
 }
 
 /* Visually identical to `.floating-selection-bar`, deliberately: the two share
@@ -284,14 +354,17 @@ watch(pillKey, () => {
   text-underline-offset: 2px;
   cursor: pointer;
 }
-.r-btn:hover:not(:disabled) {
+.r-btn:hover:not([aria-disabled="true"]) {
   background: var(--hover-wash);
 }
 .r-btn:focus-visible {
   box-shadow: var(--focus-ring);
   outline: none;
 }
-.r-btn:disabled {
+/* `aria-disabled`, never the attribute: disabling a control the keyboard is
+   currently ON moves focus to <body>, and this button flips to Redo the moment
+   the round trip lands. */
+.r-btn[aria-disabled="true"] {
   opacity: 0.35;
   cursor: default;
 }

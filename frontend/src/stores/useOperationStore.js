@@ -44,6 +44,15 @@ export const HISTORY_LIMIT = 50;
 export const RECEIPT_MS = 5000;
 export const DESTRUCTIVE_RECEIPT_MS = 8000;
 
+/** Trailing-edge window for WS-driven re-reads. */
+export const WS_REFRESH_DEBOUNCE_MS = 400;
+
+/**
+ * How many Ctrl+Z presses may queue behind an in-flight undo. A cap, because a
+ * held key or a panicked burst should not walk the whole stack.
+ */
+export const MAX_QUEUED_STEPS = 5;
+
 /**
  * `op_type` → mdi glyph. Exact matches first; anything unknown falls through
  * `OP_ICON_RULES` and finally to `FALLBACK_ICON`.
@@ -139,7 +148,10 @@ export function summarizeOperation(operation) {
   const raw = String(operation.summary ?? "").trim();
   const base = raw || humanizeOpType(operation.op_type);
   const count = Number(operation.target_count);
-  if (Number.isFinite(count) && count > 1) return `${base} · ${count}`;
+  // Grouped, like every other count in the product: "2,700", not "2700".
+  if (Number.isFinite(count) && count > 1) {
+    return `${base} · ${count.toLocaleString()}`;
+  }
   return base;
 }
 
@@ -200,6 +212,14 @@ export const useOperationStore = defineStore("operation", () => {
   let inFlight = false;
   let refetchQueued = false;
 
+  // Trailing-edge debounce for WS-driven re-reads, and whether anything in the
+  // current window came from this client (and may therefore narrate itself).
+  let wsDebounceTimer = null;
+  let wsNarrate = false;
+
+  // Ctrl+Z presses waiting behind an in-flight undo.
+  let queuedUndos = 0;
+
   // ── Derived history ──────────────────────────────────────────────────────
   /**
    * The undo stack, newest first, capped at `HISTORY_LIMIT`. Only `applied`
@@ -228,6 +248,23 @@ export const useOperationStore = defineStore("operation", () => {
   const hasHistory = computed(
     () => past.value.length > 0 || future.value.length > 0,
   );
+
+  /**
+   * Was the step Ctrl+Z would take back done somewhere else?
+   *
+   * An external operation updates the stack silently (a pill offering to undo
+   * something the user did not just do is a trap), but the CONSEQUENCE is that
+   * the undo target quietly becomes another tab's action while the control
+   * looks unchanged. The affordance has to say so before it reverts something
+   * the user never did.
+   */
+  const nextUndoIsExternal = computed(() => {
+    if (!nextUndo.value) return false;
+    const origin = nextUndo.value.origin_client_id;
+    // No origin at all means a background job — also not this tab.
+    if (!origin) return true;
+    return origin !== myClientId();
+  });
 
   function myClientId() {
     try {
@@ -414,6 +451,11 @@ export const useOperationStore = defineStore("operation", () => {
    * Origin is read from the event `data` (never a contextvar, never a guess),
    * and only to decide whether the change may narrate itself.
    *
+   * Debounced on the trailing edge: a bulk action over thousands of pictures
+   * emits a continuous stream of these, and the stack does not need to be
+   * sub-second fresh. Without it the two reads would poll back to back at
+   * round-trip speed for the whole run.
+   *
    * @param {Object} payload - the parsed WS envelope.
    * @returns {Promise<void>} resolves once the re-read has landed.
    */
@@ -421,37 +463,96 @@ export const useOperationStore = defineStore("operation", () => {
     if (isReadOnly.value || !payload) return Promise.resolve();
     const mine =
       payload.origin_client_id && payload.origin_client_id === myClientId();
-    return refresh({ narrate: Boolean(mine) });
+    // Any own-origin event in the window makes the whole window narratable:
+    // dropping the flag because a background job's event arrived last would
+    // silently swallow the user's own receipt.
+    wsNarrate = wsNarrate || Boolean(mine);
+    if (wsDebounceTimer != null) clearTimeout(wsDebounceTimer);
+    return new Promise((resolve) => {
+      wsDebounceTimer = setTimeout(() => {
+        wsDebounceTimer = null;
+        const narrate = wsNarrate;
+        wsNarrate = false;
+        refresh({ narrate }).then(resolve, resolve);
+      }, WS_REFRESH_DEBOUNCE_MS);
+    });
   }
 
   // ── Mutations ────────────────────────────────────────────────────────────
+  /**
+   * Surface a failed undo/redo. Three shapes, because they mean three things:
+   *
+   *   409 — the stack moved under you (another tab got there first, or a new
+   *         action superseded the redo stack). Ordinary, not a defect.
+   *   423 — a locked picture set froze one of the targets. A state, not a
+   *         failure: the user has to unlock the set, and the server's detail
+   *         names it.
+   *   else — a real error, which stays until dismissed.
+   */
   function reportFailure(action, error) {
     const detail = error?.response?.data?.detail;
     const status = error?.response?.status;
-    // 409 is the ordinary "the stack moved under you" answer, not a defect:
-    // another tab undid it first, or a new action superseded the redo stack.
-    const text =
-      status === 409
-        ? (detail ?? `Nothing left to ${action}.`)
-        : (detail ?? `Could not ${action}. ${error?.message ?? ""}`.trim());
+    let level = "error";
+    let text;
+    if (status === 409) {
+      level = "warning";
+      text = detail ?? `Nothing left to ${action}.`;
+    } else if (status === 423) {
+      level = "warning";
+      text =
+        detail ??
+        `Could not ${action}: a locked picture set has frozen one of the pictures. Unlock the set to change it.`;
+    } else {
+      text = detail ?? `Could not ${action}. ${error?.message ?? ""}`.trim();
+    }
     console.warn(`useOperationStore: ${action} failed`, error);
+    // A receipt still offering the action that just failed is a lie; retire it
+    // before the notice explains what happened.
+    dismissReceipt();
     try {
-      useNoticeStore().push({
-        level: status === 409 ? "warning" : "error",
-        text,
-        key: `operation-${action}`,
-      });
+      useNoticeStore().push({ level, text, key: `operation-${action}` });
     } catch (e) {
       console.warn("useOperationStore: could not surface the failure", e);
     }
   }
 
   /**
+   * Tell the user that a shortcut they pressed had nothing to act on. A global
+   * key binding that silently does nothing is the one unacceptable answer:
+   * the user cannot tell it from a broken feature.
+   */
+  function reportNothingToDo(action) {
+    try {
+      useNoticeStore().push({
+        level: "info",
+        text: `Nothing to ${action}.`,
+        key: `operation-nothing-to-${action}`,
+      });
+    } catch (e) {
+      console.warn("useOperationStore: could not surface the empty stack", e);
+    }
+  }
+
+  /**
    * Undo the newest reversible operation (and its whole batch).
+   *
+   * Pressing Ctrl+Z repeatedly is the canonical undo idiom, and each press
+   * takes a round trip. A press that lands while one is in flight is QUEUED
+   * (up to `MAX_QUEUED_STEPS`) rather than dropped, or four of five presses
+   * would silently do nothing.
+   *
    * @returns {Promise<Object|null>} the API result, or null when it failed.
    */
   async function undo() {
-    if (isReadOnly.value || busy.value || !canUndo.value) return null;
+    if (isReadOnly.value) return null;
+    if (busy.value) {
+      if (queuedUndos < MAX_QUEUED_STEPS) queuedUndos += 1;
+      return null;
+    }
+    if (!canUndo.value) {
+      reportNothingToDo("undo");
+      return null;
+    }
     const target = nextUndo.value;
     busy.value = true;
     try {
@@ -461,11 +562,18 @@ export const useOperationStore = defineStore("operation", () => {
       if (reverted) showReceipt(buildReceipt(reverted, "undone"));
       return result;
     } catch (e) {
+      queuedUndos = 0;
       reportFailure("undo", e);
       await refresh({ narrate: false });
       return null;
     } finally {
       busy.value = false;
+      if (queuedUndos > 0 && canUndo.value) {
+        queuedUndos -= 1;
+        undo();
+      } else {
+        queuedUndos = 0;
+      }
     }
   }
 
@@ -474,7 +582,11 @@ export const useOperationStore = defineStore("operation", () => {
    * @returns {Promise<Object|null>} the API result, or null when it failed.
    */
   async function redo() {
-    if (isReadOnly.value || busy.value || !canRedo.value) return null;
+    if (isReadOnly.value || busy.value) return null;
+    if (!canRedo.value) {
+      reportNothingToDo("redo");
+      return null;
+    }
     const target = nextRedo.value;
     busy.value = true;
     try {
@@ -521,6 +633,22 @@ export const useOperationStore = defineStore("operation", () => {
 
     busy.value = true;
     let reverted = 0;
+    // One POST per step: a 20-step walk on a slow link would otherwise look
+    // like the app froze, with the popover shut and both buttons greyed until
+    // a receipt appeared from nowhere. Say what is happening while it happens.
+    const progressKey = steps > 1 ? "operation-undo-progress" : null;
+    if (progressKey) {
+      try {
+        useNoticeStore().push({
+          level: "info",
+          text: `Undoing ${steps} steps…`,
+          timeout: 0,
+          key: progressKey,
+        });
+      } catch (e) {
+        console.warn("useOperationStore: could not report undo progress", e);
+      }
+    }
     try {
       while (pending.length) {
         const id = pending.shift();
@@ -541,6 +669,16 @@ export const useOperationStore = defineStore("operation", () => {
       return reverted;
     } finally {
       busy.value = false;
+      if (progressKey) {
+        try {
+          useNoticeStore().dismissByKey(progressKey);
+        } catch (e) {
+          console.warn(
+            "useOperationStore: could not retire the progress notice",
+            e,
+          );
+        }
+      }
     }
   }
 
@@ -573,6 +711,10 @@ export const useOperationStore = defineStore("operation", () => {
   /** Drop every trace of the previous session (logout / vault switch). */
   function reset() {
     dismissReceipt();
+    if (wsDebounceTimer != null) clearTimeout(wsDebounceTimer);
+    wsDebounceTimer = null;
+    wsNarrate = false;
+    queuedUndos = 0;
     operations.value = [];
     canUndo.value = false;
     canRedo.value = false;
@@ -597,6 +739,7 @@ export const useOperationStore = defineStore("operation", () => {
     future,
     historyCount,
     hasHistory,
+    nextUndoIsExternal,
     // actions
     refresh,
     onPictureEvent,

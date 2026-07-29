@@ -133,6 +133,17 @@ describe("UndoControl — enablement", () => {
     );
   });
 
+  it("says when the undo target came from somewhere else", () => {
+    const store = useOperationStore();
+    seed(store, [op({ origin_client_id: "another-tab" })]);
+    const wrapper = mount(UndoControl, globalOpts);
+    // External operations update the stack silently, so the control has to say
+    // so before it reverts something this user never did.
+    expect(wrapper.find(".uc-btn--undo").attributes("title")).toContain(
+      "Changed elsewhere:",
+    );
+  });
+
   it("names the exact step and its shortcut once there is history", () => {
     const store = useOperationStore();
     seed(store, [op()]);
@@ -196,7 +207,7 @@ describe("UndoControl — the History popover", () => {
     const { wrapper } = await mountOpen([op({ id: 12 }), op({ id: 11 })]);
     expect(wrapper.find(".uc-count").text()).toBe("2 steps");
     expect(wrapper.find(".tbm-footer").text()).toContain(
-      "Click a step to undo back to it",
+      "Choose a step to undo back to it",
     );
   });
 
@@ -233,11 +244,33 @@ describe("UndoControl — the hover preview", () => {
     expect(wrapper.find(".tbm-footer").text()).toContain("Undo 1 step");
   });
 
-  it("clears the preview when the pointer leaves the list", async () => {
+  it("clears the preview only when the pointer leaves the whole panel", async () => {
     const { wrapper } = await mountOpen([op({ id: 13 }), op({ id: 12 })]);
     await wrapper.findAll(".uc-row")[1].trigger("mouseenter");
+    // Moving from a row toward the footer must not wipe the readout the user
+    // is moving to read, so the reset lives on the panel, not on the list.
     await wrapper.find(".uc-list").trigger("mouseleave");
+    expect(wrapper.findAll(".uc-row--willundo")).toHaveLength(2);
+
+    await wrapper.find(".uc-panel").trigger("mouseleave");
     expect(wrapper.findAll(".uc-row--willundo")).toHaveLength(0);
+  });
+
+  it("keeps the preview pinned to the step, not to its position", async () => {
+    const { store, wrapper } = await mountOpen([
+      op({ id: 13 }),
+      op({ id: 12 }),
+      op({ id: 11 }),
+    ]);
+    await wrapper.findAll(".uc-row")[1].trigger("mouseenter");
+    expect(wrapper.find(".tbm-footer").text()).toContain("Undo 2 steps");
+
+    // Another tab records a step while the popover is open. A positional index
+    // would now describe a different range than the user is looking at.
+    store.operations = [op({ id: 14 }), ...store.operations];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tbm-footer").text()).toContain("Undo 3 steps");
+    expect(wrapper.findAll(".uc-row--willundo")).toHaveLength(3);
   });
 });
 
@@ -282,18 +315,61 @@ describe("UndoControl — keyboard reachability", () => {
     }
   });
 
-  it("labels each history row with what activating it would do", async () => {
+  it("labels each history row with what activating it would do, and how far", async () => {
+    const { wrapper } = await mountOpen([op({ id: 13 }), op({ id: 12 })]);
+    const labels = wrapper
+      .findAll(".uc-row")
+      .map((r) => r.attributes("aria-label"));
+    // The step count rides the row rather than a chatty live region in the
+    // footer, which would read one sentence per row swept.
+    expect(labels[0]).toBe("Undo back to: Added tag 'portrait' · 12 (1 step)");
+    expect(labels[1]).toBe("Undo back to: Added tag 'portrait' · 12 (2 steps)");
+  });
+
+  it("activates a row from the keyboard", async () => {
+    const { store, wrapper } = await mountOpen([
+      op({ id: 13 }),
+      op({ id: 12 }),
+    ]);
+    const undoTo = vi.spyOn(store, "undoTo").mockResolvedValue(1);
+    // Vuetify's menu preventDefaults Enter on its content, which suppresses
+    // the synthesized click, so the row has to handle Enter itself.
+    await wrapper.findAll(".uc-row")[0].trigger("keydown.enter");
+    expect(undoTo).toHaveBeenCalledWith(13);
+  });
+
+  it("labels the popover as a dialog, not as a menu it does not implement", async () => {
     const { wrapper } = await mountOpen([op({ id: 13 })]);
-    expect(wrapper.find(".uc-row").attributes("aria-label")).toBe(
-      "Undo back to: Added tag 'portrait' · 12",
+    // No roving arrow-key navigation is implemented, so claiming role=menu
+    // would promise a keyboard contract that is not owed and not honoured.
+    const panel = wrapper.find(".uc-panel");
+    expect(panel.attributes("role")).toBe("dialog");
+    expect(panel.attributes("aria-label")).toBe("History");
+    expect(wrapper.find(".uc-btn--chevron").attributes("aria-expanded")).toBe(
+      "true",
     );
   });
 
-  it("announces the popover as an expandable menu", () => {
-    useOperationStore();
-    const wrapper = mount(UndoControl, globalOpts);
-    const chevron = wrapper.find(".uc-btn--chevron");
-    expect(chevron.attributes("aria-haspopup")).toBe("menu");
-    expect(chevron.attributes("aria-expanded")).toBe("false");
+  it("returns focus to the chevron when the popover closes on a pick", async () => {
+    const store = useOperationStore();
+    seed(store, [op({ id: 13 }), op({ id: 12 })]);
+    const wrapper = mount(UndoControl, {
+      ...globalOpts,
+      attachTo: document.body,
+    });
+    vi.spyOn(store, "undoTo").mockResolvedValue(1);
+    await wrapper.find(".uc-btn--chevron").trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    await wrapper.findAll(".uc-row")[0].trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    // Vuetify restores focus on Esc and Tab-past-last, but not on a
+    // programmatic close: without this the row is unmounted under the keyboard
+    // and focus lands on <body>.
+    expect(document.activeElement).toBe(
+      wrapper.find(".uc-btn--chevron").element,
+    );
   });
 });
