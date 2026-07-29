@@ -74,6 +74,16 @@ export const QUEUE_PAGE_SIZE = 20;
 export const PREFETCH_MARGIN = 3;
 
 /**
+ * The most groups one Ctrl+A may take.
+ *
+ * A selection is not free: every verdict given to it is one request per group,
+ * and the queue's founding rule is never to hold the whole thing in memory. A
+ * ceiling keeps both bounded on a library with tens of thousands of duplicates;
+ * the gesture reports when it hits one, so "all" never quietly means "some".
+ */
+export const SELECT_ALL_MAX = 500;
+
+/**
  * The smallest stack the server will create.
  *
  * A stack is a grouping row over two or more pictures, so one member is not a
@@ -216,6 +226,9 @@ export const useDedupStore = defineStore("dedup", () => {
   const hasMore = ref(false);
   const focusIndex = ref(0);
   const loading = ref(false);
+  // The page request currently on the wire, so a second caller joins it instead
+  // of being dropped by the busy guard. Not a ref: nothing renders from it.
+  let pageInFlight = null;
   const loadingMore = ref(false);
   const error = ref(null);
   const busy = ref(false);
@@ -696,20 +709,42 @@ export const useDedupStore = defineStore("dedup", () => {
    * costs a Set per page and it is the thing that keeps a mid-flight switch
    * between the two seamless.
    *
+   * A caller that arrives while a page is already in flight JOINS it rather
+   * than being dropped: `selectAll` pages in a loop and has to know when each
+   * page has actually landed, and the view's scroll handler can fire in the
+   * middle of that loop.
+   *
+   * @param {Object} [options]
+   * @param {number} [options.limit] - page size, defaulting to the queue's.
+   *   Clamped to the server's published maximum.
    * @returns {Promise<void>}
    */
-  async function loadMore() {
-    if (!hasMore.value || loadingMore.value || loading.value) return;
+  function loadMore(options = {}) {
+    if (!hasMore.value || loading.value) return Promise.resolve();
+    if (pageInFlight) return pageInFlight;
+    pageInFlight = fetchNextPage(options).finally(() => {
+      pageInFlight = null;
+    });
+    return pageInFlight;
+  }
+
+  /** The page request itself. Never called directly — go through `loadMore`. */
+  async function fetchNextPage({ limit } = {}) {
     loadingMore.value = true;
     try {
       const cursor = nextCursor.value;
+      const ceiling = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
+      const pageSize = Math.min(
+        Math.max(Number(limit) || QUEUE_PAGE_SIZE, 1),
+        ceiling,
+      );
       const data = await listGroups({
         ...policyArgs.value,
         scopeType: scopeType.value,
         scopeId: scopeId.value,
         decided: showingDecided.value,
         ...(cursor === null ? { offset: nextOffset.value } : { cursor }),
-        limit: QUEUE_PAGE_SIZE,
+        limit: pageSize,
       });
       const page = Array.isArray(data?.groups) ? data.groups : [];
       const seen = new Set(groups.value.map((g) => g.signature));
@@ -804,12 +839,40 @@ export const useDedupStore = defineStore("dedup", () => {
     setFocus(index);
   }
 
-  /** Ctrl+A: every loaded group. Selection is a client-side gesture, so it
-   * covers what is loaded — the pages the user has actually seen. */
-  function selectAll() {
-    if (!groups.value.length) return;
+  /**
+   * Ctrl+A: every group in the queue, not just the pages already fetched.
+   *
+   * Selecting "what happens to be loaded" made the gesture mean a different
+   * thing depending on how far the user had scrolled — 40 groups out of 300,
+   * with nothing on screen saying so. So this pages the rest in first, at the
+   * server's maximum page size rather than the queue's browsing page size.
+   *
+   * It stops at {@link SELECT_ALL_MAX}, because the selection is not free: a
+   * verdict on it is one request per group, and the queue's own rule is never
+   * to hold the whole thing in memory. Hitting the ceiling is reported rather
+   * than hidden, so "all" never silently means "some".
+   *
+   * @returns {Promise<{selected: number, total: number, truncated: boolean}>}
+   */
+  async function selectAll() {
+    if (!groups.value.length) {
+      return { selected: 0, total: 0, truncated: false };
+    }
+    const pageSize = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
+    while (hasMore.value && groups.value.length < SELECT_ALL_MAX) {
+      const before = groups.value.length;
+      await loadMore({ limit: pageSize });
+      // A page that added nothing is the end of the queue, whatever `hasMore`
+      // still claims. Without this the loop would spin on a failed request.
+      if (groups.value.length === before) break;
+    }
     selectedSignatures.value = new Set(groups.value.map((g) => g.signature));
     selectionAnchor = null;
+    return {
+      selected: selectedSignatures.value.size,
+      total: Math.max(total.value, selectedSignatures.value.size),
+      truncated: hasMore.value,
+    };
   }
 
   /** Shift+click: select the whole run from the anchor to `index`. */

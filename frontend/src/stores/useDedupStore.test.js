@@ -23,7 +23,12 @@ import {
   reopenGroup,
   autoStackExact,
 } from "../api/dedup";
-import { useDedupStore, scopeKey, QUEUE_PAGE_SIZE } from "./useDedupStore";
+import {
+  useDedupStore,
+  scopeKey,
+  QUEUE_PAGE_SIZE,
+  SELECT_ALL_MAX,
+} from "./useDedupStore";
 
 /** The bounds `GET /dedup/policy` publishes, as the shipped backend does. */
 const BOUNDS = {
@@ -1299,5 +1304,82 @@ describe("useDedupStore — the thumbnail size", () => {
     setActivePinia(createPinia());
     expect(useDedupStore().sizeLevel).toBe(3);
     spy.mockRestore();
+  });
+});
+
+describe("useDedupStore — Ctrl+A", () => {
+  // The bug this replaces: select-all took whatever pages had been fetched, so
+  // the gesture meant "40 groups" or "300" depending on how far the user had
+  // scrolled, and nothing said which.
+  it("pages the rest of the queue in and selects every group", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 55 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    expect(store.groups.length).toBe(20);
+    listGroups.mockClear();
+
+    let served = 20;
+    listGroups.mockImplementation(async ({ limit }) => {
+      const size = Math.min(limit, 55 - served);
+      const page = Array.from({ length: size }, (_, i) =>
+        group(`g${served + i + 1}`),
+      );
+      served += size;
+      return { groups: page, total: 55, offset: served, limit };
+    });
+
+    const result = await store.selectAll();
+    expect(result).toEqual({ selected: 55, total: 55, truncated: false });
+    expect(store.selectionCount).toBe(55);
+    // At the server's page size, not the queue's browsing one: 20 held, then
+    // one request for the remaining 35.
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.calls[0][0].limit).toBe(200);
+  });
+
+  // "All" must never quietly mean "some": a bulk verdict on a set the user
+  // never saw the size of is exactly what the ceiling has to be honest about.
+  it("stops at the ceiling and says that it did", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 5000 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+
+    let served = 20;
+    listGroups.mockImplementation(async ({ limit }) => {
+      const page = Array.from({ length: limit }, (_, i) =>
+        group(`g${served + i + 1}`),
+      );
+      served += limit;
+      return { groups: page, total: 5000, offset: served, limit };
+    });
+
+    const result = await store.selectAll();
+    expect(result.truncated).toBe(true);
+    expect(result.total).toBe(5000);
+    expect(result.selected).toBeGreaterThanOrEqual(SELECT_ALL_MAX);
+    // Bounded: it stops one page past the ceiling at most, never runs the queue.
+    expect(store.groups.length).toBeLessThan(SELECT_ALL_MAX + 200);
+  });
+
+  it("gives up on a page that adds nothing rather than spinning", async () => {
+    servePage([group("g1"), group("g2")], { total: 900 });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    // A server that keeps saying "there is more" and serving nothing.
+    listGroups.mockClear();
+    listGroups.mockResolvedValue({ groups: [], total: 900, offset: 2, limit: 200 });
+
+    const result = await store.selectAll();
+    expect(result.selected).toBe(2);
+    expect(listGroups).toHaveBeenCalledTimes(1);
   });
 });

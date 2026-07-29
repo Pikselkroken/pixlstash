@@ -107,6 +107,9 @@ function isActivatableTarget(event) {
  * @param {function(): void} deps.closeCompare
  * @param {function(): void} deps.undo - the shared operation-store undo.
  * @param {function(): boolean} [deps.isReadOnly] - defaults to never read-only.
+ * @param {function(): void} [deps.selectAll] - what `Ctrl+A` runs. Defaults to
+ *   the store's action; the view overrides it to narrate the result, which it
+ *   has to await.
  * @param {function(): boolean} [deps.isBlocked] - an extra decline hook for a
  *   modal that is not Compare (the auto-stack dialog uses it).
  * @param {function(): void} [deps.onEscape] - what `Escape` does when Compare
@@ -150,6 +153,7 @@ export function createDedupKeyHandler({
   isBlocked = () => false,
   onEscape = () => {},
   onExclusionRefused = () => {},
+  selectAll = null,
   pageRows = () => DEFAULT_PAGE_ROWS,
   zoom = NO_ZOOM,
 }) {
@@ -215,9 +219,9 @@ export function createDedupKeyHandler({
       undo();
       return;
     }
-    // Select-all is the second chord the queue claims: every loaded group, on
-    // the open queue and the Decided page alike. Claimed so the browser does
-    // not also select the page's text.
+    // Select-all is the second chord the queue claims: every group in the
+    // queue, on the open queue and the Decided page alike. Claimed so the
+    // browser does not also select the page's text.
     if (
       (event.ctrlKey || event.metaKey) &&
       !event.altKey &&
@@ -227,7 +231,8 @@ export function createDedupKeyHandler({
       !isBlocked()
     ) {
       claim(event);
-      store.selectAll?.();
+      if (selectAll) selectAll();
+      else store.selectAll?.();
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;

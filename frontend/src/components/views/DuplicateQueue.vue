@@ -967,6 +967,28 @@ async function confirmAutoStack() {
 
 const compareRef = ref(null);
 
+/**
+ * Select every group in the queue and say what that came to.
+ *
+ * Ctrl+A pages the rest of the queue in, so it is not instant and it can stop
+ * short of the whole thing. Both facts have to be said out loud: a gesture
+ * called "select all" that quietly took 500 of 5,000 would put a bulk verdict
+ * on a set the user never saw the size of.
+ */
+async function onSelectAll() {
+  const { selected, total, truncated } = await store.selectAll();
+  if (!selected) return;
+  const count = selected.toLocaleString();
+  announcement.value = truncated
+    ? `Selected ${count} of ${total.toLocaleString()} groups, the most confident ones. That is as many as one selection can hold.`
+    : `Selected all ${count} ${selected === 1 ? "group" : "groups"}.`;
+  if (truncated) {
+    noticeStore.info(
+      `Selected the ${count} most confident groups. That is as many as one selection can hold, so the rest of the queue is untouched.`,
+    );
+  }
+}
+
 const onKeydown = createDedupKeyHandler({
   store,
   isCompareOpen: () => compareOpen.value,
@@ -984,6 +1006,7 @@ const onKeydown = createDedupKeyHandler({
   onExclusionRefused: () => {
     announcement.value = STACK_FLOOR_NOTICE;
   },
+  selectAll: onSelectAll,
   // The blink compare's state lives in the dialog; its KEYS live in the one
   // keyboard model, driven through the dialog's exposed surface.
   zoom: {

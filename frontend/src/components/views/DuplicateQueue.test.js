@@ -744,3 +744,30 @@ describe("DuplicateQueue — a read-only session", () => {
     wrapper.unmount();
   });
 });
+
+describe("DuplicateQueue — Ctrl+A", () => {
+  // Ctrl+A pages the queue in, so it is not instant and it can stop short.
+  // Both facts are narrated: a bulk verdict on a set whose size the user never
+  // saw is exactly what the announcement is for.
+  it("narrates what Ctrl+A actually selected", async () => {
+    const page1 = Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(page1, { total: 30 });
+    listGroups.mockResolvedValue({
+      groups: Array.from({ length: 10 }, (_, i) => group(`g${i + 21}`)),
+      total: 30,
+      offset: 30,
+      limit: 200,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+
+    await wrapper.find(".dq").trigger("keydown", { key: "a", ctrlKey: true });
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectionCount).toBe(30);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Selected all 30 groups",
+    );
+    wrapper.unmount();
+  });
+});
