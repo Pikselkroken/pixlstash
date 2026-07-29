@@ -77,6 +77,9 @@ curl "https://your-pixlstash-host/api/v1/pictures/export/download/$task" \\
 
 > **Trash:** `DELETE /pictures/{id}` moves a picture to the *scrapheap* (recoverable via
 > `POST /pictures/scrapheap/restore`); `DELETE /pictures/scrapheap` purges it for good.
+> Both scrapheap *moves* and *restores* are recorded in the operation log
+> (`pictures.scrapheap.move` / `pictures.scrapheap.restore`) and are reversible with
+> `POST /operations/undo`. A purge is **not** recorded and cannot be undone.
 """
 
 
