@@ -109,6 +109,7 @@ from pixlstash.db_models.face import Face
 from pixlstash.db_models.tag import Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -138,8 +139,27 @@ MAX_PAGE_SIZE = 200
 
 MAX_BUCKET_MEMBERS = 4000
 """Cap on one tier-2 bucket. The within-bucket comparison is O(k^2) popcounts,
-which numpy does in milliseconds at k=4000 (~8M pairs); beyond that the bucket is
-split by hash prefix rather than being dropped, so nothing is silently skipped."""
+which numpy does in milliseconds at k=4000 (~8M comparisons); beyond that the
+bucket is split into shards rather than being dropped, so nothing is silently
+skipped. This bounds **CPU**, not memory — see :data:`MAX_PAIRS_PER_BUCKET`."""
+
+MAX_PAIRS_PER_BUCKET = 50_000
+"""Cap on the *materialised* near-pairs of one bucket.
+
+``MAX_BUCKET_MEMBERS`` bounds the comparison work; it does not bound the result.
+A bucket whose members are mutually near-identical (a burst of near-black frames,
+a folder of solid-colour placeholders, one image copied 4000 times) yields
+``k*(k-1)/2`` pairs: ~8M tuples, roughly 580 MB, for a component the union-find
+only needs a spanning subset of. 50 000 pairs is ~4 MB and still connects every
+matching member of any realistic bucket. Hitting it logs a warning naming the
+bucket — the cap is never silent."""
+
+MAX_TRACKED_PAIRS = 400_000
+"""Cap on the pairs a whole streaming scan keeps in memory across buckets.
+
+A scan holds pairs from every finished bucket so a chain spanning two buckets
+becomes one group. That set is what grows without bound over a large library;
+capping it at ~32 MB keeps the scan's footprint flat. Reaching it is logged."""
 
 PHASH_BITS = 64
 PHASH_HEX_LEN = PHASH_BITS // 4
@@ -204,6 +224,15 @@ class ScopeType(str, Enum):
     FOLDER = "folder"
 
 
+_NUMERIC_SCOPE_TYPES = frozenset(
+    {ScopeType.PROJECT, ScopeType.SET, ScopeType.CHARACTER}
+)
+"""Scopes whose ``scope_id`` is a row id and must parse as an integer."""
+
+LIKE_ESCAPE_CHAR = "\\"
+"""Escape character for the folder scope's ``LIKE`` prefix match."""
+
+
 @dataclass(frozen=True)
 class DedupScope:
     """A scan / count scope and the SQL that narrows a picture query to it.
@@ -222,8 +251,23 @@ class DedupScope:
             object.__setattr__(self, "scope_type", ScopeType(str(self.scope_type)))
         if self.scope_type is ScopeType.GLOBAL:
             object.__setattr__(self, "scope_id", None)
-        elif self.scope_id is None or str(self.scope_id) == "":
+            return
+        if self.scope_id is None or str(self.scope_id) == "":
             raise ValueError(f"scope_id is required for scope_type={self.scope_type}")
+        if self.scope_type in _NUMERIC_SCOPE_TYPES:
+            # Validate at construction, not at query time. The id reaches SQL as
+            # ``int(...)`` in picture_predicate(); leaving a non-numeric string to
+            # blow up there turned a bad request into a 500 on three read routes,
+            # and POST /dedup/scan *persisted* the unparseable scope before
+            # anything ever tried to parse it. Failing here makes it a 400 at the
+            # boundary, before any write.
+            try:
+                object.__setattr__(self, "scope_id", str(int(str(self.scope_id))))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"scope_id for scope_type={self.scope_type.value} must be an "
+                    f"integer id, got {self.scope_id!r}"
+                ) from exc
 
     @property
     def key(self) -> str:
@@ -258,9 +302,20 @@ class DedupScope:
             )
         # FOLDER: a picture is in the folder when it was imported from it or its
         # file lives under it. Both are prefix matches on an indexed column.
+        #
+        # The LIKE pattern escapes ``%`` / ``_`` / the escape character itself:
+        # unescaped, a scope_id of "%" would silently mean "everywhere", so a
+        # "Find duplicates in this folder" entry could match far more than the
+        # folder it named. The literal path is still compared exactly on
+        # import_source_folder.
         prefix = str(self.scope_id).rstrip("/\\")
+        pattern = (
+            prefix.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
+            .replace("%", f"{LIKE_ESCAPE_CHAR}%")
+            .replace("_", f"{LIKE_ESCAPE_CHAR}_")
+        )
         return (Picture.import_source_folder == prefix) | (
-            Picture.file_path.like(f"{prefix}%")
+            Picture.file_path.like(f"{pattern}%", escape=LIKE_ESCAPE_CHAR)
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -373,7 +428,22 @@ class CandidateMember:
     reference_folder_id: Optional[int] = None
     pixel_sha: Optional[str] = None
     perceptual_hash: Optional[str] = None
+    thumbnail_width: Optional[int] = None
+    thumbnail_height: Optional[int] = None
     tag_count: int = 0
+
+    @property
+    def thumbnail_version(self) -> str:
+        """The ``?v=`` token the queue's thumbnail URLs must carry.
+
+        Same value and same semantics as the batch-thumbnail endpoint's — both
+        call :meth:`ImageUtils.thumbnail_cache_token`. Without it a thumbnail
+        regenerated mid-triage would keep painting the stale cached bitmap in the
+        queue, because the queue's URL would never change.
+        """
+        return ImageUtils.thumbnail_cache_token(
+            self.thumbnail_width, self.thumbnail_height
+        )
 
     @property
     def pixels(self) -> int:
@@ -404,15 +474,27 @@ class CandidateMember:
     def content_key(self) -> str:
         """The member's contribution to the group signature.
 
-        ``pixel_sha`` when it exists. A picture whose hash has not been computed
-        yet falls back to ``id:<n>``, which is stable but *not* stable across a
-        re-import of the same file — so a verdict made on a group containing such
-        a member will be re-asked after a re-import. That is the honest
-        behaviour: pretending two un-hashed rows are the same file would make the
-        verdict memory lie. ``MissingPixelShaFinder`` closes the gap in the
-        background.
+        ``pixel_sha:size_bytes`` when the hash exists. **The size is a co-key
+        here for the same reason it is one in tier-1 detection** (§22.1):
+        ``pixel_sha`` is a *sampled* digest above 128 KiB, so the digest alone
+        does not identify a file. Detection has always grouped on
+        ``(pixel_sha, size_bytes)``; identity omitting the size made
+        :func:`group_signature` non-injective over groups, which meant two
+        distinct exact groups differing only in size collapsed onto one
+        signature — the upsert dropped one from the queue, a ``keep_separate``
+        silenced both file sets, and a stack verdict's write target depended on
+        scan order rather than on what the user saw.
+
+        A picture whose hash has not been computed yet falls back to ``id:<n>``,
+        which is stable but *not* stable across a re-import of the same file — so
+        a verdict made on a group containing such a member will be re-asked after
+        a re-import. That is the honest behaviour: pretending two un-hashed rows
+        are the same file would make the verdict memory lie.
+        ``MissingPixelShaFinder`` closes the gap in the background.
         """
-        return self.pixel_sha or f"id:{self.id}"
+        if self.pixel_sha:
+            return f"{self.pixel_sha}:{self.size_bytes}"
+        return f"id:{self.id}"
 
     @property
     def cover_score(self) -> float:
@@ -449,6 +531,7 @@ class CandidateMember:
             "file_path": (
                 self.file_path if self.reference_folder_id is not None else None
             ),
+            "thumbnail_version": self.thumbnail_version,
             "cover_score": round(self.cover_score, 4),
             "why": why if why is not None else [],
         }
@@ -689,6 +772,8 @@ def load_candidates(
                 Picture.reference_folder_id,
                 Picture.pixel_sha,
                 Picture.perceptual_hash,
+                Picture.thumbnail_width,
+                Picture.thumbnail_height,
             ).where(Picture.id.in_(chunk), Picture.deleted.is_(False))
         ).all()
         for row in rows:
@@ -706,6 +791,8 @@ def load_candidates(
                 reference_folder_id=row[10],
                 pixel_sha=row[11],
                 perceptual_hash=row[12],
+                thumbnail_width=row[13],
+                thumbnail_height=row[14],
             )
         tag_rows = session.exec(
             select(Tag.picture_id, func.count(Tag.id))
@@ -982,16 +1069,41 @@ def near_pairs_in_bucket(
     id_array = np.array(kept, dtype=np.int64)
     max_hamming = int((1.0 - float(threshold)) * PHASH_BITS)
     pairs: list[tuple[int, int, float]] = []
+    truncated = False
     for offset in range(1, len(kept)):
         distances = _popcount64(hashes[:-offset] ^ hashes[offset:])
         hits = np.nonzero(distances <= max_hamming)[0]
         if hits.size == 0:
             continue
         for index in hits:
+            if len(pairs) >= MAX_PAIRS_PER_BUCKET:
+                truncated = True
+                break
             left = int(id_array[index])
             right = int(id_array[index + offset])
             similarity = 1.0 - float(distances[index]) / PHASH_BITS
             pairs.append((min(left, right), max(left, right), round(similarity, 6)))
+        if truncated:
+            break
+    if truncated:
+        # Never silent (CLAUDE.md's no-silent-caps rule). The cap only bites on a
+        # bucket where a large fraction of members are mutually near-identical —
+        # k members that all match produce k*(k-1)/2 pairs, so 4000 members would
+        # be ~8M tuples (~580 MB) for a group the union-find only needs a
+        # spanning subset of. The retained pairs are the lowest-offset ones,
+        # which still connect every matching member into the same component; the
+        # loss is confidence *resolution* (the group's weakest-link value may be
+        # measured over fewer edges), not group membership.
+        logger.warning(
+            "[dedup-tier2] bucket %s=%s hit the %d-pair cap with %d members; "
+            "the group's members are still all connected, but its confidence is "
+            "measured over a subset of its edges. Raise MAX_PAIRS_PER_BUCKET if "
+            "this bucket matters, or narrow the bucket.",
+            bucket.kind,
+            bucket.key,
+            MAX_PAIRS_PER_BUCKET,
+            len(kept),
+        )
     return pairs
 
 

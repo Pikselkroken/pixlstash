@@ -628,6 +628,7 @@ Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
       "created_at": "2026-05-12T14:22:00", "imported_at": "2026-05-13T08:00:00",
       "stack_id": null, "reference_folder_id": null,
       "file_path": null,             // non-null ONLY for reference-folder pictures
+      "thumbnail_version": "320x240",// append as ?v= — same token the grid uses
       "cover_score": 108.64,         // megapixels*4 + tags*3 + score*2 + 8 if RAW
       "why": [{ "text": "Highest resolution", "against": false }]
     }]
@@ -650,6 +651,19 @@ Render the `why` pills as reasons, not conclusions: `against: false` is the oliv
 check, `against: true` the red x. A group carrying red pills is the one that needs
 Compare.
 
+**`thumbnail_version` must be appended as `?v=`** to every thumbnail URL the queue
+builds — `/api/v1/pictures/thumbnails/{picture_id}.webp?v={thumbnail_version}` —
+exactly as the batch-thumbnail endpoint does (both come from the same server-side
+helper, so they cannot drift). Without it a thumbnail regenerated mid-triage keeps
+painting the stale cached bitmap, because the queue's URL never changes. The value
+is `"0"` until the picture has been processed.
+
+**Scope validation.** `scope_id` must be an integer for `project` / `set` /
+`character`; anything else is a **400** at the boundary on every route that takes a
+scope, including `POST /dedup/scan` (which writes nothing on a rejected scope). For
+`folder`, `%` and `_` are escaped rather than treated as wildcards, so a folder
+scope always means the folder it names.
+
 ### `POST /dedup/counts`
 
 Read-only despite the verb (a scope list does not fit a URL). Body:
@@ -667,7 +681,8 @@ Read-only despite the verb (a scope list does not fit a URL). Body:
 
 `by_tier` deliberately reports tiers that are switched off, so a tier switch can
 be labelled with what enabling it would add. A non-global scope without a
-`scope_id` is a **400**.
+`scope_id` is a **400**, and the `scopes` list is capped at **200** entries (each
+is a separate correlated `COUNT`) — over that is a **422**.
 
 ### `POST /dedup/scan`
 
@@ -707,23 +722,60 @@ picture set is a **423** with the usual `pictures_locked` detail.
 project membership and set membership onto every member and lifts every member to
 the highest score; nothing is overwritten and nothing is deleted.
 
+> **The union is also a visibility change.** Adding an out-of-scope duplicate to a
+> *shared* set means every live share token for that set now reaches it. That is
+> the shipped stack-atomic membership model (ordinary `POST /stacks` does the
+> same), but auto-stack applies it in bulk — worth saying out loud in the consent
+> copy. See backend §22.8 accepted risk A1.
+
 ### `POST /dedup/auto-stack`
 
 Body: `{ "scope": {…}, "dry_run": true, "batch_id": null, "limit": null }`.
 **Defaults to `dry_run: true`**, which returns the counts the consent dialog shows
 and writes nothing. Send `dry_run: false` to apply.
 
+Dry run:
+
 ```jsonc
-{ "batch_id": "a1b2…", "dry_run": false, "groups": 1204, "pictures": 2611,
-  "scope": { … }, "results": [ /* one verdict object per group */ ],
-  "failures": [ { "signature": "…", "error": "…" } ] }
+{ "batch_id": null, "dry_run": true, "groups": 1204, "pictures": 2611,
+  "scope": { … }, "results": [],
+  "dry_run_summary": {
+    "groups": 1204,
+    "groups_by_tier": { "exact": 1204, "near": 0, "embedding": 0 },
+    "pictures": 2611,
+    "covers_gaining_tags": 310,
+    "covers_gaining_score": 88,
+    "covers_gaining_metadata": 361   // the dialog's "covers gaining metadata" row
+  } }
+```
+
+`dry_run_summary` is derived from the **same** snapshot as the top-level counts in
+a single read, so the dialog's figures can never disagree with each other. The
+union is not executed to produce them and nothing is written; a cover "gains" a
+facet when some other member of its group carries something it does not.
+
+Applied (including a partially applied run):
+
+```jsonc
+{ "batch_id": "a1b2…", "dry_run": false, "groups": 1203, "pictures": 2609,
+  "scope": { … },
+  "results":  [ { …verdict…, "outcome": "applied" } ],
+  "failures": [ { "signature": "…", "outcome": "blocked", "status_code": 423,
+                  "error": { "code": "set_locked", … } } ],
+  "blocked": 1, "failed": 0 }
 ```
 
 Only the **exact** tier is eligible; near and embedding groups always go through
 the queue no matter how confident they look. Every group in the run shares one
-`batch_id`, so N stacks reverse with a single undo. `failures` is non-empty when a
-group could not be stacked — one bad group never aborts the run, and the response
-reports the partial result honestly rather than hiding it.
+`batch_id`, so N stacks reverse with a single `POST
+/operations/batches/{batch_id}/undo`.
+
+**Every group is accounted for under exactly one `outcome`** — `applied`,
+`blocked` (a guard refused it, in practice a locked picture set at 423) or
+`failed` (it could not be resolved at all). One bad group never aborts the run,
+and **the `batch_id` is returned even on a partially applied run**, so work that
+did happen always comes back with its undo handle. Show `blocked` groups to the
+user: they are still in the queue awaiting an individual decision.
 
 ### Not in this API
 

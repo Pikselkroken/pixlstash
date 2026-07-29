@@ -173,28 +173,74 @@ class DedupScanTask(BaseTask):
             session.commit()
 
             seen_pictures: set[int] = set()
+            # Pairs are kept across buckets so a chain spanning two buckets folds
+            # into ONE group rather than two. That is a real requirement, but it
+            # is also the scan's only unbounded structure, so it is capped —
+            # see MAX_TRACKED_PAIRS.
             pair_cache: dict[tuple[int, int], float] = {}
+            pair_cap_reported = False
+            near_groups = 0
             for index, bucket in enumerate(buckets, start=1):
+                # Ids whose grouping this bucket could have changed. Only groups
+                # touching one of these are re-persisted below; previously the
+                # scan re-derived and re-wrote EVERY group after EVERY bucket,
+                # which is O(buckets x groups) DELETE+INSERT on the single DB
+                # writer thread — every import, tag edit and verdict queues
+                # behind a running scan.
+                touched: set[int] = set()
                 for a, b, similarity in dedup_tier_service.near_pairs_in_bucket(
                     session, bucket, policy.threshold
                 ):
                     key = (a, b)
+                    if key not in pair_cache and len(pair_cache) >= (
+                        dedup_tier_service.MAX_TRACKED_PAIRS
+                    ):
+                        if not pair_cap_reported:
+                            # Never silent: the scan continues and every bucket is
+                            # still compared, but cross-bucket chaining stops
+                            # growing, so two buckets' halves of one chain can be
+                            # reported as two groups instead of one.
+                            logger.warning(
+                                "[dedup-scan] scan %s reached the %d tracked-pair "
+                                "cap at bucket %d of %d; further cross-bucket "
+                                "chaining is dropped and some chains may be "
+                                "reported as separate groups. Narrow the scope or "
+                                "raise MAX_TRACKED_PAIRS.",
+                                scan_id,
+                                dedup_tier_service.MAX_TRACKED_PAIRS,
+                                index,
+                                len(buckets),
+                            )
+                            pair_cap_reported = True
+                        continue
                     if similarity > pair_cache.get(key, 0.0):
                         pair_cache[key] = similarity
+                        touched.update(key)
                 seen_pictures.update(bucket.picture_ids)
-                # Groups are re-derived from every pair seen so far, so a chain
-                # that spans two buckets becomes one group rather than two.
-                groups = dedup_tier_service.groups_from_pairs(
-                    session,
-                    [(a, b, sim) for (a, b), sim in pair_cache.items()],
-                    policy,
-                    DedupTier.NEAR,
-                )
-                dedup_tier_service.persist_groups_in_session(session, groups, scan_id)
+
+                if touched:
+                    groups = dedup_tier_service.groups_from_pairs(
+                        session,
+                        [(a, b, sim) for (a, b), sim in pair_cache.items()],
+                        policy,
+                        DedupTier.NEAR,
+                    )
+                    near_groups = len(groups)
+                    # Persist only the groups this bucket could have changed. A
+                    # group untouched by this bucket is byte-identical to the row
+                    # already stored, so rewriting it buys nothing.
+                    changed = [
+                        group
+                        for group in groups
+                        if touched.intersection(group.picture_ids)
+                    ]
+                    dedup_tier_service.persist_groups_in_session(
+                        session, changed, scan_id
+                    )
                 scan = session.get(DedupScan, scan_id)
                 scan.scanned_buckets = index
                 scan.scanned_pictures = min(len(seen_pictures), total_pictures)
-                scan.groups_found = found + len(groups)
+                scan.groups_found = found + near_groups
                 scan.updated_at = datetime.utcnow()
                 session.add(scan)
                 session.commit()

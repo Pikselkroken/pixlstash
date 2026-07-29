@@ -9,12 +9,26 @@ Four tables backing the Duplicates queue:
   member content hashes), so rescans and re-imports never re-ask.
 * ``dedupscan`` — per-scope scan progress for the "scanned N of M" banner.
 
-**No reprocessing reset is needed.** Tier 1 reuses the existing indexed
-``picture.pixel_sha`` column and tier 2 the existing ``picture.perceptual_hash``
-/ ``picture.size_bin_index`` columns; nothing computed by an earlier release
-becomes invalid, so no column is NULLed here. Pictures whose ``pixel_sha`` was
-never computed are backfilled by ``MissingPixelShaFinder`` at runtime, which
-already selects on ``pixel_sha IS NULL`` — a reset would be a no-op.
+**No reprocessing reset is needed on `picture`.** Tier 1 reuses the existing
+indexed ``picture.pixel_sha`` column and tier 2 the existing
+``picture.perceptual_hash`` / ``picture.size_bin_index`` columns; nothing
+computed by an earlier release becomes invalid, so no column is NULLed here.
+Pictures whose ``pixel_sha`` was never computed are backfilled by
+``MissingPixelShaFinder`` at runtime, which already selects on
+``pixel_sha IS NULL`` — a reset would be a no-op.
+
+**Stale signatures are purged.** The group signature was changed during review to
+include the ``size_bytes`` co-key (``<pixel_sha>:<size_bytes>``), because the
+digest alone is sampled above 128 KiB and did not identify a file — two distinct
+exact groups could collide on one signature. Rows written before that change are
+keyed on the old format: a stale ``dedupverdict`` would silently never match
+again (a remembered decision quietly forgotten) and a stale ``dedupgroup`` would
+linger forever, matching no future detection while still inflating the sidebar
+badge. Neither self-heals, so this migration empties the four tables when they
+already exist. That can only affect a developer machine that ran this feature
+branch before the fix — the tables ship for the first time here — and rebuilding
+them costs one rescan. Amending the migration rather than stacking a second one
+follows the feature-branch rule in CLAUDE.md.
 
 Revision ID: 0088_add_dedup_tier_tables
 Revises: 0087_add_entity_project_membership
@@ -131,6 +145,14 @@ def upgrade() -> None:
             "ix_dedupscan_scope_key", "dedupscan", ["scope_key"], unique=True
         )
         op.create_index("ix_dedupscan_status", "dedupscan", ["status"])
+
+    # Purge rows written under the pre-review signature format (see the module
+    # docstring). Only a table that already existed can hold them; a table just
+    # created above is empty, so the DELETE is a no-op there. Children first so
+    # the foreign key holds on databases that enforce it.
+    for table in ("dedupgroupmember", "dedupgroup", "dedupverdict", "dedupscan"):
+        if table in existing_tables:
+            op.execute(sa.text(f"DELETE FROM {table}"))  # noqa: S608 - fixed literals
 
 
 def downgrade() -> None:

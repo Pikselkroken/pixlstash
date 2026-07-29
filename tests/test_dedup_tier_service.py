@@ -38,6 +38,7 @@ from pixlstash.db_models.picture_likeness import PictureLikeness
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
+from pixlstash.services import dedup_verdict_service as verdicts
 from pixlstash.services.dedup_tier_service import (
     CandidateMember,
     DedupScope,
@@ -219,9 +220,11 @@ def test_signature_is_order_independent_and_content_derived():
 
 
 def test_signature_falls_back_to_the_picture_id_when_no_hash_exists():
-    hashed = _member(id=7, pixel_sha="deadbeef")
+    hashed = _member(id=7, pixel_sha="deadbeef", size_bytes=100)
     unhashed = _member(id=7)
-    assert hashed.content_key == "deadbeef"
+    # The hash is never the identity on its own: it is sampled above 128 KiB, so
+    # the size travels with it (see test_content_key_carries_the_size_co_key).
+    assert hashed.content_key == "deadbeef:100"
     assert unhashed.content_key == "id:7"
 
 
@@ -800,3 +803,87 @@ def test_scan_progress_for_an_unscanned_scope_is_idle_not_an_error(server):
     progress = _run(server, tiers.scan_progress_in_session, None)
     assert progress["status"] == "idle"
     assert progress["total_pictures"] == 0
+
+
+# ── R1: the group signature must be injective over groups ─────────────────────
+
+
+def test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct(server):
+    """Regression for the CSO's E1: the signature needs the ``size_bytes`` co-key.
+
+    ``pixel_sha`` is a *sampled* digest above 128 KiB, which is exactly why tier 1
+    detects on ``(pixel_sha, size_bytes)``. Identity that dropped the size made
+    two distinct exact groups collapse onto one signature, and all three
+    consequences were silent: one group vanished from the queue via the
+    upsert-on-signature, a keep-separate on the survivor resolved both file sets,
+    and a stack verdict's write target depended on scan order rather than on what
+    the user saw.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 999},
+            {"pixel_sha": "aaa", "size_bytes": 999},
+        ],
+    )
+    groups = _run(server, tiers.find_exact_groups_in_session, None)
+    assert len(groups) == 2
+    assert sorted(sorted(g.picture_ids) for g in groups) == [
+        sorted(ids[:2]),
+        sorted(ids[2:]),
+    ]
+    # The whole point: two groups, two signatures.
+    assert len({g.signature for g in groups}) == 2
+
+    # ...and therefore two persisted rows, not one silently overwriting the other.
+    _scan(server)
+    rows = _run(
+        server,
+        lambda session: sorted(
+            (row.signature, row.member_count)
+            for row in session.exec(select(DedupGroup)).all()
+        ),
+    )
+    assert len(rows) == 2
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 2
+
+
+def test_a_verdict_on_one_group_does_not_resolve_its_same_digest_twin(server):
+    """The second half of E1: consent must not leak across file sets."""
+    _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 999},
+            {"pixel_sha": "aaa", "size_bytes": 999},
+        ],
+    )
+    _scan(server)
+    page, total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert total == 2
+    _run(server, verdicts.apply_keep_separate_in_session, page[0]["signature"], None)
+    # The other group is still waiting for its own decision.
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    remaining, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert len(remaining) == 1
+    assert remaining[0]["signature"] == page[1]["signature"]
+
+    # And a rescan does not resurrect the decided one or silence the open one.
+    _scan(server)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+
+
+def test_content_key_carries_the_size_co_key():
+    """Unit-level pin on the identity format itself."""
+    member = tiers.CandidateMember(id=1, pixel_sha="aaa", size_bytes=100)
+    twin = tiers.CandidateMember(id=2, pixel_sha="aaa", size_bytes=999)
+    assert member.content_key == "aaa:100"
+    assert member.content_key != twin.content_key
+    assert tiers.group_signature([member.content_key]) != tiers.group_signature(
+        [twin.content_key]
+    )
+    # An unhashed picture still falls back to its id.
+    assert tiers.CandidateMember(id=7).content_key == "id:7"

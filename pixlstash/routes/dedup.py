@@ -43,12 +43,12 @@ owner-only, and the verdict routes mutate stacks across arbitrary pictures.
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service, dedup_tier_service
-from pixlstash.services import dedup_verdict_service
+from pixlstash.services import dedup_verdict_service, operation_log_service
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_THRESHOLD,
@@ -78,6 +78,14 @@ from pixlstash.services.dedup_sweep_service import (
 )
 
 logger = get_logger(__name__)
+
+MAX_COUNT_SCOPES = 200
+"""Cap on the scope list of one ``POST /dedup/counts``.
+
+Each scope is a separate correlated ``COUNT`` subquery, so an uncapped list turns
+one request into thousands of queries against the owner's own server. 200 is far
+more than any real context menu needs (the sidebar asks for a handful) and keeps
+the worst case bounded."""
 
 
 class SweepPolicyModel(BaseModel):
@@ -573,6 +581,16 @@ class DedupCandidateModel(BaseModel):
             "implementation detail."
         ),
     )
+    thumbnail_version: str = Field(
+        description=(
+            "Cache-buster token for this picture's thumbnail URL: append it as "
+            "`?v=`, exactly as the batch-thumbnail endpoint does (both call the "
+            "same helper). It changes whenever the stored bitmap is regenerated, "
+            "so a thumbnail rebuilt mid-triage refetches instead of the queue "
+            'painting the stale cached image. `"0"` until the picture has been '
+            "processed."
+        )
+    )
     cover_score: float = Field(
         description=(
             "`megapixels*4 + tags*3 + score*2 + 8 if RAW`. The highest wins the "
@@ -708,9 +726,13 @@ class DedupCountsRequestModel(BaseModel):
     )
     scopes: list[ScopeRequestModel] = Field(
         default_factory=list,
+        max_length=MAX_COUNT_SCOPES,
         description=(
             "Extra scopes to count. The global count is always returned, so a "
-            "context menu can ask for its own scopes and get the badge for free."
+            "context menu can ask for its own scopes and get the badge for free. "
+            f"At most {MAX_COUNT_SCOPES} per request: each scope is a separate "
+            "correlated COUNT, so an uncapped list turns one request into "
+            "thousands of queries."
         ),
     )
 
@@ -879,6 +901,38 @@ class AutoStackRequestModel(BaseModel):
     )
 
 
+class AutoStackDryRunSummaryModel(BaseModel):
+    """Aggregates for the consent dialog, from the dry run's own snapshot."""
+
+    model_config = ConfigDict(extra="allow")
+
+    groups: int = Field(description="Groups the run would act on.")
+    groups_by_tier: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Group count per tier, zero-filled for every tier. Only `exact` is "
+            "ever non-zero today - auto-stack is exact-only - but the shape is "
+            "stable so the dialog does not need a special case if that changes."
+        ),
+    )
+    pictures: int = Field(description="Pictures across those groups.")
+    covers_gaining_tags: int = Field(
+        description="Covers that would gain at least one tag from the union."
+    )
+    covers_gaining_score: int = Field(
+        description="Covers whose score the union would lift."
+    )
+    covers_gaining_metadata: int = Field(
+        description=(
+            "Covers gaining tags **or** score - the design's "
+            '"covers gaining metadata" row. Derived from the planned verdicts in '
+            "the same read as the counts above, so the dialog's numbers can never "
+            "disagree with each other; the union itself is not run and nothing is "
+            "written."
+        )
+    )
+
+
 class AutoStackResponse(BaseModel):
     """What the bulk auto-stack did, or would do."""
 
@@ -886,22 +940,46 @@ class AutoStackResponse(BaseModel):
 
     batch_id: Optional[str] = Field(
         default=None,
-        description="The shared batch id. Null only for a dry run with none supplied.",
+        description=(
+            "The shared batch id, and the `POST /operations/batches/{batch_id}/"
+            "undo` handle for the whole run. Always present on an applied run - "
+            "including a partially applied one - so work that did happen is "
+            "never left without a way to reverse it. Null only for a dry run "
+            "with none supplied."
+        ),
     )
     dry_run: bool = Field(description="Whether anything was written.")
-    groups: int = Field(description="Exact groups stacked (or that would be).")
-    pictures: int = Field(description="Pictures across those groups.")
+    groups: int = Field(
+        description="Exact groups actually stacked (or, on a dry run, that would be)."
+    )
+    pictures: int = Field(description="Pictures across the stacked groups.")
     scope: dict[str, Any] = Field(description="The scope the run covered.")
+    dry_run_summary: Optional[AutoStackDryRunSummaryModel] = Field(
+        default=None,
+        description="Consent-dialog aggregates. Present on a dry run only.",
+    )
     results: list[VerdictResponse] = Field(
-        default_factory=list, description="Per-group results. Empty for a dry run."
+        default_factory=list,
+        description=(
+            'One entry per applied group, each with `outcome: "applied"`. Empty '
+            "for a dry run."
+        ),
     )
     failures: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(
-            "Groups skipped and why. A single unstackable group never aborts the "
-            "run, so a partial result is reported honestly rather than hidden."
+            "One entry per group that was not applied: `{signature, outcome, "
+            "status_code, error}`, where `outcome` is `blocked` (a guard refused "
+            "it - in practice a locked picture set, 423) or `failed` (it could "
+            "not be resolved at all). A single unstackable group never aborts "
+            "the run, so a partial result is reported honestly rather than "
+            "hidden, and the run still returns its `batch_id`."
         ),
     )
+    blocked: int = Field(
+        default=0, description="Groups refused by a guard, typically a locked set."
+    )
+    failed: int = Field(default=0, description="Groups that could not be resolved.")
 
 
 def create_router(server) -> APIRouter:
@@ -1062,7 +1140,12 @@ def create_router(server) -> APIRouter:
         ),
         response_model=VerdictResponse,
     )
-    def post_stack_verdict(payload: StackVerdictRequestModel):
+    def post_stack_verdict(request: Request, payload: StackVerdictRequestModel):
+        # §21 origin discipline: actor / source / origin_client_id are read from
+        # the request HERE, on the request's own task, and passed down
+        # explicitly. The contextvar is dead on the DB worker thread, so the
+        # service must never read it for itself.
+        context = operation_log_service.request_context(request)
         try:
             result = dedup_verdict_service.apply_stack_verdict(
                 server.vault,
@@ -1070,6 +1153,7 @@ def create_router(server) -> APIRouter:
                 payload.cover_picture_id,
                 list(payload.excluded_picture_ids),
                 payload.batch_id,
+                **context,
             )
         except DedupVerdictError as exc:
             logger.info("[dedup] stack verdict rejected: %s", exc)
@@ -1088,6 +1172,11 @@ def create_router(server) -> APIRouter:
         response_model=VerdictResponse,
     )
     def post_keep_separate_verdict(payload: SignatureRequestModel):
+        # No request_context here on purpose: keep-separate writes no operation
+        # row (it changes no reversible picture facet — see
+        # dedup_verdict_service.OP_TYPE_STACK), so actor / source would be dead
+        # arguments. If this verdict ever starts recording, wire it up like
+        # post_stack_verdict does.
         try:
             result = dedup_verdict_service.apply_keep_separate(
                 server.vault, payload.signature, payload.batch_id
@@ -1110,6 +1199,7 @@ def create_router(server) -> APIRouter:
         response_model=ReopenResponse,
     )
     def post_reopen_verdict(payload: SignatureRequestModel):
+        # No request_context here on purpose — see post_keep_separate_verdict.
         try:
             return dedup_verdict_service.reopen_verdict(server.vault, payload.signature)
         except DedupVerdictError as exc:
@@ -1130,15 +1220,23 @@ def create_router(server) -> APIRouter:
         ),
         response_model=AutoStackResponse,
     )
-    def post_auto_stack(payload: Optional[AutoStackRequestModel] = Body(default=None)):
+    def post_auto_stack(
+        request: Request,
+        payload: Optional[AutoStackRequestModel] = Body(default=None),
+    ):
         request_model = payload or AutoStackRequestModel()
         scope = _scope(request_model.scope)
+        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # This is the most far-reaching mutation on the surface, so it is the one
+        # that most needs an attributed audit row.
+        context = operation_log_service.request_context(request)
         return dedup_verdict_service.bulk_auto_stack(
             server.vault,
             scope,
             request_model.batch_id,
             request_model.dry_run,
             request_model.limit,
+            **context,
         )
 
     @router.get(

@@ -40,26 +40,39 @@ module calls it and adds the three the design requires on top:
   characters is left alone and logged; the members keep their own faces, which is
   the non-lossy outcome.
 
-Operation log
--------------
-Every verdict is meant to raise an action receipt and land in the operation log,
-with a bulk auto-stack coalescing into one batch id so N stacks reverse with one
-undo. The operation log ships on its own lane (``feature/operation-log``); this
-branch is stacked on the dedup sweep planner and does not contain it, so the call
-is made through :func:`_record_operation`, which imports the service lazily and
-logs a clear warning naming the missing module when it is absent. Wiring the two
-lanes together at merge time is a no-op: the seam already passes ``batch_id``,
-``op_type`` and the before/after picture id set.
+Operation log (§21)
+-------------------
+Every verdict raises an action receipt and lands in the operation log. Each
+verdict records **exactly one** :class:`~pixlstash.db_models.operation.Operation`
+row, and a bulk auto-stack shares a single ``batch_id`` across every group in the
+run, so ``POST /operations/batches/{batch_id}/undo`` reverses a thousand stacks in
+one step.
+
+Two details this module owns rather than inherits:
+
+* **It does not go through** ``routes/stacks.py``. Those handlers already wrap
+  themselves in ``run_recorded_metadata_task``; calling them would produce a
+  second operation row per verdict, and "one verdict, one undo" would stop being
+  true. :func:`_stack_members` does the stacking in-session instead, and this
+  module records once around the whole verdict.
+* **It snapshots the stack-expanded set**, not just the group's members
+  (§21's ``expand_stacks`` rule). Folding an existing stack into the new one
+  reparents co-members the group never named, and ``normalize_stack_positions``
+  renumbers *every* member including soft-deleted ones — so the snapshot is taken
+  over :func:`expand_picture_ids_to_stacks` with ``include_deleted=True``, or an
+  undo would restore the group and leave its siblings behind.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
+from fastapi import HTTPException
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -75,11 +88,16 @@ from pixlstash.db_models.dedup import (
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.tag import Tag, is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import operation_log_service
 from pixlstash.services.dedup_tier_service import (
     DedupScope,
+    DedupTier,
     prune_stale_groups_in_session,
 )
-from pixlstash.services.stack_membership import reconcile_stack_membership
+from pixlstash.services.stack_membership import (
+    expand_picture_ids_to_stacks,
+    reconcile_stack_membership,
+)
 from pixlstash.stacking import normalize_stack_positions
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -87,10 +105,24 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-# One op-log entry per verdict; the bulk path shares a single batch id.
+# The one op_type this module records. Stable — part of the API contract the
+# frontend keys its undo affordances off. A bulk auto-stack shares one batch_id
+# across every row it writes, so the whole run reverses in a single step.
+#
+# Keep-separate and reopen have no op_type on purpose: they change no reversible
+# picture facet, so they record nothing rather than writing a no-op row that
+# would still consume a Ctrl+Z.
 OP_TYPE_STACK = "dedup.stack"
-OP_TYPE_KEEP_SEPARATE = "dedup.keep_separate"
-OP_TYPE_REOPEN = "dedup.reopen"
+
+# Per-group outcome vocabulary for a bulk auto-stack. Closed set; the response
+# reports every group under exactly one of these, so a partial run is legible
+# rather than inferred from a count mismatch.
+BULK_REASON_APPLIED = "applied"
+BULK_REASON_BLOCKED = "blocked"
+"""The group was refused by a guard that returns an HTTP status — in practice a
+locked picture set (423). Nothing was written for it."""
+BULK_REASON_FAILED = "failed"
+"""The group could not be resolved at all (stale signature, too few members)."""
 
 
 class DedupVerdictError(Exception):
@@ -144,35 +176,22 @@ def _record_operation(
     session: Session,
     *,
     op_type: str,
-    picture_ids: list[int],
     before: dict[str, dict],
     after: dict[str, dict],
     batch_id: Optional[str],
     summary: str,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> None:
-    """Append this verdict to the operation log, if that lane is present.
+    """Append **one** operation row for this verdict.
 
-    Cross-lane seam, not a fallback: ``pixlstash.services.operation_log_service``
-    lands on ``feature/operation-log`` and is not on this branch. When it is
-    missing the verdict still applies (it is an ordinary, individually reversible
-    stacking action) but is not undoable in one keystroke, and that consequence is
-    logged with the module name so the gap is visible rather than silent.
+    Called once per verdict, around the whole mutation, on the verdict's own
+    session — so the row and the change it describes commit against the same
+    serialised writer (§21). The verdict path deliberately does not reuse
+    ``routes/stacks.py``, which records itself; going through it would produce a
+    second row and break "one verdict, one undo".
     """
-    try:
-        from pixlstash.services import operation_log_service
-    except ImportError as exc:
-        logger.warning(
-            "[dedup-verdict] operation log unavailable (%s): %s %s on %d picture(s) "
-            "batch=%s applied but NOT recorded, so Ctrl+Z will not reverse it. "
-            "This is the feature/operation-log lane seam; wiring it up needs no "
-            "change here.",
-            exc,
-            op_type,
-            summary,
-            len(picture_ids),
-            batch_id,
-        )
-        return
     operation_log_service.record_operation_in_session(
         session,
         op_type=op_type,
@@ -180,18 +199,28 @@ def _record_operation(
         after=after,
         batch_id=batch_id,
         summary=summary,
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
     )
 
 
 def _capture_state(session: Session, picture_ids: list[int]) -> dict[str, dict]:
-    """Snapshot the picture state an undo would restore, if the log is present."""
-    try:
-        from pixlstash.services import operation_log_service
-    except ImportError:
-        # Already reported by _record_operation with full context; capturing
-        # nothing here keeps the verdict path free of a second identical warning.
-        return {}
+    """Snapshot every reversible facet of *picture_ids* (§21's undo payload)."""
     return operation_log_service.capture_state_in_session(session, picture_ids)
+
+
+def _undo_targets(session: Session, picture_ids: list[int]) -> list[int]:
+    """The ids an undo of this verdict has to restore.
+
+    Stacking is stack-atomic: folding an existing stack into the verdict's stack
+    reparents co-members the group never named, and ``normalize_stack_positions``
+    renumbers **every** member of an affected stack, soft-deleted ones included.
+    Snapshotting only the group's members would leave those siblings stranded on
+    undo, which is exactly the ``expand_stacks`` /
+    ``expand_stacks_include_deleted`` pairing §21 requires of a grouping mutation.
+    """
+    return expand_picture_ids_to_stacks(session, picture_ids, include_deleted=True)
 
 
 # --- Group lookup -----------------------------------------------------------
@@ -444,6 +473,89 @@ def _stack_members(
     return stack_id
 
 
+# --- Bulk dry-run aggregates -------------------------------------------------
+
+
+def _dry_run_summary_in_session(
+    session: Session, groups: list[DedupGroup]
+) -> dict[str, Any]:
+    """Aggregate what a bulk auto-stack would do, for the consent dialog.
+
+    Computed from the **same** ``groups`` list the dry-run counts come from, in
+    the same read, so the dialog's "N groups" and its "M covers gain metadata"
+    row cannot disagree because a scan landed between two queries.
+
+    The union is **not** run to work this out — nothing is written and no
+    membership is reconciled. Each figure is derived from the planned verdict:
+    the cover is the group's stored preselection, and a cover "gains" a facet
+    when some other member of its group already carries something the cover does
+    not (which is exactly what :func:`apply_metadata_union_in_session` would then
+    copy onto it).
+
+    Returns:
+        ``groups_by_tier`` (always keyed by every tier, zero-filled),
+        ``pictures``, ``covers_gaining_tags``, ``covers_gaining_score`` and
+        ``covers_gaining_metadata`` (the union of the previous two — the row the
+        design's dialog promises).
+    """
+    summary: dict[str, Any] = {
+        "groups_by_tier": {tier.value: 0 for tier in DedupTier},
+        "groups": len(groups),
+        "pictures": 0,
+        "covers_gaining_tags": 0,
+        "covers_gaining_score": 0,
+        "covers_gaining_metadata": 0,
+    }
+    if not groups:
+        return summary
+
+    group_ids = [int(group.id) for group in groups]
+    members_by_group: dict[int, list[int]] = defaultdict(list)
+    for group_id, picture_id in session.exec(
+        select(DedupGroupMember.group_id, DedupGroupMember.picture_id)
+        .join(Picture, Picture.id == DedupGroupMember.picture_id)
+        .where(
+            DedupGroupMember.group_id.in_(group_ids),
+            Picture.deleted.is_(False),
+        )
+    ).all():
+        members_by_group[int(group_id)].append(int(picture_id))
+
+    all_ids = [pid for ids in members_by_group.values() for pid in ids]
+    scores = dict(
+        session.exec(
+            select(Picture.id, Picture.score).where(Picture.id.in_(all_ids))
+        ).all()
+    )
+    tags_by_picture: dict[int, set[str]] = defaultdict(set)
+    for picture_id, tag in session.exec(
+        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(all_ids))
+    ).all():
+        if not is_tag_sentinel(tag):
+            tags_by_picture[int(picture_id)].add(str(tag))
+
+    for group in groups:
+        member_ids = members_by_group.get(int(group.id), [])
+        summary["groups_by_tier"][str(group.tier)] = (
+            summary["groups_by_tier"].get(str(group.tier), 0) + 1
+        )
+        summary["pictures"] += len(member_ids)
+        cover_id = int(group.cover_picture_id or (member_ids[0] if member_ids else 0))
+        if cover_id not in member_ids:
+            continue
+        others = [pid for pid in member_ids if pid != cover_id]
+        gains_tags = any(
+            tags_by_picture[pid] - tags_by_picture[cover_id] for pid in others
+        )
+        gains_score = any(
+            int(scores.get(pid) or 0) > int(scores.get(cover_id) or 0) for pid in others
+        )
+        summary["covers_gaining_tags"] += int(gains_tags)
+        summary["covers_gaining_score"] += int(gains_score)
+        summary["covers_gaining_metadata"] += int(gains_tags or gains_score)
+    return summary
+
+
 # --- Verdicts ---------------------------------------------------------------
 
 
@@ -453,6 +565,9 @@ def apply_stack_verdict_in_session(
     cover_picture_id: Optional[int] = None,
     excluded_picture_ids: Optional[Iterable[int]] = None,
     batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> VerdictResult:
     """Stack a group's members and remember the decision.
 
@@ -467,6 +582,10 @@ def apply_stack_verdict_in_session(
             rescan does not treat the exclusion as an unfinished decision.
         batch_id: Operation-log batch. Bulk auto-stack passes one id for every
             group so the whole run reverses with a single undo.
+        actor: Who performed the change, from ``request_context`` in the handler.
+        source: WS-envelope source, likewise read from the request (§21 origin
+            discipline: never from a contextvar, which is dead on this thread).
+        origin_client_id: WS-envelope per-tab origin, likewise.
 
     Returns:
         The :class:`VerdictResult` behind the action receipt.
@@ -499,7 +618,10 @@ def apply_stack_verdict_in_session(
             f"cover {cover_id} is not an included member of group {signature!r}"
         )
 
-    before = _capture_state(session, included)
+    # Snapshot the stack-expanded set: folding an existing stack in reparents
+    # co-members this group never named, and they must be restorable too.
+    undo_targets = _undo_targets(session, included)
+    before = _capture_state(session, undo_targets)
     stack_id = _stack_members(session, included, cover_id)
     union = apply_metadata_union_in_session(session, included, stack_id)
     _upsert_verdict(
@@ -512,15 +634,17 @@ def apply_stack_verdict_in_session(
         stack_id=stack_id,
         batch_id=batch_id,
     )
-    after = _capture_state(session, included)
+    after = _capture_state(session, undo_targets)
     _record_operation(
         session,
         op_type=OP_TYPE_STACK,
-        picture_ids=included,
         before=before,
         after=after,
         batch_id=batch_id,
         summary=f"Stacked {len(included)} duplicates",
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
     )
     session.commit()
     logger.info(
@@ -565,15 +689,11 @@ def apply_keep_separate_in_session(
         stack_id=None,
         batch_id=batch_id,
     )
-    _record_operation(
-        session,
-        op_type=OP_TYPE_KEEP_SEPARATE,
-        picture_ids=member_ids,
-        before={},
-        after={},
-        batch_id=batch_id,
-        summary=f"Kept {len(member_ids)} pictures separate",
-    )
+    # No operation row: keep-separate changes no reversible picture facet, so
+    # there is nothing for undo to restore. Recording an empty diff would be a
+    # no-op row (``record_operation_in_session`` returns None for one) that still
+    # consumed a Ctrl+Z, which is worse than not offering undo here. The user's
+    # way back is the explicit reopen action, which is what the Stacks view shows.
     session.commit()
     logger.info(
         "[dedup-verdict] keep-separate recorded for signature=%s (%d members)",
@@ -615,15 +735,8 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
     if group is not None:
         group.resolved = False
         session.add(group)
-    _record_operation(
-        session,
-        op_type=OP_TYPE_REOPEN,
-        picture_ids=json.loads(row.picture_ids or "[]"),
-        before={},
-        after={},
-        batch_id=None,
-        summary="Reopened a duplicate decision",
-    )
+    # No operation row, for the same reason as keep-separate: reopening touches
+    # only the verdict row, which is not a reversible picture facet.
     session.commit()
     logger.info("[dedup-verdict] reopened verdict for signature=%s", signature)
     return {
@@ -640,6 +753,9 @@ def bulk_auto_stack_in_session(
     batch_id: Optional[str] = None,
     dry_run: bool = False,
     limit: Optional[int] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Stack every unresolved **exact** group under one batch id.
 
@@ -658,9 +774,17 @@ def bulk_auto_stack_in_session(
         dry_run: Count what would happen and write nothing. This is what the
             consent dialog reads.
         limit: Cap the number of groups acted on, for a paged run.
+        actor: Who performed the change, from ``request_context`` in the handler.
+        source: WS-envelope source, likewise read from the request.
+        origin_client_id: WS-envelope per-tab origin, likewise.
 
     Returns:
-        Counts, the batch id, and the per-group results (empty for a dry run).
+        The batch id, the counts, and a per-group outcome for **every** group the
+        run considered: ``results`` for the applied ones and ``failures`` for the
+        rest, each carrying an ``outcome`` of :data:`BULK_REASON_APPLIED`,
+        :data:`BULK_REASON_BLOCKED` or :data:`BULK_REASON_FAILED`. The batch id is
+        always present, so a partially applied run always hands back its undo
+        handle.
     """
     scope = scope or DedupScope()
     query = select(DedupGroup).where(
@@ -685,6 +809,7 @@ def bulk_auto_stack_in_session(
         for group in groups:
             picture_total += int(group.member_count or 0)
         return {
+            "dry_run_summary": _dry_run_summary_in_session(session, groups),
             "batch_id": batch_id,
             "dry_run": True,
             "groups": len(groups),
@@ -699,28 +824,62 @@ def bulk_auto_stack_in_session(
     for group in groups:
         try:
             result = apply_stack_verdict_in_session(
-                session, group.signature, batch_id=batch_id
-            )
-        except DedupVerdictError as exc:
-            # One unstackable group must not abort the run; record it so the
-            # response reports an honest partial result instead of pretending
-            # every group succeeded.
-            logger.warning(
-                "[dedup-verdict] auto-stack skipped group %s: %s",
+                session,
                 group.signature,
-                exc,
+                batch_id=batch_id,
+                actor=actor,
+                source=source,
+                origin_client_id=origin_client_id,
             )
-            failures.append({"signature": group.signature, "error": str(exc)})
+        except (DedupVerdictError, HTTPException) as exc:
+            # One unstackable group must never abort the run: every earlier group
+            # has already committed, so aborting here would leave a partially
+            # applied bulk mutation whose batch id the caller never receives —
+            # i.e. no undo handle for work that did happen.
+            #
+            # HTTPException is caught alongside DedupVerdictError because the
+            # locked-set guards raise 423, and a locked member is the *most
+            # likely* reason a group cannot be stacked. Catching only the former
+            # made this function's own API description ("a single unstackable
+            # group never aborts the run") false for the common case.
+            session.rollback()
+            if isinstance(exc, HTTPException):
+                reason, detail, status_code = (
+                    BULK_REASON_BLOCKED,
+                    exc.detail,
+                    exc.status_code,
+                )
+            else:
+                reason, detail, status_code = BULK_REASON_FAILED, str(exc), None
+            logger.warning(
+                "[dedup-verdict] auto-stack %s group %s (batch=%s): %s",
+                reason,
+                group.signature,
+                batch_id,
+                detail,
+            )
+            failures.append(
+                {
+                    "signature": group.signature,
+                    "outcome": reason,
+                    "status_code": status_code,
+                    "error": detail,
+                }
+            )
             continue
-        results.append(result.as_dict())
+        results.append({**result.as_dict(), "outcome": BULK_REASON_APPLIED})
     prune_stale_groups_in_session(session)
     logger.info(
-        "[dedup-verdict] auto-stacked %d exact group(s) under batch %s (%d skipped)",
+        "[dedup-verdict] auto-stacked %d exact group(s) under batch %s "
+        "(%d blocked, %d failed)",
         len(results),
         batch_id,
-        len(failures),
+        sum(1 for f in failures if f["outcome"] == BULK_REASON_BLOCKED),
+        sum(1 for f in failures if f["outcome"] == BULK_REASON_FAILED),
     )
     return {
+        # Always present once anything could have committed, so the caller always
+        # holds the POST /operations/batches/{batch_id}/undo handle.
         "batch_id": batch_id,
         "dry_run": False,
         "groups": len(results),
@@ -728,6 +887,8 @@ def bulk_auto_stack_in_session(
         "scope": scope.as_dict(),
         "results": results,
         "failures": failures,
+        "blocked": sum(1 for f in failures if f["outcome"] == BULK_REASON_BLOCKED),
+        "failed": sum(1 for f in failures if f["outcome"] == BULK_REASON_FAILED),
     }
 
 
@@ -740,14 +901,25 @@ def apply_stack_verdict(
     cover_picture_id: Optional[int] = None,
     excluded_picture_ids: Optional[Iterable[int]] = None,
     batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> VerdictResult:
-    """Write-path vault wrapper around :func:`apply_stack_verdict_in_session`."""
+    """Write-path vault wrapper around :func:`apply_stack_verdict_in_session`.
+
+    ``actor`` / ``source`` / ``origin_client_id`` come from
+    ``operation_log_service.request_context(request)``, evaluated in the handler
+    on the request's own task — never read here, where the contextvar is dead.
+    """
     return vault.db.run_task(
         apply_stack_verdict_in_session,
         signature,
         cover_picture_id,
         list(excluded_picture_ids or []),
         batch_id,
+        actor,
+        source,
+        origin_client_id,
     )
 
 
@@ -769,16 +941,27 @@ def bulk_auto_stack(
     batch_id: Optional[str] = None,
     dry_run: bool = False,
     limit: Optional[int] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Write-path vault wrapper around :func:`bulk_auto_stack_in_session`."""
     return vault.db.run_task(
-        bulk_auto_stack_in_session, scope, batch_id, dry_run, limit
+        bulk_auto_stack_in_session,
+        scope,
+        batch_id,
+        dry_run,
+        limit,
+        actor,
+        source,
+        origin_client_id,
     )
 
 
 __all__ = [
-    "OP_TYPE_KEEP_SEPARATE",
-    "OP_TYPE_REOPEN",
+    "BULK_REASON_APPLIED",
+    "BULK_REASON_BLOCKED",
+    "BULK_REASON_FAILED",
     "OP_TYPE_STACK",
     "DedupVerdictError",
     "VerdictResult",

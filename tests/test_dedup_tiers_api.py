@@ -28,11 +28,14 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, PictureSetMember
+from pixlstash.db_models import Picture, PictureSet, PictureSetMember
+from pixlstash.db_models.dedup import DedupScan
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
 from pixlstash.services.dedup_tier_service import TierPolicy
+from pixlstash.routes.dedup import MAX_COUNT_SCOPES
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 API = "/api/v1"
@@ -501,5 +504,171 @@ def test_auto_stack_applies_under_one_batch_id():
         assert stacked[0] is not None and stacked[0] == stacked[1]
         assert stacked[2] is None
         assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── resource hardening ────────────────────────────────────────────────────────
+
+
+def test_a_non_numeric_scope_id_is_a_400_on_every_route():
+    """Regression for the CSO's D4.
+
+    ``picture_predicate()`` calls ``int(scope_id)`` for project / set / character.
+    Leaving that unvalidated turned a bad request into an unhandled 500 on three
+    read routes, and `POST /dedup/scan` returned 200 while **persisting** the
+    unparseable scope — a self-inflicted poison row that made every later
+    `GET /dedup/groups` for that scope 500 too. Validation now happens at the
+    boundary, before any write.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        for scope_type in ("project", "set", "character"):
+            params = {"scope_type": scope_type, "scope_id": "not-an-int"}
+            body = {"scope_type": scope_type, "scope_id": "not-an-int"}
+            assert client.get(GROUPS_URL, params=params).status_code == 400
+            assert client.post(COUNTS_URL, json={"scopes": [body]}).status_code == 400
+            assert client.post(SCAN_URL, json={"scope": body}).status_code == 400
+            assert client.post(AUTO_STACK_URL, json={"scope": body}).status_code == 400
+        # And nothing was persisted by the rejected scan requests.
+        scans = _run(server, lambda session: session.exec(select(DedupScan)).all())
+        assert scans == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_folder_scope_does_not_treat_wildcards_as_wildcards():
+    """A "Find duplicates in this folder" entry must not silently mean everywhere.
+
+    The folder predicate is a LIKE prefix match; unescaped, a scope_id of "%"
+    matches every path in the vault.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        # The seeded duplicate pair lives under /vault/, so a literal "%" would
+        # match it if the metacharacter were not escaped.
+        wild = client.post(
+            COUNTS_URL, json={"scopes": [{"scope_type": "folder", "scope_id": "%"}]}
+        )
+        assert wild.status_code == 200, wild.text
+        assert wild.json()["scopes"][0]["unresolved_groups"] == 0
+
+        # The real folder still matches.
+        real = client.post(
+            COUNTS_URL,
+            json={"scopes": [{"scope_type": "folder", "scope_id": "/vault"}]},
+        )
+        assert real.json()["scopes"][0]["unresolved_groups"] == 1
+        assert len(ids) == 3
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_counts_scope_list_is_capped():
+    """One request must not become thousands of correlated COUNT subqueries."""
+    temp_dir, client, server, _ids, _token, set_id = _env()
+    try:
+        scopes = [{"scope_type": "set", "scope_id": str(set_id)}] * (
+            MAX_COUNT_SCOPES + 1
+        )
+        assert client.post(COUNTS_URL, json={"scopes": scopes}).status_code == 422
+        ok = client.post(COUNTS_URL, json={"scopes": scopes[:MAX_COUNT_SCOPES]})
+        assert ok.status_code == 200, ok.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── frontend contract additions ───────────────────────────────────────────────
+
+
+def test_every_candidate_carries_a_thumbnail_cache_token():
+    """The queue must be able to bust a stale thumbnail like the grid does."""
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        candidates = client.get(GROUPS_URL).json()["groups"][0]["candidates"]
+        # Unprocessed pictures report the "0" sentinel rather than omitting it.
+        assert all(c["thumbnail_version"] == "0" for c in candidates)
+
+        def set_thumbnail(session):
+            pic = session.get(Picture, ids[0])
+            pic.thumbnail_width = 320
+            pic.thumbnail_height = 240
+            session.add(pic)
+            session.commit()
+
+        _run(server, set_thumbnail)
+        candidates = client.get(GROUPS_URL).json()["groups"][0]["candidates"]
+        token = next(
+            c["thumbnail_version"] for c in candidates if c["picture_id"] == ids[0]
+        )
+        # Exactly the token the batch-thumbnail endpoint puts in its ?v=.
+        assert token == ImageUtils.thumbnail_cache_token(320, 240) == "320x240"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_auto_stack_dry_run_carries_the_consent_aggregates():
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        body = client.post(AUTO_STACK_URL, json={}).json()
+        summary = body["dry_run_summary"]
+        assert summary["groups"] == body["groups"] == 1
+        assert summary["pictures"] == body["pictures"] == 2
+        assert summary["groups_by_tier"] == {"exact": 1, "near": 0, "embedding": 0}
+        # The seeded cover carries the only tag and the only score, so it gains
+        # nothing from the union.
+        assert summary["covers_gaining_metadata"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_partially_blocked_auto_stack_returns_its_batch_id():
+    """R2 at the HTTP boundary: a 423 mid-run must not swallow the undo handle."""
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+
+        def add_second_group_and_lock_it(session):
+            created = []
+            for _ in range(2):
+                pic = Picture(
+                    file_path=f"/vault/locked_{len(created)}.png",
+                    format="png",
+                    width=10,
+                    height=10,
+                    size_bytes=42,
+                    pixel_sha="locked",
+                )
+                session.add(pic)
+                session.flush()
+                created.append(int(pic.id))
+            picture_set = PictureSet(name="Frozen", locked=True)
+            session.add(picture_set)
+            session.commit()
+            session.refresh(picture_set)
+            session.add(
+                PictureSetMember(set_id=int(picture_set.id), picture_id=created[0])
+            )
+            session.commit()
+            return created
+
+        locked_ids = _run(server, add_second_group_and_lock_it)
+        _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+        response = client.post(AUTO_STACK_URL, json={"dry_run": False})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["batch_id"]
+        assert body["groups"] == 1
+        assert body["blocked"] == 1
+        assert body["failures"][0]["status_code"] == 423
+        # The unlocked group was applied, the locked one was not.
+        assert (
+            _run(server, lambda session: session.get(Picture, ids[0]).stack_id)
+            is not None
+        )
+        assert (
+            _run(server, lambda session: session.get(Picture, locked_ids[0]).stack_id)
+            is None
+        )
     finally:
         _teardown(temp_dir, server)

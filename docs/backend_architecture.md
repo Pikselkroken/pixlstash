@@ -1728,6 +1728,25 @@ is dominated by the top bit and says nothing about Hamming proximity.
 `LikenessUtils.PHASH_PREFIX_LEN = 3` is dead code with no reader. The reusable
 precomputed bucket key is `size_bin_index`, and that is what tier 2 uses.
 
+**Memory is bounded separately from CPU.** `MAX_BUCKET_MEMBERS` caps the
+comparison *work*; it does not cap the *result*. A bucket whose members are
+mutually near-identical (a burst of near-black frames, a folder of solid-colour
+placeholders, one image copied 4000 times) yields `k*(k-1)/2` pairs — ~8M tuples,
+roughly 580 MB, for a component the union-find only needs a spanning subset of.
+Two further caps, both logged when they bite (never silent):
+
+| Constant | Value | Bounds |
+|---|---|---|
+| `MAX_PAIRS_PER_BUCKET` | 50 000 (~4 MB) | pairs materialised for one bucket |
+| `MAX_TRACKED_PAIRS` | 400 000 (~32 MB) | pairs a whole streaming scan retains across buckets |
+
+Hitting the per-bucket cap keeps every matching member connected (the retained
+pairs are the lowest-offset ones), so group *membership* is unaffected; what is
+lost is confidence *resolution*, since the weakest-link value is measured over
+fewer edges. Hitting the scan-wide cap stops cross-bucket chaining growing, so a
+chain spanning two buckets can be reported as two groups. Both log a warning
+naming the bucket or scan and what was given up.
+
 ### 22.3 Tier 3 — embedding
 
 Opt-in, and recomputes nothing: it folds the existing `PictureLikeness` edge table
@@ -1762,7 +1781,7 @@ as a *preselection* the user overrides, together with:
 
 The server reports reasons. The user concludes.
 
-### 22.6 Persistence: three tables
+### 22.6 Persistence: four tables
 
 `pixlstash/db_models/dedup.py`, migration `0088_add_dedup_tier_tables`:
 
@@ -1770,11 +1789,22 @@ The server reports reasons. The user concludes.
   *upserts on `signature`*, so a rescan refreshes rows instead of duplicating
   them, and the queue is paged from `(resolved, confidence DESC)` and never
   materialised whole. This is what makes 10 groups and 10,000 cost the same.
-- **`dedupverdict`** — verdict memory keyed on the group **signature**
-  (`sha256` of the sorted member content keys, `pixel_sha` where available and
-  `id:<n>` where not). Because the key is content and not ids, a rescan or a
-  re-import never re-asks. `reopened_at` marks a verdict as no longer live; the
-  row is kept so the decision history survives.
+- **`dedupverdict`** — verdict memory keyed on the group **signature**: `sha256`
+  of the sorted member content keys, where a content key is
+  **`<pixel_sha>:<size_bytes>`** (or `id:<n>` for a picture not yet hashed).
+  Because the key is content and not ids, a rescan or a re-import never re-asks.
+  `reopened_at` marks a verdict as no longer live; the row is kept so the
+  decision history survives.
+
+  **The size co-key is not optional.** Identity has to match detection: tier 1
+  groups on `(pixel_sha, size_bytes)` precisely because the digest is sampled
+  above 128 KiB. A signature over the digest alone was not injective over groups
+  — two distinct exact groups differing only in size collapsed onto one
+  signature, and all three consequences were silent: the upsert-on-signature
+  dropped one group from the queue, a `keep_separate` on the survivor resolved
+  both file sets, and a stack verdict's write target depended on scan order
+  rather than on what the user saw. Pinned by
+  `test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct`.
 - **`dedupscan`** — one row per scope key, both the scan *request* (status
   `pending`) and the "scanned N of M" progress readout.
 
@@ -1791,6 +1821,20 @@ the queue the moment that bucket finishes and `scanned_buckets` advances with it
 tier 3 appends last. Restarting a scan is safe because persistence is an upsert.
 The finder `depends_on` `PIXEL_SHA` and `IMAGE_EMBEDDING` so a scan reports honest
 counts rather than a partially hashed library.
+
+**Only the groups a bucket could have changed are re-persisted.** Pairs are
+retained across buckets so a chain spanning two of them folds into one group, but
+each bucket tracks the picture ids its *new* pairs touched and rewrites only the
+groups containing one of them. The earlier version re-derived and re-wrote **every
+group after every bucket** — `O(buckets × groups)` DELETE+INSERT on the single DB
+writer thread, which every import, tag edit, scrapheap move and verdict then
+queues behind.
+
+**Honest scope of the performance claim.** §22.6's "10 groups and 10,000 perform
+identically" is a statement about the **queue page**, which reads exactly `limit`
+rows. It is *not* a statement about the scan: a scan is inherently proportional to
+the library, it holds the single DB writer while it runs, and its memory is bounded
+by the caps in §22.2 rather than being free.
 
 ### 22.8 Verdicts and the metadata union
 
@@ -1818,17 +1862,77 @@ The union writes tags and scores, which are curation state, so it calls
 `enforce_pictures_not_locked` first: a locked-set member makes the whole verdict a
 423 rather than a half-applied union.
 
-### 22.9 Operation-log seam
+**Guard ordering is load-bearing.** `_stack_members` calls
+`enforce_stack_membership_not_locked` **before** it folds any other stack in, and
+that guard expands through `expand_picture_ids_to_stacks` — which is why a locked
+co-member dragged in by the fold is caught even though
+`apply_metadata_union_in_session` only checks the group's own members. Moving the
+lock check after the fold would open that hole. Pinned by
+`test_a_locked_co_member_of_a_folded_stack_is_refused`.
 
-Every verdict raises an action receipt and lands in the operation log (§21),
-with bulk auto-stack coalescing into one `batch_id` so N stacks reverse with one
-undo. The two features were developed on separate lanes, so
-`dedup_verdict_service._record_operation` imports the operation log lazily and,
-should the module ever be absent, logs a warning naming it and the consequence
-(the verdict still applies but is not reversible in one keystroke) rather than
-failing the verdict. With both lanes merged the import resolves and the seam is
-live: it passes `batch_id`, `op_type` and the before/after picture state to
-`record_operation_in_session`, so verdicts are recorded with no further wiring.
+#### Accepted risk A1 — the union widens live share tokens
+
+**This is a change to who can see what, not only to metadata.** Unioning set and
+project membership adds an out-of-scope duplicate to a *shared* set, and every
+live share token for that set immediately reaches it — the picture, its tags, its
+`pixel_sha`, its file. The authz gate is behaving correctly (the picture genuinely
+*is* a set member after the union); the widening is the membership change itself.
+
+- **Not new.** An ordinary `POST /stacks` does exactly the same thing; this is the
+  shipped stack-atomic membership model, not a dedup regression.
+- **What is new is the amplification.** `POST /dedup/auto-stack` with
+  `dry_run=false` applies it to **every exact group in the vault** behind one
+  consent dialog. The dry run reports `groups` / `pictures` and a
+  `dry_run_summary`, but **not** how many shared sets or live tokens would gain
+  members.
+- **Blast radius.** Bounded to the owner's own sharing decisions: only sets and
+  projects that already have an outstanding token, and only pictures the owner has
+  just declared duplicates of something already in that set.
+- **Compensating controls.** `dry_run=true` is the default; the union is additive
+  and reversible through the operation log; tokens are owner-minted and READ-only;
+  a locked set refuses the union outright.
+- **Ruling: accepted** for the single-owner product. **Revisit** at the start of
+  any multi-user work, and immediately if bulk auto-stack is ever wired to run
+  unattended (at import or on a schedule) — unattended bulk membership widening is
+  a different risk and this acceptance does not cover it.
+- **Recommended, not implemented:** a `shared_sets_affected` count in the dry-run
+  summary so the consent dialog can say so out loud.
+
+### 22.9 Operation-log integration (§21)
+
+Every stack verdict records **exactly one** `Operation` row.
+
+- **One verdict, one row.** The verdict path deliberately does *not* call
+  `routes/stacks.py`, whose handlers already wrap themselves in
+  `run_recorded_metadata_task`; going through them would write a second row and
+  "one verdict, one undo" would stop being true. `_stack_members` stacks
+  in-session and `_record_operation` records once around the whole verdict.
+- **Bulk auto-stack shares one `batch_id`** across every group in the run, so
+  `POST /operations/batches/{batch_id}/undo` reverses the lot in one step. The
+  response carries the `batch_id` **even when the run only partially applied**
+  (see below), so work that happened is never left without a way to reverse it.
+- **The snapshot is stack-expanded**, taken over `expand_picture_ids_to_stacks`
+  with `include_deleted=True`: folding a stack reparents co-members the group
+  never named, and `normalize_stack_positions` renumbers soft-deleted members too
+  (§21.1). Both are pinned by non-vacuous tests.
+- **Keep-separate and reopen record nothing.** Neither changes a reversible
+  picture facet, so `record_operation_in_session` would return `None` anyway;
+  writing a no-op row would still consume a Ctrl+Z. The way back from
+  keep-separate is the explicit reopen action.
+- **Origin discipline.** `actor` / `source` / `origin_client_id` come from
+  `operation_log_service.request_context(request)`, read in the handler on the
+  request's own task and passed down explicitly — never from the contextvar, which
+  is dead on the DB worker thread. Only the two recording handlers take a
+  `Request`; keep-separate and reopen deliberately do not, since the values would
+  be dead arguments.
+
+**A bulk run is never aborted by one bad group.** The locked-set guards raise
+`HTTPException(423)`, so the loop catches that alongside `DedupVerdictError`,
+rolls back just that iteration, and records the group under an explicit outcome:
+`applied`, `blocked` (a guard refused it) or `failed` (it could not be resolved).
+Catching only `DedupVerdictError` meant a locked group mid-run propagated out
+after earlier groups had already committed — a partially applied mutation whose
+server-minted batch id the caller never saw.
 
 ---
 
