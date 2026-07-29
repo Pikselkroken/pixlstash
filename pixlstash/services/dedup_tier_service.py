@@ -78,8 +78,10 @@ the parameter object for that surface.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+from binascii import Error as BinasciiError
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -123,8 +125,10 @@ DEFAULT_THRESHOLD = 0.90
 
 MIN_THRESHOLD = 0.65
 """Hard floor. Below this nothing is suggested at all — a low threshold produces
-confident-looking garbage and destroys trust in the sidebar count. Requests below
-it are a 400, never a silent clamp."""
+confident-looking garbage and destroys trust in the sidebar count. Never a silent
+clamp: :class:`TierPolicy` raises ``ValueError`` here, and every route carries the
+same bound as a pydantic ``ge=``, so over HTTP a low threshold is refused with a
+**422** before any handler runs."""
 
 MAX_THRESHOLD = 0.99999
 
@@ -150,9 +154,19 @@ MAX_PAIRS_PER_BUCKET = 50_000
 A bucket whose members are mutually near-identical (a burst of near-black frames,
 a folder of solid-colour placeholders, one image copied 4000 times) yields
 ``k*(k-1)/2`` pairs: ~8M tuples, roughly 580 MB, for a component the union-find
-only needs a spanning subset of. 50 000 pairs is ~4 MB and still connects every
-matching member of any realistic bucket. Hitting it logs a warning naming the
-bucket — the cap is never silent."""
+only needs a spanning subset of. 50 000 pairs is ~4 MB.
+
+**The cap can lose membership.** Pairs are emitted in increasing member-offset
+order, so the cap keeps the nearest-offset edges and drops the wider ones. For a
+uniformly near-identical bucket that costs only confidence resolution (the
+offset-1 edges alone span the block). For a dense but *non-uniform* block —
+~700 mutually matching members exhaust the cap well inside the low offsets — a
+member whose only match sits at a wider offset gets no edge at all and is split
+off into its own group or drops out of the queue. Hitting the cap logs a warning
+naming the bucket, the offset it stopped at and that consequence; the cap is
+never silent and the comment is not reassuring about a case it cannot cover.
+Mitigation: resolve the dense block and rescan, narrow the bucket, or raise this
+constant for the memory it costs."""
 
 MAX_TRACKED_PAIRS = 400_000
 """Cap on the pairs a whole streaming scan keeps in memory across buckets.
@@ -208,6 +222,26 @@ TIER_ORDER: tuple[DedupTier, ...] = (
     DedupTier.NEAR,
     DedupTier.EMBEDDING,
 )
+
+TIER_STRENGTH: dict[str, int] = {
+    TIER_EXACT: 3,
+    TIER_NEAR: 2,
+    TIER_EMBEDDING: 1,
+}
+"""How strong each tier's evidence is, for the upsert's tier precedence.
+
+Two tiers can find the *same* group: a byte-identical pair is also perceptually
+identical, so a near-enabled rescan rediscovers every exact pair. The upsert is
+keyed on the signature, so without precedence the later (weaker) tier overwrote
+the stronger one — and an ``exact`` pair silently downgraded to ``near``
+disappeared from the exact-only default queue *and* from ``POST
+/dedup/auto-stack``, which only ever acts on ``exact``.
+"""
+
+
+def tier_strength(tier: Optional[str]) -> int:
+    """Rank a stored tier value; an unknown or missing tier ranks lowest."""
+    return TIER_STRENGTH.get(str(tier or ""), 0)
 
 
 class ScopeType(str, Enum):
@@ -268,6 +302,23 @@ class DedupScope:
                     f"scope_id for scope_type={self.scope_type.value} must be an "
                     f"integer id, got {self.scope_id!r}"
                 ) from exc
+            return
+        if self.scope_type is ScopeType.FOLDER:
+            # Normalise here, not at query time, and reject what normalises away.
+            # The predicate strips trailing separators before building its LIKE
+            # prefix, so "/", "\", "///" all became an empty prefix and a LIKE
+            # pattern of "%" — a "Find duplicates in this folder" request that
+            # silently meant the whole vault, and a persisted dedupscan row whose
+            # scope_key claimed otherwise. Normalising at construction also makes
+            # "/photos" and "/photos/" the same scope key instead of two scans.
+            prefix = str(self.scope_id).rstrip("/\\")
+            if not prefix:
+                raise ValueError(
+                    "scope_id for scope_type=folder must name a folder; "
+                    f"{self.scope_id!r} normalises to an empty prefix, which "
+                    "would match the whole vault"
+                )
+            object.__setattr__(self, "scope_id", prefix)
 
     @property
     def key(self) -> str:
@@ -307,8 +358,9 @@ class DedupScope:
         # unescaped, a scope_id of "%" would silently mean "everywhere", so a
         # "Find duplicates in this folder" entry could match far more than the
         # folder it named. The literal path is still compared exactly on
-        # import_source_folder.
-        prefix = str(self.scope_id).rstrip("/\\")
+        # import_source_folder. ``scope_id`` was already stripped of trailing
+        # separators and rejected if that left it empty (__post_init__).
+        prefix = str(self.scope_id)
         pattern = (
             prefix.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
             .replace("%", f"{LIKE_ESCAPE_CHAR}%")
@@ -1069,7 +1121,7 @@ def near_pairs_in_bucket(
     id_array = np.array(kept, dtype=np.int64)
     max_hamming = int((1.0 - float(threshold)) * PHASH_BITS)
     pairs: list[tuple[int, int, float]] = []
-    truncated = False
+    truncated_at_offset: Optional[int] = None
     for offset in range(1, len(kept)):
         distances = _popcount64(hashes[:-offset] ^ hashes[offset:])
         hits = np.nonzero(distances <= max_hamming)[0]
@@ -1077,31 +1129,44 @@ def near_pairs_in_bucket(
             continue
         for index in hits:
             if len(pairs) >= MAX_PAIRS_PER_BUCKET:
-                truncated = True
+                truncated_at_offset = offset
                 break
             left = int(id_array[index])
             right = int(id_array[index + offset])
             similarity = 1.0 - float(distances[index]) / PHASH_BITS
             pairs.append((min(left, right), max(left, right), round(similarity, 6)))
-        if truncated:
+        if truncated_at_offset is not None:
             break
-    if truncated:
-        # Never silent (CLAUDE.md's no-silent-caps rule). The cap only bites on a
-        # bucket where a large fraction of members are mutually near-identical —
-        # k members that all match produce k*(k-1)/2 pairs, so 4000 members would
-        # be ~8M tuples (~580 MB) for a group the union-find only needs a
-        # spanning subset of. The retained pairs are the lowest-offset ones,
-        # which still connect every matching member into the same component; the
-        # loss is confidence *resolution* (the group's weakest-link value may be
-        # measured over fewer edges), not group membership.
+    if truncated_at_offset is not None:
+        # Never silent (CLAUDE.md's no-silent-caps rule), and never dishonest.
+        # Pairs are emitted in increasing member-offset order, so the cap keeps
+        # the *nearest-offset* edges and drops every edge at a wider offset. In a
+        # bucket where members are mutually near-identical that is harmless: the
+        # offset-1 edges alone form a spanning path (k-1 <= MAX_PAIRS_PER_BUCKET
+        # for any bucket, since MAX_BUCKET_MEMBERS is far smaller), so every
+        # member still lands in one component and only confidence *resolution*
+        # suffers.
+        #
+        # It is NOT harmless in a dense but non-uniform block. ~700 mutually
+        # matching members exhaust the cap inside the low offsets; a member whose
+        # only match sits at a wider offset then never gets an edge at all, so it
+        # is split into a separate group or drops out of the queue entirely. The
+        # cap can therefore lose membership, and this warning says so. The
+        # mitigations are to resolve the dense block and rescan (the survivors
+        # then fit under the cap), to narrow the bucket, or to raise
+        # MAX_PAIRS_PER_BUCKET for the memory it costs.
         logger.warning(
-            "[dedup-tier2] bucket %s=%s hit the %d-pair cap with %d members; "
-            "the group's members are still all connected, but its confidence is "
-            "measured over a subset of its edges. Raise MAX_PAIRS_PER_BUCKET if "
-            "this bucket matters, or narrow the bucket.",
+            "[dedup-tier2] bucket %s=%s hit the %d-pair cap at member offset %d "
+            "of %d with %d members: no edge at a wider offset was emitted, so a "
+            "member whose only match is further away may be split into its own "
+            "group or missing from the queue, and reported confidences are "
+            "measured over a subset of the edges. Resolve this block and rescan, "
+            "narrow the bucket, or raise MAX_PAIRS_PER_BUCKET.",
             bucket.kind,
             bucket.key,
             MAX_PAIRS_PER_BUCKET,
+            truncated_at_offset,
+            len(kept) - 1,
             len(kept),
         )
     return pairs
@@ -1281,11 +1346,31 @@ def persist_groups_in_session(
             session.flush()
         else:
             row = existing
-            row.tier = group.tier.value
-            row.confidence = group.confidence
+            # Tier precedence: a stronger tier is never downgraded by a weaker
+            # one rediscovering the same signature. Exact pairs are perceptually
+            # identical too, so a near-enabled rescan finds every one of them
+            # again; overwriting unconditionally moved them out of the
+            # exact-only default view and out of auto-stack's eligibility.
+            # Tier, confidence and evidence describe the *same* finding, so they
+            # move together — mixing a stored exact tier with a near
+            # confidence would misreport both.
+            if tier_strength(group.tier.value) >= tier_strength(row.tier):
+                row.tier = group.tier.value
+                row.confidence = group.confidence
+                row.evidence = json.dumps(group.evidence)
+                row.cover_picture_id = group.cover_picture_id
+            else:
+                logger.debug(
+                    "[dedup] keeping tier %s for signature %s; %s rediscovered "
+                    "the same group with weaker evidence",
+                    row.tier,
+                    group.signature,
+                    group.tier.value,
+                )
+            # Membership is pinned by the signature (it hashes the sorted member
+            # content keys), so it is refreshed either way: a re-import can give
+            # the same content new picture ids.
             row.member_count = len(group.members)
-            row.cover_picture_id = group.cover_picture_id
-            row.evidence = json.dumps(group.evidence)
             row.resolved = resolved
             row.scan_id = scan_id
             session.add(row)
@@ -1338,6 +1423,68 @@ def prune_stale_groups_in_session(session: Session) -> int:
 
 def _tier_filter(policy: TierPolicy):
     return DedupGroup.tier.in_([tier.value for tier in policy.tiers])
+
+
+CURSOR_VERSION = "1"
+"""Version tag inside the opaque queue cursor, so its encoding can change."""
+
+
+class DedupCursorError(ValueError):
+    """A queue cursor could not be decoded (truncated, edited or foreign)."""
+
+
+def encode_queue_cursor(confidence: float, group_id: int) -> str:
+    """Encode the keyset position of the last delivered row.
+
+    The queue's order is ``(confidence DESC, id ASC)``, so the position after a
+    row is exactly that pair. The wire form is base64url (unpadded) over
+    ``"1|<confidence>|<group id>"``, with the confidence written at 17
+    significant digits so a float round-trips exactly and the ``=`` tie-break
+    branch of the keyset predicate is reliable. It is opaque by intent — clients
+    must pass it back verbatim, never construct or interpret one.
+
+    Args:
+        confidence: The last delivered group's confidence.
+        group_id: The last delivered group's row id.
+
+    Returns:
+        The cursor to hand back as ``next_cursor``.
+    """
+    raw = f"{CURSOR_VERSION}|{float(confidence):.17g}|{int(group_id)}"
+    return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
+
+
+def decode_queue_cursor(cursor: str) -> tuple[float, int]:
+    """Decode a cursor produced by :func:`encode_queue_cursor`.
+
+    Raises:
+        DedupCursorError: The cursor is not a cursor this server minted. A bad
+            cursor is a 400, never a silent restart from the top — silently
+            paging from offset 0 would hand the client the same page forever.
+    """
+    text = str(cursor or "")
+    try:
+        padded = text + "=" * (-len(text) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
+        version, confidence, group_id = raw.split("|")
+        if version != CURSOR_VERSION:
+            raise ValueError(f"unsupported cursor version {version!r}")
+        return float(confidence), int(group_id)
+    except (ValueError, UnicodeDecodeError, BinasciiError) as exc:
+        raise DedupCursorError(f"malformed queue cursor {cursor!r}: {exc}") from exc
+
+
+def _keyset_predicate(cursor: str):
+    """The ``WHERE`` that resumes ``(confidence DESC, id ASC)`` after *cursor*.
+
+    The tie-break half is load-bearing: several groups routinely share a
+    confidence (every exact group is 1.0), so ``confidence < c`` alone would skip
+    the rest of the tied run and ``confidence <= c`` would repeat it forever.
+    """
+    confidence, group_id = decode_queue_cursor(cursor)
+    return (DedupGroup.confidence < confidence) | (
+        (DedupGroup.confidence == confidence) & (DedupGroup.id > group_id)
+    )
 
 
 def count_unresolved_in_session(
@@ -1412,16 +1559,40 @@ def page_queue_in_session(
     scope: Optional[DedupScope] = None,
     offset: int = 0,
     limit: int = DEFAULT_PAGE_SIZE,
-) -> tuple[list[dict[str, Any]], int]:
+    cursor: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], int, Optional[str]]:
     """One page of the queue, confidence descending. Never loads the whole list.
 
     Exactly ``limit`` group rows are read, then one candidate load for that
     page's members. 10 groups and 10,000 cost the same per page, which is the
     design's virtual-queue requirement expressed on the server side.
 
+    **Page with the cursor, not the offset.** The queue is a live list: deciding
+    a verdict on a delivered row removes it from ``resolved=False``, and a tier-2
+    scan commits new groups after every bucket. Both shift every later row's
+    offset, so ``offset=limit`` on the second request skips exactly as many
+    groups as the first page's decisions removed — a deterministic, silent skip
+    reproduced with a single verdict between two pages. The keyset cursor encodes
+    *where the last row was in the ordering* rather than *how many rows to
+    discard*, so a row that never moved is never skipped.
+
+    Args:
+        session: Pre-opened session.
+        policy: Tier gating and threshold; server defaults when omitted.
+        scope: Scope to page within; the whole vault when omitted.
+        offset: Deprecated rows-to-skip paging. Ignored when *cursor* is given —
+            the route rejects the combination before it reaches here.
+        limit: Page size, clamped to :data:`MAX_PAGE_SIZE`.
+        cursor: Opaque keyset position from a previous page's ``next_cursor``.
+
     Returns:
-        ``(groups, total)`` where *total* is the complete unresolved count in
-        scope, so the client can size its scrollbar without a second request.
+        ``(groups, total, next_cursor)``. *total* is the complete unresolved
+        count in scope, so the client can size its scrollbar without a second
+        request. *next_cursor* is ``None`` once the page is not full, which is
+        end-of-found.
+
+    Raises:
+        DedupCursorError: *cursor* is not a cursor this server minted.
     """
     policy = policy or TierPolicy()
     scope = scope or DedupScope()
@@ -1442,17 +1613,26 @@ def page_queue_in_session(
                 .where(Picture.deleted.is_(False), predicate)
             )
         )
-    rows = session.exec(
-        query.order_by(
-            DedupGroup.confidence.desc(),
-            DedupGroup.id.asc(),
-        )
-        .offset(offset)
-        .limit(limit)
-    ).all()
+    if cursor:
+        query = query.where(_keyset_predicate(cursor))
+    query = query.order_by(
+        DedupGroup.confidence.desc(),
+        DedupGroup.id.asc(),
+    ).limit(limit)
+    if not cursor:
+        query = query.offset(offset)
+    rows = session.exec(query).all()
     total = count_unresolved_in_session(session, policy, scope)
     if not rows:
-        return [], total
+        return [], total, None
+    # A short page is end-of-found; a full page may or may not be, and handing
+    # back a cursor that yields one empty page is cheaper than the extra COUNT
+    # that would be needed to know for certain.
+    next_cursor = (
+        encode_queue_cursor(float(rows[-1].confidence or 0.0), int(rows[-1].id))
+        if len(rows) == limit
+        else None
+    )
 
     group_ids = [int(row.id) for row in rows]
     member_rows = session.exec(
@@ -1509,7 +1689,7 @@ def page_queue_in_session(
                 ],
             }
         )
-    return payload, total
+    return payload, total, next_cursor
 
 
 def scope_counts_in_session(
@@ -1677,10 +1857,11 @@ def page_queue(
     scope: Optional[DedupScope] = None,
     offset: int = 0,
     limit: int = DEFAULT_PAGE_SIZE,
-) -> tuple[list[dict[str, Any]], int]:
+    cursor: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], int, Optional[str]]:
     """Read-only vault wrapper around :func:`page_queue_in_session`."""
     return vault.db.run_immediate_read_task(
-        page_queue_in_session, policy, scope, offset, limit
+        page_queue_in_session, policy, scope, offset, limit, cursor
     )
 
 
@@ -1690,6 +1871,7 @@ def _queue_response_in_session(
     scope: DedupScope,
     offset: int,
     limit: int,
+    cursor: Optional[str] = None,
 ) -> dict[str, Any]:
     """The whole ``GET /dedup/groups`` payload, on one session.
 
@@ -1697,12 +1879,16 @@ def _queue_response_in_session(
     is captioned with come from the same read, and so the route never touches
     ``vault.db`` (§10.1).
     """
-    groups, total = page_queue_in_session(session, policy, scope, offset, limit)
+    groups, total, next_cursor = page_queue_in_session(
+        session, policy, scope, offset, limit, cursor
+    )
     return {
         "groups": groups,
         "total": total,
         "offset": offset,
         "limit": min(int(limit), MAX_PAGE_SIZE),
+        "cursor": cursor,
+        "next_cursor": next_cursor,
         "policy": policy.as_dict(),
         "scope": scope.as_dict(),
         "scan": scan_progress_in_session(session, scope),
@@ -1715,6 +1901,7 @@ def queue_response(
     scope: Optional[DedupScope] = None,
     offset: int = 0,
     limit: int = DEFAULT_PAGE_SIZE,
+    cursor: Optional[str] = None,
 ) -> dict[str, Any]:
     """Read-only vault wrapper producing the full queue-page response."""
     return vault.db.run_immediate_read_task(
@@ -1723,6 +1910,7 @@ def queue_response(
         scope or DedupScope(),
         offset,
         limit,
+        cursor,
     )
 
 
@@ -1781,6 +1969,7 @@ __all__ = [
     "COVER_RAW_BONUS",
     "COVER_SCORE_WEIGHT",
     "COVER_TAG_WEIGHT",
+    "CURSOR_VERSION",
     "DEFAULT_MAX_GROUP_SIZE",
     "DEFAULT_MIN_GROUP_SIZE",
     "DEFAULT_PAGE_SIZE",
@@ -1791,15 +1980,17 @@ __all__ = [
     "MIN_THRESHOLD",
     "RAW_FORMATS",
     "TIER_ORDER",
+    "TIER_STRENGTH",
+    "VERDICT_KEEP_SEPARATE",
+    "VERDICT_STACKED",
     "CandidateMember",
+    "DedupCursorError",
     "DedupScope",
     "DedupTier",
     "DetectedGroup",
     "NearBucket",
     "ScopeType",
     "TierPolicy",
-    "VERDICT_KEEP_SEPARATE",
-    "VERDICT_STACKED",
     "assemble_group",
     "build_candidate_evidence",
     "build_group_evidence",
@@ -1809,6 +2000,8 @@ __all__ = [
     "count_unresolved_in_session",
     "counts_response",
     "cover_order_key",
+    "decode_queue_cursor",
+    "encode_queue_cursor",
     "find_embedding_groups_in_session",
     "find_exact_groups_in_session",
     "find_near_groups_in_session",
@@ -1829,5 +2022,6 @@ __all__ = [
     "scan_progress_in_session",
     "scope_counts_in_session",
     "select_cover",
+    "tier_strength",
     "verdict_signatures_in_session",
 ]

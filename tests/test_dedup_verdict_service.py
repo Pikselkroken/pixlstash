@@ -95,7 +95,7 @@ def _scan(server, policy=None):
 
 
 def _one_signature(server) -> str:
-    page, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     assert page, "expected at least one unresolved group"
     return page[0]["signature"]
 

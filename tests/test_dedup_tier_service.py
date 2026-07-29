@@ -605,14 +605,16 @@ def test_the_queue_pages_by_confidence_descending(server):
     )
     policy = TierPolicy(near_enabled=True)
     _scan(server, policy)
-    page, total = _run(server, tiers.page_queue_in_session, policy, None, 0, 2)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, policy, None, 0, 2)
     assert total == 3
     assert [round(group["confidence"], 4) for group in page] == [
         1.0,
         round(63 / 64, 4),
     ]
     assert page[0]["tier"] == "exact"
-    second, _total = _run(server, tiers.page_queue_in_session, policy, None, 2, 2)
+    second, _total, _cursor = _run(
+        server, tiers.page_queue_in_session, policy, None, 2, 2
+    )
     assert len(second) == 1
     assert second[0]["confidence"] == pytest.approx(60 / 64)
 
@@ -631,7 +633,7 @@ def test_the_queue_carries_the_cover_and_both_evidence_layers(server):
         ],
     )
     _scan(server)
-    page, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     group = page[0]
     assert group["cover_picture_id"] == ids[0]
     assert any(pill["text"] == "Identical file hash" for pill in group["why"])
@@ -670,7 +672,7 @@ def test_a_recorded_verdict_resolves_the_group_on_the_next_scan(server):
         ],
     )
     _scan(server)
-    page, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     signature = page[0]["signature"]
 
     def record(session):
@@ -688,7 +690,7 @@ def test_a_recorded_verdict_resolves_the_group_on_the_next_scan(server):
     # A rescan re-derives the same signature and never re-asks.
     _scan(server)
     assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
-    page, total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     assert page == [] and total == 0
 
 
@@ -701,7 +703,7 @@ def test_a_reopened_verdict_puts_the_group_back_in_the_queue(server):
         ],
     )
     _scan(server)
-    page, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     signature = page[0]["signature"]
 
     def record_and_reopen(session):
@@ -862,12 +864,14 @@ def test_a_verdict_on_one_group_does_not_resolve_its_same_digest_twin(server):
         ],
     )
     _scan(server)
-    page, total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     assert total == 2
     _run(server, verdicts.apply_keep_separate_in_session, page[0]["signature"], None)
     # The other group is still waiting for its own decision.
     assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
-    remaining, _total = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    remaining, _total, _cursor = _run(
+        server, tiers.page_queue_in_session, None, None, 0, 10
+    )
     assert len(remaining) == 1
     assert remaining[0]["signature"] == page[1]["signature"]
 
@@ -887,3 +891,171 @@ def test_content_key_carries_the_size_co_key():
     )
     # An unhashed picture still falls back to its id.
     assert tiers.CandidateMember(id=7).content_key == "id:7"
+
+
+# ── tier precedence on upsert ────────────────────────────────────────────────
+
+
+def _group_row(server, signature):
+    return _run(
+        server,
+        lambda session: session.exec(
+            select(DedupGroup).where(DedupGroup.signature == signature)
+        ).first(),
+    )
+
+
+def test_a_near_scan_does_not_downgrade_an_exact_group(server):
+    """QA blocker 2, the two-scan repro.
+
+    A byte-identical pair is also perceptually identical, so every near-enabled
+    scan rediscovers it as a ``near`` group with the same signature. The upsert
+    wrote ``row.tier`` unconditionally, so the pair was demoted to ``near`` - and
+    a ``near`` group is invisible in the exact-only default queue *and*
+    ineligible for ``POST /dedup/auto-stack``, which only ever acts on ``exact``.
+    """
+    _seed(
+        server,
+        [
+            {
+                "pixel_sha": "same",
+                "size_bytes": 100,
+                "perceptual_hash": PHASH_ZERO,
+            },
+            {
+                "pixel_sha": "same",
+                "size_bytes": 100,
+                "perceptual_hash": PHASH_ZERO,
+            },
+        ],
+    )
+    # Scan 1: exact only.
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+    rows = _run(server, lambda session: session.exec(select(DedupGroup)).all())
+    assert len(rows) == 1
+    signature = rows[0].signature
+    assert rows[0].tier == DedupTier.EXACT.value
+    exact_confidence = rows[0].confidence
+
+    # Scan 2: the user turns tier 2 on.
+    _run(
+        server,
+        tiers.run_scan_now_in_session,
+        TierPolicy(near_enabled=True),
+        None,
+    )
+    row = _group_row(server, signature)
+    assert row.tier == DedupTier.EXACT.value, "exact must never be downgraded"
+    assert row.confidence == exact_confidence
+
+    # And the pair is still where the exact-only default queue and auto-stack
+    # both look for it.
+    page, _total, _cursor = _run(
+        server, tiers.page_queue_in_session, TierPolicy(), None, 0, 10
+    )
+    assert [group["tier"] for group in page] == [DedupTier.EXACT.value]
+
+
+def test_the_upsert_takes_the_stronger_tier_in_either_arrival_order(server):
+    """Precedence is a *maximum*, not a freeze on whatever landed first.
+
+    Driven through :func:`persist_groups_in_session` directly, because a real
+    scan cannot present the same signature under two tiers in the weak-then-
+    strong order: the signature hashes the members' ``<pixel_sha>:<size_bytes>``
+    content keys, so anything tier 1 can group tier 2 also sees, and the reverse
+    change (two files becoming byte-identical) changes the content keys and
+    therefore the signature. The precedence rule still has to hold both ways, or
+    it is an ordering accident rather than a rule.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "same", "size_bytes": 100},
+            {"pixel_sha": "same", "size_bytes": 100},
+        ],
+    )
+
+    def upsert(session, first, second):
+        members = tiers.load_candidates(session, ids)
+        ordered = [members[pid] for pid in ids]
+        for tier, confidence in (first, second):
+            tiers.persist_groups_in_session(
+                session, [tiers.assemble_group(tier, confidence, ordered)]
+            )
+        return session.exec(select(DedupGroup)).all()
+
+    strong = (DedupTier.EXACT, 1.0)
+    weak = (DedupTier.NEAR, 0.93)
+
+    rows = _run(server, upsert, strong, weak)
+    assert [row.tier for row in rows] == [DedupTier.EXACT.value]
+    assert rows[0].confidence == 1.0
+
+    rows = _run(server, upsert, weak, strong)
+    assert [row.tier for row in rows] == [DedupTier.EXACT.value]
+    assert rows[0].confidence == 1.0
+
+
+# ── keyset cursor ────────────────────────────────────────────────────────────
+
+
+def test_a_cursor_round_trips_its_position_exactly():
+    """Float equality drives the tie-break branch, so the encoding must be exact."""
+    for confidence in (1.0, 0.9, 0.65, 0.123456789012345, 0.0):
+        cursor = tiers.encode_queue_cursor(confidence, 4242)
+        assert tiers.decode_queue_cursor(cursor) == (confidence, 4242)
+
+
+def test_a_tampered_cursor_is_refused_rather_than_reinterpreted():
+    for bad in ("", "AAAA", "not base64!", tiers.encode_queue_cursor(1.0, 1)[:-4]):
+        with pytest.raises(tiers.DedupCursorError):
+            tiers.decode_queue_cursor(bad)
+    # A cursor from a future encoding version is refused, not misread.
+    import base64
+
+    forged = base64.urlsafe_b64encode(b"9|1.0|1").decode().rstrip("=")
+    with pytest.raises(tiers.DedupCursorError):
+        tiers.decode_queue_cursor(forged)
+
+
+def test_the_cursor_resumes_a_tied_confidence_run_without_gap_or_repeat(server):
+    """Every exact group ties at the same confidence; the id breaks the tie."""
+    for index in range(5):
+        _seed(
+            server,
+            [
+                {"pixel_sha": f"tie-{index}", "size_bytes": 100 + index},
+                {"pixel_sha": f"tie-{index}", "size_bytes": 100 + index},
+            ],
+        )
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+    walked = []
+    cursor = None
+    for _ in range(10):
+        page, total, cursor = _run(
+            server, tiers.page_queue_in_session, None, None, 0, 2, cursor
+        )
+        assert total == 5
+        walked.extend(group["signature"] for group in page)
+        if cursor is None:
+            break
+    assert len(walked) == 5, walked
+    assert len(set(walked)) == 5, "a tie must not be delivered twice"
+
+
+# ── folder scope normalisation ───────────────────────────────────────────────
+
+
+def test_a_folder_scope_that_normalises_to_empty_is_refused():
+    """CSO W2: these all rstripped to "" and became a LIKE pattern of "%"."""
+    for bad in ("/", "\\", "///", "\\\\", "/\\/"):
+        with pytest.raises(ValueError):
+            DedupScope(scope_type=ScopeType.FOLDER, scope_id=bad)
+
+
+def test_a_folder_scope_is_normalised_to_one_scope_key():
+    plain = DedupScope(scope_type=ScopeType.FOLDER, scope_id="/photos/2026")
+    trailing = DedupScope(scope_type=ScopeType.FOLDER, scope_id="/photos/2026/")
+    assert plain.key == trailing.key == "folder:/photos/2026"
+    assert trailing.scope_id == "/photos/2026"
