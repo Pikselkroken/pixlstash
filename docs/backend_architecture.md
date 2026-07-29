@@ -31,6 +31,7 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
 
 ---
 
@@ -419,6 +420,13 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
+| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
+| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
+| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
+| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                       |
+| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                           |
+| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state         |
+| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                |
 | GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                          |
 | POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                         |
 | GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                 |
@@ -635,6 +643,19 @@ TaggerRun: id, run (unique), model_version, verdict, recommend,
            (tagger eval runs pushed from PixlTagger)
 ```
 
+### Operation log (append-only)
+
+```text
+Operation: id, batch_id, created_at, actor, op_type, target_type,
+           target_ids (JSON list[int]), target_count,
+           before_state (JSON {picture_id: {facet: value}}),
+           after_state (same shape), source, origin_client_id,
+           undoable, status (applied|undone|superseded), undone_at,
+           summary
+           (one recorded change; undo restores before_state, redo
+            restores after_state — see §21)
+```
+
 ### Filesystem-linked
 
 ```text
@@ -784,6 +805,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
 | [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
 | [services/impossible_tag_scan_service.py](../pixlstash/services/impossible_tag_scan_service.py) | On-demand impossible-tag scan — (re)builds the cleanup queue for person-tags that are impossible on a picture with no detectable face; sibling of `tag_scan_service.py` |
+| [services/operation_log_service.py](../pixlstash/services/operation_log_service.py) | The operation log (§21): snapshots the reversible metadata facets of the affected pictures before and after a mutation, records the diff as one append-only `Operation` row (with a batch id when it is part of a bulk action), and applies a recorded state back for undo/redo. `run_recorded_metadata_task` is the wrapper mutation sites call instead of `vault.db.run_task`, so capture, mutation and recording share one queued task |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
 ### 10.1 DB access rule for services (enforced in CI)
@@ -867,7 +889,11 @@ Selected milestones:
 
 | 0084 | Library-wide `smart_score` NULL-reset after rebalancing the positive weights |
 
-Current head: `0084_recompute_smart_score_rebalanced_weights`.
+| 0085 | `smart_score` NULL-reset after restoring the built-in anchors |
+
+| 0086 | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
+
+Current head: `0086_add_operation_log`.
 
 ---
 
@@ -1483,7 +1509,46 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-07-19. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+
+The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
+
+### The design: record state, not inverses
+
+Instead of teaching each mutating endpoint how to invert itself, the log snapshots the **metadata state of the affected pictures before and after** the mutation and keeps only the facets that changed. Undo writes the recorded `before` back; redo writes `after` back. Consequences worth knowing:
+
+- The applier is uniform, so a new mutating endpoint becomes undoable by wrapping its DB task — there is no inverse to write and none to get wrong.
+- The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
+- Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
+
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, and stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+
+### Recording a change
+
+Metadata mutation sites call `operation_log_service.run_recorded_metadata_task(vault, work_fn, *args, op_type=…, picture_ids=…, **request_context(request))` **instead of** `vault.db.run_task(work_fn, *args)`. That wrapper runs capture → mutation → capture → record inside **one** queued DB task, so the `Operation` row and the change it describes commit against the same serialised writer; a separate before-read on the caller's thread would leave a window for another write to land between the snapshot and the mutation and be silently attributed to this operation. Pass `expand_stacks=True` when the mutation is stack-atomic, or undo would restore the clicked picture and leave its stack siblings behind. Pass `resolve_picture_ids=` — a `(session) -> ids` callable run on the mutation's own session just before the write — when the handler's targets are not knowable from the request alone (a request addressed by *face* id; a replace-all that evicts members it was never told about); without it the operation records a half-change undo could not fully reverse. A mutation that changed nothing records nothing.
+
+### `batch_id` — one bulk action, one Undo
+
+`batch_id` groups several rows into one user-visible action. Undoing any member reverts the whole batch (newest first), so a partially-undone bulk action cannot exist, and `POST /operations/batches/{batch_id}/undo` is the single-call revert behind a bulk report ("Collapsed 2,700 groups — Undo"). The column is present from the first migration deliberately: retrofitting a grouping key onto a log that already holds rows is exactly the pain the additive-only rule exists to prevent.
+
+### Append-only, and what "status" means
+
+Recorded content (`op_type` / `target_ids` / `before_state` / `after_state` / `actor` / `source` / `created_at`) is written once and never rewritten. The only mutable columns are the lifecycle markers `status` (`applied` → `undone` → `superseded`) and `undone_at`, which *append* the fact that an operation was reverted rather than erasing it. Recording a new operation supersedes the redo stack (classic linear undo history) by advancing those markers — no row is deleted. `tests/test_operation_log.py::test_log_is_append_only_across_undo_and_redo` pins this.
+
+### Origin discipline (§15) applies on both sides
+
+`source` / `origin_client_id` are read from the **request**, in the handler, on the request's own task (`operation_log_service.request_context`), then passed explicitly downstream and carried in the WS event `data` dict when undo announces itself. The service never reads `origin_client_id_var` — it runs on the DB worker thread where that contextvar is dead, the same hazard `test_source_origin_read_from_data_only` pins for the broadcaster. Both directions are tested: `tests/test_operation_log.py::test_service_module_never_reads_the_origin_contextvar` (an AST check, so a future edit cannot reintroduce the read) and `tests/test_ws_broadcaster.py::test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar` (the producer side of the envelope contract).
+
+### Locked sets are not bypassed
+
+A locked picture set is a hard freeze on its members' label data. `apply_state_in_session` — the single sink every restore goes through — calls `enforce_pictures_not_locked` over the whole recorded state before dispatching, so undo/redo cannot become the one write path around the freeze; a frozen target yields `423` and the operation stays `applied`.
+
+### Endpoints and authorization
+
+`GET /operations`, `GET /operations/undo-state`, `GET /operations/{operation_id}`, `POST /operations/undo`, `POST /operations/redo`, `POST /operations/{operation_id}/undo`, `POST /operations/batches/{batch_id}/undo` — all declared **`OWNER_ONLY`** in `ROUTE_POLICIES` (§16.1). The log enumerates every change to the whole library and undo writes metadata back onto arbitrary pictures across the vault, so no resource-scoped grant can bound either. The handlers carry **no** authorization code; the gate is the sole enforcement.
+
+---
+
+*Last updated: 2026-07-28. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
-
