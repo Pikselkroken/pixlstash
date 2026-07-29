@@ -10,9 +10,17 @@ get wrong), and produces exactly the ``{before, after}`` payload the DAM roadmap
 specifies for the audit log.
 
 Scope discipline (DAM 1.2, binding): only the **metadata** facets in
-:data:`FACETS` are captured and reversible — tags, caption/description, rating,
-picture-set / project / character membership, stacking, and the scrapheap
-soft-delete state. File-mutating operations may be *recorded* for audit with
+:data:`FACETS` are captured and reversible — tags, the tag-prediction rows and
+their human-label ledger, caption/description, rating, picture-set / project /
+character membership, stacking, and the scrapheap soft-delete state. A facet is
+either whole or absent: a tag decision that also writes the ledger records both
+sides, because restoring the tag and leaving the ledger's rejection standing
+would look undone while the tagger still treated the tag as refused (§21.2).
+Values *derived* from those facets — ``anomaly_tag_uncertainty`` and the cached
+``smart_score`` — are deliberately NOT snapshotted; they are recomputed and
+invalidated on restore through the same guards the forward path uses, because a
+snapshot of a derived value is a second source of truth waiting to drift.
+File-mutating operations may be *recorded* for audit with
 ``undoable=False``, but they are not reversible until copy-on-write versions land
 (Stage 2 / v2.1). A **permanent** delete (scrapheap purge, Empty Scrapheap,
 retention auto-purge) destroys the file and is deliberately *not* recorded here:
@@ -51,6 +59,7 @@ from pixlstash.db_models import (
     PictureSetMember,
     PictureStack,
     Tag,
+    TagPrediction,
 )
 from pixlstash.db_models.operation import (
     STATUS_APPLIED,
@@ -62,6 +71,14 @@ from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.service.label_ledger import MANUAL_MODEL_VERSION, UNKNOWN
+from pixlstash.utils.service.smart_score_invalidation import (
+    InteractiveRescoreRegistry,
+    invalidate_on_anomaly_change,
+)
+from pixlstash.utils.service.tag_prediction_utils import (
+    recompute_anomaly_tag_uncertainty,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
@@ -73,6 +90,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 FACET_TAGS = "tags"
+FACET_TAG_PREDICTIONS = "tag_predictions"
 FACET_DESCRIPTION = "description"
 FACET_SCORE = "score"
 FACET_SETS = "sets"
@@ -85,6 +103,7 @@ FACET_DELETED = "deleted"
 
 FACETS = (
     FACET_TAGS,
+    FACET_TAG_PREDICTIONS,
     FACET_DESCRIPTION,
     FACET_SCORE,
     FACET_SETS,
@@ -102,6 +121,11 @@ FACETS = (
 OP_SCRAPHEAP_MOVE = "pictures.scrapheap.move"
 OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
 
+# The tag-review decisions (§21.2). Named for the same reason the scrapheap pair
+# is: the frontend keys its icon/receipt affordances off the string.
+OP_TAGS_CONFIRM = "pictures.tags.confirm"
+OP_TAGS_REJECT = "pictures.tags.reject"
+
 # HTTP status for "an undo target was permanently purged and cannot come back".
 # 410 Gone, not 404: the picture demonstrably existed and was destroyed, and the
 # operation row that named it is still there.
@@ -115,6 +139,7 @@ MAX_LIST_LIMIT = 500
 # refresh the sidebar counts.
 _FACET_EVENTS = {
     FACET_TAGS: (EventType.CHANGED_TAGS, EventType.CHANGED_PICTURES),
+    FACET_TAG_PREDICTIONS: (EventType.CHANGED_TAGS, EventType.CHANGED_PICTURES),
     FACET_DESCRIPTION: (EventType.CHANGED_DESCRIPTIONS, EventType.CHANGED_PICTURES),
     FACET_SCORE: (EventType.CHANGED_PICTURES,),
     FACET_SETS: (EventType.CHANGED_PICTURES,),
@@ -219,6 +244,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             FACET_PROJECT_ID: picture.project_id,
             FACET_PENDING_CHARACTER_ID: picture.pending_character_id,
             FACET_TAGS: [],
+            FACET_TAG_PREDICTIONS: {},
             FACET_SETS: [],
             FACET_PROJECTS: [],
             FACET_CHARACTERS: {},
@@ -245,6 +271,49 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
         select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(present))
     ).all():
         state[str(int(picture_id))][FACET_TAGS].append(tag)
+
+    for (
+        picture_id,
+        tag,
+        model_version,
+        confidence,
+        status,
+        predicted_at,
+        label_state,
+        label_source,
+        labeled_at,
+        label_model_version,
+        label_confidence,
+    ) in session.exec(
+        select(
+            TagPrediction.picture_id,
+            TagPrediction.tag,
+            TagPrediction.model_version,
+            TagPrediction.confidence,
+            TagPrediction.status,
+            TagPrediction.predicted_at,
+            TagPrediction.label_state,
+            TagPrediction.label_source,
+            TagPrediction.labeled_at,
+            TagPrediction.label_model_version,
+            TagPrediction.label_confidence,
+        ).where(TagPrediction.picture_id.in_(present))
+    ).all():
+        state[str(int(picture_id))][FACET_TAG_PREDICTIONS][tag] = {
+            # The tagger's own live fields. Captured so a row the operation itself
+            # invented can be rebuilt on redo — never written back onto a row that
+            # still exists (see :func:`_apply_tag_predictions`).
+            "model_version": model_version,
+            "confidence": confidence,
+            # The human-decision fields: the review status and the label ledger.
+            "status": status,
+            "predicted_at": _naive_utc_iso(predicted_at),
+            "label_state": label_state,
+            "label_source": label_source,
+            "labeled_at": _naive_utc_iso(labeled_at),
+            "label_model_version": label_model_version,
+            "label_confidence": label_confidence,
+        }
 
     for picture_id, set_id in session.exec(
         select(PictureSetMember.picture_id, PictureSetMember.set_id).where(
@@ -627,6 +696,87 @@ def _apply_tags(session: Session, picture_id: int, tags) -> None:
         session.add(Tag(picture_id=picture_id, tag=tag))
 
 
+def _apply_tag_predictions(session: Session, picture_id: int, predictions) -> None:
+    """Restore the picture's prediction rows and their human-label ledger.
+
+    Two rules keep this from rolling back work the operation never did:
+
+    1. **The tagger's live fields are not written back onto a surviving row.**
+       ``model_version`` / ``confidence`` belong to the model, and no human
+       decision moves them, so restoring them could only revert a *tagger* run
+       that happened after the operation. They are used solely to rebuild a row
+       the recorded state has and the DB no longer does (a redo re-creating the
+       synthetic row its undo deleted).
+    2. **Only a synthetic ``manual`` row is deleted when the state omits it.**
+       A user decision is the one thing that can *create* a prediction row
+       (``record_human_label`` invents a ``model_version='manual'`` row for a tag
+       the tagger never predicted), so that is the only kind an undo may remove.
+       A real tagger row written since the recording is left alone and logged —
+       deleting it would silently discard model output nobody asked to revert.
+
+    Args:
+        session: Pre-opened DB session; the caller commits.
+        picture_id: Picture whose prediction rows are being restored.
+        predictions: The recorded ``{tag: {field: value}}`` map for this picture.
+    """
+    if not isinstance(predictions, dict):
+        return
+    existing = {
+        row.tag: row
+        for row in session.exec(
+            select(TagPrediction).where(TagPrediction.picture_id == picture_id)
+        ).all()
+    }
+    for tag, fields in predictions.items():
+        if not isinstance(fields, dict):
+            logger.warning(
+                "operation_log: recorded prediction state for tag %r on picture %d "
+                "is %s, not a mapping; it cannot be restored",
+                tag,
+                picture_id,
+                type(fields).__name__,
+            )
+            continue
+        row = existing.get(tag)
+        if row is None:
+            row = TagPrediction(
+                picture_id=picture_id,
+                tag=tag,
+                confidence=float(fields.get("confidence") or 0.0),
+                model_version=str(fields.get("model_version") or MANUAL_MODEL_VERSION),
+                predicted_at=_parse_naive_utc(fields.get("predicted_at")),
+            )
+        row.status = fields.get("status") or "PENDING"
+        row.label_state = fields.get("label_state") or UNKNOWN
+        row.label_source = fields.get("label_source")
+        row.labeled_at = _parse_naive_utc(fields.get("labeled_at"))
+        row.label_model_version = fields.get("label_model_version")
+        label_confidence = fields.get("label_confidence")
+        row.label_confidence = (
+            float(label_confidence) if label_confidence is not None else None
+        )
+        session.add(row)
+
+    kept: list[str] = []
+    for tag, row in existing.items():
+        if tag in predictions:
+            continue
+        if row.model_version == MANUAL_MODEL_VERSION:
+            session.delete(row)
+        else:
+            kept.append(tag)
+    if kept:
+        logger.info(
+            "operation_log: picture %d has %d tagger prediction row(s) written "
+            "since this operation was recorded (%s); they are left in place "
+            "because only the synthetic 'manual' rows a human decision creates "
+            "may be removed by an undo",
+            picture_id,
+            len(kept),
+            ", ".join(sorted(kept)[:10]),
+        )
+
+
 def _apply_sets(session: Session, picture_id: int, set_ids) -> None:
     wanted = {int(sid) for sid in set_ids or []}
     existing = {
@@ -790,8 +940,27 @@ def _enforce_scrapheap_targets_exist(
     )
 
 
+def _label_bearing_ids(state: dict[str, dict]) -> list[int]:
+    """Picture ids in *state* whose restoration moves the anomaly-label inputs.
+
+    Both the applied ``Tag`` rows and the prediction/ledger rows feed
+    :func:`~pixlstash.scoring.smart_score.fetch_anomaly_confidences`, so a
+    restore of either facet has to re-derive what the forward path derives.
+    """
+    return sorted(
+        int(picture_id)
+        for picture_id, facets in (state or {}).items()
+        if FACET_TAGS in (facets or {}) or FACET_TAG_PREDICTIONS in (facets or {})
+    )
+
+
 def apply_state_in_session(
-    session: Session, state: dict[str, dict], action: str = "restore metadata"
+    session: Session,
+    state: dict[str, dict],
+    action: str = "restore metadata",
+    *,
+    registry: Optional[InteractiveRescoreRegistry] = None,
+    origin_client_id: Optional[str] = None,
 ) -> list[int]:
     """Write a recorded metadata state back onto its pictures.
 
@@ -801,12 +970,24 @@ def apply_state_in_session(
     purged-target guard (:func:`_enforce_scrapheap_targets_exist`) sits beside it
     on the same fail-closed contract.
 
+    **Derived data is re-derived, not restored.** ``Picture.anomaly_tag_uncertainty``
+    is recomputed from the restored rows and the cached ``smart_score`` is dropped
+    through the very same :func:`invalidate_on_anomaly_change` guard the forward
+    tag/label writes use. Snapshotting either would invite drift: they are
+    functions of the label state, so the only way an undo can leave the scorer
+    honest is to recompute them from what it just wrote.
+
     Args:
         session: Pre-opened DB session; the caller commits.
         state: ``{"<picture_id>": {facet: value}}`` as recorded. A facet value of
             ``None`` for a collection facet means "the picture did not exist on
             this side of the change" and is skipped rather than emptied.
         action: Human verb phrase echoed in the 423 when a target is frozen.
+        registry: The vault's interactive-rescore registry, so a score this
+            restore invalidates refreshes the initiating tab's card immediately
+            instead of waiting for the whole backfill to drain.
+        origin_client_id: The tab that asked for the undo/redo, stamped onto that
+            refresh. Passed in explicitly (§15) — never read from a contextvar.
 
     Returns:
         The picture ids actually written.
@@ -817,56 +998,80 @@ def apply_state_in_session(
     """
     enforce_pictures_not_locked(session, [int(pid) for pid in (state or {})], action)
     _enforce_scrapheap_targets_exist(session, state, action)
+    label_ids = _label_bearing_ids(state)
     touched: list[int] = []
-    for picture_id_raw, facets in (state or {}).items():
-        picture_id = int(picture_id_raw)
-        picture = session.get(Picture, picture_id)
-        if picture is None:
-            logger.warning(
-                "operation_log: picture %d no longer exists; skipping its part of "
-                "the recorded state",
-                picture_id,
-            )
-            continue
-        for facet, value in (facets or {}).items():
-            if facet == FACET_DESCRIPTION:
-                picture.description = value
-                session.add(picture)
-            elif facet == FACET_SCORE:
-                picture.score = int(value) if value is not None else None
-                session.add(picture)
-            elif facet == FACET_PROJECT_ID:
-                picture.project_id = int(value) if value is not None else None
-                session.add(picture)
-            elif facet == FACET_PENDING_CHARACTER_ID:
-                picture.pending_character_id = int(value) if value is not None else None
-                session.add(picture)
-            elif facet == FACET_TAGS:
-                if value is not None:
-                    _apply_tags(session, picture_id, value)
-            elif facet == FACET_SETS:
-                if value is not None:
-                    _apply_sets(session, picture_id, value)
-            elif facet == FACET_PROJECTS:
-                if value is not None:
-                    _apply_projects(session, picture_id, value)
-            elif facet == FACET_CHARACTERS:
-                if value is not None:
-                    _apply_characters(session, picture_id, value)
-            elif facet == FACET_STACK:
-                if value is not None:
-                    _apply_stack(session, picture, value)
-            elif facet == FACET_DELETED:
-                if value is not None:
-                    _apply_deleted(session, picture, value)
-            else:
+    # The dispatch loop stays inside this function on purpose: the lock guard
+    # above is what makes every sink below safe, and extracting the loop would
+    # move those sinks into a helper the locked-set guardrail can no longer see
+    # as guarded (tests/test_architecture_guardrails.py, guardrail 7).
+    with invalidate_on_anomaly_change(
+        session,
+        label_ids,
+        context=action,
+        registry=registry,
+        origin_client_id=origin_client_id,
+    ):
+        for picture_id_raw, facets in (state or {}).items():
+            picture_id = int(picture_id_raw)
+            picture = session.get(Picture, picture_id)
+            if picture is None:
                 logger.warning(
-                    "operation_log: unknown facet %r on picture %d was recorded "
-                    "but has no applier; it cannot be restored",
-                    facet,
+                    "operation_log: picture %d no longer exists; skipping its part "
+                    "of the recorded state",
                     picture_id,
                 )
-        touched.append(picture_id)
+                continue
+            for facet, value in (facets or {}).items():
+                if facet == FACET_DESCRIPTION:
+                    picture.description = value
+                    session.add(picture)
+                elif facet == FACET_SCORE:
+                    picture.score = int(value) if value is not None else None
+                    session.add(picture)
+                elif facet == FACET_PROJECT_ID:
+                    picture.project_id = int(value) if value is not None else None
+                    session.add(picture)
+                elif facet == FACET_PENDING_CHARACTER_ID:
+                    picture.pending_character_id = (
+                        int(value) if value is not None else None
+                    )
+                    session.add(picture)
+                elif facet == FACET_TAGS:
+                    if value is not None:
+                        _apply_tags(session, picture_id, value)
+                elif facet == FACET_TAG_PREDICTIONS:
+                    if value is not None:
+                        _apply_tag_predictions(session, picture_id, value)
+                elif facet == FACET_SETS:
+                    if value is not None:
+                        _apply_sets(session, picture_id, value)
+                elif facet == FACET_PROJECTS:
+                    if value is not None:
+                        _apply_projects(session, picture_id, value)
+                elif facet == FACET_CHARACTERS:
+                    if value is not None:
+                        _apply_characters(session, picture_id, value)
+                elif facet == FACET_STACK:
+                    if value is not None:
+                        _apply_stack(session, picture, value)
+                elif facet == FACET_DELETED:
+                    if value is not None:
+                        _apply_deleted(session, picture, value)
+                else:
+                    logger.warning(
+                        "operation_log: unknown facet %r on picture %d was recorded "
+                        "but has no applier; it cannot be restored",
+                        facet,
+                        picture_id,
+                    )
+            touched.append(picture_id)
+        if label_ids:
+            # Derived data, re-derived from what was just written (never restored
+            # from a snapshot). Must run before the context manager exits, so the
+            # score invalidation observes the final label state.
+            session.flush()
+            for picture_id in label_ids:
+                recompute_anomaly_tag_uncertainty(session, picture_id)
     return touched
 
 
@@ -954,6 +1159,8 @@ def _restore(
     operations: list[Operation],
     *,
     to_before: bool,
+    registry: Optional[InteractiveRescoreRegistry] = None,
+    origin_client_id: Optional[str] = None,
 ) -> tuple[list[int], set[str], dict[str, list[int]]]:
     """Apply the before- (undo) or after- (redo) state of *operations* in order.
 
@@ -972,7 +1179,15 @@ def _restore(
         state = _loads(
             operation.before_state if to_before else operation.after_state, {}
         )
-        touched.update(apply_state_in_session(session, state, action))
+        touched.update(
+            apply_state_in_session(
+                session,
+                state,
+                action,
+                registry=registry,
+                origin_client_id=origin_client_id,
+            )
+        )
         for picture_facets in state.values():
             facets.update(picture_facets or {})
         moved_out, moved_in = lifecycle_split(state)
@@ -1073,7 +1288,10 @@ def _mark_undone(session: Session, members: list[Operation]) -> None:
 
 
 def undo_in_session(
-    session: Session, operation_id: Optional[int] = None
+    session: Session,
+    operation_id: Optional[int] = None,
+    registry: Optional[InteractiveRescoreRegistry] = None,
+    origin_client_id: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo one operation (and its whole batch), returning what it touched.
 
@@ -1086,14 +1304,23 @@ def undo_in_session(
     members = [member for member in members if member.undoable]
     if not members:
         raise OperationLogError("Nothing to undo")
-    touched, facets, lifecycle = _restore(session, members, to_before=True)
+    touched, facets, lifecycle = _restore(
+        session,
+        members,
+        to_before=True,
+        registry=registry,
+        origin_client_id=origin_client_id,
+    )
     _mark_undone(session, members)
     session.commit()
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
 
 
 def undo_batch_in_session(
-    session: Session, batch_id: str
+    session: Session,
+    batch_id: str,
+    registry: Optional[InteractiveRescoreRegistry] = None,
+    origin_client_id: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Undo every still-applied operation of one batch (the sweep's Undo)."""
     members = list(
@@ -1107,7 +1334,13 @@ def undo_batch_in_session(
     )
     if not members:
         raise OperationLogError(f"Batch {batch_id} has nothing to undo")
-    touched, facets, lifecycle = _restore(session, members, to_before=True)
+    touched, facets, lifecycle = _restore(
+        session,
+        members,
+        to_before=True,
+        registry=registry,
+        origin_client_id=origin_client_id,
+    )
     _mark_undone(session, members)
     session.commit()
     return [serialize(member) for member in members], touched, sorted(facets), lifecycle
@@ -1115,6 +1348,8 @@ def undo_batch_in_session(
 
 def redo_in_session(
     session: Session,
+    registry: Optional[InteractiveRescoreRegistry] = None,
+    origin_client_id: Optional[str] = None,
 ) -> tuple[list[dict], list[int], list[str], dict[str, list[int]]]:
     """Re-apply the most recently undone operation (and its whole batch)."""
     operation = session.exec(
@@ -1127,7 +1362,13 @@ def redo_in_session(
     members = _batch_members_in_session(session, operation, STATUS_UNDONE)
     # Redo replays in application order, the mirror of undo's reverse order.
     members = sorted(members, key=lambda op: op.id or 0)
-    touched, facets, lifecycle = _restore(session, members, to_before=False)
+    touched, facets, lifecycle = _restore(
+        session,
+        members,
+        to_before=False,
+        registry=registry,
+        origin_client_id=origin_client_id,
+    )
     for member in members:
         member.status = STATUS_APPLIED
         member.undone_at = None
@@ -1228,7 +1469,10 @@ def undo(
 ) -> dict:
     """Undo the newest reversible operation, or a named one, plus its batch."""
     members, touched, facets, lifecycle = vault.db.run_task(
-        undo_in_session, operation_id
+        undo_in_session,
+        operation_id,
+        vault.interactive_rescore_registry,
+        origin_client_id,
     )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
@@ -1238,12 +1482,17 @@ def undo_batch(
 ) -> dict:
     """Undo one whole bulk action by its batch id (the sweep's report Undo)."""
     members, touched, facets, lifecycle = vault.db.run_task(
-        undo_batch_in_session, batch_id
+        undo_batch_in_session,
+        batch_id,
+        vault.interactive_rescore_registry,
+        origin_client_id,
     )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
 
 
 def redo(vault: "Vault", origin_client_id: Optional[str] = None) -> dict:
     """Re-apply the most recently undone operation (and its batch)."""
-    members, touched, facets, lifecycle = vault.db.run_task(redo_in_session)
+    members, touched, facets, lifecycle = vault.db.run_task(
+        redo_in_session, vault.interactive_rescore_registry, origin_client_id
+    )
     return _finish(vault, members, touched, facets, lifecycle, origin_client_id)
