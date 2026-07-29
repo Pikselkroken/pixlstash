@@ -7,7 +7,9 @@
  * near-duplicate suggestion look as certain as a byte-identical match. So the
  * two tiers get two treatments, not two numbers:
  *
- *   • Exact: a filled accent chip with the "identical" glyph. A settled fact.
+ *   • Exact: a filled accent chip with the equals glyph. A settled fact, and the
+ *              glyph has to say so — an approximately-equals sign here would
+ *              hedge the one claim in this queue that is not a measurement.
  *   • Near: a quiet outlined chip with the blur glyph. A measurement, with
  *              the percentage in tabular figures so a column of them lines up.
  *
@@ -32,7 +34,7 @@ const confidence = computed(() => confidenceLabel(props.group));
     :class="confidence.exact ? 'conf-pill--exact' : 'conf-pill--near'"
   >
     <v-icon class="conf-pill__ico" size="12">{{
-      confidence.exact ? "mdi-approximately-equal" : "mdi-blur"
+      confidence.exact ? "mdi-equal" : "mdi-blur"
     }}</v-icon>
     <span class="conf-pill__label">{{ confidence.label }}</span>
   </span>
