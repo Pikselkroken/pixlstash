@@ -672,6 +672,79 @@ def test_scrapheap_move_is_recorded_and_undo_brings_the_picture_back():
         _teardown(temp_dir, server)
 
 
+def test_scrapheap_lifecycle_announces_restored_not_added():
+    """End to end: the WS envelope calls a scrapheap comeback ``restored``.
+
+    Both the op-log undo path and the explicit restore endpoint put a card back,
+    and both used to say ``added`` — which the SPA reads as "new to the vault"
+    and answers with the sidebar's NEW marker on the counts that grew. That is a
+    lie for a picture that has been in the library all along, so the comeback
+    gets its own kind. Genuine imports keep ``added``; a re-scrapheap on redo
+    keeps ``removed``.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        emitted: list[dict] = []
+        real_notify = server.vault.notify
+
+        def _capture(event_type, data=None):
+            if isinstance(data, dict) and "change_kind" in data:
+                emitted.append({"event": event_type, **data})
+            return real_notify(event_type, data)
+
+        server.vault.notify = _capture
+
+        assert (
+            client.delete(
+                f"{API}/pictures/{picture_id}", headers={"X-Client-Id": "tab-1"}
+            ).status_code
+            == 200
+        )
+        # The move itself: the card goes away.
+        assert emitted[-1]["change_kind"] == "removed"
+        assert emitted[-1]["picture_ids"] == [picture_id]
+
+        emitted.clear()
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        undo_kinds = {
+            kind["change_kind"]
+            for kind in emitted
+            if picture_id in (kind.get("picture_ids") or [])
+        }
+        assert undo_kinds == {"restored"}, emitted
+        # Origin travels in ``data`` (§15) — the undo path runs on the DB worker
+        # thread where the contextvar is dead.
+        assert all("origin_client_id" in kind for kind in emitted)
+
+        emitted.clear()
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        redo_kinds = {
+            kind["change_kind"]
+            for kind in emitted
+            if picture_id in (kind.get("picture_ids") or [])
+        }
+        assert redo_kinds == {"removed"}, emitted
+
+        # …and the explicit endpoint agrees with the undo path.
+        emitted.clear()
+        assert (
+            client.post(
+                f"{API}/pictures/scrapheap/restore", json={"picture_ids": [picture_id]}
+            ).status_code
+            == 200
+        )
+        endpoint_kinds = {
+            kind["change_kind"]
+            for kind in emitted
+            if picture_id in (kind.get("picture_ids") or [])
+        }
+        assert "restored" in endpoint_kinds, emitted
+        assert "added" not in endpoint_kinds, emitted
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_bulk_scrapheap_move_is_one_batch_and_one_undo():
     """Bulk = one batch id = one Undo, matching the log's grouping rule."""
     temp_dir, client, server = _setup()

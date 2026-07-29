@@ -105,7 +105,11 @@ class InjectWsEventRequest(BaseModel):
     )
     change_kind: Optional[str] = Field(
         default=None,
-        description='Optional grid hint: "added", "updated", or "removed".',
+        description=(
+            'Optional grid hint: "added", "updated", "removed", or "restored" '
+            "(a scrapheap undo/restore — the card comes back, but the picture "
+            "is not a new import)."
+        ),
         examples=["updated"],
     )
     fields: Optional[list[str]] = Field(
