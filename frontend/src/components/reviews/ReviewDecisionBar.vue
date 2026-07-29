@@ -116,11 +116,8 @@
       class="rs-decide-btn"
       type="button"
       :disabled="!canUndo"
-      :title="
-        undoBlocked
-          ? undefined
-          : 'Undo the last decision — reopens it and reverses the tag change.'
-      "
+      :title="undoBlocked ? undefined : undoTitle"
+      :aria-keyshortcuts="undoKeyShortcuts"
       v-bind="lockAttrs('undo')"
       @click="emit('undo')"
     >
@@ -148,6 +145,12 @@
 
 <script setup>
 import { computed, onUnmounted, ref, useId, watch } from "vue";
+
+import {
+  formatKeyHint,
+  isApplePlatform,
+  undoKeyHint,
+} from "../../utils/shortcutHints";
 
 const props = defineProps({
   kind: { type: String, required: true }, // 'binary' | 'pair'
@@ -181,6 +184,18 @@ const chipId = useId();
 
 const undoBlocked = computed(() =>
   props.canUndo ? props.blocked?.undo || "" : "",
+);
+
+// The control teaches BOTH keys, and says which stack it undoes. Ctrl+Z is the
+// app-wide vocabulary and now works here too, but it is the review's own
+// single-step undo that it runs, not the app-wide history behind the overlay.
+const undoTitle = computed(
+  () =>
+    `Undo the last decision in this review (U or ${formatKeyHint(undoKeyHint())}). Reopens it and reverses the tag change.`,
+);
+// A space-separated list of alternatives, which is what the attribute takes.
+const undoKeyShortcuts = computed(() =>
+  isApplePlatform() ? "Meta+Z U" : "Control+Z U",
 );
 
 // aria-disabled (NOT disabled) + the reason, co-located via aria-describedby so

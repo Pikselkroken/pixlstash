@@ -1476,12 +1476,19 @@ function handleGlobalKeydown(e) {
   //   * typing: a text field keeps its own native undo stack;
   //   * read-only: the endpoints are owner-only anyway;
   //   * auto-repeat: a HELD Ctrl+Z must not walk the whole stack;
-  //   * a modal overlay owns the screen: the receipt lives on --z-floating,
-  //     under the lightbox and under any dialog, so an undo fired from there
-  //     would mutate the library with no visible narration. That breaks the
-  //     design's own "every undo raises a receipt" invariant, so the shortcut
-  //     declines rather than acting blind. Promoting the receipt above those
-  //     layers is the recorded follow-up.
+  //   * a modal DIALOG owns the screen: the receipt lives on --z-floating,
+  //     under any dialog scrim, so an undo fired from there would mutate the
+  //     library with no visible narration. That breaks the design's own "every
+  //     undo raises a receipt" invariant, so the shortcut declines rather than
+  //     acting blind.
+  //
+  // The lightbox is NOT covered by that last guard and never was:
+  // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
+  // renders its own. What actually stops this handler there is ImageOverlay's
+  // `stopImmediatePropagation()` on a listener registered before this one (a
+  // child mounts first). Undo works in the lightbox, and it is the lightbox's
+  // own key handler plus `OverlayActionReceipt` that do it, fitted to that
+  // surface's GUI per the owner's ruling.
   if (
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&

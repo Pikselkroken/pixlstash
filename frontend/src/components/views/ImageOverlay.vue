@@ -606,11 +606,19 @@
             {{ zoomHudLabel }}
           </div>
 
-          <div v-if="swipeHintVisible" class="overlay-swipe-hint">
+          <!-- Both hints stand down while a receipt is up: they are ambient
+               teaching with no deadline, the receipt is feedback on a committed
+               action that expires. "Click or Space to show controls" under an
+               Undo button is worse than redundant, because that click is not
+               the click the user wants. They return when the receipt retires. -->
+          <div
+            v-if="swipeHintVisible && !hasReceipt"
+            class="overlay-swipe-hint"
+          >
             <v-icon size="18">mdi-swap-horizontal</v-icon>
             <span>Swipe to navigate</span>
           </div>
-          <div v-if="chromeHidden" class="overlay-chrome-hint">
+          <div v-if="chromeHidden && !hasReceipt" class="overlay-chrome-hint">
             <span>Click or <kbd>Space</kbd> to show controls</span>
           </div>
         </div>
@@ -731,6 +739,17 @@
             :video-duration="videoMeta.duration"
           />
         </aside>
+
+        <!-- The lightbox's own narration of an undoable action. Last child of
+             `.overlay-main` on purpose: this is where `--filmstrip-rail-width`
+             is declared, last-in-DOM is last-in-tab-order, and it escapes
+             `.overlay-canvas`'s `overflow: hidden`, which would clip the focus
+             ring on the Undo button. -->
+        <OverlayActionReceipt
+          v-if="!isReadOnly"
+          ref="receiptRef"
+          :chrome-hidden="chromeHidden"
+        />
       </div>
     </div>
   </div>
@@ -778,12 +797,14 @@ import {
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { copyText } from "../../utils/clipboard";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
+import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import {
@@ -796,6 +817,12 @@ import { dedupeTagList, getTagList } from "../../utils/tags.js";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
+// Undo/redo is the same stack the grid uses; only the narration differs here
+// (OverlayActionReceipt, in the lightbox's own dark chrome).
+const operationStore = useOperationStore();
+const receiptRef = ref(null);
+/** A receipt is on screen: the two bottom-centre hints stand down while it is. */
+const hasReceipt = computed(() => Boolean(operationStore.receipt));
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -2005,6 +2032,29 @@ function showNextImage() {
   return navigateOverlayImage(1);
 }
 
+/**
+ * Is the keystroke landing in a text-entry surface?
+ *
+ * A text field keeps its own native undo stack, and the lightbox has several
+ * (the tag field, the description editor, the plugin parameter inputs). Both
+ * the event target and `document.activeElement` count, matching the strictness
+ * App's global handler uses: a Vuetify combobox moves focus around, so the two
+ * do not always agree.
+ *
+ * @param {EventTarget|null} target - the keydown target.
+ * @returns {boolean}
+ */
+function isTypingTarget(target) {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  return [target, active].some(
+    (el) =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
+        el.getAttribute("role") === "textbox"),
+  );
+}
+
 function handleKeydown(e) {
   if (!open.value) return;
   // Prevent other window keydown listeners (e.g. ImageGrid) from seeing this
@@ -2028,6 +2078,39 @@ function handleKeydown(e) {
       e.preventDefault();
       handleUserActivity();
       openContextMenuFromKeyboard();
+      return;
+    }
+  }
+
+  // Undo / redo, handled HERE rather than by App's global binding.
+  //
+  // This handler is registered in ImageOverlay's own `onMounted`, and a child
+  // mounts before its parent, so it runs before App's window listener — and it
+  // calls `stopImmediatePropagation()` above. App's `Ctrl+Z` therefore never
+  // sees a keystroke while the lightbox is open, no matter what its own guards
+  // say. The owner ruled that undo must work here anyway, fitted to the
+  // lightbox's own GUI: `OverlayActionReceipt` narrates the result inside the
+  // overlay chrome, so the action is never taken blind.
+  //
+  // Above the `chromeHidden` bail on purpose. The narration is a transient HUD
+  // like the progress cards and the swipe hint, none of which hide with the
+  // chrome, so undo stays reachable on a bare image and still reports itself.
+  if (
+    (e.ctrlKey || e.metaKey) &&
+    !e.altKey &&
+    !e.repeat &&
+    !isReadOnly.value &&
+    !isTypingTarget(e.target)
+  ) {
+    const undoKey = e.key?.toLowerCase();
+    if (undoKey === "z" && !e.shiftKey) {
+      e.preventDefault();
+      operationStore.undo();
+      return;
+    }
+    if (undoKey === "y" || (undoKey === "z" && e.shiftKey)) {
+      e.preventDefault();
+      operationStore.redo();
       return;
     }
   }
@@ -2141,6 +2224,17 @@ function handleKeydown(e) {
   }
 
   if (e.key === "Escape") {
+    // Focus is inside the receipt: retire it and hand the keyboard back to the
+    // canvas, without closing the lightbox. A keyboard user who tabbed into the
+    // pill needs an exit that is not "leave the whole surface". Escape is NOT a
+    // general receipt dismissal — the pill blocks nothing and expires on its
+    // own, and making Escape-to-close depend on an invisible countdown would be
+    // a worse failure than a pill that outlived its welcome.
+    if (receiptRef.value?.containsFocus?.()) {
+      receiptRef.value.dismiss();
+      overlayCanvasRef.value?.focus?.();
+      return;
+    }
     if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
