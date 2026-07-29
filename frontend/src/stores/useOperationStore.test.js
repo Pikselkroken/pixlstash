@@ -1,0 +1,496 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { setActivePinia, createPinia } from "pinia";
+
+// The store reads `isReadOnly` off the apiClient singleton and talks to the
+// backend only through `api/operations`. Both are mocked so no HTTP happens and
+// every branch (read-only, 409, batch coalescing) can be driven directly.
+vi.mock("../utils/apiClient", () => ({
+  apiClient: { get: vi.fn(), post: vi.fn() },
+  isReadOnly: { value: false },
+  // useWsStore mirrors its client id into the client's module scope on setup.
+  setRequestClientId: vi.fn(),
+}));
+
+vi.mock("../api/operations", () => ({
+  listOperations: vi.fn(),
+  getUndoState: vi.fn(),
+  undoLastOperation: vi.fn(),
+  redoOperation: vi.fn(),
+  undoOperation: vi.fn(),
+  undoBatch: vi.fn(),
+}));
+
+import { isReadOnly as readOnly } from "../utils/apiClient";
+import {
+  getUndoState,
+  listOperations,
+  redoOperation,
+  undoBatch,
+  undoLastOperation,
+  undoOperation,
+} from "../api/operations";
+import {
+  DESTRUCTIVE_RECEIPT_MS,
+  RECEIPT_MS,
+  formatOperationTime,
+  iconForOpType,
+  isDestructiveOpType,
+  summarizeOperation,
+  useOperationStore,
+} from "./useOperationStore";
+import { useWsStore } from "./useWsStore";
+
+const MY_CLIENT = "client-me";
+const OTHER_CLIENT = "client-them";
+
+function op(overrides = {}) {
+  return {
+    id: 1,
+    batch_id: null,
+    created_at: "2026-07-29T12:00:00",
+    op_type: "pictures.tags.add",
+    target_type: "picture",
+    target_ids: [1, 2],
+    target_count: 2,
+    source: "ui",
+    origin_client_id: MY_CLIENT,
+    undoable: true,
+    status: "applied",
+    summary: "Added tag 'portrait'",
+    ...overrides,
+  };
+}
+
+/** Seed the mocked API with a history and an undo-state derived from it. */
+function serve(rows, state = {}) {
+  listOperations.mockResolvedValue(rows);
+  getUndoState.mockResolvedValue({
+    can_undo: rows.some((r) => r.status === "applied" && r.undoable),
+    can_redo: rows.some((r) => r.status === "undone"),
+    next_undo: rows.find((r) => r.status === "applied" && r.undoable) ?? null,
+    next_redo: rows.find((r) => r.status === "undone") ?? null,
+    ...state,
+  });
+}
+
+/** Bring the store to a settled state so the NEXT refresh can narrate. */
+async function primed(rows) {
+  const store = useOperationStore();
+  serve(rows);
+  await store.refresh();
+  return store;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  setActivePinia(createPinia());
+  readOnly.value = false;
+  for (const fn of [
+    listOperations,
+    getUndoState,
+    undoLastOperation,
+    redoOperation,
+    undoOperation,
+    undoBatch,
+  ]) {
+    fn.mockReset();
+  }
+  // A stable per-tab client id so "mine" vs "external" is decidable.
+  useWsStore().clientId = MY_CLIENT;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("iconForOpType", () => {
+  it("maps a known op type to its glyph", () => {
+    expect(iconForOpType("pictures.tags.add")).toBe("mdi-tag-plus-outline");
+    expect(iconForOpType("stacks.dissolve")).toBe("mdi-layers-off-outline");
+  });
+
+  it("falls through to a substring rule for a type this build has not seen", () => {
+    // The scrapheap lane lands its own op types alongside these.
+    expect(iconForOpType("pictures.scrapheap.move")).toBe(
+      "mdi-trash-can-outline",
+    );
+    expect(iconForOpType("pictures.tags.something_new")).toBe(
+      "mdi-tag-outline",
+    );
+  });
+
+  it("falls back to a neutral glyph for anything unrecognised", () => {
+    expect(iconForOpType("plugins.frobnicate")).toBe("mdi-history");
+    expect(iconForOpType(undefined)).toBe("mdi-history");
+  });
+});
+
+describe("isDestructiveOpType", () => {
+  it("flags scrapheap and clearing operations", () => {
+    expect(isDestructiveOpType("pictures.scrapheap.move")).toBe(true);
+    expect(isDestructiveOpType("pictures.tags.clear")).toBe(true);
+    expect(isDestructiveOpType("stacks.dissolve")).toBe(true);
+  });
+
+  it("leaves ordinary edits alone", () => {
+    expect(isDestructiveOpType("pictures.tags.add")).toBe(false);
+    expect(isDestructiveOpType("pictures.score")).toBe(false);
+  });
+});
+
+describe("summarizeOperation", () => {
+  it("appends the target count when more than one picture is touched", () => {
+    expect(summarizeOperation(op({ target_count: 12 }))).toBe(
+      "Added tag 'portrait' · 12",
+    );
+  });
+
+  it("omits the count for a single picture", () => {
+    expect(summarizeOperation(op({ target_count: 1 }))).toBe(
+      "Added tag 'portrait'",
+    );
+  });
+
+  it("humanises the op type when the server recorded no summary", () => {
+    expect(summarizeOperation(op({ summary: null, target_count: 1 }))).toBe(
+      "Pictures tags add",
+    );
+  });
+});
+
+describe("formatOperationTime", () => {
+  it("returns an empty string for a missing or unparseable timestamp", () => {
+    expect(formatOperationTime(null)).toBe("");
+    expect(formatOperationTime("not a date")).toBe("");
+  });
+
+  it("parses the API's naive UTC timestamp as UTC, not as local time", () => {
+    // Without the Z the browser would read this as local and shift the row.
+    const withMarker = formatOperationTime("2026-07-29T12:00:00Z");
+    const naive = formatOperationTime("2026-07-29T12:00:00");
+    expect(naive).toBe(withMarker);
+    expect(naive).toMatch(/\d{2}[:.]\d{2}/);
+  });
+});
+
+describe("useOperationStore — refresh and the history split", () => {
+  it("splits applied rows into past and undone rows into future", async () => {
+    const store = useOperationStore();
+    serve([
+      op({ id: 5, status: "undone" }),
+      op({ id: 4 }),
+      op({ id: 3 }),
+      op({ id: 2, status: "superseded" }),
+    ]);
+    await store.refresh();
+
+    expect(store.past.map((o) => o.id)).toEqual([4, 3]);
+    expect(store.future.map((o) => o.id)).toEqual([5]);
+    // A superseded row was cleared by a later action; it is in neither list.
+    expect(store.historyCount).toBe(2);
+    expect(store.hasHistory).toBe(true);
+  });
+
+  it("skips the server entirely in a read-only session", async () => {
+    readOnly.value = true;
+    const store = useOperationStore();
+    await store.refresh();
+    expect(listOperations).not.toHaveBeenCalled();
+    expect(getUndoState).not.toHaveBeenCalled();
+  });
+
+  it("keeps the last known state when the read fails", async () => {
+    const store = await primed([op({ id: 4 })]);
+    listOperations.mockRejectedValue(new Error("boom"));
+    await store.refresh();
+    expect(store.past.map((o) => o.id)).toEqual([4]);
+  });
+});
+
+describe("useOperationStore — receipts narrate this client only", () => {
+  it("raises no receipt on the first load", async () => {
+    const store = useOperationStore();
+    serve([op({ id: 9 })]);
+    await store.refresh();
+    expect(store.receipt).toBeNull();
+  });
+
+  it("raises a receipt for a new operation from this client", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10, summary: "Scored ★★★★" }), op({ id: 9 })]);
+    await store.refresh();
+
+    expect(store.receipt).toMatchObject({
+      mode: "did",
+      operationId: 10,
+      summary: "Scored ★★★★ · 2",
+      icon: "mdi-tag-plus-outline",
+    });
+  });
+
+  it("stays silent for an operation from another client", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10, origin_client_id: OTHER_CLIENT }), op({ id: 9 })]);
+    await store.refresh();
+
+    expect(store.receipt).toBeNull();
+    // The stack still moved — silently is not the same as not at all.
+    expect(store.past.map((o) => o.id)).toEqual([10, 9]);
+  });
+
+  it("marks an operation recorded for audit as not undoable", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10, undoable: false }), op({ id: 9 })]);
+    await store.refresh();
+    expect(store.receipt.mode).toBe("blocked");
+  });
+
+  it("counts the batch siblings as the coalesced +N", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([
+      op({ id: 12, batch_id: "b1" }),
+      op({ id: 11, batch_id: "b1" }),
+      op({ id: 10, batch_id: "b1" }),
+      op({ id: 9 }),
+    ]);
+    await store.refresh();
+    expect(store.receipt.mergedCount).toBe(2);
+  });
+
+  it("reports no +N for a lone operation", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+    await store.refresh();
+    expect(store.receipt.mergedCount).toBe(0);
+  });
+
+  it("never stacks two receipts — the newest replaces the current one", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+    await store.refresh();
+    const first = store.receipt.key;
+    serve([op({ id: 11, summary: "Second" }), op({ id: 10 }), op({ id: 9 })]);
+    await store.refresh();
+
+    expect(store.receipt.key).toBeGreaterThan(first);
+    expect(store.receipt.operationId).toBe(11);
+  });
+
+  it("holds a destructive receipt for 8s and an ordinary one for 5s", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+    await store.refresh();
+    expect(store.receipt.durationMs).toBe(RECEIPT_MS);
+
+    serve([
+      op({ id: 11, op_type: "pictures.scrapheap.move" }),
+      op({ id: 10 }),
+      op({ id: 9 }),
+    ]);
+    await store.refresh();
+    expect(store.receipt.durationMs).toBe(DESTRUCTIVE_RECEIPT_MS);
+    expect(store.receipt.icon).toBe("mdi-trash-can-outline");
+  });
+});
+
+describe("useOperationStore — the receipt countdown", () => {
+  async function withLiveReceipt() {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+    await store.refresh();
+    return store;
+  }
+
+  it("dismisses itself when the window elapses", async () => {
+    const store = await withLiveReceipt();
+    vi.advanceTimersByTime(RECEIPT_MS - 1);
+    expect(store.receipt).not.toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(store.receipt).toBeNull();
+  });
+
+  it("pauses on hover and resumes from where it stopped (WCAG 2.2.1)", async () => {
+    const store = await withLiveReceipt();
+    vi.advanceTimersByTime(2000);
+    store.pauseReceipt();
+    vi.advanceTimersByTime(60000);
+    expect(store.receipt).not.toBeNull();
+
+    store.resumeReceipt();
+    vi.advanceTimersByTime(2999);
+    expect(store.receipt).not.toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(store.receipt).toBeNull();
+  });
+
+  it("dismisses on demand", async () => {
+    const store = await withLiveReceipt();
+    store.dismissReceipt();
+    expect(store.receipt).toBeNull();
+  });
+});
+
+describe("useOperationStore — undo and redo", () => {
+  it("undoes, then flips the receipt to the undone state with Redo offered", async () => {
+    const store = await primed([op({ id: 10, summary: "Moved to Scrapheap" })]);
+    undoLastOperation.mockResolvedValue({ operations: [op({ id: 10 })] });
+    serve([op({ id: 10, status: "undone" })]);
+
+    await store.undo();
+
+    expect(undoLastOperation).toHaveBeenCalledTimes(1);
+    expect(store.receipt).toMatchObject({ mode: "undone", operationId: 10 });
+    expect(store.canRedo).toBe(true);
+  });
+
+  it("refuses to undo when there is nothing to undo", async () => {
+    const store = useOperationStore();
+    serve([]);
+    await store.refresh();
+    await store.undo();
+    expect(undoLastOperation).not.toHaveBeenCalled();
+  });
+
+  it("refuses to undo in a read-only session", async () => {
+    const store = await primed([op({ id: 10 })]);
+    readOnly.value = true;
+    await store.undo();
+    expect(undoLastOperation).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a 409 as a warning and re-reads the stack", async () => {
+    const store = await primed([op({ id: 10 })]);
+    undoLastOperation.mockRejectedValue({
+      response: { status: 409, data: { detail: "Nothing to undo" } },
+    });
+    serve([op({ id: 10, status: "undone" })]);
+
+    await store.undo();
+
+    expect(store.receipt).toBeNull();
+    // The stack was re-read rather than left showing a step that is gone.
+    expect(store.past).toHaveLength(0);
+  });
+
+  it("redoes and narrates the replayed step", async () => {
+    const store = useOperationStore();
+    serve([op({ id: 10, status: "undone" })]);
+    await store.refresh();
+    redoOperation.mockResolvedValue({ operations: [op({ id: 10 })] });
+    serve([op({ id: 10 })]);
+
+    await store.redo();
+
+    expect(redoOperation).toHaveBeenCalledTimes(1);
+    expect(store.receipt).toMatchObject({ mode: "did", operationId: 10 });
+  });
+
+  it("undoes one whole bulk action by batch id", async () => {
+    const store = await primed([
+      op({ id: 11, batch_id: "b1" }),
+      op({ id: 10, batch_id: "b1" }),
+    ]);
+    undoBatch.mockResolvedValue({ operations: [] });
+    serve([
+      op({ id: 11, batch_id: "b1", status: "undone" }),
+      op({ id: 10, batch_id: "b1", status: "undone" }),
+    ]);
+
+    await store.undoBatchById("b1");
+
+    expect(undoBatch).toHaveBeenCalledWith("b1");
+    expect(store.receipt).toMatchObject({ mode: "undone" });
+  });
+});
+
+describe("useOperationStore — undoTo walks the stack", () => {
+  it("undoes every step from the newest down to the clicked one", async () => {
+    const store = await primed([
+      op({ id: 13 }),
+      op({ id: 12 }),
+      op({ id: 11 }),
+    ]);
+    undoOperation.mockImplementation(async (id) => ({
+      operations: [op({ id })],
+    }));
+    serve([
+      op({ id: 13, status: "undone" }),
+      op({ id: 12, status: "undone" }),
+      op({ id: 11 }),
+    ]);
+
+    const reverted = await store.undoTo(12);
+
+    expect(undoOperation.mock.calls.map(([id]) => id)).toEqual([13, 12]);
+    expect(reverted).toBe(2);
+    expect(store.receipt).toMatchObject({ mode: "undone", steps: 2 });
+  });
+
+  it("does not re-request a batch sibling the server already reverted", async () => {
+    const store = await primed([
+      op({ id: 13, batch_id: "b1" }),
+      op({ id: 12, batch_id: "b1" }),
+      op({ id: 11 }),
+    ]);
+    // Undoing 13 takes its whole batch (12) with it.
+    undoOperation.mockResolvedValue({
+      operations: [op({ id: 13 }), op({ id: 12 })],
+    });
+    serve([op({ id: 11 })]);
+
+    await store.undoTo(12);
+
+    expect(undoOperation).toHaveBeenCalledTimes(1);
+    expect(undoOperation).toHaveBeenCalledWith(13);
+  });
+
+  it("ignores a step that is not on the stack", async () => {
+    const store = await primed([op({ id: 13 })]);
+    expect(await store.undoTo(999)).toBe(0);
+    expect(undoOperation).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOperationStore — WebSocket reconciliation", () => {
+  it("narrates an own-origin picture event", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10 }), op({ id: 9 })]);
+    await store.onPictureEvent({
+      type: "pictures_changed",
+      origin_client_id: MY_CLIENT,
+    });
+    expect(store.receipt).not.toBeNull();
+  });
+
+  it("updates the stack silently for an external picture event", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([op({ id: 10, origin_client_id: OTHER_CLIENT }), op({ id: 9 })]);
+    await store.onPictureEvent({
+      type: "pictures_changed",
+      origin_client_id: OTHER_CLIENT,
+    });
+    expect(store.receipt).toBeNull();
+    expect(store.past.map((o) => o.id)).toEqual([10, 9]);
+  });
+
+  it("stays off the wire in a read-only session", async () => {
+    readOnly.value = true;
+    const store = useOperationStore();
+    await store.onPictureEvent({ type: "pictures_changed" });
+    expect(listOperations).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOperationStore — reset", () => {
+  it("drops the history, the receipt and the enablement flags", async () => {
+    const store = await primed([op({ id: 10 })]);
+    store.showReceipt(store.buildReceipt(op({ id: 10 }), "did"));
+    store.reset();
+
+    expect(store.operations).toEqual([]);
+    expect(store.receipt).toBeNull();
+    expect(store.canUndo).toBe(false);
+    expect(store.canRedo).toBe(false);
+    expect(store.loaded).toBe(false);
+  });
+});
