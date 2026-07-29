@@ -531,6 +531,92 @@ describe("RemixDialog prompt prefill", () => {
   });
 });
 
+describe("RemixDialog seeds", () => {
+  function segButtons(w) {
+    return w.findAll(".remix-seg-btn");
+  }
+
+  /** Button labels with the stubbed v-icon's "mdi-…" text stripped. */
+  function segLabels(w) {
+    return segButtons(w).map((b) => b.text().replace(/mdi-\S+\s*/, ""));
+  }
+
+  function segButton(w, label) {
+    return segButtons(w).find((b) => b.text().includes(label));
+  }
+
+  it("offers Incremented only where an original seed exists to increment", async () => {
+    const w = await settle(mountDialog());
+    expect(segLabels(w)).toEqual(["Random", "Incremented", "Fixed"]);
+  });
+
+  it("does not offer Incremented in template mode", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    const w = await settle(mountDialog());
+    expect(segLabels(w)).toEqual(["Random", "Fixed"]);
+  });
+
+  it("defaults Fixed to the original seed and flags it until changed", async () => {
+    const w = await settle(mountDialog());
+    await segButton(w, "Fixed").trigger("click");
+    await nextTick();
+    const input = w.find('input[aria-label="Seed value"]');
+    expect(Number(input.element.value)).toBe(1);
+    expect(w.find(".remix-seed-note--warn").text()).toContain("same as original");
+
+    await input.setValue(2);
+    await nextTick();
+    expect(w.find(".remix-seed-note--warn").exists()).toBe(false);
+  });
+
+  it("submits Incremented as a fixed seed at original + delta", async () => {
+    const w = await settle(mountDialog());
+    await segButton(w, "Incremented").trigger("click");
+    await nextTick();
+    await w.find('input[aria-label="Delta from the original seed"]').setValue(5);
+    await nextTick();
+    expect(w.find(".remix-seed-note").text()).toContain("= 6");
+
+    await w.find(".app-btn:last-child").trigger("click");
+    await settle(w);
+    expect(runRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ seed_mode: "fixed", seed: 6 }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts a negative delta", async () => {
+    getPictureRecipe.mockResolvedValue({
+      ...CLEAN_RECIPE,
+      seed: 100,
+    });
+    const w = await settle(mountDialog());
+    await segButton(w, "Incremented").trigger("click");
+    await nextTick();
+    await w.find('input[aria-label="Delta from the original seed"]').setValue(-3);
+    await nextTick();
+    await w.find(".app-btn:last-child").trigger("click");
+    await settle(w);
+    expect(runRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ seed_mode: "fixed", seed: 97 }),
+      expect.anything(),
+    );
+  });
+
+  it("drops a sticky Incremented preference where it cannot be honoured", async () => {
+    sessionStorage.setItem("comfyui_remix_seed_mode", "incremented");
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    const w = await settle(mountDialog());
+    expect(segButton(w, "Random").attributes("aria-checked")).toBe("true");
+  });
+});
+
 describe("RemixDialog scope", () => {
   it("says nothing about scope for a single selection", async () => {
     const w = await settle(mountDialog({ selectedImageIds: [42] }));

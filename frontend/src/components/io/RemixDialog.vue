@@ -234,16 +234,37 @@
               {{ option.label }}
             </button>
           </div>
-          <input
-            v-if="seedMode === 'fixed'"
-            v-model.number="seed"
-            type="number"
-            class="remix-num"
-            min="0"
-            :max="maxSeed"
-            aria-label="Seed value"
-            @keydown="onFieldKeydown"
-          />
+          <template v-if="seedMode === 'fixed'">
+            <input
+              v-model.number="seed"
+              type="number"
+              class="remix-num"
+              min="0"
+              :max="maxSeed"
+              aria-label="Seed value"
+              @keydown="onFieldKeydown"
+            />
+            <!-- The identical seed re-creates the identical image, which the
+                 importer dedupes into silence — flagged, not forbidden. -->
+            <span v-if="seedIsOriginal" class="remix-seed-note remix-seed-note--warn">
+              <v-icon size="14" class="remix-mode-icon">mdi-alert-outline</v-icon>
+              same as original
+            </span>
+          </template>
+          <template v-else-if="seedMode === 'incremented'">
+            <input
+              v-model.number="seedDelta"
+              type="number"
+              class="remix-num remix-num--delta"
+              :min="-maxSeed"
+              :max="maxSeed"
+              aria-label="Delta from the original seed"
+              @keydown="onFieldKeydown"
+            />
+            <span class="remix-seed-note" aria-live="polite">
+              = {{ incrementedSeed }}
+            </span>
+          </template>
         </div>
       </div>
 
@@ -336,10 +357,7 @@ const SEED_KEY = "comfyui_remix_seed";
 // nesting a second disclosure.
 const MAX_NODE_CLASSES_SHOWN = 12;
 
-const seedModes = [
-  { id: "random", label: "Random", icon: "mdi-dice-multiple-outline" },
-  { id: "fixed", label: "Fixed", icon: "mdi-lock-outline" },
-];
+const SEED_DELTA_KEY = "comfyui_remix_seed_delta";
 
 const templates = ref([]);
 const templatesLoading = ref(false);
@@ -365,11 +383,14 @@ const focusedModeIndex = ref(0);
 const modeEls = ref([]);
 const liveMessage = ref("");
 
+const savedSeedMode = sessionStorage.getItem(SEED_MODE_KEY);
 const seedMode = ref(
-  sessionStorage.getItem(SEED_MODE_KEY) === "fixed" ? "fixed" : "random",
+  ["fixed", "incremented"].includes(savedSeedMode) ? savedSeedMode : "random",
 );
 const savedSeed = Number(sessionStorage.getItem(SEED_KEY));
 const seed = ref(Number.isFinite(savedSeed) && savedSeed >= 0 ? savedSeed : 0);
+const savedDelta = Number(sessionStorage.getItem(SEED_DELTA_KEY));
+const seedDelta = ref(Number.isFinite(savedDelta) && savedDelta !== 0 ? savedDelta : 1);
 
 const submitting = ref(false);
 const submitError = ref("");
@@ -382,6 +403,7 @@ let returnFocusEl = null;
 
 watch(seedMode, (v) => sessionStorage.setItem(SEED_MODE_KEY, v));
 watch(seed, (v) => sessionStorage.setItem(SEED_KEY, String(v)));
+watch(seedDelta, (v) => sessionStorage.setItem(SEED_DELTA_KEY, String(v)));
 
 const sourceLabel = computed(() => {
   const img = props.image;
@@ -397,6 +419,54 @@ const otherSelectedCount = computed(() => {
 
 const maxSeed = computed(() =>
   selectedMode.value === "recipe" ? MAX_SEED_RECIPE : MAX_SEED_32,
+);
+
+/**
+ * The seed the original run actually used: the recipe route's `seed` (the
+ * sampler's own widget), falling back to the first patchable seed input.
+ * `null` — never 0, which is a legal seed — when there is nothing to read.
+ */
+const originalSeed = computed(() => {
+  const info = recipe.value;
+  if (!info?.available) return null;
+  const v = info.seed ?? info.seed_inputs?.[0]?.value;
+  return Number.isFinite(v) && v >= 0 ? v : null;
+});
+
+/**
+ * Incremented is only offered where there is an original to increment from:
+ * recipe mode with a readable seed. Templates draw their own seeds, so the
+ * option would be an offer the dialog cannot honour.
+ */
+const seedModes = computed(() => {
+  const modes = [{ id: "random", label: "Random", icon: "mdi-dice-multiple-outline" }];
+  if (selectedMode.value === "recipe" && originalSeed.value != null) {
+    modes.push({ id: "incremented", label: "Incremented", icon: "mdi-plus-minus" });
+  }
+  modes.push({ id: "fixed", label: "Fixed", icon: "mdi-lock-outline" });
+  return modes;
+});
+
+// A sticky "incremented" preference must not survive into a context that
+// cannot honour it (template mode, or a recipe with no readable seed).
+watch(seedModes, (list) => {
+  if (!list.some((o) => o.id === seedMode.value)) seedMode.value = "random";
+});
+
+const incrementedSeed = computed(() => {
+  if (originalSeed.value == null) return null;
+  const delta = Number(seedDelta.value) || 0;
+  return Math.min(maxSeed.value, Math.max(0, originalSeed.value + delta));
+});
+
+/** Flag — not forbid — a fixed seed that would re-create the original exactly.
+ * Recipe mode only: a template run with the original's seed is a different
+ * graph, so nothing identical comes out of it. */
+const seedIsOriginal = computed(
+  () =>
+    selectedMode.value === "recipe" &&
+    originalSeed.value != null &&
+    Number(seed.value) === originalSeed.value,
 );
 
 /**
@@ -625,6 +695,9 @@ async function onOpen() {
   // from under the user mid-interaction is worse than a moment of no default.
   selectedMode.value = "";
   await Promise.all([loadTemplates(), loadRecipe(), loadDescription()]);
+  // Fixed defaults to the seed the original run used — flagged as "same as
+  // original" until edited — rather than whatever a previous dialog pinned.
+  if (originalSeed.value != null) seed.value = originalSeed.value;
   selectedMode.value = resolveInitialMode();
   focusedModeIndex.value = Math.max(
     0,
@@ -859,8 +932,15 @@ async function submit() {
         ? await runRecipe(
             {
               picture_id: props.image.id,
-              seed_mode: seedMode.value,
-              seed: seedMode.value === "fixed" ? seed.value : undefined,
+              // Incremented is a client-side convenience over the same API:
+              // it submits as a fixed seed at original + delta.
+              seed_mode: seedMode.value === "random" ? "random" : "fixed",
+              seed:
+                seedMode.value === "fixed"
+                  ? seed.value
+                  : seedMode.value === "incremented"
+                    ? incrementedSeed.value
+                    : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
               // Sent only for the run the user actually acknowledged. Never a
@@ -876,7 +956,7 @@ async function submit() {
               picture_ids: [props.image.id],
               workflow_name: selectedWorkflow.value,
               caption: templateTakesPrompt.value ? prompt.value : "",
-              seed_mode: seedMode.value,
+              seed_mode: seedMode.value === "random" ? "random" : "fixed",
               seed: seedMode.value === "fixed" ? seed.value : undefined,
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
@@ -1232,7 +1312,20 @@ async function submit() {
 .remix-seed-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+.remix-seed-note {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  white-space: nowrap;
+}
+
+/* The delta stays narrow so the resulting seed fits beside it. */
+.remix-num--delta {
+  flex: 0 1 110px;
 }
 
 .remix-seg {
