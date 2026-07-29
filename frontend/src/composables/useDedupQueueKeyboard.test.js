@@ -90,6 +90,33 @@ describe("dedup keyboard — moving the focus", () => {
     expect(store.setFocus).toHaveBeenCalledWith(1);
   });
 
+  it("PageDown and PageUp move a screenful, as the view measures it", () => {
+    deps.pageRows = () => 7;
+    handle = createDedupKeyHandler(deps);
+    store.focusIndex = 9;
+    handle(keyEvent("PageDown"));
+    expect(store.setFocus).toHaveBeenCalledWith(16);
+    handle(keyEvent("PageUp"));
+    expect(store.setFocus).toHaveBeenCalledWith(2);
+  });
+
+  it("falls back to a conservative page when the viewport is unmeasurable", () => {
+    // A list that has not laid out yet reports 0 rows. Moving by zero would be
+    // a dead key, and guessing a whole screen would overshoot the queue.
+    deps.pageRows = () => 0;
+    handle = createDedupKeyHandler(deps);
+    handle(keyEvent("PageDown"));
+    expect(store.setFocus).toHaveBeenCalledWith(5);
+  });
+
+  it("claims the page keys so the scroll container does not also move", () => {
+    // The page keys would otherwise scroll the list out from under the cursor
+    // AND move the focus, which lands the user two screens from where they are.
+    const event = keyEvent("PageDown");
+    handle(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
   // Reading the queue is not a verdict, so navigation stays live for a share
   // session that cannot act on it.
   it("still navigates in a read-only session", () => {

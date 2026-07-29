@@ -9,6 +9,7 @@
 // The model, in one table:
 //
 //   ArrowUp / ArrowDown   move the focus (k / j alias the same pair)
+//   PageUp / PageDown     move the focus a screenful of rows at a time
 //   Home / End            jump to the first / last open group
 //   Enter                 stack the focused group
 //   S                     keep the focused group separate
@@ -114,12 +115,22 @@ function isActivatableTarget(event) {
  * @param {function(Object): void} [deps.onExclusionRefused] - called with the
  *   group when `X` was refused because the stack floor was reached. The view
  *   narrates it; this handler has no opinion on how.
+ * @param {function(): number} [deps.pageRows] - how many rows `PageUp` and
+ *   `PageDown` move. The viewport's row capacity, which only the view can
+ *   measure; the fallback is a conservative screenful.
  * @param {Object} [deps.zoom] - the Compare dialog's blink-compare surface:
  *   `{ isOpen, open, close, flip, to, togglePixels }`. The zoom's state lives
  *   in the dialog; the KEYS live here, so the queue keeps exactly one
  *   keyboard owner. Omitted (the default no-op) in tests that predate it.
  * @returns {function(KeyboardEvent): void}
  */
+/**
+ * The page step used when the view cannot measure its viewport (a test, or a
+ * list that has not laid out yet). Deliberately smaller than any real screenful
+ * so a blind guess never overshoots the queue.
+ */
+const DEFAULT_PAGE_ROWS = 5;
+
 const NO_ZOOM = {
   isOpen: () => false,
   open: () => {},
@@ -139,8 +150,19 @@ export function createDedupKeyHandler({
   isBlocked = () => false,
   onEscape = () => {},
   onExclusionRefused = () => {},
+  pageRows = () => DEFAULT_PAGE_ROWS,
   zoom = NO_ZOOM,
 }) {
+  /**
+   * A page move in rows, never zero: a viewport too short to hold one row must
+   * still advance, or the key reads as dead.
+   * @returns {number}
+   */
+  function rowsPerPage() {
+    const rows = Math.floor(Number(pageRows()));
+    return Number.isFinite(rows) && rows >= 1 ? rows : DEFAULT_PAGE_ROWS;
+  }
+
   /**
    * Point `1`-`9` and `X` at the focused group, from the list or from Compare.
    * @param {KeyboardEvent} event
@@ -299,12 +321,28 @@ export function createDedupKeyHandler({
       store.focusPrev();
       return;
     }
+    // A page move is a focus move like any other, so it auto-loads at the tail
+    // and drags the scroll with it. `setFocus` clamps, which is what makes
+    // PageDown on the last screenful land on the last row rather than nowhere.
+    if (key === "pagedown") {
+      claim(event);
+      store.setFocus(store.focusIndex + rowsPerPage());
+      return;
+    }
+    if (key === "pageup") {
+      claim(event);
+      store.setFocus(store.focusIndex - rowsPerPage());
+      return;
+    }
     if (key === "home") {
       claim(event);
       store.setFocus(0);
       return;
     }
     if (key === "end") {
+      // The last row the client HOLDS, which is the last row it can focus.
+      // Landing there asks the store for the next page, so repeated End walks
+      // a paging queue to its true end instead of stopping at the first page.
       claim(event);
       store.setFocus(store.groups.length - 1);
       return;

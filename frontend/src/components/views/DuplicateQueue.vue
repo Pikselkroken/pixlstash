@@ -13,11 +13,12 @@
          carries the two keys the strip has no room for, and the one fact that
          makes the whole queue safe to work fast. -->
     <p id="dq-key-help" class="visually-hidden">
-      Up and Down arrows choose a group. Enter stacks it. S keeps it separate. C
-      compares every copy field by field. The number keys 1 to 9 choose the
-      cover. X leaves the picture under the cursor out of the stack. Control Z
-      undoes the last verdict. Escape returns here from a control. No picture is
-      ever deleted, and a stack can be undone.
+      Up and Down arrows choose a group. Page Up and Page Down move a screenful
+      at a time, and Home and End jump to the first and last group. Enter stacks
+      it. S keeps it separate. C compares every copy field by field. The number
+      keys 1 to 9 choose the cover. X leaves the picture under the cursor out of
+      the stack. Control Z undoes the last verdict. Escape returns here from a
+      control. No picture is ever deleted, and a stack can be undone.
     </p>
 
     <div class="dq-toolbar">
@@ -353,6 +354,7 @@ const STACK_FLOOR_NOTICE =
 
 const KEY_HINTS = [
   { keys: ["↑", "↓"], label: "choose group" },
+  { keys: ["PgUp", "PgDn"], label: "jump a screen" },
   { keys: ["Enter"], label: "stack it" },
   { keys: ["S"], label: "keep separate" },
   { keys: ["C"], label: "compare" },
@@ -878,6 +880,9 @@ const onKeydown = createDedupKeyHandler({
   undo: () => operationStore.undo(),
   isReadOnly: () => readOnly.value,
   isBlocked: () => autoStackOpen.value || tierMenuOpen.value,
+  // One row less than the viewport holds, so a page move keeps the row the
+  // user was reading on screen as the anchor for the next one.
+  pageRows: () => Math.max(1, viewportRows.value - 1),
   onEscape,
   onExclusionRefused: () => {
     announcement.value = STACK_FLOOR_NOTICE;
