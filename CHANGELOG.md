@@ -1,3 +1,7 @@
+# [1.9.0]
+
+- Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
+
 # [1.8.0] [Security:Moderate]
 
 Smart Scores are recomputed for your whole library the first time you open 1.8.0, so the grid may re-order compared to 1.7. Part of that is a fix: the built-in reference points that score a library with few ratings of its own had stopped loading, so if you have rated only a handful of pictures your scores should be better than before. This is expected, not a bug: the scoring weights are rebalanced so the top of the 1-5 range is reachable again and your best pictures can score like it. Your originals and snapshots are untouched, and the recompute runs in the background in small batches without re-running any AI models, so it stays out of your way.

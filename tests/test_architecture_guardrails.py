@@ -137,6 +137,7 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints

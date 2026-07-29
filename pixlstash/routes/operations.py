@@ -67,6 +67,11 @@ class UndoResultResponse(BaseModel):
     operations: list[OperationResponse] = []
     picture_ids: list[int] = []
     picture_count: int = 0
+    # The scrapheap lifecycle subset of ``picture_ids``: pictures this call moved
+    # INTO the scrapheap (they left the active grid) and pictures it brought back
+    # OUT of it. Both are empty for a pure metadata undo.
+    scrapheaped_picture_ids: list[int] = []
+    restored_picture_ids: list[int] = []
 
 
 class UndoRequest(BaseModel):
@@ -161,7 +166,10 @@ def create_router(server) -> APIRouter:
             "**whole batch** is reverted, so a partially-undone bulk action "
             "cannot exist. 409 when there is nothing to undo or the named "
             "operation is not reversible; 423 when a locked picture set freezes "
-            "one of the targets."
+            "one of the targets; 410 when undoing a move to the Scrapheap whose "
+            "picture has since been permanently purged (retention sweep or Empty "
+            "Scrapheap) — the whole request is refused, the operation stays "
+            "applied, and nothing is written."
         ),
         response_model=UndoResultResponse,
     )

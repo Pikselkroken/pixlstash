@@ -140,6 +140,7 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @open-remix-dialog="openRemixDialog"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -352,6 +353,17 @@
       "
       anchor="top"
       @abort="abortExportZip"
+    />
+    <RemixDialog
+      :open="remixDialogOpen"
+      :image="remixImage"
+      :selected-image-ids="selectedImageIds"
+      :client-id="comfyuiClientId || ''"
+      :backend-url="props.backendUrl"
+      :stack-outputs="genStackPrefs.stackI2IOutputs"
+      @close="remixDialogOpen = false"
+      @run="handleComfyuiRun"
+      @use-batch="handleContextMenuOpenComfyuiPanel"
     />
     <ComfyUiRunner
       ref="comfyuiRunner"
@@ -1031,6 +1043,7 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
   useNoticeStore,
@@ -1068,6 +1081,7 @@ import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
+import RemixDialog from "../io/RemixDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
@@ -1783,6 +1797,23 @@ const comfyuiProgressPercent = computed(() => {
 
 function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
+}
+
+// ── Remix ("Generate variants…") ─────────────────────────────────────────
+// Acts on the RIGHT-CLICKED picture, not the selection — the dialog discloses
+// that and offers a route to the batch panel when a wider selection is live.
+const remixDialogOpen = ref(false);
+const remixImage = ref(null);
+
+function openRemixDialog(pictureId) {
+  const id = pictureId ?? contextMenuImage.value?.id;
+  if (id == null) return;
+  const image =
+    allGridImages.value.find((img) => String(img?.id) === String(id)) ||
+    contextMenuImage.value;
+  if (!image) return;
+  remixImage.value = image;
+  remixDialogOpen.value = true;
 }
 
 async function runComfyuiOnGridImages({
@@ -2816,6 +2847,7 @@ const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+const genStackPrefs = useGenStackPrefsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
 // Every failure path in this component reports through the notice surface. A
 // native alert() is unstyled, blocking and focus-stealing; a bare `catch` that

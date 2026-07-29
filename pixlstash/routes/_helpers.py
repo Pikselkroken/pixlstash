@@ -9,10 +9,12 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     PictureStack,
 )
@@ -66,13 +68,23 @@ def picture_referenced_by_project(
     (another entity still anchors it there) or can be removed.  The entity being
     moved is excluded from the check via ``exclude_character_id`` /
     ``exclude_set_id`` so it does not count as a reason to keep the picture.
+
+    Since issue #125 an entity may belong to several projects, so "still assigned
+    to ``project_id``" is read from the ``CharacterProjectMember`` /
+    ``PictureSetProjectMember`` join tables rather than the scalar primary-project
+    FK. Reading the FK here would drop a picture out of a project that one of its
+    entities is still (secondarily) a member of.
     """
     char_query = (
         select(Character.id)
         .join(Face, Face.character_id == Character.id)
+        .join(
+            CharacterProjectMember,
+            CharacterProjectMember.character_id == Character.id,
+        )
         .where(
             Face.picture_id == picture_id,
-            Character.project_id == project_id,
+            CharacterProjectMember.project_id == project_id,
         )
     )
     if exclude_character_id is not None:
@@ -83,9 +95,13 @@ def picture_referenced_by_project(
     set_query = (
         select(PictureSet.id)
         .join(PictureSetMember, PictureSetMember.set_id == PictureSet.id)
+        .join(
+            PictureSetProjectMember,
+            PictureSetProjectMember.set_id == PictureSet.id,
+        )
         .where(
             PictureSetMember.picture_id == picture_id,
-            PictureSet.project_id == project_id,
+            PictureSetProjectMember.project_id == project_id,
         )
     )
     if exclude_set_id is not None:

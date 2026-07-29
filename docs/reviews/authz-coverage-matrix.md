@@ -2,8 +2,8 @@
 
 - **Branch:** `backend-refactoring`
 - **Scope:** Phase 1 **Step 2 only** of the centralised-authz refactor (backend refactor plan §3.5). This PR **declares** the access policy of every mounted HTTP route in `pixlstash/authz/registry.py::ROUTE_POLICIES`. It does **not** enforce anything (`AUTHZ_GATE_ENFORCING = False`), remove any inline check, or change any handler. It is the regenerated coverage matrix the adversarial security review consumes.
-- **Arithmetic completeness (updated 2026-07-28):** **224 declared**, covering the **223** routes mounted in the default configuration plus **1 conditionally-mounted** route. The v1.9 delta is **+7 `owner_only`** rows for the DAM 1.2 operation log (`operations.py`, table below), taking `owner_only` 83 → **90**. No existing declaration changed. Original Step-2 text follows.
-- **Arithmetic completeness:** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
+- **Arithmetic completeness (re-derived 2026-07-29, v1.9 backbone merged):** **228 declared**, covering the **227** routes mounted in the default configuration plus **1 conditionally-mounted** route (`POST /api/v1/test-hooks/ws-event`). These numbers are **counted from `ROUTE_POLICIES` and the live route inventory**, not carried forward from prose: `len(ROUTE_POLICIES) == 228`, `len(api_endpoint_set(app)) == 227`, `live - declared == ∅`, `declared - live == {POST /api/v1/test-hooks/ws-event}`. The v1.9 backbone delta over the 217-declaration baseline is **+11**: **+7 `owner_only`** for the DAM 1.2 operation log (#626, `operations.py`), **+2 `owner_only`** for the near-duplicate sweep dry run (#625, `dedup.py` — GET `/dedup/sweep/policy`, POST `/dedup/sweep/dry-run`), and **+2 `picture_scoped`** for Remix (#627 — GET `/comfyui/pictures/{picture_id}/recipe`, POST `/comfyui/run_recipe`). That takes `owner_only` 83 → **92** and `picture_scoped` 33 → **35**; no other policy class moved and no existing declaration was retargeted. Multi-project membership (#629) declared no new routes. Earlier interim counts in this document (219 / 224) were prose carried across merges and are superseded by this count.
+- **Arithmetic completeness (pre-v1.9 baseline):** **217 declared**, covering the **216** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`)). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
 - **WebSockets:** the 2 WS routes (`/ws/comfyui`, `/api/v1/ws/updates`) are **out of the HTTP registry by design** — their chokepoint is `authenticate_websocket` (plan §6). They remain acknowledged in `tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged`, and `registry.py` carries the `# WS routes: see authn/websocket.py` sentinel.
 
 ## How each policy was derived (preserve-today's-behaviour rule)
@@ -27,14 +27,16 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (217 total)
+## Policy distribution (228 total)
+
+Counted from `ROUTE_POLICIES` on 2026-07-29, after the v1.9 backbone merges.
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 16 |
-| `owner_only` | 83 |
-| `picture_scoped` | 33 |
+| `owner_only` | 92 |
+| `picture_scoped` | 35 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
 | `character_scoped` | 5 |
@@ -243,6 +245,19 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/stacks/{stack_id}/order` | owner_only |  | Reorder stack; PATCH blocked for READ tokens; owner only |
 | GET | `/api/v1/stacks/{stack_id}/pictures` | scoped_list |  |  |
 
+### dedup.py
+
+Added 2026-07-28 with the v1.9 near-duplicate sweep (Lane E). Both routes are new,
+carry no inline authz code (the gate is the sole enforcement, §16.1), and are
+covered in both directions by `tests/test_dedup_sweep_api.py`
+(`test_scoped_read_token_is_denied_on_both_routes` /
+`test_owner_reaches_both_routes`).
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/sweep/policy` | owner_only |  | Sweep policy defaults/bounds; operator surface, returns no per-object data |
+| POST | `/api/v1/dedup/sweep/dry-run` | owner_only |  | Vault-wide near-duplicate plan (counts + picture ids across the whole library); cannot be narrowed to a share token's scope without leaking out-of-scope counts, same reasoning as tag_health. POST also blocked for READ tokens |
+
 ### characters.py
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
@@ -312,8 +327,10 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | POST | `/api/v1/comfyui/abort` | owner_only |  | Abort generation; POST blocked for READ tokens; owner only |
+| GET | `/api/v1/comfyui/pictures/{picture_id}/recipe` | picture_scoped | id=picture_id |  |
 | GET | `/api/v1/comfyui/pictures/{picture_id}/workflow` | picture_scoped | id=picture_id |  |
 | POST | `/api/v1/comfyui/run_i2i` | picture_scoped | body=picture_ids |  |
+| POST | `/api/v1/comfyui/run_recipe` | picture_scoped | body=picture_id | required single body id; re-extracts the graph from the scoped picture |
 | POST | `/api/v1/comfyui/run_t2i` | picture_scoped | body=source_picture_id |  |
 | GET | `/api/v1/comfyui/workflows` | any_token |  |  |
 | POST | `/api/v1/comfyui/workflows/import` | owner_only |  | Import workflow; POST blocked for READ tokens; owner only |

@@ -33,6 +33,12 @@ import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  useViewStore,
+} from "./stores/useViewStore";
 import { redoKeyHint, undoKeyHint } from "./utils/shortcutHints";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
@@ -54,9 +60,6 @@ import {
 } from "./utils/thumbnailSizes";
 
 const BACKEND_URL = API_BASE_URL;
-const ALL_PICTURES_ID = "ALL";
-const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
-const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -74,6 +77,9 @@ const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const lockedSetsStore = useLockedSetsStore();
 const operationStore = useOperationStore();
+// Owns route → view resolution (the app's single route watcher). Route pushing
+// stays here in App.vue; see stores/useViewStore.js.
+const viewStore = useViewStore();
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
 // everywhere; only the hint is platform-specific.
 const undoKeyHintKeys = undoKeyHint();
@@ -165,12 +171,8 @@ let stopOpenSettings = null;
 // --- Computed ---
 // Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
-const activeFolderKey = computed(() => {
-  const { name, params } = route;
-  if (name === "ref-folder" && params.id) return `rf-${params.id}`;
-  if (name === "import-folder" && params.id) return `if-${params.id}`;
-  return null;
-});
+// Parsed once, by useViewStore.
+const activeFolderKey = computed(() => viewStore.activeFolderKey);
 
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
@@ -1014,226 +1016,10 @@ function pushRouteForCurrentSelection() {
   });
 }
 
-/**
- * Apply the current route params/query to the Pinia stores.
- * Called on initial load (immediate) and on every route change so that
- * back/forward navigation and direct URL entry update the grid correctly.
- *
- * This function is intentionally idempotent — writing the same values to
- * reactive refs is a no-op in Vue's reactivity system, so it is safe to
- * call it on every route tick without triggering unnecessary re-renders.
- */
-// True array equality by numeric content — avoids spurious reactive updates
-// when applyRouteToStores writes the same IDs that handleSelect* already set.
-function _sameNumIds(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (Number(a[i]) !== Number(b[i])) return false;
-  }
-  return true;
-}
-
-function applyRouteToStores() {
-  const { name, params, query } = route;
-
-  if (name === "all-pictures") {
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
-      selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    selectionStore.lastSelectedCharacterLabel = "All Pictures";
-    projectStore.projectViewMode = "global";
-    projectStore.selectedProjectId = null;
-  } else if (name === "character") {
-    const charIdRaw = params.id || ALL_PICTURES_ID;
-    const charIdNum = Number(charIdRaw);
-    const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
-    const idsRaw = query.ids;
-    const modeRaw = query.mode;
-    // No ?ids= query → fall back to the single route character (when it is a
-    // real character, id > 0), mirroring the set branch. Falling back to []
-    // here would clear selectedCharacterIds after a single select, so the
-    // next Ctrl/Cmd-click would see an empty multi-set and never accumulate
-    // (this is why multi-select worked for sets but not characters).
-    const ids = idsRaw
-      ? String(idsRaw)
-          .split(",")
-          .map(Number)
-          .filter((id) => Number.isFinite(id) && id > 0)
-      : Number.isFinite(charIdNum) && charIdNum > 0
-        ? [charIdNum]
-        : [];
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== String(charId))
-      selectionStore.selectedCharacter = charId;
-    if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
-      selectionStore.selectedCharacterIds = ids;
-    if (ids.length > 1 && modeRaw) {
-      selectionStore.characterMultiMode = String(modeRaw);
-    }
-    if (charId === ALL_PICTURES_ID) {
-      selectionStore.lastSelectedCharacterLabel = "All Pictures";
-    } else if (charId === UNASSIGNED_PICTURES_ID) {
-      selectionStore.lastSelectedCharacterLabel = "Unassigned Pictures";
-    }
-    projectStore.projectViewMode = "global";
-    projectStore.selectedProjectId = null;
-  } else if (name === "scrapheap") {
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    if (
-      String(selectionStore.selectedCharacter) !== String(SCRAPHEAP_PICTURES_ID)
-    )
-      selectionStore.selectedCharacter = SCRAPHEAP_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    selectionStore.lastSelectedCharacterLabel = "Scrapheap";
-    projectStore.projectViewMode = "global";
-    projectStore.selectedProjectId = null;
-  } else if (name === "set") {
-    const primaryId = Number(params.id);
-    const idsRaw = query.ids;
-    const modeRaw = query.mode;
-    const baseRaw = query.base;
-    const ids = idsRaw
-      ? String(idsRaw)
-          .split(",")
-          .map(Number)
-          .filter((id) => Number.isFinite(id) && id > 0)
-      : Number.isFinite(primaryId) && primaryId > 0
-        ? [primaryId]
-        : [];
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedCharacter = null;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    const nextSet = ids[0] ?? null;
-    if (selectionStore.selectedSet !== nextSet)
-      selectionStore.selectedSet = nextSet;
-    if (!_sameNumIds(selectionStore.selectedSetIds, ids))
-      selectionStore.selectedSetIds = ids;
-    if (ids.length > 1 && modeRaw) {
-      selectionStore.setMultiMode = String(modeRaw);
-    }
-    if (ids.length > 1 && baseRaw) {
-      const baseId = Number(baseRaw);
-      if (Number.isFinite(baseId) && baseId > 0) {
-        selectionStore.setDifferenceBaseId = baseId;
-      }
-    }
-    projectStore.projectViewMode = "global";
-    projectStore.selectedProjectId = null;
-  } else if (name === "project") {
-    const projectId = Number(params.id);
-    projectStore.projectViewMode = "project";
-    projectStore.selectedProjectId =
-      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
-    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
-      selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.lastSelectedCharacterLabel = "All Pictures";
-  } else if (name === "project-character") {
-    const projectId = Number(params.projectId);
-    const charIdRaw = params.id || ALL_PICTURES_ID;
-    const charIdNum = Number(charIdRaw);
-    const charId = Number.isFinite(charIdNum) ? charIdNum : String(charIdRaw);
-    // Parse the multi-selection from the query (mirrors the global character
-    // branch); fall back to the single route character so a single select in
-    // project mode does not clear selectedCharacterIds — which previously made
-    // the next Ctrl/Cmd-click restart from empty (multi-select never worked in
-    // the project tab).
-    const idsRaw = query.ids;
-    const modeRaw = query.mode;
-    const ids = idsRaw
-      ? String(idsRaw)
-          .split(",")
-          .map(Number)
-          .filter((id) => Number.isFinite(id) && id > 0)
-      : Number.isFinite(charIdNum) && charIdNum > 0
-        ? [charIdNum]
-        : [];
-    projectStore.projectViewMode = "project";
-    projectStore.selectedProjectId =
-      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    if (String(selectionStore.selectedCharacter) !== String(charId))
-      selectionStore.selectedCharacter = charId;
-    if (!_sameNumIds(selectionStore.selectedCharacterIds, ids))
-      selectionStore.selectedCharacterIds = ids;
-    if (ids.length > 1 && modeRaw) {
-      selectionStore.characterMultiMode = String(modeRaw);
-    }
-  } else if (name === "project-set") {
-    const projectId = Number(params.projectId);
-    const setId = Number(params.id);
-    const idsRaw = query.ids;
-    const modeRaw = query.mode;
-    const baseRaw = query.base;
-    const ids = idsRaw
-      ? String(idsRaw)
-          .split(",")
-          .map(Number)
-          .filter((id) => Number.isFinite(id) && id > 0)
-      : Number.isFinite(setId) && setId > 0
-        ? [setId]
-        : [];
-    projectStore.projectViewMode = "project";
-    projectStore.selectedProjectId =
-      Number.isFinite(projectId) && projectId > 0 ? projectId : null;
-    selectionStore.selectedFolderFilter = null;
-    selectionStore.selectedCharacter = null;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    const nextSet = ids[0] ?? null;
-    if (selectionStore.selectedSet !== nextSet)
-      selectionStore.selectedSet = nextSet;
-    if (!_sameNumIds(selectionStore.selectedSetIds, ids))
-      selectionStore.selectedSetIds = ids;
-    if (ids.length > 1 && modeRaw) {
-      selectionStore.setMultiMode = String(modeRaw);
-    }
-    if (ids.length > 1 && baseRaw) {
-      const baseId = Number(baseRaw);
-      if (Number.isFinite(baseId) && baseId > 0) {
-        selectionStore.setDifferenceBaseId = baseId;
-      }
-    }
-    selectionStore.lastSelectedCharacterLabel = "All Pictures";
-  } else if (name === "ref-folder" || name === "import-folder") {
-    // Folder routes — clear all other selection state. The sidebar will emit
-    // select-folder with the full payload once it loads the folder data.
-    projectStore.projectViewMode = "global";
-    projectStore.selectedProjectId = null;
-    if (String(selectionStore.selectedCharacter) !== String(ALL_PICTURES_ID))
-      selectionStore.selectedCharacter = ALL_PICTURES_ID;
-    if (selectionStore.selectedCharacterIds.length > 0)
-      selectionStore.selectedCharacterIds = [];
-    selectionStore.selectedSet = null;
-    if (selectionStore.selectedSetIds.length > 0)
-      selectionStore.selectedSetIds = [];
-    selectionStore.lastSelectedCharacterLabel = "All Pictures";
-  }
-}
-
-// Sync route → stores on every navigation (and immediately on mount for deep-linking).
-watch(route, applyRouteToStores, { immediate: true, deep: true });
+// Route -> stores: install the app's single route watcher (immediately on
+// mount for deep-linking, then on every navigation). The parsing and the
+// writes live in useViewStore; App.vue keeps only the route PUSHING above.
+viewStore.startRouteSync(route, { watch });
 
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
 // project picker) must not navigate or change the grid — the route is the
@@ -1249,9 +1035,9 @@ function handleUpdateSelectedProjectId(id) {
   projectStore.selectedProjectId = id;
 }
 
-// Explicit "view this project" entry click → navigate. applyRouteToStores
-// (watching the route) sets projectViewMode/selectedProjectId from the URL,
-// which scopes the grid to the project.
+// Explicit "view this project" entry click → navigate. useViewStore (watching
+// the route) sets projectViewMode/selectedProjectId from the URL, which scopes
+// the grid to the project.
 function handleViewProject(id) {
   if (id == null) return;
   pushAppRoute({ name: "project", params: { id: String(id) } });
