@@ -40,6 +40,7 @@ outside it, which is the same reasoning that makes the tag-health board
 owner-only, and the verdict routes mutate stacks across arbitrary pictures.
 """
 
+import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -55,6 +56,7 @@ from pixlstash.services.dedup_tier_service import (
     MAX_PAGE_SIZE,
     MAX_THRESHOLD,
     MIN_THRESHOLD,
+    DedupCursorError,
     DedupScope,
     DedupTier,
     ScopeType,
@@ -78,6 +80,33 @@ from pixlstash.services.dedup_sweep_service import (
 )
 
 logger = get_logger(__name__)
+
+CLIENT_BATCH_ID_PREFIX = "cli-"
+MAX_BATCH_ID_LENGTH = 80
+CLIENT_BATCH_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{4,76}$")
+"""The shape a **client-supplied** operation batch id must have.
+
+Batch ids are namespaced so the log can tell who minted one: the server mints
+``srv-<uuid4hex>`` (:func:`operation_log_service.new_batch_id`) and a client may
+group its own gestures under ``cli-…``. Taken verbatim, a client could submit
+``srv-…`` and have its rows read as a server batch — and, worse, graft them into
+an existing batch so one Ctrl+Z reverses more than the user did.
+
+The pattern is duplicated here on purpose: the shared definition lands in
+``pixlstash/utils/request_origin.py`` with the ``X-Operation-Batch-Id`` header
+contract (branch ``feature/gesture-batch-id``), which is not on this branch.
+When that merges, both sites must import it from there instead. Note the
+difference in disposition: an unusable *header* is dropped and ignored, because a
+header is ambient; an unusable *body* field is a 400, because the client named it
+deliberately and silently ignoring it would mis-group its undo.
+"""
+
+MAX_CURSOR_LENGTH = 128
+"""Cap on the opaque queue cursor a client may send back.
+
+The cursors this server mints are ~40 characters; anything longer is not one of
+ours, and bounding it here keeps a malformed value from reaching the base64
+decoder as an unbounded string."""
 
 MAX_COUNT_SCOPES = 200
 """Cap on the scope list of one ``POST /dedup/counts``.
@@ -451,7 +480,8 @@ class TierPolicyModel(BaseModel):
             f"Defaults to {DEFAULT_THRESHOLD}. Exact matches are always shown "
             f"regardless. Below {MIN_THRESHOLD} nothing is suggested at all: a "
             "low threshold produces confident-looking garbage and destroys trust "
-            "in the count, so a lower value is a 400, never a silent clamp."
+            "in the count, so a lower value is refused (422 from this bound), "
+            "never a silent clamp."
         ),
     )
 
@@ -684,8 +714,26 @@ class DedupQueueResponse(BaseModel):
             "database and is never loaded whole."
         )
     )
-    offset: int = Field(description="Echo of the requested offset.")
+    offset: int = Field(
+        description=(
+            "Echo of the requested offset. **Deprecated** - offset paging skips "
+            "groups whenever the queue changes underneath it (a verdict on a "
+            "delivered row, or a tier-2 scan committing a bucket, shifts every "
+            "later row up). Page with `cursor` instead; `0` is echoed when "
+            "cursor paging."
+        )
+    )
     limit: int = Field(description="Effective page size after clamping.")
+    cursor: Optional[str] = Field(
+        default=None, description="Echo of the cursor this page was read from."
+    )
+    next_cursor: Optional[str] = Field(
+        default=None,
+        description=(
+            "Pass as `cursor` to fetch the next page. `null` at end-of-found. "
+            "Opaque: pass it back verbatim, never construct or parse one."
+        ),
+    )
     policy: TierPolicyModel = Field(description="The policy this page was read under.")
     scope: dict[str, Any] = Field(description="The scope this page was read under.")
     scan: ScanProgressModel = Field(description="Scan progress for this scope.")
@@ -804,7 +852,10 @@ class StackVerdictRequestModel(BaseModel):
         default=None,
         description=(
             "Operation-log batch to record this verdict under. Supply the same "
-            "id across several calls to make them reverse as one undo."
+            "`cli-<4-76 chars of A-Z a-z 0-9 _ ->` id across several calls to "
+            "make them reverse as one undo. Omit it and the server mints its own "
+            "`srv-` id; any other shape is a 400, so a client cannot mint what "
+            "reads as a server batch or graft its rows into one."
         ),
     )
 
@@ -816,7 +867,11 @@ class SignatureRequestModel(BaseModel):
 
     signature: str = Field(description="The group signature.")
     batch_id: Optional[str] = Field(
-        default=None, description="Operation-log batch to record under."
+        default=None,
+        description=(
+            "Operation-log batch to record under. Must be a client-namespaced "
+            "`cli-…` id; omit it to have the server mint one."
+        ),
     )
 
 
@@ -890,8 +945,9 @@ class AutoStackRequestModel(BaseModel):
     batch_id: Optional[str] = Field(
         default=None,
         description=(
-            "Operation-log batch id. Omit to have the server mint one; every "
-            "stack in the run shares it, so N stacks reverse with one undo."
+            "Operation-log batch id. Omit to have the server mint one (`srv-…`); "
+            "every stack in the run shares it, so N stacks reverse with one "
+            "undo. A supplied id must be client-namespaced `cli-…`."
         ),
     )
     limit: Optional[int] = Field(
@@ -993,6 +1049,29 @@ def create_router(server) -> APIRouter:
             logger.info("[dedup] rejected tier policy %s: %s", model, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    def _batch_id(value: Optional[str]) -> Optional[str]:
+        """Accept only a client-namespaced batch id, 400 on anything else.
+
+        The server mints ``srv-…`` for a verdict that arrives without one; a
+        client that wants several verdicts to reverse together supplies its own
+        ``cli-…``. Accepting an arbitrary string let a client mint what reads as
+        a server batch, or graft its rows into someone else's batch so one undo
+        reverses more than the user did.
+        """
+        if value is None:
+            return None
+        text = str(value)
+        if len(text) > MAX_BATCH_ID_LENGTH or not CLIENT_BATCH_ID_RE.fullmatch(text):
+            logger.info("[dedup] rejected client batch_id %r", text[:120])
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"batch_id must match {CLIENT_BATCH_ID_PREFIX}<4-76 chars of "
+                    "A-Z a-z 0-9 _ ->; omit it to have the server mint one"
+                ),
+            )
+        return text
+
     def _scope(model: Optional[ScopeRequestModel]) -> DedupScope:
         """Build the service scope from a request model, 400 on a bad one."""
         try:
@@ -1043,7 +1122,14 @@ def create_router(server) -> APIRouter:
             "candidate's own evidence - so the client renders reasons rather "
             "than conclusions. The queue is paged from the database and is never "
             "loaded whole: 10 groups and 10,000 cost the same per page. The "
-            "response also carries this scope's scan progress for the banner."
+            "response also carries this scope's scan progress for the banner.\n\n"
+            "Page with `cursor`: pass the previous page's `next_cursor` back "
+            "verbatim, and stop when `next_cursor` is `null`. The queue is a "
+            "live list - deciding a verdict on a delivered group removes it, and "
+            "a tier-2 scan commits new groups after every bucket - so `offset` "
+            "paging skips exactly as many groups as the previous page changed. "
+            "`offset` still works for compatibility but is deprecated, and "
+            "sending both `cursor` and `offset` is a 400."
         ),
         response_model=DedupQueueResponse,
     )
@@ -1067,7 +1153,24 @@ def create_router(server) -> APIRouter:
         scope_id: Optional[str] = Query(
             default=None, description="Scope id, required unless scope is global."
         ),
-        offset: int = Query(default=0, ge=0, description="Groups to skip."),
+        offset: Optional[int] = Query(
+            default=None,
+            ge=0,
+            deprecated=True,
+            description=(
+                "Groups to skip. Deprecated - use `cursor`; offset paging skips "
+                "groups when the queue changes between pages. Mutually exclusive "
+                "with `cursor`."
+            ),
+        ),
+        cursor: Optional[str] = Query(
+            default=None,
+            max_length=MAX_CURSOR_LENGTH,
+            description=(
+                "Opaque keyset position from the previous page's `next_cursor`. "
+                "Omit for the first page. Mutually exclusive with `offset`."
+            ),
+        ),
         limit: int = Query(
             default=DEFAULT_PAGE_SIZE,
             ge=1,
@@ -1075,6 +1178,17 @@ def create_router(server) -> APIRouter:
             description="Groups per page.",
         ),
     ):
+        if cursor is not None and offset is not None:
+            # Refused rather than silently preferring one: a client that sends
+            # both has two different ideas of where it is, and answering either
+            # one hands back a page it did not ask for.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "cursor and offset are mutually exclusive; page with cursor "
+                    "(offset is deprecated)"
+                ),
+            )
         policy = _policy(
             TierPolicyModel(
                 near_enabled=near_enabled,
@@ -1083,9 +1197,13 @@ def create_router(server) -> APIRouter:
             )
         )
         scope = _scope(ScopeRequestModel(scope_type=scope_type, scope_id=scope_id))
-        return dedup_tier_service.queue_response(
-            server.vault, policy, scope, offset, limit
-        )
+        try:
+            return dedup_tier_service.queue_response(
+                server.vault, policy, scope, offset or 0, limit, cursor
+            )
+        except DedupCursorError as exc:
+            logger.info("[dedup] rejected queue cursor: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post(
         "/dedup/counts",
@@ -1152,7 +1270,7 @@ def create_router(server) -> APIRouter:
                 payload.signature,
                 payload.cover_picture_id,
                 list(payload.excluded_picture_ids),
-                payload.batch_id,
+                _batch_id(payload.batch_id),
                 **context,
             )
         except DedupVerdictError as exc:
@@ -1179,7 +1297,7 @@ def create_router(server) -> APIRouter:
         # post_stack_verdict does.
         try:
             result = dedup_verdict_service.apply_keep_separate(
-                server.vault, payload.signature, payload.batch_id
+                server.vault, payload.signature, _batch_id(payload.batch_id)
             )
         except DedupVerdictError as exc:
             logger.info("[dedup] keep-separate verdict rejected: %s", exc)
@@ -1200,6 +1318,9 @@ def create_router(server) -> APIRouter:
     )
     def post_reopen_verdict(payload: SignatureRequestModel):
         # No request_context here on purpose — see post_keep_separate_verdict.
+        # batch_id is unused by reopen (it records no operation) but is still
+        # validated, so no route on this surface accepts a malformed one.
+        _batch_id(payload.batch_id)
         try:
             return dedup_verdict_service.reopen_verdict(server.vault, payload.signature)
         except DedupVerdictError as exc:
@@ -1233,7 +1354,7 @@ def create_router(server) -> APIRouter:
         return dedup_verdict_service.bulk_auto_stack(
             server.vault,
             scope,
-            request_model.batch_id,
+            _batch_id(request_model.batch_id),
             request_model.dry_run,
             request_model.limit,
             **context,

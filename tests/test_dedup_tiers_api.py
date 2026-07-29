@@ -29,7 +29,7 @@ from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember
-from pixlstash.db_models.dedup import DedupScan
+from pixlstash.db_models.dedup import DedupScan, DedupVerdict
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
@@ -670,5 +670,340 @@ def test_a_partially_blocked_auto_stack_returns_its_batch_id():
             _run(server, lambda session: session.get(Picture, locked_ids[0]).stack_id)
             is None
         )
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── undo reopens the verdict, not only the pictures ───────────────────────────
+
+
+def _add_exact_groups(server, count, members=2, sha_prefix="extra"):
+    """Insert *count* more exact groups of *members* byte-identical pictures."""
+
+    def insert(session):
+        created = []
+        for index in range(count):
+            group = []
+            for member in range(members):
+                pic = Picture(
+                    file_path=f"/vault/{sha_prefix}_{index}_{member}.png",
+                    format="png",
+                    width=100,
+                    height=100,
+                    size_bytes=500 + index,
+                    pixel_sha=f"{sha_prefix}-{index}",
+                )
+                session.add(pic)
+                session.flush()
+                group.append(int(pic.id))
+            created.append(group)
+        session.commit()
+        return created
+
+    return _run(server, insert)
+
+
+def _rescan(server):
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+
+def _signatures(client) -> set:
+    return {group["signature"] for group in client.get(GROUPS_URL).json()["groups"]}
+
+
+def _verdict_row(server, signature):
+    return _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+
+
+def test_undo_returns_the_stacked_group_to_the_queue():
+    """QA blocker 1, single verdict.
+
+    Undo restored every picture facet but left the ``DedupVerdict`` decided and
+    the ``DedupGroup`` resolved, so the group never came back to the queue, was
+    not counted, and survived a rescan (the signature still carried a live
+    verdict). The only way back was a ``POST /dedup/verdicts/reopen`` no user
+    could discover. The post-restore hook now reopens both rows inside the undo's
+    own transaction.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        signature = _signature(client)
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 1
+
+        stacked = client.post(STACK_URL, json={"signature": signature})
+        assert stacked.status_code == 200, stacked.text
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+        assert _signatures(client) == set()
+
+        undone = client.post(f"{API}/operations/undo", json={})
+        assert undone.status_code == 200, undone.text
+
+        # The pictures are unstacked ...
+        assert _run(
+            server, lambda session: [session.get(Picture, pid).stack_id for pid in ids]
+        ) == [None, None, None]
+        # ... and so is the decision.
+        assert _signatures(client) == {signature}
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 1
+        verdict = _verdict_row(server, signature)
+        assert verdict is not None, "the verdict row is kept, only reopened"
+        assert verdict.reopened_at is not None
+
+        # A rescan does not re-decide it either: it is genuinely back in the queue.
+        _rescan(server)
+        assert _signatures(client) == {signature}
+
+        redone = client.post(f"{API}/operations/redo", json={})
+        assert redone.status_code == 200, redone.text
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+        assert _signatures(client) == set()
+        assert _verdict_row(server, signature).reopened_at is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_batch_undo_after_auto_stack_returns_every_group():
+    """QA blocker 1, QA's exact repro: bulk auto-stack then batch undo.
+
+    Every duplicate vanished from the queue permanently - one undo click, and the
+    whole vault's worth of duplicate decisions was unrecoverable without
+    hand-reopening each signature.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=3)
+        _rescan(server)
+        before = _signatures(client)
+        assert len(before) == 4
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 4
+
+        applied = client.post(AUTO_STACK_URL, json={"dry_run": False})
+        assert applied.status_code == 200, applied.text
+        batch_id = applied.json()["batch_id"]
+        assert applied.json()["groups"] == 4
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+
+        undone = client.post(f"{API}/operations/batches/{batch_id}/undo", json={})
+        assert undone.status_code == 200, undone.text
+
+        assert _signatures(client) == before
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 4
+        # And the whole batch is redoable, back to nothing outstanding.
+        assert client.post(f"{API}/operations/redo", json={}).status_code == 200
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_an_undo_does_not_reopen_a_group_it_never_touched():
+    """The hook is scoped to the undone batch, not to every decided group."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        signatures = sorted(_signatures(client))
+        assert len(signatures) == 2
+        kept_separate, stacked = signatures
+
+        keep = client.post(KEEP_SEPARATE_URL, json={"signature": kept_separate})
+        assert keep.status_code == 200, keep.text
+        response = client.post(STACK_URL, json={"signature": stacked})
+        assert response.status_code == 200, response.text
+        assert _signatures(client) == set()
+
+        assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+
+        # Only the stacked group came back; the keep-separate decision stands,
+        # and a rescan does not re-ask it.
+        assert _signatures(client) == {stacked}
+        _rescan(server)
+        assert _signatures(client) == {stacked}
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── keyset paging ─────────────────────────────────────────────────────────────
+
+
+def test_a_verdict_between_pages_makes_offset_skip_and_the_cursor_not():
+    """QA 3: a decided page-1 row shifts every later row's offset by one.
+
+    Both halves are asserted: offset paging demonstrably loses a group (so the
+    test cannot pass vacuously), and the cursor delivers it.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=3)
+        _rescan(server)
+        everything = _signatures(client)
+        assert len(everything) == 4
+
+        # Offset paging: read page 1, decide it, read page 2 at offset=2.
+        page_one = client.get(GROUPS_URL, params={"limit": 2}).json()
+        delivered = [group["signature"] for group in page_one["groups"]]
+        assert len(delivered) == 2
+        decided = client.post(STACK_URL, json={"signature": delivered[0]})
+        assert decided.status_code == 200, decided.text
+        offset_page = client.get(GROUPS_URL, params={"limit": 2, "offset": 2}).json()
+        seen_by_offset = set(delivered) | {
+            group["signature"] for group in offset_page["groups"]
+        }
+        skipped = everything - seen_by_offset
+        assert skipped, "offset paging is expected to skip after a verdict"
+
+        # Same situation, cursor paging: nothing is skipped.
+        assert page_one["next_cursor"], page_one
+        cursor_page = client.get(
+            GROUPS_URL, params={"limit": 2, "cursor": page_one["next_cursor"]}
+        ).json()
+        seen_by_cursor = set(delivered) | {
+            group["signature"] for group in cursor_page["groups"]
+        }
+        assert skipped <= seen_by_cursor
+        assert seen_by_cursor == everything
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_cursor_walks_every_group_when_confidences_tie():
+    """Exact groups all sit at the same confidence, so the tie-break is the id.
+
+    ``confidence < c`` alone would drop the rest of the tied run; ``<=`` would
+    repeat it forever. Walking one row at a time exercises the boundary on every
+    step.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=4)
+        _rescan(server)
+        everything = _signatures(client)
+        assert len(everything) == 5
+        confidences = {
+            group["confidence"] for group in client.get(GROUPS_URL).json()["groups"]
+        }
+        assert len(confidences) == 1, "the tie-break is what is under test"
+
+        walked = []
+        cursor = None
+        for _ in range(len(everything) + 2):
+            params = {"limit": 1}
+            if cursor:
+                params["cursor"] = cursor
+            body = client.get(GROUPS_URL, params=params).json()
+            walked.extend(group["signature"] for group in body["groups"])
+            cursor = body["next_cursor"]
+            if not cursor:
+                break
+        assert cursor is None, "paging must terminate"
+        assert len(walked) == len(set(walked)), "no group is delivered twice"
+        assert set(walked) == everything
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_cursor_and_offset_together_are_rejected():
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        cursor = client.get(GROUPS_URL, params={"limit": 1}).json()["next_cursor"]
+        response = client.get(GROUPS_URL, params={"cursor": cursor or "x", "offset": 0})
+        assert response.status_code == 400, response.text
+        assert "mutually exclusive" in response.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_malformed_cursor_is_a_400_not_a_silent_restart():
+    """Silently paging from the top would hand the client page 1 forever."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        for bad in ("not-base64!!", "AAAA", "MXwxLjB8"):
+            response = client.get(GROUPS_URL, params={"cursor": bad})
+            assert response.status_code == 400, (bad, response.text)
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── batch id namespacing and folder scope normalisation ───────────────────────
+
+
+def test_a_server_shaped_batch_id_from_a_client_is_rejected():
+    """CSO M1: a verbatim body batch_id let a client impersonate a server batch."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        signature = _signature(client)
+        for bad in ("srv-deadbeef", "batch-42", "cli-ab", "cli-" + "a" * 200, ""):
+            response = client.post(
+                STACK_URL, json={"signature": signature, "batch_id": bad}
+            )
+            assert response.status_code == 400, (bad, response.text)
+            assert (
+                client.post(
+                    KEEP_SEPARATE_URL, json={"signature": signature, "batch_id": bad}
+                ).status_code
+                == 400
+            ), bad
+            assert (
+                client.post(
+                    AUTO_STACK_URL, json={"dry_run": False, "batch_id": bad}
+                ).status_code
+                == 400
+            ), bad
+        # Nothing was decided by any of the rejected calls.
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 1
+
+        # A client-namespaced id is accepted and used verbatim.
+        response = client.post(
+            STACK_URL, json={"signature": signature, "batch_id": "cli-gesture-01"}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["batch_id"] == "cli-gesture-01"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_server_minted_batch_id_is_namespaced():
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        signature = _signature(client)
+        response = client.post(STACK_URL, json={"signature": signature})
+        assert response.status_code == 200, response.text
+        assert response.json()["batch_id"].startswith("srv-")
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_folder_scope_that_normalises_to_nothing_is_rejected():
+    """CSO W2: "/" rstripped to "" and became a LIKE of "%" - silently global."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        for bad in ("/", "\\", "///", "\\\\", "/\\/"):
+            body = {"scope_type": "folder", "scope_id": bad}
+            assert (
+                client.get(
+                    GROUPS_URL, params={"scope_type": "folder", "scope_id": bad}
+                ).status_code
+                == 400
+            ), bad
+            assert client.post(COUNTS_URL, json={"scopes": [body]}).status_code == 400
+            assert client.post(SCAN_URL, json={"scope": body}).status_code == 400
+            assert client.post(AUTO_STACK_URL, json={"scope": body}).status_code == 400
+        # No poison scan row was persisted by the rejected requests.
+        assert _run(server, lambda session: session.exec(select(DedupScan)).all()) == []
+
+        # A real folder still works, with or without a trailing separator, and
+        # both spellings are the same scope.
+        for spelling in ("/vault", "/vault/"):
+            counts = client.post(
+                COUNTS_URL,
+                json={"scopes": [{"scope_type": "folder", "scope_id": spelling}]},
+            )
+            assert counts.status_code == 200, counts.text
+            assert counts.json()["scopes"][0]["unresolved_groups"] == 1
+            assert counts.json()["scopes"][0]["key"] == "folder:/vault"
     finally:
         _teardown(temp_dir, server)
