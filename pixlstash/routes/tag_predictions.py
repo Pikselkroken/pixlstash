@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import tag_prediction_service
+from pixlstash.services import operation_log_service, tag_prediction_service
 from pixlstash.utils.service.anomaly_thresholds import (
     load_label_thresholds,
     load_raw_label_thresholds,
@@ -152,7 +152,10 @@ def create_router(server) -> APIRouter:
         summary="Confirm a tag prediction",
         description=(
             "Marks the prediction as CONFIRMED and ensures a corresponding row "
-            "exists in the Tag table.  Emits a CHANGED_PICTURES event."
+            "exists in the Tag table.  Emits a CHANGED_PICTURES event and records "
+            "an undoable ``pictures.tags.confirm`` operation, so undo reverses "
+            "both the Tag row and the human-label ledger entry.  423 when a "
+            "locked picture set freezes the picture (nothing is recorded)."
         ),
         response_model=ConfirmTagPredictionResponse,
     )
@@ -163,9 +166,29 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
+        def _confirm(session):
+            tag_prediction_service.confirm_tag_prediction_in_session(
+                session,
+                pic_id,
+                tag,
+                server.vault.interactive_rescore_registry,
+                origin_client_id,
+            )
+
+        # Recorded so Ctrl+Z can revert it (§21.2). The op captures BOTH the Tag
+        # row this creates and the prediction row's ledger, because undoing one
+        # without the other would put the tag back while the tagger still read it
+        # as adjudicated. Recorded regardless of which principal called: a scoped
+        # token may reach this route, but /operations* is OWNER_ONLY, so only the
+        # owner can ever see or undo the row (precedent N2, v1.9 authz sign-off).
         try:
-            tag_prediction_service.confirm_tag_prediction(
-                server.vault, pic_id, tag, origin_client_id=origin_client_id
+            _result, _operation = operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                _confirm,
+                op_type=operation_log_service.OP_TAGS_CONFIRM,
+                picture_ids=[pic_id],
+                summary=f"Confirmed tag '{tag}'",
+                **operation_log_service.request_context(request),
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Prediction not found")
@@ -179,7 +202,15 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/pictures/{id}/tag_predictions/{tag}/reject",
         summary="Reject a tag prediction",
-        description="Marks the prediction as REJECTED.  Does not modify the Tag table.",
+        description=(
+            "Marks the prediction as REJECTED, writing a durable human NEG label "
+            "(a synthetic ``manual`` prediction row is created when the tag was "
+            "hand-added and the tagger never predicted it).  Does not modify the "
+            "Tag table.  Records an undoable ``pictures.tags.reject`` operation "
+            "summarised as *Removed tag 'x'* — that is what the user did; the "
+            "ledger is the mechanism.  423 when a locked picture set freezes the "
+            "picture (nothing is recorded)."
+        ),
         response_model=RejectTagPredictionResponse,
     )
     def reject_tag_prediction(id: int, tag: str, request: Request):
@@ -189,8 +220,26 @@ def create_router(server) -> APIRouter:
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid picture id")
 
-        tag_prediction_service.reject_tag_prediction(
-            server.vault, pic_id, tag, origin_client_id=origin_client_id
+        def _reject(session):
+            tag_prediction_service.reject_tag_prediction_in_session(
+                session,
+                pic_id,
+                tag,
+                server.vault.interactive_rescore_registry,
+                origin_client_id,
+            )
+
+        # Recorded so Ctrl+Z can revert it (§21.2). "Removed tag" is what the user
+        # did; the NEG ledger row is the mechanism, and it is captured with the
+        # tags facet so an undo reverses both — a restored tag the tagger still
+        # treats as rejected is a half-undo, which is worse than none.
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _reject,
+            op_type=operation_log_service.OP_TAGS_REJECT,
+            picture_ids=[pic_id],
+            summary=f"Removed tag '{tag}'",
+            **operation_log_service.request_context(request),
         )
         server.handle_vault_event(
             EventType.CHANGED_PICTURES,
