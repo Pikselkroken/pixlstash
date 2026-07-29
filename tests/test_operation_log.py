@@ -1408,6 +1408,7 @@ def test_a_malformed_gesture_batch_header_is_ignored_never_a_500():
                 "no-namespace",
                 "cli-" + "a" * 200,  # oversized
                 "cli-has spaces",
+                "cli-abcd\n",  # G1: a trailing LF must not pass (fullmatch, not match)
             )
         ):
             resp = client.post(
@@ -1418,7 +1419,7 @@ def test_a_malformed_gesture_batch_header_is_ignored_never_a_500():
             assert resp.status_code == 200, resp.text
 
         recorded = _operations(server, op_type="pictures.tags.add")
-        assert len(recorded) == 4
+        assert len(recorded) == 5
         assert all(op["batch_id"] is None for op in recorded), recorded
     finally:
         _teardown(temp_dir, server)

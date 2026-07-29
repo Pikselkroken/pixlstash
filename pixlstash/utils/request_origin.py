@@ -102,7 +102,9 @@ def sanitize_operation_batch_id(raw: str | None) -> str | None:
     """
     if not raw:
         return None
-    if len(raw) > MAX_OPERATION_BATCH_ID_LENGTH or not _CLIENT_BATCH_ID_RE.match(raw):
+    if len(raw) > MAX_OPERATION_BATCH_ID_LENGTH or not _CLIENT_BATCH_ID_RE.fullmatch(
+        raw
+    ):
         logger.debug(
             "Ignoring malformed %s header (length=%d, prefix=%r); the operation "
             "will be recorded unbatched",
