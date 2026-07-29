@@ -24,6 +24,7 @@ import json
 import os
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import select
@@ -994,3 +995,124 @@ def test_operations_routes_have_no_inline_authz_check():
             f"{forbidden} is an inline authz check; the AuthzGate owns "
             "authorization for these routes (docs/backend_architecture.md §16.1)"
         )
+
+
+# ── post-restore hooks ────────────────────────────────────────────────────────
+
+
+def _register_recording_hook(op_type):
+    """Register a hook that records its calls, and return the call list.
+
+    The registry is module-global, so the hook is removed again by the caller's
+    ``finally`` to keep tests independent.
+    """
+    calls = []
+
+    def _hook(session, operations, direction):
+        calls.append((direction, sorted(int(op.id) for op in operations)))
+
+    operation_log_service.register_post_restore_hook(op_type, _hook)
+    return calls
+
+
+def test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch():
+    """The generic seam a feature uses to reopen what an operation also decided.
+
+    An operation can change state the recorded picture facets do not cover (the
+    v1.9 duplicate verdict is the first). Without a hook, undo restored the
+    pictures and left that decision standing. The contract asserted here is what
+    the feature relies on: called once per restore, with **every** operation of
+    its own op_type, with the direction, and never for a foreign op_type.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        calls = _register_recording_hook("test.hooked")
+        other = _register_recording_hook("test.unhooked")
+        ids = [_upload(client) for _ in range(2)]
+        batch_id = operation_log_service.new_batch_id()
+
+        def _tag_one(session, picture_id, tag):
+            session.add(Tag(picture_id=picture_id, tag=tag))
+            session.commit()
+
+        for picture_id in ids:
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                _tag_one,
+                picture_id,
+                "hooked",
+                op_type="test.hooked",
+                picture_ids=[picture_id],
+                batch_id=batch_id,
+                summary="Hooked",
+            )
+        recorded = sorted(op["id"] for op in _operations(server, batch_id=batch_id))
+        assert len(recorded) == 2
+        assert calls == [], "recording must not fire a restore hook"
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert calls == [("undo", recorded)], calls
+
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        assert calls == [("undo", recorded), ("redo", recorded)], calls
+
+        # A hook registered for a different op_type never saw any of it.
+        assert other == []
+    finally:
+        operation_log_service._POST_RESTORE_HOOKS.pop("test.hooked", None)
+        operation_log_service._POST_RESTORE_HOOKS.pop("test.unhooked", None)
+        _teardown(temp_dir, server)
+
+
+def test_a_failing_post_restore_hook_aborts_the_whole_undo():
+    """The hook runs inside the restore's transaction, so it fails closed.
+
+    A hook that could fail *after* the state was committed would leave the
+    pictures restored and the feature's own state stale — exactly the split the
+    hook exists to prevent.
+    """
+    temp_dir, client, server = _setup()
+    try:
+
+        def _boom(session, operations, direction):
+            raise RuntimeError("hook refused")
+
+        operation_log_service.register_post_restore_hook("test.failing", _boom)
+        picture_id = _upload(client)
+
+        def _tag_one(session, pid, tag):
+            session.add(Tag(picture_id=pid, tag=tag))
+            session.commit()
+
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _tag_one,
+            picture_id,
+            "kept",
+            op_type="test.failing",
+            picture_ids=[picture_id],
+            summary="Failing",
+        )
+        assert _tags(server, picture_id) == ["kept"]
+
+        # The TestClient re-raises an unhandled server exception rather than
+        # turning it into a 500, so the refusal surfaces here.
+        with pytest.raises(RuntimeError, match="hook refused"):
+            client.post(f"{API}/operations/undo")
+        # Nothing was written: the tag is still there and the operation is still
+        # applied, so the user can retry rather than being left half-undone.
+        assert _tags(server, picture_id) == ["kept"]
+        assert [op["status"] for op in _operations(server, op_type="test.failing")] == [
+            "applied"
+        ]
+    finally:
+        operation_log_service._POST_RESTORE_HOOKS.pop("test.failing", None)
+        _teardown(temp_dir, server)
+
+
+def test_a_server_minted_batch_id_is_namespaced():
+    """M1: an un-namespaced id is indistinguishable from a client-supplied one."""
+    assert operation_log_service.new_batch_id().startswith(
+        operation_log_service.SERVER_BATCH_ID_PREFIX
+    )
+    assert operation_log_service.new_batch_id() != operation_log_service.new_batch_id()
