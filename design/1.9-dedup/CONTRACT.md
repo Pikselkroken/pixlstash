@@ -26,9 +26,11 @@ with a one-time notice pointing at the new sidebar entry.
 ## Design-over-shipped-backend deltas (backend adapts)
 
 1. **Cover selection formula** replaces the shipped planner's keeper order
-   (score → smart score → recency): `pixels×4 + tags×3 + userScore×2 + RAW
-   bonus`, ties break to **oldest capture time**. Always a visible
-   preselection the user can override (1–9); never silent.
+   (score → smart score → recency): `megapixels×4 + tags×3 + userScore×2 +
+   RAW bonus`, ties break to **oldest capture time**. Always a visible
+   preselection the user can override (1–9); never silent. (The pixel term is
+   **megapixels**, not raw pixel count: at raw counts it would dwarf every
+   other term and the formula would be "biggest file wins" with decoration.)
 2. **Policy model** replaces `SweepPolicy`'s auto/review split semantics with
    tier gating: Tier 1 exact is always included and cannot be switched off;
    each looser tier is a separate opt-in with its own live count and enabling
@@ -49,6 +51,14 @@ with a one-time notice pointing at the new sidebar entry.
    membership onto the stack and takes the highest score. Nothing is
    overwritten or lost. (Reconcile with existing stack semantics; if current
    "Stack groups" behaviour differs, the design's union wins.)
+   **Characters carry one carve-out.** A face carries a bbox and an embedding
+   that belong to one specific picture, so a true face-to-character union
+   would mean fabricating `Face` rows. When the group's members between them
+   reference exactly **one** character, members that lack it get
+   `pending_character_id` (the shipped deferred-assignment path). A group
+   spanning **several** characters is left alone and logged — inventing
+   detection data is worse than not unioning. Tags, sets, projects and score
+   union unconditionally.
 
 ## Performance rules (design §1, binding)
 
@@ -56,7 +66,11 @@ with a one-time notice pointing at the new sidebar entry.
   with a "scanned N% of M" banner streaming.
 - Queue is virtual: one group in the DOM, prefetch next group's thumbnails
   only; group list paged from the DB by confidence descending, never loaded
-  whole. 10 groups and 10,000 must perform identically.
+  whole. 10 groups and 10,000 must perform identically. Paging is by
+  **keyset cursor**, not offset: the queue is a live list (a verdict removes
+  the row the user just decided, a tier-2 scan commits new groups after every
+  bucket), and an offset re-read skips exactly as many groups as changed
+  underneath it.
 - Scoped scans (project/set/character/folder context menu "Find duplicates
   in…" with live count) reuse cached hashes and return instantly; queue opens
   with a dismissible scope pill.

@@ -606,7 +606,7 @@ without `near_enabled` is a **400**, and a `threshold` below `min_threshold` is 
 ### `GET /dedup/groups`
 
 Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
-`scope_id`, `offset`, `limit` (≤ 200).
+`scope_id`, `cursor`, `limit` (≤ 200), and the deprecated `offset`.
 
 ```jsonc
 {
@@ -634,12 +634,23 @@ Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
     }]
   }],
   "total": 128, "offset": 0, "limit": 20,
+  "cursor": null,                    // echo of the cursor this page was read from
+  "next_cursor": "MXwxfDQy",         // pass back as ?cursor=; null at end-of-found
   "policy": { … }, "scope": { "scope_type": "global", "scope_id": null, "key": "global" },
   "scan": { "status": "running", "scanned_pictures": 79412, "total_pictures": 128412,
             "scanned_buckets": 210, "total_buckets": 940, "groups_found": 128,
             "error": null }
 }
 ```
+
+**Page with `cursor`, not `offset`.** Send the previous page's `next_cursor`
+back verbatim and stop when it is `null`. The queue is a live list: deciding a
+verdict removes the group the user just decided, and a tier-2 scan commits new
+groups after every bucket, so an `offset` re-read skips exactly as many groups as
+changed underneath it — reproducibly, with a single verdict between two pages.
+The cursor is **opaque**: never construct, parse or edit one. A cursor the server
+did not mint is a **400** (not a silent restart from page 1), `offset` is
+deprecated but still works, and sending **both** is a **400**.
 
 `scan` is the banner. `status` is `idle` when the scope has never been scanned —
 that is not an error, the queue still shows what an earlier global scan found.
@@ -701,11 +712,24 @@ All three take `{ "signature": "9f2c…", "batch_id": "…" }`; `POST
 excluding down to fewer than two members is a **400**. A member frozen by a locked
 picture set is a **423** with the usual `pictures_locked` detail.
 
+**`batch_id` is namespaced.** Omit it and the server mints its own `srv-…`;
+supply one only to make several calls reverse as one undo, and then it must match
+`cli-<4–76 chars of A-Z a-z 0-9 _ ->` (≤ 80). Any other shape — including a
+`srv-…` id — is a **400**, so a client cannot mint what reads as a server batch
+or graft its rows into an existing one.
+
 | Route | Effect |
 |---|---|
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Does **not** unstack anything. |
+
+**Undoing a stack verdict also returns its group to the queue.** `POST
+/operations/undo` and `POST /operations/batches/{batch_id}/undo` unstack the
+pictures *and* reopen the verdict, so after an undo the group is back in `GET
+/dedup/groups` and back in the sidebar count with no extra call — do not follow an
+undo with a `reopen`. Redo re-decides it. `reopen` stays the explicit way back
+from a **keep-separate**, which records no operation and therefore has no undo.
 
 `stack` and `keep-separate` return:
 
@@ -726,7 +750,7 @@ the highest score; nothing is overwritten and nothing is deleted.
 > *shared* set means every live share token for that set now reaches it. That is
 > the shipped stack-atomic membership model (ordinary `POST /stacks` does the
 > same), but auto-stack applies it in bulk — worth saying out loud in the consent
-> copy. See backend §22.8 accepted risk A1.
+> copy. See backend §22.9 accepted risk A1.
 
 ### `POST /dedup/auto-stack`
 

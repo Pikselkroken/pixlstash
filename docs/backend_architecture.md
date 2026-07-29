@@ -1660,6 +1660,50 @@ Both sites pass `expand_stacks=True, expand_stacks_include_deleted=True`. `norma
 
 No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
 
+### 21.2 Post-restore hooks — reopening what an operation also decided
+
+The recorded before/after state covers the reversible **picture** facets. An
+operation can additionally have decided something that is *not* a picture facet,
+and restoring the pictures without reopening that decision leaves the two halves
+disagreeing. The v1.9 duplicate verdict is the first such case, and QA
+caught it half-working: undoing a stack verdict unstacked the pictures but left the
+`DedupVerdict` decided and the `DedupGroup` resolved, so the group never returned
+to the queue, was not counted, and **survived a rescan** (the signature still
+carried a live verdict). The only way back was a `POST /dedup/verdicts/reopen`
+no user could find.
+
+`register_post_restore_hook(op_type, hook)` is the generic seam. `_restore` — the
+one place both undo and redo write state — dispatches the registered hooks after
+every state has been applied and **before the commit**, so the decision and the
+pictures land in one transaction or not at all; a hook that raises aborts the
+whole restore and the operation stays `applied`.
+
+- The hook is called **once per restore** with *every* operation of its own
+  `op_type` in that restore (`(session, operations, direction)`), so a 2 700-row
+  batch undo is one call, not 2 700.
+- `direction` is `RESTORE_UNDO` / `RESTORE_REDO`.
+- **The op-log core imports no feature module.** Registration lives in the
+  feature that owns the `op_type` — `dedup_verdict_service` registers at import
+  time and is imported by `routes/dedup.py`, which `Server` mounts at startup.
+  An `op_type` with no hook simply has none.
+
+Pinned by `tests/test_operation_log.py::test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch`
+and `::test_a_failing_post_restore_hook_aborts_the_whole_undo`.
+
+### 21.3 `batch_id` is namespaced
+
+`new_batch_id()` mints `srv-<uuid4hex>` (`SERVER_BATCH_ID_PREFIX`). A batch id can
+also come from a client, and the two must be distinguishable: an un-namespaced id
+makes a client-supplied grouping key indistinguishable from a server-minted one,
+so a client could submit an id that reads as a server batch — or graft its rows
+into an existing batch, where one Ctrl+Z then reverses more than the user did.
+Client-supplied ids are the `cli-` shape, validated at the request boundary
+(`^cli-[A-Za-z0-9_-]{4,76}$`, ≤80 chars) and refused with a **400** when they do
+not match. Note the deliberate asymmetry with the header form: an unusable
+*header* is dropped and ignored because a header is ambient; an unusable *body*
+field is a refusal, because the client named it on purpose and silently ignoring
+it would mis-group its undo.
+
 ---
 
 ## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
@@ -1740,12 +1784,20 @@ Two further caps, both logged when they bite (never silent):
 | `MAX_PAIRS_PER_BUCKET` | 50 000 (~4 MB) | pairs materialised for one bucket |
 | `MAX_TRACKED_PAIRS` | 400 000 (~32 MB) | pairs a whole streaming scan retains across buckets |
 
-Hitting the per-bucket cap keeps every matching member connected (the retained
-pairs are the lowest-offset ones), so group *membership* is unaffected; what is
-lost is confidence *resolution*, since the weakest-link value is measured over
-fewer edges. Hitting the scan-wide cap stops cross-bucket chaining growing, so a
-chain spanning two buckets can be reported as two groups. Both log a warning
-naming the bucket or scan and what was given up.
+**The per-bucket cap can lose membership, and the log says so.** Pairs are
+emitted in increasing member-offset order, so the cap keeps the nearest-offset
+edges and drops every wider one. In a *uniformly* near-identical bucket that is
+harmless — the offset-1 edges alone span the block — and the only loss is
+confidence *resolution*. In a **dense but non-uniform** block it is not: ~700
+mutually matching members exhaust 50 000 pairs well inside the low offsets, so a
+member whose only match sits at a wider offset gets no edge at all and is split
+into its own group or drops out of the queue entirely. An earlier version of this
+paragraph claimed membership was never lost; that was wrong. The warning now
+names the bucket, the offset it stopped at, and that consequence, and states the
+mitigations (resolve the dense block and rescan, narrow the bucket, or raise
+`MAX_PAIRS_PER_BUCKET` for the memory it costs). Hitting the scan-wide cap stops
+cross-bucket chaining growing, so a chain spanning two buckets can be reported as
+two groups. Both log a warning naming the bucket or scan and what was given up.
 
 ### 22.3 Tier 3 — embedding
 
@@ -1762,10 +1814,16 @@ the dry-run planner, unchanged).
 - Tier 1 is always included and **has no switch**.
 - Each looser tier is a separate opt-in, and `embedding_enabled` **requires**
   `near_enabled`.
-- `threshold` defaults to `0.90`; `MIN_THRESHOLD = 0.65` is a hard floor. A
-  request below it raises `ValueError` → HTTP 400. It is never silently clamped:
-  a low threshold produces confident-looking garbage and destroys trust in the
-  sidebar count.
+- `threshold` defaults to `0.90`; `MIN_THRESHOLD = 0.65` is a hard floor. It is
+  never silently clamped: a low threshold produces confident-looking garbage and
+  destroys trust in the sidebar count. **The refusal is a 422, not a 400.** The
+  floor is a pydantic `ge=MIN_THRESHOLD` bound on the query parameter and on
+  `TierPolicyModel.threshold`, so FastAPI rejects a low value before any handler
+  runs, on every route. `TierPolicy.__post_init__` keeps its own `ValueError`
+  check because it is the *service-level* invariant — reachable from a task or a
+  test that never went through a request — and the tier-dependency rule it also
+  enforces (`embedding_enabled` requires `near_enabled`) is not expressible as a
+  field bound, so **that** one is the 400 the handlers translate.
 
 ### 22.5 Cover selection and evidence
 
@@ -1789,6 +1847,19 @@ The server reports reasons. The user concludes.
   *upserts on `signature`*, so a rescan refreshes rows instead of duplicating
   them, and the queue is paged from `(resolved, confidence DESC)` and never
   materialised whole. This is what makes 10 groups and 10,000 cost the same.
+
+  **The upsert honours tier precedence** (`TIER_STRENGTH`: exact > near >
+  embedding). Two tiers routinely find the *same* group — a byte-identical pair
+  is also perceptually identical, so every near-enabled scan rediscovers every
+  exact pair under the same signature — and the upsert originally wrote
+  `row.tier` unconditionally. An exact pair silently demoted to `near`
+  disappeared from the exact-only default view **and** from
+  `POST /dedup/auto-stack`, which only ever acts on `exact`. Tier, confidence,
+  evidence and cover move together (they describe one finding); membership is
+  refreshed either way, because the signature pins the member *content keys* and
+  a re-import can give the same content new picture ids. Pinned by
+  `test_a_near_scan_does_not_downgrade_an_exact_group` and
+  `test_the_upsert_takes_the_stronger_tier_in_either_arrival_order`.
 - **`dedupverdict`** — verdict memory keyed on the group **signature**: `sha256`
   of the sorted member content keys, where a content key is
   **`<pixel_sha>:<size_bytes>`** (or `id:<n>` for a picture not yet hashed).
@@ -1812,7 +1883,44 @@ The server reports reasons. The user concludes.
 dropped below two, so the sidebar badge cannot be inflated by scrapheaped
 pictures.
 
-### 22.7 Streaming and the background path
+**Scope ids are normalised and validated at construction** (`DedupScope.__post_init__`),
+not at query time. Project / set / character ids must parse as integers. A
+**folder** `scope_id` is stripped of trailing separators and **refused when that
+leaves it empty**: `/`, `\`, `///` all rstripped to `""`, which became a `LIKE`
+pattern of `%` — a "Find duplicates in this folder" request that silently meant
+the whole vault, plus a persisted `dedupscan` row whose `scope_key` claimed
+otherwise. Normalising at construction also collapses `/photos` and `/photos/`
+onto one scope key instead of two scans.
+
+### 22.7 Paging the queue: a keyset cursor, not an offset
+
+`GET /dedup/groups` pages by an **opaque keyset cursor**. The queue is a live
+list: a verdict removes the row the user just decided from `resolved=False`, and
+a tier-2 scan commits new groups after every bucket. Both shift every later row's
+offset, so `offset=limit` on the next request skips exactly as many groups as the
+page's decisions removed — a deterministic, silent skip reproduced with a single
+verdict between two pages.
+
+- **Order is `(confidence DESC, id ASC)`**, and the cursor encodes that pair for
+  the last delivered row. Wire form: unpadded base64url over
+  `"1|<confidence at %.17g>|<group id>"` (`CURSOR_VERSION` is the leading `1`).
+  17 significant digits make the float round-trip exactly, which the tie-break
+  branch depends on.
+- **The tie-break half is load-bearing.** Every exact group sits at the same
+  confidence, so `confidence < c` alone would drop the rest of the tied run and
+  `confidence <= c` would repeat it forever. The predicate is
+  `confidence < c OR (confidence = c AND id > i)`.
+- `next_cursor` is `null` once the page is not full — end-of-found. A full last
+  page hands back a cursor that yields one empty page, which is cheaper than the
+  extra `COUNT` needed to know for certain.
+- **Opaque by intent.** Clients pass it back verbatim. A cursor this server did
+  not mint is a **400**, never a silent restart from the top — silently paging
+  from offset 0 would hand the client page 1 forever.
+- `offset` still works and is **deprecated**; sending both is a **400** rather
+  than a silent preference, because a client that sends both has two different
+  ideas of where it is.
+
+### 22.8 Streaming and the background path
 
 `DedupScanFinder` / `DedupScanTask` (`TaskType.DEDUP_SCAN`) turn a `pending`
 `dedupscan` row into work. Tier 1 runs first and in one shot so the queue is never
@@ -1836,7 +1944,7 @@ rows. It is *not* a statement about the scan: a scan is inherently proportional 
 the library, it holds the single DB writer while it runs, and its memory is bounded
 by the caps in §22.2 rather than being free.
 
-### 22.8 Verdicts and the metadata union
+### 22.9 Verdicts and the metadata union
 
 The only two verdicts are **stack** and **keep separate**. Neither deletes
 anything; there is no destructive route on this surface in 1.9.
@@ -1898,7 +2006,7 @@ live share token for that set immediately reaches it — the picture, its tags, 
 - **Recommended, not implemented:** a `shared_sets_affected` count in the dry-run
   summary so the consent dialog can say so out loud.
 
-### 22.9 Operation-log integration (§21)
+### 22.10 Operation-log integration (§21)
 
 Every stack verdict records **exactly one** `Operation` row.
 
@@ -1919,6 +2027,27 @@ Every stack verdict records **exactly one** `Operation` row.
   picture facet, so `record_operation_in_session` would return `None` anyway;
   writing a no-op row would still consume a Ctrl+Z. The way back from
   keep-separate is the explicit reopen action.
+- **A stack verdict is always recorded under a `batch_id`**, minted server-side
+  (`srv-…`, §21.3) when the caller supplies none. The batch id is what ties the
+  `Operation` row back to its `DedupVerdict` row, and that correlation is what
+  makes the undo complete — see below.
+- **Undo reopens the verdict, not only the pictures.** `restore_verdicts_in_session`
+  is registered as the §21.2 post-restore hook for `dedup.stack`. On **undo** it
+  stamps `reopened_at` on every verdict in the restored batches (the row is kept
+  — the decision history is worth keeping) and sets its group `resolved=False`;
+  on **redo** it clears `reopened_at` and re-resolves the group. `decided_at` is
+  never re-stamped: it records when the user decided, and "live" is exactly
+  `reopened_at IS NULL`. One query covers a 2 700-group batch undo. Without this
+  the undo was half an undo: the pictures came back unstacked while the group
+  stayed decided, invisible in the queue and in the counts, and it **survived a
+  rescan** because `verdict_signatures_in_session` still saw a live verdict.
+  Pinned at the HTTP level by `test_undo_returns_the_stacked_group_to_the_queue`,
+  `test_batch_undo_after_auto_stack_returns_every_group` (QA's exact repro) and
+  `test_an_undo_does_not_reopen_a_group_it_never_touched`.
+- **A pre-existing row without a batch id cannot be correlated**, and the hook
+  says so with a warning naming the operation ids rather than half-restoring in
+  silence: the pictures are back, the group stays decided until the user reopens
+  it explicitly.
 - **Origin discipline.** `actor` / `source` / `origin_client_id` come from
   `operation_log_service.request_context(request)`, read in the handler on the
   request's own task and passed down explicitly — never from the contextvar, which
