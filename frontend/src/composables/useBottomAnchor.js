@@ -126,6 +126,28 @@ export function useBottomAnchor(name, elRef, { narrowOnly = false } = {}) {
 }
 
 /**
+ * The measured height of ONE registered anchor, or 0 when it is not visible.
+ *
+ * The notice stack only ever needs the tallest, but a second bottom-anchored
+ * element that stacks ON TOP of another (the action receipt above the selection
+ * pill) needs that one element's height to lift itself clear. Reading it from
+ * the registry keeps the height measured rather than guessed — the spec is
+ * explicit that the pill's 56px is a first-frame fallback and not a token.
+ *
+ * @param {string} name - the key the element registered under.
+ * @returns {{height: import('vue').ComputedRef<number>}} pixels, 0 when hidden.
+ */
+export function useAnchorHeight(name) {
+  const height = computed(() => {
+    const anchor = anchors.value[name];
+    if (!anchor?.visible) return 0;
+    const value = Number(anchor.height);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  });
+  return { height };
+}
+
+/**
  * The height bottom-anchored floating chrome currently occupies in the notice
  * column's footprint, including the gap that must sit above it.
  *

@@ -32,12 +32,14 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
+import { useOperationStore } from "./stores/useOperationStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
   UNASSIGNED_PICTURES_ID,
   useViewStore,
 } from "./stores/useViewStore";
+import { redoKeyHint, undoKeyHint } from "./utils/shortcutHints";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 
 import SideBar from "./components/panels/SideBar.vue";
@@ -74,9 +76,14 @@ const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const lockedSetsStore = useLockedSetsStore();
+const operationStore = useOperationStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 const viewStore = useViewStore();
+// Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
+// everywhere; only the hint is platform-specific.
+const undoKeyHintKeys = undoKeyHint();
+const redoKeyHintKeys = redoKeyHint();
 
 // --- Router ---
 const route = useRoute();
@@ -201,6 +208,16 @@ const activeCategoryLabel = computed(() => {
 });
 
 // --- WebSocket ---
+// Event types that can carry a recorded operation (the reversible metadata
+// facets of backend_architecture.md §21). `picture_imported` is deliberately
+// absent: imports are not undoable in v1.9, so they never appear in the stack.
+const OPERATION_BEARING_EVENTS = new Set([
+  "pictures_changed",
+  "tags_changed",
+  "characters_changed",
+  "descriptions_changed",
+]);
+
 function buildUpdatesSocketUrl() {
   if (!BACKEND_URL) return "";
   const wsBase = BACKEND_URL.replace(/^http/i, "ws");
@@ -326,6 +343,14 @@ function connectUpdatesSocket() {
       payload = JSON.parse(event.data);
     } catch {
       return;
+    }
+    // The operation log has no WS event of its own: a metadata mutation
+    // announces itself as a picture/tag/character change, and that is the
+    // signal the undo stack may have moved. Origin is read from the event
+    // `data` (never a contextvar) and only decides whether the change may
+    // narrate itself; an external one updates the stack silently.
+    if (OPERATION_BEARING_EVENTS.has(payload?.type)) {
+      operationStore.onPictureEvent(payload);
     }
     const isPictureChange =
       payload?.type === "pictures_changed" ||
@@ -1398,15 +1423,33 @@ async function patchConfigUIOptions() {
   }
 }
 
+/**
+ * Is a modal surface (a dialog, the lightbox) currently covering the app?
+ *
+ * There is no shared flag for this: every dialog owns its own `open` ref, so
+ * the honest single source is the scrim Vuetify renders for every active
+ * overlay. Used to decline global shortcuts whose feedback would be invisible
+ * behind it.
+ */
+function isModalOverlayOpen() {
+  if (typeof document === "undefined") return false;
+  return document.querySelector(".v-overlay--active .v-overlay__scrim") != null;
+}
+
 function handleGlobalKeydown(e) {
   // The review overlay is modal and owns its own keyboard handler; don't
   // run the app/grid shortcuts (scroll, search, help) behind it.
   if (reviewSessionsStore.overlayOpen) return;
-  const tag = document.activeElement?.tagName?.toLowerCase();
-  const isEditable =
-    tag === "input" ||
-    tag === "textarea" ||
-    document.activeElement?.isContentEditable;
+  // Match the strictness the grid and the lightbox already use: a SELECT and an
+  // ARIA textbox are typing surfaces too, and the event target matters as much
+  // as `document.activeElement` (a Vuetify combobox moves focus around).
+  const isEditable = [e.target, document.activeElement].some(
+    (el) =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
+        el.getAttribute("role") === "textbox"),
+  );
 
   // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
   // "Content on Hover or Focus" applies: it must be dismissible without moving
@@ -1422,6 +1465,39 @@ function handleGlobalKeydown(e) {
     sidebarStore.sidebarVisible
   ) {
     sidebarStore.hideAutoSidebar();
+  }
+
+  // Undo / redo. Global by design: the shortcut has to work with no receipt on
+  // screen, and every undo raises one, so the result is always narrated. Ctrl
+  // and Meta are both accepted (the HINT is platform-specific, the binding is
+  // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
+  //
+  // Four guards, each for its own reason:
+  //   * typing: a text field keeps its own native undo stack;
+  //   * read-only: the endpoints are owner-only anyway;
+  //   * auto-repeat: a HELD Ctrl+Z must not walk the whole stack;
+  //   * a modal overlay owns the screen: the receipt lives on --z-floating,
+  //     under the lightbox and under any dialog, so an undo fired from there
+  //     would mutate the library with no visible narration. That breaks the
+  //     design's own "every undo raises a receipt" invariant, so the shortcut
+  //     declines rather than acting blind. Promoting the receipt above those
+  //     layers is the recorded follow-up.
+  if (
+    (e.ctrlKey || e.metaKey) &&
+    !e.altKey &&
+    !e.repeat &&
+    !isEditable &&
+    !isReadOnly.value &&
+    !isModalOverlayOpen()
+  ) {
+    const key = e.key?.toLowerCase();
+    if (key === "z" && !e.shiftKey) {
+      e.preventDefault();
+      operationStore.undo();
+    } else if (key === "y" || (key === "z" && e.shiftKey)) {
+      e.preventDefault();
+      operationStore.redo();
+    }
   }
 
   const keys = ["Home", "End", "PageUp", "PageDown"];
@@ -1802,6 +1878,11 @@ onMounted(async () => {
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
     snapshotsStore.fetchSnapshots();
+    // Seed the undo stack so the toolbar control is correctly enabled on the
+    // first frame. This read establishes the "already seen" watermark, so the
+    // history it returns cannot pop a receipt for something that happened
+    // before the tab existed.
+    operationStore.refresh({ narrate: false });
   }
   // Navigate to the scoped resource when a share token is active
   const ctx = sessionContext.value;
@@ -2358,6 +2439,22 @@ defineExpose({
               <tr>
                 <td><kbd>Ctrl</kbd>+<kbd>A</kbd></td>
                 <td>Select all images</td>
+              </tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
+                <td>
+                  <template v-for="(key, i) in undoKeyHintKeys" :key="key"
+                    ><span v-if="i > 0">+</span><kbd>{{ key }}</kbd></template
+                  >
+                </td>
+                <td>Undo the last change</td>
+              </tr>
+              <tr :class="{ 'shortcut-disabled': isReadOnly }">
+                <td>
+                  <template v-for="(key, i) in redoKeyHintKeys" :key="key"
+                    ><span v-if="i > 0">+</span><kbd>{{ key }}</kbd></template
+                  >
+                </td>
+                <td>Redo the change you just undid</td>
               </tr>
               <tr>
                 <td><kbd>G</kbd></td>

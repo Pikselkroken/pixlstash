@@ -1010,6 +1010,9 @@
       @reverse-image-search="handleReverseImageSearch"
       @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
+    <!-- The action receipt shares the selection pill's slot and lifts clear of
+         it when both are up. Owner-only, like the toolbar control. -->
+    <ActionReceipt v-if="!isReadOnly" :lift-px="actionReceiptLift" />
   </div>
 </template>
 
@@ -1035,7 +1038,11 @@ import {
   DEFAULT_TIMEOUTS,
 } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
-import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import {
+  useAnchorHeight,
+  useBottomAnchor,
+} from "../../composables/useBottomAnchor";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
@@ -1057,6 +1064,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
@@ -2863,6 +2871,18 @@ const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 // which is what `narrowOnly` encodes.
 const breadcrumbEl = ref(null);
 useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
+
+// The action receipt shares the selection pill's slot, so when the pill is up
+// the receipt sits above it. The lift is the pill's MEASURED height plus the
+// standard gap, never a constant, because the pill wraps and grows on coarse
+// pointers (the 56px in floatingBottom.js is a first-frame fallback, not a
+// design token).
+const { height: selectionBarHeight } = useAnchorHeight("selection-bar");
+const actionReceiptLift = computed(() =>
+  selectionBarHeight.value > 0
+    ? selectionBarHeight.value + FLOATING_BOTTOM_GAP_PX
+    : 0,
+);
 
 watch(
   visibleRangeLabel,

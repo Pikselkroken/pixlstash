@@ -2154,7 +2154,10 @@ function handleKeydown(e) {
     showPrevImage();
   } else if (["ArrowRight", "Right", "ArrowDown", "Down"].includes(e.key)) {
     showNextImage();
-  } else if (e.key === "z" || e.key === "Z") {
+  } else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
+    // Modifier-blind `z` would make Ctrl+Z and Ctrl+Shift+Z (which reports
+    // `e.key === "Z"`) zoom instead of undo: the worst kind of collision,
+    // because it does something visible and wrong.
     toggleZoom();
   } else if (e.key === " " || e.key === "Spacebar") {
     e.preventDefault();
