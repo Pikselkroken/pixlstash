@@ -1060,6 +1060,18 @@ function handleSelectDuplicates(scope = {}) {
 // writes live in useViewStore; App.vue keeps only the route PUSHING above.
 viewStore.startRouteSync(route, { watch });
 
+// A navigation retires the live undo receipt (owner decision, 2026-07-29):
+// the pill narrates something that happened on the view being left, and a
+// receipt carried into the next view reads as a fresh event there. Ctrl+Z
+// keeps working everywhere regardless — the receipt is narration, not the
+// undo affordance itself.
+watch(
+  () => route.fullPath,
+  (next, prev) => {
+    if (prev !== undefined && next !== prev) operationStore.dismissReceipt();
+  },
+);
+
 // Stateless sidebar tabs: switching the Global ↔ Project mode (or the
 // project picker) must not navigate or change the grid — the route is the
 // single source of truth. These handlers therefore only mirror the value
@@ -1479,6 +1491,22 @@ function handleGlobalKeydown(e) {
   // The review overlay is modal and owns its own keyboard handler; don't
   // run the app/grid shortcuts (scroll, search, help) behind it.
   if (reviewSessionsStore.overlayOpen) return;
+  // The LIGHTBOX owns the keyboard too, with its own undo binding and its own
+  // receipt. This used to be enforced implicitly by listener order — the
+  // overlay mounted before App, ran first, and stopImmediatePropagation()
+  // silenced this handler — but the Duplicates view unmounts and remounts the
+  // grid (and the overlay inside it), which re-registers their listeners
+  // AFTER this one and silently flips that order. The result was one Ctrl+Z
+  // running TWO undos: this handler's, then the overlay's, which the
+  // operation store's busy-queue happily executed as a queued second step.
+  // Ownership is therefore stated here explicitly, on the same DOM signal the
+  // overlay renders (`.image-overlay` is v-if'd on open), not on ordering.
+  if (
+    typeof document !== "undefined" &&
+    document.querySelector(".image-overlay") != null
+  ) {
+    return;
+  }
   // Match the strictness the grid and the lightbox already use: a SELECT and an
   // ARIA textbox are typing surfaces too, and the event target matters as much
   // as `document.activeElement` (a Vuetify combobox moves focus around).
@@ -1523,11 +1551,11 @@ function handleGlobalKeydown(e) {
   //
   // The lightbox is NOT covered by that last guard and never was:
   // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
-  // renders its own. What actually stops this handler there is ImageOverlay's
-  // `stopImmediatePropagation()` on a listener registered before this one (a
-  // child mounts first). Undo works in the lightbox, and it is the lightbox's
-  // own key handler plus `OverlayActionReceipt` that do it, fitted to that
-  // surface's GUI per the owner's ruling.
+  // renders its own. The lightbox is excluded by the explicit `.image-overlay`
+  // check at the top of this handler (listener ORDER used to do it, until the
+  // Duplicates view's grid remount flipped it — see that comment). Undo works
+  // in the lightbox through its own key handler plus `OverlayActionReceipt`,
+  // fitted to that surface's GUI per the owner's ruling.
   if (
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&

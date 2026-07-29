@@ -152,6 +152,12 @@ export function useActionReceipt({ announce = true } = {}) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     }
     if (announceTimer != null) clearTimeout(announceTimer);
+    // A surface that unmounts mid-hover (a view change under the pointer)
+    // would otherwise leave the countdown frozen forever: no mouseleave will
+    // ever fire, so the stale receipt survives in the store and resurfaces on
+    // whichever surface renders next. Releasing the pause lets the countdown
+    // finish — or dismiss immediately if it had already drained.
+    store.resumeReceipt();
   });
 
   // A receipt raised while the tab is hidden starts with a running countdown
