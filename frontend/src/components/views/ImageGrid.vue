@@ -4883,6 +4883,7 @@ const {
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted,
   },
   props,
 );
