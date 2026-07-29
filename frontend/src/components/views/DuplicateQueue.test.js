@@ -367,6 +367,87 @@ describe("DuplicateQueue — one toolbar", () => {
   });
 });
 
+describe("DuplicateQueue — who owns the keyboard", () => {
+  // The bug: the handler was bound on the queue root, so the shortcuts only
+  // worked while the DOM focus was inside it. One click on a sidebar row and
+  // every key went dead, with nothing on screen to say why.
+  it("still answers keys after the focus has left the queue", async () => {
+    const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    expect(document.activeElement).toBe(elsewhere);
+
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    expect(store.focusIndex).toBe(1);
+
+    elsewhere.remove();
+    wrapper.unmount();
+  });
+
+  // The other half of the same coin: a document-bound handler must not answer
+  // keys meant for a dialog raised over the queue.
+  it("hands the keyboard to a dialog the queue did not open", async () => {
+    const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
+    const scrim = document.createElement("div");
+    scrim.className = "v-overlay--active";
+    scrim.innerHTML = '<div class="v-overlay__scrim"></div>';
+    document.body.appendChild(scrim);
+
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    expect(store.focusIndex).toBe(0);
+
+    scrim.remove();
+    wrapper.unmount();
+  });
+
+  // And it must stop listening when the destination is left, or a key pressed
+  // in the grid would move a cursor in a queue that is no longer on screen.
+  it("stops listening once the view is gone", async () => {
+    const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
+    wrapper.unmount();
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+    );
+    expect(store.focusIndex).toBe(0);
+  });
+
+  // Ctrl+A pages the queue in, so it is not instant and it can stop short.
+  // Both facts are narrated: a bulk verdict on a set whose size the user never
+  // saw is exactly what the announcement is for.
+  it("narrates what Ctrl+A actually selected", async () => {
+    const page1 = Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(page1, { total: 30 });
+    listGroups.mockResolvedValue({
+      groups: Array.from({ length: 10 }, (_, i) => group(`g${i + 21}`)),
+      total: 30,
+      offset: 30,
+      limit: 200,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+
+    document.dispatchEvent(
+      new window.KeyboardEvent("keydown", {
+        key: "a",
+        ctrlKey: true,
+        bubbles: true,
+      }),
+    );
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectionCount).toBe(30);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Selected all 30 groups",
+    );
+    wrapper.unmount();
+  });
+});
+
 describe("DuplicateQueue — the Decided page", () => {
   it("lists decided groups with their verdict and clears one on demand", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
@@ -741,33 +822,6 @@ describe("DuplicateQueue — a read-only session", () => {
     expect(
       wrapper.findComponent({ name: "DedupCompareDialog" }).props("readOnly"),
     ).toBe(true);
-    wrapper.unmount();
-  });
-});
-
-describe("DuplicateQueue — Ctrl+A", () => {
-  // Ctrl+A pages the queue in, so it is not instant and it can stop short.
-  // Both facts are narrated: a bulk verdict on a set whose size the user never
-  // saw is exactly what the announcement is for.
-  it("narrates what Ctrl+A actually selected", async () => {
-    const page1 = Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`));
-    const { wrapper, store } = await mountQueue(page1, { total: 30 });
-    listGroups.mockResolvedValue({
-      groups: Array.from({ length: 10 }, (_, i) => group(`g${i + 21}`)),
-      total: 30,
-      offset: 30,
-      limit: 200,
-      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
-    });
-
-    await wrapper.find(".dq").trigger("keydown", { key: "a", ctrlKey: true });
-    await flushPromises();
-    await wrapper.vm.$nextTick();
-
-    expect(store.selectionCount).toBe(30);
-    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
-      "Selected all 30 groups",
-    );
     wrapper.unmount();
   });
 });

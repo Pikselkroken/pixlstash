@@ -6,7 +6,6 @@
     aria-label="Duplicate review queue"
     aria-describedby="dq-key-help"
     data-testid="duplicate-queue"
-    @keydown="onKeydown"
   >
     <!-- The visible hint strip is a row of glyphs, so it is hidden from
          assistive tech and this sentence carries the model instead. It also
@@ -989,7 +988,31 @@ async function onSelectAll() {
   }
 }
 
-const onKeydown = createDedupKeyHandler({
+/**
+ * A dialog the queue did NOT open is on screen — Settings, Share, anything the
+ * sidebar raised over us.
+ *
+ * The handler is bound at the document (see below), so without this the queue
+ * would answer keys meant for whatever is on top of it. Compare and the
+ * auto-stack dialog are the queue's own and are exempt: the model has branches
+ * for both.
+ *
+ * @returns {boolean}
+ */
+function foreignDialogOpen() {
+  if (typeof document === "undefined") return false;
+  if (compareOpen.value || autoStackOpen.value) return false;
+  // Two signals, because the app has two kinds of modal: Vuetify's scrim (every
+  // AppDialog) and the review overlay, which paints its own. Both are stated on
+  // the DOM rather than on listener order, for the reason App.vue records at
+  // `handleGlobalKeydown` — a remount silently reorders listeners.
+  return (
+    document.querySelector(".v-overlay--active .v-overlay__scrim") != null ||
+    document.querySelector(".rs-overlay") != null
+  );
+}
+
+const handleKeydown = createDedupKeyHandler({
   store,
   isCompareOpen: () => compareOpen.value,
   openCompare: () => {
@@ -1019,16 +1042,26 @@ const onKeydown = createDedupKeyHandler({
   },
 });
 
-// Compare renders through the shared dialog, which teleports out of this
-// subtree and moves the focus into itself. Its keys therefore never bubble back
-// to the queue root, so the model's Compare branch is bound at the document for
-// exactly as long as the dialog is up. Keys the root handler claims stop
-// propagating there, so nothing is handled twice.
-watch(compareOpen, (open) => {
-  if (typeof document === "undefined") return;
-  if (open) document.addEventListener("keydown", onKeydown);
-  else document.removeEventListener("keydown", onKeydown);
-});
+/**
+ * The queue's keys, bound at the DOCUMENT for as long as the view is mounted.
+ *
+ * They used to be bound on the queue root, which meant they only worked while
+ * the DOM focus was inside it: one click on a sidebar row and every shortcut
+ * went dead, with nothing on screen to say why or how to get them back. The
+ * queue is a whole destination, not a widget — while it is the view, the keys
+ * are the view's.
+ *
+ * Two things keep that from being greedy. `isTypingTarget` still declines to a
+ * text field wherever it lives, and `foreignDialogOpen` hands the keyboard to
+ * any dialog raised over the queue. And it stays honest with the app shell for
+ * free: `claim()` calls `stopPropagation`, and this listener sits on the
+ * document while `App.vue`'s sits on the window, so a key the queue takes never
+ * reaches the shell's Ctrl+Z or its Home/End scrolling.
+ */
+function onKeydown(event) {
+  if (foreignDialogOpen()) return;
+  handleKeydown(event);
+}
 
 /**
  * Read the scope out of the URL.
@@ -1147,6 +1180,7 @@ onMounted(() => {
   prefetchNextGroup();
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", onDocumentPointerDown);
+    document.addEventListener("keydown", onKeydown);
   }
 });
 
