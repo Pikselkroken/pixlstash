@@ -999,8 +999,20 @@
       @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
     <!-- The action receipt shares the selection pill's slot and lifts clear of
-         it when both are up. Owner-only, like the toolbar control. -->
-    <ActionReceipt v-if="!isReadOnly" :lift-px="actionReceiptLift" />
+         it when both are up. Owner-only, like the toolbar control.
+
+         `pill-hidden` while the lightbox is open, NOT `v-if`: the lightbox has
+         its own narration of the same single receipt, so two pills would render
+         it at two positions and the grid one would show through the backdrop.
+         The component stays mounted because it carries the one app-wide
+         `role="status"` region, which the lightbox deliberately does not
+         duplicate (the lightbox does not `inert` the grid, so that region still
+         speaks and a second one would double-speak). -->
+    <ActionReceipt
+      v-if="!isReadOnly"
+      :lift-px="actionReceiptLift"
+      :pill-hidden="overlayOpen"
+    />
   </div>
 </template>
 

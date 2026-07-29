@@ -39,6 +39,13 @@ const props = defineProps({
    * and grows on coarse pointers.
    */
   liftPx: { type: Number, default: 0 },
+  /**
+   * Hide the PILL while another surface renders the same receipt (the lightbox
+   * has its own narration in its own chrome). The component stays mounted: it
+   * carries the one app-wide live region, and the lightbox deliberately has
+   * none, so unmounting this would silence every undo announcement made there.
+   */
+  pillHidden: { type: Boolean, default: false },
 });
 
 // The receipt contract — wording, glyphs, keycaps, the drain window, the
@@ -63,6 +70,11 @@ const {
   resume,
   takeAction,
 } = useActionReceipt();
+
+/** The button's accessible name: the verb alone does not say what it undoes. */
+const actionAccessibleName = computed(
+  () => `${actionLabel.value}: ${text.value}`,
+);
 
 const wrapperStyle = computed(() => ({
   paddingBottom: `${Math.max(0, props.liftPx)}px`,
@@ -93,7 +105,16 @@ function onUndo(event) {
     data-testid="action-receipt-slot"
   >
     <!-- One persistent region, always mounted, so an announcement is never
-         raced by the node that carries it. -->
+         raced by the node that carries it. It is also the ONLY one in the app:
+         the lightbox's narration deliberately has none, because the lightbox
+         does not `inert` or `aria-hidden` the grid, so this region still speaks
+         from underneath it. Do not gate it on the lightbox being closed, and do
+         not add a second one there.
+
+         If the lightbox is ever made a proper modal (`aria-modal` + `inert`),
+         this region goes inert with the rest of the grid and undo announcements
+         go silent everywhere. The fix then is to MOVE this one region up beside
+         NoticeHost, not to duplicate it. -->
     <span
       class="visually-hidden"
       role="status"
@@ -104,7 +125,7 @@ function onUndo(event) {
     >
     <transition name="receipt">
       <div
-        v-if="receipt"
+        v-if="receipt && !pillHidden"
         :key="pillKey"
         class="receipt"
         :class="{ 'receipt--undone': undone, 'receipt--blocked': blocked }"
@@ -125,6 +146,7 @@ function onUndo(event) {
             type="button"
             class="r-btn"
             :aria-disabled="store.busy"
+            :aria-label="actionAccessibleName"
             :aria-keyshortcuts="actionKeyShortcut"
             @click="onUndo"
           >
