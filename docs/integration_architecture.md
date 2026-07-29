@@ -26,6 +26,7 @@
 16. [Versioning](#16-versioning)
 17. [Integration Pitfalls](#17-integration-pitfalls)
 18. [Integration Diagrams](#18-integration-diagrams)
+19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
 
 ---
 
@@ -564,4 +565,172 @@ flowchart TB
 
 ---
 
-*Last updated: 2026-07-19. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+## 19. Duplicates Queue API (v1.9)
+
+The contract behind the sidebar **Duplicates** destination. Every route is
+`owner_only`; a share token gets 403 on all of them. Backend design is
+`docs/backend_architecture.md` §22.
+
+**Two rules the client must hold to.** The queue is *paged*, never fetched whole
+(`GET /dedup/groups` returns `total` so a scrollbar can be sized without a second
+request), and a group is addressed by its **`signature`**, never by an id. The
+signature is a hash of the group's member content hashes, so it survives a rescan
+and a re-import; a numeric id would not.
+
+### `GET /dedup/policy`
+
+No parameters. Renders the tier switches and the threshold slider so 0.90 and the
+0.65 floor are never hardcoded twice.
+
+```jsonc
+{
+  "defaults": { "near_enabled": false, "embedding_enabled": false,
+                "threshold": 0.9, "min_group_size": 2, "max_group_size": 24 },
+  "bounds": {
+    "min_threshold": 0.65, "max_threshold": 0.99999,
+    "tiers": ["exact", "near", "embedding"],
+    "always_on_tiers": ["exact"],
+    "tier_requires": { "exact": null, "near": "exact", "embedding": "near" },
+    "scope_types": ["global", "project", "set", "character", "folder"],
+    "verdicts": ["stacked", "keep_separate"],
+    "max_page_size": 200
+  }
+}
+```
+
+`always_on_tiers` is why the exact switch renders disabled; `tier_requires` is why
+enabling *embedding* must first enable *near*. Sending `embedding_enabled=true`
+without `near_enabled` is a **400**, and a `threshold` below `min_threshold` is a
+**422** — neither is silently corrected.
+
+### `GET /dedup/groups`
+
+Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
+`scope_id`, `offset`, `limit` (≤ 200).
+
+```jsonc
+{
+  "groups": [{
+    "signature": "9f2c…",           // the id every verdict route takes
+    "tier": "exact",                 // exact | near | embedding
+    "confidence": 1.0,               // 1.0 for exact; else the WEAKEST pairwise link
+    "member_count": 2,
+    "cover_picture_id": 41,          // a preselection, never a silent decision
+    "why": [                         // group evidence, BOTH directions
+      { "text": "Identical file hash", "against": false },
+      { "text": "Different resolution", "against": true }
+    ],
+    "created_at": "2026-07-29T09:00:00",
+    "candidates": [{
+      "picture_id": 41, "width": 6016, "height": 4016, "megapixels": 24.16,
+      "size_bytes": 14800000, "format": "jpeg", "is_raw": false,
+      "score": 4, "tag_count": 2,
+      "created_at": "2026-05-12T14:22:00", "imported_at": "2026-05-13T08:00:00",
+      "stack_id": null, "reference_folder_id": null,
+      "file_path": null,             // non-null ONLY for reference-folder pictures
+      "cover_score": 108.64,         // megapixels*4 + tags*3 + score*2 + 8 if RAW
+      "why": [{ "text": "Highest resolution", "against": false }]
+    }]
+  }],
+  "total": 128, "offset": 0, "limit": 20,
+  "policy": { … }, "scope": { "scope_type": "global", "scope_id": null, "key": "global" },
+  "scan": { "status": "running", "scanned_pictures": 79412, "total_pictures": 128412,
+            "scanned_buckets": 210, "total_buckets": 940, "groups_found": 128,
+            "error": null }
+}
+```
+
+`scan` is the banner. `status` is `idle` when the scope has never been scanned —
+that is not an error, the queue still shows what an earlier global scan found.
+`file_path` is populated **only** for reference-folder pictures, where the user
+manages the files; for a managed-library picture the path is an implementation
+detail and the API returns `null`.
+
+Render the `why` pills as reasons, not conclusions: `against: false` is the olive
+check, `against: true` the red x. A group carrying red pills is the one that needs
+Compare.
+
+### `POST /dedup/counts`
+
+Read-only despite the verb (a scope list does not fit a URL). Body:
+`{ "policy": {…}, "scopes": [{ "scope_type": "set", "scope_id": "9" }] }`.
+
+```jsonc
+{
+  "unresolved_groups": 128,                              // the sidebar badge
+  "by_tier": { "exact": 96, "near": 30, "embedding": 2 },// INCLUDING disabled tiers
+  "scopes": [{ "scope_type": "set", "scope_id": "9", "key": "set:9",
+               "unresolved_groups": 4 }],
+  "policy": { … }, "scan": { … }
+}
+```
+
+`by_tier` deliberately reports tiers that are switched off, so a tier switch can
+be labelled with what enabling it would add. A non-global scope without a
+`scope_id` is a **400**.
+
+### `POST /dedup/scan`
+
+Body: `{ "policy": {…}, "scope": { "scope_type": "project", "scope_id": "3" } }`.
+Returns the scan progress row **immediately** — the queue is opened while the
+scan runs. Hashes are cached (computed on import), so a scoped scan only reads and
+compares them. Tier 1 lands in milliseconds; tier 2 groups appear as each
+candidate bucket finishes, so poll `GET /dedup/groups` and watch
+`scan.scanned_buckets` rather than waiting for `status: "complete"`.
+
+### Verdict routes
+
+All three take `{ "signature": "9f2c…", "batch_id": "…" }`; `POST
+/dedup/verdicts/stack` additionally takes `cover_picture_id` and
+`excluded_picture_ids`. An unknown signature, a cover outside the group, or
+excluding down to fewer than two members is a **400**. A member frozen by a locked
+picture set is a **423** with the usual `pictures_locked` detail.
+
+| Route | Effect |
+|---|---|
+| `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
+| `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
+| `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Does **not** unstack anything. |
+
+`stack` and `keep-separate` return:
+
+```jsonc
+{ "signature": "9f2c…", "verdict": "stacked", "stack_id": 77,
+  "cover_picture_id": 41, "picture_ids": [41, 42], "excluded_picture_ids": [],
+  "batch_id": "a1b2…",
+  "metadata_union": { "tags_added": 3, "scores_lifted": 1,
+                      "characters_pending": 0, "membership_changed": true,
+                      "best_score": 5 } }
+```
+
+`metadata_union` is what the action receipt should say. Stacking **unions** tags,
+project membership and set membership onto every member and lifts every member to
+the highest score; nothing is overwritten and nothing is deleted.
+
+### `POST /dedup/auto-stack`
+
+Body: `{ "scope": {…}, "dry_run": true, "batch_id": null, "limit": null }`.
+**Defaults to `dry_run: true`**, which returns the counts the consent dialog shows
+and writes nothing. Send `dry_run: false` to apply.
+
+```jsonc
+{ "batch_id": "a1b2…", "dry_run": false, "groups": 1204, "pictures": 2611,
+  "scope": { … }, "results": [ /* one verdict object per group */ ],
+  "failures": [ { "signature": "…", "error": "…" } ] }
+```
+
+Only the **exact** tier is eligible; near and embedding groups always go through
+the queue no matter how confident they look. Every group in the run shares one
+`batch_id`, so N stacks reverse with a single undo. `failures` is non-empty when a
+group could not be stacked — one bad group never aborts the run, and the response
+reports the partial result honestly rather than hiding it.
+
+### Not in this API
+
+There is **no deletion route** anywhere in v1.9. A stack is a grouping row plus a
+cover pointer; dropping it restores the flat grid exactly. Any UI copy implying
+files are removed would be wrong.
+
+---
+
+*Last updated: 2026-07-29. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*

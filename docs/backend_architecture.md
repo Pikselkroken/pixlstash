@@ -91,7 +91,7 @@ pixlstash/
 │   ├── projects.py                   # Projects
 │   ├── picture_sets.py               # Picture sets + membership
 │   ├── stacks.py                     # Stacks
-│   ├── dedup.py                      # Near-duplicate sweep policy + dry run
+│   ├── dedup.py                      # Duplicate queue, counts, scan, verdicts + sweep dry run
 │   ├── config.py                     # User/server config + progress
 │   ├── reference_folders.py          # Reference folders
 │   ├── import_folders.py             # Watch folders
@@ -149,6 +149,8 @@ pixlstash/
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
 │   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
+│   ├── dedup_tier_service.py         # Tiered detection, tier policy, cover + evidence (§22)
+│   ├── dedup_verdict_service.py      # Stack / keep-separate verdicts + metadata union (§22)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -354,7 +356,9 @@ Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPr
 Standard CRUD; set/stack membership management; stack reordering.
 
 ### `dedup.py`
-The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan), the review queue, and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
+The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan) and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
+
+The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup/policy`, `GET /dedup/groups`, `POST /dedup/counts`, `POST /dedup/scan`, `POST /dedup/verdicts/{stack,keep-separate,reopen}` and `POST /dedup/auto-stack`. Every one of them is `owner_only` for the same reasoning plus, for the verdict routes, the fact that they mutate stacks across arbitrary pictures. Detection lives in [services/dedup_tier_service.py](../pixlstash/services/dedup_tier_service.py) and verdicts in [services/dedup_verdict_service.py](../pixlstash/services/dedup_verdict_service.py); the handlers only build a `TierPolicy` / `DedupScope` (a bad one is a 400, never a silent retune) and call a service wrapper. See §22 for the tiers, the hash decision, the bucket design, the cover formula and the verdict memory, and `docs/integration_architecture.md` §19 for the request/response contract.
 
 ### `config.py`
 | Method | Path | Purpose |
@@ -430,8 +434,16 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
 | GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
+| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
+| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
+| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
+| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
+| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
 | POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
 | GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
+| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
+| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
+| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
@@ -984,7 +996,7 @@ Current head: `0087_add_entity_project_membership`.
 └── reference-folders/         # If configured
 ```
 
-- `pixel_sha` (SHA-256 of decoded pixels) is used for import deduplication.
+- `pixel_sha` (indexed) is used for import deduplication and for §22's tier-1 exact-duplicate detection. It is a **SHA-256 over the file's bytes** (not over decoded pixels, despite the name), and it is **sampled** above 128 KiB: `ImageUtils._calculate_sha256_digest` digests 8 chunks of 8 KiB spread across the file rather than every byte. Anything comparing on it should pair it with `size_bytes` — see §22.1.
 - Watermarks are rendered on demand and cached in memory.
 
 ### Database
@@ -1648,6 +1660,176 @@ No new routes and no migration: the existing undo/redo endpoints carry all of it
 
 ---
 
-*Last updated: 2026-07-28. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
+
+The Duplicates queue is filled by three tiers of increasing cost and decreasing
+certainty. Detection lives in `pixlstash/services/dedup_tier_service.py`; what
+happens when the user decides lives in `pixlstash/services/dedup_verdict_service.py`.
+The shipped `dedup_sweep_service.py` dry-run planner is unchanged and remains the
+non-destructive foundation the whole feature is built on.
+
+### 22.1 Tier 1 — exact, and the hash decision
+
+Tier 1 is `GROUP BY pixel_sha, size_bytes HAVING count(*) > 1` on the **existing
+indexed `picture.pixel_sha` column**. No new hash column was added.
+
+Be honest about what `pixel_sha` is. `ImageUtils._calculate_sha256_digest` hashes
+the whole file only up to 128 KiB; above that it samples 8 chunks of 8 KiB spread
+across the file. So it is a *sampled* content digest, not a full-file SHA-256, and
+two files could in principle share one while differing in an unsampled region.
+
+Two consequences, both deliberate:
+
+- **`size_bytes` is a co-key, not decoration.** The sample offsets are derived from
+  the file size, so equal size plus equal sampled digest is a far stronger claim
+  than the digest alone. It costs nothing — the `pixel_sha` index already narrows
+  the group.
+- **Exact matches still go through a consent dialog.** `POST /dedup/auto-stack`
+  defaults to `dry_run=true`; the design deliberately does not stack exact matches
+  at import without the user seeing the count first. The worst case of a false
+  exact match is two different pictures in one *stack*, which is reversible with
+  one keystroke and destroys nothing.
+
+A new full-file hash column was considered and rejected: it would mean re-reading
+every byte of every file in the library on upgrade to buy a guarantee this feature
+does not need. `pixel_sha` is already computed incrementally on every import path;
+`MissingPixelShaFinder` / `PixelShaTask` (`TaskType.PIXEL_SHA`) backfill the rows
+that predate it, selecting on `pixel_sha IS NULL` — which is why migration
+`0088` contains no `NULL` reset.
+
+### 22.2 Tier 2 — bucketed near, and what "bucket" reuses
+
+Perceptual hashes are compared **only within candidate buckets**, never
+library-wide. `build_near_buckets()` emits four bucket kinds from columns the
+library already maintains:
+
+| Bucket kind | Column | Catches |
+|---|---|---|
+| `size_bin` | `picture.size_bin_index` (indexed `(w << 32) + h`) | re-saves, re-encodes, burst frames |
+| `capture_minute` | `created_at` truncated to the minute | bursts, re-exports that changed size |
+| `import_folder` | `picture.import_source_folder` (indexed) | one import run |
+| `folder` | parent directory of `file_path` | a duplicated folder |
+
+A picture belongs to several buckets; that is the point. Buckets over
+`MAX_BUCKET_MEMBERS` (4000) are **split into shards**, never dropped, so no
+candidate is silently skipped.
+
+Inside a bucket the comparison is a numpy XOR plus a SWAR popcount over the 64-bit
+dHash in `picture.perceptual_hash`, with
+`similarity = 1 - hamming / 64`. A 4000-member bucket is ~8M popcounts, which is
+milliseconds.
+
+**`LikenessParameter.PHASH_PREFIX` is deliberately not used as a bucket key.**
+Despite the name it stores the *entire* 64-bit dHash linearly normalised into
+`[0, 1]` (`int(phash[:16], 16) / (2**64 - 1)`), so numeric proximity in that slot
+is dominated by the top bit and says nothing about Hamming proximity.
+`LikenessUtils.PHASH_PREFIX_LEN = 3` is dead code with no reader. The reusable
+precomputed bucket key is `size_bin_index`, and that is what tier 2 uses.
+
+### 22.3 Tier 3 — embedding
+
+Opt-in, and recomputes nothing: it folds the existing `PictureLikeness` edge table
+into components through the shipped `dedup_sweep_service.stream_likeness_edges` /
+`_LikenessForest`. Its groups append to the same queue.
+
+### 22.4 Policy: tier gating replaces the auto/review split
+
+`TierPolicy` is the queue's policy surface and supersedes `SweepPolicy`'s
+auto/review split *for the queue* (`SweepPolicy` remains the parameter object for
+the dry-run planner, unchanged).
+
+- Tier 1 is always included and **has no switch**.
+- Each looser tier is a separate opt-in, and `embedding_enabled` **requires**
+  `near_enabled`.
+- `threshold` defaults to `0.90`; `MIN_THRESHOLD = 0.65` is a hard floor. A
+  request below it raises `ValueError` → HTTP 400. It is never silently clamped:
+  a low threshold produces confident-looking garbage and destroys trust in the
+  sidebar count.
+
+### 22.5 Cover selection and evidence
+
+Cover score is `megapixels*4 + tags*3 + score*2 + 8 if RAW`; highest wins, ties
+break to the **oldest capture time**, then to the lowest id. It is always exposed
+as a *preselection* the user overrides, together with:
+
+- **group evidence** — matching pills and evidence-against pills (different
+  resolution / aspect ratio / file format), so a group carrying red pills is
+  visibly the one that needs Compare;
+- **per-candidate evidence** — what each candidate is best at and where it loses,
+  plus its numeric `cover_score`.
+
+The server reports reasons. The user concludes.
+
+### 22.6 Persistence: three tables
+
+`pixlstash/db_models/dedup.py`, migration `0088_add_dedup_tier_tables`:
+
+- **`dedupgroup` / `dedupgroupmember`** — the found-groups cache. Detection
+  *upserts on `signature`*, so a rescan refreshes rows instead of duplicating
+  them, and the queue is paged from `(resolved, confidence DESC)` and never
+  materialised whole. This is what makes 10 groups and 10,000 cost the same.
+- **`dedupverdict`** — verdict memory keyed on the group **signature**
+  (`sha256` of the sorted member content keys, `pixel_sha` where available and
+  `id:<n>` where not). Because the key is content and not ids, a rescan or a
+  re-import never re-asks. `reopened_at` marks a verdict as no longer live; the
+  row is kept so the decision history survives.
+- **`dedupscan`** — one row per scope key, both the scan *request* (status
+  `pending`) and the "scanned N of M" progress readout.
+
+`prune_stale_groups_in_session()` removes groups whose live membership has
+dropped below two, so the sidebar badge cannot be inflated by scrapheaped
+pictures.
+
+### 22.7 Streaming and the background path
+
+`DedupScanFinder` / `DedupScanTask` (`TaskType.DEDUP_SCAN`) turn a `pending`
+`dedupscan` row into work. Tier 1 runs first and in one shot so the queue is never
+empty; tier 2 then commits **after each bucket**, so a bucket's groups appear in
+the queue the moment that bucket finishes and `scanned_buckets` advances with it;
+tier 3 appends last. Restarting a scan is safe because persistence is an upsert.
+The finder `depends_on` `PIXEL_SHA` and `IMAGE_EMBEDDING` so a scan reports honest
+counts rather than a partially hashed library.
+
+### 22.8 Verdicts and the metadata union
+
+The only two verdicts are **stack** and **keep separate**. Neither deletes
+anything; there is no destructive route on this surface in 1.9.
+
+Stacking applies the metadata union onto every member:
+
+| What | Behaviour |
+|---|---|
+| project + set membership | union, via the existing `reconcile_stack_membership` |
+| tags | union of every non-sentinel tag; `__tag` / `__tag:<engine>` markers are excluded so an already-tagged picture is not re-queued |
+| score | every member lifted to `max(score)`; never lowered |
+| characters | see below |
+
+**Characters are the one honest limitation.** A face carries a bbox and an
+embedding that belong to one specific picture, so a true face-to-character union
+would mean fabricating `Face` rows. Instead, when the group's members between them
+reference exactly **one** character, members that do not already carry it get
+`Picture.pending_character_id` (the shipped deferred-assignment mechanism the face
+extraction task consumes). A group spanning several characters is left alone and
+logged.
+
+The union writes tags and scores, which are curation state, so it calls
+`enforce_pictures_not_locked` first: a locked-set member makes the whole verdict a
+423 rather than a half-applied union.
+
+### 22.9 Operation-log seam
+
+Every verdict raises an action receipt and lands in the operation log (§21),
+with bulk auto-stack coalescing into one `batch_id` so N stacks reverse with one
+undo. The two features were developed on separate lanes, so
+`dedup_verdict_service._record_operation` imports the operation log lazily and,
+should the module ever be absent, logs a warning naming it and the consequence
+(the verdict still applies but is not reversible in one keystroke) rather than
+failing the verdict. With both lanes merged the import resolves and the seam is
+live: it passes `batch_id`, `op_type` and the before/after picture state to
+`record_operation_in_session`, so verdicts are recorded with no further wiring.
+
+---
+
+*Last updated: 2026-07-29. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
