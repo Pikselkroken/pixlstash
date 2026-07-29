@@ -315,6 +315,58 @@ describe("DuplicateQueue — keeping a group separate", () => {
   });
 });
 
+describe("DuplicateQueue — one toolbar", () => {
+  // The queue used to carry a second bar whose right half was a row of key
+  // hints. Every one of those keys is already stated on the row it acts on, in
+  // Compare's footer, or in the description a screen reader reads, so the bar
+  // was explanation the user had to look past on every visit.
+  it("carries the count and the Decided toggle, and no key hints", async () => {
+    const { wrapper } = await mountQueue([group("g1"), group("g2")]);
+    const toolbar = wrapper.find(".dq-toolbar");
+    expect(toolbar.find(".qtitle").text()).toContain("2 groups to review");
+    expect(toolbar.find(".qdecided").exists()).toBe(true);
+    expect(wrapper.find(".qhead").exists()).toBe(false);
+    expect(wrapper.find(".khint").exists()).toBe(false);
+    expect(toolbar.findAll("kbd")).toHaveLength(0);
+    // The keys themselves are not hidden, they are stated where they act: the
+    // focused row still wears its Enter/S/C chips.
+    expect(wrapper.find(".grow--focus").findAll("kbd").length).toBeGreaterThan(
+      0,
+    );
+    wrapper.unmount();
+  });
+
+  // The one thing that stayed on a second row, and it is state rather than
+  // explanation: it appears with the selection and leaves with it.
+  it("raises the bulk bar only while a selection is live", async () => {
+    const { wrapper, store } = await mountQueue([group("g1"), group("g2")]);
+    expect(wrapper.find(".qselbar").exists()).toBe(false);
+
+    store.toggleSelected(0);
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".qselbar").text()).toContain("2 groups selected");
+
+    store.clearSelection();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".qselbar").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  // The slider drives the rows, so the height it publishes has to reach them.
+  it("hands the size level's height to every row", async () => {
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    const heightOf = () =>
+      wrapper.findComponent({ name: "DedupGroupRow" }).props("thumbHeight");
+    expect(heightOf()).toBe(112);
+
+    store.setSizeLevel(6);
+    await wrapper.vm.$nextTick();
+    expect(heightOf()).toBe(232);
+    wrapper.unmount();
+  });
+});
+
 describe("DuplicateQueue — the Decided page", () => {
   it("lists decided groups with their verdict and clears one on demand", async () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
@@ -689,21 +741,6 @@ describe("DuplicateQueue — a read-only session", () => {
     expect(
       wrapper.findComponent({ name: "DedupCompareDialog" }).props("readOnly"),
     ).toBe(true);
-    wrapper.unmount();
-  });
-});
-
-describe("DuplicateQueue — the thumbnail size", () => {
-  // The slider drives the rows, so the height it publishes has to reach them.
-  it("hands the size level's height to every row", async () => {
-    const { wrapper, store } = await mountQueue([group("g1")]);
-    const heightOf = () =>
-      wrapper.findComponent({ name: "DedupGroupRow" }).props("thumbHeight");
-    expect(heightOf()).toBe(112);
-
-    store.setSizeLevel(6);
-    await wrapper.vm.$nextTick();
-    expect(heightOf()).toBe(232);
     wrapper.unmount();
   });
 });

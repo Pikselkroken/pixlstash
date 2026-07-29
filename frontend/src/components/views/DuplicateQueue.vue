@@ -21,8 +21,37 @@
       control. No picture is ever deleted, and a stack can be undone.
     </p>
 
+    <!-- One toolbar, not two. The queue's count, the way to the Decided page,
+         the tier gate and the size control are all state or controls; the
+         keyboard model that used to sit on a second bar is stated on the rows
+         themselves (the Enter/S/C chips), in Compare's footer and in the
+         description above, which is where a hint belongs (owner call,
+         2026-07-29). -->
     <div class="dq-toolbar">
       <div class="dq-tb-left">
+        <span v-if="store.hasGroups" class="qtitle">{{ headline }}</span>
+        <!-- SESSION tally, and says so: the durable record is the Decided
+             page, which spans every session. -->
+        <span v-if="store.doneCount && !store.showingDecided" class="qsub"
+          >{{ store.doneCount.toLocaleString() }} done this session</span
+        >
+        <!-- The flip side of the queue: review what was already decided and
+             clear a decision. -->
+        <button
+          type="button"
+          class="qdecided"
+          :class="{ 'qdecided--on': store.showingDecided }"
+          :aria-pressed="store.showingDecided ? 'true' : 'false'"
+          @click="store.toggleDecided()"
+        >
+          <v-icon size="15">{{
+            store.showingDecided ? "mdi-arrow-left" : "mdi-history"
+          }}</v-icon>
+          {{ store.showingDecided ? "Back to review" : "Decided" }}
+        </button>
+
+        <span class="dq-tb-sep" aria-hidden="true"></span>
+
         <div ref="tierWrapEl" class="dq-tier-wrap">
           <button
             ref="tierButtonEl"
@@ -114,36 +143,12 @@
     </div>
 
     <div v-else-if="store.hasGroups" class="queue">
-      <div class="qhead">
-        <span class="qtitle">{{
-          store.showingDecided
-            ? `${store.total.toLocaleString()} decided ${store.total === 1 ? "group" : "groups"}`
-            : `${store.openCount.toLocaleString()} ${store.openCount === 1 ? "group" : "groups"} to review`
-        }}</span>
-        <!-- SESSION tally, and says so: the durable record is the Decided
-             page, which spans every session. -->
-        <span v-if="store.doneCount && !store.showingDecided" class="qsub"
-          >{{ store.doneCount.toLocaleString() }} done this session</span
-        >
-        <!-- The flip side of the queue: review what was already decided and
-             clear a decision — this is the way back that used to hide in a
-             transient notice. -->
-        <button
-          type="button"
-          class="qdecided"
-          :class="{ 'qdecided--on': store.showingDecided }"
-          :aria-pressed="store.showingDecided ? 'true' : 'false'"
-          @click="store.toggleDecided()"
-        >
-          <v-icon size="15">{{
-            store.showingDecided ? "mdi-arrow-left" : "mdi-history"
-          }}</v-icon>
-          {{ store.showingDecided ? "Back to review" : "Decided" }}
-        </button>
-        <!-- The bulk-scope statement: while ≥2 groups are selected, a verdict
-             on any of them takes all of them, and this is where that is said
-             once, above the rows that each also say it on their buttons. -->
-        <span v-if="store.selectionCount > 1" class="qselchip" role="status">
+      <!-- The bulk-scope statement: while ≥2 groups are selected, a verdict on
+           any of them takes all of them. The only thing left on a second bar,
+           and it appears WITH the selection and goes with it — live state, not
+           a standing explanation. -->
+      <div v-if="store.selectionCount > 1" class="qselbar">
+        <span class="qselchip" role="status">
           <v-icon size="14">mdi-checkbox-multiple-marked-outline</v-icon>
           {{ store.selectionCount }} groups selected —
           {{
@@ -159,16 +164,6 @@
           >
             Clear
           </button>
-        </span>
-        <span class="qsp"></span>
-        <span
-          v-for="hint in KEY_HINTS"
-          :key="hint.label"
-          class="khint"
-          aria-hidden="true"
-        >
-          <kbd v-for="k in hint.keys" :key="k">{{ k }}</kbd>
-          {{ hint.label }}
         </span>
       </div>
 
@@ -397,16 +392,6 @@ const MIN_ROW_CONTENT_PX = 89;
 const STACK_FLOOR_NOTICE =
   "A stack needs at least two pictures, so this one has to stay in. Keep the group separate instead.";
 
-const KEY_HINTS = [
-  { keys: ["↑", "↓"], label: "choose group" },
-  { keys: ["PgUp", "PgDn"], label: "jump a screen" },
-  { keys: ["Enter"], label: "stack it" },
-  { keys: ["S"], label: "keep separate" },
-  { keys: ["C"], label: "compare" },
-  { keys: ["Ctrl", "Z"], label: "undo" },
-  { keys: ["Ctrl", "⇧", "click"], label: "select many" },
-];
-
 const route = useRoute();
 const router = useRouter();
 const store = useDedupStore();
@@ -430,9 +415,18 @@ const readOnly = computed(() => Boolean(isReadOnly.value));
 const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
 
+/** What the toolbar calls the queue: the count, and which side of it is shown. */
+const headline = computed(() =>
+  store.showingDecided
+    ? `${store.total.toLocaleString()} decided ${store.total === 1 ? "group" : "groups"}`
+    : `${store.openCount.toLocaleString()} ${store.openCount === 1 ? "group" : "groups"} to review`,
+);
+
 /** The row pitch a given picture height implies, before anything is measured. */
 function estimatedPitch() {
-  return Math.max(store.thumbHeight, MIN_ROW_CONTENT_PX) + ROW_CHROME_PX;
+  return (
+    Math.max(store.thumbHeight, MIN_ROW_CONTENT_PX) + ROW_CHROME_PX
+  );
 }
 
 /** The real row pitch, measured once two rows exist; the estimate until then. */
@@ -1176,9 +1170,17 @@ defineExpose({ windowedGroups, tierLabel });
   margin-left: auto;
 }
 
+/* Divides the queue's identity (what it holds, which side is showing) from the
+   controls that change what it holds. */
+.dq-tb-sep {
+  width: 1px;
+  height: 18px;
+  background: rgb(var(--v-theme-divider));
+}
+
 /* The size control. A fixed track width, because a slider that grows with the
-   toolbar makes the same drag mean a different size on every window.
-   space-3, not space-2: the slider's thumb overhangs both ends of its track, so
+   toolbar makes the same drag mean a different size on every window. */
+/* space-3, not space-2: the slider's thumb overhangs both ends of its track, so
    a tighter gap has it colliding with the icon at Tiny and the label at Huge. */
 .dq-size {
   display: flex;
@@ -1251,27 +1253,18 @@ defineExpose({ windowedGroups, tierLabel });
   flex: 1;
 }
 
-.qhead {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  padding: var(--space-2) var(--space-5) var(--space-3);
-}
-
+/* The count leads the toolbar: it is the queue's to-do number, and the one
+   thing the user checks on arrival and after every verdict. */
 .qtitle {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
+  white-space: nowrap;
 }
 
-.qsub,
-.khint {
+.qsub {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-background), 0.6);
-}
-
-.qsp {
-  flex: 1;
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+  white-space: nowrap;
 }
 
 /* The Decided toggle: same chrome as the toolbar buttons, pressed state
@@ -1286,7 +1279,8 @@ defineExpose({ windowedGroups, tierLabel });
   background: transparent;
   font-size: var(--text-xs);
   font-family: var(--font-ui);
-  color: rgba(var(--v-theme-on-background), 0.75);
+  color: inherit;
+  white-space: nowrap;
   cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
 }
@@ -1303,7 +1297,14 @@ defineExpose({ windowedGroups, tierLabel });
 .qdecided--on {
   background: var(--active-wash);
   border-color: rgba(var(--v-theme-accent), 0.5);
-  color: rgb(var(--v-theme-on-surface));
+}
+
+/* Appears with the selection and goes with it, so the queue has one bar in
+   its resting state and a second only while a bulk gesture is live. */
+.qselbar {
+  display: flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-5) 0;
 }
 
 /* The bulk-scope chip: accent-washed so it reads as state, not decoration —
@@ -1334,20 +1335,6 @@ defineExpose({ windowedGroups, tierLabel });
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: var(--focus-ring);
-}
-
-.khint {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-kbd {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(var(--v-theme-on-background), 0.3);
 }
 
 .qlist {
