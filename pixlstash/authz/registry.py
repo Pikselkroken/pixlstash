@@ -452,6 +452,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
+    # ── dedup.py (near-duplicate sweep, dry run) ────────────────────────────
+    ("GET", "/api/v1/dedup/sweep/policy"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Sweep policy defaults/bounds for the vault-wide sweep; an "
+            "owner-only operator surface returning no per-object data"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/sweep/dry-run"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Vault-wide near-duplicate plan: counts and picture ids across the "
+            "whole library, which cannot be narrowed to a share token's scope "
+            "without leaking counts about out-of-scope pictures (same reasoning "
+            "as tag_health). POST is also blocked for READ tokens"
+        ),
+    ),
     # ── characters.py ───────────────────────────────────────────────────────
     ("GET", "/api/v1/characters"): _LIST_AWARE,
     ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),
@@ -647,6 +664,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),
+    ("GET", "/api/v1/comfyui/pictures/{picture_id}/recipe"): RoutePolicy(
+        _PIC, id_param="picture_id"
+    ),
+    ("POST", "/api/v1/comfyui/run_recipe"): RoutePolicy(
+        _PIC, body_ids="picture_id"
+    ),  # required single body id; re-extracts the graph from the scoped picture
     # ── snapshots.py (all require_unscoped_owner) ───────────────────────────
     ("GET", "/api/v1/snapshots"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"
@@ -720,6 +743,38 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/reviews/{review_id}/suggestions"): RoutePolicy(
         _OWNER, justification="Owner-only review read (inline rejects scoped tokens)"
+    ),
+    # ── operations.py (the append-only operation log: history + undo/redo) ──
+    # Vault-wide change history and the undo/redo stack. OWNER_ONLY across the
+    # board: the log enumerates every change to the whole library (a scoped
+    # share token must not read it), and undo/redo write metadata back onto
+    # arbitrary pictures across the vault, which no scoped grant can bound. The
+    # handlers carry NO authz code — the gate is the only enforcement (§16.1).
+    ("GET", "/api/v1/operations"): RoutePolicy(
+        _OWNER, justification="Vault-wide change history; owner-only read"
+    ),
+    ("GET", "/api/v1/operations/undo-state"): RoutePolicy(
+        _OWNER, justification="Vault-wide undo/redo availability; owner-only read"
+    ),
+    ("GET", "/api/v1/operations/{operation_id}"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "One operation incl. the recorded before/after metadata of its "
+            "targets (arbitrary vault pictures); owner-only read"
+        ),
+    ),
+    ("POST", "/api/v1/operations/undo"): RoutePolicy(
+        _OWNER, justification="Reverts metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/redo"): RoutePolicy(
+        _OWNER, justification="Re-applies metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/{operation_id}/undo"): RoutePolicy(
+        _OWNER, justification="Reverts metadata across the vault; owner-only write"
+    ),
+    ("POST", "/api/v1/operations/batches/{batch_id}/undo"): RoutePolicy(
+        _OWNER,
+        justification="Reverts a whole bulk action across the vault; owner-only write",
     ),
     # ── tag_health.py (bespoke "reject resource-scoped" gate; owner-only) ────
     # Same unscoped-READ nuance as reviews (see NEEDS REVIEW above).

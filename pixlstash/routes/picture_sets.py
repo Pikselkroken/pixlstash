@@ -27,6 +27,7 @@ from pixlstash.db_models import (
     picture_set_in_project,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services import operation_log_service
 from pixlstash.services.project_membership_service import (
     picture_set_project_ids,
     reconcile_entity_projects_change,
@@ -1642,12 +1643,19 @@ def create_router(server) -> APIRouter:
             session.commit()
             return added_any
 
-        success = server.vault.db.run_task(
+        # Set membership is stack-atomic, so the snapshot expands to the whole
+        # stack — otherwise undo would leave the stack siblings in the set.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             add_member,
             id,
             picture_id,
             reference_character_id=reference_character_id,
-            priority=DBPriority.IMMEDIATE,
+            op_type="picture_sets.members.add",
+            picture_ids=[picture_id],
+            expand_stacks=True,
+            summary="Added a picture to a set",
+            **operation_log_service.request_context(request),
         )
         if success:
             try:
@@ -1713,12 +1721,19 @@ def create_router(server) -> APIRouter:
             session.commit()
             return True
 
-        success = server.vault.db.run_task(
+        # Stack-atomic like the add above: the removal takes the whole stack out,
+        # so the snapshot has to cover the whole stack too.
+        success, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
             remove_member,
             id,
             picture_id,
             reference_character_id=reference_character_id,
-            priority=DBPriority.IMMEDIATE,
+            op_type="picture_sets.members.remove",
+            picture_ids=[picture_id],
+            expand_stacks=True,
+            summary="Removed a picture from a set",
+            **operation_log_service.request_context(request),
         )
         if success:
             if reference_character_id is not None:
@@ -1791,8 +1806,16 @@ def create_router(server) -> APIRouter:
             session.commit()
             return added
 
-        added = server.vault.db.run_task(
-            bulk_add, id, picture_ids, priority=DBPriority.IMMEDIATE
+        added, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            bulk_add,
+            id,
+            picture_ids,
+            op_type="picture_sets.members.add",
+            picture_ids=picture_ids,
+            expand_stacks=True,
+            summary=f"Added {len(picture_ids)} picture(s) to a set",
+            **operation_log_service.request_context(request),
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
@@ -1869,8 +1892,25 @@ def create_router(server) -> APIRouter:
             session.commit()
             return added
 
-        added = server.vault.db.run_task(
-            bulk_replace, id, picture_ids, priority=DBPriority.IMMEDIATE
+        def _current_members(session):
+            # A replace-all also EVICTS members the request never named. They must
+            # be in the snapshot or undo would re-add the new members and never
+            # restore the evicted ones — a half-reversible operation.
+            return session.exec(
+                select(PictureSetMember.picture_id).where(PictureSetMember.set_id == id)
+            ).all()
+
+        added, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            bulk_replace,
+            id,
+            picture_ids,
+            op_type="picture_sets.members.replace",
+            picture_ids=picture_ids,
+            resolve_picture_ids=_current_members,
+            expand_stacks=True,
+            summary=f"Replaced a set's members with {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
         )
         if added is None:
             raise HTTPException(status_code=404, detail="Picture set not found")

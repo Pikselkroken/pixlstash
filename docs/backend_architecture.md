@@ -31,6 +31,7 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
 
 ---
 
@@ -90,6 +91,7 @@ pixlstash/
 │   ├── projects.py                   # Projects
 │   ├── picture_sets.py               # Picture sets + membership
 │   ├── stacks.py                     # Stacks
+│   ├── dedup.py                      # Near-duplicate sweep policy + dry run
 │   ├── config.py                     # User/server config + progress
 │   ├── reference_folders.py          # Reference folders
 │   ├── import_folders.py             # Watch folders
@@ -146,6 +148,7 @@ pixlstash/
 │
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
+│   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -350,6 +353,9 @@ Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPr
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
+### `dedup.py`
+The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan), the review queue, and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
+
 ### `config.py`
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -367,7 +373,22 @@ Standard CRUD; set/stack membership management; stack reordering.
 CRUD for reference / import folders; filesystem browsing for picker dialogs.
 
 ### `comfyui.py`
-List workflows; execute a workflow against a picture.
+List workflows; execute a workflow against a picture; replay the workflow a picture carries.
+
+**Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
+
+- `find_comfy_workflow` (`utils/comfyui_utilities.py`) reads the **UI** chunk and drives display only (`GET /comfyui/pictures/{id}/workflow`, the overlay's workflow inspector, the `ComfyUIExtractionTask` backfill).
+- `find_comfy_api_prompt` reads the **`prompt`** chunk and is the only source for anything that runs. It has **no fallback to the UI graph and performs no UI→API conversion**: converting means re-resolving widget values, links, muted/bypassed nodes and subgraph expansion exactly as the ComfyUI frontend does, and a near-miss yields a graph that runs and silently generates something else. Absent an executable `prompt` chunk the honest answer is "no executable workflow embedded".
+
+**Remix routes (v1.9).** `GET /comfyui/pictures/{picture_id}/recipe` reports whether a picture carries a replayable recipe and pre-flights it against the user's ComfyUI (see `services/comfyui_recipe_service.py`, §10). `POST /comfyui/run_recipe` replays it with fresh or pinned seeds into the source's stack; it **re-extracts the graph from the file server-side on every call and never accepts a client-supplied graph**, so the authz gate's `PICTURE_SCOPED` declaration on the source picture is the complete access control for it. Both refuse honestly rather than silently no-op: a graph with no seed input would re-generate a byte-identical image that the importer dedupes on `pixel_sha` and emits no event for, so the user would see literally nothing happen.
+
+**The replayed graph is untrusted input (review finding R3, CWE-829).** It is authored by whoever made the image file, not by the owner, and PixlStash's premise is importing images from elsewhere: an attractive PNG from a model site can carry any API-format graph, and replaying it executes it on the owner's ComfyUI, bounded only by which node packs are installed. `sanitize_prompt_graph` is a **shape** filter (it drops non-node entries), not a capability filter, and there is deliberately no node-class allowlist — one would break every legitimate custom pack. The owner is therefore the trust anchor, and three controls make that a decision rather than an accident:
+
+1. **Disclosure.** The recipe response carries `node_classes` — the distinct `class_type` list, from `collect_node_classes` — so the confirm dialog can name what will run. It is read from the file, so it is populated **even when the pre-flight could not run**, which is exactly the case where the owner has nothing else to judge by. A node *count* is not an answer to "what will this run".
+2. **Fail closed on an uninspected graph.** `preflight_prompt` degrading to `unchecked_preflight` keeps `ok: True` because the only fact known is that the check did not run — so `run_recipe` refuses `preflight.checked is False` with a 400 unless the request carries `allow_unchecked: true`, the owner's explicit acknowledgement, which is logged with the node classes. **The refusal is enforced here, not only in the dialog**; a UI-only gate is not a gate. This is the one control that is a hard gate, and it is deliberately reserved for the rare case: gating the common ones is what turns an acknowledgement into a reflex.
+3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label` so the dialog can warn that the embedded workflow came from outside. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
+
+**Seed ranges differ by route.** `run_t2i` / `run_i2i` validate a fixed seed to 32 bits; `run_recipe` allows the full 64-bit range ComfyUI's core samplers declare, because the shipped `Flux2-Klein-Image-Edit` template's own `noise_seed` is `432262096973502` and a 32-bit check would reject reproducing our own built-in's default.
 
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
@@ -409,9 +430,18 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
 | GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
+| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
+| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
+| GET    | /api/v1/operations                                                            | operations      | List recorded operations (newest first)                    |
+| POST   | /api/v1/operations/batches/{batch_id}/undo                                    | operations      | Undo one whole bulk action by its batch id                 |
+| POST   | /api/v1/operations/redo                                                       | operations      | Re-apply the most recently undone operation                |
+| POST   | /api/v1/operations/undo                                                       | operations      | Undo the newest reversible operation                       |
+| GET    | /api/v1/operations/undo-state                                                 | operations      | What undo and redo would do next                           |
+| GET    | /api/v1/operations/{operation_id}                                             | operations      | Get one operation including its before/after state         |
+| POST   | /api/v1/operations/{operation_id}/undo                                        | operations      | Undo one specific operation (and its batch)                |
 | GET    | /api/v1/picture_sets                                                          | picture_sets    | List picture sets                                          |
 | POST   | /api/v1/picture_sets                                                          | picture_sets    | Create picture set                                         |
 | GET    | /api/v1/picture_sets/locked-members                                           | picture_sets    | List locked sets and their frozen pictures                 |
@@ -627,7 +657,7 @@ stay, holding the entity's **primary** project (lowest member project id, or
   character / set / picture token sees `[]`, the owner sees everything (finding
   R1, `docs/reviews/v1.9-authz-signoff.md`).
 - The FK is retired by a post-1.12 cleanup, not here; migration
-  `0086_add_entity_project_membership` is purely additive and backfills the join
+  `0087_add_entity_project_membership` is purely additive and backfills the join
   from the existing FKs.
 
 ### Users & sharing
@@ -668,6 +698,19 @@ Review: id, tag, project_id, set_id, character_id, status
 TaggerRun: id, run (unique), model_version, verdict, recommend,
            accepted, anomaly_macro_f1, report (JSON), created_at
            (tagger eval runs pushed from PixlTagger)
+```
+
+### Operation log (append-only)
+
+```text
+Operation: id, batch_id, created_at, actor, op_type, target_type,
+           target_ids (JSON list[int]), target_count,
+           before_state (JSON {picture_id: {facet: value}}),
+           after_state (same shape), source, origin_client_id,
+           undoable, status (applied|undone|superseded), undone_at,
+           summary
+           (one recorded change; undo restores before_state, redo
+            restores after_state — see §21)
 ```
 
 ### Filesystem-linked
@@ -747,8 +790,20 @@ All taggers and captioners are implemented as `TaggerPlugin` subclasses ([pixlst
 |-------------|-------|------|------------|-------|
 | `wd14` | `WD14Plugin` | `tagger_plugins/wd14.py` | Tags | `SmilingWolf/wd-convnext-tagger-v3` ONNX |
 | `pixlstash_tagger` | `PixlStashTaggerPlugin` | `tagger_plugins/pixlstash_tagger.py` | Tags | `PersonalJeebus/pixlvault-anomaly-tagger` (HF, pinned) |
-| `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions |
+| `florence2` | `Florence2Plugin` | `tagger_plugins/florence2.py` | Descriptions | Florence-2 captions **and** the Segment action's detector — see the variant note below |
 | `joycaption` | `JoyCaptionPlugin` | `tagger_plugins/joycaption.py` | Tags + Descriptions | LLaVA-style LLM; `bitsandbytes` optional dep |
+
+#### Florence-2 checkpoint selection (issue #512)
+
+`Florence2Service` is shared between captioning and object detection (the Segment action), so **one setting drives both** — `model_variant` in the plugin's `parameter_schema`, a `select` over `FLORENCE_MODEL_VARIANTS` (`base`, default, and `large-ft`). Loading two variants side by side would double the VRAM for no benefit, so this is deliberate rather than a limitation.
+
+Three things have to move together, and the tests in `tests/test_florence_model_variant.py` pin each:
+
+- **The revision follows the variant.** Every entry pins a HuggingFace commit; an unpinned ref is a silent supply-chain change.
+- **The VRAM figure follows the variant** (`Florence2Service.base_vram_mb`, ~900 MB base vs ~2.6 GB large-ft). A constant pinned to base would under-count the gate and spill.
+- **The variant is applied at one chokepoint**, `InferenceEngine.ensure_captioning_ready()`, not only in `Florence2Plugin.init()` — `DescriptionWorkflow` and `detect_objects` reach the service directly and never run the plugin's `init`. Switching variants unloads the resident checkpoint so the next load picks up the new one.
+
+No migration is needed: the value is read from `tagger_settings` with a `base` fallback, so existing installs are unchanged.
 
 ### `TaggerPlugin` ABC
 
@@ -809,6 +864,8 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
 | [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
+| [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
+| [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
 | [services/restore_service.py](../pixlstash/services/restore_service.py) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
@@ -818,6 +875,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/tag_scan_service.py](../pixlstash/services/tag_scan_service.py) | On-demand near-neighbour tag scan — finds one tag's suspects and appends them; reuses the shared `knn_disagreement_with_neighbors` kernel so CLI and UI can't drift |
 | [services/review_service.py](../pixlstash/services/review_service.py) | Service layer for review sessions (one tag + a frozen scope + one scan's results): create, scan-once, append-only refresh, archive/abort, and per-item decisions |
 | [services/impossible_tag_scan_service.py](../pixlstash/services/impossible_tag_scan_service.py) | On-demand impossible-tag scan — (re)builds the cleanup queue for person-tags that are impossible on a picture with no detectable face; sibling of `tag_scan_service.py` |
+| [services/operation_log_service.py](../pixlstash/services/operation_log_service.py) | The operation log (§21): snapshots the reversible metadata facets of the affected pictures before and after a mutation, records the diff as one append-only `Operation` row (with a batch id when it is part of a bulk action), and applies a recorded state back for undo/redo. `run_recorded_metadata_task` is the wrapper mutation sites call instead of `vault.db.run_task`, so capture, mutation and recording share one queued task |
 | [services/impossible_tag_clear_service.py](../pixlstash/services/impossible_tag_clear_service.py) | Bulk-clear the filter-implied wrong tags for the human-reviewed "Impossible tags" grid selection (recording a human NEG per removed tag), plus the symmetric undo; used by the impossible-tags routes |
 
 ### 10.1 DB access rule for services (enforced in CI)
@@ -901,7 +959,11 @@ Selected milestones:
 
 | 0084 | Library-wide `smart_score` NULL-reset after rebalancing the positive weights |
 
-Current head: `0084_recompute_smart_score_rebalanced_weights`.
+| 0085 | `smart_score` NULL-reset after restoring the built-in anchors |
+
+| 0086 | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
+
+Current head: `0086_add_operation_log`.
 
 ---
 
@@ -1519,7 +1581,46 @@ sequenceDiagram
 
 ---
 
-*Last updated: 2026-07-19. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+
+The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
+
+### The design: record state, not inverses
+
+Instead of teaching each mutating endpoint how to invert itself, the log snapshots the **metadata state of the affected pictures before and after** the mutation and keeps only the facets that changed. Undo writes the recorded `before` back; redo writes `after` back. Consequences worth knowing:
+
+- The applier is uniform, so a new mutating endpoint becomes undoable by wrapping its DB task — there is no inverse to write and none to get wrong.
+- The stored payload is exactly the `{before, after}` shape the roadmap specifies for the audit log, so the feed needs no second representation.
+- Restoring is idempotent: applying a state twice is a no-op, so a retried undo cannot corrupt anything.
+
+**Reversible facets** (the DAM 1.2 metadata scope, `FACETS` in [services/operation_log_service.py](../pixlstash/services/operation_log_service.py)): tags, description/caption, score (rating), picture-set membership, project membership (`PictureProjectMember` + the `Picture.project_id` FK), per-face character assignment + `pending_character_id`, and stacking (`stack_id` / `stack_position`, with the stack's name so a dissolved stack can be recreated on undo). A file-mutating operation may be *recorded* with `undoable=False` for audit, but it is not reversible until copy-on-write versions land (v2.1).
+
+### Recording a change
+
+Metadata mutation sites call `operation_log_service.run_recorded_metadata_task(vault, work_fn, *args, op_type=…, picture_ids=…, **request_context(request))` **instead of** `vault.db.run_task(work_fn, *args)`. That wrapper runs capture → mutation → capture → record inside **one** queued DB task, so the `Operation` row and the change it describes commit against the same serialised writer; a separate before-read on the caller's thread would leave a window for another write to land between the snapshot and the mutation and be silently attributed to this operation. Pass `expand_stacks=True` when the mutation is stack-atomic, or undo would restore the clicked picture and leave its stack siblings behind. Pass `resolve_picture_ids=` — a `(session) -> ids` callable run on the mutation's own session just before the write — when the handler's targets are not knowable from the request alone (a request addressed by *face* id; a replace-all that evicts members it was never told about); without it the operation records a half-change undo could not fully reverse. A mutation that changed nothing records nothing.
+
+### `batch_id` — one bulk action, one Undo
+
+`batch_id` groups several rows into one user-visible action. Undoing any member reverts the whole batch (newest first), so a partially-undone bulk action cannot exist, and `POST /operations/batches/{batch_id}/undo` is the single-call revert behind a bulk report ("Collapsed 2,700 groups — Undo"). The column is present from the first migration deliberately: retrofitting a grouping key onto a log that already holds rows is exactly the pain the additive-only rule exists to prevent.
+
+### Append-only, and what "status" means
+
+Recorded content (`op_type` / `target_ids` / `before_state` / `after_state` / `actor` / `source` / `created_at`) is written once and never rewritten. The only mutable columns are the lifecycle markers `status` (`applied` → `undone` → `superseded`) and `undone_at`, which *append* the fact that an operation was reverted rather than erasing it. Recording a new operation supersedes the redo stack (classic linear undo history) by advancing those markers — no row is deleted. `tests/test_operation_log.py::test_log_is_append_only_across_undo_and_redo` pins this.
+
+### Origin discipline (§15) applies on both sides
+
+`source` / `origin_client_id` are read from the **request**, in the handler, on the request's own task (`operation_log_service.request_context`), then passed explicitly downstream and carried in the WS event `data` dict when undo announces itself. The service never reads `origin_client_id_var` — it runs on the DB worker thread where that contextvar is dead, the same hazard `test_source_origin_read_from_data_only` pins for the broadcaster. Both directions are tested: `tests/test_operation_log.py::test_service_module_never_reads_the_origin_contextvar` (an AST check, so a future edit cannot reintroduce the read) and `tests/test_ws_broadcaster.py::test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar` (the producer side of the envelope contract).
+
+### Locked sets are not bypassed
+
+A locked picture set is a hard freeze on its members' label data. `apply_state_in_session` — the single sink every restore goes through — calls `enforce_pictures_not_locked` over the whole recorded state before dispatching, so undo/redo cannot become the one write path around the freeze; a frozen target yields `423` and the operation stays `applied`.
+
+### Endpoints and authorization
+
+`GET /operations`, `GET /operations/undo-state`, `GET /operations/{operation_id}`, `POST /operations/undo`, `POST /operations/redo`, `POST /operations/{operation_id}/undo`, `POST /operations/batches/{batch_id}/undo` — all declared **`OWNER_ONLY`** in `ROUTE_POLICIES` (§16.1). The log enumerates every change to the whole library and undo writes metadata back onto arbitrary pictures across the vault, so no resource-scoped grant can bound either. The handlers carry **no** authorization code; the gate is the sole enforcement.
+
+---
+
+*Last updated: 2026-07-28. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes
-

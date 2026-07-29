@@ -16,8 +16,8 @@ single-project assignment in the untouched FK).
 Backfill inserts one join row per non-``NULL`` scalar FK, so an existing library
 comes up with exactly the membership it had before, expressed in the new shape.
 
-Revision ID: 0086_add_entity_project_membership
-Revises: 0085_recompute_smart_score_restored_builtin_anchors
+Revision ID: 0087_add_entity_project_membership
+Revises: 0086_add_operation_log
 Create Date: 2026-07-28 00:00:00.000000
 
 """
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0086_add_entity_project_membership"
-down_revision: Union[str, None] = "0085_recompute_smart_score_restored_builtin_anchors"
+revision: str = "0087_add_entity_project_membership"
+down_revision: Union[str, None] = "0086_add_operation_log"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

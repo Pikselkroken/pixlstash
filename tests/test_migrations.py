@@ -320,7 +320,7 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
             conn.close()
 
 
-def test_alembic_0086_backfills_entity_project_membership():
+def test_alembic_0087_backfills_entity_project_membership():
     """A deployed DB whose characters / picture sets carry the legacy single
     ``project_id`` FK gains one join row per assignment (issue #125).
 
