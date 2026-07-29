@@ -20,13 +20,13 @@
            four ways (bar, caret, wash, filled button) and the kbd chips on the
            verdict buttons say where the keyboard acts (owner call,
            2026-07-29: the explicit label was noise). -->
-      <DedupWhyPills :why="group.why" :limit="2" />
+      <DedupWhyPills :why="group.why" :limit="whyLimit" />
     </div>
 
     <!-- Thumbnails at grid scale, edge to edge, carrying no metadata: only the
          cover label and the index, and the index only while the row is focused
          because that is the only row `1`-`9` can address. -->
-    <div class="gstrip">
+    <div class="gstrip" :style="stripStyle">
       <button
         v-for="(candidate, i) in group.candidates"
         :key="idOf(candidate)"
@@ -183,10 +183,28 @@ import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
 import { candidateId } from "../../utils/dedup";
+import {
+  DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  stripHeightForSizeLevel,
+} from "../../utils/thumbnailSizes";
 import { MIN_STACK_MEMBERS } from "../../stores/useDedupStore";
 
 /** A candidate's picture id. The server calls the field `picture_id`. */
 const idOf = candidateId;
+
+/**
+ * The widest shape a thumbnail may keep before it is cropped, as a ratio. A
+ * ceiling, not a crop: only a beyond-panoramic picture reaches it.
+ */
+const MAX_THUMB_RATIO = 2.4;
+
+/**
+ * Below this height the info column, not the strip, sets the row height, and
+ * the second why-pill is what keeps it tall. Dropping to one pill is safe
+ * BECAUSE `orderEvidence` puts counter-evidence first: the pill that survives
+ * the limit is always the one that argues against stacking.
+ */
+const ONE_PILL_BELOW_PX = 96;
 
 const props = defineProps({
   group: { type: Object, required: true },
@@ -211,6 +229,15 @@ const props = defineProps({
   // expensive half of a row, so an off-screen group holds a placeholder box of
   // the same size rather than a decoded image.
   loadThumbnails: { type: Boolean, default: true },
+  // How tall the candidate strip draws its pictures, from the queue's size
+  // control. The row is laid out from this one number: the box, the placeholder
+  // estimate and the panorama ceiling all follow it.
+  // `defineProps` is hoisted, so the default is computed from the imported
+  // ladder rather than from a local constant.
+  thumbHeight: {
+    type: Number,
+    default: stripHeightForSizeLevel(DEFAULT_THUMBNAIL_SIZE_LEVEL),
+  },
   busy: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
 });
@@ -280,13 +307,22 @@ function thumbUrl(candidate) {
 }
 
 /**
- * How tall every strip thumbnail is; widths follow each picture's shape.
- *
- * Must stay in step with `.gthumb { height }` below — the placeholder is sized
- * from here and the box from there, and a mismatch makes every row jump as the
- * images decode.
+ * The strip's measurements as CSS variables, so ONE number drives the box, the
+ * unknown-shape fallback and the panorama ceiling together. Sizing the box in
+ * CSS and the placeholder in JS from two copies of the height is how a row
+ * starts jumping as its images decode.
  */
-const THUMB_HEIGHT_PX = 112;
+const stripStyle = computed(() => ({
+  "--gthumb-h": `${props.thumbHeight}px`,
+  "--gthumb-max-w": `${Math.round(props.thumbHeight * MAX_THUMB_RATIO)}px`,
+  // The unknown-shape fallback is a 4:3 box at the strip's height.
+  "--gthumb-fallback-w": `${Math.round((props.thumbHeight * 4) / 3)}px`,
+}));
+
+/** How many why-pills the info column has room for at this size. */
+const whyLimit = computed(() =>
+  props.thumbHeight < ONE_PILL_BELOW_PX ? 1 : 2,
+);
 
 /**
  * The PLACEHOLDER's estimated shape, from stored dimensions. Only an
@@ -300,8 +336,8 @@ function thumbBoxStyle(candidate) {
   const w = Number(candidate.width);
   const h = Number(candidate.height);
   if (!w || !h) return null;
-  const ratio = Math.min(2.4, Math.max(0.45, w / h));
-  return { width: `${Math.round(THUMB_HEIGHT_PX * ratio)}px` };
+  const ratio = Math.min(MAX_THUMB_RATIO, Math.max(0.45, w / h));
+  return { width: `${Math.round(props.thumbHeight * ratio)}px` };
 }
 
 /**
@@ -487,8 +523,8 @@ function onToggle(candidate) {
      corrected shape) or the placeholder's metadata estimate. */
   width: auto;
   min-width: 44px;
-  /* Keep in step with THUMB_HEIGHT_PX in the script above. */
-  height: 112px;
+  /* Set by the strip from the queue's size control. */
+  height: var(--gthumb-h);
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -518,13 +554,13 @@ function onToggle(candidate) {
   height: 100%;
   /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. Scaled
      with the height so the widest allowed shape stays the same 2.4:1. */
-  max-width: 268px;
+  max-width: var(--gthumb-max-w);
   object-fit: cover;
 }
 
 /* The unknown-shape fallback: a 4:3 box at the strip's height. */
 .gt--placeholder {
-  width: 150px;
+  width: var(--gthumb-fallback-w);
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 

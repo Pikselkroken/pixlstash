@@ -58,6 +58,28 @@
       </div>
 
       <div class="dq-tb-right">
+        <!-- The same Tiny-to-Huge ladder the grid uses, driving the strip's
+             picture height and therefore the row's. Live on drag: unlike the
+             grid's, this control changes a list that is already on screen, so
+             the user is looking straight at the answer. -->
+        <div v-if="store.hasGroups" class="dq-size">
+          <v-icon size="16" aria-hidden="true">mdi-image-size-select-large</v-icon>
+          <v-slider
+            class="dq-size-slider"
+            :model-value="store.sizeLevel"
+            :min="0"
+            :max="maxSizeLevel"
+            :step="1"
+            density="compact"
+            hide-details
+            color="primary"
+            thumb-color="primary"
+            :aria-label="`Thumbnail size: ${sizeLabel}`"
+            @update:model-value="store.setSizeLevel($event)"
+          />
+          <span class="dq-size-value">{{ sizeLabel }}</span>
+        </div>
+
         <button
           v-if="store.exactCount > 0 && !readOnly"
           type="button"
@@ -171,6 +193,7 @@
           :cover-id="store.coverIdFor(entry.group)"
           :excluded-ids="store.excludedFor(entry.group.signature)"
           :load-thumbnails="entry.loadThumbnails"
+          :thumb-height="store.thumbHeight"
           :busy="store.busy"
           :read-only="readOnly"
           @focus="onRowFocus(entry.index, $event)"
@@ -322,6 +345,10 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { candidateId } from "../../utils/dedup";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
+import {
+  MAX_THUMBNAIL_SIZE_LEVEL,
+  sizeLabelForLevel,
+} from "../../utils/thumbnailSizes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
@@ -345,13 +372,21 @@ const WINDOW_BEFORE = 4;
 const WINDOW_AFTER = 8;
 
 /**
- * The spacer height a windowed-out row stands in for, refined to the real row
- * pitch once two rows have rendered. It only has to keep the scrollbar honest,
- * not pixel-accurate — but it is now what the WHOLE track is sized from, so it
- * starts at the measured pitch (132px row + the 8px list gap) rather than a
- * round number.
+ * What a row costs beyond its pictures: 8px of padding top and bottom, a 1px
+ * border on each edge, and the 8px gap to the next row. Measured, and the
+ * reason the estimate is a function of the size level rather than a constant —
+ * the whole scroll track is sized from it, so it has to move when the size
+ * control does.
  */
-const ROW_ESTIMATE_PX = 140;
+const ROW_CHROME_PX = 28;
+
+/**
+ * The floor a row cannot go under whatever the pictures do: the info column
+ * (title, confidence, one why-pill) and the three verdict buttons both sit
+ * beside the strip. Below this the size control stops buying rows per screen
+ * and only buys back horizontal space.
+ */
+const MIN_ROW_CONTENT_PX = 89;
 
 /**
  * What the queue says when `X` is refused at the stack floor.
@@ -392,8 +427,16 @@ const announcement = ref("");
 
 const readOnly = computed(() => Boolean(isReadOnly.value));
 
+const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
+const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
+
+/** The row pitch a given picture height implies, before anything is measured. */
+function estimatedPitch() {
+  return Math.max(store.thumbHeight, MIN_ROW_CONTENT_PX) + ROW_CHROME_PX;
+}
+
 /** The real row pitch, measured once two rows exist; the estimate until then. */
-const rowPitchPx = ref(ROW_ESTIMATE_PX);
+const rowPitchPx = ref(estimatedPitch());
 /** First row index the scroll position implies, and how many rows fit. */
 const scrollIndex = ref(0);
 const viewportRows = ref(WINDOW_AFTER);
@@ -513,6 +556,24 @@ watch(
   async () => {
     await nextTick();
     measureRowPitch();
+    maybeLoadMore();
+  },
+);
+
+/**
+ * A size change makes every measurement taken at the old size wrong, and the
+ * spacers are what the scrollbar is built from. Drop straight to the estimate
+ * for the new size so the track is never sized from a stale pitch, re-measure
+ * once the rows have laid out, and keep the keyboard cursor on screen: resizing
+ * must not cost the user their place in the queue.
+ */
+watch(
+  () => store.thumbHeight,
+  async () => {
+    rowPitchPx.value = estimatedPitch();
+    await nextTick();
+    measureRowPitch();
+    scrollFocusIntoView();
     maybeLoadMore();
   },
 );
@@ -1113,6 +1174,31 @@ defineExpose({ windowedGroups, tierLabel });
 
 .dq-tb-right {
   margin-left: auto;
+}
+
+/* The size control. A fixed track width, because a slider that grows with the
+   toolbar makes the same drag mean a different size on every window.
+   space-3, not space-2: the slider's thumb overhangs both ends of its track, so
+   a tighter gap has it colliding with the icon at Tiny and the label at Huge. */
+.dq-size {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.dq-size-slider {
+  width: 96px;
+  flex: 0 0 96px;
+}
+
+/* Fixed width: the label changes on every notch, and one that resizes with its
+   text drags the whole toolbar sideways as the user drags the slider. Wide
+   enough for the longest rung ("Very Large"). */
+.dq-size-value {
+  width: 11ch;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-toolbar-text), 0.7);
+  white-space: nowrap;
 }
 
 .dq-tier-wrap {

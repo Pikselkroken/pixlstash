@@ -12,14 +12,38 @@
 // The perceptual jump between few-column layouts is large (tile width scales as
 // 1/columns), so the steps shrink (2,2,2,1,1,1) rather than grow as the tiles
 // get bigger. Justified row heights are a separate, smoother scale.
+// `stripHeight` is the third consumer of the same ladder: the duplicate
+// queue's candidate strip, where the pictures sit in a row beside the group's
+// facts rather than in a grid of their own. Its numbers are a third scale
+// again, and a much smaller one, because a triage row is read a screenful at a
+// time — Medium is the height the queue shipped with, so the default level
+// leaves the queue looking exactly as it did.
 export const THUMBNAIL_SIZE_STEPS = [
-  { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150 },
-  { key: "very_small", label: "Very Small", columns: 10, rowHeight: 180 },
-  { key: "small", label: "Small", columns: 8, rowHeight: 210 },
-  { key: "medium", label: "Medium", columns: 6, rowHeight: 245 },
-  { key: "large", label: "Large", columns: 5, rowHeight: 285 },
-  { key: "very_large", label: "Very Large", columns: 4, rowHeight: 330 },
-  { key: "huge", label: "Huge", columns: 3, rowHeight: 375 },
+  { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150, stripHeight: 64 },
+  {
+    key: "very_small",
+    label: "Very Small",
+    columns: 10,
+    rowHeight: 180,
+    stripHeight: 80,
+  },
+  { key: "small", label: "Small", columns: 8, rowHeight: 210, stripHeight: 96 },
+  {
+    key: "medium",
+    label: "Medium",
+    columns: 6,
+    rowHeight: 245,
+    stripHeight: 112,
+  },
+  { key: "large", label: "Large", columns: 5, rowHeight: 285, stripHeight: 144 },
+  {
+    key: "very_large",
+    label: "Very Large",
+    columns: 4,
+    rowHeight: 330,
+    stripHeight: 184,
+  },
+  { key: "huge", label: "Huge", columns: 3, rowHeight: 375, stripHeight: 232 },
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium
@@ -48,6 +72,11 @@ export function columnsForSizeLevel(level) {
 /** Justified-layout target row height (px) for a size level. */
 export function rowHeightForSizeLevel(level) {
   return stepFor(level).rowHeight;
+}
+
+/** Duplicate-queue candidate-strip thumbnail height (px) for a size level. */
+export function stripHeightForSizeLevel(level) {
+  return stepFor(level).stripHeight;
 }
 
 /** Human-readable label ("Tiny" … "Huge") for a size level. */

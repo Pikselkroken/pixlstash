@@ -1257,3 +1257,47 @@ describe("useDedupStore — scans and bulk auto-stack", () => {
     expect(store.busy).toBe(false);
   });
 });
+
+describe("useDedupStore — the thumbnail size", () => {
+  // The size is remembered in localStorage, so each case starts from a browser
+  // that has never been told one.
+  beforeEach(() => {
+    window.localStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  // The queue's size is a VIEW preference and deliberately not the grid's
+  // server-side one: a row of copies beside a column of facts wants a different
+  // size from a wall of pictures. Only the ladder is shared.
+  it("starts at the ladder's default and maps the level to a strip height", () => {
+    const store = useDedupStore();
+    expect(store.sizeLevel).toBe(3);
+    expect(store.thumbHeight).toBe(112);
+  });
+
+  it("remembers a new size and clamps one off the ladder", () => {
+    const store = useDedupStore();
+    store.setSizeLevel(5);
+    expect(store.sizeLevel).toBe(5);
+    expect(store.thumbHeight).toBe(184);
+    expect(window.localStorage.getItem("pixlstash:dedupSizeLevel")).toBe("5");
+
+    store.setSizeLevel(99);
+    expect(store.sizeLevel).toBe(6);
+    store.setSizeLevel(-4);
+    expect(store.sizeLevel).toBe(0);
+  });
+
+  it("survives a browser that refuses localStorage", () => {
+    // Private mode throws from the getter. A default size is a fine outcome; a
+    // store that cannot be constructed is not.
+    const spy = vi
+      .spyOn(window.localStorage.__proto__, "getItem")
+      .mockImplementation(() => {
+        throw new Error("denied");
+      });
+    setActivePinia(createPinia());
+    expect(useDedupStore().sizeLevel).toBe(3);
+    spy.mockRestore();
+  });
+});

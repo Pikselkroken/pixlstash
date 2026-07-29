@@ -55,6 +55,11 @@ import {
   autoStackExact,
   GLOBAL_SCOPE,
 } from "../api/dedup";
+import {
+  DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  clampSizeLevel,
+  stripHeightForSizeLevel,
+} from "../utils/thumbnailSizes";
 import { suggestedCoverId, candidateId } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 
@@ -89,6 +94,34 @@ export const TIER_LABELS = Object.freeze({
   near: { label: "Near-identical", hint: "bursts, re-exports, resizes" },
   embedding: { label: "Same scene", hint: "cross-folder, re-framed" },
 });
+
+/**
+ * Where the queue's thumbnail size is remembered.
+ *
+ * Deliberately NOT the grid's server-side `thumbnail_size_level`: the queue
+ * reads a row of copies beside a column of facts, the grid reads a wall of
+ * pictures, and a size that suits one is the wrong size for the other. Only the
+ * LADDER is shared (`thumbnailSizes.js`), so the two controls speak the same
+ * Tiny-to-Huge language without dragging each other around.
+ */
+const SIZE_LEVEL_KEY = "pixlstash:dedupSizeLevel";
+
+/** Read the remembered size level, falling back to the ladder's default. */
+function storedSizeLevel() {
+  try {
+    const raw = window.localStorage?.getItem(SIZE_LEVEL_KEY);
+    if (raw === null || raw === undefined) return DEFAULT_THUMBNAIL_SIZE_LEVEL;
+    return clampSizeLevel(raw);
+  } catch (err) {
+    // Private mode, or storage disabled by policy. A default size is a fine
+    // outcome; a thrown getter that takes the whole queue with it is not.
+    console.warn(
+      "[dedup] could not read the remembered thumbnail size; using the default",
+      err,
+    );
+    return DEFAULT_THUMBNAIL_SIZE_LEVEL;
+  }
+}
 
 /** The empty scan record, so consumers never branch on `null`. */
 const IDLE_SCAN = Object.freeze({
@@ -195,6 +228,31 @@ export const useDedupStore = defineStore("dedup", () => {
   const nearEnabled = ref(false);
   const embeddingEnabled = ref(false);
   const threshold = ref(null);
+
+  // --- How big the queue draws its candidates ------------------------------
+  // A view preference, so it lives on the client and survives a reload.
+  const sizeLevel = ref(storedSizeLevel());
+  const thumbHeight = computed(() => stripHeightForSizeLevel(sizeLevel.value));
+
+  /**
+   * Move the size, clamped to the ladder, and remember it.
+   *
+   * @param {number} level
+   */
+  function setSizeLevel(level) {
+    const next = clampSizeLevel(level);
+    if (next === sizeLevel.value) return;
+    sizeLevel.value = next;
+    try {
+      window.localStorage?.setItem(SIZE_LEVEL_KEY, String(next));
+    } catch (err) {
+      // The size still applies for this session; only the memory of it is lost.
+      console.warn(
+        "[dedup] could not remember the thumbnail size for next time",
+        err,
+      );
+    }
+  }
 
   // --- Per-group user choices, keyed by signature --------------------------
   const coverChoices = ref({});
@@ -1226,6 +1284,10 @@ export const useDedupStore = defineStore("dedup", () => {
     stackedCount,
     separatedCount,
     doneCount,
+    // size
+    sizeLevel,
+    thumbHeight,
+    setSizeLevel,
     openQueue,
     clearScope,
     loadFirstPage,

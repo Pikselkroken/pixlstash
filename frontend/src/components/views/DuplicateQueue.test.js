@@ -155,6 +155,10 @@ async function mountQueue(groups, { byTier = {}, total = null } = {}) {
 let errorSpy;
 
 beforeEach(() => {
+  // The queue's thumbnail size is remembered in localStorage, and the row pitch
+  // every spacer is sized from follows it. A case that changes the size would
+  // otherwise resize the rows of every case after it.
+  window.localStorage.clear();
   setActivePinia(createPinia());
   readOnlyRef.value = false;
   routeMock.name = "duplicates";
@@ -685,6 +689,21 @@ describe("DuplicateQueue — a read-only session", () => {
     expect(
       wrapper.findComponent({ name: "DedupCompareDialog" }).props("readOnly"),
     ).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("DuplicateQueue — the thumbnail size", () => {
+  // The slider drives the rows, so the height it publishes has to reach them.
+  it("hands the size level's height to every row", async () => {
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    const heightOf = () =>
+      wrapper.findComponent({ name: "DedupGroupRow" }).props("thumbHeight");
+    expect(heightOf()).toBe(112);
+
+    store.setSizeLevel(6);
+    await wrapper.vm.$nextTick();
+    expect(heightOf()).toBe(232);
     wrapper.unmount();
   });
 });

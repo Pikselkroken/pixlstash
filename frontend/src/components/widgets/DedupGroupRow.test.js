@@ -122,3 +122,54 @@ describe("DedupGroupRow — what the verdicts cost", () => {
     expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
   });
 });
+
+describe("DedupGroupRow — the size control", () => {
+  // One number drives the row. Sizing the box in CSS and the placeholder in JS
+  // from two copies of the height is how a row starts jumping as it decodes.
+  it("lays the strip out from the height it is given", () => {
+    const style = mountRow({ thumbHeight: 184 }).find(".gstrip").attributes("style");
+    expect(style).toContain("--gthumb-h: 184px");
+    // The panorama ceiling and the unknown-shape fallback scale with it.
+    expect(style).toContain("--gthumb-max-w: 442px");
+    expect(style).toContain("--gthumb-fallback-w: 245px");
+  });
+
+  it("sizes an unloaded placeholder from the same height", () => {
+    const withShape = {
+      ...group(2),
+      candidates: [
+        { picture_id: 1, width: 4000, height: 3000 },
+        { picture_id: 2, width: 4000, height: 3000 },
+      ],
+    };
+    const wrapper = mountRow({
+      group: withShape,
+      loadThumbnails: false,
+      thumbHeight: 64,
+    });
+    // 4:3 at 64px tall.
+    expect(wrapper.find(".gt--placeholder").attributes("style")).toContain(
+      "width: 85px",
+    );
+  });
+
+  // At the small end the info column, not the strip, sets the row height. One
+  // pill is safe BECAUSE the evidence is ordered counter-first: the pill that
+  // survives the limit is always the one arguing against stacking.
+  it("keeps the counter-evidence pill when it drops to one", () => {
+    const contested = {
+      ...group(2),
+      why: [
+        { text: "same dimensions", against: false },
+        { text: "different crop", against: true },
+      ],
+    };
+    const small = mountRow({ group: contested, thumbHeight: 64 });
+    const pills = small.findAll(".why-pill");
+    expect(pills).toHaveLength(1);
+    expect(pills[0].text()).toContain("different crop");
+
+    const normal = mountRow({ group: contested, thumbHeight: 112 });
+    expect(normal.findAll(".why-pill")).toHaveLength(2);
+  });
+});
