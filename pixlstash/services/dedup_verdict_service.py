@@ -66,7 +66,6 @@ Two details this module owns rather than inherits:
 from __future__ import annotations
 
 import json
-import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -86,10 +85,12 @@ from pixlstash.db_models.dedup import (
     DedupVerdict,
 )
 from pixlstash.db_models.face import Face
+from pixlstash.db_models.operation import Operation
 from pixlstash.db_models.tag import Tag, is_tag_sentinel
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
 from pixlstash.services.dedup_tier_service import (
+    ID_CHUNK,
     DedupScope,
     DedupTier,
     prune_stale_groups_in_session,
@@ -168,8 +169,15 @@ class VerdictResult:
 
 
 def new_batch_id() -> str:
-    """Mint a batch id grouping one bulk action's operations into one undo."""
-    return uuid.uuid4().hex
+    """Mint a batch id grouping one bulk action's operations into one undo.
+
+    Delegates to :func:`operation_log_service.new_batch_id` rather than minting
+    its own shape: batch ids are namespaced (``srv-`` for server-minted, ``cli-``
+    for a client-supplied one, validated at the request boundary), and a third
+    un-namespaced shape from this module would make a dedup batch
+    indistinguishable from a client-grafted one in the log.
+    """
+    return operation_log_service.new_batch_id()
 
 
 def _record_operation(
@@ -595,6 +603,12 @@ def apply_stack_verdict_in_session(
             fewer than two members left after exclusions.
     """
     group, member_ids = _load_group(session, signature)
+    # Always under a batch id, even for a single verdict. The batch id is the key
+    # that ties the recorded Operation back to the DedupVerdict row, which is how
+    # an undo knows to reopen the verdict as well as restoring the pictures (see
+    # :func:`restore_verdicts_in_session`). A verdict recorded without one would
+    # be undoable on the picture side and permanently decided on the queue side.
+    batch_id = batch_id or new_batch_id()
     excluded = sorted({int(pid) for pid in (excluded_picture_ids or [])})
     unknown = sorted(set(excluded) - set(member_ids))
     if unknown:
@@ -745,6 +759,84 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
         "reopened_at": row.reopened_at,
         "group_returned_to_queue": group is not None,
     }
+
+
+def restore_verdicts_in_session(
+    session: Session, operations: list[Operation], direction: str
+) -> None:
+    """Reopen (on undo) or re-decide (on redo) the verdicts *operations* recorded.
+
+    Registered with the operation log as the post-restore hook for
+    :data:`OP_TYPE_STACK` (see
+    :func:`pixlstash.services.operation_log_service.register_post_restore_hook`).
+
+    Why this is needed at all: the operation log restores the reversible *picture*
+    facets, and a stack verdict changes two more things that are not picture
+    facets — the ``DedupVerdict`` row (decided) and the ``DedupGroup`` row
+    (resolved). Without this hook an undo unstacked the pictures but left the
+    group decided, so it never returned to the queue, survived a rescan (the
+    signature still carried a live verdict) and was recoverable only through
+    ``POST /dedup/verdicts/reopen``.
+
+    Correlation is by ``batch_id``: a stack verdict is always recorded under one
+    (minted server-side when the caller supplies none), and the verdict row
+    stores the same id. One query covers a 2 700-group batch undo, which is why
+    the hook takes the whole list rather than one operation at a time.
+
+    Args:
+        session: The restore's own session. Not committed here — the operation
+            log commits the restore and this together, so the pictures and the
+            queue can never disagree.
+        operations: Every :data:`OP_TYPE_STACK` operation in this restore.
+        direction: ``operation_log_service.RESTORE_UNDO`` or ``RESTORE_REDO``.
+    """
+    batch_ids = sorted({op.batch_id for op in operations if op.batch_id})
+    unbatched = sorted(int(op.id) for op in operations if not op.batch_id and op.id)
+    if unbatched:
+        # Rows written before verdicts were always batched. Nothing correlates
+        # them to a verdict, so say so rather than silently half-restoring: the
+        # pictures are back but the group stays decided until the user reopens it.
+        logger.warning(
+            "[dedup-verdict] %s: operation(s) %s carry no batch_id, so their "
+            "duplicate verdict cannot be located; the pictures were restored but "
+            "the group stays decided. Use POST /dedup/verdicts/reopen to return "
+            "it to the queue.",
+            direction,
+            unbatched,
+        )
+    if not batch_ids:
+        return
+
+    is_redo = direction == operation_log_service.RESTORE_REDO
+    reopened_at = None if is_redo else datetime.utcnow()
+    signatures: list[str] = []
+    for start in range(0, len(batch_ids), ID_CHUNK):
+        chunk = batch_ids[start : start + ID_CHUNK]
+        for row in session.exec(
+            select(DedupVerdict).where(DedupVerdict.batch_id.in_(chunk))
+        ).all():
+            # decided_at is deliberately not re-stamped on redo: it records when
+            # the user decided, and the row is "live" precisely when reopened_at
+            # is NULL, so one field carries the whole lifecycle honestly.
+            row.reopened_at = reopened_at
+            session.add(row)
+            signatures.append(str(row.signature))
+    if not signatures:
+        return
+    for start in range(0, len(signatures), ID_CHUNK):
+        chunk = signatures[start : start + ID_CHUNK]
+        for group in session.exec(
+            select(DedupGroup).where(DedupGroup.signature.in_(chunk))
+        ).all():
+            group.resolved = is_redo
+            session.add(group)
+    logger.info(
+        "[dedup-verdict] %s returned %d verdict(s) to %s across batch(es) %s",
+        direction,
+        len(signatures),
+        "decided" if is_redo else "the queue",
+        batch_ids,
+    )
 
 
 def bulk_auto_stack_in_session(
@@ -958,6 +1050,15 @@ def bulk_auto_stack(
     )
 
 
+# Registered at import time, and this module is imported by
+# ``pixlstash/routes/dedup.py``, which ``Server`` mounts at startup — so the hook
+# is in place before any request can reach undo. The registration lives here, not
+# in the operation log, so the op-log core keeps no dedup knowledge.
+operation_log_service.register_post_restore_hook(
+    OP_TYPE_STACK, restore_verdicts_in_session
+)
+
+
 __all__ = [
     "BULK_REASON_APPLIED",
     "BULK_REASON_BLOCKED",
@@ -975,4 +1076,5 @@ __all__ = [
     "new_batch_id",
     "reopen_verdict",
     "reopen_verdict_in_session",
+    "restore_verdicts_in_session",
 ]
