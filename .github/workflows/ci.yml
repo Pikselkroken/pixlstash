@@ -226,6 +226,7 @@ jobs:
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
           tests/test_migrations.py
+          tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
@@ -572,6 +573,7 @@ jobs:
           tests/test_snapshots_auth.py
           tests/test_metadata_hash.py
           tests/test_architecture_guardrails.py
+          tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_find_orphaned_files.py
           tests/test_server.py
