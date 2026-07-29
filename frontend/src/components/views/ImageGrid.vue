@@ -58,6 +58,7 @@
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
+      @open-duplicates="emit('open-duplicates')"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
@@ -817,7 +818,32 @@
                 class="stack-band-overlay"
                 :style="getStackBandStyle(img)"
               ></div>
-              <!-- Top-right hover badges: stars + stack indicator -->
+              <!-- The stack count and the deck edges are permanent, not
+                   hover-only: how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made stacks
+                   invisible while browsing. -->
+              <StackEdgeTicks
+                v-if="shouldShowStackBadge(img)"
+                :count="getStackBadgeCount(img)"
+              />
+              <!-- Once a stack is expanded its members look like any other
+                   picture, so the one that the collapsed tile stands for has to
+                   say so. Without this, expanding a stack loses the answer to
+                   "which of these is the keeper". -->
+              <span
+                v-if="isExpandedStackCover(img)"
+                class="stack-cover-flag"
+                title="This picture is the stack's cover"
+                >Cover</span
+              >
+              <!-- Top-right badge column — the shared home for corner
+                   indicators (stars above, stack count below, right-aligned,
+                   2px gap). The stars are hover-only; the stack count is
+                   PERMANENT — how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made
+                   stacks invisible while browsing. The hover behaviour
+                   therefore lives on the container's other children, not the
+                   container. -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
@@ -833,19 +859,12 @@
                   :compact="true"
                   @set-score="setScore(img, $event)"
                 />
-                <div
+                <StackBadge
                   v-if="shouldShowStackBadge(img)"
-                  class="stack-indicator"
-                  :title="stackBadgeTitle(img)"
-                  @click.stop="toggleStackExpand(img)"
+                  :count="getStackBadgeCount(img)"
+                  @activate="toggleStackExpand(img)"
                   @mouseenter.stop="prefetchStackMembers(img)"
-                >
-                  <v-icon
-                    :size="badgeIconSizes.stack"
-                    :style="getStackBadgeIconStyle(img)"
-                    >mdi-layers-outline</v-icon
-                  >
-                </div>
+                />
               </div>
             </div>
           </div>
@@ -1086,6 +1105,8 @@ import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import StackBadge from "../widgets/StackBadge.vue";
+import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
 import RemixDialog from "../io/RemixDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
@@ -1155,7 +1176,6 @@ import {
   getStackPositionValue,
   selectNewestStackMember,
   shouldShowStackBadge,
-  stackBadgeTitle,
 } from "../../utils/stack.js";
 import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
 import {
@@ -1190,6 +1210,7 @@ const emit = defineEmits([
   "load-sort-changed",
   "flag-sort-changed",
   "open-settings",
+  "open-duplicates",
   "open-import",
   "local-import",
   "confirm-export-zip",
@@ -1264,6 +1285,8 @@ const props = defineProps({
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
   impossibleSources: { type: Array, default: () => [] },
+  // "all" | "stacked" | "unstacked" | "unresolved"
+  stackStateFilter: { type: String, default: "all" },
   sharedOnlyFilter: { type: Boolean, default: false },
   unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
@@ -1439,6 +1462,19 @@ const badgeCssVars = computed(() => {
     "--badge-padding": `${paddingV}px ${paddingH}px`,
   };
 });
+
+/**
+ * Whether this tile is the cover of a stack the user has expanded.
+ *
+ * Only meaningful while the stack is expanded: collapsed, the cover IS the
+ * tile, so flagging it would be noise.
+ *
+ * @param {Object} img
+ * @returns {boolean}
+ */
+function isExpandedStackCover(img) {
+  return isStackExpandedForImage(img) && getStackPositionValue(img) === 0;
+}
 
 const badgeIconSizes = computed(() => {
   const t = badgeSizeT.value;
@@ -4973,7 +5009,6 @@ const {
   showRemoveFromStack,
   mapGridImages,
   getStackCardStyle,
-  getStackBadgeIconStyle,
   getStackBandStyle,
   isStackExpandedForImage,
   rebuildGridImagesFromLastFetch,
@@ -6036,6 +6071,7 @@ watch(
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
     () => props.impossibleSources,
+    () => props.stackStateFilter,
     () => props.sharedOnlyFilter,
     () => props.unassignedOnlyFilter,
   ],
@@ -7729,7 +7765,7 @@ function handleEmptyStateReset() {
 
 /* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
    padding, same left edge and inset. See the shared
-   `.penalised-tag-indicator, .stack-indicator, .thumbnail-lock-badge` rules
+   `.penalised-tag-indicator, .thumbnail-lock-badge` rules
    below, which it joins rather than restating. */
 
 .thumbnail-share-badge {
@@ -8097,7 +8133,10 @@ function handleEmptyStateReset() {
 /* Suppress all hover-revealed elements in touch-select mode */
 .touch-select-mode .image-card:hover .resolution-hover-overlay,
 .touch-select-mode .image-card:hover .thumbnail-id-overlay,
-.touch-select-mode .image-card:hover .thumbnail-top-right-badges {
+.touch-select-mode .image-card:hover .thumbnail-top-right-badges > *,
+/* The permanent stack badge must also clear the corner for the ✓ that a
+   touch-selection stamps at top-right. */
+.touch-select-mode .image-card:has(.selection-overlay) .thumbnail-top-right-badges > * {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -8418,7 +8457,6 @@ function handleEmptyStateReset() {
    Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
    track each other at every column count. */
 .penalised-tag-indicator,
-.stack-indicator,
 .thumbnail-lock-badge {
   display: flex;
   align-items: center;
@@ -8439,8 +8477,22 @@ function handleEmptyStateReset() {
   filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
 }
 
-.stack-indicator {
-  cursor: pointer;
+/* Bottom-left, on the photo scrim: the same corner and the same backing the
+   grid's other permanent chips use, so it reads as one family. */
+.stack-cover-flag {
+  position: absolute;
+  bottom: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-raised);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  pointer-events: none;
 }
 
 .stack-band-overlay {
@@ -8474,12 +8526,19 @@ function handleEmptyStateReset() {
   align-items: flex-end;
   gap: 2px;
   z-index: 120;
+  pointer-events: none;
+}
+
+/* Hover-only members of the badge column (the stars). The stack badge
+   (.sbadge) is exempt on purpose: the count is permanent. The opacity lives on
+   the CHILDREN, not the container, precisely so one column can hold both. */
+.thumbnail-top-right-badges > :not(.sbadge) {
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.image-card:hover .thumbnail-top-right-badges {
+.image-card:hover .thumbnail-top-right-badges > :not(.sbadge) {
   opacity: 1;
   pointer-events: auto;
 }

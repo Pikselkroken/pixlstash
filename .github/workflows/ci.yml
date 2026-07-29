@@ -216,6 +216,11 @@ jobs:
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_dedup_sweep_api.py
+          tests/test_dedup_sweep_service.py
+          tests/test_dedup_tier_service.py
+          tests/test_dedup_tiers_api.py
+          tests/test_dedup_verdict_service.py
           tests/test_detections_scope.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py

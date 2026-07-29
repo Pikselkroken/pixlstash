@@ -74,6 +74,36 @@
               Search relevance (fixed)
             </div>
 
+            <!-- Shown once, in the slot the removed sort order used to occupy.
+                 A user who reached for "Likeness Groups" here needs one line
+                 telling them where the capability went, not a changelog. -->
+            <div
+              v-if="dedupMigrationNotice.visible.value"
+              class="tbm-section gb-sort-migration-note"
+              data-testid="sort-migration-notice"
+            >
+              <v-icon size="16">mdi-content-duplicate</v-icon>
+              <span class="gb-sort-migration-text">
+                Looking for Likeness Groups? Duplicates now has its own place in
+                the sidebar, with a count and a one-key review queue.
+              </span>
+              <button
+                type="button"
+                class="gb-sort-migration-open"
+                @click="openDuplicatesFromNotice"
+              >
+                Open Duplicates
+              </button>
+              <button
+                type="button"
+                class="gb-sort-migration-dismiss"
+                aria-label="Hide this notice"
+                @click="dedupMigrationNotice.dismiss()"
+              >
+                <v-icon size="16">mdi-close</v-icon>
+              </button>
+            </div>
+
             <div class="tbm-section">
               <div class="tbm-grid-2">
                 <button
@@ -536,7 +566,6 @@ import { computed, nextTick, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
-import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -554,6 +583,7 @@ import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import UndoControl from "./UndoControl.vue";
+import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
   selectedCharacter: String,
@@ -572,27 +602,46 @@ const emit = defineEmits([
   "open-import",
   "local-import",
   "open-settings",
+  "open-duplicates",
 ]);
 
 const tbImportMenuOpen = ref(false);
 
-const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
-const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
+// Shown once per browser and then never again. A migration nudge that came back
+// after a reload would be an ad, so the flag is persisted rather than held in
+// the transient notice store.
+const dedupMigrationNotice = useOneTimeNotice("dedup-sort-migration");
 
-const filteredSortOptions = computed(() => {
-  const options = sortStore.sortOptions ?? [];
-  if (selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID) {
-    return options.filter((opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY);
-  }
-  return options;
-});
+/** Dismiss the notice and take the user to where the capability moved. */
+function openDuplicatesFromNotice() {
+  dedupMigrationNotice.dismiss();
+  gbSortMenuOpen.value = false;
+  emit("open-duplicates");
+}
+
+const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
+
+// The Likeness Groups sort order is gone from the menu in 1.9. It was a lens,
+// not a task: it never told you how many duplicates you had, offered no verdict,
+// had no bulk action, and forgot everything the moment you changed sort. It also
+// implied a whole-library comparison every time it was used. The signal survives
+// in the Duplicates destination, which builds groups you can act on instead of
+// shuffling the grid.
+//
+// The backend still serves the mechanism, so a deep link or a saved preference
+// that names it keeps working; it simply has no menu row any more, and the
+// migration notice below points at where it went.
+const filteredSortOptions = computed(() =>
+  (sortStore.sortOptions ?? []).filter(
+    (opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY,
+  ),
+);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pinia stores (replaces gridBarState and toolbarState provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
 const filterStore = useFilterStore();
 const sortStore = useSortStore();
-const selectionStore = useSelectionStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
@@ -1248,6 +1297,64 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-sort-panel {
   width: 320px;
   max-width: 92vw;
+}
+
+/* The migration notice occupies the row the removed sort order used to hold, so
+   it is a menu section rather than a floating card: the user is already looking
+   here, which is the whole reason it works as a pointer. */
+.gb-sort-migration-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-accent), 0.12);
+  border: 1px solid rgba(var(--v-theme-accent), 0.35);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.gb-sort-migration-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.gb-sort-migration-open {
+  border: none;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.gb-sort-migration-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+}
+
+.gb-sort-migration-open:hover,
+.gb-sort-migration-dismiss:hover {
+  background: var(--hover-wash);
+}
+
+.gb-sort-migration-open:focus-visible,
+.gb-sort-migration-dismiss:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .gb-sort-search-note {

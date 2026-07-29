@@ -91,6 +91,7 @@ pixlstash/
 │   ├── projects.py                   # Projects
 │   ├── picture_sets.py               # Picture sets + membership
 │   ├── stacks.py                     # Stacks
+│   ├── dedup.py                      # Duplicate queue, counts, scan, verdicts + sweep dry run
 │   ├── config.py                     # User/server config + progress
 │   ├── reference_folders.py          # Reference folders
 │   ├── import_folders.py             # Watch folders
@@ -147,6 +148,9 @@ pixlstash/
 │
 ├── services/                         # Business-logic extracted from route handlers
 │   ├── config_service.py             # Hardware monitoring + import folder utilities
+│   ├── dedup_sweep_service.py        # Vault-wide near-duplicate sweep planner (read-only)
+│   ├── dedup_tier_service.py         # Tiered detection, tier policy, cover + evidence (§22)
+│   ├── dedup_verdict_service.py      # Stack / keep-separate verdicts + metadata union (§22)
 │   ├── plugin_service.py             # Image plugin orchestration + progress tracking
 │   ├── share_service.py              # Share-token validation + watermark resolution
 │   └── tag_prediction_service.py     # Confirm / reject / reset tag predictions
@@ -351,6 +355,11 @@ Add/remove user tags; bulk clear; confirm or reject model-predicted tags (`TagPr
 ### `projects.py`, `picture_sets.py`, `stacks.py`
 Standard CRUD; set/stack membership management; stack reordering.
 
+### `dedup.py`
+The vault-wide near-duplicate sweep, **dry run only** (v1.9 Lane E). `GET /dedup/sweep/policy` returns the server's default confidence policy plus the bounds and closed vocabularies a client should build its controls from; `POST /dedup/sweep/dry-run` resolves every near-duplicate group in the vault under a supplied policy and returns the plan behind "N groups auto-collapse, M need review". Both are `owner_only` (a vault-wide aggregate cannot be narrowed to a share token's scope without leaking out-of-scope counts — the same reasoning as `tag_health`), and neither writes anything. All logic lives in [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py); the handlers only translate the request body into a `SweepPolicy` and serialise the `SweepReport`. Execution (applying a plan) and the auto-at-import policy are later work; the dry-run planner already accepts an optional `operation_batch_id` so a future apply step can correlate a plan with the operation-log batch that undoes it.
+
+The same module also serves the **v1.9 tiered Duplicates queue** — `GET /dedup/policy`, `GET /dedup/groups`, `POST /dedup/counts`, `POST /dedup/scan`, `POST /dedup/verdicts/{stack,keep-separate,reopen}` and `POST /dedup/auto-stack`. Every one of them is `owner_only` for the same reasoning plus, for the verdict routes, the fact that they mutate stacks across arbitrary pictures. Detection lives in [services/dedup_tier_service.py](../pixlstash/services/dedup_tier_service.py) and verdicts in [services/dedup_verdict_service.py](../pixlstash/services/dedup_verdict_service.py); the handlers only build a `TierPolicy` / `DedupScope` (a bad one is a 400, never a silent retune) and call a service wrapper. See §22 for the tiers, the hash decision, the bucket design, the cover formula and the verdict memory, and `docs/integration_architecture.md` §19 for the request/response contract.
+
 ### `config.py`
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -425,6 +434,16 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
 | GET    | /api/v1/check-session                                                         | auth            | Check Session                                              |
+| POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
+| POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
+| GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
+| GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
+| POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
+| POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
+| GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
+| POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
+| POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
+| POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                         |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                      |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                     |
@@ -858,6 +877,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
+| [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
 | [services/restore_service.py](../pixlstash/services/restore_service.py) | Full-database and per-resource (picture / picture_set / project / character) restore from a snapshot; runs `alembic upgrade head` on the snapshot first (see §18) |
 | [services/tag_prediction_service.py](../pixlstash/services/tag_prediction_service.py) | Confirm, reject, delete, and reset tag predictions; encapsulates the `TagPrediction` → `Tag` promotion logic used by `routes/tag_predictions.py` |
@@ -957,7 +977,9 @@ Selected milestones:
 
 | 0087 | `characterprojectmember` / `picturesetprojectmember` join tables — many-to-many characters and picture sets across projects (#125). Additive: the scalar `project_id` FKs stay and stay populated as the primary project, and the migration backfills one join row per existing assignment |
 
-Current head: `0087_add_entity_project_membership`.
+| 0088 | `dedupgroup` / `dedupgroupmember` / `dedupverdict` / `dedupscan` — the tiered Duplicates queue cache, verdict memory and scan progress (§22.6). Additive, and deliberately no `NULL` reset: tier 1 reuses the existing `pixel_sha` column and the runtime `MissingPixelShaFinder` backfills rows where it is `NULL` (§22.1) |
+
+Current head: `0088_add_dedup_tier_tables`.
 
 ---
 
@@ -976,7 +998,7 @@ Current head: `0087_add_entity_project_membership`.
 └── reference-folders/         # If configured
 ```
 
-- `pixel_sha` (SHA-256 of decoded pixels) is used for import deduplication.
+- `pixel_sha` (indexed) is used for import deduplication and for §22's tier-1 exact-duplicate detection. It is a **SHA-256 over the file's bytes** (not over decoded pixels, despite the name), and it is **sampled** above 128 KiB: `ImageUtils._calculate_sha256_digest` digests 8 chunks of 8 KiB spread across the file rather than every byte. Anything comparing on it should pair it with `size_bytes` — see §22.1.
 - Watermarks are rendered on demand and cached in memory.
 
 ### Database
@@ -1682,8 +1704,421 @@ A handler that is a bulk action in its own right (the scrapheap move/restore) pa
 
 **Deliberately NOT recorded in this lane** (decided, not overlooked): `POST /pictures/{id}/tag_predictions/delete`, `POST /pictures/{id}/reset_tags` and `POST /pictures/{id}/reset_description`. All three exist to *trigger re-inference* — they drop machine output and queue the tagger/captioner to regenerate it. Their undo semantics are genuinely different (restoring the old rows would immediately be overwritten by the pass they started, and "undo" would have to mean cancelling a queued job), so they need a design of their own rather than a facet.
 
+### 21.3 Post-restore hooks — reopening what an operation also decided
+
+The recorded before/after state covers the reversible **picture** facets. An
+operation can additionally have decided something that is *not* a picture facet,
+and restoring the pictures without reopening that decision leaves the two halves
+disagreeing. The v1.9 duplicate verdict is the first such case, and QA
+caught it half-working: undoing a stack verdict unstacked the pictures but left the
+`DedupVerdict` decided and the `DedupGroup` resolved, so the group never returned
+to the queue, was not counted, and **survived a rescan** (the signature still
+carried a live verdict). The only way back was a `POST /dedup/verdicts/reopen`
+no user could find.
+
+`register_post_restore_hook(op_type, hook)` is the generic seam. `_restore` — the
+one place both undo and redo write state — dispatches the registered hooks after
+every state has been applied and **before the commit**, so the decision and the
+pictures land in one transaction or not at all; a hook that raises aborts the
+whole restore and the operation stays `applied`.
+
+- The hook is called **once per restore** with *every* operation of its own
+  `op_type` in that restore (`(session, operations, direction)`), so a 2 700-row
+  batch undo is one call, not 2 700.
+- `direction` is `RESTORE_UNDO` / `RESTORE_REDO`.
+- **The op-log core imports no feature module.** Registration lives in the
+  feature that owns the `op_type` — `dedup_verdict_service` registers at import
+  time and is imported by `routes/dedup.py`, which `Server` mounts at startup.
+  An `op_type` with no hook simply has none.
+
+Pinned by `tests/test_operation_log.py::test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch`
+and `::test_a_failing_post_restore_hook_aborts_the_whole_undo`.
+
+### 21.4 `batch_id` is namespaced
+
+`new_batch_id()` mints `srv-<uuid4hex>` (`SERVER_BATCH_ID_PREFIX`). A batch id can
+also come from a client, and the two must be distinguishable: an un-namespaced id
+makes a client-supplied grouping key indistinguishable from a server-minted one,
+so a client could submit an id that reads as a server batch — or graft its rows
+into an existing batch, where one Ctrl+Z then reverses more than the user did.
+There are two client entry points, one contract (`^cli-[A-Za-z0-9_-]{4,76}$`,
+≤80 chars): the `X-Operation-Batch-Id` **header** (§21.2's gesture coalescing,
+validated in `utils/request_origin.py`) and the dedup verdict **body** field
+(validated in `routes/dedup.py`), refused with a **400** when it does not match.
+Note the deliberate asymmetry between the two: an unusable *header* is dropped
+and ignored because a header is ambient; an unusable *body* field is a refusal,
+because the client named it on purpose and silently ignoring it would mis-group
+its undo.
+
 ---
 
-*Last updated: 2026-07-28. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
+
+The Duplicates queue is filled by three tiers of increasing cost and decreasing
+certainty. Detection lives in `pixlstash/services/dedup_tier_service.py`; what
+happens when the user decides lives in `pixlstash/services/dedup_verdict_service.py`.
+The shipped `dedup_sweep_service.py` dry-run planner is unchanged and remains the
+non-destructive foundation the whole feature is built on.
+
+### 22.1 Tier 1 — exact, and the hash decision
+
+Tier 1 is `GROUP BY pixel_sha, size_bytes HAVING count(*) > 1` on the **existing
+indexed `picture.pixel_sha` column**. No new hash column was added.
+
+Be honest about what `pixel_sha` is. `ImageUtils._calculate_sha256_digest` hashes
+the whole file only up to 128 KiB; above that it samples 8 chunks of 8 KiB spread
+across the file. So it is a *sampled* content digest, not a full-file SHA-256, and
+two files could in principle share one while differing in an unsampled region.
+
+Two consequences, both deliberate:
+
+- **`size_bytes` is a co-key, not decoration.** The sample offsets are derived from
+  the file size, so equal size plus equal sampled digest is a far stronger claim
+  than the digest alone. It costs nothing — the `pixel_sha` index already narrows
+  the group.
+- **Exact matches still go through a consent dialog.** `POST /dedup/auto-stack`
+  defaults to `dry_run=true`; the design deliberately does not stack exact matches
+  at import without the user seeing the count first. The worst case of a false
+  exact match is two different pictures in one *stack*, which is reversible with
+  one keystroke and destroys nothing.
+
+A new full-file hash column was considered and rejected: it would mean re-reading
+every byte of every file in the library on upgrade to buy a guarantee this feature
+does not need. `pixel_sha` is already computed incrementally on every import path;
+`MissingPixelShaFinder` / `PixelShaTask` (`TaskType.PIXEL_SHA`) backfill the rows
+that predate it, selecting on `pixel_sha IS NULL` — which is why migration
+`0088` contains no `NULL` reset.
+
+### 22.2 Tier 2 — bucketed near, and what "bucket" reuses
+
+Perceptual hashes are compared **only within candidate buckets**, never
+library-wide. `build_near_buckets()` emits four bucket kinds from columns the
+library already maintains:
+
+| Bucket kind | Column | Catches |
+|---|---|---|
+| `size_bin` | `picture.size_bin_index` (indexed `(w << 32) + h`) | re-saves, re-encodes, burst frames |
+| `capture_minute` | `created_at` truncated to the minute | bursts, re-exports that changed size |
+| `import_folder` | `picture.import_source_folder` (indexed) | one import run |
+| `folder` | parent directory of `file_path` | a duplicated folder |
+
+A picture belongs to several buckets; that is the point. Buckets over
+`MAX_BUCKET_MEMBERS` (4000) are **split into shards**, never dropped, so no
+candidate is silently skipped.
+
+Inside a bucket the comparison is a numpy XOR plus a SWAR popcount over the 64-bit
+dHash in `picture.perceptual_hash`, with
+`similarity = 1 - hamming / 64`. A 4000-member bucket is ~8M popcounts, which is
+milliseconds.
+
+**`LikenessParameter.PHASH_PREFIX` is deliberately not used as a bucket key.**
+Despite the name it stores the *entire* 64-bit dHash linearly normalised into
+`[0, 1]` (`int(phash[:16], 16) / (2**64 - 1)`), so numeric proximity in that slot
+is dominated by the top bit and says nothing about Hamming proximity.
+`LikenessUtils.PHASH_PREFIX_LEN = 3` is dead code with no reader. The reusable
+precomputed bucket key is `size_bin_index`, and that is what tier 2 uses.
+
+**Memory is bounded separately from CPU.** `MAX_BUCKET_MEMBERS` caps the
+comparison *work*; it does not cap the *result*. A bucket whose members are
+mutually near-identical (a burst of near-black frames, a folder of solid-colour
+placeholders, one image copied 4000 times) yields `k*(k-1)/2` pairs — ~8M tuples,
+roughly 580 MB, for a component the union-find only needs a spanning subset of.
+Two further caps, both logged when they bite (never silent):
+
+| Constant | Value | Bounds |
+|---|---|---|
+| `MAX_PAIRS_PER_BUCKET` | 50 000 (~4 MB) | pairs materialised for one bucket |
+| `MAX_TRACKED_PAIRS` | 400 000 (~32 MB) | pairs a whole streaming scan retains across buckets |
+
+**The per-bucket cap can lose membership, and the log says so.** Pairs are
+emitted in increasing member-offset order, so the cap keeps the nearest-offset
+edges and drops every wider one. In a *uniformly* near-identical bucket that is
+harmless — the offset-1 edges alone span the block — and the only loss is
+confidence *resolution*. In a **dense but non-uniform** block it is not: ~700
+mutually matching members exhaust 50 000 pairs well inside the low offsets, so a
+member whose only match sits at a wider offset gets no edge at all and is split
+into its own group or drops out of the queue entirely. An earlier version of this
+paragraph claimed membership was never lost; that was wrong. The warning now
+names the bucket, the offset it stopped at, and that consequence, and states the
+mitigations (resolve the dense block and rescan, narrow the bucket, or raise
+`MAX_PAIRS_PER_BUCKET` for the memory it costs). Hitting the scan-wide cap stops
+cross-bucket chaining growing, so a chain spanning two buckets can be reported as
+two groups. Both log a warning naming the bucket or scan and what was given up.
+
+### 22.3 Tier 3 — embedding
+
+Opt-in, and recomputes nothing: it folds the existing `PictureLikeness` edge table
+into components through the shipped `dedup_sweep_service.stream_likeness_edges` /
+`_LikenessForest`. Its groups append to the same queue.
+
+### 22.4 Policy: tier gating replaces the auto/review split
+
+`TierPolicy` is the queue's policy surface and supersedes `SweepPolicy`'s
+auto/review split *for the queue* (`SweepPolicy` remains the parameter object for
+the dry-run planner, unchanged).
+
+- Tier 1 is always included and **has no switch**.
+- Each looser tier is a separate opt-in, and `embedding_enabled` **requires**
+  `near_enabled`.
+- `threshold` defaults to `0.90`; `MIN_THRESHOLD = 0.65` is a hard floor. It is
+  never silently clamped: a low threshold produces confident-looking garbage and
+  destroys trust in the sidebar count. **The refusal is a 422, not a 400.** The
+  floor is a pydantic `ge=MIN_THRESHOLD` bound on the query parameter and on
+  `TierPolicyModel.threshold`, so FastAPI rejects a low value before any handler
+  runs, on every route. `TierPolicy.__post_init__` keeps its own `ValueError`
+  check because it is the *service-level* invariant — reachable from a task or a
+  test that never went through a request — and the tier-dependency rule it also
+  enforces (`embedding_enabled` requires `near_enabled`) is not expressible as a
+  field bound, so **that** one is the 400 the handlers translate.
+
+### 22.5 Cover selection and evidence
+
+Cover score is `megapixels*4 + tags*3 + score*2 + 8 if RAW`; highest wins, ties
+break to the **oldest capture time**, then to the lowest id. It is always exposed
+as a *preselection* the user overrides, together with:
+
+- **group evidence** — matching pills and evidence-against pills (different
+  resolution / aspect ratio / file format), so a group carrying red pills is
+  visibly the one that needs Compare;
+- **per-candidate evidence** — what each candidate is best at and where it loses,
+  plus its numeric `cover_score`.
+
+The server reports reasons. The user concludes.
+
+### 22.6 Persistence: four tables
+
+`pixlstash/db_models/dedup.py`, migration `0088_add_dedup_tier_tables`:
+
+- **`dedupgroup` / `dedupgroupmember`** — the found-groups cache. Detection
+  *upserts on `signature`*, so a rescan refreshes rows instead of duplicating
+  them, and the queue is paged from `(resolved, confidence DESC)` and never
+  materialised whole. This is what makes 10 groups and 10,000 cost the same.
+
+  **The upsert honours tier precedence** (`TIER_STRENGTH`: exact > near >
+  embedding). Two tiers routinely find the *same* group — a byte-identical pair
+  is also perceptually identical, so every near-enabled scan rediscovers every
+  exact pair under the same signature — and the upsert originally wrote
+  `row.tier` unconditionally. An exact pair silently demoted to `near`
+  disappeared from the exact-only default view **and** from
+  `POST /dedup/auto-stack`, which only ever acts on `exact`. Tier, confidence,
+  evidence and cover move together (they describe one finding); membership is
+  refreshed either way, because the signature pins the member *content keys* and
+  a re-import can give the same content new picture ids. Pinned by
+  `test_a_near_scan_does_not_downgrade_an_exact_group` and
+  `test_the_upsert_takes_the_stronger_tier_in_either_arrival_order`.
+- **`dedupverdict`** — verdict memory keyed on the group **signature**: `sha256`
+  of the sorted member content keys, where a content key is
+  **`<pixel_sha>:<size_bytes>`** (or `id:<n>` for a picture not yet hashed).
+  Because the key is content and not ids, a rescan or a re-import never re-asks.
+  `reopened_at` marks a verdict as no longer live; the row is kept so the
+  decision history survives.
+
+  **The size co-key is not optional.** Identity has to match detection: tier 1
+  groups on `(pixel_sha, size_bytes)` precisely because the digest is sampled
+  above 128 KiB. A signature over the digest alone was not injective over groups
+  — two distinct exact groups differing only in size collapsed onto one
+  signature, and all three consequences were silent: the upsert-on-signature
+  dropped one group from the queue, a `keep_separate` on the survivor resolved
+  both file sets, and a stack verdict's write target depended on scan order
+  rather than on what the user saw. Pinned by
+  `test_two_groups_sharing_a_digest_but_not_a_size_stay_distinct`.
+- **`dedupscan`** — one row per scope key, both the scan *request* (status
+  `pending`) and the "scanned N of M" progress readout.
+
+`prune_stale_groups_in_session()` removes groups whose live membership has
+dropped below two, so the sidebar badge cannot be inflated by scrapheaped
+pictures. Prune only runs on a verdict or a scan, so the counts and the open
+queue additionally filter on the spot (`_live_groups_filter`): a group counts
+only while it still POSES a decision — two or more live members spanning two
+or more stack units (`COALESCE(stack_id, -id)`). The stack-unit half exists
+because the grid's own stack actions never touch `dedupgroup`: an exact pair
+the user stacked by hand stayed "unresolved" and was re-offered forever
+(found in the wild as 21 zombie groups, 2026-07-29). A group where a stack
+would still fold something in — two stacks, or a stack plus a loner — keeps
+counting.
+
+**Scope ids are normalised and validated at construction** (`DedupScope.__post_init__`),
+not at query time. Project / set / character ids must parse as integers. A
+**folder** `scope_id` is stripped of trailing separators and **refused when that
+leaves it empty**: `/`, `\`, `///` all rstripped to `""`, which became a `LIKE`
+pattern of `%` — a "Find duplicates in this folder" request that silently meant
+the whole vault, plus a persisted `dedupscan` row whose `scope_key` claimed
+otherwise. Normalising at construction also collapses `/photos` and `/photos/`
+onto one scope key instead of two scans.
+
+### 22.7 Paging the queue: a keyset cursor, not an offset
+
+`GET /dedup/groups` pages by an **opaque keyset cursor**. The queue is a live
+list: a verdict removes the row the user just decided from `resolved=False`, and
+a tier-2 scan commits new groups after every bucket. Both shift every later row's
+offset, so `offset=limit` on the next request skips exactly as many groups as the
+page's decisions removed — a deterministic, silent skip reproduced with a single
+verdict between two pages.
+
+- **Order is `(confidence DESC, id ASC)`**, and the cursor encodes that pair for
+  the last delivered row. Wire form: unpadded base64url over
+  `"1|<confidence at %.17g>|<group id>"` (`CURSOR_VERSION` is the leading `1`).
+  17 significant digits make the float round-trip exactly, which the tie-break
+  branch depends on.
+- **The tie-break half is load-bearing.** Every exact group sits at the same
+  confidence, so `confidence < c` alone would drop the rest of the tied run and
+  `confidence <= c` would repeat it forever. The predicate is
+  `confidence < c OR (confidence = c AND id > i)`.
+- `next_cursor` is `null` once the page is not full — end-of-found. A full last
+  page hands back a cursor that yields one empty page, which is cheaper than the
+  extra `COUNT` needed to know for certain.
+- **Opaque by intent.** Clients pass it back verbatim. A cursor this server did
+  not mint is a **400**, never a silent restart from the top — silently paging
+  from offset 0 would hand the client page 1 forever.
+- `offset` still works and is **deprecated**; sending both is a **400** rather
+  than a silent preference, because a client that sends both has two different
+  ideas of where it is.
+
+### 22.8 Streaming and the background path
+
+`DedupScanFinder` / `DedupScanTask` (`TaskType.DEDUP_SCAN`) turn a `pending`
+`dedupscan` row into work. Tier 1 runs first and in one shot so the queue is never
+empty; tier 2 then commits **after each bucket**, so a bucket's groups appear in
+the queue the moment that bucket finishes and `scanned_buckets` advances with it;
+tier 3 appends last. Restarting a scan is safe because persistence is an upsert.
+The finder `depends_on` `PIXEL_SHA` and `IMAGE_EMBEDDING` so a scan reports honest
+counts rather than a partially hashed library.
+
+**Only the groups a bucket could have changed are re-persisted.** Pairs are
+retained across buckets so a chain spanning two of them folds into one group, but
+each bucket tracks the picture ids its *new* pairs touched and rewrites only the
+groups containing one of them. The earlier version re-derived and re-wrote **every
+group after every bucket** — `O(buckets × groups)` DELETE+INSERT on the single DB
+writer thread, which every import, tag edit, scrapheap move and verdict then
+queues behind.
+
+**Honest scope of the performance claim.** §22.6's "10 groups and 10,000 perform
+identically" is a statement about the **queue page**, which reads exactly `limit`
+rows. It is *not* a statement about the scan: a scan is inherently proportional to
+the library, it holds the single DB writer while it runs, and its memory is bounded
+by the caps in §22.2 rather than being free.
+
+### 22.9 Verdicts and the metadata union
+
+The only two verdicts are **stack** and **keep separate**. Neither deletes
+anything; there is no destructive route on this surface in 1.9.
+
+Stacking applies the metadata union onto every member:
+
+| What | Behaviour |
+|---|---|
+| project + set membership | union, via the existing `reconcile_stack_membership` |
+| tags | union of every non-sentinel tag; `__tag` / `__tag:<engine>` markers are excluded so an already-tagged picture is not re-queued |
+| score | every member lifted to `max(score)`; never lowered |
+| characters | see below |
+
+**Characters are the one honest limitation.** A face carries a bbox and an
+embedding that belong to one specific picture, so a true face-to-character union
+would mean fabricating `Face` rows. Instead, when the group's members between them
+reference exactly **one** character, members that do not already carry it get
+`Picture.pending_character_id` (the shipped deferred-assignment mechanism the face
+extraction task consumes). A group spanning several characters is left alone and
+logged.
+
+The union writes tags and scores, which are curation state, so it calls
+`enforce_pictures_not_locked` first: a locked-set member makes the whole verdict a
+423 rather than a half-applied union.
+
+**Guard ordering is load-bearing.** `_stack_members` calls
+`enforce_stack_membership_not_locked` **before** it folds any other stack in, and
+that guard expands through `expand_picture_ids_to_stacks` — which is why a locked
+co-member dragged in by the fold is caught even though
+`apply_metadata_union_in_session` only checks the group's own members. Moving the
+lock check after the fold would open that hole. Pinned by
+`test_a_locked_co_member_of_a_folded_stack_is_refused`.
+
+#### Accepted risk A1 — the union widens live share tokens
+
+**This is a change to who can see what, not only to metadata.** Unioning set and
+project membership adds an out-of-scope duplicate to a *shared* set, and every
+live share token for that set immediately reaches it — the picture, its tags, its
+`pixel_sha`, its file. The authz gate is behaving correctly (the picture genuinely
+*is* a set member after the union); the widening is the membership change itself.
+
+- **Not new.** An ordinary `POST /stacks` does exactly the same thing; this is the
+  shipped stack-atomic membership model, not a dedup regression.
+- **What is new is the amplification.** `POST /dedup/auto-stack` with
+  `dry_run=false` applies it to **every exact group in the vault** behind one
+  consent dialog. The dry run reports `groups` / `pictures` and a
+  `dry_run_summary`, but **not** how many shared sets or live tokens would gain
+  members.
+- **Blast radius.** Bounded to the owner's own sharing decisions: only sets and
+  projects that already have an outstanding token, and only pictures the owner has
+  just declared duplicates of something already in that set.
+- **Compensating controls.** `dry_run=true` is the default; the union is additive
+  and reversible through the operation log; tokens are owner-minted and READ-only;
+  a locked set refuses the union outright.
+- **Ruling: accepted** for the single-owner product. **Revisit** at the start of
+  any multi-user work, and immediately if bulk auto-stack is ever wired to run
+  unattended (at import or on a schedule) — unattended bulk membership widening is
+  a different risk and this acceptance does not cover it.
+- **Recommended, not implemented:** a `shared_sets_affected` count in the dry-run
+  summary so the consent dialog can say so out loud.
+
+### 22.10 Operation-log integration (§21)
+
+Every stack verdict records **exactly one** `Operation` row.
+
+- **One verdict, one row.** The verdict path deliberately does *not* call
+  `routes/stacks.py`, whose handlers already wrap themselves in
+  `run_recorded_metadata_task`; going through them would write a second row and
+  "one verdict, one undo" would stop being true. `_stack_members` stacks
+  in-session and `_record_operation` records once around the whole verdict.
+- **Bulk auto-stack shares one `batch_id`** across every group in the run, so
+  `POST /operations/batches/{batch_id}/undo` reverses the lot in one step. The
+  response carries the `batch_id` **even when the run only partially applied**
+  (see below), so work that happened is never left without a way to reverse it.
+- **The snapshot is stack-expanded**, taken over `expand_picture_ids_to_stacks`
+  with `include_deleted=True`: folding a stack reparents co-members the group
+  never named, and `normalize_stack_positions` renumbers soft-deleted members too
+  (§21.1). Both are pinned by non-vacuous tests.
+- **Keep-separate and reopen record nothing.** Neither changes a reversible
+  picture facet, so `record_operation_in_session` would return `None` anyway;
+  writing a no-op row would still consume a Ctrl+Z. The way back from
+  keep-separate is the explicit reopen action.
+- **A stack verdict is always recorded under a `batch_id`**, minted server-side
+  (`srv-…`, §21.3) when the caller supplies none. The batch id is what ties the
+  `Operation` row back to its `DedupVerdict` row, and that correlation is what
+  makes the undo complete — see below.
+- **Undo reopens the verdict, not only the pictures.** `restore_verdicts_in_session`
+  is registered as the §21.2 post-restore hook for `dedup.stack`. On **undo** it
+  stamps `reopened_at` on every verdict in the restored batches (the row is kept
+  — the decision history is worth keeping) and sets its group `resolved=False`;
+  on **redo** it clears `reopened_at` and re-resolves the group. `decided_at` is
+  never re-stamped: it records when the user decided, and "live" is exactly
+  `reopened_at IS NULL`. One query covers a 2 700-group batch undo. Without this
+  the undo was half an undo: the pictures came back unstacked while the group
+  stayed decided, invisible in the queue and in the counts, and it **survived a
+  rescan** because `verdict_signatures_in_session` still saw a live verdict.
+  Pinned at the HTTP level by `test_undo_returns_the_stacked_group_to_the_queue`,
+  `test_batch_undo_after_auto_stack_returns_every_group` (QA's exact repro) and
+  `test_an_undo_does_not_reopen_a_group_it_never_touched`.
+- **A pre-existing row without a batch id cannot be correlated**, and the hook
+  says so with a warning naming the operation ids rather than half-restoring in
+  silence: the pictures are back, the group stays decided until the user reopens
+  it explicitly.
+- **Origin discipline.** `actor` / `source` / `origin_client_id` come from
+  `operation_log_service.request_context(request)`, read in the handler on the
+  request's own task and passed down explicitly — never from the contextvar, which
+  is dead on the DB worker thread. Only the two recording handlers take a
+  `Request`; keep-separate and reopen deliberately do not, since the values would
+  be dead arguments.
+
+**A bulk run is never aborted by one bad group.** The locked-set guards raise
+`HTTPException(423)`, so the loop catches that alongside `DedupVerdictError`,
+rolls back just that iteration, and records the group under an explicit outcome:
+`applied`, `blocked` (a guard refused it) or `failed` (it could not be resolved).
+Catching only `DedupVerdictError` meant a locked group mid-run propagated out
+after earlier groups had already committed — a partially applied mutation whose
+server-minted batch id the caller never saw.
+
+---
+
+*Last updated: 2026-07-29. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

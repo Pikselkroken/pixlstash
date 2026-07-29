@@ -454,6 +454,82 @@ def test_no_duplicate_reference_picture_sets():
         gc.collect()
 
 
+def test_set_view_represents_a_stack_by_its_in_set_member():
+    """A stack whose leader is OUTSIDE the set must not vanish from the set view.
+
+    Legacy stacks predating the stack-atomic invariant can leave a set holding
+    a non-leader member whose cover is not in the set; the collapsed grid then
+    rendered NEITHER picture (the owner's #670/#1746 report: six members, five
+    tiles, and no stack in sight). The listing now represents such a stack by
+    its lowest-positioned member INSIDE the id filter, stack fields intact so
+    the tile still wears its badge.
+    """
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        import glob
+
+        from pixlstash.db_models import Picture, PictureSetMember
+
+        image_candidates = glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
+        ) + glob.glob(
+            os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg")
+        )
+        assert len(image_candidates) >= 2, "Need at least 2 test images"
+
+        def upload_image(path):
+            mime_type = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+            with open(path, "rb") as f:
+                result = upload_pictures_and_wait(
+                    client,
+                    [("file", (os.path.basename(path), f, mime_type))],
+                )
+            return result["results"][0]["picture_id"]
+
+        pic_a = upload_image(image_candidates[0])
+        pic_b = upload_image(image_candidates[1])
+        stack_resp = client.post("/stacks", json={"picture_ids": [pic_a, pic_b]})
+        assert stack_resp.status_code == 200, stack_resp.text
+
+        def read_positions(session):
+            return {
+                pid: session.get(Picture, pid).stack_position
+                for pid in (pic_a, pic_b)
+            }
+
+        positions = server.vault.db.run_task(read_positions)
+        leader = pic_a if positions[pic_a] == 0 else pic_b
+        member = pic_b if leader == pic_a else pic_a
+
+        set_resp = client.post("/picture_sets", json={"name": "LegacySet"})
+        assert set_resp.status_code == 200, set_resp.text
+        set_id = set_resp.json()["picture_set"]["id"]
+
+        # Simulate the legacy shape DIRECTLY: a membership row for the
+        # non-leader only, bypassing the stack-atomic members endpoint.
+        def seed(session):
+            session.add(PictureSetMember(set_id=set_id, picture_id=member))
+            session.commit()
+
+        server.vault.db.run_task(seed)
+
+        listed = client.get(f"/pictures?set_id={set_id}&fields=grid")
+        assert listed.status_code == 200, listed.text
+        rows = listed.json()
+        assert [row["id"] for row in rows] == [member]
+        assert rows[0]["stack_id"] is not None
+
+        # The unscoped grid is untouched: the true leader represents the stack.
+        all_rows = client.get("/pictures?fields=grid").json()
+        all_ids = [row["id"] for row in all_rows]
+        assert leader in all_ids
+        assert member not in all_ids
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
 def test_members_endpoint_expands_stack_siblings():
     """Sets are stack-atomic: adding any member of a stack adds every member.
 

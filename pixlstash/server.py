@@ -54,6 +54,7 @@ from pixlstash.routes.picture_sets import create_router as create_picture_sets_r
 from pixlstash.routes.projects import create_router as create_projects_router
 from pixlstash.routes.tags import create_router as create_tags_router
 from pixlstash.routes.stacks import create_router as create_stacks_router
+from pixlstash.routes.dedup import create_router as create_dedup_router
 from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
@@ -1070,6 +1071,12 @@ class Server(
             create_stacks_router(self),
             prefix=API_V1_PREFIX,
             tags=["stacks"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_dedup_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["dedup"],
             dependencies=gate,
         )
         # tag_predictions must be registered before pictures so that the

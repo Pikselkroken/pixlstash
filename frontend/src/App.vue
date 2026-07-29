@@ -33,6 +33,7 @@ import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import { useDedupStore } from "./stores/useDedupStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -47,6 +48,7 @@ import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
+import DuplicateQueue from "./components/views/DuplicateQueue.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
@@ -77,6 +79,7 @@ const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const lockedSetsStore = useLockedSetsStore();
 const operationStore = useOperationStore();
+const dedupStore = useDedupStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 const viewStore = useViewStore();
@@ -528,6 +531,14 @@ function refreshSidebar(options = {}) {
   // which also fires on a lock/unlock PATCH's CHANGED_PICTURES event). The store
   // coalesces overlapping fetches, so calling it here on every refresh is cheap.
   lockedSetsStore.fetch();
+  // The duplicates badge rides the same triggers: an import, a stack or a
+  // verdict all move the count, and every one of them already causes a sidebar
+  // refresh. The per-scope cache goes with it, since a context menu opened
+  // afterwards must not quote a pre-change number.
+  if (!isReadOnly.value) {
+    dedupStore.invalidateScopeCounts();
+    dedupStore.refreshCounts();
+  }
 }
 
 function refreshSidebarDebounced() {
@@ -1014,6 +1025,34 @@ function pushRouteForCurrentSelection() {
     params: { id: String(sel.selectedCharacter) },
     query,
   });
+}
+
+// The Duplicates destination is addressed by route name, not by a sentinel in
+// the selection store: it shows no pictures, so it has no selection to express.
+const isDuplicatesView = computed(() => route.name === "duplicates");
+
+/**
+ * Open the duplicate triage queue, optionally scoped to one collection object.
+ *
+ * The scope travels in the query rather than in a store, so a scoped queue is a
+ * link the user can bookmark and reload, and a back-navigation out of one lands
+ * somewhere that still makes sense.
+ *
+ * @param {Object} [scope]
+ * @param {string} [scope.type] - "project", "set", "character" or "folder".
+ * @param {number|string} [scope.id]
+ * @param {string} [scope.label] - what the scope pill reads.
+ * @param {string} [scope.icon] - the pill's mdi glyph.
+ */
+function handleSelectDuplicates(scope = {}) {
+  const query = {};
+  if (scope.type && scope.type !== "library") {
+    query.scope = scope.type;
+    if (scope.id !== undefined && scope.id !== null) query.scope_id = scope.id;
+    if (scope.label) query.scope_label = scope.label;
+    if (scope.icon) query.scope_icon = scope.icon;
+  }
+  pushAppRoute({ name: "duplicates", query });
 }
 
 // Route -> stores: install the app's single route watcher (immediately on
@@ -2089,6 +2128,8 @@ defineExpose({
             @update:selected-project-id="handleUpdateSelectedProjectId"
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
+            :isDuplicatesView="isDuplicatesView"
+            @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
             @update:folder-scanning="folderScanning = $event"
@@ -2188,7 +2229,13 @@ defineExpose({
                 overflow: hidden;
               "
             >
+              <!-- Duplicates is a destination, not a filter, so it replaces
+                   the grid rather than floating over it. The grid stays
+                   unmounted while the queue is open, which is also what keeps
+                   its fetches and its WebSocket reconciliation quiet. -->
+              <DuplicateQueue v-if="isDuplicatesView" />
               <ImageGrid
+                v-else
                 ref="gridContainer"
                 :thumbnailSize="gridStore.thumbnailSize"
                 :sidebarVisible="sidebarStore.sidebarVisible"
@@ -2228,6 +2275,7 @@ defineExpose({
                 :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
                 :faceBboxFilter="filterStore.faceBboxFilter"
                 :impossibleSources="filterStore.impossibleSources"
+                :stackStateFilter="filterStore.stackStateFilter"
                 :sharedOnlyFilter="filterStore.sharedOnlyFilter"
                 :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
                 :showFaceBboxes="gridStore.showFaceBboxes"
@@ -2307,6 +2355,7 @@ defineExpose({
                 "
                 @update:match-count="gridStore.matchCount = $event"
                 @update:overlay-open="lightboxOpen = $event"
+                @open-duplicates="handleSelectDuplicates({})"
                 @open-settings="openSettingsDialog"
                 @open-import="openImportDialog"
                 @local-import="handleLocalImport"

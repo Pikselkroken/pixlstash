@@ -32,7 +32,7 @@ the other two test layers:
 | Frontend units | Vitest | pure utils / pure logic |
 | **End-to-end** | **Playwright** | **the built SPA + a live backend, one origin** |
 
-There are **21 specs** today, all green locally. Each spec maps to a section of
+There are **22 specs** today, all green locally. Each spec maps to a section of
 [`docs/release-test-plan.md`](release-test-plan.md), so the manual release
 checklist shrinks as e2e coverage grows.
 
@@ -58,6 +58,8 @@ checklist shrinks as e2e coverage grows.
 | §19 Grid live-update | [`grid-own-change-no-pill.spec.js`](../frontend/e2e/specs/grid-own-change-no-pill.spec.js), [`grid-external-change-pill.spec.js`](../frontend/e2e/specs/grid-external-change-pill.spec.js), [`grid-injection.spec.js`](../frontend/e2e/specs/grid-injection.spec.js), [`grid-overlay-deferral.spec.js`](../frontend/e2e/specs/grid-overlay-deferral.spec.js) | WebSocket refresh: own change raises no pill, external raises the right pill, injection origin-suppression, flood coalescing, overlay deferral |
 | §20 Review Sessions | [`review-board.spec.js`](../frontend/e2e/specs/review-board.spec.js) | Tag-health board (9 cases): open, render columns, rebuild control, Why column, filter, sort, anomalies toggle, Start-review row (drives the real `tag_health` cache) |
 | §20 Review Sessions | [`review-session.spec.js`](../frontend/e2e/specs/review-session.spec.js) | Session loop (7 cases): create, binary Yes/No mapping + tally + backend receipt, and Escape-close run green (**BUG-RS-1 render crash resolved**); four further cases — Undo, Skip, keyboard, queue completion/archive — stay `test.fixme`'d for reasons unrelated to BUG-RS-1 (see docs/regular-tests.md §Review Sessions) |
+
+| §21 Duplicates | [`dedup.spec.js`](../frontend/e2e/specs/dedup.spec.js) | Keyboard triage (6 cases): arrow navigation and focus clamping, the `X` exclusion floor and its refusal, `C` opens Compare and Escape closes it, `Enter` stacks (asserted against the server's stack) with auto-advance and a moving sidebar badge, `S` keeps separate, and the done state. **Requires the `/dedup` backend branch**; seeds its own duplicates (see below) |
 
 Still manual (candidates for future specs): §14 Tag predictions, §15 Export,
 and the Selection ▾ ↔ context-menu parity comparison (#403).
@@ -106,6 +108,33 @@ gitignored `.auth/` dir for the duration of the run.
 > (`disable_rate_limit` / `rate_limit_max_requests` / `rate_limit_window_seconds`),
 > whose defaults are unchanged for production.
 
+### The duplicates seed
+
+The fixture holds no byte-identical duplicates, and the harness cannot create
+any through the product: `POST /pictures/import` refuses without the
+face-extraction worker, a reference folder's initial scan is planner-driven, and
+a `DedupGroup` row is only ever written by `DedupScanTask` — all three ride on
+the work planner, which `disable_background_workers: true` switches off.
+Enabling the workers for the whole suite would start face extraction, quality
+scoring and captioning over the entire fixture on every run.
+
+[`seed_dedup_fixture.py`](../frontend/e2e/seed_dedup_fixture.py) does exactly
+what those disabled workers would have done and nothing else: it copies fixture
+images to new files, inserts a `picture` row per copy (same bytes, therefore the
+same `pixel_sha`, which is what tier 1 groups on) and then runs the **real**
+`DedupScanTask.run_scan_in_session`, so the groups, covers and evidence the spec
+drives are production output rather than fabricated rows. It touches only the
+throwaway work directory, never the committed `test-data/`.
+
+`dedup.spec.js` runs it in `beforeAll` and runs it again with `--cleanup` in
+`afterAll`. **That cleanup is not optional.** The suite shares one mutable
+backend and these are the only cases that add pictures and create stacks; the
+stack verdict's metadata union pulls the copies into the source picture's sets,
+and a set left counting copies that are then deleted is what makes the export
+and tag-health specs downstream fail. The cleanup removes the seeded pictures
+and every row hanging off them, unstacks and drops the stacks the verdicts
+created, and clears the dedup tables.
+
 ### Layout
 
 ```
@@ -118,6 +147,8 @@ e2e/
   specs/             one file per release-test-plan section
   global-setup.js    registers admin, mints token, saves session state
   serve_e2e_backend.py  the throwaway-backend launcher
+  seed_dedup_fixture.py seeds byte-identical duplicates and runs the real
+                        dedup scan; --cleanup undoes both (see above)
 ```
 
 ## 4. Running Locally

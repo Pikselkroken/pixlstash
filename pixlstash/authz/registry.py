@@ -452,6 +452,94 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
+    # ── dedup.py (near-duplicate sweep, dry run) ────────────────────────────
+    ("GET", "/api/v1/dedup/sweep/policy"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Sweep policy defaults/bounds for the vault-wide sweep; an "
+            "owner-only operator surface returning no per-object data"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/sweep/dry-run"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Vault-wide near-duplicate plan: counts and picture ids across the "
+            "whole library, which cannot be narrowed to a share token's scope "
+            "without leaking counts about out-of-scope pictures (same reasoning "
+            "as tag_health). POST is also blocked for READ tokens"
+        ),
+    ),
+    # ── dedup.py (v1.9 tiered duplicate queue) ──────────────────────────────
+    # Every route on this surface is OWNER_ONLY for one of two reasons, both of
+    # which are the tag-health reasoning: a vault-wide aggregate cannot be
+    # narrowed to a share token's scope without leaking the existence and count
+    # of out-of-scope pictures, and a verdict mutates stacks across arbitrary
+    # pictures that a scoped token has no business touching.
+    ("GET", "/api/v1/dedup/policy"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Tier defaults/bounds for the duplicate queue; an owner-only "
+            "operator surface returning no per-object data"
+        ),
+    ),
+    ("GET", "/api/v1/dedup/groups"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Returns duplicate groups with picture ids, dimensions and (for "
+            "reference-folder pictures) file paths from anywhere in the vault. "
+            "A group is defined by content identity, not by collection "
+            "membership, so it routinely spans a share token's scope boundary "
+            "and cannot be narrowed without leaking that out-of-scope copies "
+            "exist"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/counts"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Vault-wide and per-scope duplicate counts. Read-only but POST "
+            "because the scope list does not fit a URL; POST is also blocked "
+            "for READ tokens. Counts describe pictures outside any token's "
+            "scope (same reasoning as tag_health)"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/scan"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Queues a background scan over the whole vault or a chosen scope; "
+            "an owner-only maintenance trigger. POST is also blocked for READ "
+            "tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/verdicts/stack"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Mutates stack membership, tags, project/set membership and scores "
+            "across pictures identified only by a content signature, which can "
+            "name any picture in the vault. POST is also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/verdicts/keep-separate"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Writes a permanent verdict about an arbitrary set of vault "
+            "pictures. POST is also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/verdicts/reopen"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Reverses a stored verdict about an arbitrary set of vault "
+            "pictures. POST is also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/auto-stack"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Bulk stacking across the whole vault under one undo batch; the "
+            "most far-reaching mutation on this surface. POST is also blocked "
+            "for READ tokens"
+        ),
+    ),
     # ── characters.py ───────────────────────────────────────────────────────
     ("GET", "/api/v1/characters"): _LIST_AWARE,
     ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),

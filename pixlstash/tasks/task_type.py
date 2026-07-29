@@ -27,6 +27,8 @@ class TaskType(str, Enum):
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
     SCRAPHEAP_RETENTION_PURGE = "ScrapheapRetentionPurgeTask"
     THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
+    PIXEL_SHA = "PixelShaTask"
+    DEDUP_SCAN = "DedupScanTask"
 
     @staticmethod
     def all():

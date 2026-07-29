@@ -245,6 +245,48 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/stacks/{stack_id}/order` | owner_only |  | Reorder stack; PATCH blocked for READ tokens; owner only |
 | GET | `/api/v1/stacks/{stack_id}/pictures` | scoped_list |  |  |
 
+### dedup.py
+
+Added 2026-07-28 with the v1.9 near-duplicate sweep (Lane E). Both routes are new,
+carry no inline authz code (the gate is the sole enforcement, §16.1), and are
+covered in both directions by `tests/test_dedup_sweep_api.py`
+(`test_scoped_read_token_is_denied_on_both_routes` /
+`test_owner_reaches_both_routes`).
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/sweep/policy` | owner_only |  | Sweep policy defaults/bounds; operator surface, returns no per-object data |
+| POST | `/api/v1/dedup/sweep/dry-run` | owner_only |  | Vault-wide near-duplicate plan (counts + picture ids across the whole library); cannot be narrowed to a share token's scope without leaking out-of-scope counts, same reasoning as tag_health. POST also blocked for READ tokens |
+
+The eight routes below were added 2026-07-29 with the v1.9 tiered Duplicates queue
+(Lane 1A). All are new, none carries inline authz code (the gate is the sole
+enforcement, §16.1), and all eight are covered **in both directions** by
+`tests/test_dedup_tiers_api.py` — negative via `Authorization: Bearer` *and* via
+the `?token=` query-parameter path
+(`test_scoped_read_token_is_denied_on_every_route`), plus
+`test_a_denied_verdict_route_changed_nothing` (the 403 is fail-closed: no write
+happened) and `test_unauthenticated_is_denied`; positive on every route via the
+owner cookie session across the policy, queue, counts, scan, verdict and
+auto-stack tests.
+
+Two rationales apply. **Read routes:** a duplicate group is defined by *content
+identity*, not by collection membership, so it routinely spans a share token's
+scope boundary; narrowing it would leak that out-of-scope copies exist, which is
+the tag_health reasoning. **Write routes:** a verdict is addressed by a content
+signature that can name any picture in the vault and mutates stack membership,
+tags, project/set membership and scores, so there is no coherent scoped form of it.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/policy` | owner_only |  | Tier defaults/bounds; operator surface, returns no per-object data |
+| GET | `/api/v1/dedup/groups` | owner_only |  | Returns duplicate groups with picture ids, dimensions and (for reference-folder pictures) file paths from anywhere in the vault; content-identity grouping crosses any token scope |
+| POST | `/api/v1/dedup/counts` | owner_only |  | Vault-wide and per-scope duplicate counts. Read-only but POST because the scope list does not fit a URL; POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/scan` | owner_only |  | Queues a background scan over the vault or a chosen scope; owner-only maintenance trigger. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/stack` | owner_only |  | Mutates stack membership, tags, project/set membership and scores across pictures named only by a content signature. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/keep-separate` | owner_only |  | Writes a permanent verdict about an arbitrary set of vault pictures. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/verdicts/reopen` | owner_only |  | Reverses a stored verdict about an arbitrary set of vault pictures. POST also blocked for READ tokens |
+| POST | `/api/v1/dedup/auto-stack` | owner_only |  | Bulk stacking across the whole vault under one undo batch; the most far-reaching mutation on this surface. POST also blocked for READ tokens |
+
 ### characters.py
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |

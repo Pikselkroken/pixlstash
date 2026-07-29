@@ -1,4 +1,10 @@
 from .character import Character  # noqa: F401
+from .dedup import (  # noqa: F401
+    DedupGroup,
+    DedupGroupMember,
+    DedupScan,
+    DedupVerdict,
+)
 from .deleted_file_log import DeletedFileLog  # noqa: F401
 from .entity_project import (  # noqa: F401
     CharacterProjectMember,
