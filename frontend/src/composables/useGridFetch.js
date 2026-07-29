@@ -334,6 +334,11 @@ export function useGridFetch(
     (props.impossibleSources || []).forEach((s) =>
       params.append("impossible_tag_source", s),
     );
+    // "all" is the absence of the filter, so it is expressed by omission rather
+    // than by a sentinel the backend would have to know a second spelling for.
+    if (props.stackStateFilter && props.stackStateFilter !== "all") {
+      params.append("stack_state", props.stackStateFilter);
+    }
     if (props.sharedOnlyFilter) {
       params.append("shared_only", "true");
     }
@@ -387,6 +392,11 @@ export function useGridFetch(
     (props.impossibleSources || []).forEach((s) =>
       params.append("impossible_tag_source", s),
     );
+    // "all" is the absence of the filter, so it is expressed by omission rather
+    // than by a sentinel the backend would have to know a second spelling for.
+    if (props.stackStateFilter && props.stackStateFilter !== "all") {
+      params.append("stack_state", props.stackStateFilter);
+    }
     if (props.applyTagFilter) {
       params.append("apply_tag_filter", "true");
     }

@@ -1,14 +1,19 @@
 <template>
   <v-dialog
     :model-value="open"
-    :max-width="width"
+    :max-width="fullscreen ? undefined : width"
     :scrim="true"
     :persistent="persistent"
     transition="dialog-bottom-transition"
     @update:model-value="(v) => !v && emit('close')"
     @click:outside="emit('close')"
   >
-    <div class="app-dialog" :style="{ width: width + 'px' }" @keydown="onKeydown">
+    <div
+      class="app-dialog"
+      :class="{ 'app-dialog--fullscreen': fullscreen }"
+      :style="fullscreen ? undefined : { width: width + 'px' }"
+      @keydown="onKeydown"
+    >
       <header class="app-dialog__header">
         <div class="app-dialog__titlewrap">
           <h2 class="app-dialog__title">{{ title }}</h2>
@@ -53,6 +58,9 @@ const props = defineProps({
   // dialog where the nav rail and content own their own padding.
   padBody: { type: Boolean, default: true },
   persistent: { type: Boolean, default: false },
+  // Near-viewport-sized dialog for working surfaces (Compare) where the
+  // content is the point and a fixed width would waste the screen.
+  fullscreen: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["close", "accept"]);
@@ -174,6 +182,20 @@ function onKeydown(e) {
 .app-dialog__body {
   overflow-y: auto;
   padding: var(--space-6);
+}
+
+/* A working surface, not a form: take (nearly) the whole viewport and let the
+   body flex, so the content decides its own internal scrolling. */
+.app-dialog--fullscreen {
+  width: min(1800px, 96vw);
+  height: 94vh;
+}
+
+.app-dialog--fullscreen .app-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-dialog__body--flush {

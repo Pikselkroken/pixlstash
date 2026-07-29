@@ -418,11 +418,18 @@ def diff_states(
 SummarySpec = Union[str, Callable[[dict, dict], Optional[str]], None]
 
 
-# Server-minted batch ids are namespaced so a client-supplied correlation id
-# (``X-Operation-Batch-Id``, validated to the ``cli-`` namespace in
-# ``utils/request_origin.py``) can never collide with one and graft its own
-# requests onto a batch the server created.
 SERVER_BATCH_ID_PREFIX = "srv-"
+"""Namespace for a batch id the *server* minted.
+
+A batch id can also arrive from a client — the ``cli-`` shape, validated at
+both request boundaries (the ``X-Operation-Batch-Id`` header in
+``utils/request_origin.py``, the dedup verdict body field in
+``routes/dedup.py``) — and the two must be distinguishable in the log: an
+un-namespaced id makes a client-supplied grouping key indistinguishable from a
+server-minted one, so a client could graft its rows into what reads as a
+server batch. Every minting site in the backend goes through
+:func:`new_batch_id`.
+"""
 
 
 def new_batch_id() -> str:
@@ -1148,6 +1155,56 @@ def serialize(operation: Operation, include_state: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Post-restore hooks — reopening the domain state an operation also decided
+# ---------------------------------------------------------------------------
+
+RESTORE_UNDO = "undo"
+RESTORE_REDO = "redo"
+
+# op_type -> callback(session, operations, direction). Registered by the feature
+# that owns the op_type; this module never imports a feature module, so the core
+# stays free of domain knowledge and an unregistered op_type simply has no hook.
+#
+# Why hooks exist at all: the recorded before/after state covers the reversible
+# *picture* facets (:data:`FACETS`). An operation may additionally have decided
+# something that is not a picture facet — the v1.9 duplicate verdict is the first
+# — and restoring the pictures without reopening that decision leaves the two
+# halves disagreeing. The hook runs inside the restore's own transaction, after
+# every state has been applied, so the decision and the pictures commit together
+# or not at all.
+_POST_RESTORE_HOOKS: dict[str, Callable[[Session, list[Operation], str], None]] = {}
+
+
+def register_post_restore_hook(
+    op_type: str, hook: Callable[[Session, list[Operation], str], None]
+) -> None:
+    """Register *hook* to run after an ``op_type`` operation is undone or redone.
+
+    Args:
+        op_type: The ``Operation.op_type`` this hook owns.
+        hook: ``(session, operations, direction) -> None``, called **once** per
+            restore with every operation of this type in that restore (so a
+            batch of 2 700 rows is one call, not 2 700). *direction* is
+            :data:`RESTORE_UNDO` or :data:`RESTORE_REDO`. It runs on the
+            restore's session, before the commit, and must not commit: raising
+            aborts the whole undo, which is the intended fail-closed behaviour.
+    """
+    _POST_RESTORE_HOOKS[str(op_type)] = hook
+
+
+def _run_post_restore_hooks(
+    session: Session, operations: list[Operation], direction: str
+) -> None:
+    """Dispatch the registered hooks for *operations*, grouped by ``op_type``."""
+    by_type: dict[str, list[Operation]] = {}
+    for operation in operations:
+        if operation.op_type in _POST_RESTORE_HOOKS:
+            by_type.setdefault(operation.op_type, []).append(operation)
+    for op_type, members in by_type.items():
+        _POST_RESTORE_HOOKS[op_type](session, members, direction)
+
+
+# ---------------------------------------------------------------------------
 # Undo / redo
 # ---------------------------------------------------------------------------
 
@@ -1183,6 +1240,11 @@ def _restore(
 ) -> tuple[list[int], set[str], dict[str, list[int]]]:
     """Apply the before- (undo) or after- (redo) state of *operations* in order.
 
+    Once every state is written, the registered post-restore hooks run on this
+    same session (see :func:`register_post_restore_hook`) so an operation that
+    also decided something outside the picture facets can reopen that decision in
+    the same transaction. A hook that raises aborts the restore.
+
     Returns:
         ``(touched_ids, facets, lifecycle)`` where *lifecycle* is
         ``{"scrapheaped": [...], "restored": [...]}`` — the pictures this
@@ -1212,6 +1274,9 @@ def _restore(
         moved_out, moved_in = lifecycle_split(state)
         scrapheaped.update(moved_out)
         restored.update(moved_in)
+    _run_post_restore_hooks(
+        session, operations, RESTORE_UNDO if to_before else RESTORE_REDO
+    )
     lifecycle = {
         "scrapheaped": sorted(scrapheaped),
         "restored": sorted(restored),

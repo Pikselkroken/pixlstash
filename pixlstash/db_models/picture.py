@@ -834,7 +834,41 @@ class Picture(SQLModel, table=True):
         # was unacceptably slow on large libraries.
         if stack_leaders_only:
             project_scope = search.get("project_id", _NO_PROJECT_SCOPE)
-            if project_scope is _NO_PROJECT_SCOPE or isinstance(
+            id_scope: list[int] = []
+            raw_id_scope = search.get("id")
+            if isinstance(raw_id_scope, (list, tuple, set)):
+                for raw in raw_id_scope:
+                    try:
+                        id_scope.append(int(raw))
+                    except (TypeError, ValueError):
+                        continue
+            if id_scope:
+                # An explicit id filter (a picture set, a share token's scope, a
+                # split) narrows the grid to those pictures. Represent each
+                # stack by its lowest-positioned member INSIDE that filter:
+                # the global position-0 leader may not be in it, and requiring
+                # it rendered NEITHER picture — a set containing only a
+                # non-cover stack member showed 5 tiles for its 6 members and
+                # no stack at all (the owner's #670/#1746 report). Same rule
+                # as the project-scoped branch below, scoped to the id list.
+                sibling = aliased(cls)
+                cur_pos = func.coalesce(cls.stack_position, 999999)
+                sib_pos = func.coalesce(sibling.stack_position, 999999)
+                has_higher_ranked_sibling = exists(
+                    select(sibling.id).where(
+                        sibling.stack_id == cls.stack_id,
+                        sibling.deleted.is_(False),
+                        sibling.id.in_(id_scope),
+                        or_(
+                            sib_pos < cur_pos,
+                            (sib_pos == cur_pos) & (sibling.id < cls.id),
+                        ),
+                    )
+                )
+                query = query.where(
+                    or_(cls.stack_id.is_(None), ~has_higher_ranked_sibling)
+                )
+            elif project_scope is _NO_PROJECT_SCOPE or isinstance(
                 project_scope, (list, tuple)
             ):
                 # Unscoped (or multi-project) grid: fast path — leader is the

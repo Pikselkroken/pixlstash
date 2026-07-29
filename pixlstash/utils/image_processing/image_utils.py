@@ -682,6 +682,32 @@ class ImageUtils:
             )
 
     @staticmethod
+    def thumbnail_cache_token(
+        thumbnail_width: Optional[int], thumbnail_height: Optional[int]
+    ) -> str:
+        """The ``?v=`` cache-buster for a picture's thumbnail URL.
+
+        Keyed on the stored bitmap's own dimensions, so any regeneration that
+        repopulates them changes the URL and the browser refetches instead of
+        painting a stale bitmap. ``"0"`` until the picture has been processed.
+
+        Single source of truth on purpose: the batch-thumbnail endpoint and the
+        duplicate queue both hand this token to the same frontend cache, and two
+        independent copies of the ``WxH`` formula would eventually disagree and
+        reintroduce the stale-thumbnail bug this token exists to fix.
+
+        Args:
+            thumbnail_width: Stored bitmap width, or ``None`` when unprocessed.
+            thumbnail_height: Stored bitmap height, or ``None`` when unprocessed.
+
+        Returns:
+            ``"<width>x<height>"``, or ``"0"`` when either dimension is missing.
+        """
+        if thumbnail_width and thumbnail_height:
+            return f"{thumbnail_width}x{thumbnail_height}"
+        return "0"
+
+    @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:
         """Compute a content hash for raw image bytes."""
         file_size = len(image_bytes)

@@ -199,6 +199,19 @@ describe("ActionReceipt — pause on hover and focus (WCAG 2.2.1)", () => {
     expect(store.receipt).toBeNull();
   });
 
+  it("releases a held pause when the surface unmounts mid-hover", async () => {
+    // The regression this pins: a view change under the pointer unmounted the
+    // pill while paused, no mouseleave ever fired, and the frozen receipt
+    // survived in the store to resurface on whichever surface rendered next.
+    const { store, wrapper } = mountWith(op());
+    await wrapper.vm.$nextTick();
+
+    await wrapper.find(".receipt").trigger("mouseenter");
+    wrapper.unmount();
+    vi.advanceTimersByTime(60000);
+    expect(store.receipt).toBeNull();
+  });
+
   it("freezes the countdown while focus is inside the pill", async () => {
     const { store, wrapper } = mountWith(op());
     await wrapper.vm.$nextTick();

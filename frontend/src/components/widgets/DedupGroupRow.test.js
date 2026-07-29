@@ -1,0 +1,124 @@
+// One group in the triage queue.
+//
+// The tests pin the two things the row owes the keyboard and the screen reader,
+// neither of which is visible in a screenshot: only the focused row is a tab
+// stop, and the focused row says so in something other than CSS.
+
+import { describe, it, expect } from "vitest";
+import { mount } from "@vue/test-utils";
+
+import DedupGroupRow from "./DedupGroupRow.vue";
+
+const globalOpts = { global: { stubs: { "v-icon": true } } };
+
+/** A group of `n` candidates, in the backend's shape. */
+function group(n = 3) {
+  return {
+    signature: "g1",
+    tier: "near",
+    confidence: 0.94,
+    member_count: n,
+    cover_picture_id: 1,
+    why: [{ text: "same dimensions", against: false }],
+    candidates: Array.from({ length: n }, (_, i) => ({ picture_id: i + 1 })),
+  };
+}
+
+function mountRow(props = {}) {
+  return mount(DedupGroupRow, {
+    ...globalOpts,
+    props: { group: group(), index: 0, coverId: 1, ...props },
+  });
+}
+
+describe("DedupGroupRow — the tab order", () => {
+  // Twenty groups on screen is well over a hundred buttons. A Tab key that
+  // walks all of them is a Tab key nobody presses twice.
+  it("keeps every control out of the tab order on an unfocused row", () => {
+    const wrapper = mountRow({ focused: false });
+    const tabbable = wrapper
+      .findAll("button")
+      .filter((b) => b.attributes("tabindex") !== "-1");
+    expect(tabbable).toHaveLength(0);
+  });
+
+  // The focused row is the only row the keyboard model acts on, so it is the
+  // only row Tab should reach.
+  it("puts the focused row's controls in the tab order", () => {
+    const wrapper = mountRow({ focused: true });
+    const buttons = wrapper.findAll("button");
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const button of buttons) {
+      expect(button.attributes("tabindex")).toBe("0");
+    }
+  });
+});
+
+describe("DedupGroupRow — what assistive tech is told", () => {
+  // The focused-row treatment is five CSS signals and nothing else, which says
+  // nothing at all to a screen reader.
+  it("marks the focused row as current", () => {
+    expect(mountRow({ focused: true }).attributes("aria-current")).toBe("true");
+    expect(
+      mountRow({ focused: false }).attributes("aria-current"),
+    ).toBeUndefined();
+  });
+
+  it("names the row and its size", () => {
+    const wrapper = mountRow({ index: 4 });
+    expect(wrapper.attributes("aria-label")).toBe("Group 5, 3 pictures");
+  });
+
+  // Without a label every candidate reaches a screen reader as the same
+  // unlabelled control repeated N times: the image is deliberately decorative.
+  it("names each thumbnail by its position and its state", () => {
+    const wrapper = mountRow({ coverId: 2, excludedIds: [3] });
+    const labels = wrapper
+      .findAll(".gthumb")
+      .map((b) => b.attributes("aria-label"));
+    expect(labels).toEqual([
+      "Picture 1 of 3",
+      "Picture 2 of 3, cover",
+      "Picture 3 of 3, not in the stack",
+    ]);
+  });
+
+  // Only the focused row answers to 1-9 and X, so only the focused row may
+  // claim the keys work.
+  it("names the keys in the tooltip only where they work", () => {
+    expect(
+      mountRow({ focused: true }).find(".gthumb").attributes("title"),
+    ).toContain("press 1");
+    expect(
+      mountRow({ focused: false }).find(".gthumb").attributes("title"),
+    ).not.toContain("press 1");
+  });
+});
+
+describe("DedupGroupRow — what the verdicts cost", () => {
+  // Neither verdict asks for a confirmation, so each has to say what it does
+  // before it is pressed rather than after.
+  it("says that stacking deletes nothing and can be undone", () => {
+    const title = mountRow().find(".gbtn--stack").attributes("title");
+    expect(title).toContain("stays on disk");
+    expect(title).toContain("Ctrl+Z");
+  });
+
+  // The verdict is remembered, and the pictures survive it. The copy must not
+  // promise a "reopen" affordance that does not exist yet.
+  it("says that keeping separate is remembered and loses nothing", () => {
+    const title = mountRow().findAll(".gbtn")[1].attributes("title");
+    expect(title).toContain("stay in your library");
+    expect(title).toContain("stop being suggested");
+    expect(title).not.toContain("reopen");
+  });
+
+  it("locks both verdicts in a read-only session", () => {
+    const wrapper = mountRow({ readOnly: true });
+    for (const button of wrapper.findAll(".gbtn")) {
+      expect(button.attributes("disabled")).toBeDefined();
+    }
+    // Comparing is reading, so it stays live.
+    expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+  });
+});

@@ -1,0 +1,114 @@
+<script setup>
+/**
+ * The why-pills under a duplicate group: the evidence for and against stacking.
+ *
+ * The pills are the group's reasoning, shown where the decision is made, so the
+ * user never has to trust an unexplained suggestion.
+ *
+ * Two rules shape this component:
+ *
+ *   • Counter-evidence reads FIRST (`orderEvidence`). A group carrying red pills
+ *     is exactly the one that needs a closer look, and a collapsed row has room
+ *     for about two pills, so the warning half has to be the half that survives
+ *     the `limit`.
+ *   • Meaning never rides on colour alone (WCAG 1.4.1). The check and the cross
+ *     glyphs carry the for/against split, and each pill states it in its `title`
+ *     as well, so the distinction survives a monochrome or colour-blind read.
+ *
+ * The label sits in `on-surface`, not in `primary` or `error`: an action-fill
+ * token is never small body text on a canvas (visual-language.md §4). The status
+ * colour lives in the tinted fill, the border, and the glyph.
+ */
+import { computed } from "vue";
+
+import { orderEvidence, evidenceLabel } from "../../utils/dedup";
+
+/** The pill's rendered text. The server calls the field `text`. */
+const labelOf = evidenceLabel;
+
+const props = defineProps({
+  /** Evidence entries, the server's `[{ text, against }]`, in its order. */
+  why: { type: Array, default: () => [] },
+  /** Maximum pills to render. 0 means show every one. */
+  limit: { type: Number, default: 0 },
+});
+
+/**
+ * Ordering happens BEFORE truncation, never after: truncating the server order
+ * first would be free to drop the counter-evidence and leave a row that looks
+ * unanimously safe when it is not.
+ */
+const pills = computed(() => {
+  const ordered = orderEvidence(props.why);
+  return props.limit > 0 ? ordered.slice(0, props.limit) : ordered;
+});
+</script>
+
+<template>
+  <ul v-if="pills.length" class="why-pills">
+    <li
+      v-for="(pill, index) in pills"
+      :key="`${index}:${labelOf(pill)}`"
+      class="why-pill"
+      :class="pill.against ? 'why-pill--neg' : 'why-pill--pos'"
+      :title="pill.against ? 'Argues against stacking' : 'Supports stacking'"
+    >
+      <v-icon class="why-pill__ico" size="12">{{
+        pill.against ? "mdi-close" : "mdi-check"
+      }}</v-icon>
+      <span class="why-pill__label">{{ labelOf(pill) }}</span>
+    </li>
+  </ul>
+</template>
+
+<style scoped>
+/* A list, not a row of spans: this is an enumeration of reasons, and a screen
+   reader announcing "list, 3 items" is the correct summary of it. */
+.why-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.why-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  /* Full-strength body text on a tint. The status hue is carried by the fill,
+     the border, and the glyph, which is where a 12px label cannot go. */
+  color: rgb(var(--v-theme-on-surface));
+  white-space: nowrap;
+}
+
+/* Supports stacking. */
+.why-pill--pos {
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-color: rgba(var(--v-theme-primary), 0.35);
+}
+.why-pill--pos .why-pill__ico {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* Argues against stacking. Same construction, so the two read as one family
+   with one differing signal rather than as two different components. */
+.why-pill--neg {
+  background: rgba(var(--v-theme-error), 0.12);
+  border-color: rgba(var(--v-theme-error), 0.35);
+}
+.why-pill--neg .why-pill__ico {
+  color: rgb(var(--v-theme-error));
+}
+
+.why-pill__ico {
+  flex-shrink: 0;
+}
+</style>

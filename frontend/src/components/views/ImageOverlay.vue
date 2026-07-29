@@ -645,6 +645,7 @@
             :locked="isCurrentLocked"
             :lock-note="currentLockReason"
             @update-description="handleDescriptionUpdate"
+            @editing-finished="focusOverlayCanvas"
           />
 
           <div class="sidebar-section sidebar-section--faces">
@@ -2084,13 +2085,14 @@ function handleKeydown(e) {
 
   // Undo / redo, handled HERE rather than by App's global binding.
   //
-  // This handler is registered in ImageOverlay's own `onMounted`, and a child
-  // mounts before its parent, so it runs before App's window listener — and it
-  // calls `stopImmediatePropagation()` above. App's `Ctrl+Z` therefore never
-  // sees a keystroke while the lightbox is open, no matter what its own guards
-  // say. The owner ruled that undo must work here anyway, fitted to the
-  // lightbox's own GUI: `OverlayActionReceipt` narrates the result inside the
-  // overlay chrome, so the action is never taken blind.
+  // App's handler stands down while `.image-overlay` is in the DOM (an
+  // explicit guard at its top). Do NOT rely on the stopImmediatePropagation()
+  // above to silence it: that only works when this listener registered first,
+  // and the Duplicates view's grid remount re-registers this one LAST — that
+  // ordering flip is exactly how one Ctrl+Z once ran two undos. The owner
+  // ruled that undo must work here, fitted to the lightbox's own GUI:
+  // `OverlayActionReceipt` narrates the result inside the overlay chrome, so
+  // the action is never taken blind.
   //
   // Above the `chromeHidden` bail on purpose. The narration is a transient HUD
   // like the progress cards and the swipe hint, none of which hide with the
@@ -3258,10 +3260,13 @@ async function fetchOverlayMetadata(imageId) {
     if (data.tags !== undefined) {
       merged.tags = dedupeTagList(dataTags);
     }
-    if (
-      image.value?.description == null ||
-      image.value.description.startsWith("__description::")
-    ) {
+    if (data.description !== undefined) {
+      // The server is authoritative for the description, same reasoning as
+      // smartScore above: this fetch is how an undo/redo (whose WS
+      // descriptions_changed event triggers it) reaches an open overlay, and
+      // the old local-wins rule kept the field stale until reopen. The one
+      // race — a fetch that left before a local save — is closed at the
+      // source: handleDescriptionUpdate invalidates in-flight requests.
       merged.description = data.description ?? null;
     }
     const currentMeta = image.value?.metadata;
@@ -3756,7 +3761,16 @@ function getOverlayBoxStyle(bbox, color) {
   };
 }
 
+/** Return the keyboard to the overlay once a sidebar edit ends. */
+function focusOverlayCanvas() {
+  overlayCanvasRef.value?.focus?.();
+}
+
 function handleDescriptionUpdate(imageId, newDescription) {
+  // Invalidate any in-flight metadata fetch: it left before this save and
+  // would land carrying the pre-save description, which the merge below now
+  // treats as authoritative.
+  metadataRequestId += 1;
   if (image.value && image.value.id === imageId) {
     image.value = { ...image.value, description: newDescription };
   }

@@ -46,5 +46,16 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.{js,ts}'],
+    server: {
+      deps: {
+        // Vuetify ships its component CSS as sibling `.css` imports, which Node
+        // cannot load. Any test that mounts a component importing from
+        // "vuetify/components" therefore died at import with
+        // `Unknown file extension ".css"`. Inlining routes Vuetify through
+        // Vite's transform, where the CSS import is handled, so a component that
+        // uses AppDialog or AppButton is testable at all.
+        inline: ['vuetify'],
+      },
+    },
   },
 })
