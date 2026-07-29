@@ -20,11 +20,13 @@ from sqlalchemy import (
 
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     Tag,
 )
@@ -39,6 +41,12 @@ from ._models import (
 )
 
 logger = get_logger(__name__)
+
+# Transport key for an entity's project membership on a candidate-parent dict.
+# Not a column: it is popped before the row is turned back into a model, and it
+# exists only so the join rows travel with the parent from the snapshot session
+# to the live one (issue #125).
+_PROJECT_IDS_KEY = "__project_ids"
 
 
 class ResourceRestoreMixin:
@@ -555,7 +563,13 @@ class ResourceRestoreMixin:
         Returns:
             ``{"characters": [{...}, ...], "picture_sets": [...],
               "projects": [...]}`` — one dict per parent referenced
-            anywhere in ``snap_rows``.
+            anywhere in ``snap_rows``. Character and picture-set dicts carry an
+            extra :data:`_PROJECT_IDS_KEY` entry holding the entity's project
+            membership from the snapshot; :meth:`_restore_parent_rows` pops it
+            and rebuilds the join rows. Without it a restored entity would come
+            back with its scalar ``project_id`` set but no membership row, i.e.
+            invisible to every project-scoped read (issue #125: the join is the
+            read model).
         """
 
         def _as_dict(obj):
@@ -572,13 +586,37 @@ class ResourceRestoreMixin:
         set_ids = {m.set_id for m in snap_rows.get("picture_set_members", [])}
         proj_ids = {m.project_id for m in snap_rows.get("picture_project_members", [])}
 
+        def _with_project_ids(row, membership_model, id_column, entity_id):
+            if row is None:
+                return None
+            row[_PROJECT_IDS_KEY] = sorted(
+                int(pid)
+                for pid in snap_session.execute(
+                    sa_select(membership_model.project_id).where(id_column == entity_id)
+                )
+                .scalars()
+                .all()
+                if pid is not None
+            )
+            return row
+
         characters = [
-            _as_dict(snap_session.get(Character, cid))
+            _with_project_ids(
+                _as_dict(snap_session.get(Character, cid)),
+                CharacterProjectMember,
+                CharacterProjectMember.character_id,
+                cid,
+            )
             for cid in sorted(char_ids)
             if snap_session.get(Character, cid) is not None
         ]
         picture_sets = [
-            _as_dict(snap_session.get(PictureSet, sid))
+            _with_project_ids(
+                _as_dict(snap_session.get(PictureSet, sid)),
+                PictureSetProjectMember,
+                PictureSetProjectMember.set_id,
+                sid,
+            )
             for sid in sorted(set_ids)
             if snap_session.get(PictureSet, sid) is not None
         ]
@@ -639,6 +677,13 @@ class ResourceRestoreMixin:
         are merged; existing live parents (with the same ID) are not
         touched.
 
+        A restored character or picture set also gets its project-membership
+        join rows rebuilt from the snapshot (issue #125). The join is the read
+        model, so merging the row alone would restore an entity that is
+        unreachable from the project it belongs to. Only memberships whose
+        project actually exists live are re-created — a project the user did not
+        restore would violate the foreign key.
+
         Args:
             live_session: Live writer session.
             candidate_parents: Output of ``_collect_candidate_parents``.
@@ -648,6 +693,7 @@ class ResourceRestoreMixin:
             Number of parent rows restored.
         """
         restored = 0
+        pending_memberships: list[tuple[type, str, int, list[int]]] = []
         for plural, model in (
             ("characters", Character),
             ("picture_sets", PictureSet),
@@ -657,9 +703,69 @@ class ResourceRestoreMixin:
             if not wanted:
                 continue
             for parent in candidate_parents.get(plural, []):
-                if parent["id"] in wanted:
-                    live_session.merge(model(**parent))
-                    restored += 1
+                if parent["id"] not in wanted:
+                    continue
+                fields = dict(parent)
+                project_ids = fields.pop(_PROJECT_IDS_KEY, None)
+                live_session.merge(model(**fields))
+                restored += 1
+                if project_ids:
+                    if model is Character:
+                        pending_memberships.append(
+                            (
+                                CharacterProjectMember,
+                                "character_id",
+                                int(fields["id"]),
+                                project_ids,
+                            )
+                        )
+                    elif model is PictureSet:
+                        pending_memberships.append(
+                            (
+                                PictureSetProjectMember,
+                                "set_id",
+                                int(fields["id"]),
+                                project_ids,
+                            )
+                        )
+
+        if pending_memberships:
+            # Flush the parents first so the membership FKs resolve, and only
+            # link projects that exist live.
+            live_session.flush()
+            wanted_projects = {
+                pid for _m, _c, _e, pids in pending_memberships for pid in pids
+            }
+            live_project_ids = set(
+                live_session.execute(
+                    sa_select(Project.id).where(Project.id.in_(wanted_projects))
+                )
+                .scalars()
+                .all()
+            )
+            for (
+                membership_model,
+                id_field,
+                entity_id,
+                project_ids,
+            ) in pending_memberships:
+                for project_id in project_ids:
+                    if project_id not in live_project_ids:
+                        logger.warning(
+                            "Restore: skipping %s membership %s=%s project_id=%s — "
+                            "the project does not exist in the live database, so "
+                            "the entity comes back without that membership",
+                            membership_model.__name__,
+                            id_field,
+                            entity_id,
+                            project_id,
+                        )
+                        continue
+                    live_session.merge(
+                        membership_model(
+                            **{id_field: entity_id, "project_id": project_id}
+                        )
+                    )
         return restored
 
     def _collect_rows_for_upsert(

@@ -22,7 +22,6 @@ from pixlstash.db_models import (
     Character,
     Face,
     Picture,
-    PictureProjectMember,
 )
 from pixlstash.event_types import EventType
 from pixlstash.picture_scoring import (
@@ -30,6 +29,10 @@ from pixlstash.picture_scoring import (
     select_reference_faces_for_character,
 )
 from pixlstash.services import operation_log_service
+from pixlstash.services.project_membership_service import (
+    character_project_ids,
+    reconcile_entity_projects_change,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
@@ -233,29 +236,21 @@ def create_router(server) -> APIRouter:
             for face in unique_faces:
                 session.refresh(face)
             character = session.get(Character, character_id)
-            if character and character.project_id is not None:
-                for face in unique_faces:
-                    if face.picture_id:
-                        pic = session.get(Picture, face.picture_id)
-                        if pic:
-                            membership = session.exec(
-                                select(PictureProjectMember).where(
-                                    PictureProjectMember.picture_id == pic.id,
-                                    PictureProjectMember.project_id
-                                    == character.project_id,
-                                )
-                            ).first()
-                            if membership is None:
-                                session.add(
-                                    PictureProjectMember(
-                                        picture_id=pic.id,
-                                        project_id=character.project_id,
-                                    )
-                                )
-                            if pic.project_id is None:
-                                pic.project_id = character.project_id
-                                session.add(pic)
-                if any(f.picture_id for f in unique_faces):
+            if character is not None:
+                # Issue #125: a character may belong to several projects, so the
+                # newly assigned pictures join *all* of them. Reading the primary
+                # FK here would leave them out of every secondary project.
+                assigned_picture_ids = [
+                    int(face.picture_id) for face in unique_faces if face.picture_id
+                ]
+                project_ids = character_project_ids(session, character_id)
+                if assigned_picture_ids and project_ids:
+                    reconcile_entity_projects_change(
+                        session,
+                        picture_ids=assigned_picture_ids,
+                        ensure_project_ids=project_ids,
+                        remove_project_ids=[],
+                    )
                     session.commit()
             faces_payload = [
                 {

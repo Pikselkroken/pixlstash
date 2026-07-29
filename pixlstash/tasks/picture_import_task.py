@@ -13,6 +13,11 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.project_membership_service import (
+    character_project_ids,
+    picture_set_project_ids,
+    reconcile_entity_projects_change,
+)
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -319,6 +324,7 @@ class PictureImportTask(BaseTask):
                     self._staging_id,
                 )
                 return
+            member_ids: list[int] = []
             for pic in session.exec(select(Picture).where(Picture.id.in_(ids))).all():
                 exists = session.exec(
                     select(PictureSetMember).where(
@@ -330,23 +336,15 @@ class PictureImportTask(BaseTask):
                     session.add(
                         PictureSetMember(set_id=set_id_value, picture_id=pic.id)
                     )
-                if picture_set.project_id is not None:
-                    member = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic.id,
-                            PictureProjectMember.project_id == picture_set.project_id,
-                        )
-                    ).first()
-                    if member is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic.id,
-                                project_id=picture_set.project_id,
-                            )
-                        )
-                    if pic.project_id != picture_set.project_id:
-                        pic.project_id = picture_set.project_id
-                    session.add(pic)
+                member_ids.append(int(pic.id))
+            # Issue #125: the set may belong to several projects, so the imported
+            # pictures join *all* of them, not just the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=member_ids,
+                ensure_project_ids=picture_set_project_ids(session, set_id_value),
+                remove_project_ids=[],
+            )
             session.commit()
 
         self._db.run_task(
@@ -377,25 +375,19 @@ class PictureImportTask(BaseTask):
                     self._staging_id,
                 )
                 return
+            pending_ids: list[int] = []
             for pic in session.exec(select(Picture).where(Picture.id.in_(ids))).all():
                 pic.pending_character_id = character_id_value
-                if character.project_id is not None:
-                    member = session.exec(
-                        select(PictureProjectMember).where(
-                            PictureProjectMember.picture_id == pic.id,
-                            PictureProjectMember.project_id == character.project_id,
-                        )
-                    ).first()
-                    if member is None:
-                        session.add(
-                            PictureProjectMember(
-                                picture_id=pic.id,
-                                project_id=character.project_id,
-                            )
-                        )
-                    if pic.project_id is None:
-                        pic.project_id = character.project_id
                 session.add(pic)
+                pending_ids.append(int(pic.id))
+            # Issue #125: the character may belong to several projects, so the
+            # imported pictures join *all* of them, not just the primary FK.
+            reconcile_entity_projects_change(
+                session,
+                picture_ids=pending_ids,
+                ensure_project_ids=character_project_ids(session, character_id_value),
+                remove_project_ids=[],
+            )
             session.commit()
 
         self._db.run_task(
