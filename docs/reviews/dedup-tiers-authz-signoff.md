@@ -1195,3 +1195,330 @@ Reviewer probes (written this round, run, then deleted):
 **Independence.** Round 2 was performed by the round-1 reviewer, who wrote no code
 on either branch. M1 and G1 are new required changes and must be certified by
 someone other than whoever implements them.
+
+---
+
+# 10. Round 3 (2026-07-29) — targeted confirm, `feature/dedup-tiers` @ `b74bbd31`
+
+Five commits on top of the head approved in round 2 (`029525a0`). Scope: the
+security-relevant parts of the QA-blocker fixes plus M1. Re-derived against
+`b74bbd31`, not against round 2's tree.
+
+## 10.1 Verdict
+
+# **APPROVE-WITH-ONE-REQUIRED-CHANGE** — #638 @ `b74bbd31`
+
+| Item | Verdict |
+|---|---|
+| 1. **M1** — batch-id namespacing + client validation | **CLOSED** |
+| 2. **Post-restore hook** — op_type selection | **SAFE** |
+| 2. **Post-restore hook** — atomic abort on raise | **SAFE** |
+| 2. **Post-restore hook** — batch-id correlation scope | **DEFECT — R5, required** |
+| 3. **Cursor** — malformed input, 400 never 500 | **SAFE** (one comment-accuracy nit, R6) |
+| 3. **Cursor** — cannot bypass scope/authz filtering | **SAFE** |
+| 4. **W2** — slash-only folder scopes | **CLOSED** |
+
+| # | Severity | What | Status |
+|---|---|---|---|
+| **R5** | **MEDIUM-LOW** | The post-restore hook correlates purely on `batch_id`, so undoing a stack verdict **also reopens every other verdict sharing that batch id** — including a `keep_separate` that recorded no operation at all. Reproduced. The authors' isolation test passes only because it supplies no `batch_id`. | **REQUIRED** |
+| R6 | LOW | `decode_queue_cursor` accepts non-finite floats: `1\|inf\|0` returns the **first page again** — the exact "silent restart from the top" its own docstring says it refuses. | Hardening |
+
+---
+
+## 10.2 Item 1 — M1 (my round-2 blocking item): **CLOSED**
+
+Both minting sites are namespaced and the third bare-hex shape is gone:
+
+```
+[C1] operation_log_service.new_batch_id() = 'srv-9e51e35586324b8d9dfe6c16c19cd64d'
+[C1] dedup_verdict_service.new_batch_id()  = 'srv-929acdc7972b4a7984bb14a662f15e7e'
+[C1b] stack with no batch_id -> 200 batch='srv-c49be517cae04338b45129f9b0707368'
+```
+
+My round-2 `srv-` impersonation repro is refused, and I extended it to **all four**
+dedup bodies × 13 forged shapes (`srv-…` long and short, `SRV-`, `Cli-`,
+un-namespaced, too short, too long, trailing LF, slash, space, unicode, empty,
+traversal) — **52/52 rejected with 400**:
+
+```
+[C1] route x forged batch_id -> status (want 400 for every one)
+[C1]   verdicts/stack           [400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400]
+[C1]   verdicts/keep-separate   [400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400]
+[C1]   verdicts/reopen          [400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400]
+[C1]   auto-stack               [400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400, 400]
+[C1] >>> forged ids accepted anywhere: []
+[C1] valid cli- id accepted: stack 200 | keep-separate 200 | reopen 200 | auto-stack 200
+[C1] >>> stored batch ids = ['cli-goodgesture1']
+```
+
+The reopen route — which I was asked to probe specifically — validates identically.
+Positive direction holds too: a well-formed `cli-` id is accepted on all four, so
+this is not an over-block.
+
+**Note for the #644 merge.** This validator uses `CLIENT_BATCH_ID_RE.fullmatch`,
+so it does **not** have the trailing-LF hole I raised as G1 against
+`feature/gesture-batch-id`'s `re.match` + `$` (`cli-abcd\n` → 400 here, accepted
+there). The duplication is deliberate and documented in the constant's docstring,
+which names `utils/request_origin.py` as the future single home. **G1 still stands
+against #644**, and when the two unify, the surviving implementation must be the
+`fullmatch` one. M1 item 2 (delegating `new_batch_id`) is done; M1 item 1 is done
+for the three verdict bodies, and `SweepDryRunRequest.operation_batch_id` remains
+correctly out of scope while it is inert (§9.4).
+
+## 10.3 Item 2 — the post-restore hook
+
+### op_type selection: **SAFE**
+
+Hooks dispatch on `Operation.op_type`. Nothing user-controllable reaches it:
+
+```
+[C2a] _record_operation(op_type=...) -> Name(id='OP_TYPE_STACK', ctx=Load())
+[C2a] registered hooks = ['dedup.stack']
+[C2a] 'op_type' occurrences in pixlstash/routes/:
+  (none)
+```
+
+The value is a module constant at the single call site (AST-checked, not read by
+eye), and the string `op_type` does not appear anywhere in `pixlstash/routes/` —
+no handler accepts, forwards or defaults it. Registration is import-time and
+keyed by that constant, and `register_post_restore_hook` is reachable only from
+Python, not from a request. A hook cannot be made to fire for an op_type it does
+not own, and exactly one hook is registered.
+
+### Atomic abort on a raising hook: **SAFE**
+
+I replaced the registered hook with a raiser and undid a real stack verdict:
+
+```
+[C2b] after verdict: pics=[(1, 1), (2, 1), (3, None), …]
+[C2b]   ops=[(1, 'dedup.stack', 'srv-6b6dd00c…', 'applied')]
+[C2b]   verdicts=[('d0a2bcaf', 'stacked', 'srv-6b6dd00c…', live=True)]
+[C2b]   groups=[('7c45834a', False), ('d0a2bcaf', True), …]
+[C2b] undo with a raising hook -> 500
+[C2b] after: pics=[(1, 1), (2, 1), (3, None), …]          <- identical
+[C2b]   ops=[(1, 'dedup.stack', 'srv-6b6dd00c…', 'applied')]  <- still 'applied'
+[C2b]   verdicts=[('d0a2bcaf', 'stacked', 'srv-6b6dd00c…', live=True)]
+[C2b]   groups=[('7c45834a', False), ('d0a2bcaf', True), …]
+[C2b] >>> fully atomic (nothing changed, op stays 'applied'): True
+```
+
+All four state dimensions (pictures, operations *including* `status`, verdict rows,
+group `resolved` flags) are byte-identical after the failed undo. No partial
+group-reopen, no half-restored pictures, operation stays `applied` so the user can
+retry. The hook runs inside `_restore` before `_mark_undone` and the commit, and
+the DB worker's `session.rollback()` catches it. **Fail-closed as claimed.**
+
+### R5 (REQUIRED) — batch-id correlation reopens verdicts the operation never touched
+
+`restore_verdicts_in_session` correlates **only** on `batch_id`:
+
+```python
+batch_ids = sorted({op.batch_id for op in operations if op.batch_id})
+…
+select(DedupVerdict).where(DedupVerdict.batch_id.in_(chunk))
+```
+
+Every `DedupVerdict` sharing that id is reopened — not only the ones the restored
+operations recorded. The gap is `keep_separate`, which **stores a `batch_id` but
+records no operation at all**, so nothing in the restore set corresponds to it.
+
+Reproduction (`test_C2c`): one client gesture, one `cli-` id, two verdicts — a
+keep-separate on group A and a stack on group B. This is exactly the usage the
+`cli-` namespace exists to enable and that `SignatureRequestModel.batch_id`
+documents for keep-separate.
+
+```
+[C2c] keep-separate(7c45834a) -> 200
+[C2c] stack(d0a2bcaf)        -> 200
+[C2c] ops (note: keep-separate records NONE) = [(1, 'dedup.stack', 'cli-onegesture1', 'applied')]
+[C2c] verdicts before undo = [('7c45834a', 'keep_separate', 'cli-onegesture1', live=True),
+                              ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=True)]
+[C2c] groups   before undo = [('7c45834a', True), ('d0a2bcaf', True), …]
+[C2c] POST /operations/undo -> 200
+[C2c] verdicts after undo  = [('7c45834a', 'keep_separate', 'cli-onegesture1', live=False),
+                              ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=False)]
+[C2c] groups   after undo  = [('7c45834a', False), ('d0a2bcaf', False), …]
+[C2c] >>> keep-separate still live (want True): False
+[C2c] >>> its group still resolved (want True): False
+```
+
+**Undoing the stack verdict silently reversed an unrelated "keep separate"
+decision** — a decision §22.8 and the route's own description call *permanent until
+reopened from the Stacks view*. Group A returns to the queue and re-asks the user a
+question they already answered. `redo` is symmetric: it re-decides the
+keep-separate, so a group the user reopened by hand can be silently re-resolved.
+
+The baseline behaves correctly, so this is over-reach and not a broken hook
+(`test_C2d`): a stack verdict with a server-minted id reopens exactly its own
+verdict on undo and re-decides exactly it on redo.
+
+**Why the authors' test misses it.**
+`test_an_undo_does_not_reopen_a_group_it_never_touched` is a genuine test of the
+right property, but it posts **no** `batch_id` on either call — so the
+keep-separate row stores `NULL` and the stack gets a distinct `srv-` id, the `IN`
+never matches, and isolation holds trivially. The test is true and not general.
+Mine is the same scenario with `batch_id="cli-onegesture1"` on both requests.
+
+**Severity MEDIUM-LOW.** Not an authz or confidentiality issue: owner-only,
+non-destructive (a reopened group returns to the queue; no picture, file or tag is
+touched), and visible in the queue rather than silent to the user. But it reverses
+a decision the product promises is permanent, it is reachable by *correct* client
+behaviour rather than only by abuse, and it gets more likely as #644 ships, since
+that feature's whole purpose is one id across a gesture's requests.
+
+**Fix — smallest correct change:** filter the correlation to the verdict kind that
+actually records the op_type:
+
+```python
+select(DedupVerdict).where(
+    DedupVerdict.batch_id.in_(chunk),
+    DedupVerdict.verdict == VERDICT_STACKED,
+)
+```
+
+Only `stack` records `OP_TYPE_STACK`, so this is exact for every case I could
+construct: two stack verdicts sharing a batch are always restored together anyway
+(`_batch_members_in_session` pulls the whole batch), and an already-undone stack
+verdict is filtered out by the `status == applied` predicate, so re-reopening
+cannot occur. **Also recommended:** stop storing `batch_id` on a keep-separate
+verdict row at all — it drives nothing and exists only as this hazard — and add
+the shared-`cli-`-id case to `test_an_undo_does_not_reopen_a_group_it_never_touched`.
+
+## 10.4 Item 3 — the cursor
+
+### Malformed / forged cursors: **400 or 422, never 500**
+
+17 fuzz cases against `GET /dedup/groups?cursor=`:
+
+```
+[C3] empty                -> 200  (falsy -> treated as no cursor; first page)
+[C3] not base64           -> 400 {"detail":"malformed queue cursor '!!!!not-base64!!!!': 'ascii' codec…
+[C3] valid b64, garbage   -> 400 {"detail":"malformed queue cursor 'Z2FyYmFnZQ': not enough values to u…
+[C3] wrong version        -> 400 {"detail":"…: unsupported cursor version…
+[C3] no version           -> 400 {"detail":"…: unsupported cursor version…
+[C3] too few fields       -> 400 {"detail":"…: not enough values to unpack…
+[C3] too many fields      -> 400 {"detail":"…: too many values…
+[C3] float id             -> 400 {"detail":"…: invalid literal for int…
+[C3] sql-ish              -> 400 {"detail":"…: invalid literal for int…
+[C3] unicode payload      -> 400 {"detail":"…: 'ascii' codec can't encode…
+[C3] null byte            -> 400 {"detail":"…: invalid literal for int…
+[C3] huge id              -> 422 (string_too_long, MAX_CURSOR_LENGTH)
+[C3] over max length      -> 422 (string_too_long)
+[C3] nan confidence       -> 200 {"groups":[],"total":4,…}        <- see R6
+[C3] inf confidence       -> 200 {"groups":[{…first page…}]}      <- see R6
+[C3] -inf confidence      -> 200 {"groups":[],…}                  <- see R6
+[C3] negative id          -> 200 first page                       <- benign
+[C3] >>> 5xx responses: []
+[C3] cursor + offset together -> 400 {"detail":"cursor and offset are mutually exclusive; …"}
+```
+
+No 5xx on any input. The length bound is enforced by the FastAPI `Query`
+constraint before the decoder sees the string, so an unbounded value never reaches
+base64. `cursor` + `offset` together is a 400 as documented.
+
+#### R6 (hardening, LOW) — non-finite floats survive the decoder
+
+`decode_queue_cursor` ends in `float(confidence)`, which happily parses `inf`,
+`-inf` and `nan`. `1|inf|0` makes the keyset predicate `confidence < inf` true for
+every row, so the caller **silently gets the first page again** — precisely the
+failure the function's own docstring says it refuses:
+
+> A bad cursor is a 400, never a silent restart from the top — silently paging
+> from offset 0 would hand the client the same page forever.
+
+`nan` / `-inf` silently return an empty page, which a client reads as
+end-of-queue. Neither leaks anything (the scope and policy filters still apply —
+see below) and neither is a 500, so this is LOW; but it is the same
+comment-asserts-a-guarantee-the-code-lacks pattern as W1. One-line fix: reject
+`not math.isfinite(value)` in the decoder, and add `1|inf|0` to
+`test_a_malformed_cursor_is_a_400_not_a_silent_restart`.
+
+### Cursor cannot bypass scope or policy filtering: **SAFE**
+
+The cursor carries only `(confidence, group_id)` — no scope, no tier, no
+threshold, no filter state. `page_queue_in_session` builds the scope predicate and
+the tier/threshold filters from the **request**, then ANDs the keyset predicate, so
+the cursor can only advance a position inside an already-filtered query. Verified
+by replaying a cursor minted under the global scope against a set-scoped request:
+
+```
+[C3b] GLOBAL page1: total=4 groups=['d0a2bcaf']
+[C3b] next_cursor = 'MXwxfDE'
+[C3b] SET-scoped (no cursor):        total=1 groups=['d0a2bcaf']
+[C3b] SET-scoped + GLOBAL cursor:    total=1 groups=[]
+[C3b] >>> groups the cursor smuggled past the scope filter: []
+[C3b] >>> replayed total still the scoped total: True
+```
+
+Zero out-of-scope groups, and `total` stays the scoped total rather than the global
+one. All these routes are `OWNER_ONLY` regardless, so this is defence in depth, but
+the structure is right: a cursor is a position, not a capability.
+
+## 10.5 Item 4 — W2: **CLOSED**
+
+```
+[C4] folder real folder        ('/vault') groups=200 total=4 scan=200
+[C4] folder slash              ('/'     ) groups=400 scan=400
+[C4] folder backslash          ('\'     ) groups=400 scan=400
+[C4] folder triple slash       ('///'   ) groups=400 scan=400
+[C4] folder mixed seps         ('/\/'   ) groups=400 scan=400
+[C4] folder double backslash   ('\\'    ) groups=400 scan=400
+[C4] folder empty              (''      ) groups=400 scan=400
+[C4] folder pct                ('%'     ) groups=200 total=0 scan=200
+```
+
+Every separator-only id is refused at the boundary on both the read and the write
+route — no silent global scan, and no poison scan row. `%` still correctly returns
+`total=0` (escaped, matches nothing) rather than being rejected, which is right: it
+is a legal, if pointless, literal folder name. Real folders unaffected.
+
+## 10.6 Round-3 test log
+
+```
+# feature/dedup-tiers @ b74bbd31
+$ pytest -q --fast-captions --force-cpu tests/test_dedup_tier_service.py \
+    tests/test_dedup_tiers_api.py tests/test_dedup_verdict_service.py \
+    tests/test_operation_log.py tests/test_architecture_guardrails.py
+170 passed, 1 warning in 250.86s (0:04:10)      # was 150 at 029525a0; +20 new author tests
+
+$ ruff check pixlstash
+All checks passed!
+```
+
+| Probe | Covers | Result |
+|---|---|---|
+| `test_C1` | 4 verdict bodies × 13 forged batch ids, + positive | **M1 CLOSED** (52/52 400) |
+| `test_C1b` | omitted id is server-minted `srv-` | closed |
+| `test_C2a` | op_type not user-controllable (AST + repo grep) | **SAFE** |
+| `test_C2b` | raising hook aborts atomically, 4 state dimensions | **SAFE** |
+| `test_C2c` | shared `cli-` batch across keep-separate + stack | **R5 — DEFECT** |
+| `test_C2d` | baseline: undo/redo reopens exactly its own verdict | correct |
+| `test_C3` | 17 cursor fuzz cases + cursor/offset conflict | no 5xx; **R6** |
+| `test_C3b` | global cursor replayed under a set scope | **SAFE** |
+| `test_C4` | separator-only folder scopes, read + write route | **W2 CLOSED** |
+
+Per-file, to rule out a hang: `test_dedup_verdict_service.py` 38 passed (49.83s),
+`test_dedup_tiers_api.py` 32 passed (52.19s), `test_dedup_tier_service.py` +
+`test_architecture_guardrails.py` 65 passed (36.00s), `test_operation_log.py`
+35 passed (84.49s). A first combined attempt ran >25 min without finishing while
+several probe servers of mine were still up; on a quiet machine the same command
+finished in 4m10s. **Machine contention, not a test defect** — but it is the
+load-sensitivity these suites are already known for, so a single slow CI run here
+should not be read as a hang.
+
+## 10.7 Standing items after round 3
+
+**Required before #638 merges:** R5 (the one-line `VERDICT_STACKED` filter plus the
+regression test).
+
+**Still open from earlier rounds, unchanged by these five commits:**
+W1 (the `MAX_PAIRS_PER_BUCKET` comment asserting a membership guarantee it does not
+have — round 2 §9.2), the A1 §22.8 documentation of the share-token consequence
+(round 1 §6), and G1 against `feature/gesture-batch-id` (its `re.match` + `$`
+accepts a trailing LF; the dedup-side validator added here uses `fullmatch` and is
+the implementation to keep when the two unify).
+
+**Hardening:** R6, plus round-2's W2-adjacent items and round-1's R5/R6/R7.
+
+**Independence.** Round 3 was performed by the round-1/2 reviewer, who wrote no code
+on this branch. R5 must be certified by someone other than whoever implements it.
