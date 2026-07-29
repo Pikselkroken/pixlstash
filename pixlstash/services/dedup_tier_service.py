@@ -1,0 +1,1721 @@
+"""Tiered duplicate detection: exact, bucketed near, and embedding.
+
+The v1.9 Dedup -> Stacks design replaces the "Similarity to ..." sort order with
+a **Duplicates** destination whose queue is filled by three tiers of increasing
+cost and decreasing certainty. This module owns detection, the tier policy, the
+cover preselection and the evidence pills; :mod:`pixlstash.services.dedup_verdict_service`
+owns what happens when the user decides.
+
+Tier 1 — exact
+--------------
+``GROUP BY`` on an indexed hash column. **The column is the existing
+``picture.pixel_sha``** (``Field(default=None, index=True)`` in
+:mod:`pixlstash.db_models.picture`), not a new one. Being honest about what it
+is: ``ImageUtils._calculate_sha256_digest`` hashes the whole file only up to
+128 KiB and otherwise samples 8 chunks of 8 KiB spread across the file, so it is
+a *sampled* content digest, not a full-file SHA-256. Two files can in principle
+share a ``pixel_sha`` while differing in an unsampled region.
+
+That is why tier 1 groups on ``(pixel_sha, size_bytes)`` rather than
+``pixel_sha`` alone: the sample offsets are derived from the file size, so equal
+size plus equal sampled digest is a far stronger claim than the digest alone,
+and the extra column costs nothing (the ``pixel_sha`` index already narrows the
+group). It is still not a cryptographic identity proof, which is exactly why the
+design routes exact matches through a bulk auto-stack **dialog** with a dry-run
+count rather than stacking them at import without consent, and why no tier ever
+deletes anything.
+
+A new full-file hash column was considered and rejected: it would mean re-reading
+every byte of every file in the library on upgrade to buy a guarantee the feature
+does not need (the failure mode of a false exact match is two genuinely different
+pictures ending up in one *stack*, which is reversible with one keystroke).
+``pixel_sha`` is already computed incrementally on every import path, and
+:class:`~pixlstash.tasks.missing_pixel_sha_finder.MissingPixelShaFinder` backfills
+the rows that predate it.
+
+Tier 2 — bucketed near
+----------------------
+Perceptual hashes compared **only within candidate buckets**, never library-wide.
+The buckets reuse what the library already precomputes:
+
+* ``picture.size_bin_index`` — an indexed ``(width << 32) + height`` column
+  maintained by ``LikenessParameterUtils.size_bin_index``. Exact-dimension
+  bucket; catches re-saves, re-encodes and burst frames.
+* capture minute — ``created_at`` truncated to the minute; catches bursts and
+  re-exports that changed dimensions.
+* import batch / folder — ``import_source_folder``, and the containing directory
+  of ``file_path`` for reference-folder pictures.
+
+``LikenessParameter.PHASH_PREFIX`` was investigated and is deliberately **not**
+used as a bucket key. Despite the name it stores the *entire* 64-bit dHash
+linearly normalised into ``[0, 1]`` (``int(phash[:16], 16) / (2**64 - 1)``), so
+numeric proximity in that slot is dominated by the top bit and says nothing about
+Hamming proximity. ``LikenessUtils.PHASH_PREFIX_LEN = 3`` is dead code with no
+reader. Within a bucket this module does the real thing: XOR + popcount over the
+64-bit dHash, vectorised with numpy.
+
+Each bucket is an independent unit of work, so buckets stream into the queue as
+they finish rather than the queue waiting for a full pass.
+
+Tier 3 — embedding
+------------------
+The existing :class:`~pixlstash.db_models.picture_likeness.PictureLikeness` edge
+table, folded into components by the shipped
+:mod:`pixlstash.services.dedup_sweep_service` planner. Opt-in, appended to the
+same queue. Nothing is recomputed: this tier is a different reading of data the
+image-embedding worker already produced.
+
+Policy
+------
+:class:`TierPolicy` replaces the shipped :class:`~pixlstash.services.dedup_sweep_service.SweepPolicy`
+auto/review split *for the queue*. Tier 1 is always on and cannot be switched
+off; each looser tier is a separate opt-in that requires the tier above it; the
+similarity threshold defaults to 0.90 and **nothing below 0.65 is ever
+suggested**. The dry-run planner and its report stay exactly as shipped — they
+are the non-destructive foundation this builds on, and ``SweepPolicy`` remains
+the parameter object for that surface.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional
+
+import numpy as np
+from sqlalchemy import func
+from sqlmodel import Session, select
+
+from pixlstash.db_models import Picture
+from pixlstash.db_models.dedup import (
+    SCAN_PENDING,
+    TIER_EMBEDDING,
+    TIER_EXACT,
+    TIER_NEAR,
+    VERDICT_KEEP_SEPARATE,
+    VERDICT_STACKED,
+    DedupGroup,
+    DedupGroupMember,
+    DedupScan,
+    DedupVerdict,
+)
+from pixlstash.db_models.picture_project import PictureProjectMember
+from pixlstash.db_models.picture_set import PictureSetMember
+from pixlstash.db_models.face import Face
+from pixlstash.db_models.tag import Tag
+from pixlstash.pixl_logging import get_logger
+from pixlstash.services import dedup_sweep_service
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pixlstash.vault import Vault
+
+logger = get_logger(__name__)
+
+# --- Policy constants -------------------------------------------------------
+
+DEFAULT_THRESHOLD = 0.90
+"""The near-duplicate similarity default (design §7 "Threshold")."""
+
+MIN_THRESHOLD = 0.65
+"""Hard floor. Below this nothing is suggested at all — a low threshold produces
+confident-looking garbage and destroys trust in the sidebar count. Requests below
+it are a 400, never a silent clamp."""
+
+MAX_THRESHOLD = 0.99999
+
+DEFAULT_MIN_GROUP_SIZE = 2
+DEFAULT_MAX_GROUP_SIZE = 24
+"""Ceiling on a single detected group. A larger transitively-chained blob is
+almost never one duplicate cluster; it is split no further but reported with a
+lower confidence so it sorts to the bottom of the queue."""
+
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 200
+
+MAX_BUCKET_MEMBERS = 4000
+"""Cap on one tier-2 bucket. The within-bucket comparison is O(k^2) popcounts,
+which numpy does in milliseconds at k=4000 (~8M pairs); beyond that the bucket is
+split by hash prefix rather than being dropped, so nothing is silently skipped."""
+
+PHASH_BITS = 64
+PHASH_HEX_LEN = PHASH_BITS // 4
+
+RAW_FORMATS = frozenset(
+    {
+        "raw",
+        "arw",
+        "cr2",
+        "cr3",
+        "crw",
+        "dng",
+        "erf",
+        "nef",
+        "nrw",
+        "orf",
+        "pef",
+        "raf",
+        "rw2",
+        "sr2",
+        "srw",
+        "x3f",
+    }
+)
+"""Formats treated as a camera original by the cover formula's RAW bonus."""
+
+COVER_RAW_BONUS = 8.0
+COVER_PIXEL_WEIGHT = 4.0
+COVER_TAG_WEIGHT = 3.0
+COVER_SCORE_WEIGHT = 2.0
+
+ID_CHUNK = 900
+"""SQLite bound-variable safety margin for ``IN`` loads."""
+
+
+class DedupTier(str, Enum):
+    """The three detection tiers, ordered strongest evidence first."""
+
+    EXACT = TIER_EXACT
+    NEAR = TIER_NEAR
+    EMBEDDING = TIER_EMBEDDING
+
+
+TIER_ORDER: tuple[DedupTier, ...] = (
+    DedupTier.EXACT,
+    DedupTier.NEAR,
+    DedupTier.EMBEDDING,
+)
+
+
+class ScopeType(str, Enum):
+    """Where a scan or a count is scoped to.
+
+    ``GLOBAL`` is the sidebar's vault-wide badge; the rest are the context-menu
+    "Find duplicates in ..." entry points.
+    """
+
+    GLOBAL = "global"
+    PROJECT = "project"
+    SET = "set"
+    CHARACTER = "character"
+    FOLDER = "folder"
+
+
+@dataclass(frozen=True)
+class DedupScope:
+    """A scan / count scope and the SQL that narrows a picture query to it.
+
+    Attributes:
+        scope_type: Which collection kind, or :attr:`ScopeType.GLOBAL`.
+        scope_id: The collection's id, or the absolute folder path for
+            :attr:`ScopeType.FOLDER`. ``None`` only for ``GLOBAL``.
+    """
+
+    scope_type: ScopeType = ScopeType.GLOBAL
+    scope_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scope_type, ScopeType):
+            object.__setattr__(self, "scope_type", ScopeType(str(self.scope_type)))
+        if self.scope_type is ScopeType.GLOBAL:
+            object.__setattr__(self, "scope_id", None)
+        elif self.scope_id is None or str(self.scope_id) == "":
+            raise ValueError(f"scope_id is required for scope_type={self.scope_type}")
+
+    @property
+    def key(self) -> str:
+        """Canonical ``DedupScan.scope_key`` for this scope."""
+        if self.scope_type is ScopeType.GLOBAL:
+            return "global"
+        return f"{self.scope_type.value}:{self.scope_id}"
+
+    def picture_predicate(self):
+        """Return the SQLAlchemy predicate restricting ``Picture`` to this scope.
+
+        ``None`` for the global scope, so a caller can skip the ``WHERE`` entirely
+        rather than emitting a tautology.
+        """
+        if self.scope_type is ScopeType.GLOBAL:
+            return None
+        if self.scope_type is ScopeType.PROJECT:
+            return Picture.id.in_(
+                select(PictureProjectMember.picture_id).where(
+                    PictureProjectMember.project_id == int(self.scope_id)
+                )
+            )
+        if self.scope_type is ScopeType.SET:
+            return Picture.id.in_(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.set_id == int(self.scope_id)
+                )
+            )
+        if self.scope_type is ScopeType.CHARACTER:
+            return Picture.id.in_(
+                select(Face.picture_id).where(Face.character_id == int(self.scope_id))
+            )
+        # FOLDER: a picture is in the folder when it was imported from it or its
+        # file lives under it. Both are prefix matches on an indexed column.
+        prefix = str(self.scope_id).rstrip("/\\")
+        return (Picture.import_source_folder == prefix) | (
+            Picture.file_path.like(f"{prefix}%")
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope_type": self.scope_type.value,
+            "scope_id": self.scope_id,
+            "key": self.key,
+        }
+
+
+@dataclass(frozen=True)
+class TierPolicy:
+    """Which tiers feed the queue, and how similar is similar enough.
+
+    This is the design's tier gating, and it replaces ``SweepPolicy``'s
+    auto/review split as the queue's policy surface. Validated in
+    ``__post_init__``: an invalid combination raises :class:`ValueError` (the
+    route turns that into a 400) rather than being silently corrected, because a
+    silently-retuned duplicate scan is exactly the surprise the feature cannot
+    afford.
+
+    Attributes:
+        near_enabled: Tier 2. Opt-in.
+        embedding_enabled: Tier 3. Opt-in, and requires ``near_enabled`` — the
+            design's "enabling one requires the tier above it", so a user cannot
+            land on "same scene" suggestions without having deliberately walked
+            down to them.
+        threshold: Minimum similarity for a near / embedding group to be
+            suggested at all. Defaults to :data:`DEFAULT_THRESHOLD`; may never go
+            below :data:`MIN_THRESHOLD`.
+        min_group_size: Smallest group that counts.
+        max_group_size: Groups larger than this keep their members but are
+            flagged in their evidence and pushed down the queue.
+
+    Tier 1 (exact) has no flag. It is always included and cannot be switched off.
+    """
+
+    near_enabled: bool = False
+    embedding_enabled: bool = False
+    threshold: float = DEFAULT_THRESHOLD
+    min_group_size: int = DEFAULT_MIN_GROUP_SIZE
+    max_group_size: int = DEFAULT_MAX_GROUP_SIZE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.threshold, (int, float)) or not (
+            MIN_THRESHOLD <= float(self.threshold) <= MAX_THRESHOLD
+        ):
+            raise ValueError(
+                f"threshold must be between {MIN_THRESHOLD} and {MAX_THRESHOLD}, "
+                f"got {self.threshold!r}. Below {MIN_THRESHOLD} nothing is "
+                "suggested at all."
+            )
+        if self.embedding_enabled and not self.near_enabled:
+            raise ValueError(
+                "embedding_enabled requires near_enabled: each looser tier "
+                "requires the tier above it"
+            )
+        if int(self.min_group_size) < 2:
+            raise ValueError(
+                f"min_group_size must be at least 2, got {self.min_group_size!r}"
+            )
+        if int(self.max_group_size) < int(self.min_group_size):
+            raise ValueError(
+                "max_group_size must be >= min_group_size "
+                f"({self.max_group_size} < {self.min_group_size})"
+            )
+
+    @property
+    def tiers(self) -> tuple[DedupTier, ...]:
+        """The enabled tiers, strongest first. Always starts with EXACT."""
+        enabled = [DedupTier.EXACT]
+        if self.near_enabled:
+            enabled.append(DedupTier.NEAR)
+        if self.embedding_enabled:
+            enabled.append(DedupTier.EMBEDDING)
+        return tuple(enabled)
+
+    def includes(self, tier: DedupTier) -> bool:
+        """Whether *tier* is switched on."""
+        return tier in self.tiers
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "near_enabled": bool(self.near_enabled),
+            "embedding_enabled": bool(self.embedding_enabled),
+            "threshold": float(self.threshold),
+            "min_group_size": int(self.min_group_size),
+            "max_group_size": int(self.max_group_size),
+        }
+
+
+@dataclass
+class CandidateMember:
+    """One picture in a detected group, with everything cover + evidence need.
+
+    Loaded once per group by :func:`load_candidates`; the queue page never reads
+    a picture row a second time.
+    """
+
+    id: int
+    file_path: Optional[str] = None
+    format: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    size_bytes: Optional[int] = None
+    score: Optional[int] = None
+    created_at: Optional[datetime] = None
+    imported_at: Optional[datetime] = None
+    stack_id: Optional[int] = None
+    reference_folder_id: Optional[int] = None
+    pixel_sha: Optional[str] = None
+    perceptual_hash: Optional[str] = None
+    tag_count: int = 0
+
+    @property
+    def pixels(self) -> int:
+        """Total pixel count; 0 when the dimensions were never recorded."""
+        return int(self.width or 0) * int(self.height or 0)
+
+    @property
+    def megapixels(self) -> float:
+        return round(self.pixels / 1_000_000.0, 2)
+
+    @property
+    def is_raw(self) -> bool:
+        """Whether this is a camera original, by format or by file extension."""
+        fmt = (self.format or "").strip().lower().lstrip(".")
+        if fmt in RAW_FORMATS:
+            return True
+        path = self.file_path or ""
+        suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        return suffix in RAW_FORMATS
+
+    @property
+    def aspect_ratio(self) -> Optional[float]:
+        if not self.width or not self.height:
+            return None
+        return round(float(self.width) / float(self.height), 4)
+
+    @property
+    def content_key(self) -> str:
+        """The member's contribution to the group signature.
+
+        ``pixel_sha`` when it exists. A picture whose hash has not been computed
+        yet falls back to ``id:<n>``, which is stable but *not* stable across a
+        re-import of the same file — so a verdict made on a group containing such
+        a member will be re-asked after a re-import. That is the honest
+        behaviour: pretending two un-hashed rows are the same file would make the
+        verdict memory lie. ``MissingPixelShaFinder`` closes the gap in the
+        background.
+        """
+        return self.pixel_sha or f"id:{self.id}"
+
+    @property
+    def cover_score(self) -> float:
+        """The design's cover formula: ``px*4 + tags*3 + userScore*2 + RAW``."""
+        return (
+            self.megapixels * COVER_PIXEL_WEIGHT
+            + float(self.tag_count) * COVER_TAG_WEIGHT
+            + float(self.score or 0) * COVER_SCORE_WEIGHT
+            + (COVER_RAW_BONUS if self.is_raw else 0.0)
+        )
+
+    def as_dict(self, *, why: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+        """Serialise for the queue / compare API.
+
+        ``file_path`` is included **only for reference-folder pictures** (design
+        §7 "Paths only where they matter"): there the user manages the files and
+        needs to know which copy is which, while for a managed-library picture
+        the path is an implementation detail.
+        """
+        return {
+            "picture_id": self.id,
+            "width": self.width,
+            "height": self.height,
+            "megapixels": self.megapixels,
+            "size_bytes": self.size_bytes,
+            "format": self.format,
+            "is_raw": self.is_raw,
+            "score": self.score,
+            "tag_count": self.tag_count,
+            "created_at": self.created_at,
+            "imported_at": self.imported_at,
+            "stack_id": self.stack_id,
+            "reference_folder_id": self.reference_folder_id,
+            "file_path": (
+                self.file_path if self.reference_folder_id is not None else None
+            ),
+            "cover_score": round(self.cover_score, 4),
+            "why": why if why is not None else [],
+        }
+
+
+@dataclass
+class DetectedGroup:
+    """A group produced by one of the tiers, before it is persisted.
+
+    Attributes:
+        tier: Which tier found it.
+        confidence: 1.0 for exact; the weakest pairwise similarity otherwise.
+        members: Every member, in cover-preselection order (cover first).
+        cover_picture_id: The cover preselection.
+        evidence: The group-level why-pills.
+        signature: The verdict-memory key.
+    """
+
+    tier: DedupTier
+    confidence: float
+    members: list[CandidateMember]
+    cover_picture_id: int
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    signature: str = ""
+
+    @property
+    def picture_ids(self) -> list[int]:
+        return [member.id for member in self.members]
+
+
+# --- Signature --------------------------------------------------------------
+
+
+def group_signature(content_keys: Iterable[str]) -> str:
+    """Stable identity for a *set of files*, independent of ids and order.
+
+    The design keys verdict memory on "sorted member content hashes"; this is
+    that, hashed down to a fixed-width string so it indexes cheaply. Sorting
+    first is what makes the signature survive a rescan finding the members in a
+    different order, and hashing content rather than ids is what makes it survive
+    a re-import that assigns new picture ids.
+
+    Args:
+        content_keys: Per-member content keys (see
+            :attr:`CandidateMember.content_key`).
+
+    Returns:
+        A 64-character lowercase hex digest.
+    """
+    joined = "\x1f".join(sorted(str(key) for key in content_keys))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+# --- Cover selection --------------------------------------------------------
+
+
+def cover_order_key(member: CandidateMember) -> tuple[float, float, int]:
+    """Sort key implementing the design's cover rule.
+
+    ``pixels*4 + tags*3 + userScore*2 + RAW bonus``, highest wins; ties break to
+    the **oldest capture time** (the original, not a later re-export), then to
+    the lowest id so the choice is deterministic for two rows with no timestamp.
+    """
+    created = member.created_at
+    created_ts = created.timestamp() if isinstance(created, datetime) else float("inf")
+    return (-member.cover_score, created_ts, int(member.id))
+
+
+def select_cover(members: list[CandidateMember]) -> int:
+    """Return the preselected cover's picture id.
+
+    Never silent: the caller surfaces this as a *preselection* the user overrides
+    with 1-9, together with the per-candidate evidence that explains it.
+    """
+    if not members:
+        raise ValueError("select_cover requires at least one member")
+    return min(members, key=cover_order_key).id
+
+
+# --- Evidence ---------------------------------------------------------------
+
+
+def _pill(text: str, against: bool = False) -> dict[str, Any]:
+    """One why-pill: matching evidence (olive check) or evidence against (red x)."""
+    return {"text": text, "against": bool(against)}
+
+
+def _humanise_gap(seconds: float) -> str:
+    if seconds < 2:
+        return f"{seconds:.1f}s apart"
+    if seconds < 120:
+        return f"{int(round(seconds))}s apart"
+    if seconds < 7200:
+        return f"{int(round(seconds / 60))} min apart"
+    if seconds < 172800:
+        return f"{int(round(seconds / 3600))} hours apart"
+    return f"{int(round(seconds / 86400))} days apart"
+
+
+def build_group_evidence(
+    tier: DedupTier, confidence: float, members: list[CandidateMember]
+) -> list[dict[str, Any]]:
+    """The group-level why-pills, both directions.
+
+    The design's rule is that signals cut both ways: matching evidence is an
+    olive check, anything arguing *against* a stack is a red x, and a group
+    carrying red pills is exactly the one that needs Compare. So this deliberately
+    reports resolution / aspect-ratio / format mismatches alongside the match.
+
+    Nothing here is a conclusion — the client renders reasons and the user
+    decides.
+    """
+    pills: list[dict[str, Any]] = []
+    if tier is DedupTier.EXACT:
+        pills.append(_pill("Identical file hash"))
+    else:
+        pills.append(_pill(f"{int(round(confidence * 100))}% visual match"))
+
+    dimensions = {(m.width, m.height) for m in members if m.width and m.height}
+    if len(dimensions) == 1:
+        pills.append(_pill("Same dimensions"))
+    elif len(dimensions) > 1:
+        pills.append(_pill("Different resolution", against=True))
+
+    ratios = {m.aspect_ratio for m in members if m.aspect_ratio is not None}
+    if len(ratios) > 1 and max(ratios) - min(ratios) > 0.01:
+        pills.append(_pill("Different aspect ratio", against=True))
+
+    formats = {(m.format or "").lower() for m in members if m.format}
+    if len(formats) > 1:
+        pills.append(_pill("Different file format", against=True))
+
+    captures = sorted(m.created_at for m in members if m.created_at is not None)
+    if len(captures) >= 2:
+        span = (captures[-1] - captures[0]).total_seconds()
+        if span <= 1.0:
+            pills.append(_pill("Same capture second"))
+        elif span <= 5.0:
+            pills.append(_pill(f"Burst - {_humanise_gap(span)}"))
+        else:
+            pills.append(_pill(f"Captured {_humanise_gap(span)}"))
+
+    folders = {_parent_folder(m.file_path) for m in members if m.file_path}
+    folders.discard(None)
+    if len(folders) == 1 and len(members) > 1:
+        pills.append(_pill("Same folder"))
+
+    imports = sorted(m.imported_at for m in members if m.imported_at is not None)
+    if len(imports) >= 2:
+        span = (imports[-1] - imports[0]).total_seconds()
+        if span <= 600:
+            pills.append(_pill(f"Imported {_humanise_gap(span)}"))
+
+    return pills
+
+
+def build_candidate_evidence(
+    member: CandidateMember, members: list[CandidateMember], cover_id: int
+) -> list[dict[str, Any]]:
+    """Per-candidate why-pills, so the client renders reasons, not conclusions.
+
+    These are the signals the cover formula actually used, stated per candidate:
+    what this picture is best at, and where it loses. The client pairs them with
+    the numeric ``cover_score`` so a user can see *why* the preselection landed
+    where it did and disagree with it.
+    """
+    pills: list[dict[str, Any]] = []
+    best_pixels = max((m.pixels for m in members), default=0)
+    best_tags = max((m.tag_count for m in members), default=0)
+    best_score = max((int(m.score or 0) for m in members), default=0)
+
+    if member.pixels and member.pixels == best_pixels:
+        pills.append(_pill("Highest resolution"))
+    elif member.pixels and best_pixels:
+        shortfall = 100 - int(round(100 * member.pixels / best_pixels))
+        pills.append(_pill(f"{shortfall}% fewer pixels than the best", against=True))
+
+    if member.is_raw:
+        pills.append(_pill("Camera original (RAW)"))
+
+    if best_tags and member.tag_count == best_tags:
+        pills.append(_pill(f"Most metadata ({member.tag_count} tags)"))
+    elif best_tags and member.tag_count < best_tags:
+        pills.append(
+            _pill(
+                f"Fewer tags than the best ({member.tag_count} of {best_tags})",
+                against=True,
+            )
+        )
+
+    if best_score and int(member.score or 0) == best_score:
+        pills.append(_pill(f"Highest score ({best_score})"))
+
+    if member.id == cover_id:
+        pills.append(_pill("Preselected as cover"))
+    return pills
+
+
+def _parent_folder(file_path: Optional[str]) -> Optional[str]:
+    if not file_path:
+        return None
+    normalised = file_path.replace("\\", "/")
+    if "/" not in normalised:
+        return None
+    return normalised.rsplit("/", 1)[0]
+
+
+# --- Candidate loading ------------------------------------------------------
+
+
+def load_candidates(
+    session: Session, picture_ids: Iterable[int]
+) -> dict[int, CandidateMember]:
+    """Load the cover / evidence columns for *picture_ids*, plus their tag counts.
+
+    One query per id chunk for the picture columns and one for the tag counts —
+    never a per-picture round trip, because the queue loads a whole page of
+    groups at once.
+    """
+    ordered = sorted({int(pid) for pid in picture_ids})
+    if not ordered:
+        return {}
+    members: dict[int, CandidateMember] = {}
+    for start in range(0, len(ordered), ID_CHUNK):
+        chunk = ordered[start : start + ID_CHUNK]
+        rows = session.exec(
+            select(
+                Picture.id,
+                Picture.file_path,
+                Picture.format,
+                Picture.width,
+                Picture.height,
+                Picture.size_bytes,
+                Picture.score,
+                Picture.created_at,
+                Picture.imported_at,
+                Picture.stack_id,
+                Picture.reference_folder_id,
+                Picture.pixel_sha,
+                Picture.perceptual_hash,
+            ).where(Picture.id.in_(chunk), Picture.deleted.is_(False))
+        ).all()
+        for row in rows:
+            members[int(row[0])] = CandidateMember(
+                id=int(row[0]),
+                file_path=row[1],
+                format=row[2],
+                width=row[3],
+                height=row[4],
+                size_bytes=row[5],
+                score=row[6],
+                created_at=row[7],
+                imported_at=row[8],
+                stack_id=row[9],
+                reference_folder_id=row[10],
+                pixel_sha=row[11],
+                perceptual_hash=row[12],
+            )
+        tag_rows = session.exec(
+            select(Tag.picture_id, func.count(Tag.id))
+            .where(Tag.picture_id.in_(chunk))
+            .group_by(Tag.picture_id)
+        ).all()
+        for picture_id, count in tag_rows:
+            member = members.get(int(picture_id))
+            if member is not None:
+                member.tag_count = int(count or 0)
+    return members
+
+
+def assemble_group(
+    tier: DedupTier, confidence: float, members: list[CandidateMember]
+) -> DetectedGroup:
+    """Turn raw members into a :class:`DetectedGroup` with cover and evidence."""
+    ordered = sorted(members, key=cover_order_key)
+    cover_id = ordered[0].id
+    return DetectedGroup(
+        tier=tier,
+        confidence=round(float(confidence), 6),
+        members=ordered,
+        cover_picture_id=cover_id,
+        evidence=build_group_evidence(tier, confidence, ordered),
+        signature=group_signature(m.content_key for m in ordered),
+    )
+
+
+# --- Tier 1: exact ----------------------------------------------------------
+
+
+def find_exact_groups_in_session(
+    session: Session, scope: Optional[DedupScope] = None
+) -> list[DetectedGroup]:
+    """Tier 1. ``GROUP BY pixel_sha, size_bytes HAVING count(*) > 1``.
+
+    Two indexed-column queries: one aggregate to find the duplicated hashes, one
+    to pull the member ids for exactly those hashes. No image is decoded, no
+    model runs, and the whole tier is milliseconds on a library-sized table
+    because ``picture.pixel_sha`` is indexed.
+
+    See the module docstring for why ``size_bytes`` is a co-key.
+    """
+    scope = scope or DedupScope()
+    predicate = scope.picture_predicate()
+
+    duplicated = (
+        select(Picture.pixel_sha, Picture.size_bytes)
+        .where(
+            Picture.pixel_sha.is_not(None),
+            Picture.deleted.is_(False),
+        )
+        .group_by(Picture.pixel_sha, Picture.size_bytes)
+        .having(func.count(Picture.id) > 1)
+    )
+    if predicate is not None:
+        duplicated = duplicated.where(predicate)
+    keys = [(row[0], row[1]) for row in session.exec(duplicated).all()]
+    if not keys:
+        return []
+
+    shas = sorted({key[0] for key in keys})
+    wanted = set(keys)
+    by_key: dict[tuple[Optional[str], Optional[int]], list[int]] = defaultdict(list)
+    for start in range(0, len(shas), ID_CHUNK):
+        chunk = shas[start : start + ID_CHUNK]
+        member_query = select(Picture.id, Picture.pixel_sha, Picture.size_bytes).where(
+            Picture.pixel_sha.in_(chunk), Picture.deleted.is_(False)
+        )
+        if predicate is not None:
+            member_query = member_query.where(predicate)
+        for picture_id, sha, size_bytes in session.exec(member_query).all():
+            key = (sha, size_bytes)
+            if key in wanted:
+                by_key[key].append(int(picture_id))
+
+    member_ids = [ids for ids in by_key.values() if len(ids) > 1]
+    candidates = load_candidates(session, [pid for ids in member_ids for pid in ids])
+    groups: list[DetectedGroup] = []
+    for ids in member_ids:
+        members = [candidates[pid] for pid in ids if pid in candidates]
+        if len(members) < 2:
+            continue
+        groups.append(assemble_group(DedupTier.EXACT, 1.0, members))
+    logger.info(
+        "[dedup-tier1] scope=%s produced %d exact group(s) from %d hash key(s)",
+        scope.key,
+        len(groups),
+        len(keys),
+    )
+    return groups
+
+
+# --- Tier 2: bucketed near --------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NearBucket:
+    """One candidate bucket: a bucket key and the picture ids inside it.
+
+    A bucket is a unit of work. It is scanned on its own, its groups become
+    visible in the queue as soon as it finishes, and its cost is bounded by
+    :data:`MAX_BUCKET_MEMBERS`.
+    """
+
+    kind: str
+    key: str
+    picture_ids: tuple[int, ...]
+
+
+def _bucket_rows(session: Session, scope: DedupScope) -> list[tuple]:
+    """Load the bucketing columns for every picture that has a perceptual hash."""
+    query = select(
+        Picture.id,
+        Picture.size_bin_index,
+        Picture.created_at,
+        Picture.import_source_folder,
+        Picture.file_path,
+    ).where(
+        Picture.deleted.is_(False),
+        Picture.perceptual_hash.is_not(None),
+    )
+    predicate = scope.picture_predicate()
+    if predicate is not None:
+        query = query.where(predicate)
+    return list(session.exec(query).all())
+
+
+def build_near_buckets(
+    session: Session, scope: Optional[DedupScope] = None
+) -> list[NearBucket]:
+    """Group the scope's pictures into tier-2 candidate buckets.
+
+    Four bucket kinds, all cheap and all reusing precomputed columns:
+
+    * ``size_bin`` — the indexed ``picture.size_bin_index`` (exact width/height).
+    * ``capture_minute`` — ``created_at`` truncated to the minute.
+    * ``import_folder`` — the ``import_source_folder`` batch.
+    * ``folder`` — the containing directory of ``file_path``.
+
+    A picture appears in several buckets; that is the point. Buckets larger than
+    :data:`MAX_BUCKET_MEMBERS` are split on the leading hex digits of the picture
+    id ordering rather than dropped, so no candidate is silently skipped.
+
+    Singleton buckets are discarded here rather than in the scan, so the scan's
+    "N of M buckets" progress describes real work.
+    """
+    scope = scope or DedupScope()
+    grouped: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for picture_id, size_bin, created_at, import_folder, file_path in _bucket_rows(
+        session, scope
+    ):
+        picture_id = int(picture_id)
+        if size_bin is not None:
+            grouped[("size_bin", str(size_bin))].append(picture_id)
+        if isinstance(created_at, datetime):
+            grouped[("capture_minute", created_at.strftime("%Y-%m-%dT%H:%M"))].append(
+                picture_id
+            )
+        if import_folder:
+            grouped[("import_folder", str(import_folder))].append(picture_id)
+        folder = _parent_folder(file_path)
+        if folder:
+            grouped[("folder", folder)].append(picture_id)
+
+    buckets: list[NearBucket] = []
+    for (kind, key), ids in grouped.items():
+        if len(ids) < 2:
+            continue
+        ordered = sorted(set(ids))
+        if len(ordered) <= MAX_BUCKET_MEMBERS:
+            buckets.append(NearBucket(kind=kind, key=key, picture_ids=tuple(ordered)))
+            continue
+        # Oversized bucket: split into contiguous shards. Neighbouring ids come
+        # from the same import run, so a shard boundary rarely separates a real
+        # pair, and the alternative (dropping the bucket) would hide duplicates.
+        logger.info(
+            "[dedup-tier2] bucket %s=%s has %d members; splitting into shards of %d",
+            kind,
+            key,
+            len(ordered),
+            MAX_BUCKET_MEMBERS,
+        )
+        for start in range(0, len(ordered), MAX_BUCKET_MEMBERS):
+            shard = ordered[start : start + MAX_BUCKET_MEMBERS]
+            if len(shard) < 2:
+                continue
+            buckets.append(
+                NearBucket(
+                    kind=kind,
+                    key=f"{key}#{start // MAX_BUCKET_MEMBERS}",
+                    picture_ids=tuple(shard),
+                )
+            )
+    buckets.sort(key=lambda bucket: (bucket.kind, bucket.key))
+    logger.info(
+        "[dedup-tier2] scope=%s produced %d candidate bucket(s)",
+        scope.key,
+        len(buckets),
+    )
+    return buckets
+
+
+def _popcount64(values: np.ndarray) -> np.ndarray:
+    """Vectorised 64-bit population count (SWAR), matching ``likeness_utils``."""
+    counts = values - ((values >> np.uint64(1)) & np.uint64(0x5555555555555555))
+    counts = (counts & np.uint64(0x3333333333333333)) + (
+        (counts >> np.uint64(2)) & np.uint64(0x3333333333333333)
+    )
+    counts = (counts + (counts >> np.uint64(4))) & np.uint64(0x0F0F0F0F0F0F0F0F)
+    return (counts * np.uint64(0x0101010101010101)) >> np.uint64(56)
+
+
+def near_pairs_in_bucket(
+    session: Session, bucket: NearBucket, threshold: float
+) -> list[tuple[int, int, float]]:
+    """Compare perceptual hashes **within one bucket** and return the near pairs.
+
+    ``similarity = 1 - hamming(dhash_a, dhash_b) / 64`` over the 64-bit dHash
+    stored in ``picture.perceptual_hash``. The comparison is a numpy XOR plus a
+    SWAR popcount over the bucket's upper triangle, so a 4000-member bucket is
+    ~8M popcounts — milliseconds — and the library-wide O(n^2) never happens.
+
+    Returns:
+        ``(picture_id_a, picture_id_b, similarity)`` with ``a < b``, similarity
+        at or above *threshold*.
+    """
+    ids = list(bucket.picture_ids)
+    if len(ids) < 2:
+        return []
+    values: list[int] = []
+    kept: list[int] = []
+    for start in range(0, len(ids), ID_CHUNK):
+        chunk = ids[start : start + ID_CHUNK]
+        rows = session.exec(
+            select(Picture.id, Picture.perceptual_hash).where(
+                Picture.id.in_(chunk),
+                Picture.deleted.is_(False),
+                Picture.perceptual_hash.is_not(None),
+            )
+        ).all()
+        for picture_id, phash in rows:
+            text = str(phash or "")
+            if len(text) < PHASH_HEX_LEN:
+                logger.warning(
+                    "[dedup-tier2] picture %s has a %d-char perceptual_hash %r "
+                    "(expected %d); excluded from bucket %s=%s",
+                    picture_id,
+                    len(text),
+                    text,
+                    PHASH_HEX_LEN,
+                    bucket.kind,
+                    bucket.key,
+                )
+                continue
+            try:
+                values.append(int(text[:PHASH_HEX_LEN], 16))
+            except ValueError:
+                logger.warning(
+                    "[dedup-tier2] picture %s has an unparseable perceptual_hash "
+                    "%r; excluded from bucket %s=%s",
+                    picture_id,
+                    text,
+                    bucket.kind,
+                    bucket.key,
+                )
+                continue
+            kept.append(int(picture_id))
+    if len(kept) < 2:
+        return []
+
+    hashes = np.array(values, dtype=np.uint64)
+    id_array = np.array(kept, dtype=np.int64)
+    max_hamming = int((1.0 - float(threshold)) * PHASH_BITS)
+    pairs: list[tuple[int, int, float]] = []
+    for offset in range(1, len(kept)):
+        distances = _popcount64(hashes[:-offset] ^ hashes[offset:])
+        hits = np.nonzero(distances <= max_hamming)[0]
+        if hits.size == 0:
+            continue
+        for index in hits:
+            left = int(id_array[index])
+            right = int(id_array[index + offset])
+            similarity = 1.0 - float(distances[index]) / PHASH_BITS
+            pairs.append((min(left, right), max(left, right), round(similarity, 6)))
+    return pairs
+
+
+def groups_from_pairs(
+    session: Session,
+    pairs: list[tuple[int, int, float]],
+    policy: TierPolicy,
+    tier: DedupTier = DedupTier.NEAR,
+) -> list[DetectedGroup]:
+    """Fold near pairs into connected components and assemble them.
+
+    Reuses :class:`~pixlstash.services.dedup_sweep_service._LikenessForest` — the
+    shipped union-find that already accumulates per-component min/max similarity,
+    so the group's confidence is its **weakest link**, not its strongest.
+    """
+    if not pairs:
+        return []
+    forest = dedup_sweep_service._LikenessForest()
+    for picture_id_a, picture_id_b, similarity in pairs:
+        forest.add_edge(picture_id_a, picture_id_b, similarity)
+    components = forest.components(policy.min_group_size)
+    candidates = load_candidates(
+        session, [pid for member_ids, _, _ in components for pid in member_ids]
+    )
+    groups: list[DetectedGroup] = []
+    for member_ids, similarity_min, _similarity_max in components:
+        members = [candidates[pid] for pid in member_ids if pid in candidates]
+        if len(members) < policy.min_group_size:
+            continue
+        confidence = float(similarity_min)
+        if confidence < policy.threshold:
+            continue
+        group = assemble_group(tier, confidence, members)
+        if len(members) > policy.max_group_size:
+            group.evidence.append(
+                _pill(f"Unusually large group ({len(members)} pictures)", against=True)
+            )
+        groups.append(group)
+    return groups
+
+
+def find_near_groups_in_session(
+    session: Session,
+    policy: TierPolicy,
+    scope: Optional[DedupScope] = None,
+    buckets: Optional[list[NearBucket]] = None,
+) -> list[DetectedGroup]:
+    """Tier 2 end to end: build buckets, compare inside them, assemble groups.
+
+    Callers that want the streaming behaviour (groups visible as each bucket
+    finishes) drive :func:`build_near_buckets` and :func:`near_pairs_in_bucket`
+    themselves from the task system; this convenience wrapper runs the whole
+    tier in one call and is what the tests and the synchronous scoped scan use.
+    """
+    scope = scope or DedupScope()
+    buckets = buckets if buckets is not None else build_near_buckets(session, scope)
+    pairs: dict[tuple[int, int], float] = {}
+    for bucket in buckets:
+        for picture_id_a, picture_id_b, similarity in near_pairs_in_bucket(
+            session, bucket, policy.threshold
+        ):
+            key = (picture_id_a, picture_id_b)
+            # The same pair can surface in several buckets; keep the strongest
+            # observation, which is the same number either way (the hashes do
+            # not change between buckets) but makes the merge order-independent.
+            if similarity > pairs.get(key, 0.0):
+                pairs[key] = similarity
+    edges = [(a, b, similarity) for (a, b), similarity in pairs.items()]
+    return groups_from_pairs(session, edges, policy, DedupTier.NEAR)
+
+
+# --- Tier 3: embedding ------------------------------------------------------
+
+
+def find_embedding_groups_in_session(
+    session: Session, policy: TierPolicy, scope: Optional[DedupScope] = None
+) -> list[DetectedGroup]:
+    """Tier 3. Fold the existing likeness edge table into groups.
+
+    Nothing is recomputed: this reads the ``PictureLikeness`` rows the image
+    embedding worker already produced, through the shipped keyset-paginated
+    edge stream, so the tier costs one table scan and no GPU time. Opt-in
+    because that table is only complete once the embedding worker has caught up.
+    """
+    scope = scope or DedupScope()
+    in_scope: Optional[set[int]] = None
+    predicate = scope.picture_predicate()
+    if predicate is not None:
+        in_scope = {
+            int(row)
+            for row in session.exec(
+                select(Picture.id).where(Picture.deleted.is_(False), predicate)
+            ).all()
+        }
+        if not in_scope:
+            return []
+
+    pairs: list[tuple[int, int, float]] = []
+    for (
+        picture_id_a,
+        picture_id_b,
+        likeness,
+    ) in dedup_sweep_service.stream_likeness_edges(session, policy.threshold):
+        if in_scope is not None and (
+            picture_id_a not in in_scope or picture_id_b not in in_scope
+        ):
+            continue
+        pairs.append((picture_id_a, picture_id_b, likeness))
+    return groups_from_pairs(session, pairs, policy, DedupTier.EMBEDDING)
+
+
+# --- Persistence ------------------------------------------------------------
+
+
+def verdict_signatures_in_session(
+    session: Session, signatures: Iterable[str]
+) -> set[str]:
+    """Return the subset of *signatures* that already carry a live verdict.
+
+    A verdict with ``reopened_at`` set is not live: reopening returns the group
+    to the queue, which is exactly what "permanent until the user reopens it"
+    means.
+    """
+    wanted = sorted({str(signature) for signature in signatures})
+    if not wanted:
+        return set()
+    found: set[str] = set()
+    for start in range(0, len(wanted), ID_CHUNK):
+        chunk = wanted[start : start + ID_CHUNK]
+        rows = session.exec(
+            select(DedupVerdict.signature).where(
+                DedupVerdict.signature.in_(chunk),
+                DedupVerdict.reopened_at.is_(None),
+            )
+        ).all()
+        found.update(str(row) for row in rows)
+    return found
+
+
+def persist_groups_in_session(
+    session: Session,
+    groups: list[DetectedGroup],
+    scan_id: Optional[int] = None,
+) -> int:
+    """Upsert detected groups on their signature; return how many are unresolved.
+
+    Upserting rather than inserting is what makes a rescan idempotent: the same
+    files produce the same signature, so the row is refreshed in place and the
+    queue does not grow duplicates of its own. A group whose signature already
+    carries a live verdict is stored ``resolved=True`` and never re-asked.
+    """
+    if not groups:
+        return 0
+    resolved_signatures = verdict_signatures_in_session(
+        session, (group.signature for group in groups)
+    )
+    unresolved = 0
+    for group in groups:
+        existing = session.exec(
+            select(DedupGroup).where(DedupGroup.signature == group.signature)
+        ).first()
+        resolved = group.signature in resolved_signatures
+        if existing is None:
+            row = DedupGroup(
+                signature=group.signature,
+                tier=group.tier.value,
+                confidence=group.confidence,
+                member_count=len(group.members),
+                cover_picture_id=group.cover_picture_id,
+                evidence=json.dumps(group.evidence),
+                resolved=resolved,
+                scan_id=scan_id,
+            )
+            session.add(row)
+            session.flush()
+        else:
+            row = existing
+            row.tier = group.tier.value
+            row.confidence = group.confidence
+            row.member_count = len(group.members)
+            row.cover_picture_id = group.cover_picture_id
+            row.evidence = json.dumps(group.evidence)
+            row.resolved = resolved
+            row.scan_id = scan_id
+            session.add(row)
+            session.exec(
+                DedupGroupMember.__table__.delete().where(
+                    DedupGroupMember.__table__.c.group_id == row.id
+                )
+            )
+        for position, member in enumerate(group.members):
+            session.add(
+                DedupGroupMember(
+                    group_id=int(row.id), picture_id=member.id, position=position
+                )
+            )
+        if not resolved:
+            unresolved += 1
+    session.commit()
+    return unresolved
+
+
+def prune_stale_groups_in_session(session: Session) -> int:
+    """Drop groups whose members no longer exist or no longer number two.
+
+    Called after any verdict and at the start of a rescan. Without it a group
+    whose members were soft-deleted would keep inflating the sidebar badge, and
+    the badge is the whole reason the verdict memory exists.
+    """
+    live_counts = dict(
+        session.exec(
+            select(DedupGroupMember.group_id, func.count(DedupGroupMember.picture_id))
+            .join(Picture, Picture.id == DedupGroupMember.picture_id)
+            .where(Picture.deleted.is_(False))
+            .group_by(DedupGroupMember.group_id)
+        ).all()
+    )
+    removed = 0
+    for row in session.exec(select(DedupGroup)).all():
+        if live_counts.get(int(row.id), 0) >= 2:
+            continue
+        session.delete(row)
+        removed += 1
+    if removed:
+        session.commit()
+        logger.info("[dedup] pruned %d stale group(s)", removed)
+    return removed
+
+
+# --- Queue reads ------------------------------------------------------------
+
+
+def _tier_filter(policy: TierPolicy):
+    return DedupGroup.tier.in_([tier.value for tier in policy.tiers])
+
+
+def count_unresolved_in_session(
+    session: Session,
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> int:
+    """The sidebar badge / context-menu count: unresolved groups in scope.
+
+    Groups, not pictures: the to-do count is the number of decisions left to
+    make, which is what the queue actually asks the user for.
+    """
+    policy = policy or TierPolicy()
+    scope = scope or DedupScope()
+    query = select(func.count(func.distinct(DedupGroup.id))).where(
+        DedupGroup.resolved.is_(False),
+        _tier_filter(policy),
+        DedupGroup.confidence >= policy.threshold,
+    )
+    predicate = scope.picture_predicate()
+    if predicate is not None:
+        query = query.where(
+            DedupGroup.id.in_(
+                select(DedupGroupMember.group_id)
+                .join(Picture, Picture.id == DedupGroupMember.picture_id)
+                .where(Picture.deleted.is_(False), predicate)
+            )
+        )
+    return int(session.exec(query).one())
+
+
+def count_by_tier_in_session(
+    session: Session,
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> dict[str, int]:
+    """Unresolved group count per tier, including the tiers that are switched off.
+
+    The design gives each tier its own live count so the user can see what
+    turning a tier on would add before turning it on. That means this ignores
+    the policy's tier gating on purpose and reports every tier; only the
+    threshold applies, and exact is always counted in full.
+    """
+    policy = policy or TierPolicy()
+    scope = scope or DedupScope()
+    query = select(DedupGroup.tier, func.count(DedupGroup.id)).where(
+        DedupGroup.resolved.is_(False)
+    )
+    predicate = scope.picture_predicate()
+    if predicate is not None:
+        query = query.where(
+            DedupGroup.id.in_(
+                select(DedupGroupMember.group_id)
+                .join(Picture, Picture.id == DedupGroupMember.picture_id)
+                .where(Picture.deleted.is_(False), predicate)
+            )
+        )
+    # An exact match is always shown regardless of where the threshold sits, so
+    # the threshold is applied to the looser tiers only.
+    query = query.where(
+        (DedupGroup.tier == TIER_EXACT) | (DedupGroup.confidence >= policy.threshold)
+    )
+    counts = {tier.value: 0 for tier in DedupTier}
+    for tier, count in session.exec(query.group_by(DedupGroup.tier)).all():
+        counts[str(tier)] = int(count)
+    return counts
+
+
+def page_queue_in_session(
+    session: Session,
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+    offset: int = 0,
+    limit: int = DEFAULT_PAGE_SIZE,
+) -> tuple[list[dict[str, Any]], int]:
+    """One page of the queue, confidence descending. Never loads the whole list.
+
+    Exactly ``limit`` group rows are read, then one candidate load for that
+    page's members. 10 groups and 10,000 cost the same per page, which is the
+    design's virtual-queue requirement expressed on the server side.
+
+    Returns:
+        ``(groups, total)`` where *total* is the complete unresolved count in
+        scope, so the client can size its scrollbar without a second request.
+    """
+    policy = policy or TierPolicy()
+    scope = scope or DedupScope()
+    limit = max(1, min(int(limit), MAX_PAGE_SIZE))
+    offset = max(0, int(offset))
+
+    query = select(DedupGroup).where(
+        DedupGroup.resolved.is_(False),
+        _tier_filter(policy),
+        DedupGroup.confidence >= policy.threshold,
+    )
+    predicate = scope.picture_predicate()
+    if predicate is not None:
+        query = query.where(
+            DedupGroup.id.in_(
+                select(DedupGroupMember.group_id)
+                .join(Picture, Picture.id == DedupGroupMember.picture_id)
+                .where(Picture.deleted.is_(False), predicate)
+            )
+        )
+    rows = session.exec(
+        query.order_by(
+            DedupGroup.confidence.desc(),
+            DedupGroup.id.asc(),
+        )
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    total = count_unresolved_in_session(session, policy, scope)
+    if not rows:
+        return [], total
+
+    group_ids = [int(row.id) for row in rows]
+    member_rows = session.exec(
+        select(
+            DedupGroupMember.group_id,
+            DedupGroupMember.picture_id,
+            DedupGroupMember.position,
+        )
+        .where(DedupGroupMember.group_id.in_(group_ids))
+        .order_by(DedupGroupMember.group_id, DedupGroupMember.position)
+    ).all()
+    ids_by_group: dict[int, list[int]] = defaultdict(list)
+    for group_id, picture_id, _position in member_rows:
+        ids_by_group[int(group_id)].append(int(picture_id))
+    candidates = load_candidates(
+        session, [pid for ids in ids_by_group.values() for pid in ids]
+    )
+
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        members = [
+            candidates[pid]
+            for pid in ids_by_group.get(int(row.id), [])
+            if pid in candidates
+        ]
+        if len(members) < 2:
+            # Members disappeared between the scan and this read. Report the row
+            # as-is rather than dropping it silently; prune_stale_groups removes
+            # it on the next verdict or scan.
+            logger.info(
+                "[dedup-queue] group %s has %d live member(s); it will be pruned",
+                row.signature,
+                len(members),
+            )
+        cover_id = (
+            int(row.cover_picture_id)
+            if row.cover_picture_id is not None
+            else (members[0].id if members else None)
+        )
+        payload.append(
+            {
+                "signature": row.signature,
+                "tier": row.tier,
+                "confidence": float(row.confidence or 0.0),
+                "member_count": int(row.member_count or len(members)),
+                "cover_picture_id": cover_id,
+                "why": json.loads(row.evidence) if row.evidence else [],
+                "created_at": row.created_at,
+                "candidates": [
+                    member.as_dict(
+                        why=build_candidate_evidence(member, members, cover_id)
+                    )
+                    for member in members
+                ],
+            }
+        )
+    return payload, total
+
+
+def scope_counts_in_session(
+    session: Session,
+    scopes: list[DedupScope],
+    policy: Optional[TierPolicy] = None,
+) -> list[dict[str, Any]]:
+    """Unresolved counts for several scopes in one request.
+
+    The context menus need a count per project / set / character / folder; asking
+    for them one at a time would be a request per menu item.
+    """
+    policy = policy or TierPolicy()
+    return [
+        {
+            **scope.as_dict(),
+            "unresolved_groups": count_unresolved_in_session(session, policy, scope),
+        }
+        for scope in scopes
+    ]
+
+
+# --- Scan requests and progress ---------------------------------------------
+
+
+def request_scan_in_session(
+    session: Session,
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> dict[str, Any]:
+    """Queue a scan for *scope* and return its progress row immediately.
+
+    The route returns as soon as this row exists, which is what makes the
+    context-menu "Find duplicates in ..." entry feel instant: the hashes are
+    already cached (``pixel_sha`` and ``perceptual_hash`` are computed on import),
+    so the scan only has to read and compare them, and the queue can be opened
+    while it does.
+
+    One row per scope key, reused across rescans, so a scope has exactly one
+    place to read progress from.
+    """
+    policy = policy or TierPolicy()
+    scope = scope or DedupScope()
+    row = session.exec(
+        select(DedupScan).where(DedupScan.scope_key == scope.key)
+    ).first()
+    now = datetime.utcnow()
+    if row is None:
+        row = DedupScan(scope_key=scope.key)
+    row.scope_type = scope.scope_type.value
+    row.scope_id = scope.scope_id
+    row.tiers = json.dumps([tier.value for tier in policy.tiers])
+    row.threshold = float(policy.threshold)
+    row.status = SCAN_PENDING
+    row.error = None
+    row.started_at = now
+    row.updated_at = now
+    row.finished_at = None
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    logger.info(
+        "[dedup-scan] requested scan for scope=%s tiers=%s threshold=%.4f",
+        scope.key,
+        row.tiers,
+        policy.threshold,
+    )
+    return scan_progress(row)
+
+
+def scan_progress(row: Optional[DedupScan]) -> dict[str, Any]:
+    """Serialise a scan row for the "scanned N of M" banner.
+
+    ``None`` (no scan has ever run for this scope) is reported as an idle scan
+    rather than as an error: the queue is still perfectly usable, it just shows
+    whatever an earlier global scan found.
+    """
+    if row is None:
+        return {
+            "status": "idle",
+            "scanned_pictures": 0,
+            "total_pictures": 0,
+            "scanned_buckets": 0,
+            "total_buckets": 0,
+            "groups_found": 0,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+        }
+    return {
+        "scan_id": row.id,
+        "scope_key": row.scope_key,
+        "status": row.status,
+        "tiers": json.loads(row.tiers or "[]"),
+        "threshold": float(row.threshold or DEFAULT_THRESHOLD),
+        "scanned_pictures": int(row.scanned_pictures or 0),
+        "total_pictures": int(row.total_pictures or 0),
+        "scanned_buckets": int(row.scanned_buckets or 0),
+        "total_buckets": int(row.total_buckets or 0),
+        "groups_found": int(row.groups_found or 0),
+        "started_at": row.started_at,
+        "updated_at": row.updated_at,
+        "finished_at": row.finished_at,
+        "error": row.error,
+    }
+
+
+def scan_progress_in_session(
+    session: Session, scope: Optional[DedupScope] = None
+) -> dict[str, Any]:
+    """Current scan progress for *scope*."""
+    scope = scope or DedupScope()
+    row = session.exec(
+        select(DedupScan).where(DedupScan.scope_key == scope.key)
+    ).first()
+    return scan_progress(row)
+
+
+def run_scan_now_in_session(
+    session: Session,
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> dict[str, Any]:
+    """Run every enabled tier synchronously and persist the groups.
+
+    The background path is :class:`~pixlstash.tasks.dedup_scan_task.DedupScanTask`;
+    this is the same work without the task system, for tests and for a caller
+    that genuinely wants to block (a small scope where the round trip is cheaper
+    than polling).
+    """
+    policy = policy or TierPolicy()
+    scope = scope or DedupScope()
+    prune_stale_groups_in_session(session)
+    found = 0
+    for tier in iter_tiers(policy):
+        if tier is DedupTier.EXACT:
+            groups = find_exact_groups_in_session(session, scope)
+        elif tier is DedupTier.NEAR:
+            groups = find_near_groups_in_session(session, policy, scope)
+        else:
+            groups = find_embedding_groups_in_session(session, policy, scope)
+        found += persist_groups_in_session(session, groups)
+    return {
+        "scope": scope.as_dict(),
+        "policy": policy.as_dict(),
+        "unresolved_groups": found,
+    }
+
+
+# --- Vault wrappers ---------------------------------------------------------
+
+
+def count_unresolved(
+    vault: "Vault",
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> int:
+    """Read-only vault wrapper around :func:`count_unresolved_in_session`."""
+    return vault.db.run_immediate_read_task(count_unresolved_in_session, policy, scope)
+
+
+def page_queue(
+    vault: "Vault",
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+    offset: int = 0,
+    limit: int = DEFAULT_PAGE_SIZE,
+) -> tuple[list[dict[str, Any]], int]:
+    """Read-only vault wrapper around :func:`page_queue_in_session`."""
+    return vault.db.run_immediate_read_task(
+        page_queue_in_session, policy, scope, offset, limit
+    )
+
+
+def _queue_response_in_session(
+    session: Session,
+    policy: TierPolicy,
+    scope: DedupScope,
+    offset: int,
+    limit: int,
+) -> dict[str, Any]:
+    """The whole ``GET /dedup/groups`` payload, on one session.
+
+    Assembled here rather than in the route so the page and the scan progress it
+    is captioned with come from the same read, and so the route never touches
+    ``vault.db`` (§10.1).
+    """
+    groups, total = page_queue_in_session(session, policy, scope, offset, limit)
+    return {
+        "groups": groups,
+        "total": total,
+        "offset": offset,
+        "limit": min(int(limit), MAX_PAGE_SIZE),
+        "policy": policy.as_dict(),
+        "scope": scope.as_dict(),
+        "scan": scan_progress_in_session(session, scope),
+    }
+
+
+def queue_response(
+    vault: "Vault",
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+    offset: int = 0,
+    limit: int = DEFAULT_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Read-only vault wrapper producing the full queue-page response."""
+    return vault.db.run_immediate_read_task(
+        _queue_response_in_session,
+        policy or TierPolicy(),
+        scope or DedupScope(),
+        offset,
+        limit,
+    )
+
+
+def _counts_response_in_session(
+    session: Session, policy: TierPolicy, scopes: list[DedupScope]
+) -> dict[str, Any]:
+    """The whole ``POST /dedup/counts`` payload, on one session."""
+    return {
+        "unresolved_groups": count_unresolved_in_session(session, policy),
+        "by_tier": count_by_tier_in_session(session, policy),
+        "scopes": scope_counts_in_session(session, scopes, policy),
+        "policy": policy.as_dict(),
+        "scan": scan_progress_in_session(session),
+    }
+
+
+def counts_response(
+    vault: "Vault",
+    policy: Optional[TierPolicy] = None,
+    scopes: Optional[list[DedupScope]] = None,
+) -> dict[str, Any]:
+    """Read-only vault wrapper producing the live-counts response."""
+    return vault.db.run_immediate_read_task(
+        _counts_response_in_session, policy or TierPolicy(), list(scopes or [])
+    )
+
+
+def request_scan(
+    vault: "Vault",
+    policy: Optional[TierPolicy] = None,
+    scope: Optional[DedupScope] = None,
+) -> dict[str, Any]:
+    """Queue a scan and wake the work planner so it starts now.
+
+    Write-path vault wrapper: the row is the request, and the planner turns it
+    into a :class:`~pixlstash.tasks.dedup_scan_task.DedupScanTask`.
+    """
+    progress = vault.db.run_task(
+        request_scan_in_session,
+        policy or TierPolicy(),
+        scope or DedupScope(),
+    )
+    vault.wake()
+    return progress
+
+
+def iter_tiers(policy: TierPolicy) -> Iterator[DedupTier]:
+    """Yield the enabled tiers strongest first (exact, near, embedding)."""
+    for tier in TIER_ORDER:
+        if policy.includes(tier):
+            yield tier
+
+
+__all__ = [
+    "COVER_PIXEL_WEIGHT",
+    "COVER_RAW_BONUS",
+    "COVER_SCORE_WEIGHT",
+    "COVER_TAG_WEIGHT",
+    "DEFAULT_MAX_GROUP_SIZE",
+    "DEFAULT_MIN_GROUP_SIZE",
+    "DEFAULT_PAGE_SIZE",
+    "DEFAULT_THRESHOLD",
+    "MAX_BUCKET_MEMBERS",
+    "MAX_PAGE_SIZE",
+    "MAX_THRESHOLD",
+    "MIN_THRESHOLD",
+    "RAW_FORMATS",
+    "TIER_ORDER",
+    "CandidateMember",
+    "DedupScope",
+    "DedupTier",
+    "DetectedGroup",
+    "NearBucket",
+    "ScopeType",
+    "TierPolicy",
+    "VERDICT_KEEP_SEPARATE",
+    "VERDICT_STACKED",
+    "assemble_group",
+    "build_candidate_evidence",
+    "build_group_evidence",
+    "build_near_buckets",
+    "count_by_tier_in_session",
+    "count_unresolved",
+    "count_unresolved_in_session",
+    "counts_response",
+    "cover_order_key",
+    "find_embedding_groups_in_session",
+    "find_exact_groups_in_session",
+    "find_near_groups_in_session",
+    "group_signature",
+    "groups_from_pairs",
+    "iter_tiers",
+    "load_candidates",
+    "near_pairs_in_bucket",
+    "page_queue",
+    "page_queue_in_session",
+    "persist_groups_in_session",
+    "prune_stale_groups_in_session",
+    "queue_response",
+    "request_scan",
+    "request_scan_in_session",
+    "run_scan_now_in_session",
+    "scan_progress",
+    "scan_progress_in_session",
+    "scope_counts_in_session",
+    "select_cover",
+    "verdict_signatures_in_session",
+]
