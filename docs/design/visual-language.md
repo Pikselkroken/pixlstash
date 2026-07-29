@@ -644,7 +644,17 @@ rules and tokens they collapse onto.
   is the sidebar task/upload badge's pulse-on-landing. Loop the **attention pulse**
   only while work is genuinely live; stop it when idle.
 
-## 13. Contextual action bar (toolbars over content)
+### The key-hint badge (`kbd`)
+
+Dialog action buttons wear their keys (owner decision, 2026-07-29; the behavioural
+contract lives in `frontend_architecture.md`, "App* design-system layer"): the
+accept/confirm button carries an **↵** badge and the cancel/abort button an **Esc**
+badge, rendered by `AppButton`'s `key-hint` prop as a `<kbd>` chip — `--font-mono` at
+`--text-2xs`, a 1px `currentColor` border at `--radius-sm`, the whole chip at 0.55
+opacity. `currentColor` is what makes it legal on every variant fill without a new
+token pair, and the opacity is what keeps it a hint rather than a second label. It is
+`aria-hidden` (the accessible name must stay the verb); the machine-readable copy is
+`aria-keyshortcuts` on the button itself.
 
 The full-width bar that appears above the grid to act on a context — the bulk
 **selection bar**, the image-overlay top bar, and the new **Trash restore/purge

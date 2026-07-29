@@ -8,7 +8,7 @@
     @update:model-value="(v) => !v && emit('close')"
     @click:outside="emit('close')"
   >
-    <div class="app-dialog" :style="{ width: width + 'px' }">
+    <div class="app-dialog" :style="{ width: width + 'px' }" @keydown="onKeydown">
       <header class="app-dialog__header">
         <div class="app-dialog__titlewrap">
           <h2 class="app-dialog__title">{{ title }}</h2>
@@ -43,7 +43,7 @@
 <script setup>
 import { VDialog, VIcon } from "vuetify/components";
 
-defineProps({
+const props = defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: "" },
   subtitle: { type: String, default: "" },
@@ -55,7 +55,37 @@ defineProps({
   persistent: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["close"]);
+const emit = defineEmits(["close", "accept"]);
+
+// Enter is inert wherever the key already means something: multiline fields,
+// buttons and links (native activation must win, so Enter on Cancel cancels),
+// selects, disclosure summaries, and ARIA text boxes.
+const ENTER_EXEMPT =
+  "textarea, select, button, a[href], summary, [contenteditable='true'], [role='textbox']";
+
+/**
+ * The dialog keyboard contract (owner decision, 2026-07-29 — see
+ * docs/frontend_architecture.md "App* design-system primitives"): Escape
+ * dismisses, plain Enter accepts. Handled here, on the dialog's own subtree,
+ * so every AppDialog gets it and no page-level Escape owner is consulted
+ * first. `accept` only fires for dialogs that listen for it.
+ */
+function onKeydown(e) {
+  if (e.key === "Escape") {
+    if (props.persistent) return;
+    e.stopPropagation();
+    emit("close");
+    return;
+  }
+  if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  // A descendant that handled Enter itself (e.g. a role="radio" row) has
+  // already preventDefault-ed; respect that instead of double-acting.
+  if (e.defaultPrevented) return;
+  const el = e.target instanceof Element ? e.target : null;
+  if (el && el.closest(ENTER_EXEMPT)) return;
+  e.preventDefault();
+  emit("accept");
+}
 </script>
 
 <style scoped>
