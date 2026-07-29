@@ -447,12 +447,29 @@ class TierPolicyModel(BaseModel):
         ),
     )
 
+    min_group_size: int = Field(
+        default=dedup_tier_service.DEFAULT_MIN_GROUP_SIZE,
+        ge=2,
+        description="Smallest group that counts as a duplicate group at all.",
+    )
+    max_group_size: int = Field(
+        default=dedup_tier_service.DEFAULT_MAX_GROUP_SIZE,
+        ge=2,
+        description=(
+            "Groups larger than this keep every member but carry an "
+            "`Unusually large group` evidence-against pill, because a large "
+            "transitively-chained blob is rarely one duplicate cluster."
+        ),
+    )
+
     def to_policy(self) -> TierPolicy:
         """Convert to the service parameter object, raising ``ValueError``."""
         return TierPolicy(
             near_enabled=self.near_enabled,
             embedding_enabled=self.embedding_enabled,
             threshold=self.threshold,
+            min_group_size=self.min_group_size,
+            max_group_size=self.max_group_size,
         )
 
 
