@@ -213,6 +213,8 @@ jobs:
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_dedup_sweep_api.py
+          tests/test_dedup_sweep_service.py
           tests/test_detections_scope.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
