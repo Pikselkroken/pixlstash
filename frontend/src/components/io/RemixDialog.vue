@@ -6,6 +6,7 @@
     :width="560"
     :persistent="submitting"
     @close="onRequestClose"
+    @accept="submit"
   >
     <div class="remix" @keydown.ctrl.enter.prevent="submit" @keydown.meta.enter.prevent="submit">
       <!-- Scope disclosure. The menu entry stays enabled at any selection
@@ -21,9 +22,11 @@
       </p>
 
       <!-- ── Mode ────────────────────────────────────────────────────────
-           A radio LIST, not a segmented control: each mode needs room for a
-           subtitle and, when unavailable, a reason. v1.11's lock-replay mode
-           appends a third row here with no redesign. -->
+           Side-by-side radio CARDS: stacked full-width they read as info
+           boxes, not a choice (owner feedback 2026-07-29). Still a radio
+           group with room for a subtitle and, when unavailable, a reason;
+           v1.11's lock-replay mode joins the row and wraps when it does
+           not fit. -->
       <div
         class="remix-modes"
         role="radiogroup"
@@ -110,7 +113,7 @@
             class="remix-textarea"
             rows="3"
             :placeholder="promptPlaceholder"
-            @keydown.stop
+            @keydown="onFieldKeydown"
           ></textarea>
           <p class="remix-hint">
             Editing templates respond better to an instruction ("make it snowing")
@@ -239,7 +242,7 @@
             min="0"
             :max="maxSeed"
             aria-label="Seed value"
-            @keydown.stop
+            @keydown="onFieldKeydown"
           />
         </div>
       </div>
@@ -248,11 +251,11 @@
     </div>
 
     <template #footer>
-      <span class="remix-shortcut">Ctrl+Enter to generate</span>
-      <AppButton variant="ghost" @click="onRequestClose">Cancel</AppButton>
+      <AppButton variant="ghost" key-hint="esc" @click="onRequestClose">Cancel</AppButton>
       <AppButton
         ref="generateRef"
         variant="primary"
+        key-hint="enter"
         :icon-left="submitting ? 'loading' : 'auto-fix'"
         :disabled="!canSubmit"
         @click="submit"
@@ -267,9 +270,9 @@
 /**
  * "Generate variants" — the Remix v1 entry point (v1.9 Lane D).
  *
- * Two ways to make a variant of one picture, chosen from a radio LIST so that
- * v1.11's third mode (lock-replay: reproduce the original exactly) appends a
- * row rather than forcing a redesign:
+ * Two ways to make a variant of one picture, chosen from side-by-side radio
+ * CARDS (stacked full-width they read as info boxes, not a choice); v1.11's
+ * third mode (lock-replay: reproduce the original exactly) joins the row:
  *
  * - **template** — run a saved i2i workflow with a prompt and a seed.
  * - **recipe** — "same workflow, new seed": replay the executable ComfyUI
@@ -300,6 +303,7 @@ import { VIcon } from "vuetify/components";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import { getPictureRecipe, listWorkflows, runImageToImage, runRecipe } from "../../api/comfyui";
+import { getPictureMetadata } from "../../api/pictures";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -620,7 +624,7 @@ async function onOpen() {
   // Nothing is preselected until the check resolves: a mode that flips out
   // from under the user mid-interaction is worse than a moment of no default.
   selectedMode.value = "";
-  await Promise.all([loadTemplates(), loadRecipe()]);
+  await Promise.all([loadTemplates(), loadRecipe(), loadDescription()]);
   selectedMode.value = resolveInitialMode();
   focusedModeIndex.value = Math.max(
     0,
@@ -638,6 +642,28 @@ function normaliseDescription(value) {
   if (typeof value !== "string") return "";
   if (value.startsWith("__description::")) return "";
   return value.trim();
+}
+
+/**
+ * The grid hands this dialog its own row object, and the grid LISTING carries
+ * no `description` field at all — so without this fetch the prompt claimed
+ * "this image has no description yet" for pictures that plainly have one.
+ * Only runs when the prop didn't already provide a usable description.
+ */
+async function loadDescription() {
+  if (description.value || !props.image?.id) return;
+  try {
+    const data = await getPictureMetadata(props.image.id, {
+      baseUrl: props.backendUrl,
+    });
+    const fetched = normaliseDescription(data?.description);
+    if (!fetched) return;
+    description.value = fetched;
+    if (!promptTouched.value && !prompt.value.trim()) prompt.value = fetched;
+  } catch (err) {
+    // A missing description only costs the prefill; the dialog stays usable.
+    console.error("Failed to fetch picture description for remix:", err);
+  }
 }
 
 function resolveInitialMode() {
@@ -776,6 +802,26 @@ function resetPrompt() {
   promptTouched.value = false;
 }
 
+/**
+ * Escape must reach AppDialog (dismiss) and Enter must reach it (accept —
+ * the textarea is exempt there, so Enter still makes newlines in the prompt);
+ * every other key is walled off from the app-level shortcut owners.
+ * Ctrl/Meta+Enter submits from inside a field, where the root handler would
+ * never hear it.
+ */
+function onFieldKeydown(e) {
+  if (e.key === "Escape") return;
+  if (e.key === "Enter") {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      submit();
+    }
+    return;
+  }
+  e.stopPropagation();
+}
+
 function useBatchInstead() {
   emit("use-batch");
   close();
@@ -892,11 +938,14 @@ async function submit() {
   cursor: default;
 }
 
-/* ── Mode list ─────────────────────────────────────────────────────────── */
+/* ── Mode cards ────────────────────────────────────────────────────────── */
 .remix-modes {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  /* Side by side so the cards read as a choice, not stacked info boxes
+     (owner feedback 2026-07-29). auto-fit lets a third mode wrap. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-3);
+  align-items: stretch;
 }
 
 .remix-mode {
@@ -1249,9 +1298,4 @@ async function submit() {
   color: rgb(var(--v-theme-error));
 }
 
-.remix-shortcut {
-  margin-right: auto;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
 </style>

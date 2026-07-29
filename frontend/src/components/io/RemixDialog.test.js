@@ -16,12 +16,17 @@ const listWorkflows = vi.fn();
 const getPictureRecipe = vi.fn();
 const runImageToImage = vi.fn();
 const runRecipe = vi.fn();
+const getPictureMetadata = vi.fn();
 
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...a) => listWorkflows(...a),
   getPictureRecipe: (...a) => getPictureRecipe(...a),
   runImageToImage: (...a) => runImageToImage(...a),
   runRecipe: (...a) => runRecipe(...a),
+}));
+
+vi.mock("../../api/pictures", () => ({
+  getPictureMetadata: (...a) => getPictureMetadata(...a),
 }));
 
 // The dialog and the App* widgets it embeds import Vuetify components
@@ -167,6 +172,7 @@ beforeEach(() => {
   getPictureRecipe.mockResolvedValue(CLEAN_RECIPE);
   runImageToImage.mockResolvedValue({ prompts: [{ prompt_id: "p1" }] });
   runRecipe.mockResolvedValue({ prompts: [{ prompt_id: "p2" }] });
+  getPictureMetadata.mockResolvedValue({});
 });
 
 describe("RemixDialog mode availability", () => {
@@ -486,6 +492,31 @@ describe("RemixDialog prompt prefill", () => {
     await w.find(".remix-link").trigger("click");
     await nextTick();
     expect(w.find("textarea").element.value).toBe("a cat on a mat");
+  });
+
+  it("fetches the description when the grid row does not carry one", async () => {
+    // The grid LISTING has no description field, so the prop is routinely
+    // undefined for pictures that plainly have a description.
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    getPictureMetadata.mockResolvedValue({ description: "a cat on a mat" });
+    const w = await settle(
+      mountDialog({ image: { id: 42, file_name: "cat.png" } }),
+    );
+    expect(getPictureMetadata).toHaveBeenCalledWith(42, expect.anything());
+    expect(w.find("textarea").element.value).toBe("a cat on a mat");
+    expect(w.find(".remix-provenance").text()).toContain("from image description");
+  });
+
+  it("does not fetch when the prop already provides a description", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: false,
+      reason: "no_prompt_chunk",
+    });
+    await settle(mountDialog());
+    expect(getPictureMetadata).not.toHaveBeenCalled();
   });
 
   it("ignores a pending-description sentinel rather than prefilling it", async () => {
