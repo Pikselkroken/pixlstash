@@ -138,6 +138,8 @@ def test_services_no_direct_db_calls():
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
         "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
+        "pixlstash/services/dedup_tier_service.py",  # vault-injection pattern; thin wrappers around the *_in_session queue reads and the scan request
+        "pixlstash/services/dedup_verdict_service.py",  # vault-injection pattern; thin wrappers around the *_in_session verdict writers
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
