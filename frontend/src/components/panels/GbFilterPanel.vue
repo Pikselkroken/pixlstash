@@ -84,6 +84,30 @@
             </button>
           </div>
         </div>
+        <!-- Stacks. A second segment row under the media-type row, and a
+             filter rather than a destination: stacked and unstacked carry no
+             to-do count, so neither earns a sidebar entry. The choice is
+             spelled out beside the segments because an icon alone cannot
+             distinguish "unstacked" from "unresolved". -->
+        <div class="gb-stack-row">
+          <span class="tbm-label">Stacks</span>
+          <div class="tbm-seg" role="group" aria-label="Stack state filter">
+            <button
+              v-for="opt in gbStackStateOptions"
+              :key="opt.value"
+              class="tbm-seg-btn"
+              :class="{ 'tbm-seg-btn--on': gbStackStateFilter === opt.value }"
+              type="button"
+              :title="opt.title"
+              :aria-pressed="gbStackStateFilter === opt.value"
+              @click="gbStackStateFilter = opt.value"
+            >
+              <v-icon size="16">{{ opt.icon }}</v-icon>
+              <span class="gb-stack-label">{{ opt.label }}</span>
+            </button>
+          </div>
+          <span class="gb-stack-choice">{{ gbStackStateChoiceLabel }}</span>
+        </div>
       </div>
 
       <!-- Score range -->
@@ -588,6 +612,18 @@ const gbMaxScoreFilter = computed({
     filterStore.maxScoreFilter = v ?? null;
   },
 });
+const gbStackStateFilter = computed({
+  get: () => filterStore.stackStateFilter,
+  set: (v) => {
+    filterStore.stackStateFilter = v || "all";
+  },
+});
+const gbStackStateChoiceLabel = computed(() => {
+  const chosen = gbStackStateOptions.find(
+    (opt) => opt.value === gbStackStateFilter.value,
+  );
+  return chosen ? chosen.choice : "";
+});
 const gbFaceBboxFilter = computed({
   get: () => filterStore.faceBboxFilter,
   set: (v) => {
@@ -706,6 +742,39 @@ const gbMediaTypeOptions = [
     icon: "mdi-video-outline",
     label: "Video",
     title: "Show videos only",
+  },
+];
+
+// The choice is spelled out beside the row, so each option carries the sentence
+// it stands for as well as its short label.
+const gbStackStateOptions = [
+  {
+    value: "all",
+    icon: "mdi-all-inclusive",
+    label: "Any",
+    title: "Every picture, stacked or not",
+    choice: "Showing every picture",
+  },
+  {
+    value: "stacked",
+    icon: "mdi-image-multiple",
+    label: "Stacked",
+    title: "Only pictures that belong to a stack",
+    choice: "Showing pictures that are in a stack",
+  },
+  {
+    value: "unstacked",
+    icon: "mdi-image-outline",
+    label: "Unstacked",
+    title: "Only pictures that do not belong to a stack",
+    choice: "Showing pictures that are not in a stack",
+  },
+  {
+    value: "unresolved",
+    icon: "mdi-content-duplicate",
+    label: "Unresolved",
+    title: "Pictures in a duplicate group nobody has ruled on yet",
+    choice: "Showing duplicates still waiting for a decision",
   },
 ];
 
@@ -985,6 +1054,27 @@ watch(
 }
 
 /* ── Media + Face: two icon-only groups sharing one row ───────────────────── */
+/* The stack row wraps rather than compressing its segments: the spelled-out
+   choice is the half that makes the row readable, so it keeps its own line on a
+   narrow panel instead of being truncated away. */
+.gb-stack-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+}
+
+.gb-stack-label {
+  margin-left: var(--space-2);
+}
+
+.gb-stack-choice {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
 .gb-media-face-row {
   display: flex;
   align-items: center;

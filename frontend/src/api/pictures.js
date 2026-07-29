@@ -4,7 +4,30 @@
 // have already migrated; the counts, scores, thumbnails, and export endpoints
 // join it as the grid and overlay move over.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken } from "../utils/apiClient";
+
+/**
+ * The URL a browser loads a picture's thumbnail from.
+ *
+ * Not a request function: an `<img src>` bypasses Axios entirely, so the share
+ * token has to be appended by hand. It still belongs in this module, because
+ * the path is part of the pictures contract and a second spelling of it
+ * elsewhere is exactly the drift the api layer exists to prevent.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {number|string} [options.version] - cache-buster, bumped when the
+ *   thumbnail is regenerated.
+ * @param {string} [options.baseUrl=""]
+ * @returns {string}
+ */
+export function pictureThumbnailUrl(id, { version, baseUrl = "" } = {}) {
+  const query =
+    version === undefined || version === null
+      ? ""
+      : `?v=${encodeURIComponent(version)}`;
+  return appendShareToken(`${baseUrl}/pictures/thumbnails/${id}.webp${query}`);
+}
 
 /**
  * Count the pictures matching a filter scope.

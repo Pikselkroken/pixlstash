@@ -58,6 +58,7 @@ frontend/src/
 │   ├── useReviewSessionsStore.js # tag-review sessions, health board, and sticker gamification
 │   ├── useEntityNamesStore.js   # id→name maps for the ImageGrid breadcrumb
 │   ├── useOperationStore.js     # the undo/redo stack + the action receipt (backend §21)
+│   ├── useDedupStore.js         # the duplicate triage queue, its live counts and the tier gate
 │   └── useTasksStore.js         # active background work (workers + ComfyUI runs); app-wide activity light
 │
 ├── composables/                 # Extracted logic composables (Phase 8.1 — complete)
@@ -73,7 +74,9 @@ frontend/src/
 │   ├── useReviewRoute.js        # URL ⇄ tag-review overlay (`?review=…`); mirrors ImageGrid's `?overlay=` mechanics (+ *.test.js)
 │   ├── useActionReceipt.js      # The receipt contract (wording, keycaps, drain, pause, focus) shared by the grid pill and the lightbox's own narration
 │   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
-│   └── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
+│   ├── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
+│   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
+│   └── useOneTimeNotice.js      # A notice shown once per browser and then never again; localStorage-backed (+ *.test.js)
 │
 ├── api/                         # Backend resource modules: the only place URL strings live (see §8)
 │   ├── config.js                # Per-user config blob: GET/PATCH /users/me/config
@@ -116,7 +119,7 @@ frontend/src/
 └── components/
     ├── TitleBar.vue             # Desktop-only custom window title bar (Electron): wordmark, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
-    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, LoginScreen
+    ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, LoginScreen
     ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbComfyPanel/TbExportPanel/TbImportPanel/GbFilterPanel/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
@@ -133,7 +136,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel) and the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, compare dialog, auto-stack dialog, tier menu, scan banner, scope pill, why-pills and confidence pill), and the Stack* family (badge, edge ticks, expansion strip)
 ```
 
 ---
@@ -146,7 +149,7 @@ frontend/src/
 | UI component library | Vuetify 3 |
 | State management | **Pinia** — 21 domain stores in `src/stores/`; `App.vue` owns only UI-shell state |
 | HTTP client | Axios (singleton `apiClient`) |
-| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
+| Routing | **Vue Router 4** (`createWebHistory`). `Root.vue` gates on `isAuthenticated`; all authenticated views (`/`, `/character/:id`, `/set/:id`, `/project/:id`, `/scrapheap`, `/duplicates`) render `App.vue` via `<RouterView>`. `useViewStore` owns the app's single route watcher and syncs params to Pinia stores (§4.5); `App.vue`'s nav handlers call `router.push()` to update the URL. `/duplicates` is deliberately NOT a grid view: `parseRouteView` returns `null` for it, so the selection stores keep whatever the user was looking at. **The route is the single source of truth for what the grid shows** — only explicit entry clicks push routes; sidebar tab/category switches never do (see Key Design Principles). |
 | Build tool | Vite 5 |
 | Unit tests | Vitest (jsdom environment) — test files co-located as `*.test.js` in `utils/` |
 | End-to-end tests | Playwright (`frontend/e2e/`) — drives the real SPA against a backend booted on a throwaway copy of the `test-data/` fixture. See `frontend/e2e/README.md`. |
@@ -222,6 +225,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 | `useOperationStore` | `useOperationStore.js` | The undo/redo stack, mirrored from the backend's append-only operation log (`backend_architecture.md` §21): `operations` (newest 50, newest first), `canUndo`/`canRedo`/`nextUndo`/`nextRedo` from `GET /operations/undo-state`, and the single live `receipt` that narrates what just happened. Computeds `past` (applied steps), `future` (undone, redoable), `historyCount`, `nextUndoIsExternal`. Owns the receipt's dwell timer (5s, 8s destructive, paused on hover/focus/hidden tab) and the multi-step `undoTo` walk. Refreshed on a debounced WS picture/tag/character/description event; the receipt narrates THIS client's operations only (origin read from the event `data`), so another tab's work updates the stack silently. |
+| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `total` + `hasMore` (offset-paged by confidence descending, never loaded whole), `focusIndex`, the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. A **stack** verdict is recorded server-side like any other change, so its receipt and `Ctrl+Z` come from `useOperationStore` with nothing bespoke here; a **keep-separate** records no operation by design; its narration is a transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate's sticky notice reopens every group it covered. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
@@ -504,6 +508,8 @@ Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPictu
 #### App* design-system layer (`widgets/`)
 The house-styled form/control primitives that wrap Vuetify with the PixlStash tokens (`styles/design-tokens.css`), so new UI composes from one consistent kit instead of raw Vuetify: `AppButton.vue` (~140 lines), `AppDialog.vue` (~165 lines), `AppInput.vue` (~95 lines), `AppSelect.vue` (~95 lines), `AppStepper.vue` (~125 lines), `AppTextarea.vue` (~60 lines), plus `FieldLabel.vue` (~15 lines) for consistent field labelling. Presentational; each takes `v-model` / props and emits the matching update events.
 
+**`AppDialog fullscreen`** (2026-07-29): a near-viewport dialog (min(1800px, 96vw) × 94vh, flexing body) for working surfaces where the content is the point — first user: the dedup Compare dialog, per the owner's "take the full space of the grid view". Ordinary forms keep the fixed `width`.
+
 **The dialog keyboard contract (owner decision, 2026-07-29).** Every dialog dismisses on **Escape** and accepts on plain **Enter**, and the buttons wear the keys. `AppDialog` implements both on its own subtree so no page-level Escape owner is consulted first: Escape emits `close` (suppressed while `persistent`), Enter emits `accept`. Enter is deliberately inert where the key already has a meaning — multiline fields, buttons and links (native activation wins, so Enter on a focused Cancel cancels), selects, `<summary>`, ARIA text boxes, and any element that already handled the event (`defaultPrevented`). To adopt: wire the primary action to `@accept`, give the accept/confirm button `AppButton key-hint="enter"` (an ↵ badge, plus `aria-keyshortcuts`) and the cancel/abort button `key-hint="esc"`, and let the disabled state of the button — not the handler — be what gates the keypress (the `accept` handler must check the same `canSubmit` the button uses). New dialogs must follow this; existing dialogs adopt it as they are touched. First adopter: `RemixDialog`.
 
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
@@ -580,6 +586,7 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
 - **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
 - **Three seed modes in recipe mode, two in template mode.** Random draws fresh. **Incremented** (recipe mode only — templates have no original to increment from) applies a signed delta (default +1, session-sticky) to the original seed read from the recipe response (`seed`, falling back to the first `seed_inputs` value) and shows the resulting value live; it submits as `seed_mode: "fixed"` with the computed seed, so the API surface is unchanged. **Fixed** defaults to the original seed and carries a small warning-toned "same as original" note until edited, because replaying the identical seed re-creates the identical image, which the importer dedupes into silence — flagged, not forbidden. A sticky `incremented` preference falls back to random where it cannot be honoured.
+- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion; **Fit** keeps every candidate registered in one box, **Actual pixels** (P) is 1:1 with drag-to-pan; click picks the cover, right-click excludes, Enter/S give the verdict from inside. The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
 - **First adopter of the dialog keyboard contract** (see "App* design-system layer"): Escape dismisses, plain Enter accepts via `AppDialog`'s `accept`, and the footer buttons wear the ↵ / Esc badges. The prompt textarea and seed field stop propagation of ordinary typing so grid shortcuts stay quiet, but deliberately let Escape and Enter through to the dialog — and handle Ctrl/Meta+Enter themselves, since the root-level shortcut cannot hear a stopped event.
 
 **Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
@@ -910,6 +917,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
 | `api/operations.js` | `/operations`: the append-only change log, `undo-state`, and undo / redo / per-operation undo / batch undo (all OWNER_ONLY — callers guard on `isReadOnly`) |
 | `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
+| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
@@ -1006,6 +1014,85 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 `grid.isOverlayOpen` / `grid.markOverlayDeferredRefresh` are exposed by `ImageGrid` (Tier-3 imperative API) and forwarded to `useGridRealtimeSync` through `App.vue`'s `gridApi`. Tested in `useGridRealtimeSync.test.js` (both directions: deferred while open, pill still raised when closed).
 
 ---
+
+### 9.2 The Duplicates destination
+
+Duplicate detection is a **destination with a to-do count**, not a sort order or
+a filter. `/duplicates` mounts `DuplicateQueue.vue` in place of `ImageGrid`
+(`App.vue`, `isDuplicatesView`), so the grid is unmounted and its fetches and
+WebSocket reconciliation go quiet while the queue is open. The route branch in
+`applyRouteToStores` deliberately leaves the selection stores untouched: the
+queue shows no pictures, so it has no selection to express, and navigating back
+out of it lands the user on the view they left.
+
+Three rules from the design are load-bearing and are easy to break by accident:
+
+- **Never block on a full pass.** `listQueue` returns whatever has been found
+  plus the scan's progress, so the view renders a partial queue with a streaming
+  banner. There is no state in which a user waits on a complete scan.
+- **Never render the queue whole.** Groups are paged by confidence descending,
+  the row list is windowed around the focus, and only the focused row and the
+  one after it decode real thumbnails (the next group is prefetched into the
+  browser cache and nothing further). Ten groups and ten thousand cost the same
+  to render. Paging **prefers the keyset cursor**: a response carrying
+  `next_cursor` puts `loadMore` on the cursor path and the offset is never sent
+  alongside it, which is what removes the re-serve/skip hazard an offset has over
+  a table a scan is still inserting into. A server that publishes no cursor falls
+  back to the offset path with its mitigations intact — dedupe by signature,
+  advance by the page's *served* length — and either path can hand over to the
+  other mid-queue. See `integration_architecture.md` 2.1.
+- **Auto-advance.** A verdict removes its row and the focus lands on the next
+  open group, so a run of `Enter` presses works the queue with no extra
+  keystrokes.
+- **A stack needs two members.** `useDedupStore.toggleExcluded` refuses an `X`
+  that would leave a single included candidate and returns `false`, so a
+  two-candidate group accepts no exclusion at all and the Stack button the row is
+  still offering can never be a guaranteed 400. `DuplicateQueue` narrates the
+  refusal into the live region rather than letting a one-key action read as a
+  dead key, and a verdict that *is* refused by the server surfaces the server's
+  own `detail` instead of a generic sentence.
+
+**Undo is not reimplemented for a stack verdict.** It is recorded server-side
+like any other change; `useOperationStore` notices the resulting event and
+raises the standard receipt. A **keep-separate** is the exception, and
+deliberately so: it changes no reversible picture facet, the backend records no
+operation for it, and an empty operation row would still consume a `Ctrl+Z`. No
+receipt will ever arrive for it, so `DuplicateQueue` raises its own sticky notice
+carrying a **Reopen** action, which is the only way back from that verdict.
+The queue's only other undo-specific job is to *claim* `Ctrl+Z`
+(`preventDefault` **and** `stopPropagation`, see `useDedupQueueKeyboard.js`) so
+the app shell's global handler does not also fire and undo twice. Any new view
+that owns keys the shell also owns has the same obligation.
+
+**The sidebar badge is reconciled from the server, never inferred from
+WebSocket traffic.** A keep-separate mutates no picture row, so it raises no
+event and `App.refreshSidebar` never fires for it: the optimistic decrement in
+`useDedupStore` would be corrected by nothing, would already be wrong in a second
+tab, and would drift further with every verdict. Every verdict therefore refetches
+`POST /dedup/counts` behind its optimistic tick (unawaited, so auto-advance is
+not held up), and `syncQueueToRoute` refreshes the counts on queue open even when
+the requested scope is already showing.
+
+**Scope travels in the URL**, not in a store: `/duplicates?scope=set&scope_id=12`.
+That makes a scoped queue reloadable and keeps a back-navigation meaningful.
+`useViewStore.parseRouteView` returns `null` for `/duplicates` (it drives no
+grid, so the selection stores keep whatever the user was looking at), which is
+why `DuplicateQueue` reads the scope off the route itself rather than receiving
+it from the route sync. The
+`Find duplicates in…` context-menu entries in `SideBar.vue` warm the per-scope
+count through `useDedupStore.fetchScopeCount` when the menu opens, then emit
+`select-duplicates` after `closeSidebarCtxMenu()` on the next tick, so the menu's
+teardown cannot race the navigation for focus.
+
+**Stacked / unstacked is a filter, not a place.** `filterStore.stackStateFilter`
+(`all` / `stacked` / `unstacked` / `unresolved`) serialises to `stack_state` in
+both grid query builders. Only Duplicates, which has a to-do count, earns a
+sidebar row.
+
+**The Likeness Groups sort order is gone from the menu** (`Toolbar.vue`,
+`filteredSortOptions`). The backend still serves the mechanism, so a saved
+preference naming it keeps working; the menu simply shows a one-time migration
+notice in its place, persisted through `useOneTimeNotice`.
 
 ## 10. Naming and Coding Conventions
 

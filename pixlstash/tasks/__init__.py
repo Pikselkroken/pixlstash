@@ -40,6 +40,10 @@ from .scrapheap_retention_purge_task import ScrapheapRetentionPurgeTask
 from .scrapheap_retention_purge_finder import ScrapheapRetentionPurgeFinder
 from .thumbnail_generation_task import ThumbnailGenerationTask
 from .missing_thumbnail_finder import MissingThumbnailFinder
+from .pixel_sha_task import PixelShaTask
+from .missing_pixel_sha_finder import MissingPixelShaFinder
+from .dedup_scan_task import DedupScanTask
+from .dedup_scan_finder import DedupScanFinder
 
 __all__ = [
     "TaskType",
@@ -83,4 +87,8 @@ __all__ = [
     "ScrapheapRetentionPurgeFinder",
     "ThumbnailGenerationTask",
     "MissingThumbnailFinder",
+    "PixelShaTask",
+    "MissingPixelShaFinder",
+    "DedupScanTask",
+    "DedupScanFinder",
 ]

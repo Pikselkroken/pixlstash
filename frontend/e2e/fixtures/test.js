@@ -9,6 +9,7 @@ import { SideBar } from '../pages/SideBar.js'
 import { ShareDialog } from '../pages/ShareDialog.js'
 import { ReviewSessions } from '../pages/ReviewSessions.js'
 import { NoticeHost } from '../pages/NoticeHost.js'
+import { DuplicateQueuePage } from '../pages/DuplicateQueuePage.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const TOKEN_PATH = resolve(__dirname, '../.auth/token.json')
@@ -166,6 +167,12 @@ export const test = base.extend({
   },
   reviews: async ({ page }, use) => {
     await use(new ReviewSessions(page))
+  },
+  // The Duplicates destination (§21). Its own page object rather than an
+  // extension of GridPage: the queue replaces the grid rather than layering
+  // over it, and shares none of its selectors.
+  duplicates: async ({ page }, use) => {
+    await use(new DuplicateQueuePage(page))
   },
   // The notice surface (NoticeHost.vue). Call `notices.installHooks()` BEFORE
   // the first navigation — the store seam is an addInitScript.

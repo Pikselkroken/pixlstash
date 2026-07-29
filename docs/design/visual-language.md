@@ -644,6 +644,20 @@ rules and tokens they collapse onto.
   is the sidebar task/upload badge's pulse-on-landing. Loop the **attention pulse**
   only while work is genuinely live; stop it when idle.
 
+### The outline count pill (a count in a different unit)
+
+A count that is **not pictures** must not wear the filled count pill, or it
+reads as one more picture count sitting in a column of them. The outline
+variant — no fill, a 1px border, tabular numerals, same pill radius and size —
+is the answer when such a count must be shown, with a tooltip naming the unit.
+
+*History:* introduced 2026-07-29 for the Duplicates sidebar count, and retired
+from that spot the same day: the group count moves with the tier gate and the
+threshold, so it read as churn, and the owner replaced it with the plain
+**attention dot** ("there are duplicates to review" — the queue's own header
+carries the numbers). The variant remains available for a stable non-picture
+count.
+
 ### The key-hint badge (`kbd`)
 
 Dialog action buttons wear their keys (owner decision, 2026-07-29; the behavioural
