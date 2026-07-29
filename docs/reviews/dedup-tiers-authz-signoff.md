@@ -6,9 +6,16 @@
 - **Date:** 2026-07-29.
 - **Mandate:** refute the branch's safety claims. Reproduce every finding with a concrete request or test before reporting it. Coverage matrix, not a findings list.
 
+> **STATUS: CLOSED — see §11 for the final verdicts.**
+> Four rounds. Final: **APPROVE** `feature/dedup-tiers` @ `b6b8091d` (PR #638) and
+> **APPROVE** `feature/gesture-batch-id` @ `cf3786cc` (PR #644). No open required
+> changes; two accepted risks (A1, A2) with owners and revisit triggers.
+> §1–§8 are round 1 and describe the branch as it stood at `21b07e64`; read §9–§11
+> for what is true now. §10.7 contains a correction to two claims I got wrong.
+
 ---
 
-## Verdict
+## Verdict (round 1 — superseded by §11)
 
 # **APPROVE-WITH-REQUIRED-CHANGES**
 
@@ -1518,7 +1525,280 @@ have — round 2 §9.2), the A1 §22.8 documentation of the share-token conseque
 accepts a trailing LF; the dedup-side validator added here uses `fullmatch` and is
 the implementation to keep when the two unify).
 
+> **⚠️ CORRECTION (round 4).** The first two items in the paragraph above are
+> **wrong**. W1 and A1 were both already fixed at `b74bbd31` — the head this very
+> round reviewed. I carried the status forward from round 2 instead of re-reading
+> the branch, which is exactly the failure `CLAUDE.md`'s *"don't assess what you
+> haven't read"* rule exists to prevent. See §11.4 for what the code and docs
+> actually say. Only the third item (G1, against a *different* branch) was
+> correct, and it is now fixed too.
+
 **Hardening:** R6, plus round-2's W2-adjacent items and round-1's R5/R6/R7.
 
 **Independence.** Round 3 was performed by the round-1/2 reviewer, who wrote no code
 on this branch. R5 must be certified by someone other than whoever implements it.
+
+---
+
+# 11. Round 4 (2026-07-29) — closing entry
+
+Certified by the same independent reviewer. R5 and R6 were fixed by the
+orchestrator, not by me; I wrote neither fix and certify both here.
+
+## 11.1 Final verdicts — this closes the review
+
+| Branch / PR | Head | Verdict |
+|---|---|---|
+| `feature/dedup-tiers` (PR #638) | `b6b8091d` | ## **APPROVE** |
+| `feature/gesture-batch-id` (PR #644) | `cf3786cc` | ## **APPROVE** |
+
+**No open required changes on either branch.** Every finding raised across four
+rounds is closed or recorded as an accepted risk with an owner and a revisit
+trigger. The M1 merge gate is satisfied on the dedup side and needs one line of
+follow-through when the branches actually meet (§11.5).
+
+| Finding | Raised | Status at close |
+|---|---|---|
+| R1 signature injectivity | R1 | **CLOSED** (r2) |
+| R2 bulk fail-closed + lost undo handle | R1 | **CLOSED** (r2) |
+| R3 `request_context` provenance | R1 | **CLOSED** as narrowed (r2) |
+| R4 scope 500s / poison rows | R1 | **CLOSED** (r2) |
+| R5 hook over-reach | R3 | **CLOSED** (r4, verified below) |
+| R6 non-finite cursor | R3 | **CLOSED** (r4, verified below) |
+| M1 batch-id namespace bypass | R2 | **CLOSED** (r3) + merge note (§11.5) |
+| W1 pair-cap membership claim | R2 | **CLOSED** (r3 — I mis-reported it; §11.4) |
+| W2 slash-only folder scope | R2 | **CLOSED** (r3) |
+| G1 trailing-LF batch id (#644) | R2 | **CLOSED** (r4, `cf3786cc`) |
+| G2 batch-undo reflects input | R2 | Hardening, open |
+| A1 union widens share tokens | R1 | **Accepted**, now documented (§11.4) |
+| A2 grouping unrelated work in one undo | R1/R2 | **Accepted** (forgery half closed by M1) |
+
+## 11.2 R5 — hook over-reach: **CLOSED**, and both defences are real
+
+The fix is two independent changes. I verified each **separately**, because "two
+defences" is a claim worth refuting rather than counting.
+
+**Defence 1 — keep-separate no longer stores a batch id.** My round-3 C2c
+scenario verbatim:
+
+```
+[F1] keep-separate(7c45834a) -> 200 echoed batch_id='cli-onegesture1'
+[F1] stack(d0a2bcaf)        -> 200 echoed batch_id='cli-onegesture1'
+[F1] ops = [(1, 'dedup.stack', 'cli-onegesture1', 'applied')]
+[F1] verdict rows before undo = [('7c45834a', 'keep_separate', None,              live=True),
+                                 ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=True)]
+[F1] DEFENCE 1: keep-separate row batch_id = None (want None)
+[F1] POST /operations/undo -> 200
+[F1] verdict rows after undo = [('7c45834a', 'keep_separate', None,              live=True),
+                                 ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=False)]
+[F1] >>> keep-separate still live (want True): True
+[F1] >>> its group still resolved (want True): True
+[F1] >>> stack verdict reopened   (want False live): False
+[F1] >>> its group back in queue  (want False resolved): False
+```
+
+The row stores `None` while the HTTP response still echoes `cli-onegesture1`, so
+client-side receipt grouping keeps working — the id is a response field, not
+persisted state.
+
+**Defence 2 — the `VERDICT_STACKED` filter, tested with defence 1 bypassed.** I
+wrote the shared batch id directly onto the keep-separate row in the database,
+defeating defence 1, and undid the stack:
+
+```
+[F1b] forced keep-separate row to carry 'cli-onegesture1' (defence 1 bypassed)
+[F1b] verdict rows before undo = [('7c45834a', 'keep_separate', 'cli-onegesture1', live=True),
+                                  ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=True)]
+[F1b] verdict rows after undo  = [('7c45834a', 'keep_separate', 'cli-onegesture1', live=True),
+                                  ('d0a2bcaf', 'stacked',       'cli-onegesture1', live=False)]
+[F1b] >>> keep-separate still live on the filter alone (want True): True
+[F1b] >>> its group still resolved (want True): True
+```
+
+The filter holds on its own. **The two defences are genuinely independent** — this
+also covers any legacy row written before the fix, which is the case defence 1
+cannot reach.
+
+**Not over-blocked** (over-blocking is its own regression):
+
+```
+[F1c] after stack: groups=[('7c45834a', False), ('d0a2bcaf', True),  …]
+[F1c] after undo : groups=[('7c45834a', False), ('d0a2bcaf', False), …]
+[F1c] after redo : groups=[('7c45834a', False), ('d0a2bcaf', True),  …]
+[F1d] two stack verdicts under one cli- id, undo one:
+[F1d] groups before undo = [('7c45834a', True),  ('d0a2bcaf', True),  …]
+[F1d] groups after  undo = [('7c45834a', False), ('d0a2bcaf', False), …]
+[F1d] >>> both stack groups back in the queue: True
+```
+
+Undo/redo of a stack still round-trips its own verdict, and two stack verdicts
+sharing a gesture id still both reopen — the filter narrows to the right thing,
+not to too little.
+
+The durable test `test_an_undo_does_not_reverse_a_keep_separate_sharing_its_gesture_id`
+is my scenario, and the vacuity check (2 failed with the fixes stashed) is the
+right discipline. It supersedes the round-3 gap in
+`test_an_undo_does_not_reopen_a_group_it_never_touched`, which passed only because
+it sent no `batch_id`.
+
+## 11.3 R6 — non-finite cursors: **CLOSED**
+
+```
+[F2] inf              -> 400 {"detail":"malformed queue cursor 'MXxpbmZ8MA': non-finite cursor …
+[F2] +inf             -> 400 …non-finite cursor…
+[F2] -inf             -> 400 …non-finite cursor…
+[F2] Infinity         -> 400 …non-finite cursor…
+[F2] nan              -> 400 …non-finite cursor…
+[F2] NaN upper        -> 400 …non-finite cursor…
+[F2] -nan             -> 400 …non-finite cursor…
+[F2] overflow to inf  -> 400 …non-finite cursor…        (base64 "1|1e400|0")
+[F2] finite valid     -> 200 groups=2
+[F2] finite huge      -> 200 groups=3                   (1e308, still finite)
+[F2] >>> 5xx: []
+```
+
+I extended the sweep past the three the authors added: `+inf`, `Infinity`, `NaN`
+in mixed case, `-nan`, and `1e400` — a *finite-looking literal that overflows to
+`inf` during parsing*, which a regex- or prefix-based guard would have missed.
+`math.isfinite` catches it because it checks the parsed value, not the text. All
+400, no 5xx. Finite values including `1e308` still page normally, and a real
+cursor still walks the whole queue without repeats:
+
+```
+[F2b] walked 4 page(s), signatures = ['d0a2bcaf', '7c45834a', 'df9a5571']
+[F2b] total reported = 3
+[F2b] >>> no repeats: True
+```
+
+The docstring's contract — *"a bad cursor is a 400, never a silent restart from
+the top"* — is now true.
+
+## 11.4 Correction to my round-3 report: W1 and A1 were already fixed
+
+Round 3 listed W1 and the A1 documentation as "still open, unchanged by these five
+commits". **Both statements were false.** I carried the status forward from round 2
+rather than re-reading the branch — the precise failure `CLAUDE.md`'s *"don't
+assess what you haven't read"* rule exists to prevent, and it is worse here than
+elsewhere because a sign-off's open-items list is the thing people act on. The
+branch at `b74bbd31` already contained both:
+
+**W1 — the `MAX_PAIRS_PER_BUCKET` comment.** Corrected in three places, and it
+describes my reproduction rather than talking around it:
+
+```
+**The cap can lose membership.** Pairs are emitted in increasing member-offset
+order, so the cap keeps the nearest-offset edges and drops the wider ones. For a
+uniformly near-identical bucket that costs only confidence resolution (the
+offset-1 edges alone span the block). For a dense but *non-uniform* block —
+~700 mutually matching members exhaust the cap well inside the low offsets — a
+member whose only match sits at a wider offset gets no edge at all and is split
+off into its own group or drops out of the queue.
+```
+
+The in-code comment at the truncation site says the same, the runtime warning now
+names the offset it stopped at and states the consequence, and §22.2 explicitly
+records the previous paragraph as wrong. This is a better fix than the comment
+correction I asked for.
+
+**A1 — the share-token consequence.** Landed in the `029525a0` round as a dedicated
+subsection; §-renumbering moved the metadata-union material from §22.8 to §22.9,
+which is why my grep for "§22.8" came up empty and I wrongly concluded nothing had
+been written. `docs/backend_architecture.md:1981` has
+**"#### Accepted risk A1 — the union widens live share tokens"**, covering every
+point I required: that it is a change to who can see what; that it is not new
+(ordinary `POST /stacks` does it too); that `auto-stack` is the amplification; the
+blast radius; the compensating controls; the accept ruling with a revisit trigger
+for multi-user and for unattended bulk runs; and the un-implemented
+`shared_sets_affected` recommendation carried as a known gap.
+
+Lesson recorded for whoever runs the next round of this review: **re-derive the
+open-items list from the tree at the head under review, never from the previous
+round's text.**
+
+## 11.5 G1 and the M1 merge note
+
+**G1 — CLOSED at `cf3786cc`.** `re.match` → `re.fullmatch`. Verified directly
+against that ref:
+
+```
+[G1-fix] LF trailing    'cli-abcd\n'       -> None
+[G1-fix] CR trailing    'cli-abcd\r'       -> None
+[G1-fix] CRLF           'cli-abcd\r\n'     -> None
+[G1-fix] TAB trailing   'cli-abcd\t'       -> None
+[G1-fix] LF middle      'cli-ab\ncd'       -> None
+[G1-fix] NUL trailing   'cli-abcd\x00'     -> None
+[G1-fix] legit          'cli-abcd1234'     -> 'cli-abcd1234'
+[G1-fix] srv- forged    'srv-deadbeefdead' -> None
+[G1-fix] max 76         'cli-' + 76a       -> accepted
+```
+
+The trailing-LF acceptance is gone, no other control character slips through, and
+the positive cases are unaffected.
+
+**M1 — the remaining merge-time step.** Both branches now validate with
+`fullmatch` against the same `^cli-[A-Za-z0-9_-]{4,76}$`, and both mint `srv-`, so
+the namespace is sound in each independently and there is no longer a bypass. What
+remains is **de-duplication, not a defect**: the pattern and length constant exist
+in two places (`pixlstash/utils/request_origin.py` on #644,
+`pixlstash/routes/dedup.py` on #638), which the dedup constant's docstring already
+flags. Whichever merges second should collapse them onto the `request_origin.py`
+definition and import it. Two copies that currently agree are debt, not a hole —
+this is a follow-up, not a gate.
+
+Also still recorded for when it goes live: `SweepDryRunRequest.operation_batch_id`
+is inert today and must route through the shared sanitizer the day it reaches the
+operation log (§9.4).
+
+## 11.6 Round-4 test log
+
+```
+# feature/dedup-tiers @ b6b8091d
+$ pytest -q -p no:cacheprovider --fast-captions --force-cpu \
+    tests/test_dedup_tier_service.py tests/test_dedup_tiers_api.py \
+    tests/test_dedup_verdict_service.py tests/test_operation_log.py \
+    tests/test_architecture_guardrails.py
+171 passed, 1 warning in 253.82s (0:04:13)      # 170 at b74bbd31; +1 (the R5 durable test)
+
+$ ruff check pixlstash
+All checks passed!
+
+# feature/gesture-batch-id @ cf3786cc
+$ pytest -q -p no:cacheprovider --fast-captions --force-cpu tests/test_operation_log.py
+46 passed, 1 warning in 131.31s (0:02:11)
+```
+
+| Probe | Covers | Result |
+|---|---|---|
+| `test_F1` | R5, the round-3 C2c scenario verbatim | **CLOSED** |
+| `test_F1b` | defence 2 alone, defence 1 bypassed in the DB | **independent** |
+| `test_F1c` | stack undo/redo still round-trips | no over-block |
+| `test_F1d` | two stack verdicts in one gesture both reopen | no over-narrowing |
+| `test_F2` | 10 cursor cases incl. `+inf`, `Infinity`, `-nan`, `1e400` | **CLOSED** |
+| `test_F2b` | real cursor still walks the queue, no repeats | no over-block |
+| (direct, at `cf3786cc`) | G1 control-character sweep | **CLOSED** |
+
+## 11.7 Closing state
+
+**Release blockers: none.**
+
+**Accepted risks** (owner: backend / auth maintainer in both cases):
+- **A1** — the metadata union widens live share tokens; `auto-stack` amplifies it
+  to one click. Documented at `docs/backend_architecture.md` §22.9. *Revisit:* at
+  the start of multi-user work, and immediately if bulk auto-stack ever runs
+  unattended.
+- **A2** — a client-chosen `cli-` id can group unrelated work into one undo unit,
+  including a bulk scrapheap move. *Revisit:* when the operation log becomes a
+  user-visible activity feed, and immediately if a non-owner principal can ever
+  record an operation.
+
+**Hardening carried forward, none blocking:** G2 (batch-undo 409 reflects caller
+input unbounded); round-1 R5 (the scan still re-derives groups over the whole
+cross-bucket pair cache on every bucket — only the persist was narrowed) and R6
+(unbounded distinct scan scopes); round-1 R7 / round-2 gaps now largely covered by
+the authors' added tests; the `shared_sets_affected` dry-run count recommended
+under A1; and the M1 pattern de-duplication at merge.
+
+**Independence.** All four rounds were performed by the same reviewer, who wrote no
+code on either branch. R5 and R6 were authored by the orchestrator and certified
+here by someone who did not implement them, per the `CLAUDE.md` rule that the
+author of a security fix must not certify it. This entry closes the review.
