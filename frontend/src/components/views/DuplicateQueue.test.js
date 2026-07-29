@@ -116,21 +116,26 @@ const globalOpts = {
   },
 };
 
-/** Mount the queue over one served page and let the first load settle. */
-async function mountQueue(groups, { byTier = {} } = {}) {
+/**
+ * Mount the queue over one served page and let the first load settle.
+ *
+ * `total` is the server's count of the WHOLE queue, which is larger than the
+ * page whenever there is more to page in.
+ */
+async function mountQueue(groups, { byTier = {}, total = null } = {}) {
   getPolicy.mockResolvedValue({
     defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
     bounds: BOUNDS,
   });
   listGroups.mockResolvedValue({
     groups,
-    total: groups.length,
+    total: total ?? groups.length,
     offset: 0,
     limit: 20,
     scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
   });
   getCounts.mockResolvedValue({
-    unresolved_groups: groups.length,
+    unresolved_groups: total ?? groups.length,
     by_tier: byTier,
     scopes: [],
     scan: { status: "complete" },
@@ -560,6 +565,73 @@ describe("DuplicateQueue — the render window", () => {
     // Scroll-anchored, not a union with the focus window: the mounted count
     // must stay a constant, so the head of the queue unmounts behind us.
     expect(after).not.toContain(0);
+  });
+
+  it("sizes the scroll track for the whole queue, not the pages loaded so far", async () => {
+    // The regression this pins: the spacers stood for the LOADED rows, so the
+    // track grew every time a page landed. The thumb shrank and jumped under
+    // the user's hand and "the bottom" moved each time they reached it.
+    const page1 = Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(page1, { total: 200 });
+
+    // What the track stands for, in rows: the two spacers plus the rows that
+    // are actually mounted between them (which have no height in happy-dom).
+    const trackRows = () => {
+      const spacers = wrapper
+        .findAll(".qspacer")
+        .reduce((px, s) => px + parseFloat(s.element.style.height || "0"), 0);
+      return spacers / 140 + wrapper.vm.windowedGroups.length;
+    };
+    expect(trackRows()).toBe(200);
+
+    listGroups.mockResolvedValue({
+      groups: Array.from({ length: 20 }, (_, i) => group(`g${i + 21}`)),
+      total: 200,
+      offset: 20,
+      limit: 20,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+    const list = wrapper.find(".qlist");
+    list.element.scrollTop = 15 * 140;
+    await list.trigger("scroll");
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(store.groups.length).toBe(40);
+    expect(trackRows()).toBe(200);
+  });
+
+  it("keeps paging while the scroll sits past the rows it holds", async () => {
+    // A drag into the reserved-but-unloaded tail fires ONE scroll event. Without
+    // a second trigger on arrival, the chase stalls a page short of the user.
+    const page1 = Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(page1, { total: 200 });
+    let served = 20;
+    listGroups.mockImplementation(async () => {
+      const next = Array.from({ length: 20 }, (_, i) =>
+        group(`g${served + i + 1}`),
+      );
+      served += 20;
+      return {
+        groups: next,
+        total: 200,
+        offset: served,
+        limit: 20,
+        scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+      };
+    });
+
+    const list = wrapper.find(".qlist");
+    list.element.scrollTop = 70 * 140;
+    await list.trigger("scroll");
+    for (let i = 0; i < 6; i += 1) {
+      await flushPromises();
+      await wrapper.vm.$nextTick();
+    }
+    // It walked out to the scroll position and then stopped, rather than
+    // fetching one page or running to the end of the queue.
+    expect(store.groups.length).toBeGreaterThanOrEqual(86);
+    expect(store.groups.length).toBeLessThan(200);
   });
 
   it("every mounted row may decode thumbnails", async () => {

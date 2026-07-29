@@ -187,6 +187,14 @@
           :style="{ height: `${bottomSpacer}px` }"
           aria-hidden="true"
         ></div>
+        <!-- The track is sized for the whole queue, so a fast drag can land in
+             rows that have not arrived yet. Sticky, because at that point the
+             end of the list is thousands of pixels below the viewport and a
+             message down there would never be seen. -->
+        <div v-if="store.loadingMore" class="qmore" role="status">
+          <v-icon size="14">mdi-progress-download</v-icon>
+          Loading more groups
+        </div>
       </div>
     </div>
 
@@ -339,7 +347,9 @@ const WINDOW_AFTER = 8;
 /**
  * The spacer height a windowed-out row stands in for, refined to the real row
  * pitch once two rows have rendered. It only has to keep the scrollbar honest,
- * not pixel-accurate: the measured pitch is a 132px row plus the 8px list gap.
+ * not pixel-accurate — but it is now what the WHOLE track is sized from, so it
+ * starts at the measured pitch (132px row + the 8px list gap) rather than a
+ * round number.
  */
 const ROW_ESTIMATE_PX = 140;
 
@@ -401,18 +411,32 @@ function measureRowPitch() {
   }
 }
 
+/**
+ * Fetch the next page when the scroll position is reaching past the rows the
+ * client holds.
+ *
+ * Called on scroll AND whenever the list grows, because the scrollbar is sized
+ * for the whole queue: a drag into the reserved-but-unloaded tail produces one
+ * scroll event and then nothing, so without the second trigger the chase would
+ * stall one page short of where the user is looking.
+ */
+function maybeLoadMore() {
+  if (!store.hasMore) return;
+  if (
+    scrollIndex.value + viewportRows.value + WINDOW_AFTER >=
+    store.groups.length
+  ) {
+    store.loadMore();
+  }
+}
+
 function onListScroll() {
   const list = listEl.value;
   if (!list) return;
   scrollIndex.value = Math.max(0, Math.floor(list.scrollTop / rowPitchPx.value));
   // Mouse-wheel users reach the tail without ever moving the keyboard focus,
   // so the scroll position must drive loadMore exactly as the focus does.
-  if (
-    store.hasMore &&
-    scrollIndex.value + viewportRows.value + WINDOW_AFTER >= store.groups.length
-  ) {
-    store.loadMore();
-  }
+  maybeLoadMore();
 }
 
 const focusAnchor = computed(() => (store.focusIndex < 0 ? 0 : store.focusIndex));
@@ -445,9 +469,26 @@ const renderEnd = computed(() =>
     scrollIndex.value + viewportRows.value + WINDOW_AFTER,
   ),
 );
+/**
+ * How many rows the scroll height stands for: every group the queue HAS, not
+ * just the pages fetched so far.
+ *
+ * Sizing the spacers to the loaded rows alone made the scrollbar grow under the
+ * user's hand — the thumb shrank and jumped on every page, and the track never
+ * meant anything, because "the bottom" moved each time it was reached. The
+ * server's total is the only number that does not move as paging proceeds.
+ * Once `hasMore` goes false the loaded length is the truth (a total counted
+ * under a running scan can lag the rows it already handed out).
+ */
+const totalRows = computed(() =>
+  store.hasMore
+    ? Math.max(store.groups.length, store.total)
+    : store.groups.length,
+);
+
 const topSpacer = computed(() => renderStart.value * rowPitchPx.value);
-const bottomSpacer = computed(
-  () => (store.groups.length - renderEnd.value) * rowPitchPx.value,
+const bottomSpacer = computed(() =>
+  Math.max(0, (totalRows.value - renderEnd.value) * rowPitchPx.value),
 );
 
 /**
@@ -472,6 +513,7 @@ watch(
   async () => {
     await nextTick();
     measureRowPitch();
+    maybeLoadMore();
   },
 );
 
@@ -1235,6 +1277,23 @@ kbd {
 
 .qspacer {
   flex: 0 0 auto;
+}
+
+/* Pinned to the foot of the scrollport, not to the end of the content. */
+.qmore {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-surface));
+  border: 1px solid rgb(var(--v-theme-divider));
+  box-shadow: var(--elevation-1);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
 .dq-state {
