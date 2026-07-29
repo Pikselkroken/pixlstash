@@ -16,6 +16,12 @@ Covers the three things the design rests on:
    is one batch and one Undo, a **permanent** delete is recorded nowhere, and
    undoing a move whose picture has since been purged is refused outright
    (410) rather than half-applied.
+5. **The tag-review decisions** (§21.2) — confirming and rejecting a tag
+   prediction are recorded, and their undo reverses the *whole* decision: the
+   Tag row, the prediction status AND the human-label ledger, with the derived
+   ``anomaly_tag_uncertainty`` recomputed and the cached smart score dropped.
+   A half-undo — the tag back but the rejection still on file — is the failure
+   these tests exist to prevent.
 """
 
 import gc
@@ -23,7 +29,9 @@ import io
 import json
 import os
 import tempfile
+from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 from sqlmodel import select
@@ -34,6 +42,7 @@ from pixlstash.db_models import (
     PictureSet,
     PictureSetMember,
     Tag,
+    TagPrediction,
     is_tag_sentinel,
 )
 from pixlstash.server import Server
@@ -124,6 +133,89 @@ def _visible(client, picture_id):
     payload = resp.json()
     pictures = payload["pictures"] if isinstance(payload, dict) else payload
     return picture_id in {int(pic["id"]) for pic in pictures}
+
+
+def _seed_prediction(
+    server, picture_id, tag, confidence=0.99, status="PENDING", model_version="test-v1"
+):
+    """Write the tagger prediction row a review decision adjudicates."""
+
+    def _insert(session):
+        session.add(
+            TagPrediction(
+                picture_id=picture_id,
+                tag=tag,
+                confidence=confidence,
+                model_version=model_version,
+                status=status,
+                predicted_at=datetime.utcnow(),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_insert)
+
+
+def _prediction(server, picture_id, tag):
+    """The prediction row + its human-label ledger, or ``None`` if there is none.
+
+    This is what the tagger and the training exporter read: ``label_source`` is
+    what makes a POS/NEG real supervision, so an undo that leaves it set has not
+    undone the decision no matter what the tag list says.
+    """
+
+    def _read(session):
+        row = session.exec(
+            select(TagPrediction).where(
+                TagPrediction.picture_id == picture_id,
+                TagPrediction.tag == tag,
+            )
+        ).first()
+        if row is None:
+            return None
+        return {
+            "model_version": row.model_version,
+            "confidence": row.confidence,
+            "status": row.status,
+            "label_state": row.label_state,
+            "label_source": row.label_source,
+            "label_model_version": row.label_model_version,
+            "label_confidence": row.label_confidence,
+        }
+
+    return server.vault.db.run_task(_read)
+
+
+def _picture_scores(server, picture_id):
+    """``(anomaly_tag_uncertainty, smart_score)`` — the two derived values."""
+
+    def _read(session):
+        picture = session.get(Picture, picture_id)
+        return (picture.anomaly_tag_uncertainty, picture.smart_score)
+
+    return server.vault.db.run_task(_read)
+
+
+def _set_smart_score(server, picture_id, value):
+    def _write(session):
+        picture = session.get(Picture, picture_id)
+        picture.smart_score = value
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(_write)
+
+
+def _lock_picture(server, picture_id, name="frozen"):
+    def _lock(session):
+        picture_set = PictureSet(name=name, locked=True)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        session.add(PictureSetMember(set_id=picture_set.id, picture_id=picture_id))
+        session.commit()
+
+    server.vault.db.run_task(_lock)
 
 
 def _purge_forever(client, ids):
@@ -595,16 +687,7 @@ def test_undo_refuses_to_write_a_picture_frozen_by_a_locked_set():
     try:
         picture_id = _upload(client)
         client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "sunset"})
-
-        def lock(session):
-            picture_set = PictureSet(name="frozen", locked=True)
-            session.add(picture_set)
-            session.commit()
-            session.refresh(picture_set)
-            session.add(PictureSetMember(set_id=picture_set.id, picture_id=picture_id))
-            session.commit()
-
-        server.vault.db.run_task(lock)
+        _lock_picture(server, picture_id)
 
         resp = client.post(f"{API}/operations/undo")
         assert resp.status_code == 423, resp.text
@@ -877,16 +960,7 @@ def test_scrapheap_move_of_a_locked_picture_is_refused_and_records_nothing():
     temp_dir, client, server = _setup()
     try:
         picture_id = _upload(client)
-
-        def lock(session):
-            picture_set = PictureSet(name="frozen", locked=True)
-            session.add(picture_set)
-            session.commit()
-            session.refresh(picture_set)
-            session.add(PictureSetMember(set_id=picture_set.id, picture_id=picture_id))
-            session.commit()
-
-        server.vault.db.run_task(lock)
+        _lock_picture(server, picture_id)
 
         assert client.delete(f"{API}/pictures/{picture_id}").status_code == 423
         assert _lifecycle(server, picture_id) == (False, None)
@@ -913,6 +987,319 @@ def test_scrapheap_summaries_count_the_recorded_change_not_the_request():
     restored = {"9": {facet: {"deleted": False, "deleted_at": None}}}
     assert restore({}, restored) == "Restored 1 picture from the Scrapheap"
     assert move({}, restored) is None
+
+
+# ---------------------------------------------------------------------------
+# Tag-review decisions: confirm / reject (§21.2)
+# ---------------------------------------------------------------------------
+
+# An anomaly-vocabulary tag, so the decision moves the scorer's inputs too.
+ANOMALY_TAG = "watermark"
+
+
+def test_reject_is_recorded_and_undo_clears_the_human_negative():
+    """The reported gap: a reject raised no receipt and could not be undone.
+
+    Undo must leave the ledger as if the reject never happened — status back to
+    PENDING and ``label_source`` back to null. A row still carrying a human NEG
+    is one the tagger and the training exporter would go on treating as refused,
+    which is the half-undo this facet exists to prevent.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+
+        resp = client.post(
+            f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/reject",
+            headers={"X-Client-Id": "tab-1"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        operations = _operations(server, op_type="pictures.tags.reject")
+        assert len(operations) == 1
+        operation = operations[0]
+        assert operation["target_ids"] == [picture_id]
+        assert operation["undoable"] is True
+        assert operation["status"] == "applied"
+        assert operation["summary"] == f"Removed tag '{ANOMALY_TAG}'"
+        assert operation["origin_client_id"] == "tab-1"
+        assert operation["source"] == "ui"
+
+        rejected = _prediction(server, picture_id, ANOMALY_TAG)
+        assert rejected["status"] == "REJECTED"
+        assert rejected["label_state"] == "NEG"
+        assert rejected["label_source"] == "human"
+        # The tagger version/confidence the reviewer overruled is snapshotted.
+        assert rejected["label_model_version"] == "test-v1"
+        assert rejected["label_confidence"] == 0.99
+
+        # The recorded facet is the prediction/ledger state, not an inverse.
+        detail = client.get(f"{API}/operations/{operation['id']}").json()
+        assert set(detail["before"][str(picture_id)]) == {"tag_predictions"}
+        assert (
+            detail["before"][str(picture_id)]["tag_predictions"][ANOMALY_TAG][
+                "label_source"
+            ]
+            is None
+        )
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        reopened = _prediction(server, picture_id, ANOMALY_TAG)
+        assert reopened["status"] == "PENDING"
+        assert reopened["label_state"] == "UNKNOWN"
+        assert reopened["label_source"] is None
+        assert reopened["label_model_version"] is None
+        assert reopened["label_confidence"] is None
+        # The tagger's own live fields are never rolled back by an undo.
+        assert reopened["model_version"] == "test-v1"
+        assert reopened["confidence"] == 0.99
+
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        assert _prediction(server, picture_id, ANOMALY_TAG)["label_state"] == "NEG"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_reject_of_a_hand_added_tag_round_trips_the_synthetic_manual_row():
+    """A tag the tagger never predicted has its NEG parked on an invented row.
+
+    That row is the only prediction row a user action can create, so it is also
+    the only one an undo may delete — and a redo has to be able to rebuild it.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tags", json={"tag": "sunset"}
+            ).status_code
+            == 200
+        )
+        # A content tag outside the tagger's label space: no prediction on file.
+        assert _prediction(server, picture_id, "sunset") is None
+
+        resp = client.post(f"{API}/pictures/{picture_id}/tag_predictions/sunset/reject")
+        assert resp.status_code == 200, resp.text
+        synthetic = _prediction(server, picture_id, "sunset")
+        assert synthetic["model_version"] == "manual"
+        assert synthetic["status"] == "REJECTED"
+        assert synthetic["label_state"] == "NEG"
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _prediction(server, picture_id, "sunset") is None
+
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        rebuilt = _prediction(server, picture_id, "sunset")
+        assert rebuilt["model_version"] == "manual"
+        assert rebuilt["status"] == "REJECTED"
+        assert rebuilt["label_state"] == "NEG"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_confirm_is_recorded_and_undo_removes_the_tag_row_it_created():
+    """Confirm promotes a prediction to a Tag; undo takes both back."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+        assert _tags(server, picture_id) == []
+
+        resp = client.post(
+            f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/confirm"
+        )
+        assert resp.status_code == 200, resp.text
+        assert _tags(server, picture_id) == [ANOMALY_TAG]
+
+        operations = _operations(server, op_type="pictures.tags.confirm")
+        assert len(operations) == 1
+        assert operations[0]["summary"] == f"Confirmed tag '{ANOMALY_TAG}'"
+        assert operations[0]["target_ids"] == [picture_id]
+        confirmed = _prediction(server, picture_id, ANOMALY_TAG)
+        assert confirmed["status"] == "CONFIRMED"
+        assert confirmed["label_state"] == "POS"
+
+        # Both facets moved, so both are recorded and both come back.
+        detail = client.get(f"{API}/operations/{operations[0]['id']}").json()
+        assert set(detail["before"][str(picture_id)]) == {"tags", "tag_predictions"}
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _tags(server, picture_id) == []
+        reopened = _prediction(server, picture_id, ANOMALY_TAG)
+        assert reopened["status"] == "PENDING"
+        assert reopened["label_state"] == "UNKNOWN"
+        assert reopened["label_source"] is None
+
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        assert _tags(server, picture_id) == [ANOMALY_TAG]
+        assert _prediction(server, picture_id, ANOMALY_TAG)["label_state"] == "POS"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_recomputes_the_derived_uncertainty_and_drops_the_cached_score():
+    """Derived data is re-derived on restore, never snapshotted.
+
+    ``anomaly_tag_uncertainty`` is a function of the labels, and ``smart_score``
+    is a cache of a function of them. Restoring a snapshot of either would let
+    the pair drift out of step with the rows the undo just wrote.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/confirm"
+            ).status_code
+            == 200
+        )
+        uncertainty, _score = _picture_scores(server, picture_id)
+        # Tag applied: the model was 0.99 sure, so the human/model gap is 0.01.
+        assert uncertainty == pytest.approx(0.01)
+
+        # Pretend the background scorer has since filled the cache back in.
+        _set_smart_score(server, picture_id, 0.5)
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        uncertainty, score = _picture_scores(server, picture_id)
+        # Tag gone again: the gap is the model's raw confidence, recomputed.
+        assert uncertainty == pytest.approx(0.99)
+        # And the cached score the confirm had moved is dropped for recompute.
+        assert score is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_removing_a_tag_chip_end_to_end_is_fully_undoable():
+    """The overlay gesture the bug was reported against, start to finish.
+
+    Removing a chip is two requests — ``tags/remove_all`` then the reject that
+    makes the removal durable supervision. Each records its own operation (no
+    batch id, exactly like the other single-picture tag ops), and walking both
+    back leaves the tag applied with **no** rejection on file.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "sunset"})
+        assert _tags(server, picture_id) == ["sunset"]
+
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tags/remove_all", json={"tag": "sunset"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tag_predictions/sunset/reject"
+            ).status_code
+            == 200
+        )
+        assert _tags(server, picture_id) == []
+        assert _prediction(server, picture_id, "sunset")["label_state"] == "NEG"
+
+        recorded = _operations(server)
+        assert [op["op_type"] for op in recorded] == [
+            "pictures.tags.reject",
+            "pictures.tags.remove_all",
+            "pictures.tags.add",
+        ]
+        assert all(op["batch_id"] is None for op in recorded)
+
+        # Undo is last-in-first-out: the reject, then the removal.
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _prediction(server, picture_id, "sunset") is None
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _tags(server, picture_id) == ["sunset"]
+        assert _prediction(server, picture_id, "sunset") is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_reject_on_a_locked_picture_is_refused_and_records_nothing():
+    """The 423 fires inside the recorded task, before anything is written."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+        _lock_picture(server, picture_id)
+
+        rejected = client.post(
+            f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/reject"
+        )
+        assert rejected.status_code == 423, rejected.text
+        confirmed = client.post(
+            f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/confirm"
+        )
+        assert confirmed.status_code == 423, confirmed.text
+
+        assert _operations(server, op_type="pictures.tags.reject") == []
+        assert _operations(server, op_type="pictures.tags.confirm") == []
+        # The decision itself did not land either.
+        assert _prediction(server, picture_id, ANOMALY_TAG)["status"] == "PENDING"
+        assert _tags(server, picture_id) == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_reject_of_an_unpredicted_tag_on_a_confirmed_one_does_not_batch():
+    """Two decisions are two independent steps, as for every other tag op."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+        _seed_prediction(server, picture_id, "noise", confidence=0.98)
+
+        for tag in (ANOMALY_TAG, "noise"):
+            assert (
+                client.post(
+                    f"{API}/pictures/{picture_id}/tag_predictions/{tag}/reject"
+                ).status_code
+                == 200
+            )
+
+        operations = _operations(server, op_type="pictures.tags.reject")
+        assert len(operations) == 2
+        assert all(op["batch_id"] is None for op in operations)
+
+        # One Undo reverts one decision, not both.
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert _prediction(server, picture_id, "noise")["label_source"] is None
+        assert _prediction(server, picture_id, ANOMALY_TAG)["label_source"] == "human"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_of_a_reject_leaves_a_later_tagger_prediction_alone():
+    """Only the synthetic row a decision invents may be deleted by its undo.
+
+    A prediction the tagger wrote *after* the operation was recorded is model
+    output nobody asked to revert; silently deleting it would make undo a data
+    loss path.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        _seed_prediction(server, picture_id, ANOMALY_TAG, confidence=0.99)
+        assert (
+            client.post(
+                f"{API}/pictures/{picture_id}/tag_predictions/{ANOMALY_TAG}/reject"
+            ).status_code
+            == 200
+        )
+        # The tagger runs in the background and scores another label.
+        _seed_prediction(server, picture_id, "noise", confidence=0.42)
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        survivor = _prediction(server, picture_id, "noise")
+        assert survivor is not None
+        assert survivor["confidence"] == 0.42
+    finally:
+        _teardown(temp_dir, server)
 
 
 # ---------------------------------------------------------------------------
