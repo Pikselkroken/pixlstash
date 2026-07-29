@@ -22,6 +22,12 @@ from sqlmodel import (
 from typing import ClassVar, Optional, List, Union, TYPE_CHECKING
 
 from .character import Character
+from .entity_project import (
+    character_in_no_project,
+    character_in_project,
+    picture_set_in_no_project,
+    picture_set_in_project,
+)
 from .face import Face
 from .picture_project import PictureProjectMember
 from .picture_set import PictureSet, PictureSetMember
@@ -1226,14 +1232,16 @@ class Picture(SQLModel, table=True):
         so all pictures in that stack are excluded from unassigned queries.
 
         When assignment project scope is provided, assignment is evaluated only
-        against characters/sets in that same project scope.
+        against characters/sets in that same project scope. Since issue #125 a
+        character or set may belong to several projects, so the scope predicates
+        read the membership join tables rather than the primary-project FK.
         """
         if assignment_unassigned_project:
-            project_scope = Character.project_id.is_(None)
-            set_scope = PictureSet.project_id.is_(None)
+            project_scope = character_in_no_project()
+            set_scope = picture_set_in_no_project()
         elif assignment_project_id is not None:
-            project_scope = Character.project_id == assignment_project_id
-            set_scope = PictureSet.project_id == assignment_project_id
+            project_scope = character_in_project(assignment_project_id)
+            set_scope = picture_set_in_project(assignment_project_id)
         else:
             project_scope = None
             set_scope = None
