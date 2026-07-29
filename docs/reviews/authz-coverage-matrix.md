@@ -2,6 +2,7 @@
 
 - **Branch:** `backend-refactoring`
 - **Scope:** Phase 1 **Step 2 only** of the centralised-authz refactor (backend refactor plan §3.5). This PR **declares** the access policy of every mounted HTTP route in `pixlstash/authz/registry.py::ROUTE_POLICIES`. It does **not** enforce anything (`AUTHZ_GATE_ENFORCING = False`), remove any inline check, or change any handler. It is the regenerated coverage matrix the adversarial security review consumes.
+- **Arithmetic completeness (updated 2026-07-28):** **224 declared**, covering the **223** routes mounted in the default configuration plus **1 conditionally-mounted** route. The v1.9 delta is **+7 `owner_only`** rows for the DAM 1.2 operation log (`operations.py`, table below), taking `owner_only` 83 → **90**. No existing declaration changed. Original Step-2 text follows.
 - **Arithmetic completeness:** **219 declared**, covering the **218** routes mounted in the default configuration plus **1 conditionally-mounted** route (was 207 at the Step-2 back-fill; +6 from the async streaming-staging import (#459), +2 from the v1.8.0 scrapheap-retention config pair GET/PATCH `/server-config/scrapheap-retention` (both `owner_only`), +1 GET `/server-config/scrapheap-retention/impact` (`owner_only`), +1 POST `/api/v1/test-hooks/ws-event` (`loopback_owner_only`), +2 from v1.9 Remix — GET `/comfyui/pictures/{picture_id}/recipe` and POST `/comfyui/run_recipe`, both `picture_scoped` on the source picture). Gate `enforce_startup` (both report-only and, as a dry check, `enforcing=True`) resolves the app with **0 undeclared, 0 dead declarations, 0 authoring problems** (every `PUBLIC`/`LOCAL_OWNER_ONLY` has a justification; every `*_SCOPED` `id_param` is a real template param). The audit allowlist in `tests/test_architecture_guardrails.py` has burned to **zero** (`_CURRENT_ROUTE_ALLOWLIST = frozenset()`); the registry is now the sole coverage matrix. Guardrail suite: **17 passed**.
 - **WebSockets:** the 2 WS routes (`/ws/comfyui`, `/api/v1/ws/updates`) are **out of the HTTP registry by design** — their chokepoint is `authenticate_websocket` (plan §6). They remain acknowledged in `tests/test_architecture_guardrails.py::test_websocket_routes_are_acknowledged`, and `registry.py` carries the `# WS routes: see authn/websocket.py` sentinel.
 
@@ -26,13 +27,13 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (219 total)
+## Policy distribution (221 total)
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
 | `any_token` | 16 |
-| `owner_only` | 83 |
+| `owner_only` | 85 |
 | `picture_scoped` | 35 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
@@ -242,6 +243,19 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | PATCH | `/api/v1/stacks/{stack_id}/order` | owner_only |  | Reorder stack; PATCH blocked for READ tokens; owner only |
 | GET | `/api/v1/stacks/{stack_id}/pictures` | scoped_list |  |  |
 
+### dedup.py
+
+Added 2026-07-28 with the v1.9 near-duplicate sweep (Lane E). Both routes are new,
+carry no inline authz code (the gate is the sole enforcement, §16.1), and are
+covered in both directions by `tests/test_dedup_sweep_api.py`
+(`test_scoped_read_token_is_denied_on_both_routes` /
+`test_owner_reaches_both_routes`).
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/dedup/sweep/policy` | owner_only |  | Sweep policy defaults/bounds; operator surface, returns no per-object data |
+| POST | `/api/v1/dedup/sweep/dry-run` | owner_only |  | Vault-wide near-duplicate plan (counts + picture ids across the whole library); cannot be narrowed to a share token's scope without leaking out-of-scope counts, same reasoning as tag_health. POST also blocked for READ tokens |
+
 ### characters.py
 
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
@@ -351,6 +365,30 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | POST | `/api/v1/reviews/{review_id}/archive` | owner_only |  | Owner-only review surface; write |
 | POST | `/api/v1/reviews/{review_id}/refresh` | owner_only |  | Owner-only review surface; write |
 | GET | `/api/v1/reviews/{review_id}/suggestions` | owner_only |  | Owner-only review read (inline rejects scoped tokens) |
+
+### operations.py (added 2026-07-28 — DAM 1.2 operation log)
+
+Vault-wide change history plus the undo/redo stack. `owner_only` throughout: the
+log enumerates every change to the **whole library** (a resource-scoped share
+token must not read it), and undo/redo write metadata back onto arbitrary
+pictures across the vault, which no resource-scoped grant can bound. Every write
+here is a POST outside `READ_SAFE_POST_PATHS`, so a READ (⇒ scoped) token is
+already middleware-blocked; the reads are the rows `owner_only` actually
+tightens. **No inline authz check exists in these handlers** — the gate is the
+sole enforcement (pinned by
+`tests/test_operation_log.py::test_operations_routes_have_no_inline_authz_check`),
+and the declarations themselves are pinned by
+`tests/test_operation_log.py::test_every_operations_route_is_declared_owner_only`.
+
+| Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
+|---|---|---|---|---|
+| GET | `/api/v1/operations` | owner_only |  | Vault-wide change history; owner-only read |
+| GET | `/api/v1/operations/undo-state` | owner_only |  | Vault-wide undo/redo availability; owner-only read |
+| GET | `/api/v1/operations/{operation_id}` | owner_only |  | One operation incl. the recorded before/after metadata of its targets (arbitrary vault pictures); owner-only read |
+| POST | `/api/v1/operations/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/redo` | owner_only |  | Re-applies metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/{operation_id}/undo` | owner_only |  | Reverts metadata across the vault; owner-only write |
+| POST | `/api/v1/operations/batches/{batch_id}/undo` | owner_only |  | Reverts a whole bulk action across the vault; owner-only write |
 
 ### tag_health.py
 

@@ -8,6 +8,7 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
+from pixlstash.services import operation_log_service
 from pixlstash.services.set_lock_service import enforce_stack_membership_not_locked
 from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
@@ -503,7 +504,20 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(status_code=404, detail="Stack not found")
             return safe_model_dict(stack)
 
-        stack_id = server.vault.db.run_task(create_or_assign_stack, picture_ids, name)
+        # Stacking is stack-atomic: a merge moves every member of the pictures'
+        # pre-existing stacks and reconciles the whole stack's set/project
+        # membership, so the snapshot has to cover those siblings too.
+        stack_id, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            create_or_assign_stack,
+            picture_ids,
+            name,
+            op_type="stacks.create",
+            picture_ids=picture_ids,
+            expand_stacks=True,
+            summary=f"Stacked {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
+        )
         pictures = server.vault.db.run_task(_fetch_stack_pictures, stack_id)
         pictures = _ensure_stack_positions(request, stack_id, pictures)
         payload = server.vault.db.run_task(fetch_stack_payload, stack_id)
@@ -692,7 +706,21 @@ def create_router(server) -> APIRouter:
             session.commit()
             return stack
 
-        stack = server.vault.db.run_task(remove_members, stack_id, picture_ids)
+        # Expanding to the whole stack is what makes the dissolve branch
+        # reversible: when one or fewer members remain the stack row is deleted
+        # and the survivor is unstacked too, and that survivor is not in the
+        # requested picture_ids.
+        stack, _operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            remove_members,
+            stack_id,
+            picture_ids,
+            op_type="stacks.dissolve",
+            picture_ids=picture_ids,
+            expand_stacks=True,
+            summary=f"Unstacked {len(picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
+        )
         if stack is None:
             return {"status": "success", "stack_id": None, "picture_ids": picture_ids}
 

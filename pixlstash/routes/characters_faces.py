@@ -18,7 +18,6 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
 
-from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
     Face,
@@ -30,6 +29,7 @@ from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
     select_reference_faces_for_character,
 )
+from pixlstash.services import operation_log_service
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 
@@ -95,6 +95,31 @@ def _enforce_face_mutation_scope(
             status_code=403,
             detail="Token is not authorised to access these pictures",
         )
+
+
+def _picture_ids_for_faces(face_ids):
+    """Resolver for the operation log: the pictures behind a face-id request.
+
+    Character assignment can be addressed either by picture id or by face id.
+    The face-id form does not name its pictures, so the operation log would
+    snapshot nothing and record a half-change. This returns a
+    ``(session) -> picture ids`` callable the recorder runs on the mutation's own
+    session just before the write, or ``None`` when the request already named its
+    pictures.
+    """
+    if not face_ids:
+        return None
+
+    def _resolve(session: Session):
+        return [
+            picture_id
+            for picture_id in session.exec(
+                select(Face.picture_id).where(Face.id.in_(list(face_ids)))
+            ).all()
+            if picture_id is not None
+        ]
+
+    return _resolve
 
 
 def create_router(server) -> APIRouter:
@@ -243,12 +268,25 @@ def create_router(server) -> APIRouter:
             existing_face_ids = [face.id for face in existing_faces]
             return faces_payload, existing_face_ids
 
-        faces, existing_face_ids = server.vault.db.run_task(
-            assign_faces,
-            face_ids,
-            picture_ids,
-            character_id,
-            priority=DBPriority.IMMEDIATE,
+        # Assignment is stack-atomic (the work function expands the request to
+        # whole stacks), so the snapshot expands too. A request addressed by face
+        # id does not name its pictures, so resolve them on the mutation's own
+        # session before the write — otherwise the operation would record a
+        # half-change that undo could not reverse.
+        (faces, existing_face_ids), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                assign_faces,
+                face_ids,
+                picture_ids,
+                character_id,
+                op_type="characters.assign",
+                picture_ids=picture_ids,
+                resolve_picture_ids=_picture_ids_for_faces(face_ids),
+                expand_stacks=True,
+                summary="Assigned pictures to a character",
+                **operation_log_service.request_context(request),
+            )
         )
         if not faces and len(existing_face_ids) > 0:
             # All requested faces are already assigned to this character — the
@@ -339,12 +377,20 @@ def create_router(server) -> APIRouter:
             session.refresh(face)
             return faces
 
-        server.vault.db.run_task(
+        # Unlike the assign above, this handler does not expand to stacks, so the
+        # snapshot covers exactly the requested pictures — plus the pictures of a
+        # face-id-addressed request, resolved on the mutation's own session.
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
             remove_faces_from_character,
             character_id,
             face_ids,
             picture_ids,
-            priority=DBPriority.IMMEDIATE,
+            op_type="characters.unassign",
+            picture_ids=picture_ids,
+            resolve_picture_ids=_picture_ids_for_faces(face_ids),
+            summary="Unassigned pictures from a character",
+            **operation_log_service.request_context(request),
         )
 
         server.vault.db.run_task(Picture.clear_field, picture_ids, "text_embedding")

@@ -29,7 +29,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import scrapheap_service
+from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
     locked_by_sets_for_picture,
@@ -446,12 +446,23 @@ def register_routes(router, server):
             missing_ids = [pid for pid in ids if pid not in found_ids]
             return updated_ids, missing_ids
 
-        updated_ids, missing_ids = server.vault.db.run_task(
-            update_picture_projects,
-            picture_ids,
-            project_id_value,
-            mode,
-            priority=DBPriority.IMMEDIATE,
+        # Project membership is stack-atomic, so the snapshot expands to whole
+        # stacks — otherwise undo would restore the clicked picture and leave its
+        # stack siblings on the new project.
+        (updated_ids, missing_ids), _operation = (
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                update_picture_projects,
+                picture_ids,
+                project_id_value,
+                mode,
+                op_type="pictures.project",
+                picture_ids=picture_ids,
+                expand_stacks=True,
+                summary=f"Changed project membership ({mode}) "
+                f"for {len(picture_ids)} picture(s)",
+                **operation_log_service.request_context(request),
+            )
         )
 
         if updated_ids:
@@ -618,14 +629,21 @@ def register_routes(router, server):
                 reset_triggered,
             )
 
-        updated_ids, skipped_ids, missing_ids, reset_triggered = (
-            server.vault.db.run_task(
-                _apply_scores_batch,
-                ordered_picture_ids,
-                parsed_scores,
-                only_unscored,
-                priority=DBPriority.IMMEDIATE,
-            )
+        # Recorded as ONE operation so Ctrl+Z reverts the whole batch of ratings
+        # rather than one picture at a time.
+        (
+            (updated_ids, skipped_ids, missing_ids, reset_triggered),
+            _operation,
+        ) = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            _apply_scores_batch,
+            ordered_picture_ids,
+            parsed_scores,
+            only_unscored,
+            op_type="pictures.score",
+            picture_ids=ordered_picture_ids,
+            summary=f"Rated {len(ordered_picture_ids)} picture(s)",
+            **operation_log_service.request_context(request),
         )
 
         if updated_ids or reset_triggered:
@@ -980,11 +998,15 @@ def register_routes(router, server):
                         session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
                         session.commit()
 
-                    server.vault.db.run_task(
+                    operation_log_service.run_recorded_metadata_task(
+                        server.vault,
                         _replace_tags,
                         pic_id,
                         tag_values,
-                        priority=DBPriority.IMMEDIATE,
+                        op_type="pictures.tags.replace",
+                        picture_ids=[pic_id],
+                        summary="Replaced the picture's tags",
+                        **operation_log_service.request_context(request),
                     )
                     updated = True
                 continue
@@ -1020,11 +1042,17 @@ def register_routes(router, server):
                 return pic_db
 
             try:
-                pic = server.vault.db.run_task(
+                pic, _operation = operation_log_service.run_recorded_metadata_task(
+                    server.vault,
                     apply_picture_updates,
                     picture_id,
                     updated_fields,
-                    priority=DBPriority.IMMEDIATE,
+                    op_type="pictures.fields",
+                    picture_ids=[picture_id],
+                    summary="Edited "
+                    + ", ".join(sorted(updated_fields))
+                    + " on the picture",
+                    **operation_log_service.request_context(request),
                 )
             except KeyError:
                 raise HTTPException(status_code=404, detail="Picture not found")

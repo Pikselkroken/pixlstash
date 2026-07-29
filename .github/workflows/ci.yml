@@ -216,6 +216,8 @@ jobs:
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_dedup_sweep_api.py
+          tests/test_dedup_sweep_service.py
           tests/test_detections_scope.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
@@ -231,6 +233,7 @@ jobs:
           tests/test_metadata_hash.py
           tests/test_migrations.py
           tests/test_openapi_response_schemas.py
+          tests/test_operation_log.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
           tests/test_picture_set_locking.py

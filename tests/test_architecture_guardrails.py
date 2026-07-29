@@ -137,6 +137,7 @@ def test_services_no_direct_db_calls():
     # set once it is migrated to accept a Session.
     _direct_db_call_service_allowlist = {
         "pixlstash/services/config_service.py",  # vault-injection pattern
+        "pixlstash/services/dedup_sweep_service.py",  # vault-injection pattern; read-only wrapper around plan_sweep_in_session
         "pixlstash/services/impossible_tag_clear_service.py",  # vault-injection pattern; bulk impossible-tag clear/undo
         "pixlstash/services/picture_stats.py",  # pending session injection refactor
         "pixlstash/services/search_query_service.py",  # vault-injection pattern; DB queries for search endpoints
@@ -155,6 +156,10 @@ def test_services_no_direct_db_calls():
         "pixlstash/services/restore/preview.py",  # vault-injection pattern; restore previews + hash compare
         "pixlstash/services/comfyui_service.py",  # vault-injection pattern; owns ComfyUI output-import orchestration
         "pixlstash/services/scrapheap_service.py",  # vault-injection pattern; thin wrappers around the *_in_session purge/retention functions
+        # The op-log's whole point is that capture -> mutation -> capture ->
+        # record run in ONE queued task; the wrapper owning that submission is
+        # the atomicity guarantee, not transitional debt.
+        "pixlstash/services/operation_log_service.py",  # vault-injection pattern; atomic record-with-mutation task
     }
 
     violations = []
@@ -423,6 +428,12 @@ _LABEL_SINK_EXEMPT = {
     # NB: characters.py::alter_char now SKIPS the description clear for locked pics
     # (keeps character reassignment + text_embedding invalidation), so it is
     # guarded, not exempt.
+    # --- Op-log undo/redo: the guard lives at the single restore sink ---
+    ("pixlstash/services/operation_log_service.py", "_apply_tags"): (
+        "module-private tag reconciliation reached only from "
+        "apply_state_in_session, which calls enforce_pictures_not_locked over "
+        "the whole recorded state (every facet) before dispatching"
+    ),
     # --- CSO-named, documented NON-sinks (no Tag/ledger/label write reaches a
     # picture here). Kept for the record; excluded from the stale-prune below
     # because the scanner never flags them (they don't match a sink pattern). ---
@@ -673,6 +684,7 @@ _EXPECTED_ROUTE_MODULES = frozenset(
         "pixlstash.routes.filesystem",
         "pixlstash.routes.guest_scores",
         "pixlstash.routes.import_folders",
+        "pixlstash.routes.operations",
         "pixlstash.routes.picture_sets",
         "pixlstash.routes.pictures._anomaly",
         "pixlstash.routes.pictures._character_likeness",
