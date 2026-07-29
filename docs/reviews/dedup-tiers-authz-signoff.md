@@ -686,3 +686,512 @@ $ PYTHONPATH=<worktree> .venv/bin/python -m pytest -q --fast-captions --force-cp
 
 The branch is green as authored. Every finding above is a gap in what the tests
 *assert*, not a test the authors broke — which is the point of an adversarial pass.
+
+---
+
+# 9. Re-verification (round 2, 2026-07-29) — two scopes
+
+Certified by the same independent reviewer; the fix authors did not certify their
+own work. Round 1 reviewed `feature/dedup-tiers` @ `21b07e64`. The branch was
+rebased by the owner mid-round and the fix commit transplanted, so everything
+below is re-derived against the **current remote head**, not against round 1's tree.
+
+## 9.1 Final verdicts
+
+| Branch / PR | Head | Verdict |
+|---|---|---|
+| `feature/dedup-tiers` (PR #638) | `029525a0` | **APPROVE** |
+| `feature/gesture-batch-id` (PR #644) | `d634c869` | **APPROVE-WITH-REQUIRED-CHANGES** (one-word regex fix) |
+| **Merge gate — applies to whichever of the two merges *second*** | — | **BLOCKING** (M1 below) |
+
+New findings this round:
+
+| # | Severity | What | Status |
+|---|---|---|---|
+| **M1** | **MEDIUM** | **Merge gate.** #644 establishes the `srv-` / `cli-` batch-id namespace; #638's dedup verdict routes take a caller-supplied `batch_id` from the request **body** with no validation, so a client can post `{"batch_id": "srv-…"}` and forge a server-namespaced id. Neither branch is defective alone. | **BLOCKING at merge** |
+| **G1** | LOW | `sanitize_operation_batch_id` uses `re.match` + `$`, and Python's `$` matches before a trailing newline: `"cli-abcd\n"` is accepted verbatim and **persisted**. Reachable end to end. | **REQUIRED (#644)** |
+| **W1** | LOW | The `MAX_PAIRS_PER_BUCKET` comment claims the cap loses "confidence *resolution* … not group membership". **False** — reproduced: 2 pictures dropped from grouping entirely. | Required comment fix |
+| W2 | LOW | Folder scope: `scope_id` of `"/"`, `"\"`, `"///"` etc. `rstrip`s to `""`, so the LIKE prefix becomes `%` and the scope silently means *global* — the same class the escaping fix closed, via a different route. | Hardening |
+| G2 | LOW | `POST /operations/batches/{batch_id}/undo` accepts any string and reflects it verbatim in the 409 `detail`. | Hardening |
+| G3 | LOW | A client id reused across gestures merges unrelated operations into one undo unit; #644 additionally lets a client **override** the previously server-forced batch id on the two bulk scrapheap endpoints. | Accepted (see 9.5) |
+
+---
+
+## 9.2 Scope 1 — `feature/dedup-tiers` @ `029525a0`
+
+### R1 — signature injectivity: **CLOSED**
+
+`content_key` is now `f"{pixel_sha}:{size_bytes}"`. My round-1 E1 reproduction,
+re-run verbatim as `test_V1`:
+
+```
+[V1] group A (sha=aaa size=100) = [1, 2]
+[V1] group B (sha=aaa size=999) = [3, 4]
+[V1] detected 2 group(s), 2 distinct signature(s)
+[V1] persisted rows = [('7c7106052e', 'exact', [1, 2], False), ('a3c34404db', 'exact', [3, 4], False)]
+[V1] after keep-separate on ONE signature = [('7c7106052e', … True), ('a3c34404db', … False)]
+[V1] >>> groups resolved by that one verdict: 1 (want 1)
+[V1] content_key sample = 'aaa:100'
+[V1b] order independent: True
+[V1b] size 100 vs 999 distinct: True
+```
+
+Two groups, two signatures, two persisted rows, and a verdict on one resolves
+exactly one. All three round-1 consequences (group dropped from the queue,
+keep-separate silencing both file sets, stack target depending on scan order) are
+gone. The signature stays order-independent. The authors also promoted the
+reproduction into a durable test and amended migration 0088 to clear stale rows.
+
+### R2 — bulk fail-closed: **CLOSED, and the author's extra fix is real**
+
+The author added a `session.rollback()` on the failed iteration, arguing it closes
+a partial-write hazard my round-1 probe could not see. **They are right, and it is
+the more important half of the fix.** My round-1 probe aborted the run at the first
+423, so it never exercised what the *next* group's `session.commit()` would flush.
+
+There are two distinct raise sites, and only the second exposes the hazard:
+
+| Case | Guard | State pending when it raises |
+|---|---|---|
+| `test_V2` | `enforce_stack_membership_not_locked`, inside `_stack_members` | a `PictureStack` row already `add()`ed **and `flush()`ed** |
+| `test_V2b` | `enforce_pictures_not_locked`, inside the metadata union | **both pictures already reparented** (`stack_id` / `stack_position` set and flushed) *plus* the new stack row |
+
+`test_V2b` is the deep one — I arranged for the locked set to already contain
+every resulting member so `enforce_stack_membership_not_locked` passes cleanly and
+the 423 comes from the union, after `_stack_members` has done all its work:
+
+```
+[V2b] outcomes = groups=2 blocked=1 failed=0
+[V2b] failures = [{"signature": "7ff931c650…", "outcome": "blocked", "status_code": 423,
+                   "error": {"code": "pictures_locked", "action": "union duplicate metadata",
+                             "sets": [{"id": 1, "name": "Frozen"}], "picture_ids": [3, 4]}}]
+[V2b] pictures after = [(1, 1, 0), (2, 1, 1), (3, None, None), (4, None, None), (5, 2, 0), (6, 2, 1)]
+[V2b] >>> locked group rows (want stack_id None) = [(3, None, None), (4, None, None)]
+[V2b] >>> orphan PictureStack rows = []
+```
+
+No stowaway: the locked group's pictures are untouched and **zero** orphan
+`PictureStack` rows leaked into the next group's commit. Without the rollback,
+group 3's commit would have flushed group 2's reparenting. And the rollback does
+not over-reach:
+
+```
+[V2c] group 1 (committed before the failure) = [(1, 1, 0), (2, 1, 1)]
+[V2c] group 3 (committed after  the failure) = [(5, 2, 0), (6, 2, 1)]
+```
+
+The shallower site is equally clean, and the response shape is now legible:
+
+```
+[V2] outcomes = groups=2 blocked=1 failed=0
+[V2] batch_id returned = '2fe0ed96e05c4f91b4cdfc3575f90ee9'
+[V2] failures = [{… "outcome": "blocked", "status_code": 423, "error": {"code": "set_locked", …}}]
+[V2] >>> locked group rows (want stack_id None) = [(3, None, None), (4, None, None)]
+```
+
+`batch_id` is always returned, every group is reported under exactly one of
+`applied` / `blocked` / `failed`, and the route's API description is now true.
+**Credit where due: the rollback is a defect the authors found that I missed.**
+
+### R3 — `request_context`: **ACCEPT the author's narrowing**
+
+The author wired `request_context` on the two *recording* handlers only
+(`post_stack_verdict`, `post_auto_stack`) and argues keep-separate/reopen provably
+record nothing, so threading an actor there would be dead code. **Adjudication:
+accept.** The argument is stronger than "the diff would be empty" — the code path
+is *absent*, which I checked structurally rather than taking on trust:
+
+```
+[V3b] apply_keep_separate_in_session: record/capture calls = []
+[V3b] reopen_verdict_in_session:      record/capture calls = []
+[V3b] operations after keep-separate + reopen = []
+```
+
+(an AST walk over each function for any `record*` / `capture*` call, plus the
+behavioural check). And the two routes that *do* record now carry full provenance:
+
+```
+[V3] after POST /dedup/verdicts/stack (X-Client-Id: tab-abc):
+[V3]   op_type=dedup.stack actor='1' source='ui' origin='tab-abc'
+[V3] after POST /dedup/auto-stack (X-Client-Id: tab-xyz):
+[V3]   op_type=dedup.stack actor='1' source='ui' origin='tab-abc'
+[V3]   op_type=dedup.stack actor='1' source='ui' origin='tab-xyz'
+```
+
+Note the second run's earlier row keeps its *own* origin rather than being
+rewritten — correct. I do **not** require all four handlers, on two conditions that
+are already met: the comments on both non-recording handlers point at
+`post_stack_verdict`, and `test_keep_separate_and_reopen_record_no_operation` pins
+the premise, so the day keep-separate starts recording, that test fails and the
+omission surfaces.
+
+### R4 / section D — scope validation and caps: **CLOSED**
+
+```
+[V4] project    'not-an-int'            scan=400 groups=400 counts=400 auto=400
+[V4] project    '1; DROP TABLE picture' scan=400 groups=400 counts=400 auto=400
+[V4] project    ''                      scan=400 groups=400 counts=400 auto=400
+[V4] project    '1.5'                   scan=400 groups=400 counts=400 auto=400
+[V4] project    '0x10'                  scan=400 groups=400 counts=400 auto=400
+[V4] project    ' 1 '                   scan=200 groups=200 counts=200 auto=200
+…identical for set and character…
+[V4] persisted dedupscan rows = [(1, 'project:1', 'pending'), (2, 'set:1', 'pending'), (3, 'character:1', 'pending')]
+```
+
+Every malformed id is a 400 at the boundary on all four routes, and **no poison
+row is persisted**. My probe initially asserted zero scan rows and failed; that was
+my error, not the code's — `" 1 "` is a *valid* integer to Python and the author
+normalises it via `str(int(...))`, so the persisted `scope_key` is the canonical
+`project:1`. Correct behaviour, no scope-key duplication.
+
+LIKE escaping (`test_V4b`), and the counts cap (`test_V4c`):
+
+```
+[V4b] folder exact folder    ('/vault/real' ) -> 200 total=1
+[V4b] folder pct wildcard    ('%'           ) -> 200 total=0
+[V4b] folder underscore      ('_'           ) -> 200 total=0
+[V4b] folder pct suffix      ('/vault/rea%' ) -> 200 total=0
+[V4b] folder underscore mid  ('/vault/rea_' ) -> 200 total=0
+[V4b] folder backslash       ('\'           ) -> 200 total=1   <<< see W2
+[V4c] 200 scopes (cap=200) -> 200 | 201 -> 422 | 5000 -> 422
+```
+
+#### W2 (new, LOW) — a residual in the same folder-scope prefix
+
+The escaping is correct, but it runs *after* `prefix = scope_id.rstrip("/\\")`, and
+a `scope_id` consisting only of separators strips to the empty string:
+
+```
+scope_id='/vault/real' -> prefix='/vault/real'  LIKE '/vault/real%'
+scope_id='%'           -> prefix='%'            LIKE '\%%'
+scope_id='\'           -> prefix=''             LIKE '%'      <<< MATCHES EVERYTHING
+scope_id='/'           -> prefix=''             LIKE '%'      <<< MATCHES EVERYTHING
+scope_id='///'         -> prefix=''             LIKE '%'      <<< MATCHES EVERYTHING
+scope_id='/\/'         -> prefix=''             LIKE '%'      <<< MATCHES EVERYTHING
+```
+
+Same class the escaping fix closed — "Find duplicates in this folder" silently
+meaning *everywhere* — reached by a different input. Owner-only and read-only, so
+LOW. Fix: reject an empty post-strip prefix in `__post_init__` alongside the
+numeric validation. (A root scan is already expressible as `scope_type=global`.)
+
+### W1 (new, LOW) — the Tier-2 pair cap **does** drop group membership
+
+`MAX_PAIRS_PER_BUCKET = 50_000` is correctly introduced and warned. But its
+in-code justification asserts a guarantee it does not have:
+
+> The retained pairs are the lowest-offset ones, which still connect every
+> matching member into the same component; the loss is confidence *resolution* …
+> **not group membership**.
+
+Pairs are emitted in increasing id-offset order and the loop `break`s on the cap,
+so **any match at an offset beyond where the cap bites is never generated**. A
+bucket of 698 mutually-identical pictures (which saturates the cap around offset
+72) plus two genuine duplicates at opposite ends of the id range:
+
+```
+[W1] MAX_PAIRS_PER_BUCKET = 50000
+[W1] bucket = 1 outlier + 698 identical + 1 outlier = 700 members
+[W1] the two outliers ((1, 700)) match ONLY each other, at offset 699
+[W1] dense-block pairs = 243,253 (>> the cap)
+[W1] CONTROL (cap effectively off): 2 group(s)
+[W1]   outlier pair present: True -> [(1, 700)]
+[W1] REAL CAP (50000): 1 group(s)
+[W1]   outlier pair present: False -> []
+[W1] pictures grouped with cap off = 700, with cap on = 698
+[W1] >>> MEMBERS LOST TO THE CAP: [1, 700]
+[W1] >>> author's claim 'not group membership' holds: False
+```
+
+A whole genuine duplicate group vanishes. The claim *is* true for the motivating
+case the comment describes, which I confirmed separately —
+
+```
+[W2] all-identical bucket of 600 -> group sizes [2, 600]
+[W2] >>> every member connected: True
+```
+
+— because there the offset-1 chain alone spans the component. It is false in
+general.
+
+**Impact is LOW** (a missed suggestion in an opt-in tier, on a bucket needing
+≥~320 mutually-matching members *plus* a long-range match). **The comment is the
+problem**, not the behaviour: a future maintainer reading "not group membership"
+will trust a guarantee that does not exist. **Required: correct the comment and the
+`MAX_PAIRS_PER_BUCKET` docstring** to say membership is preserved only for matches
+below the truncation offset. Optional real fix: keep scanning offsets after the cap
+but record only pairs joining a member that has no pair yet.
+
+`MAX_TRACKED_PAIRS` behaves as claimed (`test_W3`, cap patched to 100 to reach it):
+
+```
+[W3] WARNING: [dedup-scan] scan 1 reached the 100 tracked-pair cap at bucket 1 of 6;
+     further cross-bucket chaining is dropped and some chains may be reported as
+     separate groups. Narrow the scope or raise MAX_TRACKED_PAIRS.
+[W3] scan status = ('complete', 6, 6, 1, None)
+[W3] >>> cap is warned, not silent: True | scan still completed: complete
+```
+
+Warned, named, non-fatal, scan completes. **Claim holds.**
+
+**One partial fix, non-blocking.** The incremental-persist change narrows which
+groups are *written* after each bucket, but `groups_from_pairs` is still called
+over the **whole** `pair_cache` on every bucket that touched anything — the
+O(buckets × total_pairs) *derivation* from round-1 R5 remains, on the single DB
+writer thread. Halves the problem. Recorded as remaining hardening.
+
+### A2 — I now **insist**, as a merge gate (M1)
+
+Round 1 I ruled the caller-supplied `batch_id` an accepted risk and offered a cheap
+hardening (reject an id already carrying a different `op_type`), which the authors
+declined as accepted-not-required. **That ruling was correct for #638 in isolation
+and is now superseded by #644**, which introduces a namespace whose whole purpose
+is that a client cannot forge a server batch id. Dedup's body field defeats it:
+
+```
+[X1] batch_id='srv-deadbeefdeadbeefdeadbeefdeadbeef' -> 200 stored='srv-deadbeefdeadbeefdeadbeefdeadbeef'
+[X1] operation rows = [('dedup.stack', 'srv-deadbeefdeadbeefdeadbeefdeadbeef'), ('dedup.stack', 'cli-legit1234')]
+[X1] >>> a client-supplied 'srv-' batch id reached the log: True
+```
+
+and dedup mints a third, un-namespaced shape from its own separate function:
+
+```
+[X2] server-minted auto-stack batch_id = '6e0be50b3b094788b1163e31033ff0ec'
+[X2] starts with 'srv-': False | starts with 'cli-': False
+[X2] >>> dedup mints bare hex, outside BOTH namespaces
+```
+
+So after both merge there are three id shapes in one column, #644's guard is
+bypassable through `POST /dedup/verdicts/*`, and its comment ("nothing a client
+sends can match that pattern … a future reader can tell the two apart in the log")
+becomes false.
+
+**M1 — required in whichever PR merges second (BLOCKING):**
+
+1. Route **every** caller-supplied batch id through the single
+   `sanitize_operation_batch_id` — the three dedup verdict/auto-stack body fields,
+   and `SweepDryRunRequest.operation_batch_id` when it stops being inert.
+2. Make `dedup_verdict_service.new_batch_id` delegate to
+   `operation_log_service.new_batch_id` so dedup's ids carry `srv-` too, rather
+   than being a second minting function.
+
+This is a defect in *neither branch alone* and must not be filed against either
+author; it is a seam that only exists once they meet.
+
+---
+
+## 9.3 Scope 2 — `feature/gesture-batch-id` (PR #644) @ `d634c869`
+
+Backend surface is three files: `utils/request_origin.py` (the guard),
+`services/operation_log_service.py` (`srv-` minting + `request_context`'s new
+`batch_id` key), `routes/pictures/_crud.py` (two scrapheap sites). No
+`authz/registry.py` change. `AUTHZ_GATE_ENFORCING` is `True` — verified in source
+and behaviourally in G3, correcting a reconnaissance note that read it as `False`.
+
+### The namespace guard — 28 forgery / smuggling cases, one acceptance
+
+```
+[G1] operation_log_service.new_batch_id() = 'srv-84105f15989c4d76b919caee019591b4'
+[G1] server id verbatim   -> None      [G1] srv- forged        -> None
+[G1] SRV- upper           -> None      [G1] Cli- mixed case    -> None
+[G1] cli- legit           -> 'cli-abcd1234'
+[G1] cli- min len (4)     -> 'cli-abcd'    [G1] cli- 3 chars    -> None
+[G1] cli- max (76)        -> accepted      [G1] cli- 77 chars   -> None
+[G1] oversize 5000        -> None      [G1] no namespace       -> None
+[G1] path traversal       -> None      [G1] slash              -> None
+[G1] encoded slash        -> None      [G1] dotdot only        -> None
+[G1] space                -> None      [G1] TAB                -> None
+[G1] LF middle            -> None      [G1] CR trailing        -> None
+[G1] CRLF header inject   -> None      [G1] NUL                -> None
+[G1] unicode digits       -> None      [G1] unicode homoglyph  -> None
+[G1] RTL override         -> None      [G1] empty / just prefix / None -> None
+[G1] LF trailing  'cli-abcd\n'  -> 'cli-abcd\n'   <<< ACCEPTED WITH A DANGEROUS CHARACTER
+[G1b] >>> never truncates (drop, not trim): True
+```
+
+A server-minted id, every `srv-` forgery, case variants, path characters, encoded
+slashes, whitespace, control bytes, NUL, unicode homoglyphs and RTL overrides are
+all rejected. Over-length values are **dropped, never truncated**, so a crafted long
+value cannot collide with a legitimate short one. Duplicate headers take the first:
+
+```
+[G2c] two X-Operation-Batch-Id headers (cli- then srv-) -> 200
+[G2c] ops = [(1, 'pictures.tags.add', 'cli-firstone1', 'applied', '1')]
+```
+
+#### G1 (REQUIRED, LOW) — trailing bare LF is accepted and persisted
+
+`_CLIENT_BATCH_ID_RE.match(raw)` with `^…$`. Python's `$` matches **before a single
+trailing newline**, so `"cli-abcd\n"` passes and is returned verbatim. It is not
+theoretical — it survives the HTTP layer and reaches the database:
+
+```
+[G2b] LF -> 200
+[G2b] rows with a control char in batch_id = [(1, 'pictures.tags.add', 'cli-abcd\n', 'applied', '1')]
+[G2b] all stored ids = ['cli-abcd\n']
+```
+
+The value is then echoed in every operations API payload (`serialize()`), written
+into the INFO log line `operation_log: recorded … batch=%s …` (a spurious line
+break in the log; nothing can follow the `\n`, so a full forged log record is not
+constructible), and would be placed in `/operations/batches/{batch_id}/undo` by the
+client. It directly contradicts the function's own docstring — *"the charset keeps
+the value safe to log and to put in a URL path"*.
+
+**Severity LOW** (the `cli-` namespace still holds, so no forgery and no authority
+change) but the fix is one word and this function exists to be the guard:
+
+```python
+if len(raw) > MAX_OPERATION_BATCH_ID_LENGTH or not _CLIENT_BATCH_ID_RE.fullmatch(raw):
+```
+
+(or `\Z` in place of `$`). Add `"cli-abcd\n"` to
+`test_a_client_batch_id_can_never_impersonate_a_server_minted_one`'s reject list —
+the existing case list is thorough and simply lacks this one.
+
+### Grouping never widens write authority — **CONFIRMED**
+
+A set-scoped READ token sharing a batch id with an owner operation, across write,
+delete, undo, batch-undo and read:
+
+```
+[G3] owner op under cli-sharedgesture1: [(1, 'pictures.tags.add', 'cli-sharedgesture1', 'applied', '1')]
+[G3] scoped POST tags (in-scope pic)     -> 403
+[G3] scoped POST tags (out-of-scope)     -> 403
+[G3] scoped DELETE picture               -> 403
+[G3] scoped POST operations/undo         -> 403
+[G3] scoped POST batch undo              -> 403
+[G3] scoped GET operations               -> 403
+[G3] ops after scoped attempts = [(1, …, 'cli-sharedgesture1', 'applied', '1')]
+[G3] >>> scoped token wrote into the batch: False
+```
+
+Structurally sound rather than accidentally sound: a resource-scoped token is
+always `READ`, so it cannot record an operation at all, and every operations route
+is `OWNER_ONLY`. Sharing a batch id confers nothing. **No cross-principal reuse is
+reachable** in the single-owner product — the only principal that can write an
+operation row is the owner.
+
+### The middleware ignore-path never 500s and never truncates — **CONFIRMED**
+
+```
+[G6] unauth /version + auth /pictures with legit    -> 404 / 200
+[G6] unauth /version + auth /pictures with garbage  -> 404 / 200   (raw \x01\x02)
+[G6] unauth /version + auth /pictures with huge     -> 404 / 200   (9000 chars)
+```
+
+No value produced a 500, on authenticated or unauthenticated routes, and every
+rejected value was dropped rather than trimmed (`test_G1b`). The middleware runs
+before auth on every request, which is inert: the state attribute is only read by
+handlers that already require an authenticated owner.
+
+#### G2 (hardening, LOW) — the batch-undo 409 reflects caller input
+
+```
+[G5] batch_id=legit      -> 409 {"detail":"Batch cli-realbatch1 has nothing to undo"}
+[G5] batch_id=sql-ish    -> 409 {"detail":"Batch ' OR 1=1 -- has nothing to undo"}
+[G5] batch_id=long       -> 409 {"detail":"Batch zzzz…(3000 chars) has nothing to undo"}
+[G5] batch_id=unicode    -> 409 {"detail":"Batch cli-абвг has nothing to undo"}
+```
+
+`POST /operations/batches/{batch_id}/undo` has no pattern or length bound on the
+path parameter and echoes it verbatim. The query itself is parameterised (no
+injection) and the response is JSON, so this is not XSS server-side — but the
+frontend must not render `detail` as HTML, and an unbounded reflected string is
+avoidable. Suggest bounding the path param and not echoing it.
+
+### 9.4 `dedup_sweep_service.operation_batch_id` — no guard needed *now*
+
+Verified inert on this branch: `dedup_sweep_service` contains **zero** references
+to the operation log, runs under `run_immediate_read_task` (no write session), and
+the value is used only in the returned dataclass and one log line. Nothing connects
+it to `request.state.operation_batch_id` or to `Operation.batch_id`.
+
+**Ruling: it does not need the namespace guard today** — guarding a field that
+reaches nothing would be ceremony, and the existing tests
+(`test_operation_batch_id_round_trips_and_nothing_is_written`) correctly pin it as
+an echo. **It must get the guard in the same change that makes it live**, and it is
+listed in M1 item 1 so the requirement is recorded now rather than rediscovered
+later. Add a comment on the field saying so.
+
+---
+
+## 9.5 Accepted risks, re-adjudicated
+
+**A1 (share-token widening) — unchanged, still accepted.** Not re-probed; nothing
+in either fix commit touches `reconcile_stack_membership`. The §22.8 documentation
+requirement from round 1 stands.
+
+**A2 (caller-supplied batch id) — PROMOTED to blocking as M1.** See 9.2. For the
+part of A2 that is *not* forgery — grouping unrelated work into one undo — I still
+accept it, with the blast radius now larger than in round 1:
+
+```
+[G4] three unrelated gestures sent the SAME id 'cli-reused12345'
+[G4] one POST /operations/undo reverted 3 operation(s)
+[G4b] DELETE /pictures (bulk scrapheap) under 'cli-mixedbatch99' -> 200
+[G4b]   id=1 op=pictures.tags.add        batch='cli-mixedbatch99'
+[G4b]   id=2 op=pictures.scrapheap.move  batch='cli-mixedbatch99'
+[G4b] one undo reverted: ['pictures.scrapheap.move', 'pictures.tags.add']
+```
+
+`G4b` is a **behavioural change** in #644 worth stating plainly: the two bulk
+scrapheap endpoints previously forced a server-minted `batch_id`; they now use
+`request_context(request, fallback_batch_id=…)`, and the client header **wins**
+(`or`, not "only if absent"). So a client can put a bulk scrapheap move and an
+unrelated tag edit in one undo unit.
+
+- **Blast radius.** Owner-only; every affected operation is reversible and the log
+  is append-only, so the mis-grouping is visible in `GET /operations`. The worst
+  outcome is a surprising undo, not data loss.
+- **Compensating controls.** `cli-` namespace; all operations routes `OWNER_ONLY`;
+  redo restores.
+- **Owner:** backend maintainer. **Revisit:** when the operation log becomes a
+  user-visible activity feed (§21 / DAM 4.3), where mis-grouped batches become
+  misleading audit entries — and immediately if a non-owner principal can ever
+  record an operation.
+
+---
+
+## 9.6 Round-2 test log
+
+Author suites, re-run by this reviewer at each head:
+
+```
+# feature/dedup-tiers @ 029525a0
+$ pytest -q --fast-captions --force-cpu tests/test_dedup_tier_service.py \
+    tests/test_dedup_tiers_api.py tests/test_dedup_verdict_service.py \
+    tests/test_architecture_guardrails.py tests/test_operation_log.py
+150 passed, 1 warning in 221.21s (0:03:41)      # was 131 in round 1; +19 new author tests
+
+# feature/gesture-batch-id @ d634c869
+$ pytest -q --fast-captions --force-cpu tests/test_operation_log.py \
+    tests/test_architecture_guardrails.py
+65 passed, 1 warning in 133.16s (0:02:13)
+
+$ ruff check pixlstash
+All checks passed!
+```
+
+Reviewer probes (written this round, run, then deleted):
+
+| Probe | Covers | Result |
+|---|---|---|
+| `test_V1`, `test_V1b` | R1 signature injectivity | **CLOSED** |
+| `test_V2`, `test_V2b`, `test_V2c` | R2 both 423 raise sites + rollback scope | **CLOSED**; author's rollback confirmed load-bearing |
+| `test_V3`, `test_V3b` | R3 provenance + AST proof of the absent path | **ACCEPTED as narrowed** |
+| `test_V4`, `test_V4b`, `test_V4c` | scope 400s, no poison row, LIKE escaping, counts cap | **CLOSED**; W2 residual found |
+| `test_W1`, `test_W2` | pair-cap membership claim | **claim REFUTED** |
+| `test_W3` | tracked-pair cap warning path | claim holds |
+| `test_X1`, `test_X2` | dedup body batch id vs the namespace | **M1** |
+| `test_G1`, `test_G1b` | 28 forgery / smuggling cases | 1 acceptance → **G1** |
+| `test_G2`, `test_G2b`, `test_G2c` | over-the-wire, control chars, duplicate headers | LF reaches the DB |
+| `test_G3` | scoped token vs a shared batch | **no widening** |
+| `test_G4`, `test_G4b` | id reuse; scrapheap override | A2 (accepted) |
+| `test_G5` | batch-undo path parameter | G2 (hardening) |
+| `test_G6` | middleware never 500s / never truncates | holds |
+
+**Independence.** Round 2 was performed by the round-1 reviewer, who wrote no code
+on either branch. M1 and G1 are new required changes and must be certified by
+someone other than whoever implements them.
