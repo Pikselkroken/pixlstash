@@ -16,8 +16,8 @@ becomes invalid, so no column is NULLed here. Pictures whose ``pixel_sha`` was
 never computed are backfilled by ``MissingPixelShaFinder`` at runtime, which
 already selects on ``pixel_sha IS NULL`` — a reset would be a no-op.
 
-Revision ID: 0087_add_dedup_tier_tables
-Revises: 0085_recompute_smart_score_restored_builtin_anchors
+Revision ID: 0088_add_dedup_tier_tables
+Revises: 0087_add_entity_project_membership
 Create Date: 2026-07-29 00:00:00.000000
 
 """
@@ -28,8 +28,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = "0087_add_dedup_tier_tables"
-down_revision: Union[str, None] = "0085_recompute_smart_score_restored_builtin_anchors"
+revision: str = "0088_add_dedup_tier_tables"
+down_revision: Union[str, None] = "0087_add_entity_project_membership"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
