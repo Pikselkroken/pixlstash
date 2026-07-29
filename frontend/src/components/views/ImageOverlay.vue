@@ -786,7 +786,11 @@ import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
-import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
+import {
+  faceBoxColor,
+  getStackColor,
+  toggleScore,
+} from "../../utils/utils.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
 
 // Failures report through the notice surface instead of a blocking native
@@ -2152,7 +2156,7 @@ function handleKeydown(e) {
     showNextImage();
   } else if ((e.key === "z" || e.key === "Z") && !e.ctrlKey && !e.metaKey) {
     // Modifier-blind `z` would make Ctrl+Z and Ctrl+Shift+Z (which reports
-    // `e.key === "Z"`) zoom instead of undo — the worst kind of collision,
+    // `e.key === "Z"`) zoom instead of undo: the worst kind of collision,
     // because it does something visible and wrong.
     toggleZoom();
   } else if (e.key === " " || e.key === "Spacebar") {

@@ -860,8 +860,7 @@ watch(
 );
 
 watch(gbViewMenuOpen, (isOpen) => {
-  if (isOpen)
-    gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
+  if (isOpen) gbPendingSize.value = gridStore.sizeLevel ?? DEFAULT_THUMBNAIL_SIZE_LEVEL;
 });
 
 function gbCommitSize() {

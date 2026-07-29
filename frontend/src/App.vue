@@ -346,7 +346,7 @@ function connectUpdatesSocket() {
     // announces itself as a picture/tag/character change, and that is the
     // signal the undo stack may have moved. Origin is read from the event
     // `data` (never a contextvar) and only decides whether the change may
-    // narrate itself — an external one updates the stack silently.
+    // narrate itself; an external one updates the stack silently.
     if (OPERATION_BEARING_EVENTS.has(payload?.type)) {
       operationStore.onPictureEvent(payload);
     }
@@ -1478,7 +1478,9 @@ async function fetchConfig() {
       cfg.similarity_character ?? cfg.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    const newHiddenTags = Array.isArray(cfg.hidden_tags) ? cfg.hidden_tags : [];
+    const newHiddenTags = Array.isArray(cfg.hidden_tags)
+      ? cfg.hidden_tags
+      : [];
     if (
       userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
       userPrefsStore.hiddenTags.some((tag, i) => tag !== newHiddenTags[i])
@@ -1526,7 +1528,9 @@ async function fetchConfig() {
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
-        cfg.stack_strictness != null ? Number(cfg.stack_strictness) : null,
+        cfg.stack_strictness != null
+          ? Number(cfg.stack_strictness)
+          : null,
       hidden_tags: userPrefsStore.hiddenTags,
       apply_tag_filter: userPrefsStore.applyTagFilter,
     };
@@ -1636,8 +1640,8 @@ async function patchConfigUIOptions() {
 /**
  * Is a modal surface (a dialog, the lightbox) currently covering the app?
  *
- * There is no shared flag for this — every dialog owns its own `open` ref —
- * so the honest single source is the scrim Vuetify renders for every active
+ * There is no shared flag for this: every dialog owns its own `open` ref, so
+ * the honest single source is the scrim Vuetify renders for every active
  * overlay. Used to decline global shortcuts whose feedback would be invisible
  * behind it.
  */
@@ -1650,12 +1654,10 @@ function handleGlobalKeydown(e) {
   // The review overlay is modal and owns its own keyboard handler; don't
   // run the app/grid shortcuts (scroll, search, help) behind it.
   if (reviewSessionsStore.overlayOpen) return;
-  const target = e.target;
-  const active = document.activeElement;
   // Match the strictness the grid and the lightbox already use: a SELECT and an
   // ARIA textbox are typing surfaces too, and the event target matters as much
   // as `document.activeElement` (a Vuetify combobox moves focus around).
-  const isEditable = [target, active].some(
+  const isEditable = [e.target, document.activeElement].some(
     (el) =>
       el instanceof HTMLElement &&
       (el.isContentEditable ||
@@ -1685,10 +1687,10 @@ function handleGlobalKeydown(e) {
   // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
   //
   // Four guards, each for its own reason:
-  //   • typing — a text field keeps its own native undo stack;
-  //   • read-only — the endpoints are owner-only anyway;
-  //   • auto-repeat — a HELD Ctrl+Z must not walk the whole stack;
-  //   • a modal overlay owns the screen — the receipt lives on --z-floating,
+  //   * typing: a text field keeps its own native undo stack;
+  //   * read-only: the endpoints are owner-only anyway;
+  //   * auto-repeat: a HELD Ctrl+Z must not walk the whole stack;
+  //   * a modal overlay owns the screen: the receipt lives on --z-floating,
   //     under the lightbox and under any dialog, so an undo fired from there
   //     would mutate the library with no visible narration. That breaks the
   //     design's own "every undo raises a receipt" invariant, so the shortcut
@@ -2495,108 +2497,108 @@ defineExpose({
         <!-- Peer of the left sidebar, NOT nested in the grid column: both rails
              then span the full height of `.file-manager` and nothing stacked in
              the main area can push one rail down without the other. -->
-        <StatsSidebar
-          ref="statsSidebarRef"
-          :open="sidebarStore.statsOpen"
-          :backendUrl="BACKEND_URL"
-          :selectedCharacter="selectionStore.selectedCharacter"
-          :selectedCharacterIds="selectionStore.selectedCharacterIds"
-          :characterMode="selectionStore.characterMultiMode"
-          :selectedSet="selectionStore.selectedSet"
-          :selectedSetIds="selectionStore.selectedSetIds"
-          :setMode="selectionStore.setMultiMode"
-          :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-          :projectViewMode="projectStore.projectViewMode"
-          :selectedProjectId="projectStore.selectedProjectId"
-          :tagFilter="filterStore.tagFilter"
-          :tagRejectedFilter="filterStore.tagRejectedFilter"
-          :mediaTypeFilter="filterStore.mediaTypeFilter"
-          :minScoreFilter="filterStore.minScoreFilter"
-          :maxScoreFilter="filterStore.maxScoreFilter"
-          :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
-          :resolutionBucketFilter="filterStore.resolutionBucketFilter"
-          :faceBboxFilter="filterStore.faceBboxFilter"
-          :sharedOnlyFilter="filterStore.sharedOnlyFilter"
-          :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
-          :filePathPrefixFilter="
-            selectionStore.selectedFolderFilter?.pathPrefix ?? null
-          "
-          :importSourceFolderFilter="
-            selectionStore.selectedFolderFilter?.importSourceFolder ?? null
-          "
-          :allPicturesId="ALL_PICTURES_ID"
-          :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-          :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-          :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
-          :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
-          :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
-          :wsTagUpdate="wsStore.wsTagUpdate"
-          @filter-tag="
-            (tag) => {
-              if (filterStore.tagFilter.includes(tag))
-                filterStore.tagFilter = filterStore.tagFilter.filter(
-                  (t) => t !== tag,
+          <StatsSidebar
+            ref="statsSidebarRef"
+            :open="sidebarStore.statsOpen"
+            :backendUrl="BACKEND_URL"
+            :selectedCharacter="selectionStore.selectedCharacter"
+            :selectedCharacterIds="selectionStore.selectedCharacterIds"
+            :characterMode="selectionStore.characterMultiMode"
+            :selectedSet="selectionStore.selectedSet"
+            :selectedSetIds="selectionStore.selectedSetIds"
+            :setMode="selectionStore.setMultiMode"
+            :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
+            :projectViewMode="projectStore.projectViewMode"
+            :selectedProjectId="projectStore.selectedProjectId"
+            :tagFilter="filterStore.tagFilter"
+            :tagRejectedFilter="filterStore.tagRejectedFilter"
+            :mediaTypeFilter="filterStore.mediaTypeFilter"
+            :minScoreFilter="filterStore.minScoreFilter"
+            :maxScoreFilter="filterStore.maxScoreFilter"
+            :smartScoreBucketFilter="filterStore.smartScoreBucketFilter"
+            :resolutionBucketFilter="filterStore.resolutionBucketFilter"
+            :faceBboxFilter="filterStore.faceBboxFilter"
+            :sharedOnlyFilter="filterStore.sharedOnlyFilter"
+            :unassignedOnlyFilter="filterStore.unassignedOnlyFilter"
+            :filePathPrefixFilter="
+              selectionStore.selectedFolderFilter?.pathPrefix ?? null
+            "
+            :importSourceFolderFilter="
+              selectionStore.selectedFolderFilter?.importSourceFolder ?? null
+            "
+            :allPicturesId="ALL_PICTURES_ID"
+            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
+            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
+            :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
+            :tagConfidenceAboveFilter="filterStore.tagConfidenceAboveFilter"
+            :tagConfidenceBelowFilter="filterStore.tagConfidenceBelowFilter"
+            :wsTagUpdate="wsStore.wsTagUpdate"
+            @filter-tag="
+              (tag) => {
+                if (filterStore.tagFilter.includes(tag))
+                  filterStore.tagFilter = filterStore.tagFilter.filter(
+                    (t) => t !== tag,
+                  );
+                else filterStore.tagFilter = [...filterStore.tagFilter, tag];
+              }
+            "
+            @filter-tags="
+              (tags) => {
+                const allPresent = tags.every((t) =>
+                  filterStore.tagFilter.includes(t),
                 );
-              else filterStore.tagFilter = [...filterStore.tagFilter, tag];
-            }
-          "
-          @filter-tags="
-            (tags) => {
-              const allPresent = tags.every((t) =>
-                filterStore.tagFilter.includes(t),
-              );
-              if (allPresent)
+                if (allPresent)
+                  filterStore.tagFilter = filterStore.tagFilter.filter(
+                    (t) => !tags.includes(t),
+                  );
+                else
+                  filterStore.tagFilter = [
+                    ...new Set([...filterStore.tagFilter, ...tags]),
+                  ];
+              }
+            "
+            @filter-confidence-above="
+              (entry) => {
+                if (filterStore.tagConfidenceAboveFilter.includes(entry))
+                  filterStore.tagConfidenceAboveFilter =
+                    filterStore.tagConfidenceAboveFilter.filter(
+                      (e) => e !== entry,
+                    );
+                else
+                  filterStore.tagConfidenceAboveFilter = [
+                    ...filterStore.tagConfidenceAboveFilter,
+                    entry,
+                  ];
+              }
+            "
+            @clear-tag-filter="
+              (tags) => {
                 filterStore.tagFilter = filterStore.tagFilter.filter(
                   (t) => !tags.includes(t),
                 );
-              else
-                filterStore.tagFilter = [
-                  ...new Set([...filterStore.tagFilter, ...tags]),
-                ];
-            }
-          "
-          @filter-confidence-above="
-            (entry) => {
-              if (filterStore.tagConfidenceAboveFilter.includes(entry))
+              }
+            "
+            @clear-confidence-filter="
+              (entries) => {
                 filterStore.tagConfidenceAboveFilter =
                   filterStore.tagConfidenceAboveFilter.filter(
-                    (e) => e !== entry,
+                    (e) => !entries.includes(e),
                   );
-              else
-                filterStore.tagConfidenceAboveFilter = [
-                  ...filterStore.tagConfidenceAboveFilter,
-                  entry,
-                ];
-            }
-          "
-          @clear-tag-filter="
-            (tags) => {
-              filterStore.tagFilter = filterStore.tagFilter.filter(
-                (t) => !tags.includes(t),
-              );
-            }
-          "
-          @clear-confidence-filter="
-            (entries) => {
-              filterStore.tagConfidenceAboveFilter =
-                filterStore.tagConfidenceAboveFilter.filter(
-                  (e) => !entries.includes(e),
-                );
-            }
-          "
-          @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
-          @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
-          @update:smartScoreBucketFilter="
-            (v) => (filterStore.smartScoreBucketFilter = v)
-          "
-          @update:resolutionBucketFilter="
-            (v) => (filterStore.resolutionBucketFilter = v)
-          "
-          @toggle="
-            sidebarStore.toggleStats();
-            updateIsMobile();
-          "
-        />
+              }
+            "
+            @update:minScoreFilter="(v) => (filterStore.minScoreFilter = v)"
+            @update:maxScoreFilter="(v) => (filterStore.maxScoreFilter = v)"
+            @update:smartScoreBucketFilter="
+              (v) => (filterStore.smartScoreBucketFilter = v)
+            "
+            @update:resolutionBucketFilter="
+              (v) => (filterStore.resolutionBucketFilter = v)
+            "
+            @toggle="
+              sidebarStore.toggleStats();
+              updateIsMobile();
+            "
+          />
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
