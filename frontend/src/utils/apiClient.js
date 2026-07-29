@@ -25,6 +25,41 @@ function activateShareToken(token) {
 }
 
 /**
+ * Mint a correlation id for one user gesture that fans out over several
+ * requests (deleting a tag chip is a `remove_all` *and* a `reject`).
+ *
+ * Sent as `X-Operation-Batch-Id` on every request of the gesture, it becomes
+ * the recorded operations' `batch_id`, so the whole gesture is one history step
+ * and one Ctrl+Z. See docs/backend_architecture.md §21.2.
+ *
+ * The `cli-` prefix is load-bearing: the backend only accepts client ids in
+ * that namespace, and mints its own as `srv-`, so the two can never collide.
+ *
+ * @returns {string} a fresh gesture batch id.
+ */
+function newOperationBatchId() {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+  return `cli-${random}`;
+}
+
+/**
+ * Axios config carrying a gesture batch id, or `undefined` when there is none.
+ *
+ * Every api module that participates in a compound gesture merges this into its
+ * request config, which keeps the header spelling in exactly one place.
+ *
+ * @param {string} [batchId] - an id from {@link newOperationBatchId}.
+ * @returns {Object|undefined} `{ headers: { 'X-Operation-Batch-Id': … } }`.
+ */
+function operationBatchHeaders(batchId) {
+  if (!batchId) return undefined;
+  return {headers: {'X-Operation-Batch-Id': batchId}};
+}
+
+/**
  * Append the active share token as a ?token= query parameter to a URL.
  * Should be used for all direct <img src> or similar browser-native requests
  * that bypass the axios interceptor.
@@ -214,6 +249,8 @@ export {
   isReadOnly,
   login,
   logout,
+  newOperationBatchId,
+  operationBatchHeaders,
   sessionContext,
   setRequestClientId,
   apiBaseUrl as API_BASE_URL,

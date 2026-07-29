@@ -1157,13 +1157,16 @@ def register_routes(router, server):
             op_type=operation_log_service.OP_SCRAPHEAP_RESTORE,
             picture_ids=[],
             resolve_picture_ids=_scrapheaped_targets,
-            batch_id=operation_log_service.new_batch_id(),
             # Same stack caveat as the soft-delete: normalize_stack_positions
             # renumbers every member of an affected stack, deleted ones included.
             expand_stacks=True,
             expand_stacks_include_deleted=True,
             summary=operation_log_service.scrapheap_restore_summary,
-            **operation_log_service.request_context(request),
+            # Always batched: the caller's gesture id when it sent one, a
+            # server-minted ``srv-…`` otherwise.
+            **operation_log_service.request_context(
+                request, fallback_batch_id=operation_log_service.new_batch_id()
+            ),
         )
         # A restored picture re-enters active views. ``picture_ids`` is the
         # caller-supplied subset (None == "restore all"); pass it through when
@@ -1531,11 +1534,14 @@ def register_routes(router, server):
                 pic_ids,
                 op_type=operation_log_service.OP_SCRAPHEAP_MOVE,
                 picture_ids=pic_ids,
-                batch_id=operation_log_service.new_batch_id(),
                 expand_stacks=True,
                 expand_stacks_include_deleted=True,
                 summary=operation_log_service.scrapheap_move_summary,
-                **operation_log_service.request_context(request),
+                # Always batched: the caller's gesture id when it sent one, a
+                # server-minted ``srv-…`` otherwise.
+                **operation_log_service.request_context(
+                    request, fallback_batch_id=operation_log_service.new_batch_id()
+                ),
             )
         )
         # Soft-delete removes the cards from active grid views. Broadcast a single

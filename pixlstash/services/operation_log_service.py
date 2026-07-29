@@ -418,9 +418,16 @@ def diff_states(
 SummarySpec = Union[str, Callable[[dict, dict], Optional[str]], None]
 
 
+# Server-minted batch ids are namespaced so a client-supplied correlation id
+# (``X-Operation-Batch-Id``, validated to the ``cli-`` namespace in
+# ``utils/request_origin.py``) can never collide with one and graft its own
+# requests onto a batch the server created.
+SERVER_BATCH_ID_PREFIX = "srv-"
+
+
 def new_batch_id() -> str:
     """Return a fresh opaque batch id grouping one bulk action's operations."""
-    return uuid.uuid4().hex
+    return f"{SERVER_BATCH_ID_PREFIX}{uuid.uuid4().hex}"
 
 
 def lifecycle_split(state: dict[str, dict]) -> tuple[list[int], list[int]]:
@@ -469,8 +476,8 @@ def scrapheap_restore_summary(before: dict, after: dict) -> Optional[str]:
     return f"Restored {_pictures(len(restored))} from the Scrapheap"
 
 
-def request_context(request) -> dict:
-    """Actor + WS-envelope provenance for an operation, read from the request.
+def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict:
+    """Actor + WS-envelope provenance + gesture batch, read from the request.
 
     Call this **in the handler**, on the request's own task. The values are then
     passed explicitly down to the recorder and, later, into the WS event ``data``
@@ -478,12 +485,23 @@ def request_context(request) -> dict:
     the DB worker thread and on the broadcaster's loop, so nothing downstream may
     read it.
 
+    ``batch_id`` comes from the client's ``X-Operation-Batch-Id`` header, already
+    validated by ``OriginClientMiddleware`` (``cli-`` namespace, bounded length,
+    safe charset; a malformed header is ignored, never a 500). It is a *grouping
+    hint*: one user gesture that fans out into several requests stamps them all
+    with the same id, so the whole gesture becomes one undo unit (§21.2).
+    Grouping never widens what an operation may touch and ``/operations*`` is
+    OWNER_ONLY, so a caller can only regroup its own history.
+
     Args:
         request: The FastAPI request (duck-typed; only ``request.state`` is used).
+        fallback_batch_id: Batch id to use when the caller sent no usable header —
+            for a handler that is a bulk action in its own right and mints a
+            server-side batch id (``srv-…``) regardless.
 
     Returns:
-        ``{"actor", "source", "origin_client_id"}``, ready to splat into
-        :func:`run_recorded_metadata_task`. ``source`` is ``"ui"`` when the
+        ``{"actor", "source", "origin_client_id", "batch_id"}``, ready to splat
+        into :func:`run_recorded_metadata_task`. ``source`` is ``"ui"`` when the
         caller identified itself with an ``X-Client-Id`` (an in-app action) and
         ``"external"`` otherwise, mirroring the envelope's own default.
     """
@@ -494,6 +512,7 @@ def request_context(request) -> dict:
         "actor": str(user_id) if user_id is not None else None,
         "source": "ui" if origin_client_id else "external",
         "origin_client_id": origin_client_id,
+        "batch_id": getattr(state, "operation_batch_id", None) or fallback_batch_id,
     }
 
 
