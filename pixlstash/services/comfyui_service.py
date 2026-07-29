@@ -34,6 +34,7 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -302,7 +303,16 @@ def _submit_comfyui_prompt(
             detail="ComfyUI prompt request failed",
         ) from exc
     if response.status_code >= 300:
-        detail = (response.text or "").strip()
+        raw_detail = (response.text or "").strip()
+        # ComfyUI answers a validation failure with a structured body naming the
+        # offending node and input. That is the only authoritative account of why
+        # a graph will not run, so surface it rather than a JSON dump.
+        structured = None
+        try:
+            structured = format_prompt_rejection(response.json())
+        except ValueError:
+            logger.debug("ComfyUI prompt error body was not JSON: %s", raw_detail[:200])
+        detail = structured or raw_detail
         logger.warning(
             "ComfyUI prompt failed: status=%s detail=%s",
             response.status_code,

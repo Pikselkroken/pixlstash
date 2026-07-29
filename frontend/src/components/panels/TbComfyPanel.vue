@@ -45,11 +45,16 @@
         <div class="tb-gen-seed">
           <span class="tbm-label">Seed</span>
           <div class="tb-gen-seed-row">
-            <div class="tbm-seg" role="group" aria-label="Seed mode">
+            <!-- radiogroup/radio + aria-checked, not group + plain buttons:
+                 the selected mode was class-only, so a screen-reader user had
+                 no way to tell which one was active (WCAG 4.1.2). -->
+            <div class="tbm-seg" role="radiogroup" aria-label="Seed mode">
               <button
                 class="tbm-seg-btn"
                 :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'random' }"
                 type="button"
+                role="radio"
+                :aria-checked="tbComfyuiSeedMode === 'random'"
                 @click="tbComfyuiSeedMode = 'random'"
               >
                 <v-icon size="15">mdi-dice-multiple-outline</v-icon>
@@ -59,6 +64,8 @@
                 class="tbm-seg-btn"
                 :class="{ 'tbm-seg-btn--on': tbComfyuiSeedMode === 'fixed' }"
                 type="button"
+                role="radio"
+                :aria-checked="tbComfyuiSeedMode === 'fixed'"
                 @click="tbComfyuiSeedMode = 'fixed'"
               >
                 <v-icon size="15">mdi-lock-outline</v-icon>

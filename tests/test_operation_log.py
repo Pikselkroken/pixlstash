@@ -11,6 +11,11 @@ Covers the three things the design rests on:
 3. **The invariants** — the log is append-only (undo mutates only the lifecycle
    markers), the service never reads the origin contextvar, and a locked picture
    set is not walked around by undo.
+4. **The scrapheap lifecycle** — a move to the Scrapheap and a restore out of it
+   are recorded symmetrically and are reversible in both directions, a bulk move
+   is one batch and one Undo, a **permanent** delete is recorded nowhere, and
+   undoing a move whose picture has since been purged is refused outright
+   (410) rather than half-applied.
 """
 
 import gc
@@ -98,6 +103,41 @@ def _tags(server, picture_id):
 
 def _operations(server, **filters):
     return operation_log_service.list_operations(server.vault, limit=100, **filters)
+
+
+def _lifecycle(server, picture_id):
+    """``(deleted, deleted_at)`` straight off the row, or ``None`` if purged."""
+
+    def _read(session):
+        picture = session.get(Picture, picture_id)
+        if picture is None:
+            return None
+        return (bool(picture.deleted), picture.deleted_at)
+
+    return server.vault.db.run_task(_read)
+
+
+def _visible(client, picture_id):
+    """Whether the picture shows up in the ordinary (non-scrapheap) listing."""
+    resp = client.get(f"{API}/pictures", params={"limit": 500})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    pictures = payload["pictures"] if isinstance(payload, dict) else payload
+    return picture_id in {int(pic["id"]) for pic in pictures}
+
+
+def _purge_forever(client, ids):
+    """Permanently destroy scrapheap rows through the real preview->confirm flow."""
+    preview = client.post(f"{API}/pictures/scrapheap/delete-preview", json={"ids": ids})
+    assert preview.status_code == 200, preview.text
+    token = preview.json()["confirm_token"]
+    resp = client.request(
+        "DELETE",
+        f"{API}/pictures/scrapheap",
+        json={"picture_ids": ids, "include_protected": True, "confirm_token": token},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -573,6 +613,306 @@ def test_undo_refuses_to_write_a_picture_frozen_by_a_locked_set():
         assert _operations(server)[0]["status"] == "applied"
     finally:
         _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
+# Scrapheap lifecycle (soft delete / restore)
+# ---------------------------------------------------------------------------
+
+
+def test_scrapheap_move_is_recorded_and_undo_brings_the_picture_back():
+    """The core promise: a move to the Scrapheap is reversible from the log."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        assert _visible(client, picture_id) is True
+
+        resp = client.delete(
+            f"{API}/pictures/{picture_id}", headers={"X-Client-Id": "tab-1"}
+        )
+        assert resp.status_code == 200, resp.text
+        deleted, deleted_at = _lifecycle(server, picture_id)
+        assert deleted is True
+        assert deleted_at is not None
+        assert _visible(client, picture_id) is False
+
+        operations = _operations(server, op_type="pictures.scrapheap.move")
+        assert len(operations) == 1
+        operation = operations[0]
+        assert operation["target_ids"] == [picture_id]
+        assert operation["undoable"] is True
+        assert operation["summary"] == "Moved 1 picture to the Scrapheap"
+        assert operation["origin_client_id"] == "tab-1"
+
+        # The recorded facet is the soft-delete state itself, retention stamp
+        # included, so undo restores the deadline rather than inventing one.
+        detail = client.get(f"{API}/operations/{operation['id']}").json()
+        assert detail["before"][str(picture_id)]["deleted"] == {
+            "deleted": False,
+            "deleted_at": None,
+        }
+        assert detail["after"][str(picture_id)]["deleted"]["deleted"] is True
+        assert detail["after"][str(picture_id)]["deleted"]["deleted_at"] is not None
+
+        undo = client.post(f"{API}/operations/undo")
+        assert undo.status_code == 200, undo.text
+        assert undo.json()["restored_picture_ids"] == [picture_id]
+        assert undo.json()["scrapheaped_picture_ids"] == []
+        assert _lifecycle(server, picture_id) == (False, None)
+        assert _visible(client, picture_id) is True
+
+        # Redo puts it back in the Scrapheap, with the SAME retention stamp.
+        redo = client.post(f"{API}/operations/redo")
+        assert redo.status_code == 200, redo.text
+        assert redo.json()["scrapheaped_picture_ids"] == [picture_id]
+        assert redo.json()["restored_picture_ids"] == []
+        assert _lifecycle(server, picture_id) == (True, deleted_at)
+        assert _visible(client, picture_id) is False
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_bulk_scrapheap_move_is_one_batch_and_one_undo():
+    """Bulk = one batch id = one Undo, matching the log's grouping rule."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(3)]
+        resp = client.request("DELETE", f"{API}/pictures", json={"picture_ids": ids})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["deleted_count"] == 3
+
+        operations = _operations(server, op_type="pictures.scrapheap.move")
+        assert len(operations) == 1
+        operation = operations[0]
+        assert operation["target_ids"] == sorted(ids)
+        assert operation["target_count"] == 3
+        assert operation["batch_id"]
+        assert operation["summary"] == "Moved 3 pictures to the Scrapheap"
+        assert all(_lifecycle(server, pid)[0] is True for pid in ids)
+
+        # The batch endpoint reverts the whole move in one call.
+        undo = client.post(f"{API}/operations/batches/{operation['batch_id']}/undo")
+        assert undo.status_code == 200, undo.text
+        assert sorted(undo.json()["restored_picture_ids"]) == sorted(ids)
+        assert all(_lifecycle(server, pid) == (False, None) for pid in ids)
+
+        redo = client.post(f"{API}/operations/redo")
+        assert redo.status_code == 200, redo.text
+        assert all(_lifecycle(server, pid)[0] is True for pid in ids)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_restore_from_the_scrapheap_is_recorded_symmetrically():
+    """Undoing a restore puts the pictures back — the history stays coherent."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(2)]
+        client.request("DELETE", f"{API}/pictures", json={"picture_ids": ids})
+        stamps = {pid: _lifecycle(server, pid)[1] for pid in ids}
+        assert all(stamp is not None for stamp in stamps.values())
+
+        resp = client.post(f"{API}/pictures/scrapheap/restore")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["restored_count"] == 2
+        assert all(_lifecycle(server, pid) == (False, None) for pid in ids)
+
+        operations = _operations(server, op_type="pictures.scrapheap.restore")
+        assert len(operations) == 1
+        restore_op = operations[0]
+        assert restore_op["target_ids"] == sorted(ids)
+        assert restore_op["batch_id"]
+        assert restore_op["summary"] == "Restored 2 pictures from the Scrapheap"
+
+        # Undoing the restore is a re-scrapheap, stamp and all.
+        undo = client.post(f"{API}/operations/undo")
+        assert undo.status_code == 200, undo.text
+        assert sorted(undo.json()["scrapheaped_picture_ids"]) == sorted(ids)
+        for pid in ids:
+            assert _lifecycle(server, pid) == (True, stamps[pid])
+
+        # And redoing it restores them again.
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        assert all(_lifecycle(server, pid) == (False, None) for pid in ids)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_restore_of_an_id_that_is_not_scrapheaped_records_nothing():
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        before = len(_operations(server))
+        resp = client.post(
+            f"{API}/pictures/scrapheap/restore", json={"picture_ids": [picture_id]}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["restored_count"] == 0
+        assert len(_operations(server)) == before
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undoing_a_move_whose_picture_was_purged_refuses_and_changes_nothing():
+    """The fail-closed edge case: a purge is permanent, so the undo is refused.
+
+    Same contract as the locked-set guard — the WHOLE request is refused with a
+    specific error, nothing is written, and the operation stays ``applied``
+    rather than being marked undone over a change that did not happen.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        assert client.delete(f"{API}/pictures/{picture_id}").status_code == 200
+        assert _operations(server, op_type="pictures.scrapheap.move")
+
+        purged = _purge_forever(client, [picture_id])
+        assert purged["deleted_count"] == 1
+        assert _lifecycle(server, picture_id) is None
+
+        resp = client.post(f"{API}/operations/undo")
+        assert resp.status_code == 410, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "pictures_purged"
+        assert detail["picture_ids"] == [picture_id]
+        assert "permanently deleted" in detail["message"]
+
+        # Refused, not half-applied.
+        move = _operations(server, op_type="pictures.scrapheap.move")[0]
+        assert move["status"] == "applied"
+        assert move["undone_at"] is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_partially_purged_bulk_move_refuses_the_whole_undo():
+    """No silent partial success: one purged target refuses the entire batch."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(3)]
+        client.request("DELETE", f"{API}/pictures", json={"picture_ids": ids})
+        _purge_forever(client, [ids[1]])
+        assert _lifecycle(server, ids[1]) is None
+
+        resp = client.post(f"{API}/operations/undo")
+        assert resp.status_code == 410, resp.text
+        assert resp.json()["detail"]["picture_ids"] == [ids[1]]
+
+        # The survivors are untouched — the refusal rolled the whole thing back.
+        assert _lifecycle(server, ids[0])[0] is True
+        assert _lifecycle(server, ids[2])[0] is True
+        assert (
+            _operations(server, op_type="pictures.scrapheap.move")[0]["status"]
+            == "applied"
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_permanent_deletes_record_no_operation():
+    """Purge / Empty Scrapheap are NOT undoable and must leave no log row."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(2)]
+        client.request("DELETE", f"{API}/pictures", json={"picture_ids": ids})
+        before = {op["id"] for op in _operations(server)}
+
+        # Named selection, then "Empty Scrapheap" (no ids at all).
+        _purge_forever(client, [ids[0]])
+        preview = client.post(f"{API}/pictures/scrapheap/delete-preview", json=None)
+        assert preview.status_code == 200, preview.text
+        emptied = client.request(
+            "DELETE",
+            f"{API}/pictures/scrapheap",
+            json={
+                "include_protected": True,
+                "confirm_token": preview.json()["confirm_token"],
+            },
+        )
+        assert emptied.status_code == 200, emptied.text
+
+        assert {op["id"] for op in _operations(server)} == before
+        assert _operations(server, op_type="pictures.scrapheap.purge") == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scrapheap_move_of_a_stack_member_snapshots_the_whole_stack():
+    """normalize_stack_positions renumbers siblings; undo must put them back."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(3)]
+        stacked = client.post(f"{API}/stacks", json={"picture_ids": ids})
+        assert stacked.status_code == 200, stacked.text
+
+        def positions(session):
+            return {
+                int(row.id): row.stack_position
+                for row in session.exec(
+                    select(Picture).where(Picture.id.in_(ids))
+                ).all()
+            }
+
+        before = server.vault.db.run_task(positions)
+        leader = next(pid for pid, pos in before.items() if pos == 0)
+
+        assert client.delete(f"{API}/pictures/{leader}").status_code == 200
+        after = server.vault.db.run_task(positions)
+        assert after != before, "deleting the leader should promote a sibling"
+
+        operation = _operations(server, op_type="pictures.scrapheap.move")[0]
+        # Every renumbered sibling is in the snapshot, not just the deleted one.
+        assert set(operation["target_ids"]) >= {
+            pid for pid in ids if before[pid] != after[pid]
+        }
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        assert server.vault.db.run_task(positions) == before
+        assert _lifecycle(server, leader) == (False, None)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scrapheap_move_of_a_locked_picture_is_refused_and_records_nothing():
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+
+        def lock(session):
+            picture_set = PictureSet(name="frozen", locked=True)
+            session.add(picture_set)
+            session.commit()
+            session.refresh(picture_set)
+            session.add(PictureSetMember(set_id=picture_set.id, picture_id=picture_id))
+            session.commit()
+
+        server.vault.db.run_task(lock)
+
+        assert client.delete(f"{API}/pictures/{picture_id}").status_code == 423
+        assert _lifecycle(server, picture_id) == (False, None)
+        assert _operations(server, op_type="pictures.scrapheap.move") == []
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_scrapheap_summaries_count_the_recorded_change_not_the_request():
+    """A skipped (locked / already-deleted) picture must not inflate the toast."""
+    move = operation_log_service.scrapheap_move_summary
+    restore = operation_log_service.scrapheap_restore_summary
+    facet = operation_log_service.FACET_DELETED
+
+    after = {
+        "1": {facet: {"deleted": True, "deleted_at": "2026-07-29T00:00:00"}},
+        "2": {facet: {"deleted": True, "deleted_at": "2026-07-29T00:00:00"}},
+        # A stack sibling that was only renumbered is not a move.
+        "3": {"stack": {"id": 1, "name": None, "position": 0}},
+    }
+    assert move({}, after) == "Moved 2 pictures to the Scrapheap"
+    assert restore({}, after) is None
+
+    restored = {"9": {facet: {"deleted": False, "deleted_at": None}}}
+    assert restore({}, restored) == "Restored 1 picture from the Scrapheap"
+    assert move({}, restored) is None
 
 
 # ---------------------------------------------------------------------------
