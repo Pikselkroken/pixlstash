@@ -1168,7 +1168,7 @@ def _restore(
         ``(touched_ids, facets, lifecycle)`` where *lifecycle* is
         ``{"scrapheaped": [...], "restored": [...]}`` — the pictures this
         restoration moves into and out of the scrapheap, so the caller can
-        announce them as ``removed`` / ``added`` instead of ``updated``.
+        announce them as ``removed`` / ``restored`` instead of ``updated``.
     """
     action = "undo an operation" if to_before else "redo an operation"
     touched: set[int] = set()
@@ -1214,10 +1214,15 @@ def _emit(
     (§15, ``test_source_origin_read_from_data_only``).
 
     ``change_kind`` follows the scrapheap lifecycle rather than being a blanket
-    ``"updated"``: undoing a move-to-Scrapheap puts a card back (``added``) and
-    redoing it takes the card away (``removed``), which is what the delete and
-    restore endpoints themselves broadcast. Telling the grid a vanished picture
-    was merely "updated" leaves a 404-clickable thumbnail behind.
+    ``"updated"``: undoing a move-to-Scrapheap puts a card back (``restored``)
+    and redoing it takes the card away (``removed``), which is what the delete
+    and restore endpoints themselves broadcast. Telling the grid a vanished
+    picture was merely "updated" leaves a 404-clickable thumbnail behind.
+
+    ``restored`` is deliberately NOT ``added``. Both put a card back, but only
+    ``added`` means "this picture is new to the vault": the SPA's sidebar reads
+    ``added`` as a fresh import and raises its NEW marker on the affected
+    counts, which is a lie for a picture that has been in the library all along.
     """
     if not picture_ids:
         return
@@ -1250,7 +1255,7 @@ def _emit(
     for event in events:
         _notify(event, updated, "updated")
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
-    _notify(EventType.CHANGED_PICTURES, restored, "added")
+    _notify(EventType.CHANGED_PICTURES, restored, "restored")
 
 
 def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operation:

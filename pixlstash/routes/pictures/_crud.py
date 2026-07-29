@@ -1168,12 +1168,17 @@ def register_routes(router, server):
         # A restored picture re-enters active views. ``picture_ids`` is the
         # caller-supplied subset (None == "restore all"); pass it through when
         # known so the originating tab can target the affected cards.
+        #
+        # ``restored``, not ``added``: the card comes back, but the picture is
+        # not new to the vault. The SPA's sidebar treats ``added`` as a fresh
+        # import and flashes its NEW marker on the counts that grew, which is
+        # wrong for something that was in the library the whole time.
         server.vault.notify(
             EventType.CHANGED_PICTURES,
             {
                 "picture_ids": list(picture_ids) if picture_ids else [],
                 "origin_client_id": origin_client_id,
-                "change_kind": "added",
+                "change_kind": "restored",
             },
         )
         return {"status": "success", "restored_count": restored_count}

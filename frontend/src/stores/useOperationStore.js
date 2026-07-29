@@ -48,6 +48,41 @@ export const DESTRUCTIVE_RECEIPT_MS = 8000;
 export const WS_REFRESH_DEBOUNCE_MS = 400;
 
 /**
+ * Ghost tiles — the design's `none → pending → committed` machine.
+ *
+ * A move to the Scrapheap does not take its thumbnails away immediately. The
+ * tiles stay exactly where they are, ghosted, for as long as the undo is still
+ * one click away; only when that window closes does the grid close the gap.
+ *
+ * The window is the RECEIPT's, not a clock of its own. The receipt already
+ * knows the destructive dwell, the hover/focus freeze (WCAG 2.2.1) and the
+ * hidden-tab pause, so the ghosts are expressed as "this set lives as long as
+ * receipt `key` is the live one". A second timer running alongside
+ * `receiptRemaining` would drift out of that agreement within one hover.
+ *
+ * `pending` and `committed` are the only two the grid ever sees: `none` is the
+ * absence of a set. `committed` is delivered as `collapsingPictureIds` — a
+ * hand-off, because collapsing is an imperative grid op (`removeImagesById`)
+ * and the store must not reach into the grid.
+ */
+export const GHOST_NONE = "none";
+export const GHOST_PENDING = "pending";
+export const GHOST_COMMITTED = "committed";
+
+/**
+ * How long a fresh ghost set waits for the receipt that will own its window.
+ *
+ * Ghosting starts optimistically, at the moment of the move, because the
+ * receipt cannot arrive before the WS trailing edge plus the `/operations`
+ * round trip. If none arrives — the socket dropped, the operation was not
+ * recorded, another tab's action took the newest slot — the set would stay
+ * ghosted forever with nothing left to un-ghost it. This is the liveness bound
+ * on that gap, not a second dwell timer: it is cleared the moment a receipt
+ * adopts the set, and a set that hits it collapses exactly as it would have.
+ */
+export const GHOST_ADOPT_TIMEOUT_MS = 2500;
+
+/**
  * How many Ctrl+Z presses may queue behind an in-flight undo. A cap, because a
  * held key or a panicked burst should not walk the whole stack.
  */
@@ -220,6 +255,21 @@ export const useOperationStore = defineStore("operation", () => {
   // Ctrl+Z presses waiting behind an in-flight undo.
   let queuedUndos = 0;
 
+  // ── Ghost state ──────────────────────────────────────────────────────────
+  /** Picture ids whose tiles are ghosted in place, awaiting their undo window. */
+  const ghostPictureIds = ref([]);
+  /** `none` | `pending` | `committed` — see the constants above. */
+  const ghostState = ref(GHOST_NONE);
+  /**
+   * Ids whose window has closed and which the grid must now drop. A hand-off
+   * queue, not a state: collapsing is an imperative grid op and the store does
+   * not reach into the grid. The grid drains it with `takeCollapsingGhosts()`.
+   */
+  const collapsingPictureIds = ref([]);
+  /** The `receipt.key` that owns the live set, or null while unadopted. */
+  let ghostReceiptKey = null;
+  let ghostAdoptTimer = null;
+
   // ── Derived history ──────────────────────────────────────────────────────
   /**
    * The undo stack, newest first, capped at `HISTORY_LIMIT`. Only `applied`
@@ -328,6 +378,10 @@ export const useOperationStore = defineStore("operation", () => {
       mergedCount: merged,
       steps,
       destructive,
+      // Whether the step behind this pill can actually be taken back. The
+      // ghosted tiles read it: holding them open for an undo that does not
+      // exist would promise something the Undo button cannot deliver.
+      undoable: operation?.undoable !== false,
       durationMs: destructive ? DESTRUCTIVE_RECEIPT_MS : RECEIPT_MS,
     };
   }
@@ -338,13 +392,26 @@ export const useOperationStore = defineStore("operation", () => {
    */
   function showReceipt(entry) {
     if (!entry) return;
+    // Before the swap, so a set whose pill is being replaced sees the raise.
+    reconcileGhostsWithReceipt(entry);
     receipt.value = entry;
     armReceiptTimer(entry.durationMs);
   }
 
-  /** Retire the live receipt and its countdown. */
+  /**
+   * Retire the live receipt and its countdown.
+   *
+   * This is the single place the ghost window ends on time: the dwell timer
+   * fires here, `resumeReceipt` funnels a drained countdown here, and an
+   * explicit dismissal lands here too. Binding the ghosts to it — rather than
+   * to a clock of their own — is what makes the hover freeze, the focus freeze
+   * and the hidden-tab pause apply to the tiles for free.
+   */
   function dismissReceipt() {
     clearReceiptTimer();
+    if (ghostReceiptKey != null && receipt.value?.key === ghostReceiptKey) {
+      commitGhosts();
+    }
     receipt.value = null;
   }
 
@@ -373,6 +440,141 @@ export const useOperationStore = defineStore("operation", () => {
     }
     receiptStartedAt = Date.now();
     receiptTimer = setTimeout(dismissReceipt, receiptRemaining);
+  }
+
+  // ── Ghost lifecycle ──────────────────────────────────────────────────────
+  function clearGhostAdoptTimer() {
+    if (ghostAdoptTimer != null) clearTimeout(ghostAdoptTimer);
+    ghostAdoptTimer = null;
+  }
+
+  function resetGhostSet() {
+    clearGhostAdoptTimer();
+    ghostReceiptKey = null;
+    ghostPictureIds.value = [];
+    ghostState.value = GHOST_NONE;
+  }
+
+  /**
+   * End the live set's window: hand its ids to the grid to remove, then forget
+   * it. `pending → committed → none`, in one call, because `committed` only
+   * exists as the hand-off.
+   */
+  function commitGhosts() {
+    if (!ghostPictureIds.value.length) {
+      resetGhostSet();
+      return;
+    }
+    ghostState.value = GHOST_COMMITTED;
+    collapsingPictureIds.value = [
+      ...collapsingPictureIds.value,
+      ...ghostPictureIds.value,
+    ];
+    resetGhostSet();
+  }
+
+  /**
+   * Ghost a set of pictures that just went to the Scrapheap: their tiles stay
+   * mounted, greyed, until the undo window closes.
+   *
+   * Any set already live is committed first — the design never stacks two
+   * receipts, so the older set's one-click undo is gone the moment the newer
+   * action raises its own pill, and a ghost with no live undo behind it is a
+   * lie about what a click can still do.
+   *
+   * @param {Array<number|string>} ids - the pictures the server accepted.
+   * @returns {boolean} false when ghosting does not apply (read-only session,
+   *   or nothing to ghost) and the caller should drop the tiles outright.
+   */
+  function markGhosted(ids) {
+    const wanted = (Array.isArray(ids) ? ids : []).filter(
+      (id) => id !== null && id !== undefined,
+    );
+    if (!wanted.length) return false;
+    // A read-only session never calls the undo endpoints and never renders the
+    // control, so there is no window to hold the tiles open for.
+    if (isReadOnly.value) return false;
+    commitGhosts();
+    ghostPictureIds.value = wanted;
+    ghostState.value = GHOST_PENDING;
+    ghostReceiptKey = null;
+    clearGhostAdoptTimer();
+    ghostAdoptTimer = setTimeout(() => {
+      ghostAdoptTimer = null;
+      console.warn(
+        "useOperationStore: no receipt adopted the ghosted pictures within " +
+          `${GHOST_ADOPT_TIMEOUT_MS}ms; collapsing them. The operation log did ` +
+          "not report this action back to this tab (dropped socket, unrecorded " +
+          "operation, or another tab's action took the newest slot).",
+        wanted,
+      );
+      commitGhosts();
+    }, GHOST_ADOPT_TIMEOUT_MS);
+    return true;
+  }
+
+  /**
+   * Take pictures back out of the ghost set — an undo landed and the tiles stay
+   * where they are, at full strength, with no refetch flash.
+   * @param {Array<number|string>} ids
+   */
+  function unghostPictures(ids) {
+    if (!ghostPictureIds.value.length) return;
+    const back = new Set((Array.isArray(ids) ? ids : []).map(String));
+    if (!back.size) return;
+    const remaining = ghostPictureIds.value.filter(
+      (id) => !back.has(String(id)),
+    );
+    if (remaining.length === ghostPictureIds.value.length) return;
+    if (!remaining.length) {
+      resetGhostSet();
+      return;
+    }
+    ghostPictureIds.value = remaining;
+  }
+
+  /**
+   * Forget the ghost set WITHOUT collapsing it — the grid was rebuilt from a
+   * fresh fetch, so the scrapheaped pictures are already absent and there is
+   * nothing left to grey out. The receipt is deliberately untouched: undo stays
+   * offered, it just has no tiles to un-ghost any more.
+   */
+  function dropGhosts() {
+    if (ghostState.value === GHOST_NONE) return;
+    resetGhostSet();
+  }
+
+  /** Drain the collapse queue. Returns the ids the grid must now remove. */
+  function takeCollapsingGhosts() {
+    const ids = collapsingPictureIds.value;
+    collapsingPictureIds.value = [];
+    return ids;
+  }
+
+  /**
+   * Bind a fresh ghost set to the receipt that will own its window, or end the
+   * set when a receipt that is not its own takes the pill's slot.
+   */
+  function reconcileGhostsWithReceipt(entry) {
+    if (ghostState.value !== GHOST_PENDING) return;
+    const unadopted = ghostReceiptKey == null;
+    if (unadopted && entry.mode === "did" && entry.destructive) {
+      ghostReceiptKey = entry.key;
+      clearGhostAdoptTimer();
+      // Recorded for audit but not reversible: there is no undo to wait for, so
+      // holding the tiles open would promise one that does not exist.
+      if (!entry.undoable) commitGhosts();
+      return;
+    }
+    // Any other raise replaced our pill in place (the design never stacks two),
+    // so the one-click undo for this set is gone and the grid closes the gap.
+    if (entry.key !== ghostReceiptKey) commitGhosts();
+  }
+
+  /** Un-ghost whatever an undo/redo response says it put back. */
+  function applyLifecycleToGhosts(result) {
+    const restored = result?.restored_picture_ids;
+    if (Array.isArray(restored) && restored.length) unghostPictures(restored);
   }
 
   // ── Server reads ─────────────────────────────────────────────────────────
@@ -557,6 +759,10 @@ export const useOperationStore = defineStore("operation", () => {
     busy.value = true;
     try {
       const result = await undoLastOperation();
+      // Before the receipt: the raise below would otherwise read as "a pill
+      // that is not this set's" and collapse the very tiles the undo just
+      // brought back.
+      applyLifecycleToGhosts(result);
       await refresh({ narrate: false });
       const reverted = target ?? result?.operations?.[0] ?? null;
       if (reverted) showReceipt(buildReceipt(reverted, "undone"));
@@ -592,6 +798,13 @@ export const useOperationStore = defineStore("operation", () => {
     try {
       const result = await redoOperation();
       await refresh({ narrate: false });
+      // Redoing a move puts the pictures back in the Scrapheap. Their tiles are
+      // on screen again (the undo reinstated them), so they ghost again for the
+      // new receipt's window rather than vanishing — the same offer, both ways.
+      const rescrapheaped = result?.scrapheaped_picture_ids;
+      if (Array.isArray(rescrapheaped) && rescrapheaped.length) {
+        markGhosted(rescrapheaped);
+      }
       const replayed = target ?? result?.operations?.[0] ?? null;
       if (replayed) showReceipt(buildReceipt(replayed, "did"));
       return result;
@@ -653,6 +866,7 @@ export const useOperationStore = defineStore("operation", () => {
       while (pending.length) {
         const id = pending.shift();
         const result = await undoOperation(id);
+        applyLifecycleToGhosts(result);
         const done = new Set((result?.operations ?? []).map((op) => op?.id));
         done.add(id);
         reverted += done.size;
@@ -695,6 +909,7 @@ export const useOperationStore = defineStore("operation", () => {
     busy.value = true;
     try {
       const result = await undoBatch(batchId);
+      applyLifecycleToGhosts(result);
       await refresh({ narrate: false });
       const reverted = target ?? result?.operations?.[0] ?? null;
       if (reverted) showReceipt(buildReceipt(reverted, "undone"));
@@ -711,6 +926,8 @@ export const useOperationStore = defineStore("operation", () => {
   /** Drop every trace of the previous session (logout / vault switch). */
   function reset() {
     dismissReceipt();
+    resetGhostSet();
+    collapsingPictureIds.value = [];
     if (wsDebounceTimer != null) clearTimeout(wsDebounceTimer);
     wsDebounceTimer = null;
     wsNarrate = false;
@@ -734,6 +951,9 @@ export const useOperationStore = defineStore("operation", () => {
     busy,
     loaded,
     receipt,
+    ghostPictureIds,
+    ghostState,
+    collapsingPictureIds,
     // computed
     past,
     future,
@@ -752,6 +972,10 @@ export const useOperationStore = defineStore("operation", () => {
     dismissReceipt,
     pauseReceipt,
     resumeReceipt,
+    markGhosted,
+    unghostPictures,
+    dropGhosts,
+    takeCollapsingGhosts,
     reset,
   };
 });

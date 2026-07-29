@@ -120,12 +120,20 @@ class WsBroadcasterMixin:
             return list(data)
         return []
 
+    #: The closed set of wire values for ``change_kind``. An emit site that sets
+    #: anything else has its hint DROPPED (not rejected), and the SPA then falls
+    #: back to ``"updated"`` — which for a lifecycle change leaves a stale,
+    #: 404-clickable card behind. Adding a value here is therefore half of the
+    #: contract; the other half is ``resolveChangeKind`` in
+    #: ``frontend/src/composables/useGridRealtimeSync.js``.
+    CHANGE_KINDS = ("added", "updated", "removed", "restored")
+
     @staticmethod
     def _change_kind_from(data) -> str | None:
-        """Optional ``added``/``updated``/``removed`` hint from ``data``."""
+        """Optional ``added``/``updated``/``removed``/``restored`` hint from ``data``."""
         if isinstance(data, dict):
             kind = data.get("change_kind")
-            if kind in ("added", "updated", "removed"):
+            if kind in WsBroadcasterMixin.CHANGE_KINDS:
                 return kind
         return None
 

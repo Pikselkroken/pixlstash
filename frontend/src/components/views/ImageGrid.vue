@@ -531,8 +531,10 @@
                 hoveredStackId !== null &&
                 getPictureStackId(img) === hoveredStackId,
               'image-card-cursor': img.idx === cursorIdx,
+              'image-card--ghost': isImageGhosted(img),
             },
           ]"
+          :inert="isImageGhosted(img) || null"
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
@@ -1045,6 +1047,10 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
+import {
+  GHOST_PENDING,
+  useOperationStore,
+} from "../../stores/useOperationStore";
 import {
   useNoticeStore,
   DEFAULT_TIMEOUTS,
@@ -2593,6 +2599,10 @@ const hoveredImageIdx = ref(null);
 const hoveredStackId = ref(null);
 
 function handleImageMouseEnter(img) {
+  // `inert` already blocks the event in supporting browsers; this is the
+  // testable half of the same rule. `hoveredImageIdx` is what the digit-scoring
+  // shortcut acts on when nothing is selected, so a ghost must never be hovered.
+  if (isImageGhosted(img)) return;
   hoveredImageIdx.value = img.idx;
   hoveredStackId.value = getPictureStackId(img) ?? null;
 }
@@ -2849,6 +2859,7 @@ const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
 const genStackPrefs = useGenStackPrefsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
+const operationStore = useOperationStore();
 // Every failure path in this component reports through the notice surface. A
 // native alert() is unstyled, blocking and focus-stealing; a bare `catch` that
 // only logs is worse, because the user is never told at all.
@@ -3496,7 +3507,15 @@ async function deleteSelected(idsOverride = null) {
     const removedIds = idsToRemove.filter(
       (id) => !skippedLocked.has(String(id)),
     );
-    removeImagesById(removedIds);
+    // Keep the tiles mounted and greyed while the undo is still one click away,
+    // and let the receipt's own clock decide when the grid closes the gap.
+    // `markGhosted` declines when there is no undo window to hold them open for
+    // (a read-only session), in which case they go immediately, as they always
+    // did. The own-origin `removed` echo of this same delete is suppressed by
+    // the realtime decision table, so nothing else races to drop them.
+    if (!operationStore.markGhosted(removedIds)) {
+      removeImagesById(removedIds);
+    }
     // Overlay path: don't touch the grid selection. removeImagesById already
     // drops any deleted id from it (a no-op when the overlay picture wasn't
     // grid-selected), so the user's grid selection is left exactly as it was.
@@ -4864,6 +4883,7 @@ const {
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted,
   },
   props,
 );
@@ -5086,6 +5106,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     toolbarSelectionMenuOpen,
     isJustifiedMode,
     justifiedLayout,
+    isGhosted: isGridIndexGhosted,
   },
   props,
   emit,
@@ -5677,7 +5698,11 @@ function gridImageSortKey(img) {
 // v-for key embeds img.idx — splicing allGridImages directly would corrupt the
 // virtual-scroll window. Deferred to the pill while a streaming fetch is in
 // flight (that fetch writes allGridImages wholesale from a sized placeholder).
-async function insertGridImagesById(ids) {
+// `options.highlight` (default true) drives the new-picture flash. A scrapheap
+// comeback passes false: the flash means "this was not here before", which is
+// the wrong story for a picture the user just undid the removal of.
+async function insertGridImagesById(ids, options = {}) {
+  const highlight = options?.highlight !== false;
   const wanted = (Array.isArray(ids) ? ids : [])
     .map((id) => getPictureId(id))
     .filter((id) => id !== null);
@@ -5761,7 +5786,7 @@ async function insertGridImagesById(ids) {
 
   lastFetchedGridImages.value = base;
   rebuildGridImagesFromLastFetch();
-  triggerNewImageHighlight(inserted);
+  if (highlight) triggerNewImageHighlight(inserted);
 
   // An in-app ComfyUI result lands here (origin-aware WS picture_imported insert).
   // If the overlay is open with a pending comfyui refresh, reconcile it now that
@@ -6609,6 +6634,11 @@ function updateVisibleThumbnails() {
 // ============================================================
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
+  // A ghosted tile is a placeholder for an undo decision, not content. It is
+  // already in the Scrapheap, so selecting it would arm the selection bar
+  // against a picture no bulk action can act on. Silent: the ghost's own
+  // marking already says "not available", and a notice per click is noise.
+  if (isImageGhosted(img)) return;
   // Suppress the synthesized click that fires right after a long-press touchend
   if (suppressTouchClickId.value === img.id) {
     suppressTouchClickId.value = null;
@@ -6642,7 +6672,11 @@ function handleImageCardClick(img, idx, event) {
     newSelection = allGrid
       .slice(start, end + 1)
       .map((i) => i.id)
-      .filter(Boolean);
+      .filter(Boolean)
+      // Ghosts inside the span are skipped silently: they read visually as
+      // excluded cells already, so a selection count that included them would
+      // be the surprising half.
+      .filter((id) => !isImageGhosted(id));
     // Do NOT merge with previous selection; replace it
   } else if (isShift && anchorIndex < 0) {
     newSelection = [img.id];
@@ -6657,6 +6691,14 @@ function handleImageCardClick(img, idx, event) {
 
 function handleThumbnailClick(img, idx, event) {
   if (!img.id) return;
+  // Never open the lightbox on a ghost. The overlay is the full editing surface
+  // and it FREEZES the sequence it opens on for its whole lifetime (§9.1), so
+  // opening it on a picture that is seconds from leaving the grid offers a pile
+  // of actions against a doomed object and pins a stale filmstrip while it does.
+  if (isImageGhosted(img)) {
+    event.stopPropagation();
+    return;
+  }
   // In touch-select mode, the toggle was already handled in handleTouchEnd.
   // Just suppress any synthesized click that slipped through.
   if (touchSelectMode.value) {
@@ -6707,6 +6749,12 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
+  // No menu on a ghost — before the select-on-right-click side effect below,
+  // which would otherwise put it in the selection. Every entry acts on the
+  // selection, so the menu would be entirely disabled; and the one entry that
+  // would make sense, Restore, is a second Undo affordance competing with the
+  // receipt already counting down a few seconds away.
+  if (isImageGhosted(img)) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId.value = img.id;
@@ -7108,6 +7156,162 @@ defineExpose({
 function markOverlayDeferredRefresh() {
   if (!overlayOpen.value) return;
   pendingOverlayGridRefresh.value = true;
+}
+
+// ============================================================
+// SCRAPHEAP GHOST TILES
+// ============================================================
+// A move to the Scrapheap does not take its thumbnails away. The tiles stay
+// exactly where they are, ghosted, for as long as the undo is one click away
+// (the receipt's destructive dwell, hover-freeze and hidden-tab pause included);
+// only when that window closes does the grid close the gap. Undo inside the
+// window un-ghosts them in place, with no refetch and no flash.
+//
+// The state machine and its clock live in `useOperationStore` — deliberately,
+// because the clock IS the receipt's. Everything here is the grid's half:
+// which tiles carry the flag, and the imperative collapse when the store hands
+// the ids back.
+//
+// The virtualisation rule is untouched: ghosting FLAGS items, it never
+// restructures `allGridImages` or `lastFetchedGridImages`. The only array
+// mutation is the collapse, which goes through `removeImagesById` exactly as a
+// plain delete always did.
+
+const ghostedIdSet = computed(() => {
+  // Not in the Scrapheap view. There these pictures are not on their way out,
+  // they have arrived — a ghosted tile would mean the opposite of what it means
+  // in the grid, and the view already renders the real auto-purge countdown.
+  if (isScrapheapView.value) return null;
+  const ids = operationStore.ghostPictureIds;
+  if (!ids || !ids.length) return null;
+  return new Set(ids.map((id) => String(getPictureId(id))));
+});
+
+function isImageGhosted(img) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const pictureId = getPictureId(img?.id ?? img);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+/** Index-based form, for the keyboard cursor's skip scan. */
+function isGridIndexGhosted(index) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const img = allGridImages.value?.[index];
+  const pictureId = getPictureId(img?.id);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+// A ghost is never in the selection and never under the cursor: every bulk
+// action reads the selection, and arming one against pictures that are already
+// in the Scrapheap is the trap this whole state exists to avoid.
+watch(ghostedIdSet, (set) => {
+  if (!set || !set.size) return;
+  const isGhostId = (id) => set.has(String(getPictureId(id)));
+  if (selectedImageIds.value.some(isGhostId)) {
+    selectedImageIds.value = selectedImageIds.value.filter(
+      (id) => !isGhostId(id),
+    );
+  }
+  if (lastSelectedImageId.value != null && isGhostId(lastSelectedImageId.value)) {
+    lastSelectedImageId.value = null;
+  }
+  if (cursorIdx.value !== null && isGridIndexGhosted(cursorIdx.value)) {
+    cursorIdx.value = null;
+  }
+});
+
+// Any full refetch rebuilds the grid without the scrapheaped pictures, so there
+// is nothing left to grey out. Forget the set SILENTLY — no collapse, and the
+// receipt is untouched, because undo is still on offer, it just has no tiles to
+// put back in this view any more.
+watch(allGridImages, () => {
+  if (operationStore.ghostState !== GHOST_PENDING) return;
+  const present = new Set(
+    (allGridImages.value || []).map((img) => String(getPictureId(img?.id))),
+  );
+  const anyGone = operationStore.ghostPictureIds.some(
+    (id) => !present.has(String(getPictureId(id))),
+  );
+  if (anyGone) operationStore.dropGhosts();
+});
+
+// The store hands back the ids whose window has closed.
+watch(
+  () => operationStore.collapsingPictureIds,
+  (ids) => {
+    if (!ids || !ids.length) return;
+    const doomed = operationStore.takeCollapsingGhosts();
+    if (doomed.length) void collapseGhostedImages(doomed);
+  },
+);
+
+/** Pixel top of a grid item, in whichever layout mode is active. */
+function gridItemTopOffset(index) {
+  if (index == null || index < 0) return null;
+  if (isJustifiedMode.value) {
+    const layout = justifiedLayout.value;
+    if (!layout || !layout.rowOffsets?.length) return null;
+    const row = rowOfIndex(layout.rowStarts, index);
+    if (row == null || row < 0) return null;
+    const top = layout.rowOffsets[row];
+    return typeof top === "number" ? top : null;
+  }
+  const cols = Math.max(1, props.columns || 1);
+  return Math.floor(index / cols) * rowHeight.value;
+}
+
+/**
+ * Drop the ghosted tiles and close the gap, without yanking the viewport.
+ *
+ * The collapse is on a timer, which is the one thing the grid's own rules never
+ * do (the pills exist so nothing reshuffles under the user unprompted). What
+ * makes it acceptable is that content the user is actually looking at does not
+ * move: anchor on the topmost item still on screen, remove, then put that item
+ * back under the same pixel. Ghosts below the fold move nothing; ghosts on
+ * screen close their gap in plain sight, which is the expected consequence of
+ * the sentence the receipt just read out; ghosts scrolled off the top would
+ * otherwise drag the whole view up under someone who has moved on.
+ */
+async function collapseGhostedImages(ids) {
+  const wrapper = scrollWrapper.value;
+  const scrollTop = wrapper ? wrapper.scrollTop : 0;
+  let anchorId = null;
+  let anchorOffset = 0;
+  if (wrapper && scrollTop > 0) {
+    const doomed = new Set(
+      ids.map((id) => String(getPictureId(id))).filter((id) => id !== "null"),
+    );
+    const list = allGridImages.value || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const pictureId = getPictureId(list[i]?.id);
+      if (pictureId === null || doomed.has(String(pictureId))) continue;
+      const top = gridItemTopOffset(i);
+      if (top === null) break;
+      if (top >= scrollTop) {
+        anchorId = pictureId;
+        anchorOffset = top - scrollTop;
+        break;
+      }
+    }
+  }
+
+  removeImagesById(ids);
+
+  if (anchorId === null || !wrapper) return;
+  await nextTick();
+  const newIndex = (allGridImages.value || []).findIndex(
+    (img) => getPictureId(img?.id) === anchorId,
+  );
+  if (newIndex < 0) return;
+  const newTop = gridItemTopOffset(newIndex);
+  if (newTop === null) return;
+  const target = Math.max(0, newTop - anchorOffset);
+  // Sub-pixel churn is not worth a scroll write (and would fight momentum).
+  if (Math.abs(target - wrapper.scrollTop) > 1) {
+    wrapper.scrollTop = target;
+  }
 }
 
 // Remove images by ID (for event-driven removal)
@@ -8014,6 +8218,81 @@ function handleEmptyStateReset() {
   filter: grayscale(1) brightness(0.65);
   opacity: 0.75;
 }
+
+/* ── Scrapheap ghost: a tile held in place while its undo is still offered ──
+   The tile stays where it is, ghosted and hatched, for as long as the receipt
+   is live; the grid closes the gap only when that window ends.
+
+   Three signals, none of them chromatic, so none can be confused with the
+   loading placeholder or an error state: the image desaturates, the tile fades
+   toward the page, and a diagonal hatch covers it.
+
+   The veil is a `background`, not a scrim: it fades the tile toward the grid
+   canvas in BOTH themes off one token. The hatch is two-tone — `on-background`
+   against `background` at the same alpha — so its stripes contrast with EACH
+   OTHER by a fixed delta whatever photo is underneath; a single-tone hatch
+   bottoms out near 2.1:1 on a dark photo in light theme. Both tokens flip with
+   the Vuetify theme class, so there is no media query and no theme override.
+
+   `.thumbnail-container::before` and not `.image-card::after`: the latter is
+   already taken by `.touch-select-mode` (which would make the ghost vanish in
+   touch-select mode) and its box overshoots the thumbnail by the card padding
+   and the whole info row. This node is exactly the image box in square,
+   justified and cropped modes, and it is otherwise unused — zero new DOM. */
+.image-card--ghost .thumbnail-img,
+.image-card--ghost .thumbnail-placeholder {
+  /* The same desaturation the drag source uses: one value, one meaning in this
+     grid — "this tile is on its way somewhere else". The hatch and the
+     persistence are what tell the two apart. The transition is declared here
+     rather than on the shared `.thumbnail-img` rule to keep the diff local; the
+     consequence is that an undo snaps the tile back at full strength, which is
+     the clearest possible confirmation that it came back. */
+  filter: grayscale(1);
+  transition: filter var(--dur-2) var(--ease-standard);
+}
+
+.image-card--ghost .thumbnail-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  pointer-events: none;
+  border-radius: var(--radius-md);
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(var(--v-theme-on-background), 0.5) 0 var(--space-1),
+      rgba(var(--v-theme-background), 0.5) var(--space-1) var(--space-2),
+      transparent var(--space-2) var(--space-3)
+    ),
+    rgba(var(--v-theme-background), 0.62);
+  /* A pseudo-element created by a class change has no from-state to transition
+     from, so the fade-in is a one-shot animation. `both` is load-bearing: under
+     the global reduced-motion reset this runs in ~0ms and the fill keeps the
+     END state, so the hatch appears instantly and FULLY rather than blank. */
+  animation: ghostHatchIn var(--dur-2) var(--ease-standard) both;
+}
+
+/* Matches the existing `.compact-mode .thumbnail-container::after` override. */
+.compact-mode .image-card--ghost .thumbnail-container::before {
+  border-radius: 0;
+}
+
+@keyframes ghostHatchIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A departing tile does not offer the hover affordance. `inert` already stops
+   the pointer in supporting browsers; this keeps the visual honest either way. */
+.image-card--ghost:hover .thumbnail-container::after {
+  opacity: 0;
+}
+
 .thumbnail-img {
   width: 100%;
   height: 100%;

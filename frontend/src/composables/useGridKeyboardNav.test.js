@@ -21,6 +21,7 @@ function makeNav({
   justified = null,
   scrollWrapper = null,
   lastSelectedImageId = null,
+  ghostedIndexes = [],
 } = {}) {
   const selectedImageIds = ref(["a", "b"]);
   const deleteSelected = vi.fn();
@@ -43,13 +44,15 @@ function makeNav({
     toolbarSelectionMenuOpen: ref(false),
     isJustifiedMode: ref(justified !== null),
     justifiedLayout: ref(justified),
+    isGhosted: (index) => ghostedIndexes.includes(index),
   };
 
+  const openOverlay = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
     clearSearchQuery: vi.fn(),
     scrollCursorIntoView: vi.fn(),
-    openOverlay: vi.fn(),
+    openOverlay,
     deleteSelected,
     selectionBarRef: ref({ openTagInput: vi.fn() }),
     applyScoresForSelection,
@@ -59,7 +62,13 @@ function makeNav({
   const props = { columns: 3, searchQuery: "" };
   const emit = vi.fn();
   const { handleKeyDown } = useGridKeyboardNav(deps, props, emit, callbacks);
-  return { handleKeyDown, deps, deleteSelected, applyScoresForSelection };
+  return {
+    handleKeyDown,
+    deps,
+    deleteSelected,
+    applyScoresForSelection,
+    openOverlay,
+  };
 }
 
 function keyEvent(overrides) {
@@ -200,5 +209,95 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
     expect(deps.cursorIdx.value).toBe(4); // 1 + columns(3)
     handleKeyDown(keyEvent({ key: "ArrowUp" }));
     expect(deps.cursorIdx.value).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scrapheap ghosts
+// ---------------------------------------------------------------------------
+//
+// A ghosted tile is on screen but inert — already in the Scrapheap, held there
+// only while its undo is one click away. The cursor SKIPS them: parking on one
+// would make every following key (Space, Enter, a digit) silently do nothing,
+// which is indistinguishable from a broken feature.
+
+describe("useGridKeyboardNav — ghosted tiles", () => {
+  it("skips a ghosted tile in the direction of travel", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      ghostedIndexes: [1, 2],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight" }));
+    expect(deps.cursorIdx.value).toBe(3);
+    handleKeyDown(keyEvent({ key: "ArrowLeft" }));
+    expect(deps.cursorIdx.value).toBe(0);
+  });
+
+  it("stays put when every cell ahead is ghosted", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 6,
+      ghostedIndexes: [7, 8],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight" }));
+    expect(deps.cursorIdx.value).toBe(6);
+  });
+
+  it("skips ghosts on the vertical move too", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      ghostedIndexes: [3],
+    });
+    // Down lands on 3 (0 + columns), which is ghosted → scan forward to 4.
+    handleKeyDown(keyEvent({ key: "ArrowDown" }));
+    expect(deps.cursorIdx.value).toBe(4);
+  });
+
+  it("leaves ghosts out of a Shift+arrow range", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 0,
+      lastSelectedImageId: "a",
+      ghostedIndexes: [1],
+    });
+    handleKeyDown(keyEvent({ key: "ArrowRight", shiftKey: true }));
+    // The cursor skips the ghost at 1 and lands on 2; the span 0..2 then drops
+    // the ghost silently — a count that included it would be the surprise.
+    expect(deps.selectedImageIds.value).toEqual(["a", "c"]);
+  });
+
+  it("leaves ghosts out of Ctrl+A", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      ghostedIndexes: [0, 5],
+    });
+    handleKeyDown(keyEvent({ key: "a", ctrlKey: true }));
+    // "Select all" has to mean "all a bulk action can act on".
+    expect(deps.selectedImageIds.value).not.toContain("a");
+    expect(deps.selectedImageIds.value).not.toContain("f");
+    expect(deps.selectedImageIds.value).toHaveLength(7);
+  });
+
+  it("does not open the lightbox on a ghost the cursor was already sitting on", () => {
+    const { handleKeyDown, openOverlay } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 2,
+      ghostedIndexes: [2],
+    });
+    handleKeyDown(keyEvent({ key: "Enter" }));
+    expect(openOverlay).not.toHaveBeenCalled();
+  });
+
+  it("does not toggle selection with Space on a ghost under the cursor", () => {
+    const { handleKeyDown, deps } = makeNav({
+      images: NINE_IMAGES,
+      cursorIdx: 2,
+      ghostedIndexes: [2],
+    });
+    const before = [...deps.selectedImageIds.value];
+    handleKeyDown(keyEvent({ key: " " }));
+    expect(deps.selectedImageIds.value).toEqual(before);
   });
 });

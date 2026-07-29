@@ -1644,7 +1644,18 @@ Both sites pass `expand_stacks=True, expand_stacks_include_deleted=True`. `norma
 
 **Undoing a move whose picture has since been purged is refused (410).** This is the one lifecycle edge the metadata facets do not have, and it follows the locked-set guard's fail-closed contract exactly: `_enforce_scrapheap_targets_exist` runs beside `enforce_pictures_not_locked` at the single `apply_state_in_session` sink, **before** anything is written, and raises `410 Gone` with `detail = {"code": "pictures_purged", "action", "picture_ids", "message"}`. The whole request is refused — a partially-purged batch is refused in full, not partially restored — nothing commits (the DB worker rolls the session back), and the operation stays `applied` with `undone_at` null, so the user can retry after the purged pictures are re-imported rather than being left with a batch they must reconcile by hand. The guard is scoped to pictures whose recorded state carries the `deleted` facet; a purged picture appearing in some *other* operation's state (a tag edit, a stack renumber) keeps the long-standing skip-with-a-warning behaviour, because no lifecycle promise is being broken there.
 
-`change_kind` on the WS envelope follows the lifecycle rather than a blanket `"updated"`: `_emit` announces restored pictures as `added` and re-scrapheaped ones as `removed`, matching what the delete/restore endpoints themselves broadcast — telling the grid that a vanished picture was "updated" leaves a 404-clickable thumbnail behind. The undo/redo responses carry the same split as `scrapheaped_picture_ids` / `restored_picture_ids` alongside `picture_ids`.
+`change_kind` on the WS envelope follows the lifecycle rather than a blanket `"updated"`: `_emit` announces restored pictures as **`restored`** and re-scrapheaped ones as `removed`, matching what the delete/restore endpoints themselves broadcast — telling the grid that a vanished picture was "updated" leaves a 404-clickable thumbnail behind. The undo/redo responses carry the same split as `scrapheaped_picture_ids` / `restored_picture_ids` alongside `picture_ids`.
+
+**`restored` is a distinct kind from `added`, deliberately.** Both put a card back, but only `added` means *new to the vault*, and the SPA's sidebar acts on that difference: it reads `added` as a fresh import and flashes its NEW marker on every count that grew. A picture coming back out of the Scrapheap has been in the library the whole time, so `added` there is a lie the user sees. The full wire set is:
+
+| `change_kind` | Means | Emitted by |
+|---|---|---|
+| `added` | New to the vault | imports (`_import.py`), ComfyUI results, plugin adds |
+| `updated` | Same card, changed content/position | every metadata mutation |
+| `removed` | The card is gone from active views | move-to-Scrapheap (`DELETE /pictures{,/{id}}`), scrapheap purge, retention purge, and `_emit` for a **redo** of a move |
+| `restored` | The card comes back, but the picture is not new | `POST /pictures/scrapheap/restore`, and `_emit` for an **undo** of a move |
+
+The value is gated by `WsBroadcasterMixin.CHANGE_KINDS` (`pixlstash/ws/broadcaster.py`). That gate **drops** an unrecognised kind rather than raising, so a new value added at an emit site but not to the tuple fails *silently* and the SPA falls back to `"updated"` — the exact 404-ghost-card failure above. The frontend mirror is `resolveChangeKind` in `frontend/src/composables/useGridRealtimeSync.js`; the two allowlists are one contract and must move together.
 
 No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
 

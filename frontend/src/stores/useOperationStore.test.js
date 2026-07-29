@@ -31,6 +31,7 @@ import {
 } from "../api/operations";
 import {
   DESTRUCTIVE_RECEIPT_MS,
+  GHOST_ADOPT_TIMEOUT_MS,
   RECEIPT_MS,
   WS_REFRESH_DEBOUNCE_MS,
   formatOperationTime,
@@ -639,5 +640,182 @@ describe("useOperationStore — reset", () => {
     expect(store.canUndo).toBe(false);
     expect(store.canRedo).toBe(false);
     expect(store.loaded).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ghost tiles — the `none → pending → committed` machine
+// ---------------------------------------------------------------------------
+//
+// A move to the Scrapheap leaves its tiles on screen, ghosted, for as long as
+// the undo is one click away. The window is the RECEIPT's, never a clock of its
+// own, so every test below drives the ghosts by driving the receipt — that is
+// the only way the two can be shown not to drift.
+
+const MOVE = "pictures.scrapheap.move";
+
+/** Raise the receipt a scrapheap move would raise, so it adopts the set. */
+function raiseMoveReceipt(store, overrides = {}) {
+  const row = op({
+    id: 99,
+    op_type: MOVE,
+    summary: "Moved 2 pictures to the Scrapheap",
+    ...overrides,
+  });
+  store.showReceipt(
+    store.buildReceipt(row, row.undoable === false ? "blocked" : "did"),
+  );
+  return row;
+}
+
+describe("useOperationStore — ghost tiles", () => {
+  it("ghosts a moved set and holds it for the receipt's destructive dwell", () => {
+    const store = useOperationStore();
+    expect(store.markGhosted([1, 2])).toBe(true);
+    expect(store.ghostPictureIds).toEqual([1, 2]);
+    expect(store.ghostState).toBe("pending");
+
+    raiseMoveReceipt(store);
+    expect(store.receipt.durationMs).toBe(DESTRUCTIVE_RECEIPT_MS);
+
+    // Still ghosted one tick before the dwell ends…
+    vi.advanceTimersByTime(DESTRUCTIVE_RECEIPT_MS - 1);
+    expect(store.ghostState).toBe("pending");
+    expect(store.collapsingPictureIds).toEqual([]);
+
+    // …and handed to the grid the moment it does.
+    vi.advanceTimersByTime(1);
+    expect(store.ghostState).toBe("none");
+    expect(store.takeCollapsingGhosts()).toEqual([1, 2]);
+    expect(store.collapsingPictureIds).toEqual([]);
+  });
+
+  it("freezes the ghost window while the receipt is hovered", () => {
+    const store = useOperationStore();
+    store.markGhosted([1]);
+    raiseMoveReceipt(store);
+
+    vi.advanceTimersByTime(3000);
+    store.pauseReceipt();
+    // The whole remaining dwell passes with the pointer on the pill.
+    vi.advanceTimersByTime(DESTRUCTIVE_RECEIPT_MS * 3);
+    expect(store.ghostState).toBe("pending");
+    expect(store.collapsingPictureIds).toEqual([]);
+
+    store.resumeReceipt();
+    vi.advanceTimersByTime(DESTRUCTIVE_RECEIPT_MS - 3000 - 1);
+    expect(store.ghostState).toBe("pending");
+    vi.advanceTimersByTime(1);
+    expect(store.takeCollapsingGhosts()).toEqual([1]);
+  });
+
+  it("collapses the first set when a second move replaces the receipt in place", () => {
+    const store = useOperationStore();
+    store.markGhosted([1, 2]);
+    raiseMoveReceipt(store, { id: 99 });
+
+    store.markGhosted([3, 4]);
+    expect(store.ghostPictureIds).toEqual([3, 4]);
+    // The first set's one-click undo went with its pill, so its tiles go too.
+    expect(store.takeCollapsingGhosts()).toEqual([1, 2]);
+  });
+
+  it("collapses the set when an unrelated action takes the pill's slot", () => {
+    const store = useOperationStore();
+    store.markGhosted([5]);
+    raiseMoveReceipt(store);
+
+    // A tag edit raises its own receipt; the move's Undo is no longer offered.
+    store.showReceipt(store.buildReceipt(op({ id: 100 }), "did"));
+    expect(store.ghostState).toBe("none");
+    expect(store.takeCollapsingGhosts()).toEqual([5]);
+  });
+
+  it("collapses immediately when the operation turns out not to be undoable", () => {
+    const store = useOperationStore();
+    store.markGhosted([6]);
+    raiseMoveReceipt(store, { undoable: false });
+    // A ghost promising an undo that does not exist is a lie.
+    expect(store.takeCollapsingGhosts()).toEqual([6]);
+  });
+
+  it("collapses a set that no receipt ever adopts", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = useOperationStore();
+    store.markGhosted([7]);
+
+    vi.advanceTimersByTime(GHOST_ADOPT_TIMEOUT_MS);
+    expect(store.ghostState).toBe("none");
+    expect(store.takeCollapsingGhosts()).toEqual([7]);
+    // Never silent: a dropped socket or an unrecorded operation is a real
+    // condition and has to be traceable.
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("un-ghosts in place when an undo puts the pictures back", async () => {
+    const store = await primed([op({ id: 10, op_type: MOVE })]);
+    store.markGhosted([1, 2]);
+    raiseMoveReceipt(store);
+
+    undoLastOperation.mockResolvedValue({
+      operations: [op({ id: 10, op_type: MOVE, status: "undone" })],
+      restored_picture_ids: [1, 2],
+      scrapheaped_picture_ids: [],
+    });
+    serve([op({ id: 10, op_type: MOVE, status: "undone" })]);
+    await store.undo();
+
+    expect(store.ghostState).toBe("none");
+    // Un-ghosted, NOT collapsed: the tiles stay exactly where they are, so the
+    // undo costs no refetch and no flash.
+    expect(store.collapsingPictureIds).toEqual([]);
+  });
+
+  it("re-ghosts on redo, so the offer is symmetric", async () => {
+    const store = await primed([
+      op({ id: 10, op_type: MOVE, status: "undone" }),
+    ]);
+    redoOperation.mockResolvedValue({
+      operations: [op({ id: 10, op_type: MOVE })],
+      restored_picture_ids: [],
+      scrapheaped_picture_ids: [1, 2],
+    });
+    serve([op({ id: 10, op_type: MOVE })]);
+    await store.redo();
+
+    expect(store.ghostPictureIds).toEqual([1, 2]);
+    expect(store.ghostState).toBe("pending");
+  });
+
+  it("forgets the set silently when the grid was rebuilt underneath it", () => {
+    const store = useOperationStore();
+    store.markGhosted([1, 2]);
+    raiseMoveReceipt(store);
+    store.dropGhosts();
+
+    expect(store.ghostState).toBe("none");
+    // No collapse: the pictures are already absent from the refetched grid.
+    expect(store.collapsingPictureIds).toEqual([]);
+    // …and the receipt is untouched — undo is still on offer.
+    expect(store.receipt).not.toBeNull();
+  });
+
+  it("declines to ghost in a read-only session", () => {
+    readOnly.value = true;
+    const store = useOperationStore();
+    // No undo endpoints, so no window to hold the tiles open for; the caller
+    // drops them outright instead.
+    expect(store.markGhosted([1])).toBe(false);
+    expect(store.ghostState).toBe("none");
+  });
+
+  it("drops every ghost on reset", () => {
+    const store = useOperationStore();
+    store.markGhosted([1]);
+    store.reset();
+    expect(store.ghostState).toBe("none");
+    expect(store.ghostPictureIds).toEqual([]);
+    expect(store.collapsingPictureIds).toEqual([]);
   });
 });
