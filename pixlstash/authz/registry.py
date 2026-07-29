@@ -664,6 +664,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),
+    ("GET", "/api/v1/comfyui/pictures/{picture_id}/recipe"): RoutePolicy(
+        _PIC, id_param="picture_id"
+    ),
+    ("POST", "/api/v1/comfyui/run_recipe"): RoutePolicy(
+        _PIC, body_ids="picture_id"
+    ),  # required single body id; re-extracts the graph from the scoped picture
     # ── snapshots.py (all require_unscoped_owner) ───────────────────────────
     ("GET", "/api/v1/snapshots"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner"

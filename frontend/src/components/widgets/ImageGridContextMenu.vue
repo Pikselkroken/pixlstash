@@ -366,6 +366,16 @@
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
+          title="Generate variants from this image"
+          :disabled="!contextImage || isReadOnly"
+          @click="delegateWith('open-remix-dialog', contextImage?.id)"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-auto-fix</v-icon>
+          Generate variants…
+        </button>
+        <button
+          v-if="comfyuiConfigured"
+          class="ctx-item"
           :disabled="!selectedImageIds.length || isReadOnly"
           @click="delegate('open-comfyui-panel')"
         >
@@ -614,6 +624,7 @@ const emit = defineEmits([
   "open-tag-panel",
   "open-plugin-panel",
   "open-comfyui-panel",
+  "open-remix-dialog",
   "segment",
   "auto-tag",
   "generate-description",
@@ -969,6 +980,15 @@ function onAction(eventName, payload) {
 function delegate(panelEvent) {
   emit("close");
   nextTick(() => emit(panelEvent));
+}
+
+// `delegate` plus a payload, for panels that need to know which picture was
+// right-clicked. The nextTick is the point of it: the menu's own teardown must
+// finish before the dialog opens, or the two race over focus and the dialog
+// loses it back to the closing menu.
+function delegateWith(panelEvent, payload) {
+  emit("close");
+  nextTick(() => emit(panelEvent, payload));
 }
 
 // ── Click-outside + Escape ───────────────────────────────────────────────────
