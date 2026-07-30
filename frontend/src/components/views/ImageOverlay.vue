@@ -509,16 +509,25 @@
                     </a>
                   </div>
                 </template>
-                <img
-                  v-else
-                  ref="imgRef"
-                  :src="getFullImageUrl(image)"
-                  :alt="image.description || 'Full Image'"
-                  class="overlay-img"
-                  :draggable="!isZoomed"
-                  @dragstart="handleMediaDragStart"
-                  @load="updateOverlayDims"
-                />
+                <template v-else>
+                  <img
+                    v-if="!fullImageError"
+                    ref="imgRef"
+                    :src="getFullImageUrl(image)"
+                    :alt="image.description || 'Full Image'"
+                    class="overlay-img"
+                    :draggable="!isZoomed"
+                    @dragstart="handleMediaDragStart"
+                    @load="updateOverlayDims"
+                    @error="handleFullImageError"
+                  />
+                  <div v-else class="overlay-image-error">
+                    <v-icon size="64" color="grey-lighten-1"
+                      >mdi-image-broken-variant</v-icon
+                    >
+                    <p class="overlay-image-error-msg">Could not load image</p>
+                  </div>
+                </template>
               </template>
               <template v-if="showFaceBbox && overlayReady">
                 <div v-if="faceBboxes.length === 0" class="face-bbox-empty">
@@ -820,11 +829,7 @@ import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
-import {
-  faceBoxColor,
-  getStackColor,
-  toggleScore,
-} from "../../utils/utils.js";
+import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
 
 // Failures report through the notice surface instead of a blocking native
@@ -3038,6 +3043,13 @@ function syncZoomMeasurements() {
 
 watch(image, () => scheduleOverlayDimsUpdate());
 
+const fullImageError = ref(false); // full-size <img> fired @error (e.g. undecodable source)
+
+function handleFullImageError(event) {
+  console.warn("Full image load error for", event?.target?.src);
+  fullImageError.value = true;
+}
+
 function handleVideoError(event) {
   const err = event.target?.error;
   const code = err?.code ?? -1;
@@ -3623,6 +3635,7 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
+      fullImageError.value = false;
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchDetections(newId);
@@ -3633,6 +3646,7 @@ watch(
       faceBboxes.value = [];
       detectionBboxes.value = [];
       videoError.value = null;
+      fullImageError.value = false;
       comfyMetadata.value = null;
     }
   },
@@ -4435,6 +4449,26 @@ function resetOverlayCopyState() {
   font-size: var(--text-sm);
   opacity: 0.75;
   max-width: 300px;
+}
+
+.overlay-image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-5);
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  background: rgba(var(--v-theme-dark-surface), 0.8);
+  color: rgb(var(--v-theme-on-dark-surface));
+  text-align: center;
+  min-width: 280px;
+}
+
+.overlay-image-error-msg {
+  margin: 0;
+  font-size: var(--text-sm);
+  opacity: 0.75;
 }
 
 .overlay-video-download-btn {

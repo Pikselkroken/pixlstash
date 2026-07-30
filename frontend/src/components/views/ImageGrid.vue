@@ -220,8 +220,8 @@
         </v-card-title>
         <v-card-text style="padding: 0 20px 4px">
           <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
-            Leave the label empty for dense object detection, or type a phrase to
-            detect only that (e.g. "dog").
+            Leave the label empty for dense object detection, or type a phrase
+            to detect only that (e.g. "dog").
           </div>
           <v-text-field
             v-model="segmentPrompt"
@@ -233,7 +233,9 @@
           />
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="segmentDialogOpen = false">Cancel</v-btn>
+          <v-btn variant="text" @click="segmentDialogOpen = false"
+            >Cancel</v-btn
+          >
           <v-spacer />
           <v-btn color="primary" variant="tonal" @click="confirmSegment">
             Detect
@@ -268,7 +270,9 @@
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
       :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
-      @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
+      @update:dont-show-again="
+        userPrefsStore.setHidePurgeSnapshotWarning($event)
+      "
     />
     <DeleteForeverDialog
       v-model:open="deleteForeverOpen"
@@ -696,6 +700,7 @@
               </template>
               <template v-else-if="getThumbnailSrc(img)">
                 <img
+                  v-show="!failedThumbnailIds.has(img.id)"
                   :src="getThumbnailSrc(img)"
                   class="thumbnail-img"
                   :style="getSquareCropImgStyle(img)"
@@ -709,9 +714,17 @@
                   @pointercancel="handleThumbnailPointerRelease($event)"
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
                   @dragend="handleDragEnd"
-                  @error="handleImageError"
+                  @error="handleImageError(img, $event)"
                   @load="onThumbnailLoad(img.id, $event)"
                 />
+                <div
+                  v-if="failedThumbnailIds.has(img.id)"
+                  class="thumbnail-placeholder"
+                >
+                  <v-icon class="thumbnail-broken-icon"
+                    >mdi-image-broken-variant</v-icon
+                  >
+                </div>
                 <img
                   v-if="isVideo(img)"
                   class="thumbnail-drag-preview"
@@ -1086,10 +1099,7 @@ import {
   GHOST_PENDING,
   useOperationStore,
 } from "../../stores/useOperationStore";
-import {
-  useNoticeStore,
-  DEFAULT_TIMEOUTS,
-} from "../../stores/useNoticeStore";
+import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
 import {
   useAnchorHeight,
@@ -1162,7 +1172,11 @@ import {
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
-import { getPictureSet, addPictureToSet, removePictureFromSet } from "../../api/pictureSets";
+import {
+  getPictureSet,
+  addPictureToSet,
+  removePictureFromSet,
+} from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { runTextToImage } from "../../api/comfyui";
@@ -2447,7 +2461,13 @@ function isImageRecentlyAdded(id) {
 // ============================================================
 // THUMBNAIL HELPERS
 // ============================================================
+// Thumbnails whose <img> fired @error (e.g. an undecodable source, #585):
+// the browser's native broken-image glyph is replaced with a centered icon
+// until a later successful load clears the id again.
+const failedThumbnailIds = reactive(new Set());
+
 function onThumbnailLoad(id) {
+  failedThumbnailIds.delete(id);
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
   const assignedAt = Number(thumbnailAssignedAtMap[id]);
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
@@ -2542,9 +2562,7 @@ function getVideoThumbnailSrc(img) {
 // yet been populated falls back to cover centring until they arrive.
 function isSquareCropActive(img) {
   return (
-    !isJustifiedMode.value &&
-    !isVideo(img) &&
-    squareCropParams(img) !== null
+    !isJustifiedMode.value && !isVideo(img) && squareCropParams(img) !== null
   );
 }
 
@@ -2955,8 +2973,7 @@ const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
 // In the desktop shell the breadcrumb renders in the title bar instead, so the
 // in-grid overlay below is gated on !isDesktop.
-const isDesktop =
-  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
@@ -3033,7 +3050,10 @@ function prefetchFullImage(img) {
 // ============================================================
 // SELECTION + DRAG HELPERS
 // ============================================================
-function handleImageError(event) {
+function handleImageError(img, event) {
+  if (img?.id != null) {
+    failedThumbnailIds.add(img.id);
+  }
   const imgEl = event?.target;
   if (imgEl instanceof HTMLImageElement) {
     const src = imgEl.src || "";
@@ -3905,7 +3925,9 @@ const partialStackGroupingReason = computed(() => {
   const idSet = new Set(ids);
   const images = allGridImages.value || [];
   const byId = new Map(
-    images.filter((img) => img && img.id != null).map((img) => [String(img.id), img]),
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
   );
 
   // Which stacks does the selection touch? (Members share stack_id even when
@@ -3925,7 +3947,9 @@ const partialStackGroupingReason = computed(() => {
     // An expanded stack is whole-stack only when every rendered member is
     // selected.
     const memberIds = images
-      .filter((img) => img && img.id != null && getPictureStackId(img) === stackId)
+      .filter(
+        (img) => img && img.id != null && getPictureStackId(img) === stackId,
+      )
       .map((img) => Number(img.id));
     const allSelected =
       memberIds.length > 0 && memberIds.every((mid) => idSet.has(mid));
@@ -4235,10 +4259,9 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     );
   } catch (err) {
     console.error("Scrapheap purge failed", err);
-    noticeStore.error(
-      `Couldn't delete those pictures. ${errorDetail(err)}`,
-      { key: "scrapheap-purge" },
-    );
+    noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
+      key: "scrapheap-purge",
+    });
   } finally {
     // The server spends the confirmation on the first attempt, so a retry must
     // go back through the preview rather than replaying a dead token.
@@ -8731,6 +8754,11 @@ function handleEmptyStateReset() {
   font-size: 28px;
   opacity: 0.7;
   animation: thumbnailPlaceholderSpin 1.1s linear infinite;
+}
+
+.thumbnail-broken-icon {
+  font-size: 48px;
+  opacity: 0.5;
 }
 
 @keyframes thumbnailPlaceholderSpin {
