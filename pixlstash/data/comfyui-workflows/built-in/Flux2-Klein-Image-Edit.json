@@ -21,15 +21,6 @@
       "title": "Load Image"
     }
   },
-  "81": {
-    "inputs": {
-      "image": "comfy_logo_blue.png"
-    },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
-  },
   "75:61": {
     "inputs": {
       "sampler_name": "euler"

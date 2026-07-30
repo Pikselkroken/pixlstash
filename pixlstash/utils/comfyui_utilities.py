@@ -556,6 +556,15 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
     - ``metadata["comfyui_workflow"]``
     - ``metadata["comfyui"]["workflow"]``
     - ``metadata["comfyui"]["workflow_json"]``
+    - ``metadata["png"]["prompt"]`` / ``metadata["prompt"]`` /
+      ``metadata["comfyui"]["prompt"]`` (display fallback)
+
+    The ``prompt``-chunk candidates come last so a genuine UI ``workflow``
+    chunk always wins. They exist because PixlStash-generated PNGs no longer
+    embed anything in the ``workflow`` chunk (issue #628); ComfyUI's own
+    ``prompt`` chunk (the executed API graph) is then the only thing left to
+    display. A plain-text ``prompt`` value from other tools is filtered out by
+    :func:`is_comfy_workflow`.
 
     Returns:
         The first valid workflow dict, or ``None`` if none is found.
@@ -576,6 +585,11 @@ def find_comfy_workflow(metadata: dict) -> dict | None:
         metadata.get("comfyui_workflow"),
         comfyui_block.get("workflow"),
         comfyui_block.get("workflow_json"),
+        # Lowest priority: the API-format ``prompt`` chunk, for files with no
+        # UI workflow chunk at all (e.g. PixlStash-generated PNGs, issue #628).
+        png.get("prompt"),
+        metadata.get("prompt"),
+        comfyui_block.get("prompt"),
     ]
 
     for raw in candidates:

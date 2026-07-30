@@ -278,15 +278,15 @@ def _submit_comfyui_prompt(
     clean_workflow = {
         k: v for k, v in workflow.items() if not k.startswith("pixlstash_")
     }
-    # Pass the workflow under extra_pnginfo so ComfyUI embeds it in the
-    # generated PNG automatically (same as the ComfyUI frontend does).
+    # Do NOT pass the graph under extra_data.extra_pnginfo.workflow: that PNG
+    # chunk is where the ComfyUI frontend stores the *UI* node graph, and the
+    # frontend feeds it to loadGraphData unguarded when an image is dropped on
+    # the canvas. Embedding our API-format graph there breaks drag-back-in
+    # (issue #628). ComfyUI itself always writes the correct ``prompt`` chunk
+    # (the executed API graph), which is what recipe replay and workflow
+    # display read.
     payload = {
         "prompt": clean_workflow,
-        "extra_data": {
-            "extra_pnginfo": {
-                "workflow": clean_workflow,
-            }
-        },
     }
     if client_id:
         payload["client_id"] = client_id
