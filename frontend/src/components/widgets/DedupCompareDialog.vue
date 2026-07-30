@@ -31,7 +31,14 @@
  * metadata sits under each picture as the design system's compact two-column
  * label-over-value grid instead of a tall row list.
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import {
+  anchorZoomScroll,
+  atFitFloor,
+  zoomStepScale,
+  ZOOM_CLOSE_NOTCH,
+  ZOOM_MAX_SCALE,
+} from "../../utils/zoomMath";
 import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
@@ -239,15 +246,31 @@ function tagText(candidate) {
 
 // ── Zoom: the design system's full-screen blink compare ────────────────────
 // One candidate fills the screen; flipping in place (arrows, 1-9) makes the
-// differences jump out as motion. Fit keeps every candidate registered in the
-// same box; Actual pixels is 1:1 with drag-to-pan, so resolution differences
-// show as size jumps.
+// differences jump out as motion. The magnification is a CONTINUOUS scale
+// (owner requirement): the wheel means zoom for the whole gesture — wheel up
+// over a candidate opens the zoom and continued wheeling keeps magnifying,
+// anchored at the cursor (binding: the image point under the pointer stays
+// stationary through every scale change) — and wheeling out one full notch
+// past the fit floor leaves the zoom back to Compare. Fit and 100% (actual
+// pixels) are SNAP STOPS on the continuum (the header buttons and the P key),
+// drag pans at every overflowing level, and a flip keeps the scale and pan so
+// the blink stays registered.
 
 const zoomIndex = ref(null);
-const zoomActualPixels = ref(false);
 const zoomImgEl = ref(null);
 const zoomScrollEl = ref(null);
 let panState = null;
+
+/** The current scale, 1 = actual pixels; null until the image has measured
+ * (the un-measured state renders the classic fit look via CSS). */
+const zoomScale = ref(null);
+/** The floor of the continuum: the scale at which this image exactly fits. */
+const zoomFitScale = ref(1);
+/** The displayed image's natural pixel size, measured on load. */
+const zoomNatural = ref(null);
+/** Outward wheel delta accumulated while AT the fit floor; one full notch
+ * closes the zoom (the hysteresis — see utils/zoomMath.js). */
+let zoomCloseAccumulator = 0;
 
 const zoomOpen = computed(() => props.open && zoomIndex.value != null);
 const zoomCandidate = computed(() =>
@@ -279,10 +302,16 @@ function openZoom(index = null) {
 
 function closeZoom() {
   zoomIndex.value = null;
+  zoomScale.value = null;
+  zoomNatural.value = null;
+  zoomCloseAccumulator = 0;
   panState = null;
 }
 
-/** Flip forward/back, wrapping — a blink loop, not a bounded carousel. */
+/** Flip forward/back, wrapping — a blink loop, not a bounded carousel. The
+ * scale and pan are deliberately NOT reset: flipping at identical
+ * magnification is what makes differences read as motion (the new image's
+ * own fit floor re-clamps on load). */
 function flipZoom(delta) {
   if (!zoomOpen.value) return;
   const n = candidates.value.length;
@@ -294,9 +323,122 @@ function zoomTo(index) {
   if (index >= 0 && index < candidates.value.length) zoomIndex.value = index;
 }
 
+/** Whether the current scale sits on a snap stop (1% slack). */
+function nearScale(target) {
+  const scale = zoomScale.value;
+  return scale !== null && Math.abs(scale - target) <= target * 0.01;
+}
+
+const zoomAtFit = computed(() => nearScale(zoomFitScale.value));
+const zoomAtActual = computed(() => nearScale(1));
+
+/** The readout: percentage of ACTUAL pixels, the photo-tool convention.
+ * Visibility of status — it is also what makes the blink guarantee (same
+ * magnification across flips) verifiable by eye. */
+const zoomPercent = computed(() =>
+  zoomScale.value === null ? null : Math.round(zoomScale.value * 100),
+);
+
+/**
+ * Snap to a stop on the continuum, anchored at the viewport centre (a
+ * keypress or button has no cursor to anchor on; centre is the convention).
+ * @param {number} target
+ */
+function snapZoomTo(target) {
+  if (!zoomOpen.value || zoomScale.value === null) return;
+  const el = zoomScrollEl.value;
+  applyZoomScale(
+    Math.max(zoomFitScale.value, Math.min(ZOOM_MAX_SCALE, target)),
+    el ? { x: el.clientWidth / 2, y: el.clientHeight / 2 } : { x: 0, y: 0 },
+  );
+}
+
+/** P: flip between the two snap stops — fit and 100% — exactly the two
+ * states the old toggle had, now as points on the continuum. */
 function toggleZoomPixels() {
   if (!zoomOpen.value) return;
-  zoomActualPixels.value = !zoomActualPixels.value;
+  snapZoomTo(zoomAtActual.value ? zoomFitScale.value : 1);
+}
+
+/** Measure the displayed image once it loads: its natural size fixes the fit
+ * floor, and the first measurement lands the scale ON that floor (the zoom
+ * opens at fit; a flip instead re-clamps the kept scale to the new floor). */
+function onZoomImgLoad() {
+  const img = zoomImgEl.value;
+  const el = zoomScrollEl.value;
+  const c = zoomCandidate.value;
+  const naturalW = img?.naturalWidth || Number(c?.width) || 0;
+  const naturalH = img?.naturalHeight || Number(c?.height) || 0;
+  if (!naturalW || !naturalH) return;
+  zoomNatural.value = { w: naturalW, h: naturalH };
+  const cw = el?.clientWidth || 0;
+  const ch = el?.clientHeight || 0;
+  // No measurable viewport (or a zero-layout test environment): the floor
+  // falls back to actual pixels so the continuum still behaves.
+  zoomFitScale.value = cw && ch ? Math.min(cw / naturalW, ch / naturalH) : 1;
+  if (zoomScale.value === null) {
+    zoomScale.value = zoomFitScale.value;
+  } else {
+    zoomScale.value = Math.max(
+      zoomFitScale.value,
+      Math.min(ZOOM_MAX_SCALE, zoomScale.value),
+    );
+  }
+}
+
+/** The explicit pixel size the scale implies; empty until measured, which
+ * leaves the classic CSS fit rendering in charge. */
+const zoomImgStyle = computed(() => {
+  if (zoomScale.value === null || !zoomNatural.value) return undefined;
+  return {
+    width: `${zoomNatural.value.w * zoomScale.value}px`,
+    height: `${zoomNatural.value.h * zoomScale.value}px`,
+    maxWidth: "none",
+    maxHeight: "none",
+  };
+});
+
+/** Whether the scaled image overflows the viewport (pan has meaning). */
+const zoomOverflowing = computed(() => {
+  const el = zoomScrollEl.value;
+  if (!el || zoomScale.value === null || !zoomNatural.value) return false;
+  return (
+    zoomNatural.value.w * zoomScale.value > el.clientWidth ||
+    zoomNatural.value.h * zoomScale.value > el.clientHeight
+  );
+});
+
+/**
+ * Apply a new scale with the CURSOR ANCHOR (binding): the image point under
+ * the pointer is computed before the change, the scale applied, and the
+ * scroll re-solved so that point is back under the pointer — clamped at the
+ * edges. The scroll is written after the DOM has adopted the new image size.
+ *
+ * @param {number} next
+ * @param {{x: number, y: number}} cursor - relative to the scroll container.
+ */
+function applyZoomScale(next, cursor) {
+  const el = zoomScrollEl.value;
+  const natural = zoomNatural.value;
+  const oldScale = zoomScale.value;
+  zoomScale.value = next;
+  if (!el || !natural || oldScale === null) return;
+  const target = anchorZoomScroll({
+    cursorX: cursor.x,
+    cursorY: cursor.y,
+    scrollLeft: el.scrollLeft,
+    scrollTop: el.scrollTop,
+    containerWidth: el.clientWidth,
+    containerHeight: el.clientHeight,
+    imageWidth: natural.w,
+    imageHeight: natural.h,
+    oldScale,
+    newScale: next,
+  });
+  nextTick(() => {
+    el.scrollLeft = target.left;
+    el.scrollTop = target.top;
+  });
 }
 
 /**
@@ -324,34 +466,60 @@ function requestClose() {
 // native there and the flip gesture deliberately does not exist.
 
 /**
- * The cooldown between wheel actions. One physical flick of a wheel is a
- * burst of events; without the gap, opening the zoom would immediately flip
- * past the candidate the user pointed at, and a single scroll would race
- * through the whole loop.
+ * Wheel over a candidate's picture: wheel UP (the zoom-in direction) opens
+ * the zoom, and the SAME gesture's next ticks keep zooming in over the zoom
+ * surface — one continuous motion, no meaning-switch. The opening event only
+ * opens (at fit), so the first tick after it steps once and cannot
+ * overshoot; a wheel DOWN over a thumbnail is already fully zoomed out and
+ * deliberately does nothing (and is not hijacked).
+ *
+ * First-tick anchoring: the jump from a strip thumbnail to the full-screen
+ * surface has no meaningful cursor geometry to preserve, so the zoom opens
+ * at fit and anchors perfectly from the first in-tick on the zoom surface.
+ *
+ * @param {number} index
+ * @param {WheelEvent} event
  */
-const WHEEL_COOLDOWN_MS = 150;
-let wheelAt = 0;
-
-/** @param {number} index */
-function onThumbWheel(index) {
-  wheelAt = Date.now();
+function onThumbWheel(index, event) {
+  if (event.deltaY >= 0) return;
+  event.preventDefault();
+  event.stopPropagation();
   openZoom(index);
 }
 
-/** @param {WheelEvent} event */
+/**
+ * The wheel inside the zoom means ZOOM, continuously: up magnifies, down
+ * shrinks toward the fit floor, and one further full notch AT the floor
+ * closes back to Compare (the accumulator is the hysteresis — see
+ * utils/zoomMath.js). Always preventDefault: the wheel must never scroll
+ * the page or the dialog behind the zoom.
+ *
+ * @param {WheelEvent} event
+ */
 function onZoomWheel(event) {
-  if (zoomActualPixels.value) return;
   event.preventDefault();
-  const now = Date.now();
-  if (now - wheelAt < WHEEL_COOLDOWN_MS) return;
-  const delta = event.deltaY || event.deltaX;
-  if (!delta) return;
-  wheelAt = now;
-  flipZoom(delta > 0 ? 1 : -1);
+  if (zoomScale.value === null) return;
+  const deltaY = event.deltaY;
+  if (!deltaY) return;
+  if (deltaY > 0 && atFitFloor(zoomScale.value, zoomFitScale.value)) {
+    zoomCloseAccumulator += deltaY;
+    if (zoomCloseAccumulator >= ZOOM_CLOSE_NOTCH) closeZoom();
+    return;
+  }
+  zoomCloseAccumulator = 0;
+  const next = zoomStepScale(zoomScale.value, deltaY, zoomFitScale.value);
+  if (next === zoomScale.value) return;
+  const rect = zoomScrollEl.value?.getBoundingClientRect?.();
+  applyZoomScale(next, {
+    x: rect ? event.clientX - rect.left : 0,
+    y: rect ? event.clientY - rect.top : 0,
+  });
 }
 
 // The queue's keyboard model is the single key owner; it drives the zoom
 // through this surface instead of the dialog competing for the keydown.
+// `zoomLevel` is the imperative read the tests (and any future readout)
+// use; the visible percentage renders from the same scale.
 defineExpose({
   isZoomOpen: () => zoomOpen.value,
   openZoom,
@@ -359,6 +527,7 @@ defineExpose({
   flipZoom,
   zoomTo,
   toggleZoomPixels,
+  zoomLevel: () => zoomScale.value,
 });
 
 // A new group, or a closed dialog, always starts un-zoomed at Fit: a zoom held
@@ -367,14 +536,15 @@ watch(
   () => [props.open, props.group?.signature],
   () => {
     closeZoom();
-    zoomActualPixels.value = false;
   },
 );
 
-// ── Actual-pixels panning ───────────────────────────────────────────────────
+// ── Drag-to-pan, at every overflowing zoom level ───────────────────────────
+// The wheel never pans (it zooms); the drag is the pan gesture wherever the
+// scaled image overflows. At fit there is nothing to pan and the drag no-ops.
 
 function onZoomPointerDown(event) {
-  if (!zoomActualPixels.value || event.button !== 0) return;
+  if (!zoomOpen.value || event.button !== 0) return;
   const el = zoomScrollEl.value;
   if (!el) return;
   panState = {
@@ -448,7 +618,7 @@ function onZoomContextMenu() {
         >
           <!-- Wheel over the picture starts the zoom on it: the mouse's
                equivalent of the corner button, without the pixel hunt. -->
-          <span class="dc-thumb" @wheel.prevent.stop="onThumbWheel(index)">
+          <span class="dc-thumb" @wheel="onThumbWheel(index, $event)">
             <img
               class="dc-thumb-img"
               :src="previewUrl(candidate)"
@@ -698,25 +868,31 @@ function onZoomContextMenu() {
           >Not in stack</span
         >
         <span class="dc-zv-meta">{{ zoomMetaText }}</span>
+        <!-- Fit and 100% are SNAP STOPS on the wheel's continuum; the
+             percentage readout is what makes "same magnification across the
+             blink" verifiable by eye. -->
         <div class="dc-zv-mode">
           <button
             type="button"
-            :class="{ 'dc-zv-on': !zoomActualPixels }"
-            title="Scale every candidate into the same box — keeps the blink registered"
-            @click="zoomActualPixels = false"
+            :class="{ 'dc-zv-on': zoomAtFit }"
+            title="Snap to fit — every candidate in the same box, the blink registered"
+            @click="snapZoomTo(zoomFitScale)"
           >
             <v-icon size="15">mdi-fit-to-screen-outline</v-icon>
             Fit
           </button>
           <button
             type="button"
-            :class="{ 'dc-zv-on': zoomActualPixels }"
-            title="1:1 — resolution differences show as size jumps (P)"
-            @click="zoomActualPixels = true"
+            :class="{ 'dc-zv-on': zoomAtActual }"
+            title="Snap to 1:1 — resolution differences show as size jumps (P)"
+            @click="snapZoomTo(1)"
           >
             <v-icon size="15">mdi-magnify-scan</v-icon>
             Actual pixels
           </button>
+          <span v-if="zoomPercent !== null" class="dc-zv-pct"
+            >{{ zoomPercent }}%</span
+          >
         </div>
         <button
           type="button"
@@ -730,7 +906,7 @@ function onZoomContextMenu() {
       <div
         ref="zoomScrollEl"
         class="dc-zv-img"
-        :class="{ 'dc-zv-img--px': zoomActualPixels }"
+        :class="{ 'dc-zv-img--pannable': zoomOverflowing }"
         @wheel="onZoomWheel"
         @mousedown="onZoomPointerDown"
         @mousemove="onZoomPointerMove"
@@ -740,20 +916,23 @@ function onZoomContextMenu() {
         @contextmenu.prevent="onZoomContextMenu"
       >
         <!-- draggable=false is load-bearing: the browser's native image drag
-             starts on the same gesture as the actual-pixels pan and wins the
-             race, leaving the pan dead and a ghost image under the cursor. -->
+             starts on the same gesture as the pan and wins the race, leaving
+             the pan dead and a ghost image under the cursor. -->
         <img
           v-if="zoomCandidate"
           ref="zoomImgEl"
           :src="previewUrl(zoomCandidate)"
+          :style="zoomImgStyle"
           alt=""
           draggable="false"
+          @load="onZoomImgLoad"
           @dragstart.prevent
         />
       </div>
       <div class="dc-zv-foot" aria-hidden="true">
-        <span><kbd>←</kbd><kbd>→</kbd>, scroll, or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
-        <span><kbd>P</kbd> actual pixels</span>
+        <span><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
+        <span>Scroll zooms, drag pans — zoom out past Fit to leave</span>
+        <span><kbd>P</kbd> Fit ↔ 100%</span>
         <span><kbd>Enter</kbd> stack</span>
         <span><kbd>K</kbd> keep separate</span>
         <span><kbd>Esc</kbd> back</span>
@@ -1112,6 +1291,18 @@ function onZoomContextMenu() {
   background: rgba(255, 255, 255, 0.12);
 }
 
+/* The live magnification, in the photo-tool convention (100% = 1:1). Same
+   fixed chrome values as the meta line: this is the near-black judgement
+   surface, deliberately un-themed. */
+.dc-zv-pct {
+  align-self: center;
+  min-width: 5ch;
+  text-align: right;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 .dc-zv-close {
   width: 30px;
   height: 30px;
@@ -1131,38 +1322,33 @@ function onZoomContextMenu() {
   color: #fff;
 }
 
-/* Fit: the same box for every candidate, so the blink stays registered. */
+/* One continuous zoom surface. `overflow: hidden` is deliberate: the wheel
+   ZOOMS (never scrolls) and the drag is the only pan, so no scrollbar may
+   appear and no native wheel-scroll may compete; the scroll offsets are
+   driven programmatically by the cursor-anchor math. Flex + auto margins on
+   the image: centred while it fits, full programmatic scroll range once it
+   overflows (auto margins collapse to zero under negative free space). */
 .dc-zv-img {
   flex: 1;
   min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
 }
 
+.dc-zv-img--pannable {
+  cursor: grab;
+}
+
+/* Until the image has measured (its `load` fixes the fit floor), the classic
+   fit rendering holds; the measured inline width/height then take over. */
 .dc-zv-img img {
+  display: block;
+  margin: auto;
+  flex-shrink: 0;
   width: auto;
   height: 100%;
   max-width: 100%;
   object-fit: contain;
-}
-
-/* Actual pixels: 1:1, panned by dragging. */
-.dc-zv-img--px {
-  display: block;
-  overflow: auto;
-  cursor: grab;
-  scrollbar-width: thin;
-}
-
-.dc-zv-img--px img {
-  max-width: none;
-  max-height: none;
-  width: auto;
-  height: auto;
-  display: block;
-  margin: auto;
 }
 
 .dc-zv-foot {

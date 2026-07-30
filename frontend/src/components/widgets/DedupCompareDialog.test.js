@@ -229,14 +229,10 @@ describe("DedupCompareDialog: the blink compare (zoom)", () => {
     wrapper.unmount();
   });
 
-  it("toggles actual pixels, and resets to Fit for the next group", async () => {
+  it("resets the zoom for the next group", async () => {
     const wrapper = mountDialog();
     wrapper.vm.openZoom(0);
     await wrapper.vm.$nextTick();
-    wrapper.vm.toggleZoomPixels();
-    await wrapper.vm.$nextTick();
-    expect(zoomEl().querySelector(".dc-zv-img--px")).not.toBeNull();
-
     // A new group must start un-zoomed at Fit: a held-over zoom would open
     // on the wrong picture.
     await wrapper.setProps({ group: { ...GROUP, signature: "other" } });
@@ -271,50 +267,159 @@ describe("DedupCompareDialog: the wheel", () => {
     document.body.innerHTML = "";
   });
 
-  // The mouse's way into the zoom: scrolling over a candidate's picture is the
-  // zoom button without the pixel hunt.
-  it("opens the zoom on the candidate under the wheel", async () => {
+  /** Give the zoom real geometry: an 800×600 viewport over a 1600×1200
+   * image → fit scale 0.5. jsdom computes no layout, so the metrics the
+   * component reads are defined directly and the image's load dispatched. */
+  async function primeZoom(wrapper, { iw = 1600, ih = 1200 } = {}) {
+    const surface = zoomEl().querySelector(".dc-zv-img");
+    const img = surface.querySelector("img");
+    Object.defineProperty(surface, "clientWidth", {
+      value: 800,
+      configurable: true,
+    });
+    Object.defineProperty(surface, "clientHeight", {
+      value: 600,
+      configurable: true,
+    });
+    surface.getBoundingClientRect = () => ({ left: 0, top: 0 });
+    Object.defineProperty(img, "naturalWidth", {
+      value: iw,
+      configurable: true,
+    });
+    Object.defineProperty(img, "naturalHeight", {
+      value: ih,
+      configurable: true,
+    });
+    img.dispatchEvent(new Event("load"));
+    await wrapper.vm.$nextTick();
+    return surface;
+  }
+
+  // The wheel means ZOOM for the whole gesture: wheel UP over a candidate's
+  // picture opens the zoom, and the same motion keeps magnifying inside it.
+  it("wheel up opens the zoom on that candidate; wheel down does not", async () => {
     const wrapper = mountDialog();
     await wrapper.findAll(".dc-thumb")[1].trigger("wheel", { deltaY: 3 });
+    expect(wrapper.vm.isZoomOpen()).toBe(false);
+    await wrapper.findAll(".dc-thumb")[1].trigger("wheel", { deltaY: -3 });
     expect(wrapper.vm.isZoomOpen()).toBe(true);
     expect(zoomIndexShown()).toBe(1);
     wrapper.unmount();
   });
 
-  it("flips candidates on the wheel in Fit, throttled", async () => {
+  it("continued wheeling zooms in — it never flips the candidate", async () => {
     const wrapper = mountDialog();
-    wrapper.vm.openZoom(0);
-    await wrapper.vm.$nextTick();
+    await wrapper.findAll(".dc-thumb")[0].trigger("wheel", { deltaY: -100 });
+    const surface = await primeZoom(wrapper);
+    expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5); // opened at fit
 
-    const surface = zoomEl().querySelector(".dc-zv-img");
-    const first = wheel(surface, 5);
+    const event = wheel(surface, -100);
     await wrapper.vm.$nextTick();
-    expect(zoomIndexShown()).toBe(1);
-    // The flip hijacks the wheel, so the dialog behind cannot also scroll.
-    expect(first.defaultPrevented).toBe(true);
-
-    // A second tick of the same physical flick lands inside the cooldown and
-    // must not race through the loop.
-    wheel(surface, 5);
-    await wrapper.vm.$nextTick();
-    expect(zoomIndexShown()).toBe(1);
+    expect(zoomIndexShown()).toBe(0);
+    expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5 * Math.exp(0.2), 4);
+    // The wheel never scrolls the page or the dialog behind the zoom.
+    expect(event.defaultPrevented).toBe(true);
+    expect(wheel(surface, 100).defaultPrevented).toBe(true);
     wrapper.unmount();
   });
 
-  it("leaves the wheel to native scrolling in actual-pixels mode", async () => {
-    // Actual pixels is a scroll-to-pan surface: hijacking the wheel there
-    // would kill the panning it exists for.
+  // Wheeling out one FULL notch while already at the fit floor closes the
+  // zoom back to Compare — the accumulation is the hysteresis, so trackpad
+  // crumbs cannot blow through and the boundary cannot flap.
+  it("closes exactly once: a full out-notch at the fit floor, not before", async () => {
     const wrapper = mountDialog();
     wrapper.vm.openZoom(0);
     await wrapper.vm.$nextTick();
-    wrapper.vm.toggleZoomPixels();
+    const surface = await primeZoom(wrapper);
+
+    // Zoom in, then a huge out-wheel: clamps AT the floor, must not close.
+    wheel(surface, -300);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBeGreaterThan(0.5);
+    wheel(surface, 2000);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
+    expect(wrapper.vm.isZoomOpen()).toBe(true);
+
+    // At the floor, sub-notch crumbs accumulate without closing...
+    wheel(surface, 40);
+    wheel(surface, 40);
+    expect(wrapper.vm.isZoomOpen()).toBe(true);
+    // ...and the tick that completes the notch closes, once.
+    wheel(surface, 40);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.isZoomOpen()).toBe(false);
+    expect(zoomEl()).toBeNull();
+    wrapper.unmount();
+  });
+
+  // The blink guarantee: a flip keeps the magnification (and the pan), so
+  // differences read as motion, not as a reset.
+  it("flipping candidates preserves the zoom level", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    const surface = await primeZoom(wrapper);
+    wheel(surface, -200);
+    await wrapper.vm.$nextTick();
+    const level = wrapper.vm.zoomLevel();
+    expect(level).toBeGreaterThan(0.5);
+
+    wrapper.vm.flipZoom(1);
+    await wrapper.vm.$nextTick();
+    expect(zoomIndexShown()).toBe(1);
+    expect(wrapper.vm.zoomLevel()).toBe(level);
+    wrapper.unmount();
+  });
+
+  it("drags pan the overflowing view; the wheel never does", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    const surface = await primeZoom(wrapper);
+    wheel(surface, -600); // well past fit: the view overflows
     await wrapper.vm.$nextTick();
 
-    const surface = zoomEl().querySelector(".dc-zv-img");
-    const event = wheel(surface, 5);
+    surface.scrollLeft = 100;
+    surface.scrollTop = 80;
+    surface.dispatchEvent(
+      new window.MouseEvent("mousedown", {
+        clientX: 100,
+        clientY: 100,
+        button: 0,
+        bubbles: true,
+      }),
+    );
+    surface.dispatchEvent(
+      new window.MouseEvent("mousemove", {
+        clientX: 80,
+        clientY: 90,
+        bubbles: true,
+      }),
+    );
+    expect(surface.scrollLeft).toBe(120);
+    expect(surface.scrollTop).toBe(90);
+    wrapper.unmount();
+  });
+
+  // Fit and 100% are snap stops on the continuum: P flips between them and
+  // the readout names where you are (100% = actual pixels, the photo-tool
+  // convention).
+  it("P snaps between fit and actual pixels, with the percentage shown", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
     await wrapper.vm.$nextTick();
-    expect(event.defaultPrevented).toBe(false);
-    expect(zoomIndexShown()).toBe(0);
+    await primeZoom(wrapper);
+    expect(zoomEl().querySelector(".dc-zv-pct").textContent).toBe("50%");
+
+    wrapper.vm.toggleZoomPixels();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBe(1);
+    expect(zoomEl().querySelector(".dc-zv-pct").textContent).toBe("100%");
+
+    wrapper.vm.toggleZoomPixels();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
     wrapper.unmount();
   });
 });
