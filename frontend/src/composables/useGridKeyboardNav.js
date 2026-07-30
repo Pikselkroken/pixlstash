@@ -7,6 +7,7 @@ import {
   JUSTIFIED_ROW_GAP,
 } from "./useJustifiedLayout.js";
 import { useGridStore } from "../stores/useGridStore";
+import { useSearchStore } from "../stores/useSearchStore";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -57,6 +58,7 @@ export function useGridKeyboardNav(
     setScore,
   },
 ) {
+  const searchStore = useSearchStore();
   const gridStore = useGridStore();
   // ── Scrapheap ghosts ────────────────────────────────────────────────────
   // A ghosted tile is on screen but inert: it is already in the Scrapheap and
@@ -86,7 +88,9 @@ export function useGridKeyboardNav(
 
   /** Drop ghosted ids from a selection about to be committed. */
   function withoutGhosts(indexedIds) {
-    return indexedIds.filter(({ index }) => !isGhosted(index)).map(({ id }) => id);
+    return indexedIds
+      .filter(({ index }) => !isGhosted(index))
+      .map(({ id }) => id);
   }
 
   /** `[start, end]` of `allGridImages` as selectable ids, ghosts skipped. */
@@ -150,7 +154,11 @@ export function useGridKeyboardNav(
       if (!(element instanceof HTMLElement)) return false;
       if (element.isContentEditable) return true;
       const tagName = element.tagName;
-      if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      if (
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT"
+      ) {
         return true;
       }
       if (element.getAttribute("role") === "textbox") return true;
@@ -184,7 +192,7 @@ export function useGridKeyboardNav(
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
         // No images selected — ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (props.searchQuery && props.searchQuery.trim()) {
+      } else if (searchStore.searchQuery && searchStore.searchQuery.trim()) {
         // No selection active — ESC also clears search
         clearSearchQuery();
       } else {
@@ -251,7 +259,8 @@ export function useGridKeyboardNav(
             lastSelectedImageId != null
               ? allGridImages.value.findIndex(
                   (item) =>
-                    getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+                    getPictureId(item?.id) ===
+                    getPictureId(lastSelectedImageId),
                 )
               : newIdx;
           const start = Math.min(anchorIndex, newIdx);

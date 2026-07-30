@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, reactive } from "vue";
 import { setActivePinia, createPinia } from "pinia";
+import { useSortStore } from "../stores/useSortStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { getPictureCount, streamPictures } from "../api/pictures";
 
@@ -19,14 +20,15 @@ vi.mock("../api/pictures", () => ({
 
 // Build a minimal harness for useGridFetch. Covers the overlay-defer path
 // (returns before any network call) and the streaming path (count + stream
-// mocked above). `propOverrides` merges extra props into the harness props.
+// mocked above). Sort, selection and filter state come from the stores;
+// `storeOverrides` writes them.
 function makeHarness({
   overlayOpen = false,
   selectedSort = "DATE_TAKEN",
-  propOverrides = {},
+  storeOverrides = {},
 } = {}) {
-  // The composable reads the filter facets of the query straight from the
-  // stores, so every harness needs a live Pinia.
+  // The composable reads the query's filter, sort and selection facets
+  // straight from the stores, so every harness needs a live Pinia.
   setActivePinia(createPinia());
   const startSmartScoreProgress = vi.fn();
   const completeSmartScoreProgress = vi.fn();
@@ -63,14 +65,13 @@ function makeHarness({
     faceLikenessSearchFaceId: ref(null),
   };
 
-  const props = reactive({
-    backendUrl: "http://test",
-    selectedSort,
-    selectedCharacter: null,
-    selectedSet: null,
-    searchQuery: "",
-    ...propOverrides,
-  });
+  const sortStore = useSortStore();
+  sortStore.selectedSort = selectedSort;
+  for (const [key, value] of Object.entries(storeOverrides)) {
+    sortStore[key] = value;
+  }
+
+  const props = reactive({ backendUrl: "http://test" });
 
   const callbacks = {
     collapseStackImages: (x) => x,
@@ -121,7 +122,10 @@ describe("useGridFetch streaming path", () => {
 
     const { grid } = makeHarness({
       selectedSort: "CHARACTER_LIKENESS",
-      propOverrides: { similarityCharacter: "7", selectedDescending: true },
+      storeOverrides: {
+        selectedSimilarityCharacter: "7",
+        selectedDescending: true,
+      },
     });
 
     await grid.fetchAllGridImages({ force: true });
@@ -144,7 +148,10 @@ describe("useGridFetch streaming path", () => {
 
     const { grid, refs } = makeHarness({
       selectedSort: "CHARACTER_LIKENESS",
-      propOverrides: { similarityCharacter: "7", selectedDescending: true },
+      storeOverrides: {
+        selectedSimilarityCharacter: "7",
+        selectedDescending: true,
+      },
     });
 
     await grid.fetchAllGridImages({ force: true });

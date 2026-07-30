@@ -5,10 +5,10 @@
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
     :allImages="allGridImages"
     :backendUrl="props.backendUrl"
-    :tagUpdate="props.wsTagUpdate"
-    :descriptionUpdate="props.wsDescriptionUpdate"
-    :smartScoreUpdate="props.wsSmartScoreUpdate"
-    :detectionUpdate="props.wsDetectionUpdate"
+    :tagUpdate="wsStore.wsTagUpdate"
+    :descriptionUpdate="wsStore.wsDescriptionUpdate"
+    :smartScoreUpdate="wsStore.wsSmartScoreUpdate"
+    :detectionUpdate="wsStore.wsDetectionUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="userPrefsStore.dateFormat"
@@ -38,9 +38,9 @@
   <ImageImporter
     ref="imageImporterRef"
     :backendUrl="props.backendUrl"
-    :selectedCharacterId="props.selectedCharacter"
-    :allPicturesId="props.allPicturesId"
-    :unassignedPicturesId="props.unassignedPicturesId"
+    :selectedCharacterId="selectionStore.selectedCharacter"
+    :allPicturesId="ALL_PICTURES_ID"
+    :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
     @import-started="handleImportStarted"
     @import-finished="handleImagesUploaded"
     @import-cancelled="handleImportCancelled"
@@ -49,10 +49,10 @@
   <div :style="wrapperStyle" class="grid-content-area">
     <Toolbar
       :selectedCount="selectedImageIds.length"
-      :selectedCharacter="String(props.selectedCharacter)"
-      :selectedSort="props.selectedSort"
-      :allPicturesId="String(props.allPicturesId)"
-      :unassignedPicturesId="String(props.unassignedPicturesId)"
+      :selectedCharacter="String(selectionStore.selectedCharacter)"
+      :selectedSort="sortStore.selectedSort"
+      :allPicturesId="String(ALL_PICTURES_ID)"
+      :unassignedPicturesId="String(UNASSIGNED_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
@@ -105,13 +105,13 @@
       :y="contextMenuY"
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
-      :selected-character="String(props.selectedCharacter)"
-      :selected-set="String(props.selectedSet)"
+      :selected-character="String(selectionStore.selectedCharacter)"
+      :selected-set="String(selectionStore.selectedSet)"
       :selected-group-name="selectedGroupName"
-      :selected-sort="props.selectedSort"
-      :all-pictures-id="String(props.allPicturesId)"
-      :unassigned-pictures-id="String(props.unassignedPicturesId)"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :selected-sort="sortStore.selectedSort"
+      :all-pictures-id="String(ALL_PICTURES_ID)"
+      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
+      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
@@ -162,10 +162,10 @@
       :x="overlayCtxX"
       :y="overlayCtxY"
       :selected-image-ids="overlayCtxSelectedIds"
-      :selected-character="String(props.selectedCharacter)"
-      :all-pictures-id="String(props.allPicturesId)"
-      :unassigned-pictures-id="String(props.unassignedPicturesId)"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :selected-character="String(selectionStore.selectedCharacter)"
+      :all-pictures-id="String(ALL_PICTURES_ID)"
+      :unassigned-pictures-id="String(UNASSIGNED_PICTURES_ID)"
+      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
@@ -292,13 +292,15 @@
       <select
         class="multi-select-toolbar__mode"
         :value="
-          isMultiCharacterView ? props.characterMultiMode : props.setMultiMode
+          isMultiCharacterView
+            ? selectionStore.characterMultiMode
+            : selectionStore.setMultiMode
         "
         @change="
           (e) =>
             isMultiCharacterView
-              ? emit('update:character-multi-mode', e.target.value)
-              : emit('update:set-multi-mode', e.target.value)
+              ? selectionStore.setCharacterMultiMode(e.target.value)
+              : selectionStore.setSetMultiMode(e.target.value)
         "
       >
         <option value="union">Union</option>
@@ -307,15 +309,19 @@
         <option value="xor">Unique (XOR)</option>
       </select>
       <template
-        v-if="!isMultiCharacterView && props.setMultiMode === 'difference'"
+        v-if="
+          !isMultiCharacterView && selectionStore.setMultiMode === 'difference'
+        "
       >
         <span class="multi-select-toolbar__separator">|</span>
         <label class="multi-select-toolbar__base-label">Base:</label>
         <select
           class="multi-select-toolbar__base"
-          :value="props.setDifferenceBaseId ?? normalizedSelectedSetIds[0]"
+          :value="
+            selectionStore.setDifferenceBaseId ?? normalizedSelectedSetIds[0]
+          "
           @change="
-            (e) => emit('update:set-difference-base-id', Number(e.target.value))
+            (e) => selectionStore.setSetDifferenceBaseId(Number(e.target.value))
           "
         >
           <option
@@ -323,7 +329,7 @@
             :key="sid"
             :value="sid"
           >
-            {{ props.selectedSetNames[sid] || `Set ${sid}` }}
+            {{ selectionStore.selectedSetNames[sid] || `Set ${sid}` }}
           </option>
         </select>
       </template>
@@ -373,7 +379,7 @@
     <ComfyUiRunner
       ref="comfyuiRunner"
       :backendUrl="props.backendUrl"
-      :wsPluginProgress="props.wsPluginProgress"
+      :wsPluginProgress="wsStore.wsPluginProgress"
       :overlayOpen="overlayOpen"
       :overlayImageId="overlayImageId"
       :allGridImages="allGridImages"
@@ -420,26 +426,26 @@
     >
       <div
         v-if="
-          props.pendingExternalImportCount > 0 ||
-          props.sortChangedExternalCount > 0
+          wsStore.pendingExternalImportCount > 0 ||
+          wsStore.sortChangedExternalCount > 0
         "
         class="pending-imports-pill-anchor"
       >
         <button
-          v-if="props.pendingExternalImportCount > 0"
+          v-if="wsStore.pendingExternalImportCount > 0"
           class="pending-imports-pill"
           data-testid="pending-imports-pill"
           @click="emit('load-pending-imports')"
         >
-          ↑ {{ props.pendingExternalImportCount }}
+          ↑ {{ wsStore.pendingExternalImportCount }}
           {{
-            props.pendingExternalImportCount === 1
+            wsStore.pendingExternalImportCount === 1
               ? "new picture"
               : "new pictures"
           }}, click to load
         </button>
         <button
-          v-if="props.sortChangedExternalCount > 0"
+          v-if="wsStore.sortChangedExternalCount > 0"
           class="pending-imports-pill"
           data-testid="sort-changed-pill"
           @click="emit('load-sort-changed')"
@@ -915,7 +921,7 @@
     <!-- Search Result Bar -->
     <SearchResultBar
       v-if="
-        (props.searchQuery && props.searchQuery.length > 0) ||
+        (searchStore.searchQuery && searchStore.searchQuery.length > 0) ||
         reverseImageSearchPictureIds.length ||
         faceLikenessSearchFaceId ||
         faceSearchCharacter
@@ -928,7 +934,7 @@
         faceLikenessSearchFaceId ||
         faceSearchCharacter
           ? true
-          : props.isAllPicturesActive
+          : selectionStore.isAllPicturesActive
       "
       :status-text="
         faceSearchCharacter
@@ -1023,9 +1029,9 @@
       :selected-expanded-count="selectedExpandedCount"
       :selected-face-count="selectedFaceIds.length"
       :selected-group-name="selectedGroupName"
-      :selected-sort="props.selectedSort"
+      :selected-sort="sortStore.selectedSort"
       :visible="showSelectionBar"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
@@ -1038,8 +1044,8 @@
       :tagger-plugins="taggerPlugins"
       :captioner-plugins="captionerPlugins"
       :all-grid-images="allGridImages"
-      :selected-character="String(props.selectedCharacter)"
-      :selected-set="String(props.selectedSet)"
+      :selected-character="String(selectionStore.selectedCharacter)"
+      :selected-set="String(selectionStore.selectedSet)"
       :impossible-sources="filterStore.impossibleSources"
       :clearing-impossible="clearingImpossibleTags"
       @clear-impossible-tags="handleClearImpossibleTags"
@@ -1222,10 +1228,25 @@ import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 import { debounce } from "lodash-es";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useSortStore } from "../../stores/useSortStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { useWsStore } from "../../stores/useWsStore";
+import { useSearchStore } from "../../stores/useSearchStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+} from "../../stores/useViewStore";
 
 // Store-direct (Phase 3): the picture-query filter facets and the grid's own
 // display preferences are read from the stores, not mirrored in through props.
 const filterStore = useFilterStore();
+const selectionStore = useSelectionStore();
+const sortStore = useSortStore();
+const projectStore = useProjectStore();
+const wsStore = useWsStore();
+const searchStore = useSearchStore();
 const gridStore = useGridStore();
 const userPrefsStore = useUserPrefsStore();
 
@@ -1241,9 +1262,6 @@ const emit = defineEmits([
   "import-started",
   "import-ended",
   "clear-multi-selection",
-  "update:character-multi-mode",
-  "update:set-multi-mode",
-  "update:set-difference-base-id",
   "update:visible-range-label",
   "update:match-count",
   "load-pending-imports",
@@ -1259,51 +1277,8 @@ const emit = defineEmits([
 // Props
 const props = defineProps({
   backendUrl: String,
-  selectedCharacter: { type: [String, Number, null], default: null },
-  selectedSet: { type: [Number, String, null], default: null },
-  selectedSetIds: { type: Array, default: () => [] },
-  searchQuery: String,
   activeCategoryLabel: { type: String, default: "Category" },
-  isAllPicturesActive: { type: Boolean, default: false },
-  selectedSort: String,
-  selectedDescending: Boolean,
-  similarityCharacter: { type: [String, Number, null], default: null },
-  stackThreshold: { type: [String, Number, null], default: null },
-  allPicturesId: String,
-  unassignedPicturesId: String,
-  scrapheapPicturesId: String,
-  wsTagUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsDescriptionUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsSmartScoreUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsDetectionUpdate: {
-    type: Object,
-    default: () => ({ key: 0, pictureIds: [] }),
-  },
-  wsPluginProgress: {
-    type: Object,
-    default: () => ({ key: 0, payload: null }),
-  },
-  projectViewMode: { type: String, default: "global" },
-  selectedProjectId: { type: Number, default: null },
-  characterProjectIds: { type: Object, default: () => ({}) },
-  setProjectIds: { type: Object, default: () => ({}) },
   folderScanning: { type: Boolean, default: false },
-  selectedCharacterIds: { type: Array, default: () => [] },
-  characterMultiMode: { type: String, default: "union" },
-  setMultiMode: { type: String, default: "intersection" },
-  setDifferenceBaseId: { type: Number, default: null },
-  selectedSetNames: { type: Object, default: () => ({}) },
-  pendingExternalImportCount: { type: Number, default: 0 },
-  sortChangedExternalCount: { type: Number, default: 0 },
 });
 
 // ============================================================
@@ -1316,8 +1291,8 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 const THUMBNAIL_INFO_ROW_HEIGHT = 24;
 
 const normalizedSelectedSetIds = computed(() => {
-  const idsFromProp = Array.isArray(props.selectedSetIds)
-    ? props.selectedSetIds
+  const idsFromProp = Array.isArray(selectionStore.selectedSetIds)
+    ? selectionStore.selectedSetIds
     : [];
   const normalized = idsFromProp
     .map((id) => Number(id))
@@ -1325,7 +1300,7 @@ const normalizedSelectedSetIds = computed(() => {
   if (normalized.length > 0) {
     return Array.from(new Set(normalized));
   }
-  const single = Number(props.selectedSet);
+  const single = Number(selectionStore.selectedSet);
   if (Number.isFinite(single) && single > 0) {
     return [single];
   }
@@ -1345,8 +1320,8 @@ const primarySelectedSetId = computed(() =>
 );
 
 const normalizedSelectedCharacterIds = computed(() => {
-  const ids = Array.isArray(props.selectedCharacterIds)
-    ? props.selectedCharacterIds
+  const ids = Array.isArray(selectionStore.selectedCharacterIds)
+    ? selectionStore.selectedCharacterIds
     : [];
   return ids
     .map((id) => Number(id))
@@ -1363,7 +1338,9 @@ const isMultiCharacterView = computed(
 // mode; in the global mode nothing about the query depends on project
 // membership. Used to decide whether a project assignment can change what the
 // grid shows and therefore warrants a refetch.
-const isProjectScopedView = computed(() => props.projectViewMode === "project");
+const isProjectScopedView = computed(
+  () => projectStore.projectViewMode === "project",
+);
 
 // ============================================================
 // THUMBNAIL SYSTEM STATE
@@ -1427,7 +1404,7 @@ const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
 // ── "Suggest more pictures of <person>" (#636) ────────────────────────────────
 // The person whose reference faces are the active query, or null. Distinct from
-// `props.selectedCharacter`: this search deliberately runs across the whole
+// `selectionStore.selectedCharacter`: this search deliberately runs across the whole
 // library, so it must not be mistaken for a character-scoped view.
 const faceSearchCharacter = ref(null); // { id, name }
 // The cut applied to the ranked list. Starts at the same value the backend's
@@ -1883,12 +1860,14 @@ async function runComfyuiOnGridImages({
     // set / project / character automatically.
     const contextSetId = primarySelectedSetId.value ?? undefined;
     const contextProjectId =
-      props.selectedProjectId != null ? props.selectedProjectId : undefined;
-    const rawChar = props.selectedCharacter;
+      projectStore.selectedProjectId != null
+        ? projectStore.selectedProjectId
+        : undefined;
+    const rawChar = selectionStore.selectedCharacter;
     const specialIds = [
-      props.allPicturesId,
-      props.unassignedPicturesId,
-      props.scrapheapPicturesId,
+      ALL_PICTURES_ID,
+      UNASSIGNED_PICTURES_ID,
+      SCRAPHEAP_PICTURES_ID,
     ].map((v) => String(v ?? "").toUpperCase());
     const charNum =
       rawChar != null && !specialIds.includes(String(rawChar).toUpperCase())
@@ -2006,7 +1985,7 @@ function startSmartScoreProgress(loadId, sortKey) {
   }
 
   smartScoreProgress.message =
-    props.searchQuery && props.searchQuery.trim()
+    searchStore.searchQuery && searchStore.searchQuery.trim()
       ? "Searching"
       : `Sorting by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
   smartScoreProgressTimer = setInterval(() => {
@@ -2044,7 +2023,7 @@ function completeSmartScoreProgress(loadId, measuredDurationMs, wasSuccessful) {
     }
     setSmartScoreProgressPercent(100);
     smartScoreProgress.message =
-      props.searchQuery && props.searchQuery.trim()
+      searchStore.searchQuery && searchStore.searchQuery.trim()
         ? "Search complete"
         : `Sorted by ${getSortProgressLabel(smartScoreProgressSortKey.value)}`;
     setTimeout(() => {
@@ -2280,7 +2259,7 @@ watch(
 );
 
 watch(
-  () => props.wsTagUpdate,
+  () => wsStore.wsTagUpdate,
   (payload) => {
     if (!payload || typeof payload !== "object") return;
     const nextKey = payload.key || 0;
@@ -2334,7 +2313,7 @@ watch(
 );
 
 watch(
-  () => props.wsDescriptionUpdate,
+  () => wsStore.wsDescriptionUpdate,
   (payload) => {
     if (!payload || typeof payload !== "object") return;
     const nextKey = payload.key || 0;
@@ -2351,7 +2330,7 @@ watch(
 );
 
 watch(
-  () => props.wsPluginProgress,
+  () => wsStore.wsPluginProgress,
   (wrapped) => {
     if (!wrapped || typeof wrapped !== "object") return;
     const payload = wrapped.payload;
@@ -2678,7 +2657,7 @@ function getThumbnailInfoItems(img) {
   if (!img) return [];
   const items = [];
   const selectedSort =
-    typeof props.selectedSort === "string" ? props.selectedSort : "";
+    typeof sortStore.selectedSort === "string" ? sortStore.selectedSort : "";
 
   if (
     selectedSort.includes("CHARACTER_LIKENESS") &&
@@ -2706,7 +2685,7 @@ function getThumbnailInfoItems(img) {
   }
 
   if (
-    typeof props.searchQuery === "string" &&
+    typeof searchStore.searchQuery === "string" &&
     img.likeness_score !== undefined
   ) {
     items.push({
@@ -2873,8 +2852,11 @@ function formatCompactDatetime(dateStr) {
 // ── Visible range label (emitted to SelectionBar) ──────────────
 function getImageSortLabel(img) {
   if (!img) return null;
-  const isSearchMode = !!(props.searchQuery && props.searchQuery.trim());
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+  const isSearchMode = !!(
+    searchStore.searchQuery && searchStore.searchQuery.trim()
+  );
+  const sort =
+    typeof sortStore.selectedSort === "string" ? sortStore.selectedSort : "";
   if (isSearchMode && typeof img.likeness_score === "number")
     return `≈ ${img.likeness_score.toFixed(2)}`;
   if (sort === "IMPORTED_AT" && img.imported_at)
@@ -3119,23 +3101,27 @@ async function removeFromGroup() {
   }
   // Remove from character
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID
   ) {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        removeCharacterFaces(props.selectedCharacter, pictureIds, {
+        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds, {
           baseUrl: backendUrl,
         }),
       );
     }
     if (faceIds.length) {
       requests.push(
-        removeCharacterFacesByFaceId(props.selectedCharacter, faceIds, {
-          baseUrl: backendUrl,
-        }),
+        removeCharacterFacesByFaceId(
+          selectionStore.selectedCharacter,
+          faceIds,
+          {
+            baseUrl: backendUrl,
+          },
+        ),
       );
     }
     if (!requests.length) return;
@@ -3168,9 +3154,9 @@ async function removeFromGroup() {
   }
   // Remove from set
   if (
-    props.selectedSet &&
-    props.selectedSet !== props.allPicturesId &&
-    props.selectedSet !== props.unassignedPicturesId
+    selectionStore.selectedSet &&
+    selectionStore.selectedSet !== ALL_PICTURES_ID &&
+    selectionStore.selectedSet !== UNASSIGNED_PICTURES_ID
   ) {
     if (!pictureIds.length) {
       clearFaceSelection();
@@ -3246,13 +3232,13 @@ async function removeFromGroup() {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
         [...idsToRemoveFromSet].map((id) =>
-          removePictureFromSet(props.selectedSet, id, {
+          removePictureFromSet(selectionStore.selectedSet, id, {
             baseUrl: backendUrl,
           }).catch((err) => {
             // Expected when the picture was not in the set (the selection can
             // span sets); log rather than drop it so a real failure is visible.
             console.debug(
-              `Could not remove picture ${id} from set ${props.selectedSet}`,
+              `Could not remove picture ${id} from set ${selectionStore.selectedSet}`,
               err,
             );
           }),
@@ -3339,7 +3325,7 @@ function handleOverlayAddedToSet(payload) {
   }
 
   if (
-    props.selectedCharacter === props.unassignedPicturesId &&
+    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
     !hasSetSelection.value
   ) {
     if (overlayOpen.value) {
@@ -3357,7 +3343,7 @@ function handleAddToCharacter(payload) {
     : [];
   if (!pictureIds.length) return;
   if (
-    props.selectedCharacter === props.unassignedPicturesId &&
+    selectionStore.selectedCharacter === UNASSIGNED_PICTURES_ID &&
     !hasSetSelection.value
   ) {
     removeImagesById(pictureIds);
@@ -3375,14 +3361,14 @@ function handleRemoveFromCharacter(payload) {
     : [];
   if (!pictureIds.length) return;
   const removedCharId = payload?.characterId;
-  const currentChar = props.selectedCharacter;
+  const currentChar = selectionStore.selectedCharacter;
   const isInRemovedCharView =
     removedCharId != null &&
     currentChar != null &&
     String(currentChar) === String(removedCharId) &&
-    currentChar !== props.allPicturesId &&
-    currentChar !== props.unassignedPicturesId &&
-    currentChar !== props.scrapheapPicturesId;
+    currentChar !== ALL_PICTURES_ID &&
+    currentChar !== UNASSIGNED_PICTURES_ID &&
+    currentChar !== SCRAPHEAP_PICTURES_ID;
   if (isInRemovedCharView) {
     removeImagesById(pictureIds);
     selectedImageIds.value = [];
@@ -3769,9 +3755,9 @@ async function resolveProjectSelectionPictureIds(
 // ============================================================
 const isScrapheapView = computed(() => {
   const scrapheapId = String(
-    props.scrapheapPicturesId || "SCRAPHEAP",
+    SCRAPHEAP_PICTURES_ID || "SCRAPHEAP",
   ).toUpperCase();
-  const selected = String(props.selectedCharacter || "").toUpperCase();
+  const selected = String(selectionStore.selectedCharacter || "").toUpperCase();
   return selected === scrapheapId;
 });
 
@@ -3975,20 +3961,20 @@ const selectedExpandedCount = computed(() => {
     [...visibleIds].every((id) => selectedSet.has(id));
 
   const isTopCategorySelection = [
-    String(props.allPicturesId),
-    String(props.unassignedPicturesId),
-  ].includes(String(props.selectedCharacter ?? ""));
+    String(ALL_PICTURES_ID),
+    String(UNASSIGNED_PICTURES_ID),
+  ].includes(String(selectionStore.selectedCharacter ?? ""));
 
   const isSetCategorySelection =
-    props.selectedSet !== null &&
-    props.selectedSet !== undefined &&
-    String(props.selectedSet) !== "";
+    selectionStore.selectedSet !== null &&
+    selectionStore.selectedSet !== undefined &&
+    String(selectionStore.selectedSet) !== "";
 
   const supportsAuthoritativeCategoryCount =
     isTopCategorySelection || isSetCategorySelection;
 
   const hasNoAdditionalFilters =
-    !(props.searchQuery || "").trim() &&
+    !(searchStore.searchQuery || "").trim() &&
     filterStore.mediaTypeFilter === "all" &&
     (filterStore.comfyuiModelFilter || []).length === 0 &&
     (filterStore.comfyuiLoraFilter || []).length === 0 &&
@@ -4374,13 +4360,13 @@ async function handleImagesUploaded(payload) {
   );
   if (pictureIds.length) {
     try {
-      const selectedSetId = props.selectedSet;
-      const selectedCharacterId = props.selectedCharacter;
+      const selectedSetId = selectionStore.selectedSet;
+      const selectedCharacterId = selectionStore.selectedCharacter;
       const selectedCharacterKey = String(selectedCharacterId ?? "");
       const skipCharacter = [
-        String(props.allPicturesId),
-        String(props.unassignedPicturesId),
-        String(props.scrapheapPicturesId),
+        String(ALL_PICTURES_ID),
+        String(UNASSIGNED_PICTURES_ID),
+        String(SCRAPHEAP_PICTURES_ID),
       ].includes(selectedCharacterKey);
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
@@ -4568,9 +4554,9 @@ const lockedDeleteNotice = useScopedNotice(
       // reorder is not worth it. A reorder is a user action anyway, so treating
       // it as a context change is the right answer, not a false positive.
       selectedImageIds.value.join(","),
-      String(props.selectedCharacter ?? ""),
-      String(props.selectedSet ?? ""),
-      String(props.selectedProjectId ?? ""),
+      String(selectionStore.selectedCharacter ?? ""),
+      String(selectionStore.selectedSet ?? ""),
+      String(projectStore.selectedProjectId ?? ""),
       // Locked sets are few, so a per-set membership fingerprint is cheap and
       // catches an unlock, a re-lock and a membership edit alike.
       lockedSetsStore.sets
@@ -5113,13 +5099,13 @@ const selectedGroupName = ref("");
 async function updateSelectedGroupName() {
   let name = "";
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== `${props.allPicturesId}` &&
-    props.selectedCharacter !== `${props.unassignedPicturesId}` &&
-    props.selectedCharacter !== `${props.scrapheapPicturesId}`
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== `${ALL_PICTURES_ID}` &&
+    selectionStore.selectedCharacter !== `${UNASSIGNED_PICTURES_ID}` &&
+    selectionStore.selectedCharacter !== `${SCRAPHEAP_PICTURES_ID}`
   ) {
     try {
-      const char = await getCharacter(props.selectedCharacter, {
+      const char = await getCharacter(selectionStore.selectedCharacter, {
         baseUrl: props.backendUrl,
       });
       name = char.name || "";
@@ -5145,9 +5131,9 @@ async function updateSelectedGroupName() {
 
 watch(
   [
-    () => props.selectedCharacter,
-    () => props.selectedSet,
-    () => props.selectedSetIds,
+    () => selectionStore.selectedCharacter,
+    () => selectionStore.selectedSet,
+    () => selectionStore.selectedSetIds,
   ],
   () => {
     updateSelectedGroupName();
@@ -5236,7 +5222,7 @@ async function refreshGridImage(imageId, options = {}) {
     };
     allGridImages.value = nextImages;
   }
-  if (props.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
+  if (sortStore.selectedSort === LIKENESS_GROUPS_SORT_KEY) {
     const stackIndex = getStackIndexFromItem(allGridImages.value[idx]);
     if (typeof stackIndex === "number") {
       reorderStackByScore(stackIndex);
@@ -5554,20 +5540,20 @@ function initGuestSession() {
 }
 
 function isScoreSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase() === "SCORE"
+  return typeof sortStore.selectedSort === "string"
+    ? sortStore.selectedSort.toUpperCase() === "SCORE"
     : false;
 }
 
 function isCharacterLikenessSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase() === "CHARACTER_LIKENESS"
+  return typeof sortStore.selectedSort === "string"
+    ? sortStore.selectedSort.toUpperCase() === "CHARACTER_LIKENESS"
     : false;
 }
 
 function isSmartScoreSortActive() {
-  return typeof props.selectedSort === "string"
-    ? props.selectedSort.toUpperCase().includes("SMART_SCORE")
+  return typeof sortStore.selectedSort === "string"
+    ? sortStore.selectedSort.toUpperCase().includes("SMART_SCORE")
     : false;
 }
 
@@ -5577,7 +5563,9 @@ function isSmartScoreSortActive() {
 // array it is spliced into. Nullish selectedDescending → ascending (the store
 // defaults it to a real `true`). Keep this as one computed: a lone inlined
 // `!== false` previously drifted here and mispositioned inserted cards.
-const gridSortDescending = computed(() => props.selectedDescending === true);
+const gridSortDescending = computed(
+  () => sortStore.selectedDescending === true,
+);
 
 function getGridSmartScoreValue(img) {
   if (!img) return null;
@@ -5737,7 +5725,8 @@ function repositionImageBySmartScore(imageId, smartScore, latestInfo = null) {
 // getCompactGroupLabel / sort-overlay logic). Returns a finite number used to
 // find the insert index; `id` is the implicit tiebreaker.
 function gridImageSortKey(img) {
-  const sort = typeof props.selectedSort === "string" ? props.selectedSort : "";
+  const sort =
+    typeof sortStore.selectedSort === "string" ? sortStore.selectedSort : "";
   if (sort === "IMPORTED_AT" && img?.imported_at) {
     return Date.parse(img.imported_at) || 0;
   }
@@ -6068,19 +6057,19 @@ function _resetGridState() {
 
 watch(
   [
-    () => props.selectedCharacter,
-    () => props.selectedSet,
-    () => props.selectedSetIds,
-    () => props.characterMultiMode,
-    () => props.setMultiMode,
-    () => props.setDifferenceBaseId,
-    () => props.projectViewMode,
-    () => props.selectedProjectId,
-    () => props.searchQuery,
-    () => props.selectedSort,
-    () => props.selectedDescending,
-    () => props.similarityCharacter,
-    () => props.stackThreshold,
+    () => selectionStore.selectedCharacter,
+    () => selectionStore.selectedSet,
+    () => selectionStore.selectedSetIds,
+    () => selectionStore.characterMultiMode,
+    () => selectionStore.setMultiMode,
+    () => selectionStore.setDifferenceBaseId,
+    () => projectStore.projectViewMode,
+    () => projectStore.selectedProjectId,
+    () => searchStore.searchQuery,
+    () => sortStore.selectedSort,
+    () => sortStore.selectedDescending,
+    () => sortStore.selectedSimilarityCharacter,
+    () => sortStore.stackThreshold,
   ],
   () => {
     if (scrollWrapper.value) scrollWrapper.value.scrollTop = 0;
@@ -7733,26 +7722,29 @@ async function handleAssignFaceSearchResults() {
 
 // Clear reverse image search / face search when the user starts a text search or navigates.
 watch(
-  () => props.searchQuery,
+  () => searchStore.searchQuery,
   (newVal) => {
     if (newVal && newVal.trim()) {
       resetFaceAndImageSearches();
     }
   },
 );
-watch([() => props.selectedCharacter, () => props.selectedSet], () => {
-  if (reverseImageSearchPictureIds.value?.length) {
-    reverseImageSearchPictureIds.value = [];
-  }
-  if (faceLikenessSearchFaceId.value !== null) {
-    faceLikenessSearchFaceId.value = null;
-  }
-  // The character search is NOT cleared here. It is launched from the sidebar's
-  // person menu, and opening that menu can also select the person — clearing on
-  // a selection change would cancel the search the click just asked for. It is
-  // library-wide by construction, so a view change cannot invalidate it; the
-  // Clear search button and the other search modes are its exits.
-});
+watch(
+  [() => selectionStore.selectedCharacter, () => selectionStore.selectedSet],
+  () => {
+    if (reverseImageSearchPictureIds.value?.length) {
+      reverseImageSearchPictureIds.value = [];
+    }
+    if (faceLikenessSearchFaceId.value !== null) {
+      faceLikenessSearchFaceId.value = null;
+    }
+    // The character search is NOT cleared here. It is launched from the sidebar's
+    // person menu, and opening that menu can also select the person — clearing on
+    // a selection change would cancel the search the click just asked for. It is
+    // library-wide by construction, so a view change cannot invalidate it; the
+    // Clear search button and the other search modes are its exits.
+  },
+);
 
 function handleEmptyStateReset() {
   gridReady.value = false;

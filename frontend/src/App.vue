@@ -2252,33 +2252,7 @@ defineExpose({
                 v-else
                 ref="gridContainer"
                 :backendUrl="BACKEND_URL"
-                :selectedCharacter="selectionStore.selectedCharacter"
-                :selectedCharacterIds="selectionStore.selectedCharacterIds"
-                :characterMultiMode="selectionStore.characterMultiMode"
-                :selectedSet="selectionStore.selectedSet"
-                :selectedSetIds="selectionStore.selectedSetIds"
-                :setMultiMode="selectionStore.setMultiMode"
-                :searchQuery="searchStore.searchQuery"
                 :activeCategoryLabel="activeCategoryLabel"
-                :isAllPicturesActive="selectionStore.isAllPicturesActive"
-                :selectedSort="sortStore.selectedSort"
-                :selectedDescending="sortStore.selectedDescending"
-                :similarityCharacter="sortStore.selectedSimilarityCharacter"
-                :stackThreshold="sortStore.stackThreshold"
-                :wsTagUpdate="wsStore.wsTagUpdate"
-                :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
-                :wsSmartScoreUpdate="wsStore.wsSmartScoreUpdate"
-                :wsDetectionUpdate="wsStore.wsDetectionUpdate"
-                :wsPluginProgress="wsStore.wsPluginProgress"
-                :allPicturesId="ALL_PICTURES_ID"
-                :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-                :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-                :projectViewMode="projectStore.projectViewMode"
-                :selectedProjectId="projectStore.selectedProjectId"
-                :characterProjectIds="projectStore.characterProjectIds"
-                :setProjectIds="projectStore.setProjectIds"
-                :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-                :selectedSetNames="selectionStore.selectedSetNames"
                 :folderScanning="folderScanning"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
@@ -2295,25 +2269,8 @@ defineExpose({
                         (selectionStore.selectedSetIds = []));
                   }
                 "
-                @update:character-multi-mode="
-                  (v) => {
-                    selectionStore.setCharacterMultiMode(v);
-                  }
-                "
-                @update:set-multi-mode="
-                  (v) => {
-                    selectionStore.setSetMultiMode(v);
-                  }
-                "
-                @update:set-difference-base-id="
-                  (v) => {
-                    selectionStore.setSetDifferenceBaseId(v);
-                  }
-                "
                 @import-started="wsStore.isUploadInProgress = true"
                 @import-ended="wsStore.isUploadInProgress = false"
-                :pendingExternalImportCount="wsStore.pendingExternalImportCount"
-                :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
                 @load-sort-changed="loadSortChangedExternal"
                 @flag-sort-changed="onFlagSortChanged"

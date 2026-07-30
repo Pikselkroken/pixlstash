@@ -196,14 +196,7 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
     handleKeyDown(keyEvent({ key: "PageDown", shiftKey: true }));
     // Row 2's nearest-center item from center 50 is idx 5 (center 50).
     expect(deps.cursorIdx.value).toBe(5);
-    expect(deps.selectedImageIds.value).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-    ]);
+    expect(deps.selectedImageIds.value).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
 
   it("square mode keeps the uniform index ± columns arithmetic", () => {
