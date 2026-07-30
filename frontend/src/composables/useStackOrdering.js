@@ -24,6 +24,7 @@ import {
   setStackOrder,
   removeStackMembers,
 } from "../api/stacks";
+import { useGridStore } from "../stores/useGridStore";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
@@ -67,6 +68,7 @@ export function useStackOrdering(
     setPendingRanges,
   },
 ) {
+  const gridStore = useGridStore();
   // Stack-ordering failures report through the notice surface rather than a
   // blocking native alert() (docs/design/notice-surface.md §1). Called during
   // the host component's setup, so Pinia is active.
@@ -81,7 +83,7 @@ export function useStackOrdering(
   // ── Stack visual order map ────────────────────────────────────────────────
   const stackVisualOrderMap = computed(() => {
     const images = allGridImages.value;
-    const cols = Math.max(1, props.columns || 1);
+    const cols = Math.max(1, gridStore.columns || 1);
     const result = new Map();
     let stackAppearanceIndex = 0;
     for (let i = 0; i < images.length; i++) {
@@ -544,7 +546,7 @@ export function useStackOrdering(
     const newImages = mapGridImages(collapsed);
     allGridImages.value = newImages;
     if (visibleStart.value >= newImages.length) {
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const windowCount = Math.max(cols, divisibleViewWindow.value || cols);
       visibleStart.value = 0;
       visibleEnd.value = Math.min(newImages.length, windowCount);

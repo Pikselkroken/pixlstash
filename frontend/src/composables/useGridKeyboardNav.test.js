@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref } from "vue";
+import { setActivePinia, createPinia } from "pinia";
+import { useGridStore } from "../stores/useGridStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
 // real axios instance is constructed and read-only is deterministic.
@@ -59,7 +61,10 @@ function makeNav({
     setScore: vi.fn(),
   };
 
-  const props = { columns: 3, searchQuery: "" };
+  // The composable takes the column count from the grid store; size level 6
+  // ("huge") is the 3-column step these navigation cases are written against.
+  useGridStore().sizeLevel = 6;
+  const props = { searchQuery: "" };
   const emit = vi.fn();
   const { handleKeyDown } = useGridKeyboardNav(deps, props, emit, callbacks);
   return {
@@ -77,6 +82,8 @@ function keyEvent(overrides) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The composable reads the grid's column count from the store.
+  setActivePinia(createPinia());
 });
 
 describe("useGridKeyboardNav — review-overlay guard (F1)", () => {
