@@ -195,8 +195,9 @@ class StreamPicturesResponse(BaseModel):
 class PictureCountResponse(BaseModel):
     """Total number of pictures matching the listing filters.
 
-    ``count`` is ``null`` for sorts where a total cannot be computed cheaply
-    (e.g. CHARACTER_LIKENESS)."""
+    ``count`` is an integer for every sort (including CHARACTER_LIKENESS,
+    which counts via its candidate/character filter); ``null`` is reserved
+    for a future sort whose total genuinely cannot be computed cheaply."""
 
     model_config = ConfigDict(json_schema_extra={"example": {"count": 28259}})
 
@@ -738,7 +739,10 @@ def select_pictures_for_listing(
     logger.info("Getting pictures with project id = %s", project_id_raw)
 
     if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-        if not reference_character_id:
+        # Counting does not need the likeness reference (it only counts the
+        # candidate/character filter), so the reference is required for the
+        # listing path only.
+        if not reference_character_id and not count_only:
             raise HTTPException(
                 status_code=400,
                 detail="reference_character_id is required for CHARACTER_LIKENESS sort",
@@ -1505,8 +1509,9 @@ def register_routes(router, server):
         request: Request,
         sort: str = Query(
             None,
-            description="Sort mechanism; only affects whether a count is "
-            "computable (CHARACTER_LIKENESS returns null).",
+            description="Sort mechanism; accepted for parity with /pictures. "
+            "CHARACTER_LIKENESS counts via its candidate/character filter "
+            "(no reference required).",
             examples=["DATE"],
         ),
         descending: bool = Query(
@@ -1550,11 +1555,6 @@ def register_routes(router, server):
         )
         # Use count_only=True to run a fast SELECT COUNT(*) rather than fetching all rows.
         # The count may be a small over-estimate for deployments with hidden-tag post-filtering,
-        sort_mech = (
-            SortMechanism.from_string(sort, descending=descending) if sort else None
-        )
-        if sort_mech and sort_mech.key == SortMechanism.Keys.CHARACTER_LIKENESS:
-            return {"count": None}
         count = select_pictures_for_listing(
             server=server,
             request=request,

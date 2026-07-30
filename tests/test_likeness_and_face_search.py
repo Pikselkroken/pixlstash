@@ -1,9 +1,14 @@
 import tempfile
 import os
+
+import numpy as np
 from fastapi.testclient import TestClient
 from sqlmodel import select, func
+
 from pixlstash.server import Server
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
+from pixlstash.scoring.character_likeness import count_pictures_by_character_likeness
 from tests.utils import (
     upload_pictures_and_wait,
     wait_for_faces,
@@ -195,6 +200,181 @@ def test_score_character_likeness_requires_auth():
                 data={"reference_character_id": 1},
             )
             assert resp.status_code == 401, resp.text
+
+
+def _face_features(seed: int) -> bytes:
+    """Deterministic synthetic face feature vector (float32 bytes)."""
+    rng = np.random.default_rng(seed)
+    return rng.normal(size=8).astype(np.float32).tobytes()
+
+
+def _add_face(server, pic_id, char_id, seed, face_index=0):
+    """Insert a Face row with synthetic features directly into the DB."""
+
+    def _add(session):
+        session.add(
+            Face(
+                picture_id=pic_id,
+                frame_index=0,
+                face_index=face_index,
+                character_id=char_id,
+                bbox_="0,0,10,10",
+                features=_face_features(seed),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_add)
+
+
+def _seed_likeness_stack_scenario(client, server):
+    """Seed the character-view stack scenario for CHARACTER_LIKENESS tests.
+
+    Layout (character X = the viewed character, R = the likeness reference):
+
+    - stack 1: leader ``a`` (position 0, NO face for X) + child ``b`` (X face).
+      Scoped-leader semantics must represent this stack by ``b``; the naive
+      global-leader clause dropped it entirely.
+    - stack 2: leader ``d`` (position 0, X face) + child ``e`` (no face).
+      Must still be represented by ``d`` (no over-blocking).
+    - ``c``: unstacked picture with an X face.
+    - ``r``: unstacked picture with R's reference face.
+
+    Returns:
+        (x_id, ref_id, ids) where ids is a dict of picture ids by key a-e, r.
+    """
+    images = [
+        ("file", (f"{key}.png", random_images[i], "image/png"))
+        for i, key in enumerate(["a", "b", "c", "d", "e", "r"])
+    ]
+    import_status = upload_pictures_and_wait(client, images)
+    assert import_status["status"] == "completed"
+    ids = dict(
+        zip(
+            ["a", "b", "c", "d", "e", "r"],
+            [r["picture_id"] for r in import_status["results"]],
+        )
+    )
+
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Viewed X"})
+    assert resp.status_code == 200, resp.text
+    x_id = resp.json()["character"]["id"]
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Likeness Ref"})
+    assert resp.status_code == 200, resp.text
+    ref_id = resp.json()["character"]["id"]
+
+    # Stack 1: a is the position-0 leader, b the child.
+    resp = client.post(
+        f"{API_PREFIX}/stacks", json={"picture_ids": [ids["a"], ids["b"]]}
+    )
+    assert resp.status_code == 200, resp.text
+    # Stack 2: d is the position-0 leader, e the child.
+    resp = client.post(
+        f"{API_PREFIX}/stacks", json={"picture_ids": [ids["d"], ids["e"]]}
+    )
+    assert resp.status_code == 200, resp.text
+
+    _add_face(server, ids["r"], ref_id, seed=1)
+    _add_face(server, ids["b"], x_id, seed=2)
+    _add_face(server, ids["c"], x_id, seed=3)
+    _add_face(server, ids["d"], x_id, seed=4)
+
+    return x_id, ref_id, ids
+
+
+def test_character_likeness_stack_scoped_leader_listing_and_count():
+    """CHARACTER_LIKENESS with stack_leaders_only uses scoped-leader semantics:
+    a stack whose global leader has no face for the viewed character is
+    represented by its lowest-positioned in-scope member instead of vanishing,
+    while stacks whose leader IS in scope are still returned (no over-blocking).
+    The count helper agrees with the listing."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            x_id, ref_id, ids = _seed_likeness_stack_scenario(client, server)
+
+            # fields=grid implies stack_leaders_only on /pictures.
+            resp = client.get(
+                f"{API_PREFIX}/pictures",
+                params={
+                    "sort": "CHARACTER_LIKENESS",
+                    "reference_character_id": ref_id,
+                    "character_id": x_id,
+                    "fields": "grid",
+                    "descending": "true",
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            listed_ids = [row["id"] for row in resp.json()]
+
+            # Stack 1 is represented by exactly its in-scope member b (the
+            # stack must not be dropped), stack 2 by its actual leader d, and
+            # the unstacked picture c is listed as itself.
+            assert ids["b"] in listed_ids, "stack with out-of-scope leader was dropped"
+            assert ids["d"] in listed_ids, "stack with in-scope leader was over-blocked"
+            assert ids["c"] in listed_ids
+            assert ids["a"] not in listed_ids
+            assert ids["e"] not in listed_ids
+            assert sorted(listed_ids) == sorted([ids["b"], ids["c"], ids["d"]])
+
+            # The count helper must yield exactly what the listing yields.
+            count = count_pictures_by_character_likeness(
+                server, x_id, stack_leaders_only=True
+            )
+            assert count == len(listed_ids)
+
+
+def test_pictures_count_character_likeness_matches_stream():
+    """/pictures/count with sort=CHARACTER_LIKENESS returns an integer (not
+    null) equal to the likeness stream row count, and agrees with the normal
+    (sort-less) count for the same character view."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            x_id, ref_id, ids = _seed_likeness_stack_scenario(client, server)
+
+            params = {
+                "sort": "CHARACTER_LIKENESS",
+                "reference_character_id": ref_id,
+                "descending": "true",
+                "character_id": x_id,
+                "stack_leaders_only": "true",
+            }
+            resp = client.get(f"{API_PREFIX}/pictures/count", params=params)
+            assert resp.status_code == 200, resp.text
+            likeness_count = resp.json()["count"]
+            assert isinstance(likeness_count, int)
+
+            # The likeness stream must deliver exactly that many rows.
+            resp = client.get(
+                f"{API_PREFIX}/pictures/stream",
+                params={**params, "fields": "grid", "batch_limit": 1000},
+            )
+            assert resp.status_code == 200, resp.text
+            stream = resp.json()
+            assert stream["done"] is True
+            assert len(stream["pictures"]) == likeness_count == 3
+
+            # The normal (sort-less) count the frontend grid uses must agree
+            # with the likeness count for the same character view.
+            resp = client.get(
+                f"{API_PREFIX}/pictures/count",
+                params={"character_id": x_id, "stack_leaders_only": "true"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["count"] == likeness_count
 
 
 def test_face_search_basic():

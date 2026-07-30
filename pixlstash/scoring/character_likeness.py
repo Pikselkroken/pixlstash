@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import datetime
 
 import numpy as np
-from sqlalchemy import asc, desc, exists, func, or_, text
+from sqlalchemy import and_, asc, desc, exists, func, or_, text
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, select
 
@@ -439,6 +439,80 @@ def pack_reference_blobs(reference_faces: list) -> bytes | None:
     return header + matrix_norm.tobytes()
 
 
+def _scoped_stack_leader_clause(character_id, candidate_ids: list[int] | None):
+    """Build the scoped-leader stack-collapse clause for CHARACTER_LIKENESS queries.
+
+    Mirrors the ``id_scope`` branch of ``Picture.find`` (picture.py): a stack is
+    represented by its lowest-positioned live member *inside the filtered scope*,
+    instead of being dropped whenever its global position-0 leader is out of
+    scope (e.g. the leader has no face assigned to the viewed character while a
+    child does). Shared by the list and count queries so the two can never
+    drift.
+
+    The sibling scope is: not deleted, has a Face row satisfying the same
+    character filter the outer query applies, and (when ``candidate_ids`` is
+    given) is itself in the candidate set — the candidate list carries
+    token-scope narrowing, so omitting it would let a share-scoped stack be
+    represented by an out-of-scope sibling. Tie-break is identical to
+    ``Picture.find``: ``coalesce(stack_position, 999999)`` ascending, then
+    lower id wins.
+
+    Args:
+        character_id: Character filter (int, None/""/"ALL", or "UNASSIGNED").
+        candidate_ids: Optional picture-id restriction (token scope / filters).
+
+    Returns:
+        A SQLAlchemy boolean clause to apply with ``.where()``.
+    """
+    sibling = aliased(Picture)
+    sib_face = aliased(Face)
+    if character_id == "UNASSIGNED":
+        other_sib_face = aliased(Face)
+        sibling_in_scope = and_(
+            exists(
+                select(sib_face.id).where(
+                    sib_face.picture_id == sibling.id,
+                    sib_face.character_id.is_(None),
+                )
+            ),
+            ~exists(
+                select(other_sib_face.id).where(
+                    other_sib_face.picture_id == sibling.id,
+                    other_sib_face.character_id.is_not(None),
+                )
+            ),
+        )
+    elif character_id is not None and character_id != "" and character_id != "ALL":
+        sibling_in_scope = exists(
+            select(sib_face.id).where(
+                sib_face.picture_id == sibling.id,
+                sib_face.character_id == int(character_id),
+            )
+        )
+    else:
+        sibling_in_scope = exists(
+            select(sib_face.id).where(sib_face.picture_id == sibling.id)
+        )
+
+    conditions = [
+        sibling.stack_id == Picture.stack_id,
+        sibling.deleted.is_(False),
+        sibling_in_scope,
+    ]
+    if candidate_ids is not None:
+        conditions.append(sibling.id.in_(candidate_ids))
+    cur_pos = func.coalesce(Picture.stack_position, 999999)
+    sib_pos = func.coalesce(sibling.stack_position, 999999)
+    conditions.append(
+        or_(
+            sib_pos < cur_pos,
+            and_(sib_pos == cur_pos, sibling.id < Picture.id),
+        )
+    )
+    has_higher_ranked_sibling = exists(select(sibling.id).where(*conditions))
+    return or_(Picture.stack_id.is_(None), ~has_higher_ranked_sibling)
+
+
 def find_pictures_by_character_likeness_sql(
     server,
     character_id,
@@ -464,6 +538,8 @@ def find_pictures_by_character_likeness_sql(
         descending: If True, highest-likeness pictures come first.
         candidate_ids: Optional list of picture ids to restrict the search to.
         deleted_only: If True, restrict to deleted (scrapheap) pictures only.
+        stack_leaders_only: If True, collapse each stack to one representative
+            using scoped-leader semantics (see _scoped_stack_leader_clause).
 
     Returns:
         List of picture metadata dicts with a "character_likeness" field added.
@@ -514,7 +590,7 @@ def find_pictures_by_character_likeness_sql(
         )
         if stack_leaders_only:
             query = query.where(
-                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+                _scoped_stack_leader_clause(character_id, candidate_ids)
             )
         if character_id == "UNASSIGNED":
             other_face = aliased(Face)
@@ -590,6 +666,9 @@ def count_pictures_by_character_likeness(
         character_id: Character id filter (int, None/"ALL", or "UNASSIGNED").
         candidate_ids: Optional list of picture ids to restrict the count to.
         deleted_only: If True, restrict to deleted (scrapheap) pictures only.
+        stack_leaders_only: If True, collapse each stack to one representative
+            using scoped-leader semantics (see _scoped_stack_leader_clause), so
+            the count matches what find_pictures_by_character_likeness_sql yields.
 
     Returns:
         Total number of distinct matching pictures.
@@ -606,7 +685,7 @@ def count_pictures_by_character_likeness(
         )
         if stack_leaders_only:
             query = query.where(
-                or_(Picture.stack_id.is_(None), Picture.stack_position == 0)
+                _scoped_stack_leader_clause(character_id, candidate_ids)
             )
         if character_id == "UNASSIGNED":
             inner_face = aliased(Face)
