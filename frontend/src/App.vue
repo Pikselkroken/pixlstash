@@ -34,6 +34,7 @@ import { useTasksStore } from "./stores/useTasksStore";
 import { useLockedSetsStore } from "./stores/useLockedSetsStore";
 import { useOperationStore } from "./stores/useOperationStore";
 import { useDedupStore } from "./stores/useDedupStore";
+import { useEntityListsStore } from "./stores/useEntityListsStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -80,6 +81,7 @@ const tasksStore = useTasksStore();
 const lockedSetsStore = useLockedSetsStore();
 const operationStore = useOperationStore();
 const dedupStore = useDedupStore();
+const entityListsStore = useEntityListsStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 const viewStore = useViewStore();
@@ -526,6 +528,13 @@ function onRestoreConfirmed() {
 
 function refreshSidebar(options = {}) {
   sidebarRef.value?.refreshSidebar(options);
+  // The shared character/set/project lists ride the same triggers (this is what
+  // `characters_changed` lands on). Refetch ONLY — a ws payload never writes
+  // into the cache, since `origin_client_id` is echo-matching, not authority
+  // (integration_architecture.md §8.1). The call is de-duplicated against the
+  // sidebar's own refresh above, and it also covers the case where the sidebar
+  // is unmounted but a context menu is still reading the lists.
+  entityListsStore.invalidate(undefined, { baseUrl: BACKEND_URL });
   // The locked-sets store shares the sidebar's refresh triggers (manual emits,
   // characters_changed, and pictures_changed via the debounced pictures path,
   // which also fires on a lock/unlock PATCH's CHANGED_PICTURES event). The store

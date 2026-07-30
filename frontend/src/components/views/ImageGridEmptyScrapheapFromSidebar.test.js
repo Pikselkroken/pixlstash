@@ -33,6 +33,7 @@ vi.mock("../../utils/apiClient", () => {
   const isAuthenticated = ref(true);
   const sessionContext = ref({ scope: "ALL" });
   return {
+    onSessionReset: () => () => {},
     apiClient: {
       get: (...args) => apiGet(...args),
       post: (...args) => apiPost(...args),

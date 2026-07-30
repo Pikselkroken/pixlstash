@@ -14,6 +14,8 @@ import { mount } from "@vue/test-utils";
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
   return {
+    onSessionReset: () => () => {},
+    sessionContext: { value: null },
     apiClient: { get: vi.fn(), post: vi.fn() },
     isReadOnly: ref(false),
     setRequestClientId: vi.fn(),

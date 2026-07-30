@@ -12,7 +12,7 @@ import {
 } from "../api/pictures";
 import { getCharacterSummary } from "../api/characters";
 import { getProjectSummary } from "../api/projects";
-import { listPictureSets } from "../api/pictureSets";
+import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
 import { getPictureId, PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../utils/media.js";
 import { debounce } from "lodash-es";
@@ -1271,7 +1271,13 @@ export function useGridFetch(
         selectedSetId !== undefined &&
         String(selectedSetId) !== ""
       ) {
-        const setList = await listPictureSets({ baseUrl: props.backendUrl });
+        // One shared, in-flight-de-duplicated read of the set list: this is the
+        // same request the sidebar makes on the same triggers, and the count
+        // shown here must be the fresh one, so it forces a revalidation rather
+        // than reading whatever happens to be cached.
+        const setList = await useEntityListsStore().refresh("sets", {
+          baseUrl: props.backendUrl,
+        });
         const selectedSetNumericId = Number(selectedSetId);
         const selectedSet = Array.isArray(setList)
           ? setList.find((item) => {

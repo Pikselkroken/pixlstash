@@ -36,10 +36,8 @@ import {
   bulkReopenTagSuggestions,
 } from "../api/tagSuggestions";
 import { getTagHealth, rebuildTagHealth } from "../api/tagHealth";
-import { listCharacters } from "../api/characters";
-import { listProjects } from "../api/projects";
-import { listPictureSets } from "../api/pictureSets";
 import { getAnomalyRegion } from "../api/pictures";
+import { useEntityListsStore } from "./useEntityListsStore";
 import { SET_ICONS, SET_COLORS } from "../utils/setAppearance";
 
 const PAGE_SIZE = 200;
@@ -261,9 +259,15 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
   const createError = ref(null);
 
   // --- Scope options (for the creation dialog) --------------------------------
-  const projects = ref([]);
-  const sets = ref([]);
-  const characters = ref([]);
+  // Read straight off the shared entity-list store: the same three lists the
+  // sidebar and the image context menu use (§4). `reference_pictures` is the
+  // system-owned set behind character references and is never a review scope.
+  const entityLists = useEntityListsStore();
+  const projects = computed(() => entityLists.projects);
+  const sets = computed(() =>
+    entityLists.pictureSets.filter((s) => s?.name !== "reference_pictures"),
+  );
+  const characters = computed(() => entityLists.characters);
 
   // Smart-score penalised ("anomaly") tags, lowercased, from the user config.
   const anomalyTags = ref(new Set());
@@ -578,32 +582,11 @@ export const useReviewSessionsStore = defineStore("reviewSessions", () => {
     }
   }
 
-  // Populate the creation dialog's scope dropdowns (mirrors the old store: each
-  // call independent, degrades to an empty list on error).
-  async function fetchScopeOptions() {
-    listProjects()
-      .then((rows) => {
-        projects.value = Array.isArray(rows) ? rows : [];
-      })
-      .catch(() => {
-        projects.value = [];
-      });
-    listPictureSets()
-      .then((rows) => {
-        sets.value = Array.isArray(rows)
-          ? rows.filter((s) => s?.name !== "reference_pictures")
-          : [];
-      })
-      .catch(() => {
-        sets.value = [];
-      });
-    listCharacters()
-      .then((rows) => {
-        characters.value = Array.isArray(rows) ? rows : [];
-      })
-      .catch(() => {
-        characters.value = [];
-      });
+  // Populate the creation dialog's scope dropdowns. Whatever is cached renders
+  // at once; this only revalidates it. Each list degrades independently — the
+  // store keeps the last good one and logs the failure.
+  function fetchScopeOptions() {
+    return entityLists.invalidate();
   }
 
   // --- Anomaly-region overlay (heatmap + box) ---------------------------------

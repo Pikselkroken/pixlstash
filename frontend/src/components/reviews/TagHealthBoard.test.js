@@ -11,6 +11,8 @@ import { mount } from "@vue/test-utils";
 import { h } from "vue";
 
 vi.mock("../../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: {
     get: vi.fn().mockResolvedValue({ data: [] }),
     post: vi.fn().mockResolvedValue({ data: {} }),
@@ -20,6 +22,7 @@ vi.mock("../../utils/apiClient", () => ({
 
 import TagHealthBoard from "./TagHealthBoard.vue";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 
 const VIcon = {
   name: "v-icon",
@@ -48,6 +51,12 @@ function healthRow(overrides = {}) {
 }
 
 let store;
+
+// The board's scope lists are a view onto the shared entity-list cache, so the
+// set rows are seeded there rather than on the review store.
+function seedSets(rows) {
+  useEntityListsStore().lists = { characters: [], projects: [], sets: rows };
+}
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -459,7 +468,7 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
 
   it("does not collapse anything in the locked-set terminal state", () => {
     store.healthRows = [scored("alpha", 9), zero("zulu")];
-    store.sets = [{ id: 2, name: "Frozen eval", locked: true }];
+    seedSets([{ id: 2, name: "Frozen eval", locked: true }]);
     store.healthScope = { projectId: null, setId: 2, characterId: null };
     const w = mount(TagHealthBoard, { global: globalOpts });
     expect(w.find(".rs-board-locked").exists()).toBe(true);
@@ -475,11 +484,11 @@ describe("TagHealthBoard: zero-Priority tail disclosure", () => {
 describe("TagHealthBoard: locked sets in the Set scope filter", () => {
   it("suffixes locked set labels with (locked) and leaves order untouched", () => {
     store.healthRows = [];
-    store.sets = [
+    seedSets([
       { id: 1, name: "Portraits", locked: false },
       { id: 2, name: "Frozen eval", locked: true },
       { id: 3, name: "Landscapes", locked: false },
-    ];
+    ]);
 
     const w = mount(TagHealthBoard, { global: globalOpts });
     const setSelect = w.findAll("select.rs-board-scope")[1];
@@ -496,7 +505,7 @@ describe("TagHealthBoard: locked sets in the Set scope filter", () => {
 
   it("falls back to the id-based name and still marks the lock", () => {
     store.healthRows = [];
-    store.sets = [{ id: 7, name: "", locked: true }];
+    seedSets([{ id: 7, name: "", locked: true }]);
 
     const w = mount(TagHealthBoard, { global: globalOpts });
     const setSelect = w.findAll("select.rs-board-scope")[1];
@@ -517,7 +526,7 @@ describe("TagHealthBoard: locked-set scope terminal state", () => {
 
   function mountScoped(setId) {
     store.healthRows = [healthRow({ tag: "shirt" }), healthRow({ tag: "hat" })];
-    store.sets = SETS;
+    seedSets(SETS);
     store.healthScope = { projectId: null, setId, characterId: null };
     return mount(TagHealthBoard, { global: globalOpts });
   }
@@ -583,7 +592,7 @@ describe("TagHealthBoard: locked-set scope terminal state", () => {
 
   it("does not fire on an unknown set id (sets not fetched yet)", () => {
     store.healthRows = [healthRow()];
-    store.sets = [];
+    seedSets([]);
     store.healthScope = { projectId: null, setId: 99, characterId: null };
     const w = mount(TagHealthBoard, { global: globalOpts });
     expect(w.find(".rs-board-locked").exists()).toBe(false);
