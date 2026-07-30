@@ -627,14 +627,16 @@ export function useGridFetch(
           : 0;
         const FIRST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
         const LAST_BATCH = Math.max(200, _fbVisibleItems + _fbCols * 2);
-        // Pass sort/descending to the stream so pictures arrive in the right
-        // order.  Count URL stays param-free — sort never affects COUNT(*).
+        // Pass sort/descending to both the stream and the count URLs.  The sort
+        // is not always count-neutral: CHARACTER_LIKENESS joins through Face and
+        // changes the row set, so the count must run over the same query as the
+        // stream or the placeholder grid ends up larger than the stream can fill.
         const _sort = props.selectedSort?.trim();
         const _desc = typeof props.selectedDescending === 'boolean'
           ? props.selectedDescending
           : true;
-        // For CHARACTER_LIKENESS the backend also needs reference_character_id in the
-        // stream URL (count URL only needs the character filter, not the reference).
+        // For CHARACTER_LIKENESS the backend also needs reference_character_id in
+        // both the stream and count URLs — the reference determines the row set.
         const _refCharSuffix =
           _sort === 'CHARACTER_LIKENESS' && props.similarityCharacter
             ? `&reference_character_id=${encodeURIComponent(props.similarityCharacter)}`
@@ -786,7 +788,7 @@ export function useGridFetch(
         // 1. Fast total count — single indexed SQL query.
         const countStartedAt = getNowMs();
         const countBody = await getPictureCount(
-          `stack_leaders_only=true${_charSuffix}${_formatSuffix}${_filterSuffix}`,
+          `stack_leaders_only=true${_charSuffix}${_sortSuffix}${_formatSuffix}${_filterSuffix}`,
           { baseUrl: props.backendUrl },
         );
         if (fetchAllGridImages.lastRequestId !== requestId) return;
@@ -988,6 +990,27 @@ export function useGridFetch(
         lastFetchedGridImages.value = allGridImages.value.filter(
           (img) => img && img.id != null,
         );
+        // Safety net: trim trailing placeholders the stream never filled.  If the
+        // count and stream queries ever drift again (stream yields fewer rows than
+        // COUNT(*)), the surplus tail cells would sit as permanent spinners.  Only
+        // the contiguous trailing run of id-less cells is dropped — mid-grid holes
+        // are left alone.
+        const _finalGrid = allGridImages.value;
+        let _filledEnd = _finalGrid.length;
+        while (_filledEnd > 0 && _finalGrid[_filledEnd - 1]?.id == null) {
+          _filledEnd -= 1;
+        }
+        if (_filledEnd < _finalGrid.length) {
+          console.warn(
+            "[ImageGrid.vue] Stream returned fewer rows than the count; trimming",
+            _finalGrid.length - _filledEnd,
+            "trailing placeholder cells.",
+          );
+          allGridImages.value = _finalGrid.slice(0, _filledEnd);
+          if (visibleEnd.value > _filledEnd) {
+            visibleEnd.value = _filledEnd;
+          }
+        }
         fetchPhaseTimings.postProcessMs = Math.max(0, getNowMs() - postProcessStartedAt);
         fetchSucceeded = true;
         return;
