@@ -1177,6 +1177,20 @@ function handleEmptyScrapheapFromSidebar() {
   nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
 }
 
+// The sidebar's person context menu asks for more pictures of that person
+// (#636). The search runs across the whole library rather than inside the
+// current view, so nothing here changes the selection or the route: the grid
+// owns the search mode and shows its own result bar.
+function handleSuggestPicturesForCharacter(character) {
+  if (character?.id == null) return;
+  nextTick(() =>
+    gridContainer.value?.suggestPicturesForCharacter?.({
+      id: character.id,
+      name: character.name,
+    }),
+  );
+}
+
 // Open the stats sidebar and focus its Tasks tab. Shared by the thumbnail-mode
 // "View progress" notice action and the ThumbnailUpgradeBanner's link, so both
 // use the same statsSidebarRef.focusTasksTab() plumbing.
@@ -2110,6 +2124,7 @@ defineExpose({
             :thumbnailMode="gridStore.thumbnailMode"
             @update:thumbnail-mode="handleUpdateThumbnailMode"
             @empty-scrapheap="handleEmptyScrapheapFromSidebar"
+            @suggest-pictures-for-character="handleSuggestPicturesForCharacter"
             @update:show-keyboard-hint="
               userPrefsStore.showKeyboardHint = $event
             "

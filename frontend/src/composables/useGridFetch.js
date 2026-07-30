@@ -5,6 +5,7 @@ import {
   streamPictures,
   getLikenessGroups,
   faceSearch,
+  characterFaceSearch,
   likenessSearch,
   searchPictures,
   listPicturesByIds,
@@ -57,6 +58,9 @@ export function useGridFetch(
     exportProgress,
     reverseImageSearchPictureIds,
     faceLikenessSearchFaceId,
+    faceSearchCharacter,
+    faceSearchThreshold,
+    faceSearchRanked,
   },
   props,
   {
@@ -150,6 +154,14 @@ export function useGridFetch(
       applyTagFilter: props.applyTagFilter ?? false,
       reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
       faceLikenessSearchFaceId: faceLikenessSearchFaceId?.value ?? null,
+      faceSearchCharacterId: faceSearchCharacter?.value?.id ?? null,
+      // The threshold belongs in the key: moving the slider changes which
+      // pictures the grid shows, so a fetch that early-returns as a no-op would
+      // leave the grid disagreeing with the count in the bar. The rebuild costs
+      // no network call — the ranked list and its rows are both cached.
+      faceSearchThreshold: faceSearchCharacter?.value
+        ? (faceSearchThreshold?.value ?? null)
+        : null,
     });
   }
 
@@ -497,8 +509,13 @@ export function useGridFetch(
       const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
       const _hasReverseImageSearch =
         !_hasSearch && !!reverseImageSearchPictureIds?.value?.length;
+      const _hasCharacterFaceSearch =
+        !_hasSearch && !_hasReverseImageSearch && !!faceSearchCharacter?.value?.id;
       const _hasFaceLikenessSearch =
-        !_hasSearch && !_hasReverseImageSearch && !!faceLikenessSearchFaceId?.value;
+        !_hasSearch &&
+        !_hasReverseImageSearch &&
+        !_hasCharacterFaceSearch &&
+        !!faceLikenessSearchFaceId?.value;
 
       if (_isLikenessSort) {
         fetchMode = "likeness-groups";
@@ -527,6 +544,57 @@ export function useGridFetch(
               typeof stackIndex === "number" ? getStackColor(stackIndex) : null,
           };
         });
+      } else if (_hasCharacterFaceSearch) {
+        fetchMode = "character-face-search";
+        // "Suggest more pictures of <person>" (#636): query with the character's
+        // reference faces, and let the threshold slider re-cut the SAME ranked
+        // list. The ranked refs and their picture rows are both cached against
+        // the character id, so dragging the slider costs no round trip — which
+        // is the difference between a slider that feels live and one that
+        // stutters. Only a change of character (or an explicit force) refetches.
+        const character = faceSearchCharacter.value;
+        const cached = faceSearchRanked?.value;
+        let ranked =
+          !force && cached?.characterId === character.id ? cached.matches : null;
+        if (!ranked) {
+          const raw = await characterFaceSearch(character.id, {
+            baseUrl: props.backendUrl,
+          });
+          if (fetchAllGridImages.lastRequestId !== requestId) {
+            if (isSortedFetch && options?.showProgress === true)
+              completeSmartScoreProgress(loadId, 0, false);
+            return;
+          }
+          ranked = Array.isArray(raw) ? raw : [];
+          const rowsById = {};
+          if (ranked.length) {
+            const rows = await listPicturesByIds(
+              ranked.map((r) => r.picture_id),
+              { fields: "grid", baseUrl: props.backendUrl },
+            );
+            if (fetchAllGridImages.lastRequestId !== requestId) {
+              if (isSortedFetch && options?.showProgress === true)
+                completeSmartScoreProgress(loadId, 0, false);
+              return;
+            }
+            for (const pic of Array.isArray(rows) ? rows : []) {
+              rowsById[pic.id] = pic;
+            }
+          }
+          if (faceSearchRanked) {
+            faceSearchRanked.value = {
+              characterId: character.id,
+              matches: ranked,
+              rowsById,
+            };
+          }
+        }
+        const cut = faceSearchThreshold?.value ?? 0;
+        const rowsById = faceSearchRanked?.value?.rowsById ?? {};
+        images = ranked
+          .filter((r) => (r.likeness ?? 0) >= cut)
+          .map((r) => rowsById[r.picture_id])
+          .filter(Boolean);
       } else if (_hasFaceLikenessSearch) {
         fetchMode = "face-likeness-search";
         // Face likeness search: POST to face-search with source_face_id.

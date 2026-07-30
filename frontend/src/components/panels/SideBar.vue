@@ -153,6 +153,7 @@ const emit = defineEmits([
   "update:theme-mode",
   "update:thumbnail-mode",
   "empty-scrapheap",
+  "suggest-pictures-for-character",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -2201,6 +2202,20 @@ function emptyScrapheapFromCtx() {
   closeSidebarCtxMenu();
   selectCharacter(props.scrapheapPicturesId, "Scrapheap");
   emit("empty-scrapheap");
+}
+
+// "Suggest more pictures of <person>" (#636): ranks the whole library against
+// this person's reference faces so their un-tagged pictures can be assigned in
+// one action. Deliberately does NOT select the person first — the search spans
+// the library, and narrowing the view to what is already assigned would hide
+// every result it is meant to find.
+function suggestPicturesForCharacterFromCtx(character) {
+  if (!character?.id) return;
+  closeSidebarCtxMenu();
+  emit("suggest-pictures-for-character", {
+    id: character.id,
+    name: character.name,
+  });
 }
 
 function openSetCtxIconMenu(event) {
@@ -6243,6 +6258,17 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxCharacter">
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :title="`Rank the library against ${sidebarCtxCharacter.name}'s reference faces to find their un-tagged pictures`"
+          @click="suggestPicturesForCharacterFromCtx(sidebarCtxCharacter)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-account-search</v-icon>
+          <span class="sidebar-ctx-label"
+            >Suggest more pictures of {{ sidebarCtxCharacter.name }}</span
+          >
+        </button>
         <button
           v-if="!isReadOnly"
           class="sidebar-ctx-item"

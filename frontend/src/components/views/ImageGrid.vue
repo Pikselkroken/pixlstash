@@ -902,25 +902,41 @@
       v-if="
         (props.searchQuery && props.searchQuery.length > 0) ||
         reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId
+        faceLikenessSearchFaceId ||
+        faceSearchCharacter
       "
       :images-loading="imagesLoading"
       :count="allGridImages.length"
       :category-label="props.activeCategoryLabel"
       :is-all-pictures-active="
-        reverseImageSearchPictureIds.length || faceLikenessSearchFaceId
+        reverseImageSearchPictureIds.length ||
+        faceLikenessSearchFaceId ||
+        faceSearchCharacter
           ? true
           : props.isAllPicturesActive
       "
       :status-text="
-        faceLikenessSearchFaceId
-          ? `Similar faces: ${allGridImages.length} results`
-          : reverseImageSearchPictureIds.length > 1
-            ? `Multi-image search: ${allGridImages.length} results`
-            : reverseImageSearchPictureIds.length
-              ? `Reverse image search: ${allGridImages.length} results`
-              : null
+        faceSearchCharacter
+          ? faceSearchMatches.length === 1
+            ? `1 possible picture of ${faceSearchCharacter.name}`
+            : `${faceSearchMatches.length} possible pictures of ${faceSearchCharacter.name}`
+          : faceLikenessSearchFaceId
+            ? `Similar faces: ${allGridImages.length} results`
+            : reverseImageSearchPictureIds.length > 1
+              ? `Multi-image search: ${allGridImages.length} results`
+              : reverseImageSearchPictureIds.length
+                ? `Reverse image search: ${allGridImages.length} results`
+                : null
       "
+      :threshold="faceSearchCharacter ? faceSearchThreshold : null"
+      :threshold-min="FACE_SEARCH_FETCH_FLOOR"
+      :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+      :assign-target="faceSearchCharacter?.name ?? null"
+      :assign-count="faceSearchAssignIds.length"
+      :assign-from-selection="faceSearchAssignFromSelection"
+      :assign-busy="faceSearchAssignBusy"
+      @update:threshold="handleFaceSearchThreshold"
+      @assign="handleAssignFaceSearchResults"
       @search-all="emit('search-all')"
       @clear="clearSearchQuery"
     />
@@ -1187,6 +1203,7 @@ import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
 import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
+import { debounce } from "lodash-es";
 
 const emit = defineEmits([
   "open-overlay",
@@ -1430,6 +1447,24 @@ const overlayCtxLockReason = computed(() =>
 );
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
+// ── "Suggest more pictures of <person>" (#636) ────────────────────────────────
+// The person whose reference faces are the active query, or null. Distinct from
+// `props.selectedCharacter`: this search deliberately runs across the whole
+// library, so it must not be mistaken for a character-scoped view.
+const faceSearchCharacter = ref(null); // { id, name }
+// The cut applied to the ranked list. Starts at the same value the backend's
+// SourceFaceLikenessTask already treats as "same person, safe to inherit a
+// character automatically" — a second, UI-local number would drift from it.
+const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
+// The fetch floor. Pictures below it are never fetched, so the slider cannot be
+// dragged under it without a refetch; that is why it is also the slider's min.
+const FACE_SEARCH_FETCH_FLOOR = 0.5;
+const FACE_SEARCH_MAX_THRESHOLD = 0.95;
+const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
+// { characterId, matches: [{picture_id, likeness, face_id}], rowsById } — the
+// whole ranked list plus its picture rows, so re-cutting it is free.
+const faceSearchRanked = ref(null);
+const faceSearchAssignBusy = ref(false);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -4975,6 +5010,9 @@ const {
     exportProgress,
     reverseImageSearchPictureIds,
     faceLikenessSearchFaceId,
+    faceSearchCharacter,
+    faceSearchThreshold,
+    faceSearchRanked,
   },
   props,
   {
@@ -7182,6 +7220,10 @@ defineExpose({
   // It arrives mid-fetch by construction, which is why the confirm gates on a
   // purge already running rather than on the grid's load state.
   confirmEmptyScrapheap,
+  // Lets the sidebar's person context menu arm the character-scoped face search
+  // ("Suggest more pictures of <person>", #636). Same Tier-3 route as
+  // confirmEmptyScrapheap above: sidebar → App.vue → this grid.
+  suggestPicturesForCharacter: handleSuggestPicturesForCharacter,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -7533,9 +7575,22 @@ function abortExportZip() {
 // ============================================================
 // SEARCH
 // ============================================================
-function clearSearchQuery() {
+/** Drop every non-text search mode. Called before arming a new one. */
+function resetFaceAndImageSearches() {
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
+}
+
+/** Forget the character search and its cached ranked list. */
+function clearCharacterFaceSearch() {
+  faceSearchCharacter.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+}
+
+function clearSearchQuery() {
+  resetFaceAndImageSearches();
   emit("clear-search", "");
 }
 
@@ -7550,6 +7605,7 @@ function handleReverseImageSearch() {
     ids.push(imgId);
   }
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
   reverseImageSearchPictureIds.value = ids;
   // Clear any active text search so the two modes don't overlap.
   emit("clear-search", "");
@@ -7558,8 +7614,120 @@ function handleReverseImageSearch() {
 function handleFindSimilarFaces(faceId) {
   if (!faceId) return;
   reverseImageSearchPictureIds.value = [];
+  clearCharacterFaceSearch();
   faceLikenessSearchFaceId.value = faceId;
   emit("clear-search", "");
+}
+
+/**
+ * Move the suggestion threshold.
+ *
+ * The ref is set synchronously so the count in the bar tracks the drag, while
+ * the grid rebuild is debounced: it costs no network call (the ranked list and
+ * its rows are cached) but it does re-render the virtual grid, and doing that on
+ * every pointer sample would stutter. 200ms is under the ~250ms at which a
+ * response stops reading as immediate.
+ *
+ * @param {number} value - the new cut, 0-1.
+ */
+function handleFaceSearchThreshold(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  faceSearchThreshold.value = next;
+  debouncedFaceSearchRecut();
+}
+
+const debouncedFaceSearchRecut = debounce(() => {
+  if (!faceSearchCharacter.value) return;
+  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
+}, 200);
+
+/**
+ * Arm "Suggest more pictures of <person>" from the sidebar's person menu (#636).
+ *
+ * @param {{id: number|string, name: string}} character
+ */
+function handleSuggestPicturesForCharacter(character) {
+  const id = character?.id;
+  if (id == null) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchCharacter.value = { id, name: character.name ?? "this person" };
+  emit("clear-search", "");
+  // The clear-search emit bumps gridVersion, but that watcher throttles itself
+  // to one refresh per 1200ms — and this search is the direct result of a click,
+  // so it must not be the one that gets dropped. Fetching here as well is safe:
+  // the two calls share a fetch key and the second de-dups against the first.
+  nextTick(() => {
+    fetchAllGridImages({ force: true }).then(() => updateVisibleThumbnails());
+  });
+}
+
+// Every match above the cut. Computed from the cached ranked list rather than
+// from `allGridImages`, so the count in the bar tracks the slider immediately
+// while the grid rebuild debounces behind it.
+const faceSearchMatches = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return [];
+  if (cached.characterId !== faceSearchCharacter.value.id) return [];
+  const cut = faceSearchThreshold.value ?? 0;
+  return cached.matches.filter((m) => (m.likeness ?? 0) >= cut);
+});
+
+// Selection wins over the threshold: a button that ignored an explicit
+// selection of twelve to write forty-one would be the error, not the shortcut.
+const faceSearchAssignFromSelection = computed(
+  () => selectedImageIds.value.length > 0,
+);
+
+const faceSearchAssignIds = computed(() =>
+  faceSearchAssignFromSelection.value
+    ? selectedImageIds.value.slice()
+    : faceSearchMatches.value.map((m) => m.picture_id),
+);
+
+/**
+ * Assign the suggested (or selected) pictures to the searched person.
+ *
+ * Sends picture ids rather than the matches' `face_id`s on purpose: the
+ * assignment endpoint expands stacks and re-picks the best face per picture
+ * against the same reference faces this search used, so a stacked suggestion
+ * moves as a unit. The write is recorded in the operation log, so refreshing it
+ * raises the receipt that carries Undo — which is what lets this skip a
+ * confirmation dialog.
+ */
+async function handleAssignFaceSearchResults() {
+  const character = faceSearchCharacter.value;
+  const ids = faceSearchAssignIds.value;
+  if (!character || !ids.length || faceSearchAssignBusy.value) return;
+  faceSearchAssignBusy.value = true;
+  try {
+    await addCharacterFaces(character.id, ids, { baseUrl: props.backendUrl });
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId.value = null;
+    // Re-run the search against the server rather than pruning the cached list
+    // locally. Two reasons, both correctness: the assignment is stack-atomic, so
+    // it can have assigned MORE pictures than were named here (a suggestion's
+    // stack siblings would otherwise stay on screen as un-assigned), and the
+    // fetch key has not changed, so a non-forced call would be dropped by the
+    // de-dup window and leave the grid showing what was just assigned.
+    faceSearchRanked.value = null;
+    await fetchAllGridImages({ force: true });
+    updateVisibleThumbnails();
+    // Raises the "Assigned N pictures…· Undo" receipt for this client.
+    operationStore.refresh();
+    emit("refresh-sidebar");
+  } catch (e) {
+    noticeStore.error(
+      `Couldn't assign those pictures to ${character.name}. ${errorDetail(e)}`,
+      { scope: "character-face-search-assign" },
+    );
+  } finally {
+    faceSearchAssignBusy.value = false;
+  }
 }
 
 // Clear reverse image search / face search when the user starts a text search or navigates.
@@ -7567,8 +7735,7 @@ watch(
   () => props.searchQuery,
   (newVal) => {
     if (newVal && newVal.trim()) {
-      reverseImageSearchPictureIds.value = [];
-      faceLikenessSearchFaceId.value = null;
+      resetFaceAndImageSearches();
     }
   },
 );
@@ -7579,13 +7746,17 @@ watch([() => props.selectedCharacter, () => props.selectedSet], () => {
   if (faceLikenessSearchFaceId.value !== null) {
     faceLikenessSearchFaceId.value = null;
   }
+  // The character search is NOT cleared here. It is launched from the sidebar's
+  // person menu, and opening that menu can also select the person — clearing on
+  // a selection change would cancel the search the click just asked for. It is
+  // library-wide by construction, so a view change cannot invalidate it; the
+  // Clear search button and the other search modes are its exits.
 });
 
 function handleEmptyStateReset() {
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
-  reverseImageSearchPictureIds.value = [];
-  faceLikenessSearchFaceId.value = null;
+  resetFaceAndImageSearches();
   emit("reset-to-all");
 }
 </script>
