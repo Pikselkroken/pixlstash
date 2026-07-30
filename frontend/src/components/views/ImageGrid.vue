@@ -11,9 +11,9 @@
     :detectionUpdate="props.wsDetectionUpdate"
     :hiddenTags="userPrefsStore.hiddenTags"
     :applyTagFilter="userPrefsStore.applyTagFilter"
-    :dateFormat="props.dateFormat"
-    :showStacks="props.showStacks"
-    :showProblemIcon="props.showProblemIcon"
+    :dateFormat="userPrefsStore.dateFormat"
+    :showStacks="gridStore.showStacks"
+    :showProblemIcon="gridStore.showProblemIcon"
     :availablePlugins="availablePlugins"
     :comfyuiProgress="comfyuiProgress"
     :comfyuiProgressPercent="comfyuiProgressPercent"
@@ -250,10 +250,10 @@
       resource-type="picture"
       :resource-id="contextMenuImage?.id"
       :resource-format="contextMenuImage?.format"
-      :embed-watermark="props.embedWatermark"
+      :embed-watermark="userPrefsStore.embedWatermark"
       :backend-url="props.backendUrl"
-      :public-url="props.publicUrl"
-      @update:embed-watermark="emit('update:embed-watermark', $event)"
+      :public-url="userPrefsStore.publicUrl"
+      @update:embed-watermark="userPrefsStore.embedWatermark = $event"
       @created="onSharePicCreated"
     />
     <EmptyScrapHeap
@@ -495,7 +495,7 @@
         :class="[
           'image-grid',
           {
-            'compact-mode': props.compactMode,
+            'compact-mode': gridStore.compactMode,
             'touch-select-mode': touchSelectMode,
             'image-grid--justified': isJustifiedMode,
           },
@@ -578,7 +578,7 @@
                 v-if="
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
-                  ((props.showProblemIcon && hasPenalisedTags(img)) ||
+                  ((gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
                     lockedSetsStore.isLocked(img.id) ||
                     (!isReadOnly && sharedPictureIds.has(img.id)))
@@ -586,18 +586,20 @@
                 class="thumbnail-top-left-badges"
               >
                 <div
-                  v-if="props.showProblemIcon && hasPenalisedTags(img)"
+                  v-if="gridStore.showProblemIcon && hasPenalisedTags(img)"
                   class="penalised-tag-indicator thumbnail-badge"
                   :title="penalisedTagsTitle(img)"
                 >
                   <v-icon
                     :size="badgeIconSizes.penalised"
-                    :color="penalisedTagColor(img, props.penalisedTagWeights)"
+                    :color="
+                      penalisedTagColor(img, userPrefsStore.penalisedTagWeights)
+                    "
                     >{{
                       penalisedTagIcon(
                         img,
-                        props.penalisedTagWeights,
-                        props.themeMode !== "light",
+                        userPrefsStore.penalisedTagWeights,
+                        userPrefsStore.themeMode !== "light",
                       )
                     }}</v-icon
                   >
@@ -862,7 +864,7 @@
                 class="thumbnail-top-right-badges"
               >
                 <StarRatingOverlay
-                  v-if="props.showStars"
+                  v-if="gridStore.showStars"
                   :score="
                     isReadOnly
                       ? (guestScoreMap.get(img.id) ?? img.score ?? 0)
@@ -883,7 +885,7 @@
           </div>
           <div v-if="isImageSelected(img.id)" class="selection-overlay"></div>
           <!-- Info row absolutely positioned below thumbnail -->
-          <div v-if="!props.compactMode" class="thumbnail-info-row">
+          <div v-if="!gridStore.compactMode" class="thumbnail-info-row">
             <div
               v-for="info in getThumbnailInfoItems(img)"
               :key="`${info.key}-${img.id}`"
@@ -1090,6 +1092,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useGridStore } from "../../stores/useGridStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1220,6 +1223,12 @@ import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
 import { debounce } from "lodash-es";
 
+// Store-direct (Phase 3): the picture-query filter facets and the grid's own
+// display preferences are read from the stores, not mirrored in through props.
+const filterStore = useFilterStore();
+const gridStore = useGridStore();
+const userPrefsStore = useUserPrefsStore();
+
 const emit = defineEmits([
   "open-overlay",
   "update:overlay-open",
@@ -1235,7 +1244,6 @@ const emit = defineEmits([
   "update:character-multi-mode",
   "update:set-multi-mode",
   "update:set-difference-base-id",
-  "update:embed-watermark",
   "update:visible-range-label",
   "update:match-count",
   "load-pending-imports",
@@ -1250,8 +1258,6 @@ const emit = defineEmits([
 
 // Props
 const props = defineProps({
-  thumbnailSize: Number,
-  sidebarVisible: Boolean,
   backendUrl: String,
   selectedCharacter: { type: [String, Number, null], default: null },
   selectedSet: { type: [Number, String, null], default: null },
@@ -1263,26 +1269,9 @@ const props = defineProps({
   selectedDescending: Boolean,
   similarityCharacter: { type: [String, Number, null], default: null },
   stackThreshold: { type: [String, Number, null], default: null },
-  showStars: Boolean,
-  showFaceBboxes: Boolean,
-  showDetections: Boolean,
-  showProblemIcon: Boolean,
-  penalisedTagWeights: { type: Object, default: () => ({}) },
-  showStacks: { type: Boolean, default: true },
-  compactMode: { type: Boolean, default: false },
-  // 'square' (uniform grid) or 'justified' (Google-Photos-style rows of
-  // variable-width thumbnails sharing a common row height).
-  thumbnailMode: { type: String, default: "square" },
-  // Shared thumbnail-size level (0..6). Drives square column count (via
-  // gridStore.columns) and, in justified mode, the target row height.
-  sizeLevel: { type: Number, default: 3 },
-  themeMode: { type: String, default: "light" },
-  dateFormat: { type: String, default: "locale" },
   allPicturesId: String,
   unassignedPicturesId: String,
   scrapheapPicturesId: String,
-  gridVersion: { type: Number, default: 0 },
-  wsUpdateKey: { type: Number, default: 0 },
   wsTagUpdate: {
     type: Object,
     default: () => ({ key: 0, pictureIds: [] }),
@@ -1303,8 +1292,6 @@ const props = defineProps({
     type: Object,
     default: () => ({ key: 0, payload: null }),
   },
-  // "all" | "stacked" | "unstacked" | "unresolved"
-  columns: { type: Number, required: true },
   projectViewMode: { type: String, default: "global" },
   selectedProjectId: { type: Number, default: null },
   characterProjectIds: { type: Object, default: () => ({}) },
@@ -1315,8 +1302,6 @@ const props = defineProps({
   setMultiMode: { type: String, default: "intersection" },
   setDifferenceBaseId: { type: Number, default: null },
   selectedSetNames: { type: Object, default: () => ({}) },
-  publicUrl: { type: String, default: null },
-  embedWatermark: { type: Boolean, default: false },
   pendingExternalImportCount: { type: Number, default: 0 },
   sortChangedExternalCount: { type: Number, default: 0 },
 });
@@ -1477,7 +1462,7 @@ const segmentTargetIds = ref(null);
 
 // Badge size interpolated continuously across column count (1 = lg, 12+ = sm).
 const badgeSizeT = computed(() =>
-  Math.min(1, Math.max(0, ((props.columns || 1) - 1) / 11)),
+  Math.min(1, Math.max(0, ((gridStore.columns || 1) - 1) / 11)),
 );
 
 const badgeCssVars = computed(() => {
@@ -2274,7 +2259,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => props.wsUpdateKey,
+  () => gridStore.wsUpdateKey,
   (nextKey) => {
     if (!nextKey || nextKey === lastWsUpdateKey.value) return;
     lastWsUpdateKey.value = nextKey;
@@ -2600,7 +2585,7 @@ function getFaceBboxOverlays(img) {
   void selectedFaceIds.value;
   void thumbnailReadyMap[img.id];
   if (
-    !props.showFaceBboxes ||
+    !gridStore.showFaceBboxes ||
     !img.faces ||
     !img.faces.length ||
     !(img.thumbnail_width || img.width) ||
@@ -2634,7 +2619,7 @@ function getDetectionBboxOverlays(img) {
   void faceOverlayRedrawKey.value; // depend on redraw key
   void thumbnailReadyMap[img.id];
   if (
-    !props.showDetections ||
+    !gridStore.showDetections ||
     !img.detections ||
     !img.detections.length ||
     !(img.thumbnail_width || img.width) ||
@@ -2731,18 +2716,18 @@ function getThumbnailInfoItems(img) {
   } else if (selectedSort === "IMPORTED_AT" && img.imported_at) {
     items.push({
       key: "imported_at",
-      text: formatUserDate(img.imported_at, props.dateFormat),
+      text: formatUserDate(img.imported_at, userPrefsStore.dateFormat),
     });
   } else if (selectedSort.includes("DATE") && img.created_at) {
     items.push({
       key: "created_at",
-      text: formatUserDate(img.created_at, props.dateFormat),
+      text: formatUserDate(img.created_at, userPrefsStore.dateFormat),
     });
   } else if (
     selectedSort === LIKENESS_GROUPS_SORT_KEY &&
     (typeof img.stackIndex === "number" || typeof img.stack_index === "number")
   ) {
-    if (!props.showStacks) {
+    if (!gridStore.showStacks) {
       return items;
     }
     const stackIndex =
@@ -2762,7 +2747,9 @@ function formatCompactDate(dateStr) {
   const now = new Date();
   const sameYear = d.getFullYear() === now.getFullYear();
   const fmt =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const y = d.getFullYear();
   const day = d.getDate();
   const MONTHS = [
@@ -2812,7 +2799,9 @@ function formatCompactDatetime(dateStr) {
   const now = new Date();
   const sameYear = d.getFullYear() === now.getFullYear();
   const fmt =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const y = d.getFullYear();
   const day = d.getDate();
   const MONTHS = [
@@ -2927,10 +2916,6 @@ const visibleRangeLabel = computed(() => {
   return `${first} – ${last}`;
 });
 
-// Store-direct (Phase 3): every picture-query filter facet is read from the
-// filter store, not mirrored in through props.
-const filterStore = useFilterStore();
-const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
@@ -3842,7 +3827,9 @@ const scrapheapPurgeBadges = computed(() => {
   }
   const now = purgeNowMs.value;
   const dateFormat =
-    typeof props.dateFormat === "string" ? props.dateFormat : "locale";
+    typeof userPrefsStore.dateFormat === "string"
+      ? userPrefsStore.dateFormat
+      : "locale";
   const formatDate = (iso) => formatUserDate(iso, dateFormat);
   for (const img of gridImagesToRender.value || []) {
     if (!img || img.id == null) continue;
@@ -4491,7 +4478,7 @@ function scheduleWsTagFullRefresh() {
 }
 
 watch(
-  () => props.gridVersion,
+  () => gridStore.gridVersion,
   () => {
     if (pauseGridAutoUpdates.value) {
       pendingGridRefreshAfterImport.value = true;
@@ -4651,7 +4638,7 @@ const {
 // flex-wrap lines break exactly where useJustifiedLayout computed the rows —
 // the invariant the spacer/fetch arithmetic depends on.
 const justifiedInfoRowExtra = computed(() =>
-  props.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+  gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
 );
 
 function _justifiedItemGeometry(img, localIdx) {
@@ -4700,7 +4687,7 @@ const gridContainerStyle = computed(() => {
   }
   return {
     ...base,
-    gridTemplateColumns: `repeat(${props.columns}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${gridStore.columns}, minmax(0, 1fr))`,
   };
 });
 
@@ -6135,7 +6122,7 @@ watch(
 );
 
 watch(
-  () => props.showStacks,
+  () => gridStore.showStacks,
   async (expandAllStacksEnabled) => {
     if (expandAllStacksEnabled) {
       syncExpandAllStacksFromFetchedImages();
@@ -6148,7 +6135,7 @@ watch(
 );
 
 watch(
-  () => props.columns,
+  () => gridStore.columns,
   async () => {
     updateRowHeightFromGrid();
     recalculateVisibleRange();
@@ -6161,7 +6148,7 @@ watch(
 );
 
 watch(
-  () => props.compactMode,
+  () => gridStore.compactMode,
   () => {
     updateRowHeightFromGrid();
     updateVisibleThumbnails();
@@ -6174,7 +6161,7 @@ watch(
 // the maintainer hit). Mirror the columns watch: re-measure row height, re-pack,
 // recompute the visible range, and refetch the now-visible thumbnails.
 watch(
-  () => props.thumbnailMode,
+  () => gridStore.thumbnailMode,
   async () => {
     updateRowHeightFromGrid();
     recalculateVisibleRange();
@@ -6259,7 +6246,7 @@ watch(
 );
 
 watch(
-  [() => props.showFaceBboxes, () => allGridImages.value.length],
+  [() => gridStore.showFaceBboxes, () => allGridImages.value.length],
   ([faceEnabled, length], [prevFace, prevLength]) => {
     if (!faceEnabled) return;
     if (length <= 0) return;
@@ -6271,7 +6258,7 @@ watch(
 );
 
 watch(
-  [() => props.showDetections, () => allGridImages.value.length],
+  [() => gridStore.showDetections, () => allGridImages.value.length],
   ([detEnabled, length], [prevDet, prevLength]) => {
     if (!detEnabled) return;
     if (length <= 0) return;
@@ -6371,7 +6358,7 @@ const emptyStateAlt = computed(() => {
 });
 
 const isDarkThemeActive = computed(() => {
-  const mode = String(props.themeMode || "light").toLowerCase();
+  const mode = String(userPrefsStore.themeMode || "light").toLowerCase();
   if (mode === "dark") return true;
   if (mode === "light") return false;
   if (mode === "system") {
@@ -6598,14 +6585,14 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
         }
         gridImg.faces =
           thumbObj && Array.isArray(thumbObj.faces) ? thumbObj.faces : [];
-        if (props.showFaceBboxes && gridImg.faces.length) {
+        if (gridStore.showFaceBboxes && gridImg.faces.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.detections =
           thumbObj && Array.isArray(thumbObj.detections)
             ? thumbObj.detections
             : [];
-        if (props.showDetections && gridImg.detections.length) {
+        if (gridStore.showDetections && gridImg.detections.length) {
           overlayNeedsRedraw = true;
         }
         gridImg.penalised_tags =
@@ -7175,7 +7162,7 @@ function updateDescriptionForImage(imageId, description) {
 // ============================================================
 
 watch(
-  () => props.thumbnailSize,
+  () => gridStore.thumbnailSize,
   () => {
     // Recalculate visibleStart and visibleEnd after rowHeight update
     nextTick(() => {
@@ -7190,7 +7177,7 @@ watch(
       if (!el) return;
       let cardHeight = rowHeight.value;
       const scrollTop = el.scrollTop;
-      const cols = props.columns;
+      const cols = gridStore.columns;
       // First visible row (may be partially visible)
       const firstVisibleRow = scrollTop / cardHeight;
       // Last visible row (may be partially visible)
@@ -7350,7 +7337,7 @@ function gridItemTopOffset(index) {
     const top = layout.rowOffsets[row];
     return typeof top === "number" ? top : null;
   }
-  const cols = Math.max(1, props.columns || 1);
+  const cols = Math.max(1, gridStore.columns || 1);
   return Math.floor(index / cols) * rowHeight.value;
 }
 

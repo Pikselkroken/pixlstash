@@ -21,6 +21,7 @@ import {
 } from "../utils/media.js";
 import { debounce } from "lodash-es";
 import { useFilterStore } from "../stores/useFilterStore";
+import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 
@@ -30,7 +31,8 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
  * Manages grid image fetching: fetch state, URL query building, and the
  * debounced fetch trigger.
  *
- * The filter facets of the query come from the stores directly (Phase 3);
+ * The filter facets of the query and the grid geometry come from the stores
+ * directly (Phase 3);
  * `props` still supplies the selection/sort/project fields that have not been
  * migrated yet.
  *
@@ -92,6 +94,7 @@ export function useGridFetch(
   },
 ) {
   const filterStore = useFilterStore();
+  const gridStore = useGridStore();
   const selectionStore = useSelectionStore();
   const userPrefsStore = useUserPrefsStore();
 
@@ -731,12 +734,12 @@ export function useGridFetch(
         // than rowHeight?.value, which may still hold the initial thumbnailSize
         // estimate when this runs (DOM measurement via updateRowHeightFromGrid
         // happens asynchronously and may not have fired yet).
-        const _fbCols = props.columns || 1;
+        const _fbCols = gridStore.columns || 1;
         const _fbViewH = scrollWrapper.value?.clientHeight || 0;
         const _fbViewW = scrollWrapper.value?.clientWidth || 0;
         const _fbCellH =
           _fbViewW > 0
-            ? Math.round(_fbViewW / _fbCols) + (props.compactMode ? 0 : 24)
+            ? Math.round(_fbViewW / _fbCols) + (gridStore.compactMode ? 0 : 24)
             : rowHeight?.value > 0
               ? rowHeight.value
               : 200;
@@ -986,7 +989,7 @@ export function useGridFetch(
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
         const placeholderStartedAt = getNowMs();
-        const cols = props.columns || 1;
+        const cols = gridStore.columns || 1;
         // Compute window count from actual viewport capacity so visibleEnd covers
         // all initially visible items even when the viewport shows more than VIEW_WINDOW.
         // Derive cell height from clientWidth/cols (square thumbnails) rather than
@@ -996,12 +999,12 @@ export function useGridFetch(
         const _fastViewH = scrollWrapper.value?.clientHeight || 0;
         const _effectiveRowHeight0 =
           _fastViewW > 0
-            ? Math.round(_fastViewW / cols) + (props.compactMode ? 0 : 24)
+            ? Math.round(_fastViewW / cols) + (gridStore.compactMode ? 0 : 24)
             : rowHeight?.value > 0
               ? rowHeight.value
               : Math.round(
-                  Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-                    (props.compactMode ? 0 : 24),
+                  Math.min(384, Math.max(128, gridStore.thumbnailSize || 128)) +
+                    (gridStore.compactMode ? 0 : 24),
                 );
         const _viewportItemCount0 =
           _fastViewH > 0 && _effectiveRowHeight0 > 0
@@ -1279,7 +1282,7 @@ export function useGridFetch(
       if (isSetOverlapView.value) {
         totalCurrentCategoryCount.value = newImages.length;
       }
-      const cols = props.columns || 1;
+      const cols = gridStore.columns || 1;
       // Compute window count from actual viewport capacity so visibleEnd covers
       // all initially visible items even when the viewport shows more than VIEW_WINDOW.
       // Derive cell height from clientWidth/cols (square thumbnails) rather than
@@ -1289,12 +1292,12 @@ export function useGridFetch(
       const _slowViewH = scrollWrapper.value?.clientHeight || 0;
       const _effectiveRowHeight1 =
         _slowViewW > 0
-          ? Math.round(_slowViewW / cols) + (props.compactMode ? 0 : 24)
+          ? Math.round(_slowViewW / cols) + (gridStore.compactMode ? 0 : 24)
           : rowHeight?.value > 0
             ? rowHeight.value
             : Math.round(
-                Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-                  (props.compactMode ? 0 : 24),
+                Math.min(384, Math.max(128, gridStore.thumbnailSize || 128)) +
+                  (gridStore.compactMode ? 0 : 24),
               );
       const _viewportItemCount1 =
         _slowViewH > 0 && _effectiveRowHeight1 > 0

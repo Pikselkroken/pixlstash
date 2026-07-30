@@ -6,6 +6,7 @@ import {
   verticalNeighborIndex,
   JUSTIFIED_ROW_GAP,
 } from "./useJustifiedLayout.js";
+import { useGridStore } from "../stores/useGridStore";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -56,6 +57,7 @@ export function useGridKeyboardNav(
     setScore,
   },
 ) {
+  const gridStore = useGridStore();
   // ── Scrapheap ghosts ────────────────────────────────────────────────────
   // A ghosted tile is on screen but inert: it is already in the Scrapheap and
   // is only being held there while its undo is one click away.
@@ -108,7 +110,7 @@ export function useGridKeyboardNav(
     if (scrollWrapper.value) {
       let newScrollTop = scrollWrapper.value.scrollTop;
       const total = allGridImages.value.length;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const totalRows = Math.ceil(total / cols);
       // Justified rows don't follow cols × rowHeight; use the packed model's
       // exact pixel height so End/PageDown reach the true bottom.
@@ -197,7 +199,7 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       let newIdx = cursorIdx.value;
       // Which way the scan runs when the landing cell turns out to be a ghost.
       const travel =
@@ -272,7 +274,7 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const packedLayout = activeJustifiedLayout();
       let newIdx;
       if (packedLayout) {
