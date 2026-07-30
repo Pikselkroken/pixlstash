@@ -100,15 +100,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # release_files: what this leg attaches to the GitHub release. The win
+        # leg attaches nothing here — its installer is Authenticode-signed (or
+        # explicitly labelled -unsigned) and attached by the sign-windows-desktop
+        # / attach-windows-desktop-unsigned jobs below.
         include:
-          - { runner: ubuntu-latest, os: linux, arch: x64, accel: cpu }
-          - { runner: windows-latest, os: win, arch: x64, accel: cpu }
+          - runner: ubuntu-latest
+            os: linux
+            arch: x64
+            accel: cpu
+            release_files: |
+              electron/release/*.AppImage
+              electron/release/*.deb
+          - runner: windows-latest
+            os: win
+            arch: x64
+            accel: cpu
+            release_files: ""
           # macOS (Apple Silicon, Metal). Builds UNSIGNED until the Apple Developer ID
           # signing secrets are added to the repo (see "Build Electron installers"
           # below and docs/macos-signing-setup.md): unsigned artifacts get a
           # "-unsigned" suffix and Gatekeeper quarantines them. Once the signing
           # secrets are set the build signs + notarises and drops the suffix.
-          - { runner: macos-14, os: mac, arch: arm64, accel: metal }
+          - runner: macos-14
+            os: mac
+            arch: arm64
+            accel: metal
+            release_files: |
+              electron/release/*.dmg
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -222,13 +241,99 @@ jobs:
             electron/release/*.dmg
             electron/release/*.zip
       - name: Attach installers to release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.release_files != ''
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
-          files: |
-            electron/release/*.exe
-            electron/release/*.AppImage
-            electron/release/*.deb
-            electron/release/*.dmg
+          files: ${{ matrix.release_files }}
+          prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
+
+  # Windows Authenticode signing (Certum SimplySign). The cloud key is only
+  # reachable through Certum's SimplySign Desktop GUI, so signing runs on Linux
+  # in the prebuilt certum-signer container, which drives that GUI headlessly
+  # and signs over PKCS#11 (see .github/actions/certum-sign/ and
+  # docs/windows-signing-setup.md). Gated on the WINDOWS_SIGNING_ENABLED repo
+  # variable (secrets live on the windows-signing environment, which job-level
+  # `if:` cannot see). Once enabled, a signing failure is a hard red job: the
+  # release ships without its Windows exe until this job is rerun. The
+  # -unsigned fallback below applies only while signing is not enabled.
+  sign-windows-desktop:
+    needs: [build-wheel, build-electron]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: windows-signing
+    container:
+      # UPDATE THIS DIGEST from the "Build Certum Signer Image" workflow's step
+      # summary after an image change (docs/windows-signing-setup.md §rollout).
+      image: ghcr.io/pikselkroken/certum-signer@sha256:0000000000000000000000000000000000000000000000000000000000000000 # PLACEHOLDER-set-after-first-image-build
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pixlstash-desktop-win-x64
+          path: signing
+      - name: Sign installer
+        uses: ./.github/actions/certum-sign
+        env:
+          CERTUM_USER_ID: ${{ secrets.CERTUM_USER_ID }}
+          CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+          CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
+        with:
+          files: "signing/*.exe"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pixlstash-desktop-win-x64-signed
+          path: signing/*.exe
+      - name: Upload signing diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signing-diagnostics-desktop
+          path: |
+            ${{ runner.temp }}/simplysign-redacted.log
+            ${{ runner.temp }}/*.png
+          retention-days: 3
+          if-no-files-found: ignore
+      - name: Attach signed installer to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          files: signing/*.exe
+          prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
+
+  # Fallback while signing is not enabled: ship the Windows installer with an
+  # explicit -unsigned suffix (mirrors the macOS convention above). Gated on
+  # the variable being EMPTY, not merely != 'true': a malformed value ('True',
+  # '1') then attaches no Windows exe at all — loud — instead of silently
+  # shipping unsigned while the operator believes signing is on.
+  attach-windows-desktop-unsigned:
+    needs: [build-wheel, build-electron]
+    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pixlstash-desktop-win-x64
+          path: signing
+      - name: Label installer as unsigned
+        run: |
+          set -euo pipefail
+          for f in signing/*.exe; do mv "$f" "${f%.exe}-unsigned.exe"; done
+          ls signing/
+          echo "::warning title=Unsigned Windows build::Certum code signing is not enabled (WINDOWS_SIGNING_ENABLED repo variable / windows-signing environment secrets). Attaching the Windows installer with an '-unsigned' suffix — SmartScreen will warn users. See docs/windows-signing-setup.md."
+      - name: Attach unsigned installer to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          files: signing/*.exe
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}

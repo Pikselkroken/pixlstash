@@ -15,7 +15,10 @@ jobs:
   build-installer:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
 
     steps:
       - name: Check out repository
@@ -87,14 +90,92 @@ jobs:
           name: pixlstash-server-windows-${{ steps.version.outputs.version }}
           path: installer/windows/installer-output/*.exe
 
-      - name: Attach installer to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+  # Windows Authenticode signing (Certum SimplySign) — same design as the
+  # sign-windows-desktop job in electron.yml: the cloud key is only reachable
+  # through Certum's SimplySign Desktop GUI, so signing runs on Linux in the
+  # prebuilt certum-signer container (see .github/actions/certum-sign/ and
+  # docs/windows-signing-setup.md). The sign job — not the build job — attaches
+  # the installer to the release, with a PAT (RELEASE_BOT_TOKEN), not
+  # GITHUB_TOKEN: releases created by GITHUB_TOKEN do not emit a
+  # `release: published` event, which release-version.yml depends on.
+  sign-windows-server:
+    needs: build-installer
+    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: windows-signing
+    container:
+      # UPDATE THIS DIGEST from the "Build Certum Signer Image" workflow's step
+      # summary after an image change (docs/windows-signing-setup.md §rollout).
+      image: ghcr.io/pikselkroken/certum-signer@sha256:0000000000000000000000000000000000000000000000000000000000000000 # PLACEHOLDER-set-after-first-image-build
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pixlstash-server-windows-${{ needs.build-installer.outputs.version }}
+          path: signing
+      - name: Sign installer
+        uses: ./.github/actions/certum-sign
+        env:
+          CERTUM_USER_ID: ${{ secrets.CERTUM_USER_ID }}
+          CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+          CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
+        with:
+          files: "signing/*.exe"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pixlstash-server-windows-${{ needs.build-installer.outputs.version }}-signed
+          path: signing/*.exe
+      - name: Upload signing diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-signing-diagnostics-server
+          path: |
+            ${{ runner.temp }}/simplysign-redacted.log
+            ${{ runner.temp }}/*.png
+          retention-days: 3
+          if-no-files-found: ignore
+      - name: Attach signed installer to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          # Publish with a PAT, not the default GITHUB_TOKEN. Releases created by
-          # GITHUB_TOKEN do not emit a `release: published` event that can trigger
-          # other workflows, which is why release-version.yml (docs + latest-version)
-          # never ran for tag-pushed releases. A PAT-created release does trigger it.
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
-          files: installer/windows/installer-output/*.exe
-          prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
+          files: signing/*.exe
+          prerelease: ${{ needs.build-installer.outputs.is_prerelease == 'true' }}
+
+  # Fallback while signing is not enabled: ship the installer with an explicit
+  # -unsigned suffix (mirrors the desktop app's convention in electron.yml).
+  # Gated on the variable being EMPTY, not merely != 'true': a malformed value
+  # ('True', '1') then attaches no Windows exe at all — loud — instead of
+  # silently shipping unsigned while the operator believes signing is on.
+  attach-windows-server-unsigned:
+    needs: build-installer
+    if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pixlstash-server-windows-${{ needs.build-installer.outputs.version }}
+          path: signing
+      - name: Label installer as unsigned
+        run: |
+          set -euo pipefail
+          for f in signing/*.exe; do mv "$f" "${f%.exe}-unsigned.exe"; done
+          ls signing/
+          echo "::warning title=Unsigned Windows build::Certum code signing is not enabled (WINDOWS_SIGNING_ENABLED repo variable / windows-signing environment secrets). Attaching the Windows installer with an '-unsigned' suffix — SmartScreen will warn users. See docs/windows-signing-setup.md."
+      - name: Attach unsigned installer to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          # PAT, not GITHUB_TOKEN — see the comment on sign-windows-server.
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          files: signing/*.exe
+          prerelease: ${{ needs.build-installer.outputs.is_prerelease == 'true' }}

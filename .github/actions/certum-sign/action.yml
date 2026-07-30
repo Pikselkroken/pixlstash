@@ -1,0 +1,301 @@
+name: Sign Windows binaries with Certum SimplySign
+description: |
+  Authenticode-sign PE files (.exe) with a Certum "Code Signing in the Cloud"
+  certificate.
+
+  Certum SimplySign has no headless signing API: the cloud key is reachable
+  only through the SimplySign Desktop GUI, which exposes it as a PKCS#11
+  token. This action runs that GUI headlessly (Xvfb + xdotool), logs in with
+  the TOTP derived from the otpauth URI, signs each file with jsign over
+  PKCS#11 (SHA-256 + RFC 3161 timestamp) and verifies the result with
+  osslsigncode. Adapted from ReactiveUI's NuGet signing action
+  (github.com/reactiveui/actions-common).
+
+  MUST run inside the prebuilt signer image (ghcr.io/pikselkroken/
+  certum-signer, see .github/docker/certum-signer/), which bakes in SimplySign
+  Desktop, jsign and the X11/PKCS#11 stack and exports $SS_DIST / $JSIGN_JAR.
+  Credentials are read from the environment — composite actions cannot declare
+  secret-typed inputs — so map these windows-signing environment secrets into
+  env on the calling step:
+    CERTUM_USER_ID            SimplySign login id (the account e-mail)
+    CERTUM_OTP_URI            otpauth:// URI holding the SimplySign TOTP seed
+    CERTUM_CERT_FINGERPRINT   (optional) SHA-256 fingerprint of the leaf
+                              certificate; signing fails if the actual signer
+                              cert does not match
+
+  Failure policy: every failure here is a hard red job. There is deliberately
+  no "tried to sign, shipped unsigned anyway" path — the unsigned fallback
+  lives in the calling workflows and only applies when signing is not enabled
+  at all (WINDOWS_SIGNING_ENABLED repo variable unset).
+
+inputs:
+  files:
+    description: "Glob of PE files to sign (relative to the working directory)."
+    required: true
+  timestamp-url:
+    description: "RFC3161 timestamp authority URL."
+    required: false
+    default: "http://time.certum.pl"
+  launch-seconds:
+    description: "Seconds to wait after launching SimplySign before driving the UI."
+    required: false
+    default: "20"
+  key-alias:
+    description: "jsign --alias, only needed if the token holds more than one key."
+    required: false
+    default: ""
+  debug-screenshots:
+    description: >-
+      Capture X screenshots when the login fails. Screenshots may show
+      CERTUM_USER_ID and should never show the OTP (unverified: assumes
+      SimplySign masks the OTP field); they are written to $RUNNER_TEMP for
+      the caller to upload as a short-retention artifact.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Preflight
+      shell: bash
+      env:
+        FILES_GLOB: ${{ inputs.files }}
+      run: |
+        set -euo pipefail
+        # Hard-fail on misconfiguration: if the caller reached this action,
+        # signing is enabled, so missing pieces must be loud, never a silent
+        # unsigned release.
+        : "${SS_DIST:?must run inside the certum-signer image (SS_DIST unset)}"
+        : "${JSIGN_JAR:?must run inside the certum-signer image (JSIGN_JAR unset)}"
+        [ -n "${CERTUM_USER_ID:-}" ] || { echo "::error title=Signing misconfigured::CERTUM_USER_ID secret is empty. Set it on the windows-signing environment or unset the WINDOWS_SIGNING_ENABLED repo variable."; exit 1; }
+        [ -n "${CERTUM_OTP_URI:-}" ] || { echo "::error title=Signing misconfigured::CERTUM_OTP_URI secret is empty. Set it on the windows-signing environment or unset the WINDOWS_SIGNING_ENABLED repo variable."; exit 1; }
+        shopt -s nullglob
+        files=( $FILES_GLOB )
+        [ "${#files[@]}" -gt 0 ] || { echo "::error title=Nothing to sign::no files matched: $FILES_GLOB"; exit 1; }
+        echo "will sign ${#files[@]} file(s): ${files[*]}"
+        # Derive the exe/wrapper/PKCS#11 paths baked into the image.
+        SS_START="$(find "$SS_DIST/" -name 'SimplySignDesktop_start' -type f | head -1)"
+        SS_EXE="$(find "$SS_DIST/" -name 'SimplySignDesktop' -type f | head -1)"
+        SS_PKCS11="$(find "$SS_DIST/" -name 'SimplySignPKCS*.so' | head -1)"
+        [ -n "$SS_PKCS11" ] || { echo "::error::SimplySignPKCS*.so not found under $SS_DIST"; exit 1; }
+        { echo "SS_START=$SS_START"; echo "SS_EXE=$SS_EXE"; echo "SS_PKCS11=$SS_PKCS11"; } >> "$GITHUB_ENV"
+
+    - name: Start headless display
+      shell: bash
+      run: |
+        set -euo pipefail
+        Xvfb :99 -screen 0 1280x1024x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+        sleep 3
+        # Stop fluxbox running fbsetbg (missing default wallpaper -> an
+        # xmessage that steals focus from the login form).
+        mkdir -p "$HOME/.fluxbox"
+        printf 'session.screen0.rootCommand: /bin/true\n' > "$HOME/.fluxbox/init"
+        DISPLAY=:99 fluxbox >"$RUNNER_TEMP/fluxbox.log" 2>&1 &
+        sleep 2
+        DISPLAY=:99 xdpyinfo >/dev/null && echo "X display :99 up"
+
+    - name: Connect SimplySign (headless login)
+      shell: bash
+      env:
+        DISPLAY: ":99"
+        LAUNCH_SECONDS: ${{ inputs.launch-seconds }}
+        DEBUG_SCREENSHOTS: ${{ inputs.debug-screenshots }}
+      # No `set -x` in this step: it handles the OTP. The OTP is masked with
+      # ::add-mask:: as soon as it exists, but xtrace would still splash every
+      # intermediate command into the log — keep this step quiet on purpose.
+      run: |
+        set -euo pipefail
+
+        # SimplySignDesktop reads $USER at startup and segfaults when it is
+        # unset (belt and braces on top of the image's ENV USER=root).
+        export USER="${USER:-root}"
+
+        # SimplySign needs its config near $HOME + the logon-dialog
+        # preference, otherwise it shows a "Critical error" on launch.
+        cp "$SS_DIST/SimplySignDesktop.xml" "$HOME/" 2>/dev/null || true
+        mkdir -p "$HOME/.config"
+        { echo "[General]"; echo "CacheUserIdAtLogon=Yes"; echo "ShowLogonDialogAfterApplicationStartup=Yes"; echo "ShowLogonDialogWhenAnyAppRequestsAccess=Yes"; } > "$HOME/.config/Unknown Organization.conf"
+
+        # Launch via the *_start wrapper (sets LD_LIBRARY_PATH for bundled Qt).
+        export LD_LIBRARY_PATH="$SS_DIST:${LD_LIBRARY_PATH:-}"
+        if [ -n "${SS_START:-}" ]; then "$SS_START" >"$RUNNER_TEMP/simplysign.log" 2>&1 &
+        else "$SS_EXE" >"$RUNNER_TEMP/simplysign.log" 2>&1 & fi
+        sleep "$LAUNCH_SECONDS"
+
+        # Current OTP from the otpauth URI (honours algorithm/digits/period).
+        # Plain-stdlib RFC 6238 — auditable in-diff, no extra dependency. The
+        # remaining-seconds guard regenerates rather than typing an OTP that
+        # could expire mid-entry (typing takes ~1-2 s at 50 ms/char).
+        gen_otp() {
+          python3 - <<'PY'
+        import os,hmac,hashlib,base64,struct,time
+        from urllib.parse import urlparse,parse_qs
+        q=parse_qs(urlparse(os.environ["CERTUM_OTP_URI"]).query)
+        s=q["secret"][0]
+        digits=int(q.get("digits",["6"])[0]); period=int(q.get("period",["30"])[0])
+        algo={"SHA1":hashlib.sha1,"SHA256":hashlib.sha256,"SHA512":hashlib.sha512}[q.get("algorithm",["SHA1"])[0].upper()]
+        now=time.time()
+        remaining=period-(now%period)
+        if remaining<8:
+            time.sleep(remaining+1); now=time.time()
+        key=base64.b32decode(s+"="*((8-len(s)%8)%8))
+        h=hmac.new(key,struct.pack(">Q",int(now//period)),algo).digest(); o=h[-1]&0xF
+        print(str((int.from_bytes(h[o:o+4],"big")&0x7fffffff)%(10**digits)).zfill(digits))
+        PY
+        }
+
+        find_ss_window() {
+          # Enumerate windows, match *implySign* in _NET_WM_NAME, keep the
+          # largest (`search --name PATTERN` matches the empty legacy WM_NAME
+          # for this app, so name-matching must be done per window).
+          best=0; WID=""; BX=0; BY=0; BW=0; BH=0
+          for w in $(xdotool search --name '' 2>/dev/null); do
+            nm="$(xdotool getwindowname "$w" 2>/dev/null || true)"
+            case "$nm" in *implySign*) ;; *) continue ;; esac
+            eval "$(xdotool getwindowgeometry --shell "$w" 2>/dev/null)"
+            area=$(( ${WIDTH:-0} * ${HEIGHT:-0} ))
+            if [ "$area" -gt "$best" ]; then best=$area; WID=$w; BX=${X:-0}; BY=${Y:-0}; BW=${WIDTH:-0}; BH=${HEIGHT:-0}; fi
+          done
+        }
+
+        login_failed() {
+          echo "::error title=SimplySign login failed::$1"
+          echo "--- simplysign.log tail ---"; tail -50 "$RUNNER_TEMP/simplysign.log" 2>/dev/null || true
+          if [ "$DEBUG_SCREENSHOTS" = "true" ]; then
+            import -window root "$RUNNER_TEMP/login-failure.png" 2>/dev/null || true
+            echo "screenshot saved to RUNNER_TEMP/login-failure.png (may show the user id; should not show the OTP, assuming SimplySign masks the field)"
+          fi
+        }
+
+        token_active() {
+          timeout 60 pkcs11-tool --module "$SS_PKCS11" -L 2>/dev/null | grep -q "token label"
+        }
+
+        # Up to 3 full login attempts, fresh OTP each time.
+        for attempt in 1 2 3; do
+          echo "login attempt $attempt"
+          # Wait for the login form (it can lag the launch).
+          for i in $(seq 1 30); do
+            find_ss_window
+            [ "${BW:-0}" -ge 400 ] && [ "${BH:-0}" -ge 300 ] && break
+            WID=""; sleep 2
+          done
+          if [ -z "$WID" ]; then
+            [ "$attempt" = 3 ] && { login_failed "login window did not appear"; exit 1; }
+            continue
+          fi
+          echo "login window $WID ${BW}x${BH}"
+
+          xdotool windowactivate --sync "$WID" || xdotool windowactivate "$WID" || true
+          xdotool windowraise "$WID" || true
+          sleep 1
+          # Click E-MAIL field, type id; Tab; type OTP; click Login. The click
+          # points are height fractions validated against the pinned SimplySign
+          # version — an image version bump must re-validate via the smoke test.
+          xdotool mousemove $((BX + BW/2)) $((BY + BH*39/100)) click 1; sleep 1
+          xdotool type --clearmodifiers --delay 50 "$CERTUM_USER_ID"
+          xdotool key Tab; sleep 1
+          OTP="$(gen_otp)"
+          echo "::add-mask::$OTP"
+          xdotool type --clearmodifiers --delay 50 "$OTP"
+          xdotool mousemove $((BX + BW/2)) $((BY + BH*76/100)) click 1
+          sleep 8
+
+          # "Logon successful" dialog: the token does NOT activate until its
+          # Close button (bottom-centre) is clicked. Re-find (content changed).
+          find_ss_window
+          if [ -n "$WID" ]; then
+            xdotool windowactivate --sync "$WID" || true
+            xdotool mousemove $((BX + BW/2)) $((BY + BH*94/100)) click 1
+            sleep 3
+          fi
+
+          token_active && { echo "PKCS#11 token active"; break; }
+          [ "$attempt" = 3 ] && { login_failed "token not active after 3 login attempts"; exit 1; }
+          echo "token not active yet, retrying login"
+          sleep 5
+        done
+        # Belt and braces: show the slot listing in the log (no secrets in it).
+        timeout 60 pkcs11-tool --module "$SS_PKCS11" -L
+
+    - name: Sign and verify
+      shell: bash
+      env:
+        TS_URL: ${{ inputs.timestamp-url }}
+        FILES_GLOB: ${{ inputs.files }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+      run: |
+        set -euo pipefail
+        CONF="$RUNNER_TEMP/sunpkcs11.conf"
+        { echo "name = SimplySign"; echo "library = $SS_PKCS11"; echo "slotListIndex = 0"; } > "$CONF"
+
+        alias_args=()
+        [ -n "$KEY_ALIAS" ] && alias_args=(--alias "$KEY_ALIAS")
+
+        shopt -s nullglob
+        files=( $FILES_GLOB )
+        for f in "${files[@]}"; do
+          echo "::group::sign $f"
+          # RFC3161 timestamp so the signature outlives the certificate.
+          # Retry: a transient timestamp-server failure should not require a
+          # manual job rerun.
+          ok=""
+          for try in 1 2 3; do
+            if java -jar "$JSIGN_JAR" --storetype PKCS11 --keystore "$CONF" --storepass "" \
+                 --alg SHA-256 --tsmode RFC3161 --tsaurl "$TS_URL" --replace \
+                 "${alias_args[@]}" "$f"; then ok=1; break; fi
+            echo "jsign attempt $try failed for $f, retrying in 10s"
+            sleep 10
+          done
+          [ -n "$ok" ] || { echo "::error title=Signing failed::jsign failed 3 times for $f"; exit 1; }
+
+          # Verify: structural signature check + timestamp presence.
+          osslsigncode verify -in "$f" | tee "$RUNNER_TEMP/verify.out"
+          grep -q "Signature verification: ok" "$RUNNER_TEMP/verify.out" || { echo "::error title=Verification failed::osslsigncode did not report a valid signature for $f"; exit 1; }
+
+          # Optional: assert the leaf certificate is the expected one (catches
+          # signing with the wrong cert in a multi-cert account).
+          if [ -n "${CERTUM_CERT_FINGERPRINT:-}" ]; then
+            osslsigncode extract-signature -in "$f" -out "$RUNNER_TEMP/sig.der" >/dev/null
+            actual="$(openssl pkcs7 -inform DER -in "$RUNNER_TEMP/sig.der" -print_certs 2>/dev/null \
+              | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+              | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
+            expected="$(printf '%s' "$CERTUM_CERT_FINGERPRINT" | sed 's/://g' | tr '[:upper:]' '[:lower:]')"
+            [ "$actual" = "$expected" ] || { echo "::error title=Wrong signing certificate::leaf fingerprint $actual != expected $expected for $f"; exit 1; }
+            echo "leaf certificate fingerprint matches"
+          fi
+          echo "::endgroup::"
+        done
+
+    - name: Shut down SimplySign
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Killing the desktop app ends the SimplySign session and the PKCS#11
+        # token exposure; the Xvfb/fluxbox kills are container hygiene.
+        pkill -f SimplySignDesktop 2>/dev/null || true
+        pkill Xvfb 2>/dev/null || true
+        pkill fluxbox 2>/dev/null || true
+        # Redact SimplySign's own log before any caller uploads it as a
+        # diagnostics artifact: artifact contents bypass Actions' secret
+        # masking, and this is a third-party app's log we haven't vetted.
+        # Literal (not regex) replace of the user id, plus drop any line that
+        # mentions "otp". Callers must upload simplysign-redacted.log, never
+        # the raw simplysign.log.
+        python3 - <<'PY'
+        import os
+        src = os.path.join(os.environ["RUNNER_TEMP"], "simplysign.log")
+        dst = os.path.join(os.environ["RUNNER_TEMP"], "simplysign-redacted.log")
+        try:
+            data = open(src, encoding="utf-8", errors="replace").read()
+        except FileNotFoundError:
+            raise SystemExit(0)
+        uid = os.environ.get("CERTUM_USER_ID", "")
+        if uid:
+            data = data.replace(uid, "[REDACTED-USER-ID]")
+        lines = ["[REDACTED-OTP-LINE]" if "otp" in line.lower() else line
+                 for line in data.splitlines()]
+        open(dst, "w").write("\n".join(lines) + "\n")
+        PY
+        echo "SimplySign session closed"
