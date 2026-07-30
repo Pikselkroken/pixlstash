@@ -440,7 +440,11 @@ async function fetchMembers() {
         ? await readProjectMembers(ids)
         : await readCharacterMembers(ids);
     if (requestKey !== normalisedIdsKey.value) return; // selection moved on
-    membersById.value = next;
+    // Nothing above this guard may write component state: the readers are pure
+    // reads that hand everything back, so a superseded response is discarded
+    // whole rather than leaking one of its halves.
+    membersById.value = next.members;
+    if (next.withFaces) picturesWithFaces.value = next.withFaces;
     membershipLoaded.value = true;
   } catch (e) {
     if (requestKey !== normalisedIdsKey.value) return;
@@ -460,38 +464,41 @@ async function readSetMembers(ids) {
       ...apiOpts.value,
       includeDeleted: props.includeDeletedMembers ?? false,
     })) ?? {};
-  const next = {};
+  const members = {};
   Object.entries(data).forEach(([setId, memberIds]) => {
-    next[String(setId)] = new Set(
+    members[String(setId)] = new Set(
       (Array.isArray(memberIds) ? memberIds : []).map(String),
     );
   });
-  return next;
+  return { members, withFaces: null };
 }
 
 async function readProjectMembers(ids) {
   const data = (await getProjectMembership(ids, apiOpts.value)) ?? {};
   const assignments = data.project_assignments ?? {};
   const unassignedIds = data.unassigned_picture_ids ?? [];
-  const next = { unassigned: new Set(unassignedIds.map(String)) };
+  const members = { unassigned: new Set(unassignedIds.map(String)) };
   Object.entries(assignments).forEach(([projectId, picIds]) => {
-    next[`project-${projectId}`] = new Set((picIds ?? []).map(String));
+    members[`project-${projectId}`] = new Set((picIds ?? []).map(String));
   });
-  return next;
+  return { members, withFaces: null };
 }
 
 async function readCharacterMembers(ids) {
   const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
-  picturesWithFaces.value = new Set(
-    (data.pictures_with_faces ?? []).map(String),
-  );
-  const next = {};
+  const members = {};
   Object.entries(data.character_assignments ?? {}).forEach(
     ([charId, picIds]) => {
-      next[String(charId)] = new Set(picIds.map(String));
+      members[String(charId)] = new Set(picIds.map(String));
     },
   );
-  return next;
+  // Handed back rather than assigned here: this runs before fetchMembers'
+  // selection guard, so writing it in place would leak a superseded
+  // selection's face ids past the discard.
+  return {
+    members,
+    withFaces: new Set((data.pictures_with_faces ?? []).map(String)),
+  };
 }
 
 /**

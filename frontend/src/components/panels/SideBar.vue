@@ -2572,10 +2572,13 @@ function refreshSidebar(options = {}) {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    // No cache-buster: a fresh `?cb=` per call made every sidebar refresh
-    // re-download every character thumbnail. The URL is stable so the browser
-    // can reuse what it already has; a changed thumbnail arrives with the next
-    // uncached read rather than costing one download per refresh.
+    // No cache-buster: a fresh `?cb=` per call re-downloaded every character
+    // thumbnail on every sidebar refresh, against an already-expensive route
+    // (#651). Freshness is the *response's* job instead — the route sends
+    // `Cache-Control: private, no-cache` with an ETag and answers a conditional
+    // request with a 304, so the browser revalidates every time but transfers
+    // bytes only when the thumbnail actually changed. Re-adding a buster here
+    // would defeat that (integration_architecture.md §9).
     const blob = await getCharacterThumbnail(characterId);
 
     // Create an object URL for the blob

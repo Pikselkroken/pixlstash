@@ -23,6 +23,7 @@ vi.mock("axios", () => {
 
 import {
   activateShareToken,
+  login,
   logout,
   newOperationBatchId,
   onSessionReset,
@@ -41,7 +42,9 @@ describe("newOperationBatchId", () => {
   });
 
   it("is unique per gesture", () => {
-    const ids = new Set(Array.from({ length: 50 }, () => newOperationBatchId()));
+    const ids = new Set(
+      Array.from({ length: 50 }, () => newOperationBatchId()),
+    );
     expect(ids.size).toBe(50);
   });
 });
@@ -59,6 +62,14 @@ describe("onSessionReset", () => {
     // credential's data, even if the POST hangs or fails.
     expect(calls).toEqual(["reset"]);
     await pending;
+    stop();
+  });
+
+  it("fires on login, so the previous credential's data never carries over", async () => {
+    const handler = vi.fn();
+    const stop = onSessionReset(handler);
+    await login("someone", "hunter2");
+    expect(handler).toHaveBeenCalledTimes(1);
     stop();
   });
 

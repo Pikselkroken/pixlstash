@@ -17,6 +17,7 @@ vi.mock("../../api/characters", () => ({
   addCharacterFaces: vi.fn(),
   removeCharacterFaces: vi.fn(),
 }));
+
 vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn(),
   getPictureSetMembership: vi.fn(),
@@ -38,11 +39,17 @@ import {
   getPictureSetMembership,
   addPictureToSet,
 } from "../../api/pictureSets";
+import { listCharacters, getCharacterMembership } from "../../api/characters";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const SETS = [
   { id: 7, name: "Portraits", picture_count: 12 },
   { id: 8, name: "Landscapes", picture_count: 3 },
+];
+
+const CHARACTERS = [
+  { id: 11, name: "Ada" },
+  { id: 12, name: "Grace" },
 ];
 
 let pinia;
@@ -80,6 +87,11 @@ describe("AddToEntityControl", () => {
     listPictureSets.mockReset().mockResolvedValue(SETS);
     getPictureSetMembership.mockReset().mockResolvedValue({ 7: ["101"] });
     addPictureToSet.mockReset().mockResolvedValue({});
+    listCharacters.mockReset().mockResolvedValue(CHARACTERS);
+    getCharacterMembership.mockReset().mockResolvedValue({
+      character_assignments: { 11: ["101"] },
+      pictures_with_faces: ["101"],
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
@@ -154,6 +166,45 @@ describe("AddToEntityControl", () => {
     expect(
       wrapper.findAll(".ate-item--checked .ate-item-name").map((n) => n.text()),
     ).toEqual(["Landscapes"]);
+    wrapper.unmount();
+  });
+
+  // The character reader also produces `picturesWithFaces`, which gates whether
+  // a character row can read as checked at all. It used to be assigned inside
+  // the reader — i.e. BEFORE fetchMembers' selection guard — so a superseded
+  // response discarded its membership but still wrote its face ids, silently
+  // un-ticking the current selection's rows.
+  it("discards both halves of a superseded character membership response", async () => {
+    const slowFirst = deferred();
+    const fastSecond = deferred();
+    getCharacterMembership
+      .mockReturnValueOnce(slowFirst.promise)
+      .mockReturnValueOnce(fastSecond.promise);
+
+    const wrapper = mountControl({ type: "character", pictureIds: ["101"] });
+    await wrapper.find("button.ate-btn").trigger("click");
+    await flushPromises();
+
+    // The selection moves on while the first membership read is still open.
+    await wrapper.setProps({ pictureIds: ["202"] });
+    fastSecond.resolve({
+      character_assignments: { 12: ["202"] },
+      pictures_with_faces: ["202"],
+    });
+    await flushPromises();
+    expect(
+      wrapper.findAll(".ate-item--checked .ate-item-name").map((n) => n.text()),
+    ).toEqual(["Grace"]);
+
+    // The superseded response lands last and must change nothing at all.
+    slowFirst.resolve({
+      character_assignments: { 11: ["101"] },
+      pictures_with_faces: ["101"],
+    });
+    await flushPromises();
+    expect(
+      wrapper.findAll(".ate-item--checked .ate-item-name").map((n) => n.text()),
+    ).toEqual(["Grace"]);
     wrapper.unmount();
   });
 

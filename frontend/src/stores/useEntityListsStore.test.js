@@ -243,6 +243,30 @@ describe("useEntityListsStore", () => {
     expect(store.has("characters")).toBe(false);
   });
 
+  it("does not let a pre-reset request evict the successor's dedup entry", async () => {
+    const store = useEntityListsStore();
+    const beforeReset = deferred();
+    listCharacters.mockReturnValueOnce(beforeReset.promise);
+    const stale = store.refresh("characters");
+
+    transitionAuthContext();
+
+    const afterReset = deferred();
+    listCharacters.mockReturnValueOnce(afterReset.promise);
+    store.refresh("characters");
+
+    // The pre-reset request settles LAST. Its cleanup must not remove the
+    // successor's in-flight entry, or the next caller pays for a third request.
+    beforeReset.resolve([{ id: 1, name: "Previous credential" }]);
+    await stale;
+
+    store.refresh("characters");
+    expect(listCharacters).toHaveBeenCalledTimes(2);
+
+    afterReset.resolve([{ id: 5, name: "Current" }]);
+    await Promise.resolve();
+  });
+
   it("lets a fresh read repopulate after a transition", async () => {
     const store = useEntityListsStore();
     await store.refresh("characters");

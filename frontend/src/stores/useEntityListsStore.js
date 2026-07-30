@@ -185,7 +185,11 @@ export const useEntityListsStore = defineStore("entityLists", () => {
         return requestEpoch === epoch ? lists.value[kind] : [];
       })
       .finally(() => {
-        inFlight.delete(kind);
+        // Identity-checked: a pre-reset request can settle AFTER a post-reset
+        // one for the same kind, and an unconditional delete would evict the
+        // successor's dedup entry and cost a redundant third request. (No stale
+        // write is possible either way — the epoch guard above covers that.)
+        if (inFlight.get(kind) === request) inFlight.delete(kind);
         if (requestEpoch === epoch) {
           pending.value = { ...pending.value, [kind]: false };
         }
