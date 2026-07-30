@@ -70,7 +70,7 @@ copy, reconciled against `routes/dedup.py` as shipped (2026-07-29).
 | `POST /dedup/scan` | queue a scan for one scope | `ScanProgressModel` |
 | `POST /dedup/verdicts/stack` | the "same picture" verdict | `VerdictResponse` |
 | `POST /dedup/verdicts/keep-separate` | the "different pictures" verdict | `VerdictResponse` |
-| `POST /dedup/verdicts/reopen` | un-resolve a group | `{ signature, previous_verdict, reopened_at, group_returned_to_queue }` |
+| `POST /dedup/verdicts/reopen` | un-resolve a group (clearing a stacked verdict also dissolves its stack) | `{ signature, previous_verdict, reopened_at, group_returned_to_queue, batch_id, unstacked_picture_ids }` |
 | `POST /dedup/auto-stack` | bulk-stack the exact tier, `dry_run` first | `{ batch_id, dry_run, groups, pictures, scope, dry_run_summary, results, failures }` |
 
 Shapes and rules the frontend depends on:
@@ -131,7 +131,11 @@ both flow through the standard `ActionReceipt` with nothing dedup-specific. The
 keep-separate operation's before/after payloads are empty (no picture facet
 changed); its undo reopens the verdict and returns the group to the queue via
 the registered post-restore hook, and redo re-decides it. The explicit
-**Reopen** action remains available as the non-undo way back.
+**Reopen** ("Clear decision") action remains available as the non-undo way
+back — and since the 2026-07-30 clear-decision fix it, too, records a
+`dedup.reopen` operation whenever clearing a stacked verdict has to dissolve
+the verdict's stack (the response carries the `batch_id`; undoing it restacks
+and re-decides). A picture-neutral clear still records nothing.
 
 **Paging is a keyset cursor; `offset` is the deprecated fallback.** The queue is
 ordered by confidence descending while a scan is still inserting rows, so an
@@ -912,7 +916,7 @@ or graft its rows into an existing one.
 |---|---|
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
-| `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Does **not** unstack anything. |
+| `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
 
 **Undoing a verdict also returns its group to the queue.** `POST
 /operations/undo` and `POST /operations/batches/{batch_id}/undo` restore the

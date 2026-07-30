@@ -452,7 +452,15 @@ def test_reopening_returns_the_group_and_keeps_the_history(server):
         _run(server, verdicts.reopen_verdict_in_session, signature)
 
 
-def test_reopening_a_stack_verdict_does_not_unstack_anything(server):
+def test_reopening_a_stack_verdict_dissolves_the_verdicts_stack(server):
+    """Owner override, 2026-07-30: "Clear decision" must return the group.
+
+    The old pin here asserted the opposite (reopen left the stack standing,
+    "unstacking is the Stacks view's own action"), which is exactly what made
+    a cleared group vanish forever: the queue's live filter requires two stack
+    units. See the dedicated clear-decision section at the end of this file
+    for the full behaviour matrix.
+    """
     ids = _seed(
         server,
         [
@@ -464,8 +472,8 @@ def test_reopening_a_stack_verdict_does_not_unstack_anything(server):
     signature = _one_signature(server)
     _run(server, verdicts.apply_stack_verdict_in_session, signature, None, [], None)
     _run(server, verdicts.reopen_verdict_in_session, signature)
-    assert _picture(server, ids[0]).stack_id is not None
-    assert _picture(server, ids[1]).stack_id is not None
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
 
 
 def test_reopening_an_unknown_signature_is_rejected(server):
@@ -819,8 +827,14 @@ def test_keep_separate_records_exactly_one_operation(server):
     assert verdict_row.batch_id == result.batch_id
 
 
-def test_reopen_records_no_operation(server):
-    """Reopen IS the explicit inverse action, so it stays out of the log."""
+def test_reopen_records_no_operation_when_it_touches_no_pictures(server):
+    """A clear that mutates nothing stays out of the log.
+
+    Keep-separate never touched a picture, so its clear is pure verdict
+    memory: recording it would make undo-of-clear a second, confusing way to
+    re-decide the group while there is nothing to restore. (A clear that DOES
+    unstack records one operation — pinned in the clear-decision section.)
+    """
     _seed(
         server,
         [
@@ -1270,3 +1284,335 @@ def test_a_locked_co_member_of_a_folded_stack_is_refused(server):
     assert _picture(server, ids[1]).stack_id == original_stack
     assert _picture(server, ids[2]).stack_id == original_stack
     assert _operations(server) == []
+
+
+# ── clearing a decision (the Decided page's "Clear decision") ─────────────────
+
+
+def _stacks(server) -> list:
+    return _run(server, lambda session: session.exec(select(PictureStack)).all())
+
+
+def _open_signatures(server) -> list[str]:
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 50)
+    return [group["signature"] for group in page]
+
+
+def test_clearing_a_stacked_decision_returns_the_group_to_the_queue(server):
+    """The user-reported bug (owner, 2026-07-30): clear must return the group.
+
+    Reopen used to stamp the verdict and unresolve the group but leave the
+    pictures stacked, and the live-groups filter requires the members to span
+    two stack units — so the cleared group vanished from Decided AND never
+    reappeared in the queue. Clearing a stacked decision must dissolve the
+    stack the verdict created.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, None, [], None)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+    cleared = _run(server, verdicts.reopen_verdict_in_session, signature)
+    assert cleared["previous_verdict"] == VERDICT_STACKED
+    assert cleared["group_returned_to_queue"] is True
+    # Back in the count AND the open-queue listing, not just marked reopened.
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    assert _open_signatures(server) == [signature]
+    # The verdict's stack is dissolved and no empty stack row is left behind.
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
+    assert _stacks(server) == []
+
+
+def test_clearing_a_stacked_decision_restores_a_folded_stack(server):
+    """The true inverse: a pre-existing stack the verdict folded in comes back.
+
+    The verdict's operation row recorded the pre-verdict stack state, so a
+    clear restores the pair's own stack rather than flattening everything the
+    verdict touched.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+
+    def pre_stack(session):
+        stack = PictureStack(name="pair")
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, picture_id in enumerate(ids[:2]):
+            pic = session.get(Picture, picture_id)
+            pic.stack_id = int(stack.id)
+            pic.stack_position = position
+            session.add(pic)
+        session.commit()
+        return int(stack.id)
+
+    pair_stack = _run(server, pre_stack)
+    _scan(server)
+    signature = _one_signature(server)
+    # Cover is the loner, so the pair's stack is folded into a new/cover unit.
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, ids[2], [], None)
+    assert len({_picture(server, pid).stack_id for pid in ids}) == 1
+
+    _run(server, verdicts.reopen_verdict_in_session, signature)
+    # The pair is back in ITS stack; the loner is a loner again.
+    assert _picture(server, ids[0]).stack_id == pair_stack
+    assert _picture(server, ids[1]).stack_id == pair_stack
+    assert _picture(server, ids[2]).stack_id is None
+    # Two stack units again, so the group genuinely poses a decision.
+    assert _open_signatures(server) == [signature]
+    # Exactly one stack row survives: the pair's. No orphaned empties.
+    assert [int(row.id) for row in _stacks(server)] == [pair_stack]
+
+
+def test_clearing_a_keep_separate_returns_the_group(server):
+    """The keep-separate clear touches no pictures and already worked; pin it."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_keep_separate_in_session, signature, None)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+    cleared = _run(server, verdicts.reopen_verdict_in_session, signature)
+    assert cleared["previous_verdict"] == VERDICT_KEEP_SEPARATE
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    assert _open_signatures(server) == [signature]
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+
+
+def test_clearing_a_stacked_decision_records_one_operation(server):
+    """The unstack is a picture mutation, so it must be undoable like any other.
+
+    A keep-separate clear still records nothing (no picture facet moves), so
+    the log stays free of no-op rows.
+    """
+    _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, None, [], None)
+    cleared = _run(server, verdicts.reopen_verdict_in_session, signature)
+    rows = _operations(server)
+    assert len(rows) == 2
+    clear_row = rows[-1]
+    assert clear_row.op_type == verdicts.OP_TYPE_REOPEN
+    assert clear_row.undoable is True
+    assert clear_row.batch_id == cleared["batch_id"]
+    assert cleared["batch_id"] and cleared["batch_id"].startswith("srv-")
+    # The correlation the undo-of-clear hook needs is stored on the verdict.
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row.reopen_batch_id == cleared["batch_id"]
+    # The verdict's own undo handle is untouched: undoing the ORIGINAL stack
+    # operation must still find its verdict.
+    assert row.batch_id == rows[0].batch_id
+
+
+def test_undo_of_a_clear_restacks_and_re_decides_and_redo_clears_again(server):
+    """Both directions of the clear operation itself.
+
+    Undo-of-clear must restore the verdict's stack AND re-mark the decision
+    live, or the pictures and the queue would disagree (the same half-restore
+    class the verdict hooks exist for). Redo clears again.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    stacked = _run(
+        server, verdicts.apply_stack_verdict_in_session, signature, None, [], None
+    )
+    _run(server, verdicts.reopen_verdict_in_session, signature)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+
+    _run(server, operation_log_service.undo_in_session, None)
+    # Restacked, decided again, out of the queue.
+    assert _picture(server, ids[0]).stack_id == stacked.stack_id
+    assert _picture(server, ids[1]).stack_id == stacked.stack_id
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row.reopened_at is None
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+    _run(server, operation_log_service.redo_in_session)
+    # Cleared again: unstacked, reopened, back in the queue, no empty stacks.
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row.reopened_at is not None
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    assert _stacks(server) == []
+
+
+def test_clearing_one_group_of_a_bulk_batch_leaves_the_others_alone(server):
+    """A bulk auto-stack coalesces many groups into ONE batch id.
+
+    Clearing one group must revert only that group's stacking — never its batch
+    siblings' — and must leave the sibling verdicts decided.
+    """
+    ids = _seed_two_exact_groups(server)
+    _scan(server)
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+    assert report["groups"] == 2
+    first, second = report["results"]
+
+    _run(server, verdicts.reopen_verdict_in_session, first["signature"])
+    # The cleared group is unstacked and back in the queue...
+    assert _open_signatures(server) == [first["signature"]]
+    for pid in first["picture_ids"]:
+        assert _picture(server, pid).stack_id is None
+    # ... while the sibling keeps its stack and its verdict.
+    for pid in second["picture_ids"]:
+        assert _picture(server, pid).stack_id == second["stack_id"]
+    sibling = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == second["signature"])
+        ).first(),
+    )
+    assert sibling.reopened_at is None
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    assert ids  # seeded four pictures; both assertions above cover all of them
+
+
+def test_clear_after_a_manual_unstack_touches_no_pictures(server):
+    """A verdict stack the user already dissolved needs no unstack.
+
+    The members span two stack units again, so the group is queue-visible the
+    moment the memory clears; mutating pictures (or recording an operation)
+    would fight the user's own arrangement.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, None, [], None)
+
+    def unstack_by_hand(session):
+        for picture_id in ids:
+            pic = session.get(Picture, picture_id)
+            pic.stack_id = None
+            pic.stack_position = None
+            session.add(pic)
+        session.commit()
+
+    _run(server, unstack_by_hand)
+    before = len(_operations(server))
+    cleared = _run(server, verdicts.reopen_verdict_in_session, signature)
+    assert cleared["batch_id"] is None
+    assert len(_operations(server)) == before
+    assert _open_signatures(server) == [signature]
+
+
+def test_a_clear_that_cannot_locate_its_stack_operation_is_refused(server):
+    """No silent fallback: an uncorrelatable stacked verdict is an error.
+
+    A verdict row without a batch id (pre-batching data) cannot name the
+    operation that knows its pre-verdict stack state. The clear refuses with
+    context instead of guessing; the way out is unstacking from the Stacks
+    view, after which the clear needs no picture mutation and succeeds.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, None, [], None)
+
+    def strip_batch_id(session):
+        row = session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first()
+        row.batch_id = None
+        session.add(row)
+        session.commit()
+
+    _run(server, strip_batch_id)
+    with pytest.raises(DedupVerdictError, match="cannot locate"):
+        _run(server, verdicts.reopen_verdict_in_session, signature)
+    # Nothing moved and the verdict still stands.
+    assert _picture(server, ids[0]).stack_id is not None
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row.reopened_at is None
+
+
+def test_a_clear_may_not_reuse_the_verdicts_own_batch_id(server):
+    """Grafting the clear into the verdict's own batch would make one undo
+    apply the stack and its inverse in the same restore. Refused, not honoured.
+    """
+    _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    gesture = "cli-gesture-clear-1"
+    _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        signature,
+        None,
+        [],
+        gesture,
+    )
+    with pytest.raises(DedupVerdictError, match="own batch"):
+        _run(server, verdicts.reopen_verdict_in_session, signature, gesture)

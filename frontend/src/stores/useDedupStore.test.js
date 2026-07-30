@@ -1162,18 +1162,18 @@ describe("useDedupStore — the verdict receipt", () => {
 });
 
 describe("useDedupStore — reopen", () => {
-  // Keep-separate records no operation, so this is the only way back from it.
   it("reopens a decided group and reloads the queue", async () => {
     servePage([], { total: 0 });
     reopenGroup.mockResolvedValue({
       signature: "g1",
       previous_verdict: "keep_separate",
       group_returned_to_queue: true,
+      batch_id: null,
     });
     const store = useDedupStore();
     listGroups.mockClear();
     const result = await store.reopen("g1");
-    expect(reopenGroup).toHaveBeenCalledWith("g1");
+    expect(reopenGroup).toHaveBeenCalledWith("g1", { batchId: undefined });
     expect(result.group_returned_to_queue).toBe(true);
     expect(listGroups).toHaveBeenCalledTimes(1);
   });
@@ -1182,6 +1182,39 @@ describe("useDedupStore — reopen", () => {
     reopenGroup.mockRejectedValue(new Error("nope"));
     const store = useDedupStore();
     expect(await store.reopen("g1")).toBe(null);
+  });
+
+  // Clearing a stacked decision unstacks pictures, which the backend records
+  // as one dedup.reopen operation; batch_id is the marker, exactly as for the
+  // verdict paths, and it earns the same undo receipt.
+  it("narrates a clear that recorded an operation", async () => {
+    servePage([], { total: 0 });
+    reopenGroup.mockResolvedValue({
+      signature: "g1",
+      previous_verdict: "stacked",
+      group_returned_to_queue: true,
+      batch_id: "srv-9",
+      unstacked_picture_ids: [1, 2],
+    });
+    const store = useDedupStore();
+    await store.reopen("g1");
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+    expect(useOperationStore().refresh).toHaveBeenCalledWith({ narrate: true });
+  });
+
+  // A clear that touched no picture (keep-separate, or a stack the user
+  // already dissolved) records nothing: no batch_id, no receipt.
+  it("stays silent for a clear that recorded nothing", async () => {
+    servePage([], { total: 0 });
+    reopenGroup.mockResolvedValue({
+      signature: "g1",
+      previous_verdict: "keep_separate",
+      group_returned_to_queue: true,
+      batch_id: null,
+    });
+    const store = useDedupStore();
+    await store.reopen("g1");
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
   });
 });
 
@@ -1609,6 +1642,29 @@ describe("useDedupStore — multi-select", () => {
     expect(reopenGroup).toHaveBeenCalledTimes(3);
     // reopen() reloads per call; the bulk path must reload exactly once.
     expect(listGroups).toHaveBeenCalledTimes(1);
+    // One gesture, one undo step: every clear shares one client batch id.
+    const ids = reopenGroup.mock.calls.map((c) => c[1].batchId);
+    expect(ids[0]).toMatch(/^cli-/);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it("narrates a bulk clear once when any clear recorded an operation", async () => {
+    const store = await openWith([group("g1")]);
+    reopenGroup
+      .mockResolvedValueOnce({ group_returned_to_queue: true, batch_id: null })
+      .mockResolvedValueOnce({
+        group_returned_to_queue: true,
+        batch_id: "cli-x",
+      });
+    await store.reopenMany(["a", "b"]);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent for a bulk clear that recorded nothing", async () => {
+    const store = await openWith([group("g1")]);
+    reopenGroup.mockResolvedValue({ group_returned_to_queue: true });
+    await store.reopenMany(["a", "b"]);
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
   });
 
   it("stacks every selected group under one client batch id", async () => {

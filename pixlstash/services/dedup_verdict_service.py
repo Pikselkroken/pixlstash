@@ -10,8 +10,9 @@ There are exactly two verdicts in v1.9 and neither of them deletes anything:
 Both are recorded against the group *signature*, not against picture or group
 ids, which is what makes the memory survive a re-import (see
 :func:`pixlstash.services.dedup_tier_service.group_signature`). "Keep separate"
-stands until :func:`reopen_verdict_in_session` is called from the Stacks view —
-or, since 2026-07-30, until its own operation is undone (see below).
+stands until :func:`reopen_verdict_in_session` is called from the Decided page's
+"Clear decision" — or, since 2026-07-30, until its own operation is undone (see
+below).
 
 Metadata union (design delta 5)
 -------------------------------
@@ -55,6 +56,14 @@ reversible picture facet); the owner explicitly reversed that ruling on
 2026-07-30 and keep-separate is now a first-class, undoable operation,
 symmetric with the stack verdict.
 
+Clearing a decision ("Clear decision" on the Decided page) goes through
+:func:`reopen_verdict_in_session`. Since 2026-07-30 a clear of a still-standing
+``stacked`` verdict **dissolves the verdict's stack** by restoring the recorded
+pre-verdict stack state from the verdict's own operation row — without that,
+the reopened group failed the queue's two-stack-units rule and never returned
+to review. That unstack is itself one undoable ``dedup.reopen`` operation; see
+the function's docstring for the full contract.
+
 Two details this module owns rather than inherits:
 
 * **It does not go through** ``routes/stacks.py``. Those handlers already wrap
@@ -93,7 +102,7 @@ from pixlstash.db_models.dedup import (
     DedupVerdict,
 )
 from pixlstash.db_models.face import Face
-from pixlstash.db_models.operation import Operation
+from pixlstash.db_models.operation import STATUS_APPLIED, Operation
 from pixlstash.db_models.tag import Tag, is_tag_sentinel
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
@@ -123,10 +132,16 @@ logger = get_logger(__name__)
 # picture facet, so the original CSO ruling around #644 recorded nothing rather
 # than writing a row); the owner explicitly reversed that ruling and it now
 # records one operation whose undo is carried entirely by its post-restore hook.
-# Reopen still records nothing: it IS the explicit inverse action, and logging
-# it would make undo-of-reopen a second, confusing way to re-decide a group.
+# Reopen ("Clear decision") records an operation exactly when it mutates
+# pictures: clearing a still-standing *stacked* verdict dissolves the verdict's
+# stack (restoring the recorded pre-verdict stack state) and that mutation must
+# be undoable like every other stack mutation. A clear that touches no picture
+# (keep-separate, or a stack the user already dissolved by hand) still records
+# nothing — see :func:`reopen_verdict_in_session` for why that line is where
+# the old "no second confusing way to re-decide" concern now lives.
 OP_TYPE_STACK = "dedup.stack"
 OP_TYPE_KEEP_SEPARATE = "dedup.keep_separate"
+OP_TYPE_REOPEN = "dedup.reopen"
 
 # Per-group outcome vocabulary for a bulk auto-stack. Closed set; the response
 # reports every group under exactly one of these, so a partial run is legible
@@ -211,7 +226,7 @@ def _record_operation(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     empty_diff_target_ids: Optional[list[int]] = None,
-) -> None:
+) -> Optional[Operation]:
     """Append **one** operation row for this verdict.
 
     Called once per verdict, around the whole mutation, on the verdict's own
@@ -224,7 +239,7 @@ def _record_operation(
     picture facet, so its diff is empty by construction and the row is recorded
     against the group's member ids instead (§21's empty-diff escape hatch).
     """
-    operation_log_service.record_operation_in_session(
+    return operation_log_service.record_operation_in_session(
         session,
         op_type=op_type,
         before=before,
@@ -798,13 +813,211 @@ def apply_keep_separate_in_session(
     )
 
 
-def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any]:
-    """Undo the *memory* of a verdict so the group returns to the queue.
+def _verdict_stack_still_standing(session: Session, row: DedupVerdict) -> bool:
+    """True when the verdict's members still sit together in the verdict's stack.
 
-    Stamps ``reopened_at`` rather than deleting the row: the decision history is
-    worth keeping, and a reopened verdict is simply no longer live. The pictures
-    are untouched — reopening a ``stacked`` verdict does not unstack anything,
-    because unstacking is the Stacks view's own action.
+    This is the condition under which a clear must unstack: the open queue's
+    live-groups filter requires a group's live members to span two or more
+    stack units (``COALESCE(stack_id, -id)``), so a group whose members all
+    share the verdict's stack is invisible to the queue and clearing only the
+    memory would strand it — gone from Decided, never back in review (the
+    owner-reported 2026-07-30 bug).
+
+    The check is deliberately narrow: it must be the **verdict's own** stack.
+    If the user already dissolved it by hand the members span their own units
+    and the group is queue-visible the moment the memory clears; and if the
+    user re-stacked the members into some *other* stack, that is their own
+    fresh decision, which the queue's stack-units rule deliberately does not
+    re-offer — mutating either arrangement would fight the user.
+    """
+    if row.stack_id is None:
+        logger.warning(
+            "[dedup-verdict] stacked verdict for signature=%s carries no "
+            "stack_id; treating its stack as already dissolved and clearing "
+            "the memory only",
+            row.signature,
+        )
+        return False
+    member_ids = [int(pid) for pid in json.loads(row.picture_ids or "[]")]
+    if not member_ids:
+        return False
+    live = session.exec(
+        select(Picture).where(Picture.id.in_(member_ids), Picture.deleted.is_(False))
+    ).all()
+    if len(live) < 2:
+        return False
+    units = {
+        int(pic.stack_id) if pic.stack_id is not None else -int(pic.id) for pic in live
+    }
+    return units == {int(row.stack_id)}
+
+
+def _correlate_stack_operation(session: Session, row: DedupVerdict) -> Operation:
+    """Find the one applied ``dedup.stack`` operation recorded for *row*.
+
+    Correlation is by the verdict's ``batch_id`` — every verdict is recorded
+    under one — plus membership: a bulk auto-stack coalesces MANY groups into
+    one batch, but each group records its **own** operation row, so within the
+    batch the verdict's operation is the one whose (stack-expanded) target set
+    covers the verdict's members. When a fold dragged this group's members into
+    a batch sibling's snapshot too, the verdict's own operation is the one with
+    the smallest target set (the sibling's is a strict superset taken *after*
+    this group was stacked, so restoring from it would not be pre-verdict
+    state).
+
+    Raises:
+        DedupVerdictError: The verdict has no batch id (pre-batching data) or
+            no unambiguous applied operation matches. No fallback: the caller
+            must not guess at pre-verdict state.
+    """
+    if not row.batch_id:
+        raise DedupVerdictError(
+            f"cannot locate the stack operation for verdict {row.signature!r}: "
+            "it was recorded without a batch id (pre-batching data), so its "
+            "pre-verdict stack state is unknown. Unstack the pictures from the "
+            "Stacks view, then clear the decision again."
+        )
+    member_ids = {int(pid) for pid in json.loads(row.picture_ids or "[]")}
+    candidates = session.exec(
+        select(Operation).where(
+            Operation.batch_id == row.batch_id,
+            Operation.op_type == OP_TYPE_STACK,
+            Operation.status == STATUS_APPLIED,
+        )
+    ).all()
+    matches = [
+        op
+        for op in candidates
+        if member_ids
+        and member_ids <= {int(pid) for pid in json.loads(op.target_ids or "[]")}
+    ]
+    if not matches:
+        raise DedupVerdictError(
+            f"cannot locate the stack operation for verdict {row.signature!r}: "
+            f"no applied {OP_TYPE_STACK!r} operation in batch {row.batch_id!r} "
+            f"covers members {sorted(member_ids)}. Unstack the pictures from "
+            "the Stacks view, then clear the decision again."
+        )
+    if len(matches) > 1:
+        matches.sort(key=lambda op: (int(op.target_count or 0), int(op.id or 0)))
+        if int(matches[0].target_count or 0) == int(matches[1].target_count or 0):
+            raise DedupVerdictError(
+                f"cannot locate the stack operation for verdict "
+                f"{row.signature!r}: operations "
+                f"{sorted(int(op.id) for op in matches if op.id)} in batch "
+                f"{row.batch_id!r} match it equally well. Unstack the pictures "
+                "from the Stacks view, then clear the decision again."
+            )
+        logger.info(
+            "[dedup-verdict] batch %s holds %d operations covering verdict %s "
+            "(a fold pulled its members into a sibling's snapshot); using the "
+            "smallest, operation %s",
+            row.batch_id,
+            len(matches),
+            row.signature,
+            matches[0].id,
+        )
+    return matches[0]
+
+
+def _recorded_stack_state(operation: Operation, signature: str) -> dict[str, dict]:
+    """The ``stack`` facet of *operation*'s before-state, and nothing else.
+
+    A clear reverts the verdict's *stacking* only. The metadata union (tags,
+    scores, membership) stays: clearing means "review this again", not "undo
+    everything the verdict did" — the full inverse remains the operation log's
+    undo of the verdict itself.
+    """
+    try:
+        recorded = json.loads(operation.before_state or "{}")
+    except (TypeError, ValueError) as exc:
+        raise DedupVerdictError(
+            f"cannot revert the stack for verdict {signature!r}: the recorded "
+            f"before-state of operation {operation.id} is unreadable ({exc})"
+        ) from exc
+    state: dict[str, dict] = {}
+    for picture_id, facets in (recorded or {}).items():
+        if not isinstance(facets, dict):
+            continue
+        stack = facets.get(operation_log_service.FACET_STACK)
+        if stack is not None:
+            state[str(picture_id)] = {operation_log_service.FACET_STACK: stack}
+    if not state:
+        raise DedupVerdictError(
+            f"cannot revert the stack for verdict {signature!r}: operation "
+            f"{operation.id} recorded no stack change to restore"
+        )
+    return state
+
+
+def reopen_verdict_in_session(
+    session: Session,
+    signature: str,
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Clear a verdict so the group returns to the open Duplicates queue.
+
+    Stamps ``reopened_at`` rather than deleting the row: the decision history
+    is worth keeping, and a reopened verdict is simply no longer live.
+
+    **Clearing a still-standing stacked verdict also dissolves its stack.**
+    The open queue only offers groups whose live members span two or more
+    stack units, so a cleared-but-still-stacked group would vanish from the
+    Decided page yet never return to review (the owner-reported 2026-07-30
+    bug). The stack is dissolved by restoring the **recorded pre-verdict stack
+    state** from the verdict's own operation-log row — so a pre-existing stack
+    the verdict folded in comes back instead of being flattened — scoped to
+    that one operation's targets, so clearing one group of a bulk batch never
+    touches its batch siblings. Stack rows the restore empties are deleted
+    (`operation_log_service.delete_emptied_stacks`, the #643 hygiene). The
+    metadata union is deliberately **not** reverted: a clear means "review
+    this again", not "undo the verdict" — that full inverse remains the
+    operation log's.
+
+    **The unstack is itself one undoable operation** (:data:`OP_TYPE_REOPEN`),
+    recorded under its own batch id (returned as ``batch_id``); undoing it
+    restacks the pictures AND re-marks the verdict decided via the
+    :func:`restore_reopens_in_session` post-restore hook, so the pictures and
+    the queue can never disagree. The old rule was "reopen records nothing,
+    or undo-of-reopen becomes a second, confusing way to re-decide a group";
+    that rule survives exactly where its rationale still holds — a clear that
+    touches **no picture** (keep-separate, or a stack the user already
+    dissolved by hand) records nothing and returns ``batch_id: None``. Once a
+    clear moves pictures, *not* re-deciding on undo would leave the pictures
+    restacked while the group sat open — the same half-restore class the
+    verdict hooks exist to prevent — so the operation is recorded and its
+    undo re-decides.
+
+    A stacked verdict whose stack still stands but whose operation cannot be
+    located (or not unambiguously) is **refused** with
+    :class:`DedupVerdictError` rather than degraded: no fallback may guess at
+    pre-verdict state. The way out is unstacking from the Stacks view, after
+    which the clear needs no picture mutation and succeeds.
+
+    Args:
+        session: Pre-opened session; committed here, so the unstack, the
+            verdict stamp and the operation row land together or not at all.
+        signature: The decided group's signature.
+        batch_id: Optional client (``cli-``) batch id grouping several clears
+            into one undo step; minted server-side (``srv-``) when absent and
+            pictures change. Must not equal the verdict's own batch id — that
+            graft would make one undo apply the stack and its inverse in the
+            same restore.
+        actor: Who performed the change, from ``request_context`` in the
+            handler.
+        source: WS-envelope source, likewise read from the request (§21 origin
+            discipline: never from a contextvar, dead on this thread).
+        origin_client_id: WS-envelope per-tab origin, likewise.
+
+    Returns:
+        The response dict: ``signature``, ``previous_verdict``,
+        ``reopened_at``, ``group_returned_to_queue``, ``batch_id`` (the undo
+        handle, or ``None`` when no picture changed),
+        ``unstacked_picture_ids``, plus ``event_picture_ids`` for the vault
+        wrapper's WS announcement (popped before the response).
     """
     row = session.exec(
         select(DedupVerdict).where(DedupVerdict.signature == signature)
@@ -813,7 +1026,44 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
         raise DedupVerdictError(f"No verdict recorded for signature {signature!r}")
     if row.reopened_at is not None:
         raise DedupVerdictError(f"Verdict for {signature!r} is already reopened")
+    if batch_id and batch_id == row.batch_id:
+        raise DedupVerdictError(
+            f"batch_id {batch_id!r} is the verdict's own batch: grafting the "
+            "clear into it would make one undo apply the stack and its inverse "
+            "in the same restore. Supply a fresh batch id or omit it."
+        )
+
+    member_ids = [int(pid) for pid in json.loads(row.picture_ids or "[]")]
+    event_ids: set[int] = set(member_ids)
+    unstacked: list[int] = []
+    clear_batch: Optional[str] = None
+    target_ids: list[int] = []
+
+    if row.verdict == VERDICT_STACKED and _verdict_stack_still_standing(session, row):
+        operation = _correlate_stack_operation(session, row)
+        stack_state = _recorded_stack_state(operation, signature)
+        target_ids = sorted(int(pid) for pid in stack_state)
+        clear_batch = batch_id or new_batch_id()
+        before = _capture_state(session, target_ids)
+        # apply_state_in_session is the same guarded sink undo uses: the
+        # locked-set freeze applies (423 rather than a half-cleared stack) and
+        # a vanished picture is skipped with a warning, exactly as a restore
+        # would.
+        vacated: set[int] = set()
+        operation_log_service.apply_state_in_session(
+            session,
+            stack_state,
+            "clear a duplicate decision",
+            origin_client_id=origin_client_id,
+            vacated_stack_ids=vacated,
+        )
+        operation_log_service.delete_emptied_stacks(session, vacated)
+        unstacked = target_ids
+        event_ids.update(target_ids)
+
     row.reopened_at = datetime.utcnow()
+    if clear_batch:
+        row.reopen_batch_id = clear_batch
     session.add(row)
     group = session.exec(
         select(DedupGroup).where(DedupGroup.signature == signature)
@@ -821,16 +1071,53 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
     if group is not None:
         group.resolved = False
         session.add(group)
-    # No operation row: reopen IS the explicit inverse action (of either verdict
-    # kind), and logging it would make undo-of-reopen a second, confusing way to
-    # re-decide a group. The verdicts themselves are op-logged; this stays out.
+
+    if clear_batch:
+        after = _capture_state(session, target_ids)
+        recorded = _record_operation(
+            session,
+            op_type=OP_TYPE_REOPEN,
+            before=before,
+            after=after,
+            batch_id=clear_batch,
+            summary=f"Returned {len(member_ids)} duplicates to the queue",
+            actor=actor,
+            source=source,
+            origin_client_id=origin_client_id,
+        )
+        if recorded is None:
+            # Cannot happen while the standing check gates the unstack (the
+            # restore must have moved at least one stack pointer), but a
+            # batch_id pointing at no operation would be a broken undo handle,
+            # so fail visibly rather than return it.
+            logger.error(
+                "[dedup-verdict] clear of signature=%s restored a stack state "
+                "yet produced an empty diff; no operation was recorded and no "
+                "batch id is returned (batch=%s dropped)",
+                signature,
+                clear_batch,
+            )
+            row.reopen_batch_id = None
+            session.add(row)
+            clear_batch = None
+            unstacked = []
     session.commit()
-    logger.info("[dedup-verdict] reopened verdict for signature=%s", signature)
+    logger.info(
+        "[dedup-verdict] reopened verdict for signature=%s (previous=%s, "
+        "unstacked=%s, batch=%s)",
+        signature,
+        row.verdict,
+        unstacked,
+        clear_batch,
+    )
     return {
         "signature": signature,
         "previous_verdict": row.verdict,
         "reopened_at": row.reopened_at,
         "group_returned_to_queue": group is not None,
+        "batch_id": clear_batch,
+        "unstacked_picture_ids": unstacked,
+        "event_picture_ids": sorted(event_ids),
     }
 
 
@@ -933,6 +1220,86 @@ def restore_verdicts_in_session(
         direction,
         len(signatures),
         "decided" if is_redo else "the queue",
+        batch_ids,
+    )
+
+
+def restore_reopens_in_session(
+    session: Session,
+    operations: list[Operation],
+    direction: str,
+) -> None:
+    """Re-decide (on undo) or re-clear (on redo) what a clear operation reopened.
+
+    Registered as the post-restore hook for :data:`OP_TYPE_REOPEN`. The
+    direction mapping is the **inverse** of :func:`restore_verdicts_in_session`:
+    a clear *reopened* its verdict, so undoing the clear marks the verdict
+    decided again (the operation's before-state has just restacked the
+    pictures, and a decided verdict is the only state consistent with that),
+    while redoing the clear reopens it once more (the after-state has just
+    unstacked them again; the emptied-stack hygiene is the restore's own,
+    via ``delete_emptied_stacks`` in ``_restore``).
+
+    Correlation is by ``DedupVerdict.reopen_batch_id`` — stamped by
+    :func:`reopen_verdict_in_session` whenever a clear records an operation —
+    NOT by ``batch_id``, which keeps pointing at the verdict's own operation
+    so undoing the original stack still finds its verdict.
+
+    On undo, ``decided_at`` is re-stamped to now, matching the redo semantics
+    of the verdict hook (§22.10): the stamp means "when this decision last
+    became live", and the Decided page sorts by it descending, so the
+    just-restored decision surfaces where the user looks for it.
+    """
+    batch_ids = sorted({op.batch_id for op in operations if op.batch_id})
+    unbatched = sorted(int(op.id) for op in operations if not op.batch_id and op.id)
+    if unbatched:
+        # A clear operation is always recorded under a batch id; this is
+        # defensive symmetry with restore_verdicts_in_session, not a live path.
+        logger.warning(
+            "[dedup-verdict] %s: clear operation(s) %s carry no batch_id, so "
+            "their verdict cannot be located; the pictures were restored but "
+            "the verdict's decided/reopened state was not touched.",
+            direction,
+            unbatched,
+        )
+    if not batch_ids:
+        return
+
+    is_undo = direction == operation_log_service.RESTORE_UNDO
+    now = datetime.utcnow()
+    signatures: list[str] = []
+    for start in range(0, len(batch_ids), ID_CHUNK):
+        chunk = batch_ids[start : start + ID_CHUNK]
+        for row in session.exec(
+            select(DedupVerdict).where(DedupVerdict.reopen_batch_id.in_(chunk))
+        ).all():
+            if is_undo:
+                row.reopened_at = None
+                row.decided_at = now
+            else:
+                row.reopened_at = now
+            session.add(row)
+            signatures.append(str(row.signature))
+    if not signatures:
+        logger.warning(
+            "[dedup-verdict] %s: no verdict carries reopen_batch_id in %s; "
+            "the pictures were restored but no verdict state was touched",
+            direction,
+            batch_ids,
+        )
+        return
+    for start in range(0, len(signatures), ID_CHUNK):
+        chunk = signatures[start : start + ID_CHUNK]
+        for group in session.exec(
+            select(DedupGroup).where(DedupGroup.signature.in_(chunk))
+        ).all():
+            group.resolved = is_undo
+            session.add(group)
+    logger.info(
+        "[dedup-verdict] %s of clear returned %d verdict(s) to %s across batch(es) %s",
+        direction,
+        len(signatures),
+        "decided" if is_undo else "the queue",
         batch_ids,
     )
 
@@ -1169,9 +1536,34 @@ def apply_keep_separate(
     return result
 
 
-def reopen_verdict(vault: "Vault", signature: str) -> dict[str, Any]:
-    """Write-path vault wrapper around :func:`reopen_verdict_in_session`."""
-    return vault.db.run_task(reopen_verdict_in_session, signature)
+def reopen_verdict(
+    vault: "Vault",
+    signature: str,
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Write-path vault wrapper around :func:`reopen_verdict_in_session`.
+
+    ``actor`` / ``source`` / ``origin_client_id`` come from
+    ``operation_log_service.request_context(request)``, evaluated in the handler
+    on the request's own task — never read here, where the contextvar is dead.
+    Emits the standard ``pictures_changed`` announcement over the affected
+    members (and, for a clear that unstacked, the whole restored target set),
+    since a clear changes state other tabs render.
+    """
+    result = vault.db.run_task(
+        reopen_verdict_in_session,
+        signature,
+        batch_id,
+        actor,
+        source,
+        origin_client_id,
+    )
+    event_picture_ids = result.pop("event_picture_ids", [])
+    _notify_pictures_changed(vault, event_picture_ids, origin_client_id, source)
+    return result
 
 
 def bulk_auto_stack(
@@ -1226,6 +1618,13 @@ operation_log_service.register_post_restore_hook(
     OP_TYPE_KEEP_SEPARATE,
     partial(restore_verdicts_in_session, verdict_kind=VERDICT_KEEP_SEPARATE),
 )
+# The clear's own hook, correlated by reopen_batch_id (never batch_id, which
+# stays the verdict's own undo handle). Direction-inverted by design: undoing a
+# clear re-decides; redoing it reopens.
+operation_log_service.register_post_restore_hook(
+    OP_TYPE_REOPEN,
+    restore_reopens_in_session,
+)
 
 
 __all__ = [
@@ -1233,6 +1632,7 @@ __all__ = [
     "BULK_REASON_BLOCKED",
     "BULK_REASON_FAILED",
     "OP_TYPE_KEEP_SEPARATE",
+    "OP_TYPE_REOPEN",
     "OP_TYPE_STACK",
     "DedupVerdictError",
     "VerdictResult",
@@ -1246,5 +1646,6 @@ __all__ = [
     "new_batch_id",
     "reopen_verdict",
     "reopen_verdict_in_session",
+    "restore_reopens_in_session",
     "restore_verdicts_in_session",
 ]

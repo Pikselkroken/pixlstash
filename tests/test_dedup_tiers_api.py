@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, PictureSet, PictureSetMember
+from pixlstash.db_models import Picture, PictureSet, PictureSetMember, PictureStack
 from pixlstash.db_models.dedup import DedupGroup, DedupScan, DedupVerdict
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
@@ -1394,6 +1394,77 @@ def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
         _teardown(temp_dir, server)
 
 
+def test_clear_decision_returns_the_stacked_group_to_the_queue():
+    """The owner-reported 2026-07-30 bug, at the HTTP boundary.
+
+    "Clear decision" left the Decided page but never returned the group to the
+    open queue: reopen only cleared the verdict memory while the pictures kept
+    sharing one stack, and the queue's live filter requires two stack units.
+    Clearing a stacked verdict must dissolve its stack, return the group to
+    the listing AND the badge count, and hand back an undo handle; undoing the
+    clear restacks and re-decides, redo clears again.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        signature = _signature(client)
+        stacked = client.post(STACK_URL, json={"signature": signature})
+        assert stacked.status_code == 200, stacked.text
+        stack_id = stacked.json()["stack_id"]
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+
+        cleared = client.post(REOPEN_URL, json={"signature": signature})
+        assert cleared.status_code == 200, cleared.text
+        body = cleared.json()
+        assert body["previous_verdict"] == "stacked"
+        assert body["group_returned_to_queue"] is True
+        # The clear unstacked pictures, so it is one undoable operation and the
+        # response carries the batch handle, like every other verdict path.
+        clear_batch = body["batch_id"]
+        assert clear_batch and clear_batch.startswith("srv-")
+        assert sorted(body["unstacked_picture_ids"]) == sorted(ids[:2])
+        # Back in the open listing and in the badge count, pictures unstacked.
+        assert _signatures(client) == {signature}
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 1
+        assert _run(
+            server,
+            lambda session: [session.get(Picture, pid).stack_id for pid in ids[:2]],
+        ) == [None, None]
+        # And it stays back across a rescan: the verdict really is reopened.
+        _rescan(server)
+        assert _signatures(client) == {signature}
+
+        # Undo-of-clear: restacked AND re-decided, off the queue, on Decided.
+        undone = client.post(f"{API}/operations/batches/{clear_batch}/undo", json={})
+        assert undone.status_code == 200, undone.text
+        assert _signatures(client) == set()
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+        verdict = _verdict_row(server, signature)
+        assert verdict.reopened_at is None
+        assert _run(
+            server,
+            lambda session: {session.get(Picture, pid).stack_id for pid in ids[:2]},
+        ) == {stack_id}
+
+        # Redo-of-clear: cleared again, back on the queue, no empty stack rows.
+        redone = client.post(f"{API}/operations/redo", json={})
+        assert redone.status_code == 200, redone.text
+        assert _signatures(client) == {signature}
+        assert _verdict_row(server, signature).reopened_at is not None
+        assert _run(
+            server,
+            lambda session: [session.get(Picture, pid).stack_id for pid in ids[:2]],
+        ) == [None, None]
+        orphaned = _run(
+            server,
+            lambda session: session.exec(
+                select(PictureStack).where(PictureStack.id == stack_id)
+            ).all(),
+        )
+        assert orphaned == [], "the emptied stack row must not be left behind"
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
     """Both verdict kinds emit the standard refresh signal; so do undo and redo.
 
@@ -1456,6 +1527,16 @@ def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
         assert client.post(f"{API}/operations/redo", headers=headers).status_code == 200
         redo_ids = {pid for kind in emitted for pid in (kind.get("picture_ids") or [])}
         assert redo_ids == set(by_signature[kept_separate]), emitted
+
+        # A clear announces itself too — it changes state other tabs render
+        # (the stacked clear also unstacks pictures).
+        emitted.clear()
+        response = client.post(REOPEN_URL, json={"signature": stacked}, headers=headers)
+        assert response.status_code == 200, response.text
+        assert emitted, "a clear must announce itself"
+        assert emitted[-1]["change_kind"] == "updated"
+        assert emitted[-1]["picture_ids"] == by_signature[stacked]
+        assert emitted[-1]["origin_client_id"] == "tab-1"
     finally:
         _teardown(temp_dir, server)
 

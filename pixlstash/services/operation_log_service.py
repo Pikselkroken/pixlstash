@@ -903,7 +903,7 @@ def _apply_stack(
             decided here — this runs per picture, and a later picture of the
             same restore may still land on the stack — so the restore checks
             the collected ids once every state is applied
-            (:func:`_delete_emptied_stacks`).
+            (:func:`delete_emptied_stacks`).
     """
     if not isinstance(stack, dict):
         return
@@ -927,7 +927,7 @@ def _apply_stack(
     session.add(picture)
 
 
-def _delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
+def delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
     """Delete ``PictureStack`` rows a restore has just left with no members.
 
     The symmetric counterpart of the recreate branch in :func:`_apply_stack`:
@@ -935,6 +935,8 @@ def _delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
     (members restored to ``stack_id=None`` or to another stack) must delete the
     row it empties — otherwise every undone stacking leaves an orphaned empty
     ``PictureStack`` behind (issue #643, CSO finding C3 in the dedup sign-off).
+    Public (no underscore) because the dedup clear-decision path applies a
+    recorded stack state outside a restore and owes the same hygiene.
 
     Only stacks with **zero** remaining members are deleted. A picture outside
     the restored operations that still points at the stack keeps it alive:
@@ -1112,7 +1114,7 @@ def apply_state_in_session(
         vacated_stack_ids: Optional collector, forwarded to :func:`_apply_stack`,
             of the stacks this state moves pictures off of. The caller decides
             after ALL states are applied whether those stacks ended up empty and
-            deletes the emptied rows (:func:`_delete_emptied_stacks`).
+            deletes the emptied rows (:func:`delete_emptied_stacks`).
 
     Returns:
         The picture ids actually written.
@@ -1349,7 +1351,7 @@ def _restore(
     also decided something outside the picture facets can reopen that decision in
     the same transaction. A hook that raises aborts the restore.
 
-    Stacks the restore empties are then deleted (:func:`_delete_emptied_stacks`),
+    Stacks the restore empties are then deleted (:func:`delete_emptied_stacks`),
     the mirror of :func:`_apply_stack` recreating a dissolved stack's row. The
     decision is deliberately made HERE, after every operation's state (and every
     hook) has been applied: emptiness is a property of the whole restore, not of
@@ -1397,7 +1399,7 @@ def _restore(
     _run_post_restore_hooks(
         session, operations, RESTORE_UNDO if to_before else RESTORE_REDO
     )
-    _delete_emptied_stacks(session, vacated_stack_ids)
+    delete_emptied_stacks(session, vacated_stack_ids)
     lifecycle = {
         "scrapheaped": sorted(scrapheaped),
         "restored": sorted(restored),

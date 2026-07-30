@@ -1493,7 +1493,11 @@ describe("DuplicateQueue — the Decided page", () => {
     });
     row.vm.$emit("clear-decision");
     await flushPromises();
-    expect(reopenGroup).toHaveBeenCalledWith("g9");
+    // The Decided page clears through the bulk path, which stamps a client
+    // gesture batch id so multi-row clears reverse as one undo step.
+    expect(reopenGroup).toHaveBeenCalledWith("g9", {
+      batchId: expect.stringMatching(/^cli-/),
+    });
     wrapper.unmount();
   });
 

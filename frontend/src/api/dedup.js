@@ -323,11 +323,11 @@ export async function stackGroup(
 /**
  * Keep one group separate: the "no, these are different pictures" verdict.
  *
- * No picture row changes, which is exactly why the backend records **no
- * operation** for it: there is nothing for undo to restore, and an empty
- * operation row would still consume a Ctrl+Z. Callers must therefore narrate
- * this verdict themselves and offer {@link reopenGroup} as the way back, rather
- * than waiting for a receipt that will never arrive.
+ * No picture row changes, but the decision itself is undoable (owner override,
+ * 2026-07-30): the backend records one `dedup.keep_separate` operation and the
+ * response carries its `batch_id`, like a stack. Gate narration on `batch_id`
+ * so an older backend (which returns null there) degrades to no receipt;
+ * {@link reopenGroup} remains the explicit non-undo way back.
  *
  * @param {string} signature - the group signature.
  * @param {Object} [options]
@@ -350,24 +350,32 @@ export async function keepGroupSeparate(
 }
 
 /**
- * Reopen a decided group so it is offered again.
+ * Reopen a decided group ("Clear decision") so it is offered again.
  *
- * The pictures are untouched: reopening a `stacked` verdict does not unstack
- * anything, because unstacking is the Stacks view's own action. This is the
- * documented way back from a keep-separate, which has no undo of its own.
+ * Clearing a `stacked` verdict whose stack still stands also dissolves that
+ * stack (restoring the recorded pre-verdict stack state), because the open
+ * queue only offers groups whose members span two or more stack units. That
+ * unstack is one undoable `dedup.reopen` operation and the response's
+ * `batch_id` is its undo handle — gate any receipt/narration on it, exactly
+ * as for the other verdicts. A clear that touches no picture (keep-separate,
+ * or a stack the user already dissolved by hand) records nothing and returns
+ * `batch_id: null`.
  *
  * @param {string} signature - the group signature.
  * @param {Object} [options]
+ * @param {string} [options.batchId] - operation-log batch to record under, so
+ *   several clears can reverse as one undo.
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
- *   `{ signature, previous_verdict, reopened_at, group_returned_to_queue }`.
+ *   `{ signature, previous_verdict, reopened_at, group_returned_to_queue,
+ *   batch_id, unstacked_picture_ids }`.
  *   `group_returned_to_queue` is false when the group has not been re-detected
  *   yet, in which case the next scan brings it back.
  */
-export async function reopenGroup(signature, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(dedupUrl("/verdicts/reopen", baseUrl), {
-    signature,
-  });
+export async function reopenGroup(signature, { batchId, baseUrl = "" } = {}) {
+  const body = { signature };
+  if (batchId) body.batch_id = batchId;
+  const res = await apiClient.post(dedupUrl("/verdicts/reopen", baseUrl), body);
   return res.data;
 }
 

@@ -283,11 +283,20 @@ describe("api/dedup — verdicts", () => {
     expect(result.verdict).toBe("keep_separate");
   });
 
-  it("reopenGroup posts the signature alone", async () => {
+  it("reopenGroup posts the signature alone by default", async () => {
     apiClient.post.mockResolvedValue({ data: { previous_verdict: "stacked" } });
     await reopenGroup("sig-3", { baseUrl: "/be" });
     expect(apiClient.post).toHaveBeenCalledWith("/be/dedup/verdicts/reopen", {
       signature: "sig-3",
+    });
+  });
+
+  it("reopenGroup carries a gesture batch id when given one", async () => {
+    apiClient.post.mockResolvedValue({ data: { previous_verdict: "stacked" } });
+    await reopenGroup("sig-3", { batchId: "cli-clear-1", baseUrl: "/be" });
+    expect(apiClient.post).toHaveBeenCalledWith("/be/dedup/verdicts/reopen", {
+      signature: "sig-3",
+      batch_id: "cli-clear-1",
     });
   });
 });

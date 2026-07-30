@@ -150,6 +150,14 @@ class DedupVerdict(SQLModel, table=True):
             reverse with a single undo.
         reopened_at: When the user reopened the decision. A reopened verdict no
             longer resolves its group, so the group returns to the queue.
+        reopen_batch_id: The operation-log batch of the most recent
+            picture-touching **clear** of this verdict (a clear of a `stacked`
+            verdict dissolves the verdict's stack and records one
+            `dedup.reopen` operation). This is the correlation the
+            undo-of-clear post-restore hook needs to re-mark the verdict
+            decided; :attr:`batch_id` keeps pointing at the verdict's own
+            operation, so undoing the original stack still finds its verdict.
+            NULL until a clear has touched pictures.
     """
 
     __tablename__ = "dedupverdict"
@@ -178,6 +186,10 @@ class DedupVerdict(SQLModel, table=True):
     )
     reopened_at: Optional[datetime] = Field(
         default=None, sa_column=Column("reopened_at", DateTime, nullable=True)
+    )
+    reopen_batch_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column("reopen_batch_id", String, nullable=True, index=True),
     )
 
 

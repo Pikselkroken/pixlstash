@@ -1600,10 +1600,11 @@ export const useDedupStore = defineStore("dedup", () => {
   /**
    * Keep one group separate.
    *
-   * The backend deliberately records **no operation** for this: no picture row
-   * changes, so there is nothing for undo to restore, and an empty operation row
-   * would still consume a Ctrl+Z. The caller must therefore narrate this itself
-   * and offer {@link reopen} as the way back rather than waiting for a receipt.
+   * No picture row changes, but the decision itself records one undoable
+   * operation (owner override, 2026-07-30) whose `batch_id` rides the
+   * response; narration is gated on it so an older backend (null there)
+   * degrades to no receipt. {@link reopen} remains the explicit non-undo way
+   * back.
    *
    * @param {Object} group
    * @returns {Promise<Object|null>} the verdict response, or null on failure.
@@ -1655,22 +1656,31 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * Return a decided group to the queue.
+   * Return a decided group to the queue ("Clear decision").
    *
-   * The stand-in for undo on a keep-separate. The group comes back only if it
-   * has been re-detected; when it has not, the response says so and the next
-   * scan brings it back, which the caller must report honestly rather than
+   * Clearing a stacked verdict dissolves the stack that verdict created, so
+   * the group genuinely returns to review instead of only leaving the Decided
+   * page. When the clear unstacked pictures the response carries a `batch_id`
+   * (one undoable `dedup.reopen` operation) and the shared receipt narrates
+   * it, exactly like the verdict paths; a picture-neutral clear returns null
+   * there and stays receipt-less. The group comes back only if it has been
+   * re-detected; when it has not, the response says so and the next scan
+   * brings it back, which the caller must report honestly rather than
    * implying the row will reappear.
    *
    * @param {string} signature
+   * @param {Object} [options]
+   * @param {string} [options.batchId] - client gesture id grouping several
+   *   clears into one undo step.
    * @returns {Promise<Object|null>} the reopen response, or null on failure.
    */
-  async function reopen(signature) {
+  async function reopen(signature, { batchId } = {}) {
     try {
-      const result = await reopenGroup(signature);
+      const result = await reopenGroup(signature, { batchId });
       invalidateScopeCounts();
       await loadFirstPage();
       refreshCounts();
+      if (result?.batch_id) narrateVerdictOperation();
       return result;
     } catch (err) {
       error.value = err;
@@ -1683,7 +1693,10 @@ export const useDedupStore = defineStore("dedup", () => {
    * Clear several decisions in one gesture (the Decided page's bulk path).
    *
    * One reload at the end rather than per group — reopen() reloads per call,
-   * which is right for one and quadratic for fifty.
+   * which is right for one and quadratic for fifty. Every clear shares one
+   * client gesture id, so the clears that recorded an operation (the ones
+   * that unstacked pictures) reverse as ONE undo step; a single receipt
+   * narrates the gesture when any of them did.
    *
    * @param {string[]} signatures
    * @returns {Promise<{cleared: number, returned: number}>}
@@ -1691,11 +1704,14 @@ export const useDedupStore = defineStore("dedup", () => {
   async function reopenMany(signatures) {
     let cleared = 0;
     let returned = 0;
+    let recorded = false;
+    const gestureId = newOperationBatchId();
     for (const signature of signatures) {
       try {
-        const result = await reopenGroup(signature);
+        const result = await reopenGroup(signature, { batchId: gestureId });
         cleared += 1;
         if (result?.group_returned_to_queue) returned += 1;
+        if (result?.batch_id) recorded = true;
       } catch (err) {
         error.value = err;
         console.warn(`[dedup] failed to reopen group ${signature}`, err);
@@ -1706,6 +1722,8 @@ export const useDedupStore = defineStore("dedup", () => {
       invalidateScopeCounts();
       await loadFirstPage();
       refreshCounts();
+      // One receipt per GESTURE, mirroring stack(): the batch is one undo step.
+      if (recorded) narrateVerdictOperation();
     }
     return { cleared, returned };
   }

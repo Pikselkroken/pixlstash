@@ -990,6 +990,22 @@ class ReopenResponse(BaseModel):
             "scan will bring it back."
         )
     )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch of the clear, when clearing a `stacked` "
+            "verdict dissolved its stack — the `POST /operations/batches/"
+            "{batch_id}/undo` handle. Null when no picture changed "
+            "(keep-separate, or a stack the user had already dissolved)."
+        ),
+    )
+    unstacked_picture_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Pictures whose stack state the clear restored to its pre-verdict "
+            "shape. Empty when the clear touched no pictures."
+        ),
+    )
 
 
 class AutoStackRequestModel(BaseModel):
@@ -1426,22 +1442,38 @@ def create_router(server) -> APIRouter:
         "/dedup/verdicts/reopen",
         summary="Return a decided group to the queue",
         description=(
-            "Clears the memory of a verdict so the group is offered again. The "
-            "pictures are untouched: reopening a `stacked` verdict does not "
-            "unstack anything, because unstacking is the Stacks view's own "
-            "action. The verdict row is kept and marked reopened rather than "
-            "deleted, so the decision history survives."
+            "Clears the memory of a verdict so the group is offered again. "
+            "Clearing a `stacked` verdict whose stack still stands also "
+            "dissolves that stack — restoring the recorded pre-verdict stack "
+            "state, so a stack the verdict folded in comes back — because the "
+            "open queue only offers groups whose members span two or more "
+            "stack units. That unstack is recorded as one undoable "
+            "`dedup.reopen` operation and the returned `batch_id` is its undo "
+            "handle; undoing it restacks the pictures and re-marks the "
+            "decision. A clear that touches no picture (keep-separate, or a "
+            "stack already dissolved by hand) records nothing and returns a "
+            "null `batch_id`. The metadata union is never reverted here — "
+            "that full inverse is the verdict's own undo. The verdict row is "
+            "kept and marked reopened rather than deleted, so the decision "
+            "history survives."
         ),
         response_model=ReopenResponse,
     )
-    def post_reopen_verdict(payload: SignatureRequestModel):
-        # No request_context here on purpose: reopen records no operation (it IS
-        # the explicit inverse action), so actor / source would be dead
-        # arguments. batch_id is unused by reopen but is still validated, so no
-        # route on this surface accepts a malformed one.
-        _batch_id(payload.batch_id)
+    def post_reopen_verdict(request: Request, payload: SignatureRequestModel):
+        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # A clear can now mutate picture stack state and record an operation,
+        # so the context values are no longer dead arguments. Body batch_id
+        # wins over the ambient gesture header; the service mints srv- when
+        # both are absent AND pictures actually change.
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
         try:
-            return dedup_verdict_service.reopen_verdict(server.vault, payload.signature)
+            return dedup_verdict_service.reopen_verdict(
+                server.vault,
+                payload.signature,
+                _batch_id(payload.batch_id) or header_batch_id,
+                **context,
+            )
         except DedupVerdictError as exc:
             logger.info("[dedup] reopen rejected: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc

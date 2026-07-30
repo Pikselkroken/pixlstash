@@ -2161,9 +2161,44 @@ Every verdict — stack **and** keep-separate — records **exactly one**
   restore is the post-restore hook's. The *silence* half of R5 still stands, by
   construction: each hook filters on its own verdict kind, so a shared gesture
   batch reverses the keep-separate only through its **own** operation, named in
-  the undo response — never as a side effect of the stack's. **Reopen still
-  records nothing**: it is the explicit inverse action, and logging it would
-  make undo-of-reopen a second, confusing way to re-decide a group.
+  the undo response — never as a side effect of the stack's. **Reopen records
+  an operation exactly when it mutates pictures** — see the clear-decision
+  bullet below; a picture-neutral clear still records nothing, keeping the
+  original "no second confusing way to re-decide" rationale exactly where it
+  still holds.
+- **Clearing a stacked decision dissolves its stack (`dedup.reopen`) — owner
+  bug report, 2026-07-30.** `POST /dedup/verdicts/reopen` used to clear only
+  the verdict memory ("unstacking is the Stacks view's own action"), but the
+  open queue's live filter (§22.7's two-stack-units rule) then hid the
+  reopened group forever: it left Decided and never returned to review. A
+  clear of a `stacked` verdict whose stack still stands (its live members all
+  share the **verdict's** stack unit) now restores the **recorded pre-verdict
+  stack state** from the verdict's own operation row — so a pre-existing stack
+  the verdict folded in comes back instead of being flattened — scoped to that
+  one operation's target set, so clearing one group of a bulk auto-stack batch
+  never touches its batch siblings (each group records its own operation;
+  within a batch the verdict's operation is located by membership, smallest
+  target set winning when a fold overlapped snapshots). Emptied stack rows are
+  deleted (`delete_emptied_stacks`, the #643 hygiene, now public). The
+  metadata union is deliberately **not** reverted — clear means "review this
+  again"; the full inverse remains the verdict's own undo. The unstack is
+  recorded as one undoable `dedup.reopen` operation under its own batch id
+  (returned in the response; client `cli-` gesture ids are accepted but may
+  not equal the verdict's own batch id — that graft would make one undo apply
+  a stack and its inverse in one restore, and is a 400). Its post-restore hook
+  (`restore_reopens_in_session`) is **direction-inverted**: undo-of-clear
+  restacks and re-marks the verdict decided (re-stamping `decided_at`, the
+  "last became live" semantics above); redo-of-clear reopens again. The hook
+  correlates by a dedicated `DedupVerdict.reopen_batch_id` column (migration
+  0089, additive) — never by `batch_id`, which keeps pointing at the verdict's
+  own operation so undoing the original stack still finds its verdict. An
+  uncorrelatable stacked verdict (no batch id; ambiguous or missing operation)
+  is **refused with a 400** rather than degraded — no fallback may guess at
+  pre-verdict state; unstacking by hand in the Stacks view makes the group
+  span two units again, after which the clear needs no picture mutation and
+  succeeds (records nothing, `batch_id: null`). A keep-separate clear is
+  likewise picture-neutral and unrecorded. Every clear path emits the standard
+  `pictures_changed` announcement over the affected members.
 - **A verdict is always recorded under a `batch_id`**, minted server-side
   (`srv-…`, §21.3) when the caller supplies none. The batch id is what ties the
   `Operation` row back to its `DedupVerdict` row (keep-separate rows store it
@@ -2197,9 +2232,9 @@ Every verdict — stack **and** keep-separate — records **exactly one**
 - **Origin discipline.** `actor` / `source` / `origin_client_id` come from
   `operation_log_service.request_context(request)`, read in the handler on the
   request's own task and passed down explicitly — never from the contextvar, which
-  is dead on the DB worker thread. The three recording handlers (stack,
-  keep-separate, auto-stack) take a `Request`; reopen deliberately does not,
-  since the values would be dead arguments.
+  is dead on the DB worker thread. All four recording handlers (stack,
+  keep-separate, auto-stack and — since the clear-decision fix — reopen) take
+  a `Request` and read the context there.
 
 **A bulk run is never aborted by one bad group.** The locked-set guards raise
 `HTTPException(423)`, so the loop catches that alongside `DedupVerdictError`,
