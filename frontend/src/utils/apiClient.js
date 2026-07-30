@@ -20,7 +20,45 @@ function setRequestClientId(clientId) {
     typeof clientId === 'string' && clientId ? clientId.slice(0, 200) : null;
 }
 
+// ── Auth-context transitions ────────────────────────────────────────────────
+// Every credential change — login, logout, share-token entry, vault switch —
+// is announced here, once, so no store has to invent its own detection. Any
+// store holding scope-filtered server data (whose CONTENT is an authorization
+// decision) registers here and drops that data synchronously, before the next
+// render can show one credential's data to another.
+const _sessionResetHandlers = new Set();
+
+/**
+ * Register a handler to run on every auth-context transition.
+ * @param {Function} handler - called synchronously, with no arguments.
+ * @returns {Function} unregisters the handler.
+ */
+function onSessionReset(handler) {
+  if (typeof handler !== 'function') return () => {};
+  _sessionResetHandlers.add(handler);
+  return () => _sessionResetHandlers.delete(handler);
+}
+
+/**
+ * Announce that the credential changed. Handlers run synchronously; one that
+ * throws is logged and never stops the others.
+ * @param {string} reason - what changed, for the log line.
+ */
+function notifySessionReset(reason) {
+  for (const handler of _sessionResetHandlers) {
+    try {
+      handler();
+    } catch (error) {
+      console.error(
+          `Session-reset handler failed after ${reason}:`, error);
+    }
+  }
+}
+
 function activateShareToken(token) {
+  // Entering a share token is a credential change: whatever the previous
+  // context cached was scoped to a different principal.
+  notifySessionReset('share-token entry');
   _shareToken = token;
 }
 
@@ -166,6 +204,7 @@ apiClient.interceptors.request.use((config) => {
 async function login(username, password) {
   try {
     const response = await apiClient.post('/login', {username, password});
+    notifySessionReset('login');
     isAuthenticated.value = true;  // Update authentication state
     if (typeof window !== 'undefined' && 'credentials' in navigator &&
         'PasswordCredential' in window && username && password) {
@@ -189,6 +228,9 @@ async function login(username, password) {
 
 // Logout function
 async function logout() {
+  // Drop the previous session's cached, scope-filtered data FIRST: the POST can
+  // fail or hang, and nothing that outlives this call may still be readable.
+  notifySessionReset('logout');
   try {
     await apiClient.post('/logout');
   } catch (error) {
@@ -250,6 +292,8 @@ export {
   login,
   logout,
   newOperationBatchId,
+  notifySessionReset,
+  onSessionReset,
   operationBatchHeaders,
   sessionContext,
   setRequestClientId,
