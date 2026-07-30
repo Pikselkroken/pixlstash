@@ -2069,7 +2069,8 @@ function showNextImage() {
  * @returns {boolean}
  */
 function isTypingTarget(target) {
-  const active = typeof document === "undefined" ? null : document.activeElement;
+  const active =
+    typeof document === "undefined" ? null : document.activeElement;
   return [target, active].some(
     (el) =>
       el instanceof HTMLElement &&
