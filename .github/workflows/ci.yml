@@ -204,6 +204,7 @@ jobs:
           tests/test_anomaly_region_scope.py
           tests/test_architecture_guardrails.py
           tests/test_async_import_staging.py
+          tests/test_auth_read_path.py
           tests/test_authentication.py
           tests/test_authz_gate_step3.py
           tests/test_authz_gate_step4.py
