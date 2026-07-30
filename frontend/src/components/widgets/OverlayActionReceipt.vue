@@ -177,9 +177,10 @@ defineExpose({
 
    64px: the line `.overlay-progress--comfyui` already establishes, and one
    --space-8 of clearance above the 16px hint lane whose tallest occupant is
-   ~30px. The 16px lane was rejected because `.zoom-hud` lives there and is
-   PERSISTENT at any zoom other than fit; trading a common collision for the
-   rare one with a running job is the whole argument.
+   ~30px. The 16px lane was originally rejected because the old `.zoom-hud`
+   lived there persistently; the hud has since retired into the toolbar
+   button's readout, but the lane still hosts the swipe/chrome hints, so the
+   placement stands.
 
    z-index 6 is the overlay's own trapped local scale (visual-language.md §14
    sanctions it): the same rung as `.overlay-progress`, which is the same class

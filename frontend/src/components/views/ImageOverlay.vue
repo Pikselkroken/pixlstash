@@ -379,14 +379,20 @@
             <v-icon size="20">mdi-account-plus</v-icon>
           </button>
 
+          <!-- The zoom readout lives ON the control (owner ruling): a live
+               whole-percent of natural size beside the retained icon. The
+               label width is reserved once (5ch, tabular numerals) so the
+               toolbar never jumps as the value changes. Click semantics match
+               Z: at fit → snap to 100%, otherwise → snap to fit. -->
           <button
             class="overlay-icon-btn zoom-btn"
             type="button"
-            title="Toggle zoom (Z)"
-            aria-label="Toggle zoom (Z)"
-            @click="toggleZoom"
+            :title="zoomButtonTitle"
+            :aria-label="zoomButtonTitle"
+            @click="toggleZoomSnap"
           >
             <v-icon>mdi-magnify</v-icon>
+            <span class="zoom-btn-label">{{ zoomButtonLabel }}</span>
           </button>
           <button
             class="overlay-icon-btn overlay-topbar-sidebar-toggle"
@@ -454,7 +460,7 @@
           @touchstart="onTouchStart"
           @touchmove="onTouchMove"
           @touchend="onTouchEnd"
-          @dblclick="toggleZoom"
+          @dblclick="onCanvasDblClick"
           @wheel.prevent="onWheelZoom"
           @contextmenu="handleMediaContextMenu"
         >
@@ -547,6 +553,15 @@
                   </span>
                 </div>
               </template>
+              <!-- The rubber-band rectangle rides INSIDE the transformed
+                   media (like the face boxes), so the same layout-space math
+                   is correct at every continuous zoom scale; the draw layer
+                   below only owns the pointer events and the hint. -->
+              <div
+                v-if="drawMode && drawRectStyle"
+                class="overlay-draw-rect"
+                :style="drawRectStyle"
+              ></div>
             </div>
           </div>
 
@@ -571,11 +586,6 @@
                 Cancel
               </button>
             </div>
-            <div
-              v-if="drawRectStyle"
-              class="overlay-draw-rect"
-              :style="drawRectStyle"
-            ></div>
           </div>
 
           <button
@@ -599,12 +609,14 @@
             <v-icon>mdi-chevron-right</v-icon>
           </button>
 
-          <div
-            class="zoom-hud"
-            :class="{ hidden: chromeHidden || zoomMode === 'fit' }"
-          >
-            {{ zoomHudLabel }}
-          </div>
+          <!-- The zoom announcer: the button's aria-label carries the live
+               value (no aria-live on the button); this hidden status node
+               announces on settle — 500 ms after the last wheel change, and
+               immediately on a snap stop. The settle timer lives in
+               useWheelZoom. -->
+          <span class="visually-hidden" role="status" aria-live="polite">{{
+            zoomAnnouncement
+          }}</span>
 
           <!-- Both hints stand down while a receipt is up: they are ambient
                teaching with no deadline, the receipt is feedback on a committed
@@ -761,12 +773,12 @@ import {
   onMounted,
   onUnmounted,
   ref,
-  reactive,
   computed,
   nextTick,
   toRefs,
   watch,
 } from "vue";
+import { useWheelZoom } from "../../composables/useWheelZoom";
 import {
   isSupportedVideoFile,
   getOverlayFormat,
@@ -897,9 +909,16 @@ function handleTagsUpdate(newTagsArray) {
 const sidebarOpen = ref(true);
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
-const zoomMode = ref("fit");
-const zoomSteps = ["fit", 1.5, 2];
-const pan = reactive({ x: 0, y: 0 });
+// The zoom family's shared core (Compare's model, adopted here): continuous
+// cursor-anchored wheel zoom, basis 1 = actual pixels, entry at fit, snap
+// stops at fit and 100%. The floor policy is `rest`: the overlay is a
+// DESTINATION, not a layer — wheeling out clamps hard at fit with no exit and
+// no hysteresis (Escape/backdrop remain the exits; ZOOM_EXIT_RESISTANCE stays
+// Compare-only). Pan transport stays the translate+scale transform on
+// `.overlay-media`, which the face-bbox overlays, draw-mode rectangle, and
+// video ride on.
+const zoom = useWheelZoom({ floorPolicy: "rest" });
+const zoomAnnouncement = zoom.announcement;
 const isPanning = ref(false);
 const lastPointer = ref({ x: 0, y: 0 });
 const overlayExpandedStackIds = ref(new Set());
@@ -1237,8 +1256,7 @@ watch(open, (value) => {
     chromeHidden.value = false;
     chromeRevealTimestamp.value = 0;
     addToSetControlKey.value += 1;
-    zoomMode.value = "fit";
-    resetPan();
+    zoom.reset();
     resetComfyState();
   } else {
     // Snapshot the grid sequence up front so prev/next stay stable for the
@@ -2254,7 +2272,7 @@ function handleKeydown(e) {
     // Modifier-blind `z` would make Ctrl+Z and Ctrl+Shift+Z (which reports
     // `e.key === "Z"`) zoom instead of undo: the worst kind of collision,
     // because it does something visible and wrong.
-    toggleZoom();
+    toggleZoomSnap();
   } else if (e.key === " " || e.key === "Spacebar") {
     e.preventDefault();
     if (!chromeHidden.value) {
@@ -2288,10 +2306,6 @@ const FILMSTRIP_VISIBLE_COUNT = 7;
 const FILMSTRIP_BUFFER_COUNT = 3;
 const FILMSTRIP_GAP = 0;
 const FILMSTRIP_RAIL_PADDING = 8;
-const ZOOM_WHEEL_THRESHOLD = 40;
-const ZOOM_WHEEL_SENSITIVITY = 0.25;
-// Approximate pixels per line for wheel events reported in DOM_DELTA_LINE units.
-const WHEEL_LINE_HEIGHT_PX = 16;
 const windowHeight = ref(0);
 const overlayMainRef = ref(null);
 const filmstripRef = ref(null);
@@ -2301,7 +2315,6 @@ const swipeHintVisible = ref(false);
 let swipeHintTimer = null;
 let touchTapConsumed = false;
 let lastTouchEndTime = 0;
-let zoomWheelAccumulator = 0;
 
 function updateViewportMetrics() {
   if (typeof window !== "undefined") {
@@ -2487,22 +2500,27 @@ function openSidebarFromTeaser() {
   descriptionPanelRef.value?.startEditDescription();
 }
 
-function toggleZoom(event = null) {
+/** The pointer position relative to the zoom viewport (`.overlay-canvas`),
+ * the anchor space every zoom change works in. */
+function canvasCursorFromEvent(event) {
+  const rect = overlayCanvasRef.value?.getBoundingClientRect?.();
+  if (!rect || !Number.isFinite(event?.clientX)) return null;
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+/** Z and the toolbar button: toggle between the snap stops, fit ↔ 100%,
+ * centre-anchored. */
+function toggleZoomSnap() {
+  zoom.toggleSnap();
+}
+
+/** Double-click: the same fit ↔ 100% toggle, anchored at the click point. */
+function onCanvasDblClick(event) {
   const target = event?.target;
   if (target instanceof HTMLElement && target.closest(".overlay-nav")) {
     return;
   }
-  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
-  const nextIndex = (currentIndex + 1) % zoomSteps.length;
-  zoomMode.value = zoomSteps[nextIndex];
-  if (zoomMode.value === "fit") {
-    resetPan();
-  }
-}
-
-function resetPan() {
-  pan.x = 0;
-  pan.y = 0;
+  zoom.toggleSnap(canvasCursorFromEvent(event));
 }
 
 function onPanStart(event) {
@@ -2520,8 +2538,7 @@ function onPanMove(event) {
   if (!isPanning.value || !isZoomed.value) return;
   const dx = event.clientX - lastPointer.value.x;
   const dy = event.clientY - lastPointer.value.y;
-  pan.x += dx;
-  pan.y += dy;
+  zoom.panBy(dx, dy);
   lastPointer.value = { x: event.clientX, y: event.clientY };
 }
 
@@ -2577,70 +2594,40 @@ function handleMediaDragStart(event) {
   }
 }
 
+/** Continuous cursor-anchored wheel zoom (the shared model): every step is
+ * exponential in the normalized delta, the image point under the pointer
+ * stays stationary, and wheel-out clamps hard at fit — no exit. */
 function onWheelZoom(event) {
   if (!open.value) return;
   handleUserActivity();
-  const deltaY = normalizeZoomWheelDelta(event);
-  if (!Number.isFinite(deltaY) || deltaY === 0) return;
-  zoomWheelAccumulator += deltaY;
-  if (Math.abs(zoomWheelAccumulator) < ZOOM_WHEEL_THRESHOLD) {
-    return;
-  }
-  const direction = Math.sign(zoomWheelAccumulator);
-  zoomWheelAccumulator -= direction * ZOOM_WHEEL_THRESHOLD;
-  const currentIndex = zoomSteps.findIndex((step) => step === zoomMode.value);
-  if (direction < 0 && currentIndex < zoomSteps.length - 1) {
-    zoomMode.value = zoomSteps[currentIndex + 1];
-  } else if (direction > 0 && currentIndex > 0) {
-    zoomMode.value = zoomSteps[currentIndex - 1];
-  } else {
-    zoomWheelAccumulator = 0;
-  }
-  if (zoomMode.value === "fit") {
-    resetPan();
-  }
+  zoom.wheelZoom(event, canvasCursorFromEvent(event));
 }
 
-function normalizeZoomWheelDelta(event) {
-  if (!event) return 0;
-  const raw = Number(event.deltaY ?? 0);
-  if (!Number.isFinite(raw) || raw === 0) return 0;
-  const scaled = raw * ZOOM_WHEEL_SENSITIVITY;
-  if (event.deltaMode === 1) {
-    return scaled * WHEEL_LINE_HEIGHT_PX;
-  }
-  if (event.deltaMode === 2) {
-    const pagePx = Number(windowHeight.value) || 800;
-    return scaled * pagePx;
-  }
-  return scaled;
-}
-
+// The transform transport (translate+scale) is load-bearing for the
+// face-bbox overlays, draw-mode rectangle, and video, which all ride inside
+// `.overlay-media`. Transform scale 1 IS fit: the un-transformed layout
+// already renders the fitted image, so the CSS scale is scale/fitScale.
 const mediaTransformStyle = computed(() => {
-  const scale = zoomScale.value;
+  const { x, y } = zoom.offset.value;
   return {
-    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+    transform: `translate(${x}px, ${y}px) scale(${zoom.transformScale.value})`,
   };
 });
 
-const zoomScale = computed(() => {
-  if (zoomMode.value === "fit") return 1;
-  const renderedWidth = overlayDims.value.width || 1;
-  const renderedHeight = overlayDims.value.height || 1;
-  const naturalWidth = overlayDims.value.naturalWidth || renderedWidth;
-  const naturalHeight = overlayDims.value.naturalHeight || renderedHeight;
-  const baseScale = Math.min(
-    naturalWidth / renderedWidth,
-    naturalHeight / renderedHeight,
-  );
-  return baseScale * Number(zoomMode.value);
-});
+/** Above the fit floor: drag means pan (clamped), not drag-out. */
+const isZoomed = zoom.aboveFit;
 
-const isZoomed = computed(() => zoomScale.value > 1.01);
+/** The button's live readout: whole percent of natural size — at fit this is
+ * the computed fit percentage (e.g. "37%"), never the word "Fit". Empty only
+ * until the image has measured; the reserved width absorbs it. */
+const zoomButtonLabel = zoom.percentLabel;
 
-const zoomHudLabel = computed(() => {
-  if (zoomMode.value === "fit") return "Fit";
-  return `${Math.round(Number(zoomMode.value) * 100)}%`;
+const zoomButtonTitle = computed(() => {
+  const pct = zoom.percentLabel.value;
+  if (!pct) return "Zoom (Z)";
+  return zoom.atFit.value
+    ? `Zoom ${pct} (fit) — click for 100% (Z)`
+    : `Zoom ${pct} — click to fit (Z)`;
 });
 
 const filmstripCanvasData = computed(() => {
@@ -2869,8 +2856,12 @@ function getDrawPoint(event) {
   if (!innerEl) return null;
   const rect = innerEl.getBoundingClientRect();
   const dims = overlayDims.value;
-  const localX = event.clientX - rect.left - (dims.offsetX || 0);
-  const localY = event.clientY - rect.top - (dims.offsetY || 0);
+  // The bounding rect is the TRANSFORMED box (pan + continuous scale), while
+  // dims are layout-space, so the cursor divides through the CSS scale before
+  // the layout-space mapping. At fit the scale is 1 and this is a no-op.
+  const cssScale = zoom.transformScale.value || 1;
+  const localX = (event.clientX - rect.left) / cssScale - (dims.offsetX || 0);
+  const localY = (event.clientY - rect.top) / cssScale - (dims.offsetY || 0);
   const clampedX = clamp(localX, 0, dims.width);
   const clampedY = clamp(localY, 0, dims.height);
   const imgX = (clampedX * dims.naturalWidth) / dims.width;
@@ -3024,6 +3015,25 @@ function updateOverlayDims() {
   } else {
     videoMeta.value = { duration: null };
   }
+  syncZoomMeasurements();
+}
+
+/** Feed the zoom core its fit measurement whenever the media or the viewport
+ * re-measures: entry lands at fit, a resize keeps a fit-parked scale on the
+ * new fit (the button percentage follows), a navigation keeps the scale and
+ * re-clamps it (and the pan) to the new image's floor. */
+function syncZoomMeasurements() {
+  if (!overlayReady.value) return;
+  const canvas = overlayCanvasRef.value;
+  const containerWidth = canvas?.clientWidth || 0;
+  const containerHeight = canvas?.clientHeight || 0;
+  if (containerWidth <= 1 || containerHeight <= 1) return;
+  zoom.setMeasurements({
+    containerWidth,
+    containerHeight,
+    naturalWidth: overlayDims.value.naturalWidth,
+    naturalHeight: overlayDims.value.naturalHeight,
+  });
 }
 
 watch(image, () => scheduleOverlayDimsUpdate());
@@ -3079,7 +3089,6 @@ onUnmounted(() => {
 
 watch(open, (isOpen) => {
   if (!isOpen) {
-    zoomWheelAccumulator = 0;
     swipeHintVisible.value = false;
     if (swipeHintTimer) {
       clearTimeout(swipeHintTimer);
@@ -4316,12 +4325,21 @@ function resetOverlayCopyState() {
   width: auto;
   min-width: 84px;
   padding: 6px 14px;
-  gap: 6px;
+  gap: var(--space-2);
   justify-content: flex-start;
+  /* Width reserved once (the 5ch label below): the toolbar never jumps. */
+  flex-shrink: 0;
 }
 
 .zoom-btn .v-icon {
   flex: 0 0 18px;
+}
+
+.zoom-btn-label {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  min-width: 5ch;
+  text-align: center;
 }
 
 .overlay-main {
@@ -4354,7 +4372,9 @@ function resetOverlayCopyState() {
   align-items: center;
   justify-content: center;
   transform-origin: center;
-  transition: transform 0.15s ease;
+  /* No transform transition: the continuous wheel zoom is cursor-anchored
+     per event, and an easing tween would drag the anchored point around
+     between frames. The exponential steps are the animation. */
   cursor: grab;
 }
 
@@ -4463,26 +4483,6 @@ function resetOverlayCopyState() {
 
 .overlay-nav-right {
   right: calc(16px + var(--sidebar-width));
-}
-
-.zoom-hud {
-  position: absolute;
-  bottom: 16px;
-  left: calc(16px + var(--filmstrip-rail-width, 0px));
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.55);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  transition:
-    opacity 0.2s ease,
-    left 0.2s ease;
-  z-index: 4;
-}
-
-.zoom-hud.hidden {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .overlay-swipe-hint {
@@ -5109,6 +5109,12 @@ function resetOverlayCopyState() {
     min-width: 32px;
     width: 32px;
     padding: 6px;
+  }
+
+  /* Touch is unchanged (swipe/tap, no pinch yet): the compact icon-only
+     button drops the percent label rather than squeezing it. */
+  .zoom-btn-label {
+    display: none;
   }
 }
 

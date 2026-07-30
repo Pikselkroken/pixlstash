@@ -323,10 +323,12 @@ describe("DedupCompareDialog: the wheel", () => {
     wrapper.unmount();
   });
 
-  // Wheeling out one FULL notch while already at the fit floor closes the
-  // zoom back to Compare — the accumulation is the hysteresis, so trackpad
-  // crumbs cannot blow through and the boundary cannot flap.
-  it("closes exactly once: a full out-notch at the fit floor, not before", async () => {
+  // Wheeling out THREE full notches of deliberate resistance while already at
+  // the fit floor closes the zoom back to Compare (ZOOM_EXIT_RESISTANCE; the
+  // owner raised it from one notch, which exited too easily). The
+  // accumulation is the hysteresis, so trackpad crumbs cannot blow through
+  // and the boundary cannot flap.
+  it("closes exactly once: three out-notches at the fit floor, not before", async () => {
     const wrapper = mountDialog();
     wrapper.vm.openZoom(0);
     await wrapper.vm.$nextTick();
@@ -341,15 +343,38 @@ describe("DedupCompareDialog: the wheel", () => {
     expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
     expect(wrapper.vm.isZoomOpen()).toBe(true);
 
-    // At the floor, sub-notch crumbs accumulate without closing...
-    wheel(surface, 40);
-    wheel(surface, 40);
+    // At the floor, sub-resistance accumulation keeps the zoom open — a full
+    // two notches is still not enough...
+    wheel(surface, 120);
+    wheel(surface, 120);
     expect(wrapper.vm.isZoomOpen()).toBe(true);
-    // ...and the tick that completes the notch closes, once.
-    wheel(surface, 40);
+    // ...and the tick that completes the third notch closes, once.
+    wheel(surface, 120);
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.isZoomOpen()).toBe(false);
     expect(zoomEl()).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("a zoom-in between out-ticks resets the exit resistance", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    const surface = await primeZoom(wrapper);
+
+    wheel(surface, 120);
+    wheel(surface, 120);
+    // A zoom-in leaves the floor and clears the accumulation; the huge
+    // out-wheel after it only clamps back to fit.
+    wheel(surface, -100);
+    await wrapper.vm.$nextTick();
+    wheel(surface, 2000);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.zoomLevel()).toBeCloseTo(0.5, 5);
+    // Two more notches: still under the fresh resistance.
+    wheel(surface, 120);
+    wheel(surface, 120);
+    expect(wrapper.vm.isZoomOpen()).toBe(true);
     wrapper.unmount();
   });
 

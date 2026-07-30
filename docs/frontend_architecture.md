@@ -364,7 +364,7 @@ The tab/category switch is **stateless** (see Key Design Principles). Concretely
 #### `ImageOverlay.vue` (~4 880 lines)
 Full-screen image lightbox. Responsibilities:
 - **Frozen navigation backbone (overlay-open deferral, see §9.1).** prev/next and the filmstrip read membership from a snapshot of `allImages` (`frozenAllImages`, captured on open and cleared on close) via the `overlayImages` computed, not from the live `allImages` prop. This keeps left/right working for the overlay's whole lifetime even after the current picture stops matching the active filter (e.g. the user removes the tag the view is filtered on) or a background refetch reshuffles the grid. The currently displayed card stays fresh independently: it lives in `image.value` and is updated by local edits / `fetchOverlayMetadata`, not by the snapshot. Stack expansion still loads fresh members from `/stacks/{id}/pictures`; only the sequence/membership is frozen.
-- Image display with pan/zoom (fit / 1.5× / 2×).
+- **Image display with the zoom family's continuous wheel zoom** (rework 2026-07-30; the old fit/1.5×/2× ladder and its `zoom-hud` are retired). The overlay consumes `composables/useWheelZoom.js` with basis 1 = actual pixels: entry at fit, continuous cursor-anchored exponential wheel (the image point under the pointer stays stationary through every scale change — binding), ceiling `max(ZOOM_MAX_SCALE, fitScale)`. **The floor policy is `rest`**: wheeling out clamps hard at fit with no exit and no hysteresis — the overlay is a destination, not a layer; Escape/backdrop remain the exits (`ZOOM_EXIT_RESISTANCE` stays Compare-only). Fit and 100% are the snap stops: `Z` and the toolbar zoom button toggle them centre-anchored, a double-click toggles them anchored at the click point. Drag pans at any above-fit scale (pointer capture kept) and the pan is **clamped** — the image edge never crosses its viewport edge, and a zoom-out re-clamps so the image re-centres. The pan transport is the `translate(offset) scale(scale/fitScale)` transform on `.overlay-media` (`anchorZoomOffset`), which is **load-bearing** for the face-bbox overlays, the draw-mode rectangle (both render in layout space inside `.overlay-media-inner` and ride the transform; `getDrawPoint` divides the cursor through the CSS scale), and video. The toolbar zoom button carries the live readout: a whole-percent label of natural size beside the icon (`--space-2` gap, `--text-xs`, tabular numerals, `min-width: 5ch` reserved once so the toolbar never jumps); at fit it shows the computed fit percentage (e.g. "37%", follows resize), never the word "Fit"; its title/aria narrate the click semantics ("Zoom 37% (fit) — click for 100% (Z)" / "Zoom 240% — click to fit (Z)"). No `aria-live` on the button — a visually-hidden `role="status"` node announces on settle (500 ms after the last wheel change; snaps announce immediately), timer owned by the composable. Touch is unchanged (swipe/tap; no pinch yet) and the filmstrip's wheel-navigate is untouched.
 - Tag management: add, remove, autocomplete suggestions from `GET /tags/completions`.
 - Object-detection overlay: a `showDetections` toggle button (next to the face-bbox toggle) renders stored detection boxes fetched from `GET /pictures/{id}/detections` (`detectionBboxes` ref, same request-id race guard as faces), drawn with `getOverlayBoxStyle` and coloured per distinct label. Refetched whenever the displayed image id changes, like faces.
 - AI tag predictions (accept/reject).
@@ -596,7 +596,7 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
 - **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
 - **Three seed modes in recipe mode, two in template mode.** Random draws fresh. **Incremented** (recipe mode only — templates have no original to increment from) applies a signed delta (default +1, session-sticky) to the original seed read from the recipe response (`seed`, falling back to the first `seed_inputs` value) and shows the resulting value live; it submits as `seed_mode: "fixed"` with the computed seed, so the API surface is unchanged. **Fixed** defaults to the original seed and carries a small warning-toned "same as original" note until edited, because replaying the identical seed re-creates the identical image, which the importer dedupes into silence — flagged, not forbidden. A sticky `incremented` preference falls back to random where it cannot be honoured.
-- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29; continuous-wheel rework, 2026-07-30) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion. **The wheel means ZOOM for the whole gesture** (owner requirement): wheel UP over a candidate's picture opens the zoom at fit and the same motion keeps magnifying — a continuous scale from the fit floor to 8× actual pixels (`utils/zoomMath.js`), **anchored at the cursor** (binding: the image point under the pointer stays stationary through every scale change, edge-clamped; the thumbnail→surface jump has no meaningful cursor geometry, so the open lands at fit and anchors from the first in-tick). Wheeling out one FULL accumulated notch while already AT the fit floor closes the zoom back to Compare — the accumulation is the hysteresis (trackpad crumbs cannot blow through; the boundary cannot flap because reopening takes a wheel over a thumbnail). **Fit and 100% are snap stops** on the continuum (the header buttons and P, centre-anchored), the live percentage renders in the top bar (100% = actual pixels — it is what makes the same-magnification blink guarantee verifiable), a **drag pans** at every overflowing level (the wheel never scrolls anything, `overflow: hidden` + preventDefault), and a **flip keeps scale and pan** so the blink stays registered (the new image's own fit floor re-clamps on load). Click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels/zoomLevel`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
+- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29; continuous-wheel rework, 2026-07-30) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion. **The wheel means ZOOM for the whole gesture** (owner requirement): wheel UP over a candidate's picture opens the zoom at fit and the same motion keeps magnifying — a continuous scale from the fit floor to 8× actual pixels (`utils/zoomMath.js`; wheel deltas normalized across pixel/line/page wheel modes via the shared `normalizeWheelDelta`, and the percentage readout via the shared `formatZoomPercent` — the zoom family's core, see §6), **anchored at the cursor** (binding: the image point under the pointer stays stationary through every scale change, edge-clamped; the thumbnail→surface jump has no meaningful cursor geometry, so the open lands at fit and anchors from the first in-tick). Wheeling out **three full accumulated notches of deliberate resistance** (`ZOOM_EXIT_RESISTANCE`, raised 2026-07-30 from one notch, which exited too easily) while already AT the fit floor closes the zoom back to Compare — the accumulation is the hysteresis (it only counts AT the floor, any zoom-in resets it, and a pause longer than `ZOOM_EXIT_GESTURE_GAP_MS` starts it over, so trackpad crumbs cannot blow through, stale part-gestures do not carry, and the boundary cannot flap because reopening takes a wheel over a thumbnail). **Fit and 100% are snap stops** on the continuum (the header buttons and P, centre-anchored), the live percentage renders in the top bar (100% = actual pixels — it is what makes the same-magnification blink guarantee verifiable), a **drag pans** at every overflowing level (the wheel never scrolls anything, `overflow: hidden` + preventDefault), and a **flip keeps scale and pan** so the blink stays registered (the new image's own fit floor re-clamps on load). Click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels/zoomLevel`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
 - **First adopter of the dialog keyboard contract** (see "App* design-system layer"): Escape dismisses, plain Enter accepts via `AppDialog`'s `accept`, and the footer buttons wear the ↵ / Esc badges. The prompt textarea and seed field stop propagation of ordinary typing so grid shortcuts stay quiet, but deliberately let Escape and Enter through to the dialog — and handle Ctrl/Meta+Enter themselves, since the root-level shortcut cannot hear a stopped event.
 
 **Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
@@ -831,7 +831,51 @@ Pure helpers for constructing Docker run/compose snippets in the folder editor U
 
 ---
 
-## 7. Theming and Styling
+### `zoomMath.js` + `composables/useWheelZoom.js` — the zoom family (mandatory shared core)
+
+**Any new zoom surface MUST build on this core.** Do not re-implement wheel
+zoom per surface — the family exists precisely because two surfaces once had
+divergent wheel behaviour (Compare's raw `deltaY` misbehaved on line-mode
+wheels until it adopted `normalizeWheelDelta`).
+
+Two layers:
+
+- **`utils/zoomMath.js` — the pure arithmetic**, unit-tested invariants:
+  `ZOOM_INTENSITY` (0.002, exponential wheel), `zoomStepScale` (per-event
+  0.5–2× clamp, `[fit, max]` continuum), `atFitFloor`, `ZOOM_MAX_SCALE` (8× of
+  actual pixels), `ZOOM_EXIT_RESISTANCE` + `ZOOM_EXIT_GESTURE_GAP_MS` (Compare's
+  exit hysteresis — three deliberate notches, gesture-gap restart; exit
+  surfaces only), the two **cursor-anchor solvers derived from the same equation** —
+  `anchorZoomScroll` (scroll-container transport: Compare) and
+  `anchorZoomOffset` (translate+scale transform transport: ImageOverlay) —
+  plus `normalizeWheelDelta` (pixel/line/page delta modes → pixels) and
+  `formatZoomPercent` (the one readout format, whole percent of actual
+  pixels).
+- **`composables/useWheelZoom.js` — the stateful glue**: the scale ref (basis
+  1 = actual pixels) and fit-measurement hook (`setMeasurements`), the wheel
+  handler, snap-to-stop and the fit ↔ 100% toggle, floor-policy dispatch,
+  clamped pan, and the settle detection feeding the aria announcer
+  (`ZOOM_SETTLE_MS` 500 ms; snaps announce immediately).
+
+**The parameter split is deliberate.** Shared and non-overridable (the
+family's *feel*): `ZOOM_INTENSITY`, the per-event clamp, the anchor equations,
+the near-stop slack (`NEAR_SCALE_SLACK` 1%), delta normalization, the settle
+window, the percent format. Per-surface: the entry scale (fit), the snap
+stops, `maxScale` (default `ZOOM_MAX_SCALE`; effective ceiling
+`max(maxScale, fitScale)`), the **floor behavior** (`rest` — hard clamp at
+fit, for destination surfaces like ImageOverlay; `exit` + the `ZOOM_EXIT_RESISTANCE`
+hysteresis, for layered surfaces like Compare's blink-zoom), and the **pan
+transport** (transform offsets via the composable, or a scroll container via
+`anchorZoomScroll`).
+
+Named follow-ups (recorded, not yet done):
+
+1. **`ReviewSessionsOverlay` migration onto `useWheelZoom`.** Its `.rs-zoom`
+   full-screen zoom still carries its own scroll-to-magnify implementation;
+   it should become the third consumer of the shared core.
+2. **Pinch support.** The anchor equation takes any `{x, y}` in container
+   space, so a pinch centroid drives `wheelZoom`/`snapTo` unchanged — the
+   composable is pinch-ready; only the gesture recognition is missing.
 
 ### Vuetify custom themes
 
@@ -1107,7 +1151,7 @@ row (surface or thumbnail, unmodified, not on the action buttons) opens
 Compare like `C`. The **mouse wheel** over a candidate's picture (wheel up,
 the zoom-in direction) opens the blink-compare zoom on it, and the wheel
 means ZOOM for the whole gesture from there — continuous, cursor-anchored,
-leaving back to Compare one full notch past the fit floor (see the Compare
+leaving back to Compare three full notches of resistance past the fit floor (see the Compare
 bullet in §5 for the full model). **Escape peels one layer**: zoom → Compare
 → queue. The
 keyboard model orders it that way, and `DedupCompareDialog.requestClose`

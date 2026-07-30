@@ -175,15 +175,28 @@ describe("ImageOverlay — the undo binding", () => {
 
   it("still zooms on a bare z", async () => {
     // The regression the base lane fixed: a modifier-blind `z` made Ctrl+Z zoom
-    // instead of undo. Both halves have to keep working.
+    // instead of undo. Both halves have to keep working. (Updated for the
+    // continuous-zoom rework: the zoom-hud is gone, the toolbar button's live
+    // percent readout is the visible zoom state, and Z snaps fit ↔ 100%.)
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
     const wrapper = await openOverlay();
 
-    expect(wrapper.find(".zoom-hud").classes()).toContain("hidden");
+    // Give jsdom the geometry the zoom measures: 800×600 over 1600×1200 → fit 50%.
+    const canvasEl = wrapper.find(".overlay-canvas").element;
+    Object.defineProperty(canvasEl, "clientWidth", { value: 800 });
+    Object.defineProperty(canvasEl, "clientHeight", { value: 600 });
+    const img = wrapper.find(".overlay-img");
+    Object.defineProperty(img.element, "naturalWidth", { value: 1600 });
+    Object.defineProperty(img.element, "naturalHeight", { value: 1200 });
+    Object.defineProperty(img.element, "clientWidth", { value: 800 });
+    Object.defineProperty(img.element, "clientHeight", { value: 600 });
+    await img.trigger("load");
+
+    expect(wrapper.find(".zoom-btn-label").text()).toBe("50%");
     press("z");
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".zoom-hud").classes()).not.toContain("hidden");
+    expect(wrapper.find(".zoom-btn-label").text()).toBe("100%");
     expect(undo).not.toHaveBeenCalled();
     wrapper.unmount();
   });

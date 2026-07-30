@@ -35,8 +35,11 @@ import { computed, nextTick, ref, watch } from "vue";
 import {
   anchorZoomScroll,
   atFitFloor,
+  formatZoomPercent,
+  normalizeWheelDelta,
   zoomStepScale,
-  ZOOM_CLOSE_NOTCH,
+  ZOOM_EXIT_GESTURE_GAP_MS,
+  ZOOM_EXIT_RESISTANCE,
   ZOOM_MAX_SCALE,
 } from "../../utils/zoomMath";
 import AppDialog from "./AppDialog.vue";
@@ -250,8 +253,9 @@ function tagText(candidate) {
 // (owner requirement): the wheel means zoom for the whole gesture — wheel up
 // over a candidate opens the zoom and continued wheeling keeps magnifying,
 // anchored at the cursor (binding: the image point under the pointer stays
-// stationary through every scale change) — and wheeling out one full notch
-// past the fit floor leaves the zoom back to Compare. Fit and 100% (actual
+// stationary through every scale change) — and wheeling out three full
+// notches of deliberate resistance past the fit floor leaves the zoom back
+// to Compare. Fit and 100% (actual
 // pixels) are SNAP STOPS on the continuum (the header buttons and the P key),
 // drag pans at every overflowing level, and a flip keeps the scale and pan so
 // the blink stays registered.
@@ -268,9 +272,12 @@ const zoomScale = ref(null);
 const zoomFitScale = ref(1);
 /** The displayed image's natural pixel size, measured on load. */
 const zoomNatural = ref(null);
-/** Outward wheel delta accumulated while AT the fit floor; one full notch
- * closes the zoom (the hysteresis — see utils/zoomMath.js). */
+/** Outward wheel delta accumulated while AT the fit floor; three full
+ * notches of deliberate resistance close the zoom (the hysteresis — see
+ * ZOOM_EXIT_RESISTANCE in utils/zoomMath.js). A pause longer than the
+ * gesture gap starts the count over. */
 let zoomCloseAccumulator = 0;
+let zoomCloseLastOutTs = 0;
 
 const zoomOpen = computed(() => props.open && zoomIndex.value != null);
 const zoomCandidate = computed(() =>
@@ -305,6 +312,7 @@ function closeZoom() {
   zoomScale.value = null;
   zoomNatural.value = null;
   zoomCloseAccumulator = 0;
+  zoomCloseLastOutTs = 0;
   panState = null;
 }
 
@@ -336,7 +344,7 @@ const zoomAtActual = computed(() => nearScale(1));
  * Visibility of status — it is also what makes the blink guarantee (same
  * magnification across flips) verifiable by eye. */
 const zoomPercent = computed(() =>
-  zoomScale.value === null ? null : Math.round(zoomScale.value * 100),
+  zoomScale.value === null ? null : formatZoomPercent(zoomScale.value),
 );
 
 /**
@@ -489,23 +497,38 @@ function onThumbWheel(index, event) {
 
 /**
  * The wheel inside the zoom means ZOOM, continuously: up magnifies, down
- * shrinks toward the fit floor, and one further full notch AT the floor
- * closes back to Compare (the accumulator is the hysteresis — see
- * utils/zoomMath.js). Always preventDefault: the wheel must never scroll
- * the page or the dialog behind the zoom.
+ * shrinks toward the fit floor, and three further full notches AT the floor
+ * (deliberate resistance) close back to Compare (the accumulator is the
+ * hysteresis — see ZOOM_EXIT_RESISTANCE in utils/zoomMath.js). Always
+ * preventDefault: the wheel must never scroll the page or the dialog behind
+ * the zoom.
  *
  * @param {WheelEvent} event
  */
 function onZoomWheel(event) {
   event.preventDefault();
   if (zoomScale.value === null) return;
-  const deltaY = event.deltaY;
+  // Normalize line/page-mode wheels to pixels (shared zoom-family rule):
+  // a raw line-mode deltaY of ±3 fed into pixel-tuned arithmetic zoomed
+  // ~50× weaker per notch, and took ~40 notches at the floor to leave.
+  const deltaY = normalizeWheelDelta(event, {
+    pageHeightPx: zoomScrollEl.value?.clientHeight || undefined,
+  });
   if (!deltaY) return;
   if (deltaY > 0 && atFitFloor(zoomScale.value, zoomFitScale.value)) {
+    // The exit accumulates only AT the floor; a pause longer than the gesture
+    // gap starts the count over, so a later gesture meets the full
+    // resistance itself instead of inheriting stale part-way accumulation.
+    const now = Date.now();
+    if (now - zoomCloseLastOutTs > ZOOM_EXIT_GESTURE_GAP_MS) {
+      zoomCloseAccumulator = 0;
+    }
+    zoomCloseLastOutTs = now;
     zoomCloseAccumulator += deltaY;
-    if (zoomCloseAccumulator >= ZOOM_CLOSE_NOTCH) closeZoom();
+    if (zoomCloseAccumulator >= ZOOM_EXIT_RESISTANCE) closeZoom();
     return;
   }
+  // Any zoom-in movement resets the exit accumulation.
   zoomCloseAccumulator = 0;
   const next = zoomStepScale(zoomScale.value, deltaY, zoomFitScale.value);
   if (next === zoomScale.value) return;
@@ -890,9 +913,9 @@ function onZoomContextMenu() {
             <v-icon size="15">mdi-magnify-scan</v-icon>
             Actual pixels
           </button>
-          <span v-if="zoomPercent !== null" class="dc-zv-pct"
-            >{{ zoomPercent }}%</span
-          >
+          <span v-if="zoomPercent !== null" class="dc-zv-pct">{{
+            zoomPercent
+          }}</span>
         </div>
         <button
           type="button"
