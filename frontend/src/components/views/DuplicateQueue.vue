@@ -36,26 +36,31 @@
         >
         <!-- The flip side of the queue: review what was already decided and
              clear a decision. -->
+        <!-- Compresses, never folds (amendment #2): at ≤720 the label span
+             hides and the icon-only form remains — the same pattern as
+             Auto-stack — so the button carries its own accessible name at
+             every width. -->
         <button
           type="button"
-          class="qdecided dq-fold-720"
+          class="qdecided"
           :class="{ 'qdecided--on': store.showingDecided }"
+          :title="decidedToggleLabel"
+          :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
           @click="onToggleDecided"
         >
           <v-icon size="15">{{
             store.showingDecided ? "mdi-arrow-left" : "mdi-history"
           }}</v-icon>
-          {{ store.showingDecided ? "Back to review" : "Decided" }}
+          <span class="qdecided-label">{{ decidedToggleLabel }}</span>
         </button>
 
-        <!-- Separator D-S1 wears the fold class of the group it bounds
-             (two-boundary rule, docs/design/toolbar-responsive-decisions.md
-             amendment): once the Decided toggle folds at ≤720 this rule
-             would sit flankless — and on an empty queue, with the headline
-             v-if'd away, it rendered as the bar's LEADING rule. The tail's
-             D-S2 below stays at every width. -->
-        <span class="dq-tb-sep dq-fold-720" aria-hidden="true"></span>
+        <!-- Separator D-S1: renders at ALL widths (amendment #2). With the
+             Decided toggle compressing instead of folding, its left flank is
+             always populated — including on an empty queue, where the
+             headline is v-if'd away but the toggle remains. The tail's D-S2
+             stays at every width too. -->
+        <span class="dq-tb-sep" aria-hidden="true"></span>
 
         <!-- Escape inside the popover (including on its threshold slider,
              where the queue's key model stands down for a typing target)
@@ -157,85 +162,12 @@
              they must not vanish with it. One separator divides the queue's
              own controls from the app-wide cluster. -->
         <span class="dq-tb-sep" aria-hidden="true"></span>
-        <!-- ── The ⋯ overflow, ahead of Undo (which never folds). Fold = CSS
-             both ways: each row shares its bar control's v-if, and the bar's
-             container queries flip which of the pair shows. -->
-        <TbOverflowMenu
-          class="dq-overflow"
-          :attention="tasksStore.hasActiveTasks"
-        >
-          <template #default="{ close }">
-            <button
-              type="button"
-              class="tbm-action dq-row-720"
-              :class="{ 'dq-row--on': store.showingDecided }"
-              :aria-pressed="store.showingDecided ? 'true' : 'false'"
-              @click="
-                onToggleDecided();
-                close();
-              "
-            >
-              <v-icon size="18">mdi-history</v-icon>
-              <span>Show decided</span>
-            </button>
-            <div v-if="store.hasGroups" class="dq-row-720 dq-size-row">
-              <v-icon size="18" aria-hidden="true"
-                >mdi-image-size-select-large</v-icon
-              >
-              <span>Thumbnail size</span>
-              <v-slider
-                class="dq-size-slider"
-                :model-value="store.sizeLevel"
-                :min="0"
-                :max="maxSizeLevel"
-                :step="1"
-                density="compact"
-                hide-details
-                color="primary"
-                thumb-color="primary"
-                :aria-label="`Thumbnail size: ${sizeLabel}`"
-                @update:model-value="store.setSizeLevel($event)"
-              />
-            </div>
-            <button
-              type="button"
-              class="tbm-action dq-row-600"
-              @click="
-                emit('open-settings');
-                close();
-              "
-            >
-              <v-icon size="18">mdi-cog-outline</v-icon>
-              <span>Settings…</span>
-            </button>
-            <button
-              type="button"
-              class="tbm-action dq-row-600"
-              :class="{ 'dq-row--on': sidebarStore.statsOpen }"
-              :aria-pressed="sidebarStore.statsOpen ? 'true' : 'false'"
-              @click="
-                sidebarStore.toggleStats();
-                close();
-              "
-            >
-              <v-icon size="18">mdi-chart-bar</v-icon>
-              <span>Stats sidebar</span>
-            </button>
-            <button
-              v-if="!readOnly"
-              type="button"
-              class="tbm-action dq-row-480"
-              @click="
-                close();
-                undoControlRef?.openHistory();
-              "
-            >
-              <v-icon size="18">mdi-history</v-icon>
-              <span>History…</span>
-            </button>
-          </template>
-        </TbOverflowMenu>
-        <UndoControl v-if="!readOnly" ref="undoControlRef" />
+        <!-- No burger in this bar (amendment #2): a burger may only collapse
+             controls from its own visual group, and every foldable here
+             found a better answer — Decided and Auto-stack compress to
+             icon forms, the size slider simply hides at ≤720 (the value
+             persists in the store), and the app-wide tail never folds. -->
+        <UndoControl v-if="!readOnly" />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -462,10 +394,7 @@ import {
 } from "../../utils/thumbnailSizes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
-import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import UndoControl from "../panels/UndoControl.vue";
-import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
 import DedupScanBanner from "../widgets/DedupScanBanner.vue";
@@ -522,12 +451,6 @@ const router = useRouter();
 const store = useDedupStore();
 const operationStore = useOperationStore();
 const noticeStore = useNoticeStore();
-// The overflow's folded Stats row and the ⋯ attention dot read the same
-// stores TbGlobalActions does.
-const sidebarStore = useSidebarStore();
-const tasksStore = useTasksStore();
-// The overflow's "History…" row reaches the popover UndoControl exposes.
-const undoControlRef = ref(null);
 
 // ── Undo/redo must put the queue back, not just fix the badge ─────────────
 // Reverting a stack verdict reopens the group server-side (the op log's
@@ -601,6 +524,12 @@ const readOnly = computed(() => Boolean(isReadOnly.value));
 
 const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
+
+/** What the Decided toggle says: the visible label on a wide bar, the
+ * tooltip and accessible name at every width (the span hides at ≤720). */
+const decidedToggleLabel = computed(() =>
+  store.showingDecided ? "Back to review" : "Decided",
+);
 
 /** The auto-stack button's full sentence: the visible label on a wide bar,
  * the tooltip and accessible name always. */
@@ -1926,35 +1855,11 @@ defineExpose({ windowedGroups, tierLabel });
   white-space: nowrap;
 }
 
-/* ── The ⋯ overflow ladder (docs/design/toolbar-responsive-decisions.md).
-   Fold = CSS both ways: a control's bar button and its overflow row share
-   one v-if, and these queries flip which of the pair shows. Undo never folds
-   or hides. Floor: count, Tier gate, scope pill (if scoped), Auto-stack
-   (compressed, if present), separator, Undo, ⋯. ─────────────────────────── */
-.dq-overflow,
-.dq-row-720,
-.dq-row-600,
-.dq-row-480 {
-  display: none;
-}
-
-.dq-row--on {
-  color: rgb(var(--v-theme-primary));
-}
-
-/* The size row hosts the same slider as the bar; a label beside a track. */
-.dq-size-row {
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-sm);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.dq-size-row .dq-size-slider {
-  flex: 1;
-}
-
+/* ── The collapse ladder (docs/design/toolbar-responsive-decisions.md,
+   amendment #2 — this bar has NO burger: every foldable compresses or
+   hides within its own group instead). Floor: count, Decided (icon), Tier
+   gate (icon+chevron), scope pill (compressed, if scoped), Auto-stack
+   (compressed, if present), separator, Undo, Settings, Stats. ──────────── */
 .dq-auto-short,
 .dq-auto-count {
   display: none;
@@ -1977,14 +1882,10 @@ defineExpose({ windowedGroups, tierLabel });
 }
 
 @container dqbar (max-width: 720px) {
+  /* The size control hides outright — no replacement row: the value
+     persists in the store and comes back with the width. */
   .dq-fold-720 {
     display: none;
-  }
-  .dq-overflow {
-    display: flex;
-  }
-  .dq-row-720 {
-    display: flex;
   }
   .dq-auto-full {
     display: none;
@@ -1997,23 +1898,19 @@ defineExpose({ windowedGroups, tierLabel });
   .dq-tier-label {
     display: none;
   }
+  /* The Decided toggle compresses to its icon, the Auto-stack pattern; its
+     title/aria-label carry the name. */
+  .qdecided-label {
+    display: none;
+  }
 }
 
 @container toolbar (max-width: 600px) {
-  .dq-row-600 {
-    display: flex;
-  }
   .dq-auto-short {
     display: none;
   }
   .dq-auto-count {
     display: inline;
-  }
-}
-
-@container toolbar (max-width: 480px) {
-  .dq-row-480 {
-    display: flex;
   }
 }
 </style>

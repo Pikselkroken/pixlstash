@@ -666,35 +666,61 @@ describe("DuplicateQueue — the shell chrome", () => {
   });
 
   // The decision record's canonical tail, identical in every view:
-  // [separator] [⋯ overflow] [UndoControl] [TbGlobalActions].
-  it("orders the tail separator → ⋯ → UndoControl → TbGlobalActions", async () => {
+  // [separator] [UndoControl] [TbGlobalActions]. No ⋯ anywhere in this bar
+  // (amendment #2): every foldable here compresses or hides in its own group.
+  it("orders the tail separator → UndoControl → TbGlobalActions, no burger", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
-    const overflow = wrapper.find(".dq-overflow").element;
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
     // TbGlobalActions is multi-root; its Settings button is a stable anchor.
     const globalActions = wrapper.find('button[title="Settings"]').element;
     const follows = (a, b) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-    expect(
-      overflow.previousElementSibling.classList.contains("dq-tb-sep"),
-    ).toBe(true);
-    expect(follows(overflow, undo)).toBe(true);
+    expect(undo.previousElementSibling.classList.contains("dq-tb-sep")).toBe(
+      true,
+    );
     expect(follows(undo, globalActions)).toBe(true);
+    expect(wrapper.find(".tbo-wrap").exists()).toBe(false);
     wrapper.unmount();
   });
 
-  // The separator amendment: D-S1 folds with the group it bounds (once the
-  // Decided toggle folds, the rule would sit flankless — and on an empty
-  // queue it rendered as the bar's LEADING rule); D-S2, the tail boundary,
-  // never folds. Class contract is the testable surface under jsdom.
-  it("D-S1 wears the Decided group's fold class; the tail's D-S2 does not", async () => {
+  // The separator amendments: with the Decided toggle COMPRESSING instead of
+  // folding (amendment #2), D-S1's left flank is always populated — so both
+  // rules render at all widths and neither carries a fold class.
+  it("both separators render at all widths, neither carrying a fold class", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     const separators = wrapper.findAll(".dq-toolbar .dq-tb-sep");
     expect(separators).toHaveLength(2);
-    const [dS1, dS2] = separators;
-    expect(dS1.classes()).toContain("dq-fold-720");
-    expect(dS2.classes()).not.toContain("dq-fold-720");
+    for (const separator of separators) {
+      expect(separator.classes()).not.toContain("dq-fold-720");
+    }
+    wrapper.unmount();
+  });
+
+  // The Decided toggle compresses (icon-only at ≤720, the Auto-stack
+  // pattern), so it must carry its own accessible name and keep its pressed
+  // state at every width.
+  it("the Decided toggle exposes its label and keeps aria-pressed", async () => {
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    const toggle = wrapper.find(".dq-toolbar .qdecided");
+    expect(toggle.attributes("title")).toBe("Decided");
+    expect(toggle.attributes("aria-label")).toBe("Decided");
+    expect(toggle.attributes("aria-pressed")).toBe("false");
+    expect(toggle.find(".qdecided-label").text()).toBe("Decided");
+
+    listGroups.mockResolvedValue({
+      groups: [],
+      total: 0,
+      offset: 0,
+      limit: 20,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+    await store.toggleDecided();
+    await wrapper.vm.$nextTick();
+    const flipped = wrapper.find(".dq-toolbar .qdecided");
+    expect(flipped.attributes("title")).toBe("Back to review");
+    expect(flipped.attributes("aria-label")).toBe("Back to review");
+    expect(flipped.attributes("aria-pressed")).toBe("true");
     wrapper.unmount();
   });
 
@@ -709,38 +735,6 @@ describe("DuplicateQueue — the shell chrome", () => {
     expect(button.attributes("title")).toBe(label);
     expect(button.attributes("aria-label")).toBe(label);
     expect(button.find(".dq-tier-label").text()).toBe(label);
-    wrapper.unmount();
-  });
-
-  // Fold = CSS both ways: every foldable control has its overflow row with
-  // the same v-if. jsdom does not evaluate container queries; the width steps
-  // are covered by the CSS being shared between both bars.
-  it("the ⋯ carries rows for the queue's foldable controls", async () => {
-    const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find(".tbo-trigger").trigger("click");
-    const labels = wrapper
-      .findAll(".tbo-panel .tbm-action")
-      .map((b) => b.text());
-    expect(labels).toEqual([
-      "Show decided",
-      "Settings…",
-      "Stats sidebar",
-      "History…",
-    ]);
-    // The size row hosts the SAME slider, not a copy of its value.
-    expect(wrapper.find(".tbo-panel .dq-size-row").exists()).toBe(true);
-    wrapper.unmount();
-  });
-
-  it("the ⋯ rows honour read-only: History gone, Show decided stays", async () => {
-    readOnlyRef.value = true;
-    const { wrapper } = await mountQueue([group("g1")]);
-    await wrapper.find(".tbo-trigger").trigger("click");
-    const labels = wrapper
-      .findAll(".tbo-panel .tbm-action")
-      .map((b) => b.text());
-    expect(labels).toContain("Show decided");
-    expect(labels).not.toContain("History…");
     wrapper.unmount();
   });
 

@@ -171,6 +171,58 @@ latent wrap.
    text-overflow: ellipsis; }`; `.qtitle { flex-shrink: 0; }` (the count
    must never truncate).
 
+## Amendment #2 (2026-07-30): burger placement
+
+**Principle:** a burger may only collapse controls from its OWN visual group,
+and it stands where those controls stood; a fold that would cross a group
+boundary must instead stay, compress, or hide. The first ladder violated this
+twice — the grid's ⋯ sat in the right tail while collapsing left-group
+actions, and it swallowed Review/Settings/Stats/History from across the
+boundary.
+
+**Grid:**
+
+1. The ⋯ moves to the END of `.selection-bar-left` (after the ComfyUI menu),
+   where the controls it collapses stood. The panel keeps its right-aligned
+   anchoring, so it opens leftward and stays on-screen.
+2. Burger contents FINAL: Export/Import/ComfyUI rows (≤700) + "View
+   options…" (≤600). The Review, Settings, Stats and History rows are
+   DELETED; the `:attention` pass-through goes with them.
+3. Review-and-fix-tags stays visible at ALL widths — it is the review
+   overlay's only visible entry point.
+4. Settings/Stats never fold: TbGlobalActions' ≤600 collapse rule is deleted
+   and the activity dot stays first-class on the Stats button at every
+   width.
+5. History: the chevron still hides at ≤480 (UndoControl unchanged), but the
+   burger's History row is deleted — below 480 the popover is simply
+   unavailable. Documented, accepted loss; the undo/redo buttons and
+   shortcuts remain. The dead `.tb-row-480` CSS and the grid's
+   `@container toolbar (max-width: 480px)` block go with it.
+6. Separator: G-S1 loses `tb-fold-700` — with the burger in the left run,
+   the action run at ≤700 is [Search][⋯] (two members to the floor), so
+   G-S1 renders at all widths. G-S4 unchanged.
+7. Floor:
+   `Sort(icons) Filter │G-S1│ Search ⋯ …gap… Review │G-S4│ Undo Settings Stats`.
+
+**Duplicates — the burger DISSOLVES:** every foldable found an own-group
+answer, so the bar mounts no overflow at all.
+
+1. The TbOverflowMenu mount, all its rows, and the
+   `.dq-overflow`/`.dq-row-*`/`.dq-size-row` CSS are deleted; the dq
+   `@container toolbar 480` block goes; the 600 block keeps only the
+   Auto-stack swap.
+2. The Decided toggle compresses instead of folding: label span hides in the
+   EXISTING dqbar ≤720 block (icon-only, the Auto-stack pattern), with
+   `title`/`aria-label` carrying the name and `aria-pressed` kept.
+3. The size slider hides outright at ≤720 (`dq-fold-720`) with no
+   replacement row — the value persists in the store.
+4. Separator: D-S1 loses `dq-fold-720` — with Decided visible at all widths
+   its left flank is always populated, including on an empty queue; D-S1
+   renders at all widths. D-S2 unchanged.
+
+TbOverflowMenu itself sheds the attention prop, dot, keyframes and its ≤600
+container rule (dead once Stats stopped folding). UndoControl unchanged.
+
 ## (d) Deliberately rejected, and why
 
 - **Left-side standardisation**: no shared anchor exists on the left (the grid

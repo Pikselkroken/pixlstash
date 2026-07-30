@@ -1,10 +1,5 @@
 <template>
-  <div
-    ref="wrapEl"
-    class="tbo-wrap"
-    :class="{ 'tbo-wrap--attention': attention }"
-    @keydown.esc.stop.prevent="close()"
-  >
+  <div ref="wrapEl" class="tbo-wrap" @keydown.esc.stop.prevent="close()">
     <button
       ref="triggerEl"
       type="button"
@@ -16,11 +11,6 @@
       @click="toggle"
     >
       <v-icon size="20">mdi-dots-horizontal</v-icon>
-      <!-- The app-wide activity light SURVIVES the stats toggle folding in
-           here: shown only while the toolbar container is narrow enough that
-           the stats button itself is hidden (the shared ≤600 step), so the
-           dot is never displayed twice. -->
-      <span v-if="attention" class="tbo-activity" aria-hidden="true"></span>
     </button>
     <div
       v-if="open"
@@ -51,13 +41,6 @@
 // `.tbm-action` recipe.
 
 import { onBeforeUnmount, onMounted, ref } from "vue";
-
-defineProps({
-  // The app-wide task-activity light, shown while the stats toggle is folded
-  // in here. The host passes `tasksStore.hasActiveTasks`; the CSS decides
-  // WHEN it may show (only under the shared ≤600 toolbar step).
-  attention: { type: Boolean, default: false },
-});
 
 const open = ref(false);
 const wrapEl = ref(null);
@@ -158,46 +141,4 @@ defineExpose({ close });
   gap: var(--space-1);
 }
 
-/* The activity light, identical values to TbGlobalActions' — scoped styles
-   cannot share keyframes across components, so the recipe is repeated, not
-   reinvented. Hidden until the stats toggle has actually folded (the shared
-   ≤600 toolbar step): above that width the dot lives on the stats button and
-   must never show twice. */
-.tbo-activity {
-  display: none;
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
-  animation: tbo-attention-pulse 1.4s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@container toolbar (max-width: 600px) {
-  .tbo-activity {
-    display: block;
-  }
-}
-
-@keyframes tbo-attention-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tbo-activity {
-    animation: none;
-  }
-}
 </style>

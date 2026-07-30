@@ -29,7 +29,6 @@ vi.mock("../../utils/apiClient", async () => {
 import Toolbar from "./Toolbar.vue";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
-import { useSidebarStore } from "../../stores/useSidebarStore";
 
 // Vuetify is not installed in the test app; v-menu is stubbed with the two
 // behaviours the toolbar relies on (activator slot props carry the toggle,
@@ -152,35 +151,48 @@ describe("Toolbar — the shell band's one box recipe", () => {
 
 describe("Toolbar — the canonical app-wide tail", () => {
   // The decision record: EVERY toolbar ends [separator][UndoControl]
-  // [TbGlobalActions], with the ⋯ overflow ahead of Undo once folding starts.
-  it("orders the tail separator → ⋯ → UndoControl → TbGlobalActions", () => {
+  // [TbGlobalActions]; the ⋯ (amendment #2) is NOT part of the tail — a
+  // burger stands at the end of the group it collapses, the left action run.
+  it("orders the tail separator → UndoControl → TbGlobalActions", () => {
     const wrapper = mountToolbar();
-    const overflow = wrapper.find(".tb-overflow").element;
     const undo = wrapper.findComponent({ name: "UndoControl" }).element;
     const globalActions = wrapper.findComponent({
       name: "TbGlobalActions",
     }).element;
 
     expect(
-      overflow.previousElementSibling.classList.contains("bar-separator"),
+      undo.previousElementSibling.classList.contains("bar-separator"),
     ).toBe(true);
-    expect(precedes(overflow, undo)).toBe(true);
     expect(precedes(undo, globalActions)).toBe(true);
   });
 
-  // The separator amendment: a rule marks a SEMANTIC boundary, not a group
-  // edge — the elastic gap already draws left|right. Two rules remain: G-S1
-  // (lens run | action run, folding with the actions at ≤700) and G-S4 (the
-  // tail boundary, every width). G-S3 (the right group's leading rule) and
-  // the G-S2 gap-guard are gone. Width steps live in shared CSS; the class
-  // contract is the testable surface under jsdom.
-  it("renders exactly two separators: G-S1 (folds at 700) and G-S4 (never)", () => {
+  // Amendment #2: the burger lives at the END of the left group, where the
+  // controls it collapses stood — never in the right tail.
+  it("mounts the ⋯ as the left group's last child, not in the tail", () => {
+    const wrapper = mountToolbar();
+    expect(wrapper.find(".selection-bar-left .tb-overflow").exists()).toBe(
+      true,
+    );
+    expect(wrapper.find(".selection-bar-right .tb-overflow").exists()).toBe(
+      false,
+    );
+    const left = wrapper.find(".selection-bar-left").element;
+    expect(left.lastElementChild.classList.contains("tb-overflow")).toBe(true);
+  });
+
+  // The separator amendments: a rule marks a SEMANTIC boundary, not a group
+  // edge — the elastic gap already draws left|right. Two rules remain, and
+  // with the burger anchoring the action run (amendment #2) BOTH render at
+  // all widths: G-S1's flanks stay populated down to the [Search][⋯] floor,
+  // so it carries no fold class any more.
+  it("renders exactly two separators, neither carrying a fold class", () => {
     const wrapper = mountToolbar();
     const separators = wrapper.findAll(".bar-separator");
     expect(separators).toHaveLength(2);
-    const [gS1, gS4] = separators;
-    expect(gS1.classes()).toContain("tb-fold-700");
-    expect(gS4.classes()).not.toContain("tb-fold-700");
+    for (const separator of separators) {
+      expect(separator.classes()).not.toContain("tb-fold-700");
+      expect(separator.classes()).not.toContain("tb-fold-600");
+    }
     // The gap-guard variant is deleted outright.
     expect(wrapper.find(".bar-separator--gap-guard").exists()).toBe(false);
     // No rule leads the right group: its first element child is a control.
@@ -214,7 +226,11 @@ describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
     return wrapper.find(".tbo-panel");
   }
 
-  it("carries a row for every foldable control, same conditions", async () => {
+  // Amendment #2: the burger holds ONLY its own group's members. Review,
+  // Settings, Stats and History never appear here — Review stays a visible
+  // button at all widths, Settings/Stats never fold, and below 480 the
+  // History popover is simply unavailable (accepted, documented loss).
+  it("carries rows for its own group's foldables and nothing else", async () => {
     const filterStore = useFilterStore();
     filterStore.comfyuiConfigured = true;
     const wrapper = mountToolbar();
@@ -224,11 +240,7 @@ describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
       "Export grid to zip",
       "Import photos…",
       "Generate with ComfyUI…",
-      "Review and fix tags…",
       "View options…",
-      "Settings…",
-      "Stats sidebar",
-      "History…",
     ]);
   });
 
@@ -242,18 +254,14 @@ describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
     expect(labels).not.toContain("Generate with ComfyUI…");
   });
 
-  it("honours read-only: Import and History rows are gone", async () => {
+  it("honours read-only: the Import row is gone", async () => {
     readOnlyRef.value = true;
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".tbm-action").map((b) => b.text());
     expect(labels).not.toContain("Import photos…");
-    expect(labels).not.toContain("History…");
-    // Review folds but stays visible-and-disabled, like its button.
-    const review = panel
-      .findAll(".tbm-action")
-      .find((b) => b.text() === "Review and fix tags…");
-    expect(review.attributes("disabled")).toBeDefined();
+    // Review never folds (amendment #2), so no row exists to gate.
+    expect(labels).not.toContain("Review and fix tags…");
   });
 
   it("emits the same intents as the buttons it mirrors", async () => {
@@ -268,29 +276,21 @@ describe("Toolbar — the ⋯ overflow mirrors its controls", () => {
     await openOverflow(wrapper);
     await row("Import photos…").trigger("click");
     expect(wrapper.emitted("open-import")).toHaveLength(1);
-
-    await openOverflow(wrapper);
-    await row("Settings…").trigger("click");
-    expect(wrapper.emitted("open-settings")).toHaveLength(1);
   });
 
-  it("the Stats row toggles the rail and wears the pressed state", async () => {
-    const sidebarStore = useSidebarStore();
-    const before = sidebarStore.statsOpen;
+  // The controls the amendment pinned OUT of the burger stay first-class.
+  it("keeps Review and the global pair as visible controls", () => {
     const wrapper = mountToolbar();
-    let panel = await openOverflow(wrapper);
-    const stats = panel
-      .findAll(".tbm-action")
-      .find((b) => b.text() === "Stats sidebar");
-    expect(stats.attributes("aria-pressed")).toBe(String(before));
-    await stats.trigger("click");
-    expect(sidebarStore.statsOpen).toBe(!before);
-    panel = await openOverflow(wrapper);
     expect(
-      panel
-        .findAll(".tbm-action")
-        .find((b) => b.text() === "Stats sidebar")
-        .attributes("aria-pressed"),
-    ).toBe(String(!before));
+      wrapper.find('button[title="Review and fix tags"]').exists(),
+    ).toBe(true);
+    expect(
+      wrapper
+        .find('button[title="Review and fix tags"]')
+        .classes(),
+    ).not.toContain("tb-fold-700");
+    expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
+      true,
+    );
   });
 });

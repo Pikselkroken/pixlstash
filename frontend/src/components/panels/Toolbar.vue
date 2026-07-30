@@ -351,11 +351,12 @@
         </v-menu>
         <!-- ── Separator G-S1: the lens run | the action run ────────────
              A separator marks a SEMANTIC boundary, not a group edge (the
-             amendment in docs/design/toolbar-responsive-decisions.md).
-             It wears the fold class of the group it bounds: when Export/
-             Import/ComfyUI fold at ≤700 a lone Search must join the lens
-             run, not sit boxed between two rules. -->
-        <div class="bar-separator tb-fold-700"></div>
+             amendments in docs/design/toolbar-responsive-decisions.md).
+             Renders at ALL widths: with the ⋯ standing at the end of the
+             action run it collapses (amendment #2), the run keeps two
+             members ([Search][⋯]) down to the floor, so both flanks stay
+             populated and the rule never sits boxed. -->
+        <div class="bar-separator"></div>
         <!-- ── Toolbar: Search (icon trigger → search menu popover) ───── -->
         <v-menu
           v-model="gbSearchMenuOpen"
@@ -512,38 +513,17 @@
             "
           />
         </v-menu>
-      </div>
-      <!-- No separator between the groups: the elastic gap IS the left|right
-           boundary (two-boundary rule, docs/design/toolbar-responsive-
-           decisions.md amendment). The old leading rule here boxed the Review
-           button, and its narrow-width gap-guard twin drew a double rule. -->
-      <div class="selection-bar-right">
-        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
-        <button
-          class="bar-btn bar-btn--icon tb-fold-700"
-          type="button"
-          :disabled="isReadOnly"
-          title="Review and fix tags"
-          @click="reviewSessionsStore.overlayOpen = true"
-        >
-          <v-icon size="20">mdi-tag-check-outline</v-icon>
-        </button>
-        <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
-             The canonical toolbar tail, identical in every view:
-             [separator] [UndoControl] [TbGlobalActions], with the ⋯ overflow
-             ahead of Undo once controls start folding. The rule is required
-             AND stays at every width (it mirrors the Duplicates bar's D-S2):
-             proximity alone cannot separate identical 32px icon buttons into
-             "this view's tools" and "the app's chrome". -->
-        <div class="bar-separator"></div>
-        <!-- ── The ⋯ overflow. Fold = CSS both ways: every foldable control
-             exists as its bar button AND as a row here with the same v-if,
-             and the bar's container queries flip which one is visible. The
-             trigger itself appears with the first fold step (≤700). -->
-        <TbOverflowMenu
-          class="tb-overflow"
-          :attention="tasksStore.hasActiveTasks"
-        >
+        <!-- ── The ⋯ overflow (amendment #2 in docs/design/
+             toolbar-responsive-decisions.md): a burger may only collapse
+             controls from its OWN visual group, and it stands where those
+             controls stood — so it lives HERE, at the end of the action run
+             it collapses (Export/Import/ComfyUI at ≤700, View at ≤600), and
+             never a control from across a group boundary. Fold = CSS both
+             ways: each row shares its bar button's v-if, and the container
+             queries flip which of the pair is visible. The panel keeps its
+             right-aligned anchoring, so it opens leftward and stays
+             on-screen. -->
+        <TbOverflowMenu class="tb-overflow">
           <template #default="{ close }">
             <button
               type="button"
@@ -583,18 +563,6 @@
             </button>
             <button
               type="button"
-              class="tbm-action tb-row-700"
-              :disabled="isReadOnly"
-              @click="
-                reviewSessionsStore.overlayOpen = true;
-                close();
-              "
-            >
-              <v-icon size="18">mdi-tag-check-outline</v-icon>
-              <span>Review and fix tags…</span>
-            </button>
-            <button
-              type="button"
               class="tbm-action tb-row-600"
               @click="
                 close();
@@ -604,47 +572,39 @@
               <v-icon size="18">mdi-view-grid</v-icon>
               <span>View options…</span>
             </button>
-            <button
-              type="button"
-              class="tbm-action tb-row-600"
-              @click="
-                emit('open-settings');
-                close();
-              "
-            >
-              <v-icon size="18">mdi-cog-outline</v-icon>
-              <span>Settings…</span>
-            </button>
-            <button
-              type="button"
-              class="tbm-action tb-row-600"
-              :class="{ 'tb-row--on': sidebarStore.statsOpen }"
-              :aria-pressed="sidebarStore.statsOpen ? 'true' : 'false'"
-              @click="
-                sidebarStore.toggleStats();
-                close();
-              "
-            >
-              <v-icon size="18">mdi-chart-bar</v-icon>
-              <span>Stats sidebar</span>
-            </button>
-            <button
-              v-if="!isReadOnly"
-              type="button"
-              class="tbm-action tb-row-480"
-              @click="
-                close();
-                undoControlRef?.openHistory();
-              "
-            >
-              <v-icon size="18">mdi-history</v-icon>
-              <span>History…</span>
-            </button>
           </template>
         </TbOverflowMenu>
-        <UndoControl v-if="!isReadOnly" ref="undoControlRef" />
+      </div>
+      <!-- No separator between the groups: the elastic gap IS the left|right
+           boundary (two-boundary rule, docs/design/toolbar-responsive-
+           decisions.md amendment). The old leading rule here boxed the Review
+           button, and its narrow-width gap-guard twin drew a double rule. -->
+      <div class="selection-bar-right">
+        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ─────
+             Visible at ALL widths (amendment #2): it is the review overlay's
+             only visible entry point, and folding it into the left group's
+             burger would cross the group boundary. -->
+        <button
+          class="bar-btn bar-btn--icon"
+          type="button"
+          :disabled="isReadOnly"
+          title="Review and fix tags"
+          @click="reviewSessionsStore.overlayOpen = true"
+        >
+          <v-icon size="20">mdi-tag-check-outline</v-icon>
+        </button>
+        <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
+             The canonical toolbar tail, identical in every view:
+             [separator] [UndoControl] [TbGlobalActions]. The rule is
+             required AND stays at every width (it mirrors the Duplicates
+             bar's D-S2): proximity alone cannot separate identical 32px
+             icon buttons into "this view's tools" and "the app's chrome". -->
+        <div class="bar-separator"></div>
+        <UndoControl v-if="!isReadOnly" />
         <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
-             queue, which is why they live in their own component) ──────── -->
+             queue, which is why they live in their own component). Never
+             folds (amendment #2); the activity dot stays first-class on the
+             Stats button at every width. -->
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -673,8 +633,6 @@ import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
 import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
-import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
@@ -736,12 +694,6 @@ const filterStore = useFilterStore();
 const sortStore = useSortStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
-// The overflow rows for the folded Stats toggle and the ⋯ attention dot read
-// the same stores TbGlobalActions does.
-const sidebarStore = useSidebarStore();
-const tasksStore = useTasksStore();
-// The overflow's "History…" row reaches the popover UndoControl exposes.
-const undoControlRef = ref(null);
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const projectStore = useProjectStore();
@@ -1598,26 +1550,20 @@ const gbCollapseAllStacksDisabled = computed(
   }
 }
 
-/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md).
-   Fold = CSS both ways: a control's bar button and its overflow row share one
-   v-if, and these queries flip which of the pair is visible. No JS measures
-   anything. The overflow trigger appears with the FIRST fold step; Undo never
-   folds or hides at any width (the recovery control stays a single visible
-   target, and the "Changed elsewhere" warning stays surfaced). ───────────── */
+/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md,
+   amendment #2). The burger stands at the end of its OWN group (the action
+   run) and collapses only that group's members. Fold = CSS both ways: a
+   control's bar button and its overflow row share one v-if, and these
+   queries flip which of the pair is visible. No JS measures anything. The
+   trigger appears with the FIRST fold step; Undo, Review, Settings and
+   Stats never fold at any width. ─────────────────────────────────────── */
 .tb-overflow {
   display: none;
 }
 
 .tb-row-700,
-.tb-row-600,
-.tb-row-480 {
+.tb-row-600 {
   display: none;
-}
-
-/* Pressed state on an overflow row (the folded Stats toggle): the same
-   primary token the bar button's active state uses. */
-.tb-row--on {
-  color: rgb(var(--v-theme-primary));
 }
 
 @container selbar (max-width: 700px) {
@@ -1637,12 +1583,6 @@ const gbCollapseAllStacksDisabled = computed(
     display: none;
   }
   .tb-row-600 {
-    display: flex;
-  }
-}
-
-@container toolbar (max-width: 480px) {
-  .tb-row-480 {
     display: flex;
   }
 }

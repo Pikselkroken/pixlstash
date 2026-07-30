@@ -149,13 +149,9 @@ const tasksStore = useTasksStore();
   }
 }
 
-/* ── Shared toolbar collapse (docs/design/toolbar-responsive-decisions.md).
-   At the shared ≤600 step both buttons fold into the hosts' ⋯ overflow
-   ("Settings…" / "Stats sidebar" rows), and the activity dot moves to the ⋯
-   trigger so background work stays visible. ─────────────────────────────── */
-@container toolbar (max-width: 600px) {
-  .bar-btn {
-    display: none;
-  }
-}
+/* No collapse rule here on purpose (amendment #2 in
+   docs/design/toolbar-responsive-decisions.md): Settings and Stats never
+   fold — a burger may only collapse controls from its own visual group, and
+   these are the app-wide tail's. The activity dot stays first-class on the
+   Stats button at every width. */
 </style>
