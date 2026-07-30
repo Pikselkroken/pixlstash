@@ -502,6 +502,29 @@ def character_face_likeness(candidate_blob: bytes, refs_blob: bytes) -> float:
         return 0.0
 
 
+# ---------------------------------------------------------------------------
+# SQLite connection settings (documented in docs/backend_architecture.md §13)
+# ---------------------------------------------------------------------------
+
+# How long a connection waits for the write lock before raising
+# "database is locked". sqlite3's default is 5 s, which is short for a vault
+# where a background task batch can hold the write transaction longer than
+# that. Passed as ``connect_args={"timeout": ...}``, which sqlite3 turns into
+# ``PRAGMA busy_timeout``. The engine the restore path rebuilds after a DB
+# swap already used 30 s (services/restore/full_restore.py); this makes the
+# engine built at startup match it.
+SQLITE_BUSY_TIMEOUT_S = 30
+
+# Per-connection page cache. Negative means KiB rather than pages, so this is
+# 16 MiB against SQLite's 2 MiB default. It is a cap, not a reservation, but a
+# single index scan is enough to reach it: measured peak RSS for 15 connections
+# (QueuePool size=5 + max_overflow=10) is ~263 MB versus ~79 MB at the default.
+# 16 MiB is where a scan of this repo's largest dev vault stopped growing its
+# cache; larger values cost proportionally more resident memory for no
+# measured gain (32 MiB -> ~513 MB, 64 MiB -> ~1010 MB across 15 connections).
+SQLITE_CACHE_SIZE_KIB = -16384
+
+
 def init_database(dbapi_conn, conn_record):
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
@@ -512,6 +535,7 @@ def init_database(dbapi_conn, conn_record):
     cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute(f"PRAGMA cache_size={SQLITE_CACHE_SIZE_KIB}")
     cursor.close()
 
 
@@ -644,7 +668,11 @@ class VaultDatabase:
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
-        self._engine = create_engine(f"sqlite:///{self._db_path}", echo=False)
+        self._engine = create_engine(
+            f"sqlite:///{self._db_path}",
+            echo=False,
+            connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
+        )
         event.listen(self._engine, "connect", init_database)
 
         _run_migrations(self._engine, self._db_path, db_exists)
