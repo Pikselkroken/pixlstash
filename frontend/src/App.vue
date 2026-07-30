@@ -43,6 +43,8 @@ import { redoKeyHint, undoKeyHint } from "./utils/shortcutHints";
 import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 import { useAppConfig } from "./composables/useAppConfig";
 import { useAppNavigation } from "./composables/useAppNavigation";
+import { useGlobalKeydown } from "./composables/useGlobalKeydown";
+import { useWindowFileImport } from "./composables/useWindowFileImport";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -56,7 +58,6 @@ import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.v
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
-import { isInternalImageDrag } from "./utils/media.js";
 const BACKEND_URL = API_BASE_URL;
 
 // --- Stores ---
@@ -140,6 +141,9 @@ const {
   onClearSearch: () => handleClearSearch(),
   onNavigated: () => closeSidebarIfMobile(),
 });
+
+useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
+useWindowFileImport({ sidebarRef });
 
 const { fetchConfig } = useAppConfig({
   onThumbnailSizeChanged: () => updateMaxColumns(),
@@ -610,80 +614,6 @@ async function handleLocalImport({ files, projectId } = {}) {
   sidebarRef.value?.startLocalImport?.(files, projectId ?? null);
 }
 
-function isInsideImageGrid(event) {
-  const target = event?.target;
-  if (!(target instanceof Element)) return false;
-  return Boolean(target.closest(".image-grid, .grid-scroll-wrapper"));
-}
-
-function isExternalFileDragEvent(event) {
-  const dataTransfer = event?.dataTransfer;
-  if (!dataTransfer) return false;
-  // An internal app drag (grid thumbnail → sidebar character/set/project) is
-  // never a file import — bail before the files check. On the desktop shell
-  // (Electron) such a drag ALSO populates dataTransfer.files with the dragged
-  // in-page image as a real File (the web does not), so without this guard the
-  // window-level import handler mistakes the assign-drag for an external file
-  // drop and imports the picture instead of assigning it.
-  if (isInternalImageDrag(dataTransfer)) return false;
-  const files = dataTransfer.files;
-  if (files && files.length > 0) return true;
-  const types = dataTransfer.types ? Array.from(dataTransfer.types) : [];
-  return types.includes("Files") || types.includes("application/x-moz-file");
-}
-
-function handleWindowDragOver(event) {
-  if (!isExternalFileDragEvent(event)) return;
-  // The review overlay is a modal review surface; dropping files into it
-  // must never start an import. Skip preventDefault so the drag is not shown as
-  // droppable here.
-  if (reviewSessionsStore.overlayOpen) return;
-  event.preventDefault();
-}
-
-function handleWindowDrop(event) {
-  if (!isExternalFileDragEvent(event)) return;
-  // While the review overlay is open, swallow the drop without importing
-  // (still preventDefault so the browser does not navigate to the dropped file).
-  if (reviewSessionsStore.overlayOpen) {
-    event.preventDefault();
-    return;
-  }
-  event.preventDefault();
-  if (isInsideImageGrid(event)) {
-    return;
-  }
-  const droppedFiles = Array.from(event.dataTransfer?.files || []);
-  if (!droppedFiles.length) return;
-  const projectId = sidebarRef.value?.currentProjectId ?? null;
-  sidebarRef.value?.startLocalImport?.(droppedFiles, projectId);
-}
-
-function handleWindowPaste(event) {
-  // Ignore paste events originating from editable elements (text inputs etc.)
-  const target = event.target;
-  if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target?.isContentEditable
-  ) {
-    return;
-  }
-  const items = Array.from(event.clipboardData?.items || []);
-  const mediaFiles = items
-    .filter(
-      (item) =>
-        item.kind === "file" &&
-        (item.type.startsWith("image/") || item.type.startsWith("video/")),
-    )
-    .map((item) => item.getAsFile())
-    .filter(Boolean);
-  if (!mediaFiles.length) return;
-  event.preventDefault();
-  const projectId = sidebarRef.value?.currentProjectId ?? null;
-  sidebarRef.value?.startLocalImport?.(mediaFiles, projectId);
-}
-
 function updateSidebarBreakpoints() {
   if (typeof window !== "undefined") {
     sidebarStore.sidebarForcedHidden =
@@ -884,148 +814,6 @@ function handleUpdateSidebarWidth(value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
   userPrefsStore.sidebarWidth = nextValue;
-}
-
-/**
- * Is a modal surface (a dialog, the lightbox) currently covering the app?
- *
- * There is no shared flag for this: every dialog owns its own `open` ref, so
- * the honest single source is the scrim Vuetify renders for every active
- * overlay. Used to decline global shortcuts whose feedback would be invisible
- * behind it.
- */
-function isModalOverlayOpen() {
-  if (typeof document === "undefined") return false;
-  return document.querySelector(".v-overlay--active .v-overlay__scrim") != null;
-}
-
-function handleGlobalKeydown(e) {
-  // The review overlay is modal and owns its own keyboard handler; don't
-  // run the app/grid shortcuts (scroll, search, help) behind it.
-  if (reviewSessionsStore.overlayOpen) return;
-  // The LIGHTBOX owns the keyboard too, with its own undo binding and its own
-  // receipt. This used to be enforced implicitly by listener order — the
-  // overlay mounted before App, ran first, and stopImmediatePropagation()
-  // silenced this handler — but the Duplicates view unmounts and remounts the
-  // grid (and the overlay inside it), which re-registers their listeners
-  // AFTER this one and silently flips that order. The result was one Ctrl+Z
-  // running TWO undos: this handler's, then the overlay's, which the
-  // operation store's busy-queue happily executed as a queued second step.
-  // Ownership is therefore stated here explicitly, on the same DOM signal the
-  // overlay renders (`.image-overlay` is v-if'd on open), not on ordering.
-  if (
-    typeof document !== "undefined" &&
-    document.querySelector(".image-overlay") != null
-  ) {
-    return;
-  }
-  // Match the strictness the grid and the lightbox already use: a SELECT and an
-  // ARIA textbox are typing surfaces too, and the event target matters as much
-  // as `document.activeElement` (a Vuetify combobox moves focus around).
-  const isEditable = [e.target, document.activeElement].some(
-    (el) =>
-      el instanceof HTMLElement &&
-      (el.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
-        el.getAttribute("role") === "textbox"),
-  );
-
-  // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
-  // "Content on Hover or Focus" applies: it must be dismissible without moving
-  // the pointer. Escape is that mechanism, and for a touch user it is the only
-  // dismissal besides the scrim itself. Deliberately not preventDefault-ed, and
-  // skipped while typing, so the other Escape owners keep theirs. The sidebar
-  // context menu stops propagation from a capture-phase listener and never
-  // reaches here at all.
-  if (
-    e.key === "Escape" &&
-    !isEditable &&
-    sidebarStore.sidebarOverlay &&
-    sidebarStore.sidebarVisible
-  ) {
-    sidebarStore.hideAutoSidebar();
-  }
-
-  // Undo / redo. Global by design: the shortcut has to work with no receipt on
-  // screen, and every undo raises one, so the result is always narrated. Ctrl
-  // and Meta are both accepted (the HINT is platform-specific, the binding is
-  // not); Ctrl+Shift+Z is the macOS redo convention and is accepted everywhere.
-  //
-  // Four guards, each for its own reason:
-  //   * typing: a text field keeps its own native undo stack;
-  //   * read-only: the endpoints are owner-only anyway;
-  //   * auto-repeat: a HELD Ctrl+Z must not walk the whole stack;
-  //   * a modal DIALOG owns the screen: the receipt lives on --z-floating,
-  //     under any dialog scrim, so an undo fired from there would mutate the
-  //     library with no visible narration. That breaks the design's own "every
-  //     undo raises a receipt" invariant, so the shortcut declines rather than
-  //     acting blind.
-  //
-  // The lightbox is NOT covered by that last guard and never was:
-  // `isModalOverlayOpen()` looks for a Vuetify scrim, and `.image-overlay`
-  // renders its own. The lightbox is excluded by the explicit `.image-overlay`
-  // check at the top of this handler (listener ORDER used to do it, until the
-  // Duplicates view's grid remount flipped it — see that comment). Undo works
-  // in the lightbox through its own key handler plus `OverlayActionReceipt`,
-  // fitted to that surface's GUI per the owner's ruling.
-  if (
-    (e.ctrlKey || e.metaKey) &&
-    !e.altKey &&
-    !e.repeat &&
-    !isEditable &&
-    !isReadOnly.value &&
-    !isModalOverlayOpen()
-  ) {
-    const key = e.key?.toLowerCase();
-    if (key === "z" && !e.shiftKey) {
-      e.preventDefault();
-      operationStore.undo();
-    } else if (key === "y" || (key === "z" && e.shiftKey)) {
-      e.preventDefault();
-      operationStore.redo();
-    }
-  }
-
-  const keys = ["Home", "End", "PageUp", "PageDown"];
-  if (keys.includes(e.key) && !isEditable) {
-    // These keys drive grid scrolling only. Prevent the browser's default
-    // scroll so they don't also scroll the sidebar (or the page).
-    e.preventDefault();
-    const grid = gridContainer.value;
-    if (grid && typeof grid.onGlobalKeyPress === "function") {
-      grid.onGlobalKeyPress(e.key, e);
-    }
-  }
-  if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    if (!isEditable) {
-      e.preventDefault();
-      searchStore.requestSearchFocus();
-    }
-  }
-  if (
-    (e.key === "?" || e.key === "F1") &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !isEditable
-  ) {
-    e.preventDefault();
-    shortcutsDialogOpen.value = !shortcutsDialogOpen.value;
-  }
-  if (
-    e.key === "F2" &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !isEditable &&
-    !isReadOnly.value
-  ) {
-    const gridHasFocus = gridContainer.value?.hasCursorFocus === true;
-    if (!gridHasFocus) {
-      e.preventDefault();
-      sidebarRef.value?.openCurrentSelectionEditor?.();
-    }
-  }
 }
 
 function resolveThemeName(mode) {
@@ -1266,10 +1054,6 @@ onMounted(async () => {
   }
   updateIsMobile();
   window.addEventListener("resize", updateIsMobile);
-  window.addEventListener("keydown", handleGlobalKeydown);
-  window.addEventListener("dragover", handleWindowDragOver, true);
-  window.addEventListener("drop", handleWindowDrop, true);
-  window.addEventListener("paste", handleWindowPaste, true);
   // Desktop tray → "Settings" opens the Settings dialog directly.
   if (window.pixlstashDesktop?.onOpenSettings) {
     stopOpenSettings = window.pixlstashDesktop.onOpenSettings(() =>
@@ -1296,10 +1080,6 @@ onBeforeUnmount(() => {
   tasksStore.stopPolling();
   if (stopOpenSettings) stopOpenSettings();
   window.removeEventListener("resize", updateIsMobile);
-  window.removeEventListener("keydown", handleGlobalKeydown);
-  window.removeEventListener("dragover", handleWindowDragOver, true);
-  window.removeEventListener("drop", handleWindowDrop, true);
-  window.removeEventListener("paste", handleWindowPaste, true);
   if (mainAreaResizeObserver) {
     mainAreaResizeObserver.disconnect();
     mainAreaResizeObserver = null;
