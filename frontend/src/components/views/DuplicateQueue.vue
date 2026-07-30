@@ -1499,7 +1499,18 @@ function syncQueueToRoute() {
 
 // A scope change is a navigation, not a remount: the component stays mounted
 // when the user picks "Find duplicates in..." on a second collection.
-watch(() => [route.query.scope, route.query.scope_id], syncQueueToRoute);
+//
+// An ARRAY of getters, never a getter returning an array: the latter builds a
+// fresh array each run, Vue compares it by identity, and the watcher fires on
+// EVERY route.query write — including the filter mirror's own replace() above.
+// On an empty queue that refire fell through syncQueueToRoute's fast path
+// (which requires held rows) into a full openQueue, which force-reset the
+// Decided flip the mirror was in the middle of recording: the decided rows
+// flashed and were replaced by "Queue clear".
+watch(
+  [() => route.query.scope, () => route.query.scope_id],
+  syncQueueToRoute,
+);
 
 onMounted(() => {
   syncQueueToRoute();

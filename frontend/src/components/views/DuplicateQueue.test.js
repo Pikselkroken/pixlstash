@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
+import { reactive } from "vue";
 
 vi.mock("../../api/dedup", () => ({
   getPolicy: vi.fn(),
@@ -22,8 +23,11 @@ vi.mock("../../api/dedup", () => ({
   GLOBAL_SCOPE: "global",
 }));
 
-// The queue opens itself from the URL's scope, so it needs a route.
-const routeMock = { name: "duplicates", query: {} };
+// The queue opens itself from the URL's scope, so it needs a route. Reactive,
+// as the real one is: the view watches parts of the query, and a plain object
+// would keep those watchers silent — hiding exactly the class of bug where a
+// mirror write into the URL feeds back into the component's own route sync.
+const routeMock = reactive({ name: "duplicates", query: {} });
 const routerReplace = vi.fn();
 vi.mock("vue-router", () => ({
   useRoute: () => routeMock,
@@ -87,6 +91,7 @@ import {
   getPolicy,
   listGroups,
   getCounts,
+  startScan,
   stackGroup,
   keepGroupSeparate,
   reopenGroup,
@@ -1579,6 +1584,73 @@ describe("DuplicateQueue — filters in the URL", () => {
       expect(call[0].query.near).toBe("1");
       expect(call[0].query.threshold).toBe("0.8");
     }
+    wrapper.unmount();
+  });
+
+  // The regression this pins (user report): with the open queue EMPTY,
+  // flipping to Decided flashed the decided rows and then fell back to
+  // "Queue clear". The mirror's own replace() write (view=decided) re-fired
+  // the scope watcher — a getter returning a fresh array is compared by
+  // identity, so EVERY query write refired it — and syncQueueToRoute, holding
+  // no rows, fell through its fast path into a full openQueue, which
+  // force-reset the flip and reloaded the open queue over the decided rows.
+  // With rows in the queue the fast path absorbed the refire, which is why
+  // only the empty queue ever showed it.
+  it("flipping to Decided on an empty queue survives its own mirror write", async () => {
+    getPolicy.mockResolvedValue({
+      defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
+      bounds: BOUNDS,
+    });
+    listGroups.mockImplementation(async (args) =>
+      args?.decided
+        ? {
+            groups: [group("g1")],
+            total: 1,
+            offset: 0,
+            limit: 20,
+            scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+          }
+        : {
+            groups: [],
+            total: 0,
+            offset: 0,
+            limit: 20,
+            scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+          },
+    );
+    getCounts.mockResolvedValue({
+      unresolved_groups: 0,
+      by_tier: {},
+      scopes: [],
+      scan: { status: "complete" },
+    });
+    // A real replace() lands in the route the component watches; the feedback
+    // loop this test pins cannot fire against a write-only stub.
+    routerReplace.mockImplementation((to) => {
+      routeMock.query = to.query;
+    });
+    const store = useDedupStore();
+    const wrapper = mount(DuplicateQueue, {
+      ...globalOpts,
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Queue clear");
+    startScan.mockClear();
+
+    await wrapper.find(".qdecided").trigger("click");
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+    await flushPromises();
+
+    // The flip is a reload of the SAME queue, never a reopen: pre-fix the
+    // mirror's write refired syncQueueToRoute, whose openQueue restarted the
+    // scan, reset the tallies, and — depending on how the resulting cascade
+    // interleaved — reloaded the open queue over the decided rows.
+    expect(startScan).not.toHaveBeenCalled();
+    expect(store.showingDecided).toBe(true);
+    expect(store.groups).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("Queue clear");
     wrapper.unmount();
   });
 
