@@ -15,6 +15,7 @@
       <div class="gn">
         <v-icon v-if="focused" class="gcaret" size="18">mdi-menu-right</v-icon>
         <b>Group {{ index + 1 }}</b>
+        <span class="gn-sep" aria-hidden="true">|</span>
         <span>{{ group.candidates.length }} pictures</span>
       </div>
       <DedupConfidencePill :group="group" />
@@ -72,6 +73,29 @@
           class="gcv"
           >Cover</span
         >
+        <!-- Hover-only score overlays (owner request): the grid's own
+             StarRatingOverlay top-right, the smart score bottom-right, both
+             revealed by the grid's exact hover recipe and DISPLAY-ONLY here
+             (pointer-events stays off, see the CSS) — the thumbnail keeps
+             owning click=cover, right-click=exclude, double-click=compare.
+             aria-hidden: the same facts live in Compare's meta grid, which
+             is the queue's readable surface for them. -->
+        <span v-if="loadThumbnails" class="gstars" aria-hidden="true">
+          <StarRatingOverlay
+            :score="Number(candidate.score) || 0"
+            :icon-size="14"
+            :compact="true"
+          />
+        </span>
+        <span
+          v-if="loadThumbnails && smartTextOf(candidate)"
+          class="gsmart"
+          aria-hidden="true"
+          :title="`Smart score ${smartTextOf(candidate)}`"
+        >
+          <v-icon size="12">mdi-brain</v-icon>
+          {{ smartTextOf(candidate) }}
+        </span>
         <v-icon v-if="isOut(idOf(candidate))" class="gx" size="20"
           >mdi-minus-circle-outline</v-icon
         >
@@ -111,11 +135,18 @@
            one asks for a confirmation: stacking never deletes a file, and
            keeping separate is remembered for good. A user meeting the queue for
            the first time should not have to run one to find that out. -->
+      <!-- Amendment #3: S became a SYNONYM of Enter for Stack (the owner's
+           S-for-Stack slip is now self-healing), and K took Keep separate.
+           The chips stay one key per button — the primary key shown, the
+           synonym taught in copy — while aria-keyshortcuts carries the full
+           machine-readable set (the chips are aria-hidden, so this is the
+           only channel that announces the keys at all). -->
       <button
         type="button"
         class="gbtn gbtn--stack"
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly"
+        aria-keyshortcuts="Enter S"
         :title="
           bulk
             ? `Stack every one of the ${selectionCount} selected groups behind its own cover. Every file stays on disk, and one Ctrl+Z reverses them all.`
@@ -132,6 +163,7 @@
         class="gbtn"
         :tabindex="focused ? 0 : -1"
         :disabled="busy || readOnly"
+        aria-keyshortcuts="K"
         :title="
           bulk
             ? `Leave all ${selectionCount} selected groups as separate pictures. They stay in your library and stop being suggested.`
@@ -141,7 +173,7 @@
       >
         <v-icon size="16">mdi-call-split</v-icon>
         <span>{{ bulk ? `Keep ${selectionCount} separate` : "Keep separate" }}</span>
-        <kbd v-if="showsVerdictKeys" aria-hidden="true">S</kbd>
+        <kbd v-if="showsVerdictKeys" aria-hidden="true">K</kbd>
       </button>
       <button
         type="button"
@@ -187,8 +219,9 @@ import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
-import { candidateId } from "../../utils/dedup";
+import { candidateId, candidateSmartScore } from "../../utils/dedup";
 import { formatUserDate } from "../../utils/utils";
+import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
@@ -421,6 +454,18 @@ function onRowMouseDown(event) {
 }
 
 /**
+ * A candidate's smart score for the hover chip: the metadata panel's own
+ * two-decimal precision, empty when the backend served none (NULL) or the
+ * computation failed (-1.0) — no chip either way.
+ * @param {Object} candidate
+ * @returns {string}
+ */
+function smartTextOf(candidate) {
+  const value = candidateSmartScore(candidate);
+  return value === null ? "" : value.toFixed(2);
+}
+
+/**
  * Clicking a thumbnail focuses the row and makes that picture the cover.
  * @param {Object} candidate
  */
@@ -542,8 +587,15 @@ function onDblClick(event) {
 .gn {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
+  gap: var(--space-3);
   min-width: 0;
+}
+
+/* Decorative divider between the group number and its member count; the row's
+   aria-label already phrases the pair, so this is aria-hidden. */
+.gn-sep {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.35);
 }
 
 .gn b {
@@ -678,6 +730,55 @@ function onDblClick(event) {
   left: 50%;
   transform: translate(-50%, -50%);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* ── Hover-only score overlays ─────────────────────────────────────────────
+   The grid's exact reveal recipe (opacity on the overlay, 0.15s ease, shown
+   on the thumb's hover; the grid has no focus-triggered display and neither
+   does this — matched deliberately, hover means hover). Display-only:
+   pointer-events stays OFF at all times, unlike the grid where hover arms
+   the stars for clicking — here the thumbnail owns click=cover,
+   right-click=exclude and double-click=compare, and an interactive star
+   would swallow the cover click on the very pixels a hover invites. An
+   excluded thumb's 0.4 opacity dims these with everything else in it. */
+.gstars,
+.gsmart {
+  position: absolute;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.gthumb:hover .gstars,
+.gthumb:hover .gsmart {
+  opacity: 1;
+}
+
+/* Stars top-right: the grid's badge corner. */
+.gstars {
+  top: var(--space-2);
+  right: var(--space-2);
+}
+
+/* The smart score chip, bottom-right. The grid has NO thumbnail smart-score
+   overlay to reuse (it shows the number in the info row under the card), so
+   this mirrors the closest shipped recipes instead: this strip's own
+   photo-chip treatment (.gnum/.gcv — --scrim-photo fill, --radius-sm,
+   --text-2xs on on-dark-surface), the sort menu's mdi-brain iconography and
+   the metadata panel's two-decimal precision. */
+.gsmart {
+  bottom: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The verdict column: one action per line, never wrapping under the strip. */

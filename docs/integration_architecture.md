@@ -82,10 +82,14 @@ Shapes and rules the frontend depends on:
   is rendered as a different kind of claim, never as "100% similar".
 - **A candidate is `{ picture_id, width, height, megapixels, size_bytes, format,
   is_raw, score, tag_count, created_at, imported_at, stack_id,
-  reference_folder_id, file_path, cover_score, why }`.** `file_path` is
-  populated **only** for a reference-folder picture and is null for a managed
-  one, which is exactly the design's "paths only where they matter" rule
-  enforced server-side rather than trusted to the client.
+  reference_folder_id, file_path, smart_score, sharpness, cover_score, why }`.**
+  `file_path` is populated **only** for a reference-folder picture and is null
+  for a managed one, which is exactly the design's "paths only where they
+  matter" rule enforced server-side rather than trusted to the client.
+  `smart_score` ([1, 5] scale) and `sharpness` (typical 0-0.5) are the cover
+  ranking's top signals, **null-safe**: null means not computed yet or failed —
+  render a dash, never a zero. `cover_score` is the **deprecated** legacy
+  composite; do not build new UI on it.
 - **A why-pill is `{ text, against }`.** `against: true` is counter-evidence and
   renders as the red x; the client orders counter-evidence first, because a
   collapsed row only has room for two pills and the warning is the half that
@@ -798,8 +802,11 @@ into the list's tail); the server never invents a stamp for them.
       "stack_id": null, "reference_folder_id": null,
       "file_path": null,             // non-null ONLY for reference-folder pictures
       "thumbnail_version": "320x240",// append as ?v= — same token the grid uses
-      "cover_score": 108.64,         // megapixels*4 + tags*3 + score*2 + 8 if RAW
-      "why": [{ "text": "Highest resolution", "against": false }]
+      "smart_score": 4.3,            // [1,5]; null = not computed/failed → dash
+      "sharpness": 0.31,             // typical 0–0.5; null = not computed/failed
+      "cover_score": 108.64,         // DEPRECATED legacy composite — do not use
+      "why": [{ "text": "Best smart score (4.3)", "against": false },
+              { "text": "Highest resolution", "against": false }]
     }]
   }],
   "total": 128, "offset": 0, "limit": 20,

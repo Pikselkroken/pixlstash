@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   candidateMegapixels,
+  candidateSharpness,
+  candidateSmartScore,
   isRawCandidate,
   coverScore,
   pickCoverIndex,
@@ -205,5 +207,32 @@ describe("utils/dedup — confidence", () => {
 
   it("falls back when the confidence is missing", () => {
     expect(confidenceLabel({ kind: "near" }).label).toBe("Similar");
+  });
+});
+
+describe("candidateSharpness", () => {
+  // The server nulls missing/failed itself; the guard mirrors
+  // candidateSmartScore's as a belt against older payloads.
+  it("returns the metric only when it is displayable", () => {
+    expect(candidateSharpness({ sharpness: 0.312 })).toBe(0.312);
+    expect(candidateSharpness({ sharpness: 0 })).toBe(0);
+    expect(candidateSharpness({ sharpness: null })).toBe(null);
+    expect(candidateSharpness({ sharpness: -1.0 })).toBe(null);
+    expect(candidateSharpness({})).toBe(null);
+    expect(candidateSharpness(undefined)).toBe(null);
+  });
+});
+
+describe("candidateSmartScore", () => {
+  // NULL means not-yet-computed and -1.0 means computation failed; neither is
+  // a number a person should read, so both come back as null and every
+  // display simply omits the cell.
+  it("returns the score only when it is displayable", () => {
+    expect(candidateSmartScore({ smart_score: 3.7156 })).toBe(3.7156);
+    expect(candidateSmartScore({ smart_score: 0 })).toBe(0);
+    expect(candidateSmartScore({ smart_score: null })).toBe(null);
+    expect(candidateSmartScore({ smart_score: -1.0 })).toBe(null);
+    expect(candidateSmartScore({})).toBe(null);
+    expect(candidateSmartScore(undefined)).toBe(null);
   });
 });

@@ -11,8 +11,9 @@ Covers, per tier and per rule:
 * **tier 3 (embedding)** — reuses the shipped likeness edge table;
 * **the tier policy** — exact is always on, each looser tier requires the tier
   above it, and the 0.65 floor is a hard error rather than a silent clamp;
-* **cover selection** — the design's ``px*4 + tags*3 + score*2 + RAW`` formula
-  and the oldest-capture tie-break;
+* **cover selection** — the 2026-07-30 lexicographic ranking: smart score in
+  quarter-star buckets (unknown ranks neutral, never zero), then pixel count,
+  then sharpness, then stars/tags/RAW/bytes, ties to the oldest capture;
 * **evidence** — matching pills and evidence-against pills, both directions;
 * **the queue** — paged by confidence descending, verdict-resolved groups never
   re-offered, and scope-narrowed counts.
@@ -35,6 +36,7 @@ from pixlstash.db_models.dedup import (
     DedupVerdict,
 )
 from pixlstash.db_models.picture_likeness import PictureLikeness
+from pixlstash.db_models.quality import Quality
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
@@ -82,8 +84,9 @@ def _seed(server, specs):
     """Insert one picture per spec; return the ids in order.
 
     Recognised keys: ``pixel_sha``, ``perceptual_hash``, ``size_bytes``,
-    ``width``, ``height``, ``score``, ``format``, ``file_path``, ``created_at``
-    (an offset in seconds from ``_BASE_TIME``), ``deleted``, ``tags``,
+    ``width``, ``height``, ``score``, ``smart_score``, ``sharpness`` (writes a
+    ``Quality`` row), ``format``, ``file_path``, ``created_at`` (an offset in
+    seconds from ``_BASE_TIME``), ``deleted``, ``tags``,
     ``import_source_folder``, ``reference_folder_id``.
     """
 
@@ -101,6 +104,7 @@ def _seed(server, specs):
                 size_bin_index=(width << 32) + height,
                 size_bytes=spec.get("size_bytes", 1000),
                 score=spec.get("score"),
+                smart_score=spec.get("smart_score"),
                 pixel_sha=spec.get("pixel_sha"),
                 perceptual_hash=spec.get("perceptual_hash"),
                 import_source_folder=spec.get("import_source_folder"),
@@ -116,6 +120,10 @@ def _seed(server, specs):
             session.flush()
             for tag in spec.get("tags", []):
                 session.add(Tag(picture_id=int(pic.id), tag=tag))
+            if "sharpness" in spec:
+                session.add(
+                    Quality(picture_id=int(pic.id), sharpness=spec["sharpness"])
+                )
             picture_ids.append(int(pic.id))
         session.commit()
         return picture_ids
@@ -173,42 +181,120 @@ def test_group_size_bounds_are_validated():
         TierPolicy(min_group_size=4, max_group_size=3)
 
 
-# ── cover selection ───────────────────────────────────────────────────────────
+# ── cover selection (the 2026-07-30 lexicographic ranking) ────────────────────
 
 
-def test_cover_score_is_the_designs_formula():
-    # 12 MP -> 12*4 = 48; 2 tags -> 6; score 3 -> 6; not RAW -> 0.
-    member = _member(width=4000, height=3000, tag_count=2, score=3)
-    assert member.megapixels == pytest.approx(12.0)
-    assert member.cover_score == pytest.approx(48.0 + 6.0 + 6.0)
+def test_smart_score_dominates_every_size_advantage():
+    """Tier 1 beats tier 2: a 40 MP blurry scan must not outrank a sharp
+    original the scorer rated higher — the exact failure of the old weighted
+    sum, where pixels alone could buy the cover."""
+    sharp_original = _member(id=1, width=4000, height=3000, smart_score=4.5)
+    blurry_scan = _member(
+        id=2, width=8000, height=5000, smart_score=2.0, tag_count=9, score=5
+    )
+    assert tiers.select_cover([blurry_scan, sharp_original]) == 1
 
 
-def test_raw_earns_the_cover_bonus_by_format_or_extension():
+def test_smart_scores_inside_one_bucket_fall_through_to_size():
+    """A lead smaller than the 0.25 bucket is scoring noise, not a decision:
+    both land in the same bucket and the bigger picture wins."""
+    slightly_better = _member(id=1, width=1000, height=1000, smart_score=4.30)
+    bigger = _member(id=2, width=4000, height=3000, smart_score=4.26)
+    assert tiers.select_cover([slightly_better, bigger]) == 2
+    # A genuine bucket lead decides, regardless of size.
+    clearly_better = _member(id=3, width=1000, height=1000, smart_score=4.55)
+    assert tiers.select_cover([bigger, clearly_better]) == 3
+
+
+def test_an_unknown_smart_score_ranks_neutral_never_zero():
+    """NULL (not yet computed) and -1.0 (the failed-metric sentinel) both read
+    as unknown and rank at the neutral midpoint: an unscored copy still loses
+    to a known-good one, still beats a known-bad one, and two unknowns fall
+    through to size — never buried below a scored-terrible sibling."""
+    unknown = _member(id=1, width=1000, height=1000)
+    known_bad = _member(id=2, width=8000, height=8000, smart_score=2.0)
+    known_good = _member(id=3, width=1000, height=1000, smart_score=4.0)
+    assert tiers.select_cover([known_bad, unknown]) == 1
+    assert tiers.select_cover([unknown, known_good]) == 3
+    failed = _member(id=4, width=4000, height=3000, smart_score=-1.0)
+    # Failed (-1.0) is neutral too: it ties the NULL member and wins on size.
+    assert tiers.select_cover([unknown, failed]) == 4
+
+
+def test_size_beats_sharpness_at_equal_smart_bucket():
+    bigger_softer = _member(
+        id=1, width=4000, height=3000, smart_score=4.0, sharpness=0.10
+    )
+    smaller_sharper = _member(
+        id=2, width=2000, height=1500, smart_score=4.0, sharpness=0.45
+    )
+    assert tiers.select_cover([smaller_sharper, bigger_softer]) == 1
+
+
+def test_sharpness_decides_at_equal_smart_score_and_pixels():
+    soft = _member(id=1, sharpness=0.15, score=5, tag_count=9)
+    sharp = _member(id=2, sharpness=0.40)
+    assert tiers.select_cover([soft, sharp]) == 2
+    # Unknown sharpness (missing row or the -1.0 sentinel) is neutral (0.25):
+    # it loses to a known-sharper copy and beats a known-softer one.
+    unknown = _member(id=3)
+    failed = _member(id=4, sharpness=-1.0)
+    assert tiers.select_cover([unknown, sharp]) == 2
+    assert tiers.select_cover([soft, failed]) == 4
+
+
+def test_lower_order_signals_break_full_quality_ties():
+    """Stars, then tags, then RAW, then bytes — in that order, only after the
+    quality and size tiers tie."""
+    starred = _member(id=1, score=4)
+    tagged = _member(id=2, tag_count=7)
+    assert tiers.select_cover([tagged, starred]) == 1
+    raw = _member(id=3, format="arw")
+    assert tiers.select_cover([tagged, raw]) == 2  # tags outrank RAW
+    heavy = _member(id=4, size_bytes=9_000_000)
+    light = _member(id=5, size_bytes=1_000)
+    assert tiers.select_cover([light, heavy]) == 4
+
+
+def test_ties_break_to_the_oldest_capture_then_the_lowest_id():
+    old = _member(id=10, created_at=_BASE_TIME)
+    new = _member(id=11, created_at=_BASE_TIME + timedelta(hours=5))
+    assert tiers.select_cover([new, old]) == 10
+    # No timestamps at all: deterministic on the lowest id.
+    a = _member(id=21)
+    b = _member(id=22)
+    assert tiers.select_cover([b, a]) == 21
+
+
+def test_raw_is_detected_by_format_or_extension():
     assert _member(format="ARW").is_raw
     assert _member(format="jpeg", file_path="/shoots/A7R0912.arw").is_raw
     assert not _member(format="jpeg", file_path="/shoots/x.jpg").is_raw
+
+
+def test_the_legacy_cover_score_field_is_unchanged():
+    """`cover_score` is deprecated wire-compat, not the selection rule — but
+    while it ships it must keep its documented value."""
+    member = _member(width=4000, height=3000, tag_count=2, score=3)
+    assert member.megapixels == pytest.approx(12.0)
+    assert member.cover_score == pytest.approx(48.0 + 6.0 + 6.0)
     raw = _member(id=1, format="arw", width=1000, height=1000)
     jpeg = _member(id=2, format="jpeg", width=1000, height=1000)
     assert raw.cover_score - jpeg.cover_score == pytest.approx(tiers.COVER_RAW_BONUS)
 
 
-def test_cover_prefers_the_highest_score_then_the_oldest_capture():
-    big = _member(id=1, width=6000, height=4000)
-    small = _member(id=2, width=1000, height=1000, tag_count=1)
-    assert tiers.select_cover([small, big]) == 1
-
-    # Identical formula scores: the oldest capture time wins, not the newest.
-    old = _member(id=10, created_at=_BASE_TIME)
-    new = _member(id=11, created_at=_BASE_TIME + timedelta(hours=5))
-    assert old.cover_score == pytest.approx(new.cover_score)
-    assert tiers.select_cover([new, old]) == 10
-
-
-def test_tags_can_outweigh_a_slightly_larger_picture():
-    # 1 MP + 5 tags = 4 + 15 = 19 beats 4 MP with nothing = 16.
-    tagged = _member(id=1, width=1000, height=1000, tag_count=5)
-    bigger = _member(id=2, width=2000, height=2000)
-    assert tiers.select_cover([bigger, tagged]) == 1
+def test_serialization_carries_the_ranking_signals_null_safe():
+    scored = _member(smart_score=4.256, sharpness=0.312)
+    assert scored.as_dict()["smart_score"] == pytest.approx(4.256)
+    assert scored.as_dict()["sharpness"] == pytest.approx(0.312)
+    # NULL and the -1.0 failed sentinel both serialize as null, never a fake
+    # number the Compare view would display as real.
+    blank = _member()
+    assert blank.as_dict()["smart_score"] is None
+    assert blank.as_dict()["sharpness"] is None
+    failed = _member(smart_score=-1.0, sharpness=-1.0)
+    assert failed.as_dict()["smart_score"] is None
+    assert failed.as_dict()["sharpness"] is None
 
 
 # ── signature ─────────────────────────────────────────────────────────────────
@@ -264,6 +350,39 @@ def test_candidate_evidence_explains_the_preselection_both_ways():
     assert any(p["text"] == "Preselected as cover" for p in best_pills)
     assert any(p["against"] and "fewer pixels" in p["text"] for p in worst_pills)
     assert any(p["against"] and "Fewer tags" in p["text"] for p in worst_pills)
+    # Nobody here has a smart score or sharpness: no pill invents one.
+    for pills in (best_pills, worst_pills):
+        assert not any("smart score" in p["text"].lower() for p in pills)
+        assert not any("Sharpest" in p["text"] for p in pills)
+
+
+def test_candidate_evidence_explains_the_smart_score_and_sharpness_tiers():
+    """The pills must explain the NEW ranking, in its priority order."""
+    best = _member(id=1, smart_score=4.3, sharpness=0.4)
+    mid = _member(id=2, smart_score=4.26, sharpness=0.1)
+    worse = _member(id=3, smart_score=3.1)
+    unknown = _member(id=4)
+    members = [best, mid, worse, unknown]
+
+    best_pills = tiers.build_candidate_evidence(best, members, cover_id=1)
+    assert best_pills[0]["text"] == "Best smart score (4.3)"
+    assert best_pills[0]["against"] is False
+    assert any(p["text"] == "Sharpest copy" for p in best_pills)
+
+    # 4.26 sits in the same quarter-star bucket as 4.3: an effective tie both
+    # read as best — the pill mirrors the decision unit, not float noise.
+    mid_pills = tiers.build_candidate_evidence(mid, members, cover_id=1)
+    assert mid_pills[0]["text"] == "Best smart score (4.3)"
+    assert not any(p["text"] == "Sharpest copy" for p in mid_pills)
+
+    worse_pills = tiers.build_candidate_evidence(worse, members, cover_id=1)
+    assert worse_pills[0]["text"] == "Lower smart score (3.1 vs 4.3)"
+    assert worse_pills[0]["against"] is True
+
+    # An unknown score gets no pill either way: the null field is the honest
+    # display, and a red pill would blame the picture for a pending task.
+    unknown_pills = tiers.build_candidate_evidence(unknown, members, cover_id=1)
+    assert not any("smart score" in p["text"].lower() for p in unknown_pills)
 
 
 def test_reference_folder_pictures_expose_their_path_and_others_do_not():
@@ -291,7 +410,7 @@ def test_exact_tier_groups_on_the_indexed_hash(server):
     assert sorted(group.picture_ids) == sorted(ids[:2])
     assert group.confidence == pytest.approx(1.0)
     assert group.tier is DedupTier.EXACT
-    # The higher human score wins the cover under the formula.
+    # Equal quality/size tiers: the star tier picks the higher human score.
     assert group.cover_picture_id == ids[0]
 
 
@@ -641,6 +760,55 @@ def test_the_queue_carries_the_cover_and_both_evidence_layers(server):
     assert cover["tag_count"] == 2
     assert any(p["text"] == "Preselected as cover" for p in cover["why"])
     assert any(p["text"].startswith("Most metadata") for p in cover["why"])
+
+
+def test_the_scan_ranks_the_cover_on_smart_score_end_to_end(server):
+    """The stored smart score drives the baked cover and member order, and the
+    queue serves the ranking signals null-safe (the -1.0 failed sentinel and a
+    missing Quality row both read as null on the wire)."""
+    ids = _seed(
+        server,
+        [
+            # Bigger, heavily tagged and starred — but the scorer rates it low.
+            {
+                "pixel_sha": "aaa",
+                "size_bytes": 100,
+                "width": 8000,
+                "height": 6000,
+                "score": 5,
+                "smart_score": 2.0,
+                "sharpness": -1.0,
+                "tags": ["portrait", "outdoor"],
+            },
+            # Smaller but rated clearly better: the cover under the new rule.
+            {
+                "pixel_sha": "aaa",
+                "size_bytes": 100,
+                "width": 4000,
+                "height": 3000,
+                "smart_score": 4.5,
+                "sharpness": 0.4,
+            },
+        ],
+    )
+    _scan(server)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    group = page[0]
+    assert group["cover_picture_id"] == ids[1]
+    # Members serialize in ranking order, cover first.
+    assert [c["picture_id"] for c in group["candidates"]] == [ids[1], ids[0]]
+    cover, other = group["candidates"]
+    assert cover["smart_score"] == pytest.approx(4.5)
+    assert cover["sharpness"] == pytest.approx(0.4)
+    assert any(p["text"] == "Best smart score (4.5)" for p in cover["why"])
+    assert any(p["text"] == "Sharpest copy" for p in cover["why"])
+    assert any(p["text"] == "Preselected as cover" for p in cover["why"])
+    assert other["smart_score"] == pytest.approx(2.0)
+    assert other["sharpness"] is None, "-1.0 failed sentinel must serve null"
+    assert any(
+        p["against"] and p["text"] == "Lower smart score (2.0 vs 4.5)"
+        for p in other["why"]
+    )
 
 
 def test_the_near_tier_is_hidden_until_it_is_switched_on(server):

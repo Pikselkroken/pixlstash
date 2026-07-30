@@ -1873,15 +1873,51 @@ the dry-run planner, unchanged).
 
 ### 22.5 Cover selection and evidence
 
-Cover score is `megapixels*4 + tags*3 + score*2 + 8 if RAW`; highest wins, ties
-break to the **oldest capture time**, then to the lowest id. It is always exposed
-as a *preselection* the user overrides, together with:
+**Reworked 2026-07-30 (owner requirement: "prioritise smart score, then image
+size, sharpness").** The cover preselection and member order are a
+**lexicographic ranking** (`cover_order_key`), strongest signal first — a lower
+tier can never outvote a higher one, which the old weighted sum
+(`megapixels*4 + tags*3 + score*2 + 8 if RAW`) could not guarantee (a 40 MP
+blurry scan outscored a sharp 12 MP original on pixels alone):
+
+1. **Smart score**, compared in **0.25 buckets** on the [1, 5] scale — the
+   library's one composite quality opinion (it already folds in sharpness,
+   aesthetics, resolution, anomaly penalty). Bucketing keeps scoring noise from
+   outranking a real size difference. **Unknown ranks neutral (3.0), never
+   zero** — NULL (not yet computed) and the `-1.0` failed-metric sentinel both
+   read as unknown, the same refusal-to-rank-at-zero the sweep keeper and the
+   smart-score grid sort already practice.
+2. **Image size** as raw **pixel count** (pixels, not bytes: bytes measure
+   compression, pixels measure what you lose by keeping the smaller copy).
+3. **Sharpness** (`Quality.sharpness`; unknown/failed ranks neutral at 0.25) —
+   the objective discriminator once quality and size tie.
+4. **Stars**, **tag count**, **RAW** camera-original, **file bytes** (the
+   less-compressed file at equal pixels).
+5. Ties break to the **oldest capture time**, then the lowest id.
+
+**Reconciliation with the other best-picture rules.** The canonical stack
+order (`routes/stacks.py::_stack_order_key`, mirrored by the sweep keeper's
+`member_order_key`) is stars DESC → smart score DESC → recency DESC → id. The
+dedup cover deliberately diverges twice, and only twice: smart score outranks
+stars (duplicates of one shot rarely differ on stars, and the post-stack
+metadata union lifts every member to `max(score)` anyway, so stars barely
+discriminate inside a group), and oldest capture beats recency (a duplicate
+group wants its *origin*, not the latest re-export). Do not fork a third
+opinion: new ranking needs go into one of these two.
+
+The choice is always exposed as a *preselection* the user overrides, together
+with:
 
 - **group evidence** — matching pills and evidence-against pills (different
   resolution / aspect ratio / file format), so a group carrying red pills is
   visibly the one that needs Compare;
-- **per-candidate evidence** — what each candidate is best at and where it loses,
-  plus its numeric `cover_score`.
+- **per-candidate evidence** — the ranking's own signals in priority order:
+  "Best smart score (4.3)" / "Lower smart score (3.1 vs 4.3)" (bucket-compared,
+  so effective ties both read as best), "Highest resolution" / "% fewer
+  pixels", "Sharpest copy" (positive-only), then stars/tags/RAW. The row also
+  carries null-safe `smart_score` and `sharpness` fields for display; the
+  numeric `cover_score` is the **deprecated** legacy composite, kept one
+  release for wire-compat.
 
 The server reports reasons. The user concludes.
 

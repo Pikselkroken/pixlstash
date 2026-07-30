@@ -254,7 +254,16 @@ describe("DuplicateQueue — what a screen reader hears", () => {
     const help = wrapper.find("#dq-key-help");
     expect(wrapper.attributes("aria-describedby")).toBe("dq-key-help");
     const text = help.text();
-    for (const phrase of ["1 to 9", "X leaves", "Escape", "ever deleted"]) {
+    for (const phrase of [
+      "1 to 9",
+      "X leaves",
+      "Escape",
+      "ever deleted",
+      // Amendment #3's scheme, stated where a screen reader can find it.
+      "Enter or S",
+      "K keeps it separate",
+      "Down moves on without deciding",
+    ]) {
       expect(text).toContain(phrase);
     }
     wrapper.unmount();

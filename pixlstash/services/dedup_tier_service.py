@@ -109,6 +109,7 @@ from pixlstash.db_models.dedup import (
 from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.db_models.face import Face
+from pixlstash.db_models.quality import Quality
 from pixlstash.db_models.tag import Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service
@@ -205,6 +206,41 @@ COVER_RAW_BONUS = 8.0
 COVER_PIXEL_WEIGHT = 4.0
 COVER_TAG_WEIGHT = 3.0
 COVER_SCORE_WEIGHT = 2.0
+"""Weights of the LEGACY ``cover_score`` composite (kept only for the wire field
+of the same name, which is deprecated). Cover selection no longer uses it — see
+:func:`cover_order_key` for the ranking that does (2026-07-30 rework)."""
+
+COVER_SMART_SCORE_BUCKET = 0.25
+"""Bucket width for the smart-score tier of the cover ranking.
+
+Smart score is the dominant signal (owner requirement, 2026-07-30), but a raw
+float compare would let a 0.01 scoring-noise edge outrank a 4x resolution
+difference. Scores are therefore compared in quarter-star buckets on the [1, 5]
+scale: a lead smaller than 0.25 is treated as "same quality" and the decision
+falls through to image size. Bucketing (``floor(score / width)``) rather than an
+epsilon compare keeps the relation transitive, so it is usable as a sort key."""
+
+COVER_SMART_SCORE_NEUTRAL = 3.0
+"""Effective smart score for a candidate whose stored score is unusable.
+
+``Picture.smart_score`` is NULL until the background task computes it (and is
+re-NULLed on invalidation); anything non-positive is defensively treated the
+same way, covering the repo's ``-1.0`` failed-metric convention should it ever
+reach this column. An unknown score must be *neutral*, never *worst*: ranking
+it at zero would bury a not-yet-scored original under every scored copy (the
+same rule the sweep keeper and the smart-score grid sort follow — neither ranks
+an unscored picture at zero). The midpoint of the [1, 5] scale says "average
+until proven otherwise": a copy known to be better still wins the tier, a copy
+known to be worse still loses it, and unknown vs unknown falls through to
+size."""
+
+COVER_SHARPNESS_NEUTRAL = 0.25
+"""Effective sharpness for a candidate with no usable sharpness metric.
+
+``Quality.sharpness`` is absent until the quality task runs and is ``-1.0``
+when the computation failed (the repo's failed-metric sentinel). Same neutral
+principle as :data:`COVER_SMART_SCORE_NEUTRAL`, at the midpoint of the
+metric's typical 0-0.5 range (see ``Quality.calculate_quality_score``)."""
 
 ID_CHUNK = 900
 """SQLite bound-variable safety margin for ``IN`` loads."""
@@ -484,6 +520,8 @@ class CandidateMember:
     thumbnail_width: Optional[int] = None
     thumbnail_height: Optional[int] = None
     tag_count: int = 0
+    smart_score: Optional[float] = None
+    sharpness: Optional[float] = None
 
     @property
     def thumbnail_version(self) -> str:
@@ -550,8 +588,55 @@ class CandidateMember:
         return f"id:{self.id}"
 
     @property
+    def known_smart_score(self) -> Optional[float]:
+        """The stored smart score, when it is actually usable.
+
+        ``None`` covers both "never computed / invalidated" (a NULL column —
+        ``MissingSmartScoreFinder`` will fill it) and any non-positive value
+        (defence against the repo's ``-1.0`` failed-metric sentinel; the real
+        scale starts at 1). The ranking treats an unknown score as *neutral*
+        via :data:`COVER_SMART_SCORE_NEUTRAL`, never as zero.
+        """
+        if self.smart_score is None:
+            return None
+        value = float(self.smart_score)
+        return value if value > 0.0 else None
+
+    @property
+    def smart_score_bucket(self) -> int:
+        """The quarter-star bucket the cover ranking compares smart scores in."""
+        value = self.known_smart_score
+        if value is None:
+            value = COVER_SMART_SCORE_NEUTRAL
+        return math.floor(value / COVER_SMART_SCORE_BUCKET)
+
+    @property
+    def known_sharpness(self) -> Optional[float]:
+        """The stored sharpness metric, when usable.
+
+        ``None`` covers a missing ``Quality`` row / NULL column and the
+        ``-1.0`` failed-metric sentinel the quality task writes for a picture
+        it could not decode.
+        """
+        if self.sharpness is None:
+            return None
+        value = float(self.sharpness)
+        return value if value >= 0.0 else None
+
+    @property
+    def effective_sharpness(self) -> float:
+        """Sharpness as the ranking compares it: neutral when unknown."""
+        value = self.known_sharpness
+        return value if value is not None else COVER_SHARPNESS_NEUTRAL
+
+    @property
     def cover_score(self) -> float:
-        """The design's cover formula: ``px*4 + tags*3 + userScore*2 + RAW``."""
+        """DEPRECATED legacy composite: ``px*4 + tags*3 + userScore*2 + RAW``.
+
+        No longer the selection rule (see :func:`cover_order_key`, 2026-07-30).
+        Kept only because the wire field of the same name shipped; scheduled for
+        removal once the frontend reads ``smart_score`` + the why-pills instead.
+        """
         return (
             self.megapixels * COVER_PIXEL_WEIGHT
             + float(self.tag_count) * COVER_TAG_WEIGHT
@@ -585,6 +670,20 @@ class CandidateMember:
                 self.file_path if self.reference_folder_id is not None else None
             ),
             "thumbnail_version": self.thumbnail_version,
+            # The ranking signals, null-safe for display: null means "not
+            # computed yet or failed", and the client shows a dash rather than
+            # a fake zero (or the meaningless -1.0 sentinel).
+            "smart_score": (
+                round(self.known_smart_score, 3)
+                if self.known_smart_score is not None
+                else None
+            ),
+            "sharpness": (
+                round(self.known_sharpness, 3)
+                if self.known_sharpness is not None
+                else None
+            ),
+            # DEPRECATED: the legacy composite, no longer the selection rule.
             "cover_score": round(self.cover_score, 4),
             "why": why if why is not None else [],
         }
@@ -641,16 +740,58 @@ def group_signature(content_keys: Iterable[str]) -> str:
 # --- Cover selection --------------------------------------------------------
 
 
-def cover_order_key(member: CandidateMember) -> tuple[float, float, int]:
-    """Sort key implementing the design's cover rule.
+def cover_order_key(member: CandidateMember) -> tuple:
+    """Sort key implementing the cover ranking (reworked 2026-07-30).
 
-    ``pixels*4 + tags*3 + userScore*2 + RAW bonus``, highest wins; ties break to
-    the **oldest capture time** (the original, not a later re-export), then to
-    the lowest id so the choice is deterministic for two rows with no timestamp.
+    Lexicographic tiers, strongest first — a lower tier can never outvote a
+    higher one, which is what "prioritise smart score" means and what the old
+    weighted sum (``px*4 + tags*3 + score*2 + RAW``) could not express: there a
+    40 MP blurry scan outscored a sharp 12 MP original on pixels alone.
+
+    1. **Smart score**, in quarter-star buckets
+       (:data:`COVER_SMART_SCORE_BUCKET`): the library's one composite quality
+       opinion (CLIP anchors, aesthetics, sharpness, resolution, detail,
+       anomaly penalty — see ``pixlstash/scoring/smart_score.py``). Unknown or
+       failed scores rank *neutral* (:data:`COVER_SMART_SCORE_NEUTRAL`), never
+       zero. Bucketing keeps scoring noise from outranking real differences.
+    2. **Image size** as raw pixel count. Pixels, not bytes: bytes measure
+       compression, pixels measure the information you would lose by keeping
+       the smaller copy. Exact duplicates share dimensions, so this tier ties
+       exactly there and the decision moves on.
+    3. **Sharpness** (``Quality.sharpness``, the objective per-picture metric;
+       unknown/failed ranks neutral). Sharpness is already *inside* smart
+       score, but at equal smart bucket and equal pixels it is the best
+       remaining objective discriminator between two renditions of the same
+       shot.
+    4. **Human stars** (``Picture.score``). Deliberately below the quality
+       tiers here, although the canonical stack order
+       (``routes/stacks.py::_stack_order_key`` / the sweep keeper) puts it
+       first: duplicates of one shot rarely carry different stars, and the
+       post-stack metadata union lifts every member to ``max(score)`` anyway,
+       so inside a duplicate group stars barely discriminate — and the owner's
+       requirement is smart score first.
+    5. **Tag count** (richer metadata), then the **RAW** camera-original
+       bonus, then **file size in bytes** (at equal pixels the heavier file is
+       the less-compressed one).
+    6. Ties break to the **oldest capture time** (the original, not a later
+       re-export — the one deliberate inversion of the stack order's
+       recency-first rule, because a duplicate group wants its origin), then
+       to the lowest id so the choice is deterministic for rows with no
+       timestamp.
     """
     created = member.created_at
     created_ts = created.timestamp() if isinstance(created, datetime) else float("inf")
-    return (-member.cover_score, created_ts, int(member.id))
+    return (
+        -member.smart_score_bucket,
+        -member.pixels,
+        -member.effective_sharpness,
+        -int(member.score or 0),
+        -int(member.tag_count),
+        0 if member.is_raw else 1,
+        -int(member.size_bytes or 0),
+        created_ts,
+        int(member.id),
+    )
 
 
 def select_cover(members: list[CandidateMember]) -> int:
@@ -746,25 +887,57 @@ def build_candidate_evidence(
 ) -> list[dict[str, Any]]:
     """Per-candidate why-pills, so the client renders reasons, not conclusions.
 
-    These are the signals the cover formula actually used, stated per candidate:
-    what this picture is best at, and where it loses. The client pairs them with
-    the numeric ``cover_score`` so a user can see *why* the preselection landed
-    where it did and disagree with it.
+    These are the signals :func:`cover_order_key` actually ranks on, stated per
+    candidate in ranking-priority order — smart score first, then resolution,
+    then sharpness, then the lower-order signals — so a user can see *why* the
+    preselection landed where it did and disagree with it. A signal nobody in
+    the group carries (no smart score computed yet, no sharpness) produces no
+    pill: the serialized ``smart_score`` / ``sharpness`` fields are null there
+    and the client shows a dash, which is more honest than a pill about a
+    number that does not exist.
     """
     pills: list[dict[str, Any]] = []
-    best_pixels = max((m.pixels for m in members), default=0)
-    best_tags = max((m.tag_count for m in members), default=0)
-    best_score = max((int(m.score or 0) for m in members), default=0)
 
+    # Tier 1: smart score, compared in the same quarter-star buckets the
+    # ranking uses, so two effectively-tied candidates both read as best
+    # instead of one carrying a "lower" pill over scoring noise.
+    known = [m for m in members if m.known_smart_score is not None]
+    if known and member.known_smart_score is not None:
+        best_bucket = max(m.smart_score_bucket for m in known)
+        best_display = max(m.known_smart_score for m in known)
+        if member.smart_score_bucket == best_bucket:
+            pills.append(_pill(f"Best smart score ({member.known_smart_score:.1f})"))
+        else:
+            pills.append(
+                _pill(
+                    f"Lower smart score ({member.known_smart_score:.1f} vs "
+                    f"{best_display:.1f})",
+                    against=True,
+                )
+            )
+
+    # Tier 2: image size.
+    best_pixels = max((m.pixels for m in members), default=0)
     if member.pixels and member.pixels == best_pixels:
         pills.append(_pill("Highest resolution"))
     elif member.pixels and best_pixels:
         shortfall = 100 - int(round(100 * member.pixels / best_pixels))
         pills.append(_pill(f"{shortfall}% fewer pixels than the best", against=True))
 
-    if member.is_raw:
-        pills.append(_pill("Camera original (RAW)"))
+    # Tier 3: sharpness, positive-only — a third-order "softer" red pill on
+    # every non-sharpest member would be noise, not evidence.
+    with_sharpness = [m for m in members if m.known_sharpness is not None]
+    if with_sharpness and member.known_sharpness is not None:
+        best_sharpness = max(m.known_sharpness for m in with_sharpness)
+        if member.known_sharpness == best_sharpness:
+            pills.append(_pill("Sharpest copy"))
 
+    # Lower-order signals, in ranking order.
+    best_score = max((int(m.score or 0) for m in members), default=0)
+    if best_score and int(member.score or 0) == best_score:
+        pills.append(_pill(f"Highest score ({best_score})"))
+
+    best_tags = max((m.tag_count for m in members), default=0)
     if best_tags and member.tag_count == best_tags:
         pills.append(_pill(f"Most metadata ({member.tag_count} tags)"))
     elif best_tags and member.tag_count < best_tags:
@@ -775,8 +948,8 @@ def build_candidate_evidence(
             )
         )
 
-    if best_score and int(member.score or 0) == best_score:
-        pills.append(_pill(f"Highest score ({best_score})"))
+    if member.is_raw:
+        pills.append(_pill("Camera original (RAW)"))
 
     if member.id == cover_id:
         pills.append(_pill("Preselected as cover"))
@@ -827,6 +1000,7 @@ def load_candidates(
                 Picture.perceptual_hash,
                 Picture.thumbnail_width,
                 Picture.thumbnail_height,
+                Picture.smart_score,
             ).where(Picture.id.in_(chunk), Picture.deleted.is_(False))
         ).all()
         for row in rows:
@@ -846,6 +1020,7 @@ def load_candidates(
                 perceptual_hash=row[12],
                 thumbnail_width=row[13],
                 thumbnail_height=row[14],
+                smart_score=row[15],
             )
         tag_rows = session.exec(
             select(Tag.picture_id, func.count(Tag.id))
@@ -856,6 +1031,19 @@ def load_candidates(
             member = members.get(int(picture_id))
             if member is not None:
                 member.tag_count = int(count or 0)
+        # Sharpness for the ranking's third tier. Its own indexed lookup, like
+        # the tag counts — Quality is one row per picture (or absent until the
+        # quality task has run; -1.0 marks a failed computation, and both read
+        # as "unknown" through CandidateMember.known_sharpness).
+        quality_rows = session.exec(
+            select(Quality.picture_id, Quality.sharpness).where(
+                Quality.picture_id.in_(chunk)
+            )
+        ).all()
+        for picture_id, sharpness in quality_rows:
+            member = members.get(int(picture_id))
+            if member is not None:
+                member.sharpness = sharpness
     return members
 
 

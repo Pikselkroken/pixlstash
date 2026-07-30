@@ -622,10 +622,34 @@ class DedupCandidateModel(BaseModel):
             "processed."
         )
     )
+    smart_score: Optional[float] = Field(
+        default=None,
+        description=(
+            "The library's composite quality opinion on the [1, 5] scale "
+            "(CLIP anchors, aesthetics, sharpness, resolution, anomaly "
+            "penalty) - the DOMINANT signal of the cover preselection, "
+            "compared in 0.25 buckets so scoring noise cannot outrank a real "
+            "size difference. Null when not yet computed or failed; an "
+            "unknown score ranks neutral, never worst. Display-ready (show a "
+            "dash for null)."
+        ),
+    )
+    sharpness: Optional[float] = Field(
+        default=None,
+        description=(
+            "Objective sharpness metric (typical range 0-0.5, higher is "
+            "sharper) - the ranking's tie-breaker after smart score and image "
+            "size. Null when not computed or failed; unknown ranks neutral."
+        ),
+    )
     cover_score: float = Field(
         description=(
-            "`megapixels*4 + tags*3 + score*2 + 8 if RAW`. The highest wins the "
-            "cover preselection; ties break to the oldest capture time."
+            "DEPRECATED legacy composite (`megapixels*4 + tags*3 + score*2 + "
+            "8 if RAW`). No longer the selection rule: the preselection ranks "
+            "smart score (bucketed), then pixel count, then sharpness, then "
+            "stars/tags/RAW/bytes, ties to the oldest capture. Read "
+            "`smart_score` and the why-pills instead; this field will be "
+            "removed."
         )
     )
     why: list[WhyPillModel] = Field(

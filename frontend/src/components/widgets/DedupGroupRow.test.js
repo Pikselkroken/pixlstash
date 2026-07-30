@@ -129,6 +129,23 @@ describe("DedupGroupRow — what assistive tech is told", () => {
   });
 });
 
+describe("DedupGroupRow — the verdict key scheme (amendment #3)", () => {
+  // One chip per button — the PRIMARY key shown (S, Stack's synonym, is
+  // taught in copy, never as a second chip) — while aria-keyshortcuts
+  // carries the full machine-readable set: the chips are aria-hidden, and
+  // before this nothing announced the keys at all.
+  it("chips show Enter and K; aria-keyshortcuts carries the full set", () => {
+    const wrapper = mountRow({ focused: true });
+    const stack = wrapper.find(".gbtn--stack");
+    expect(stack.find("kbd").text()).toBe("Enter");
+    expect(stack.attributes("aria-keyshortcuts")).toBe("Enter S");
+
+    const keep = wrapper.findAll(".gbtn")[1];
+    expect(keep.find("kbd").text()).toBe("K");
+    expect(keep.attributes("aria-keyshortcuts")).toBe("K");
+  });
+});
+
 describe("DedupGroupRow — what the verdicts cost", () => {
   // Neither verdict asks for a confirmation, so each has to say what it does
   // before it is pressed rather than after.
@@ -269,6 +286,83 @@ describe("DedupGroupRow — double-click opens Compare", () => {
     await wrapper.trigger("dblclick", { ctrlKey: true });
     await wrapper.trigger("dblclick", { shiftKey: true });
     expect(wrapper.emitted("compare")).toBeUndefined();
+  });
+});
+
+describe("DedupGroupRow — hover score overlays", () => {
+  /** A two-copy group carrying stars and smart scores. */
+  const scored = {
+    ...group(2),
+    candidates: [
+      { picture_id: 1, score: 3, smart_score: 3.7156 },
+      { picture_id: 2, score: 0, smart_score: null },
+    ],
+  };
+
+  // Both overlays render inside the thumb (hover reveal is the grid's CSS
+  // recipe, which jsdom does not compute — the structure and null handling
+  // are the testable surface).
+  it("renders the grid's star overlay and a smart score chip per thumbnail", () => {
+    const wrapper = mountRow({ group: scored });
+    const thumbs = wrapper.findAll(".gthumb");
+
+    const stars = thumbs[0].findComponent({ name: "StarRatingOverlay" });
+    expect(stars.exists()).toBe(true);
+    expect(stars.props("score")).toBe(3);
+    expect(stars.props("compact")).toBe(true);
+
+    const chip = thumbs[0].find(".gsmart");
+    expect(chip.text()).toContain("3.72");
+    expect(chip.attributes("title")).toBe("Smart score 3.72");
+    expect(chip.attributes("aria-hidden")).toBe("true");
+  });
+
+  // NULL means not-yet-computed and -1.0 means failed: no chip either way.
+  it("renders no smart chip for a pending or failed score", () => {
+    const failed = {
+      ...scored,
+      candidates: [
+        { picture_id: 1, score: 0, smart_score: null },
+        { picture_id: 2, score: 0, smart_score: -1.0 },
+      ],
+    };
+    const wrapper = mountRow({ group: failed });
+    expect(wrapper.findAll(".gsmart")).toHaveLength(0);
+    // The star overlay still shows (score 0 renders its dim invitations,
+    // exactly as the grid's does).
+    expect(
+      wrapper.findAllComponents({ name: "StarRatingOverlay" }),
+    ).toHaveLength(2);
+  });
+
+  it("skips both overlays on an unloaded placeholder row", () => {
+    const wrapper = mountRow({ group: scored, loadThumbnails: false });
+    expect(wrapper.findAll(".gsmart")).toHaveLength(0);
+    expect(
+      wrapper.findAllComponents({ name: "StarRatingOverlay" }),
+    ).toHaveLength(0);
+  });
+
+  // The overlays are display-only: the thumbnail keeps its whole gesture
+  // vocabulary with them mounted.
+  it("leaves click, right-click and double-click to the thumbnail", async () => {
+    const wrapper = mountRow({ group: scored });
+    const thumb = wrapper.findAll(".gthumb")[0];
+    await thumb.trigger("click");
+    expect(wrapper.emitted("set-cover")).toEqual([[1]]);
+    await thumb.trigger("contextmenu");
+    expect(wrapper.emitted("toggle-excluded")).toEqual([[1]]);
+    await thumb.trigger("dblclick");
+    expect(wrapper.emitted("compare")).toHaveLength(1);
+  });
+
+  it("keeps the excluded treatment with the overlays mounted", () => {
+    const wrapper = mountRow({ group: scored, excludedIds: [2] });
+    const thumbs = wrapper.findAll(".gthumb");
+    expect(thumbs[1].classes()).toContain("gthumb--out");
+    expect(
+      thumbs[1].findComponent({ name: "StarRatingOverlay" }).exists(),
+    ).toBe(true);
   });
 });
 

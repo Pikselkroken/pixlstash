@@ -73,16 +73,20 @@ beforeEach(() => {
 });
 
 describe("dedup keyboard — moving the focus", () => {
-  it("ArrowDown and j both move down", () => {
+  it("ArrowDown moves down, ArrowUp moves up", () => {
     handle(keyEvent("ArrowDown"));
-    handle(keyEvent("j"));
-    expect(store.focusNext).toHaveBeenCalledTimes(2);
+    expect(store.focusNext).toHaveBeenCalledTimes(1);
+    handle(keyEvent("ArrowUp"));
+    expect(store.focusPrev).toHaveBeenCalledTimes(1);
   });
 
-  it("ArrowUp and k both move up", () => {
-    handle(keyEvent("ArrowUp"));
+  // Amendment #3: the letter aliases left navigation — k became Keep
+  // separate and j is deliberately unclaimed. Neither may move the focus.
+  it("j and k no longer navigate", () => {
+    handle(keyEvent("j"));
     handle(keyEvent("k"));
-    expect(store.focusPrev).toHaveBeenCalledTimes(2);
+    expect(store.focusNext).not.toHaveBeenCalled();
+    expect(store.focusPrev).not.toHaveBeenCalled();
   });
 
   // Home goes through the store's own jump-to-start: after an End jump the
@@ -148,9 +152,18 @@ describe("dedup keyboard — verdicts", () => {
     expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
   });
 
-  it("S keeps the focused group separate", () => {
+  // Amendment #3: S is a SYNONYM of Enter — the owner's S-for-Stack slip is
+  // now self-healing, so S must never keep-separate again.
+  it("S stacks too, as Enter's synonym", () => {
     handle(keyEvent("s"));
+    expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
+    expect(store.keepSeparate).not.toHaveBeenCalled();
+  });
+
+  it("K keeps the focused group separate", () => {
+    handle(keyEvent("k"));
     expect(store.keepSeparate).toHaveBeenCalledWith(store.groups[0]);
+    expect(store.stack).not.toHaveBeenCalled();
   });
 
   it("acts on whichever group is focused, not the first", () => {
@@ -170,6 +183,7 @@ describe("dedup keyboard — verdicts", () => {
     store.busy = true;
     handle(keyEvent("Enter"));
     handle(keyEvent("s"));
+    handle(keyEvent("k"));
     expect(store.stack).not.toHaveBeenCalled();
     expect(store.keepSeparate).not.toHaveBeenCalled();
   });
@@ -178,6 +192,7 @@ describe("dedup keyboard — verdicts", () => {
     deps.isReadOnly.mockReturnValue(true);
     handle(keyEvent("Enter"));
     handle(keyEvent("s"));
+    handle(keyEvent("k"));
     expect(store.stack).not.toHaveBeenCalled();
     expect(store.keepSeparate).not.toHaveBeenCalled();
   });
@@ -262,27 +277,31 @@ describe("dedup keyboard — Compare", () => {
   // of decisions without reopening it every time. The verdict keys leave the
   // dialog up; the auto-advance flips it to the next group, and the view
   // closes it only when the queue runs out.
-  it("Enter and S give a verdict from inside Compare without closing it", () => {
+  it("Enter and S both stack, K keeps separate, none closing Compare", () => {
     compareOpen = true;
     handle(keyEvent("Enter"));
+    handle(keyEvent("s"));
+    expect(store.stack).toHaveBeenCalledTimes(2);
     expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
     expect(deps.closeCompare).not.toHaveBeenCalled();
 
-    handle(keyEvent("s"));
+    handle(keyEvent("k"));
     expect(store.keepSeparate).toHaveBeenCalledWith(store.groups[0]);
     expect(deps.closeCompare).not.toHaveBeenCalled();
   });
 
   // The dialog renders the focused group, so a focus move flips it in place
-  // and no place is lost — Up/Down (and j/k) switch the compared group.
-  it("Up/Down switch the compared group in place", () => {
+  // and no place is lost — Up/Down switch the compared group. k must NEVER
+  // navigate here: it is a verdict key now (amendment #3).
+  it("Up/Down switch the compared group in place; j and k do not", () => {
     compareOpen = true;
     handle(keyEvent("ArrowDown"));
-    handle(keyEvent("j"));
-    expect(store.focusNext).toHaveBeenCalledTimes(2);
+    expect(store.focusNext).toHaveBeenCalledTimes(1);
     handle(keyEvent("ArrowUp"));
-    handle(keyEvent("k"));
-    expect(store.focusPrev).toHaveBeenCalledTimes(2);
+    expect(store.focusPrev).toHaveBeenCalledTimes(1);
+    handle(keyEvent("j"));
+    expect(store.focusNext).toHaveBeenCalledTimes(1);
+    expect(store.focusPrev).toHaveBeenCalledTimes(1);
   });
 
   // Reading the queue is not a verdict, and neither is comparing it.
@@ -470,7 +489,7 @@ describe("dedup keyboard — Enter belongs to a focused control", () => {
   it("keeps the other keys while a button has focus", () => {
     const onButton = { tagName: "BUTTON" };
     handle(keyEvent("ArrowDown", { target: onButton }));
-    handle(keyEvent("s", { target: onButton }));
+    handle(keyEvent("k", { target: onButton }));
     expect(store.focusNext).toHaveBeenCalled();
     expect(store.keepSeparate).toHaveBeenCalled();
   });

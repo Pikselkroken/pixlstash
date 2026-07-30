@@ -77,6 +77,7 @@ def _seed(server, specs):
                 height=spec.get("height", 3000),
                 size_bytes=spec.get("size_bytes", 1000),
                 score=spec.get("score"),
+                smart_score=spec.get("smart_score"),
                 pixel_sha=spec.get("pixel_sha"),
             )
             session.add(pic)
@@ -159,7 +160,8 @@ def test_stacking_defaults_to_the_server_preselection(server):
         [],
         None,
     )
-    # The formula's score term makes the 5-star picture the cover.
+    # Equal quality and size tiers (no smart scores, same pixels): the star
+    # tier of the ranking makes the 5-star picture the cover.
     assert result.cover_picture_id == ids[1]
 
 
@@ -1187,10 +1189,11 @@ def test_the_dry_run_summary_counts_a_score_lift(server):
     _seed(
         server,
         [
-            # The cover is chosen on tags, but a twin outranks it on score, so
-            # the union would lift the cover's score.
-            {"pixel_sha": "aaa", "size_bytes": 100, "tags": ["a", "b", "c", "d"]},
-            {"pixel_sha": "aaa", "size_bytes": 100, "score": 5},
+            # The cover wins on smart score (the ranking's dominant tier), but
+            # a twin outranks it on human stars, so the union would lift the
+            # cover's score.
+            {"pixel_sha": "aaa", "size_bytes": 100, "smart_score": 4.5},
+            {"pixel_sha": "aaa", "size_bytes": 100, "score": 5, "smart_score": 2.0},
         ],
     )
     _scan(server)

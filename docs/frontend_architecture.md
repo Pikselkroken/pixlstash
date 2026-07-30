@@ -596,7 +596,7 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
 - **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
 - **Three seed modes in recipe mode, two in template mode.** Random draws fresh. **Incremented** (recipe mode only — templates have no original to increment from) applies a signed delta (default +1, session-sticky) to the original seed read from the recipe response (`seed`, falling back to the first `seed_inputs` value) and shows the resulting value live; it submits as `seed_mode: "fixed"` with the computed seed, so the API surface is unchanged. **Fixed** defaults to the original seed and carries a small warning-toned "same as original" note until edited, because replaying the identical seed re-creates the identical image, which the importer dedupes into silence — flagged, not forbidden. A sticky `incremented` preference falls back to random where it cannot be honoured.
-- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion; **Fit** keeps every candidate registered in one box, **Actual pixels** (P) is 1:1 with drag-to-pan; click picks the cover, right-click excludes, Enter/S give the verdict from inside. The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
+- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion; **Fit** keeps every candidate registered in one box, **Actual pixels** (P) is 1:1 with drag-to-pan; click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
 - **First adopter of the dialog keyboard contract** (see "App* design-system layer"): Escape dismisses, plain Enter accepts via `AppDialog`'s `accept`, and the footer buttons wear the ↵ / Esc badges. The prompt textarea and seed field stop propagation of ordinary typing so grid shortcuts stay quiet, but deliberately let Escape and Enter through to the dialog — and handle Ctrl/Meta+Enter themselves, since the root-level shortcut cannot hear a stopped event.
 
 **Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
@@ -1094,13 +1094,15 @@ Three rules from the design are load-bearing and are easy to break by accident:
   own `detail` instead of a generic sentence.
 
 **Compare is a working surface, not a detour** (owner requirements, 2026-07-30).
-A verdict given inside `DedupCompareDialog` — footer buttons or `Enter`/`S` —
+A verdict given inside `DedupCompareDialog` — footer buttons, `Enter`/`S`
+(stack) or `K` (keep separate) —
 does **not** close the dialog: the store's auto-advance moves the focus and the
 dialog, which renders `store.focusedGroup`, flips to the next group in place
 (zoom and fit/actual-pixels reset per group signature). It closes only when the
 queue runs out (`DuplicateQueue`'s `focusedGroup` watcher), and a failed
 verdict leaves the same group showing. Both verdict buttons wear their shortcut
-chips (`Enter`/`S`, via `AppButton key-hint`). A **double-click** on a queue
+chips (`Enter`/`K`, via `AppButton key-hint`; S is Stack's unshown synonym,
+taught in copy — amendment #3). A **double-click** on a queue
 row (surface or thumbnail, unmodified, not on the action buttons) opens
 Compare like `C`. The **mouse wheel** over a candidate's picture opens the
 blink-compare zoom on it; inside the zoom the wheel flips candidates in Fit
@@ -1151,7 +1153,7 @@ slider, a typing target the key model stands down for) dismisses it via a
 wrap-level handler. Slider thumbs (`role="slider"`) are typing targets, so
 their arrows never double as row moves. Settings/History/undo keep standard
 focus behaviour: the dialog/popover owns focus, and Enter-repeat on undo is
-meaningful. **Inside Compare, Up/Down (and j/k) switch the compared group in
+meaningful. **Inside Compare, Up/Down switch the compared group in
 place** — clamped at the queue's ends, live in read-only, chase-cancelling
 like any focus move; the ZOOM layer keeps all its arrows for candidate
 flipping (one axis, one meaning per layer), and Home/End/Page keys stay quiet

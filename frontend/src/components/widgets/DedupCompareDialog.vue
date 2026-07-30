@@ -43,6 +43,8 @@ import {
   candidatePath,
   candidateSizeMb,
   candidateMegapixels,
+  candidateSharpness,
+  candidateSmartScore,
   confidenceLabel,
   shortenPath,
   showsPath,
@@ -107,6 +109,52 @@ const bestScore = computed(() => bestOf(candidates.value, (c) => c.score));
 const bestTagCount = computed(() =>
   bestOf(candidates.value, (c) => c.tag_count),
 );
+const bestSmartScore = computed(() =>
+  bestOf(candidates.value, candidateSmartScore),
+);
+
+/**
+ * Whether ANY copy carries a displayable smart score — the same group-level
+ * decision the Location row makes, and for the same reason: the meta grid's
+ * height comes off the image, so the row appears on every card or on none,
+ * keeping the pictures registered against each other. Against a backend that
+ * does not serve `smart_score` yet, no card shows the row.
+ */
+const anySmartScore = computed(() =>
+  candidates.value.some((c) => candidateSmartScore(c) !== null),
+);
+
+/**
+ * A candidate's smart score for display: the metadata panel's own precision
+ * (`toFixed(2)`), the dash for a copy that has none while its siblings do.
+ * @param {Object} candidate
+ * @returns {string}
+ */
+function smartScoreText(candidate) {
+  const value = candidateSmartScore(candidate);
+  return value === null ? EMPTY : value.toFixed(2);
+}
+
+const bestSharpness = computed(() =>
+  bestOf(candidates.value, candidateSharpness),
+);
+
+/** Group-level, exactly like the Smart score column above. */
+const anySharpness = computed(() =>
+  candidates.value.some((c) => candidateSharpness(c) !== null),
+);
+
+/**
+ * A candidate's sharpness for display. Three decimals, not two: the server
+ * serialises the metric at 3dp on a typical 0–0.5 range, where two decimals
+ * would flatten genuinely different copies into the same number.
+ * @param {Object} candidate
+ * @returns {string}
+ */
+function sharpnessText(candidate) {
+  const value = candidateSharpness(candidate);
+  return value === null ? EMPTY : value.toFixed(3);
+}
 
 /**
  * Whether ANY copy in this group carries a path worth showing.
@@ -212,6 +260,8 @@ const zoomMetaText = computed(() => {
   const parts = [`#${candidateId(c)}`, resolutionText(c), fileText(c)];
   const stars = starCount(c);
   if (stars) parts.push("★".repeat(stars));
+  const smart = candidateSmartScore(c);
+  if (smart !== null) parts.push(`Smart score ${smart.toFixed(2)}`);
   return parts.filter((p) => p !== EMPTY).join(" · ");
 });
 
@@ -482,6 +532,35 @@ function onZoomContextMenu() {
               <template v-else>{{ EMPTY }}</template>
             </span>
           </span>
+          <!-- Group-level like the Location row: rendered on every card as
+               soon as ONE copy has a smart score, so the cards keep the same
+               shape and the pictures stay aligned. -->
+          <span v-if="anySmartScore" class="dc-cell">
+            <span class="dc-label">Smart score</span>
+            <span
+              class="dc-val"
+              :class="{
+                'dc-val--best': isBest(
+                  candidateSmartScore(candidate),
+                  bestSmartScore,
+                ),
+              }"
+              >{{ smartScoreText(candidate) }}</span
+            >
+          </span>
+          <span v-if="anySharpness" class="dc-cell">
+            <span class="dc-label">Sharpness</span>
+            <span
+              class="dc-val"
+              :class="{
+                'dc-val--best': isBest(
+                  candidateSharpness(candidate),
+                  bestSharpness,
+                ),
+              }"
+              >{{ sharpnessText(candidate) }}</span
+            >
+          </span>
           <span class="dc-cell">
             <span class="dc-label">Metadata</span>
             <span
@@ -568,7 +647,7 @@ function onZoomContextMenu() {
         v-if="!readOnly"
         variant="secondary"
         icon-left="call-split"
-        key-hint="s"
+        key-hint="k"
         :disabled="busy"
         title="Leave these as separate pictures. They stay in your library and stop being suggested."
         @click="emit('keep-separate')"
@@ -676,7 +755,7 @@ function onZoomContextMenu() {
         <span><kbd>←</kbd><kbd>→</kbd>, scroll, or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
         <span><kbd>P</kbd> actual pixels</span>
         <span><kbd>Enter</kbd> stack</span>
-        <span><kbd>S</kbd> keep separate</span>
+        <span><kbd>K</kbd> keep separate</span>
         <span><kbd>Esc</kbd> back</span>
       </div>
     </div>

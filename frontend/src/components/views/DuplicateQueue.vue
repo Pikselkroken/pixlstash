@@ -13,11 +13,12 @@
          makes the whole queue safe to work fast. -->
     <p id="dq-key-help" class="visually-hidden">
       Up and Down arrows choose a group. Page Up and Page Down move a screenful
-      at a time, and Home and End jump to the first and last group. Enter stacks
-      it. S keeps it separate. C compares every copy field by field. The number
-      keys 1 to 9 choose the cover. X leaves the picture under the cursor out of
-      the stack. Control Z undoes the last verdict. Escape returns here from a
-      control. No picture is ever deleted, and a stack can be undone.
+      at a time, and Home and End jump to the first and last group. Enter or S
+      stacks it. K keeps it separate. Down moves on without deciding. C
+      compares every copy field by field. The number keys 1 to 9 choose the
+      cover. X leaves the picture under the cursor out of the stack. Control Z
+      undoes the last verdict. Escape returns here from a control. No picture
+      is ever deleted, and a stack can be undone.
     </p>
 
     <!-- One toolbar, not two. The queue's count, the way to the Decided page,

@@ -223,6 +223,35 @@ answer, so the bar mounts no overflow at all.
 TbOverflowMenu itself sheds the attention prop, dot, keyframes and its ≤600
 container rule (dead once Stats stopped folding). UndoControl unchanged.
 
+## Amendment #3 (2026-07-30): the verdict key scheme
+
+**The finding:** the owner kept pressing S intending Stack. That is a capture
+slip, not ignorance — S's strongest reading IS Stack — and the old binding
+punished it with the OPPOSITE verdict (Keep separate). The feature is
+unreleased, so there is no habit base to protect; the vocabulary can be fixed
+at the root instead of patched with warnings.
+
+**Binding table (before → after):**
+
+| Key | Before | After |
+|---|---|---|
+| Enter | Stack | Stack — UNCHANGED (primary-action convention, auto-advance rhythm) |
+| S | Keep separate | **STACK** (synonym of Enter, queue + Compare). The slip becomes self-healing. |
+| K | previous-group nav synonym | **KEEP SEPARATE** (queue + Compare) |
+| J | next-group nav synonym | REMOVED, unclaimed |
+| Arrows / PageUp/Down / Home / End / C / X / 1-9 / Z / P / Escape / Ctrl+Z / Ctrl+A | — | unchanged |
+
+NO dead-key handling and NO de-training toast: pre-release, explicitly ruled
+out.
+
+**Surfaces:** the row's Stack chip stays "Enter" (one chip per button, the
+primary key shown; S is taught in copy, not chrome) and the Keep separate
+chip becomes "K"; `aria-keyshortcuts` carries the full machine-readable set
+("Enter S" / "K") — the chips are aria-hidden, and nothing announced the
+keys before, a shipped gap this closes. Compare's footer hint and its Keep
+separate `key-hint` follow; the queue's hidden help sentence reads "Enter or
+S stacks it. K keeps it separate. Down moves on without deciding."
+
 ## (d) Deliberately rejected, and why
 
 - **Left-side standardisation**: no shared anchor exists on the left (the grid

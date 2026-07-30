@@ -345,6 +345,129 @@ describe("DedupCompareDialog: closing peels one layer", () => {
   });
 });
 
+describe("DedupCompareDialog: the smart score column", () => {
+  /** The default GROUP with smart scores stamped onto its three copies. */
+  function scoredGroup(scores) {
+    return {
+      ...GROUP,
+      candidates: GROUP.candidates.map((c, i) => ({
+        ...c,
+        smart_score: scores[i],
+      })),
+    };
+  }
+
+  /** The card's Smart score cell, or null when the column is absent. */
+  function smartCellOf(card) {
+    const cell = card
+      .findAll(".dc-cell")
+      .find((c) => c.find(".dc-label").text() === "Smart score");
+    return cell ?? null;
+  }
+
+  // The metadata panel's own precision (toFixed(2)); the dash for a copy
+  // whose siblings have a score and it does not — the row is group-level,
+  // like Location, so the cards keep the same shape.
+  it("shows each copy's smart score, best-marked, on every card", () => {
+    const cards = mountDialog({
+      group: scoredGroup([3.7156, 2.1, null]),
+    }).findAll(".dc-card");
+    const cells = cards.map(smartCellOf);
+    expect(cells.every(Boolean)).toBe(true);
+    expect(cells.map((c) => c.find(".dc-val").text())).toEqual([
+      "3.72",
+      "2.10",
+      "–",
+    ]);
+    expect(cells[0].find(".dc-val").classes()).toContain("dc-val--best");
+    expect(cells[1].find(".dc-val").classes()).not.toContain("dc-val--best");
+  });
+
+  // Today's backend serves no smart_score at all: no column, anywhere.
+  it("renders no column when no copy has a score", () => {
+    const cards = mountDialog().findAll(".dc-card");
+    for (const card of cards) {
+      expect(smartCellOf(card)).toBeNull();
+    }
+  });
+
+  // -1.0 is "computation failed" and NULL is "not yet computed": neither is
+  // a number a person should read, so a group with only those has no column.
+  it("treats failed (-1) and pending (null) scores as absent", () => {
+    const cards = mountDialog({
+      group: scoredGroup([-1.0, null, -1.0]),
+    }).findAll(".dc-card");
+    for (const card of cards) {
+      expect(smartCellOf(card)).toBeNull();
+    }
+  });
+
+  it("carries the smart score into the zoom's meta line", async () => {
+    const wrapper = mountDialog({ group: scoredGroup([3.7156, null, null]) });
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    expect(
+      document.querySelector('[data-testid="dedup-zoom"] .dc-zv-meta')
+        .textContent,
+    ).toContain("Smart score 3.72");
+    wrapper.vm.closeZoom();
+    await wrapper.vm.$nextTick();
+    document.body.innerHTML = "";
+    wrapper.unmount();
+  });
+});
+
+describe("DedupCompareDialog: the sharpness column", () => {
+  /** The default GROUP with sharpness stamped onto its three copies. */
+  function sharpGroup(values) {
+    return {
+      ...GROUP,
+      candidates: GROUP.candidates.map((c, i) => ({
+        ...c,
+        sharpness: values[i],
+      })),
+    };
+  }
+
+  /** The card's Sharpness cell, or null when the column is absent. */
+  function sharpCellOf(card) {
+    const cell = card
+      .findAll(".dc-cell")
+      .find((c) => c.find(".dc-label").text() === "Sharpness");
+    return cell ?? null;
+  }
+
+  // Three decimals, not the Smart score's two: the server serialises the
+  // metric at 3dp on a typical 0-0.5 range, where two decimals would flatten
+  // genuinely different copies into the same number. Group-level presence
+  // and the best mark work exactly as the Smart score column's.
+  it("shows each copy's sharpness, best-marked, on every card", () => {
+    const cards = mountDialog({
+      group: sharpGroup([0.312, 0.1876, null]),
+    }).findAll(".dc-card");
+    const cells = cards.map(sharpCellOf);
+    expect(cells.every(Boolean)).toBe(true);
+    expect(cells.map((c) => c.find(".dc-val").text())).toEqual([
+      "0.312",
+      "0.188",
+      "–",
+    ]);
+    expect(cells[0].find(".dc-val").classes()).toContain("dc-val--best");
+    expect(cells[1].find(".dc-val").classes()).not.toContain("dc-val--best");
+  });
+
+  it("renders no column when no copy has a usable metric", () => {
+    for (const wrapper of [
+      mountDialog(),
+      mountDialog({ group: sharpGroup([null, null, null]) }),
+    ]) {
+      for (const card of wrapper.findAll(".dc-card")) {
+        expect(sharpCellOf(card)).toBeNull();
+      }
+    }
+  });
+});
+
 describe("DedupCompareDialog: the card gestures", () => {
   it("makes a clicked card the cover, and marks only that card pressed", () => {
     // aria-pressed is the only cover signal a screen-reader user gets.
@@ -393,9 +516,16 @@ describe("DedupCompareDialog: the verdict footer", () => {
 
   // A shortcut shown next to the action it triggers is the only kind anyone
   // discovers; Stack always wore its Enter chip, Keep separate lacked its S.
-  it("shows the shortcut on both verdicts: Enter on Stack, S on Keep separate", () => {
+  // Amendment #3: K keeps separate; S became Stack's synonym (taught in
+  // copy, not chrome — one chip per button, the primary key shown). The
+  // machine-readable set rides aria-keyshortcuts, since the chips are
+  // aria-hidden.
+  it("shows the shortcut on both verdicts: Enter on Stack, K on Keep separate", () => {
     const buttons = footerButtons(mountDialog());
-    expect(buttons[1].find("kbd").text()).toBe("S");
+    expect(buttons[1].find("kbd").text()).toBe("K");
+    expect(buttons[1].find("button").attributes("aria-keyshortcuts")).toBe(
+      "K",
+    );
     expect(buttons[2].find("kbd").text()).toBe("↵");
   });
 

@@ -8,14 +8,17 @@
 //
 // The model, in one table:
 //
-//   ArrowUp / ArrowDown   move the focus (k / j alias the same pair)
+//   ArrowUp / ArrowDown   move the focus (no letter aliases: amendment #3
+//                         gave k to Keep separate and left j unclaimed)
 //   PageUp / PageDown     move the focus a screenful of rows at a time
 //   Home / End            jump to the first / TRUE last open group. End over a
 //                         large unloaded gap fetches the tail page directly
 //                         (random access, one request); Home undoes the jump
 //                         by resetting to the first page.
-//   Enter                 stack the focused group
-//   S                     keep the focused group separate
+//   Enter / S             stack the focused group (S is a deliberate synonym,
+//                         amendment #3: the owner's S-for-Stack slip is now
+//                         self-healing)
+//   K                     keep the focused group separate
 //   C                     open Compare on the focused group
 //   1 - 9                 point at that candidate and make it the cover
 //   X                     leave the candidate under the cursor out of the stack
@@ -25,9 +28,9 @@
 //   Escape                close Compare, otherwise hand control back to the
 //                         queue (`onEscape`)
 //
-// While Compare is open the per-group keys stay live (`Enter`, `S`, `1`-`9`,
-// `X`, `Escape`), because Compare exists so the decision is made without a
-// second trip — and `Up`/`Down` (or `j`/`k`) switch the COMPARED GROUP in
+// While Compare is open the per-group keys stay live (`Enter`/`S`, `K`,
+// `1`-`9`, `X`, `Escape`), because Compare exists so the decision is made
+// without a second trip — and `Up`/`Down` switch the COMPARED GROUP in
 // place, since the dialog renders the focused group and shows exactly where
 // you went. A verdict there keeps Compare open and the auto-advance flips it
 // to the next group; the view closes it only when the queue runs out. Only
@@ -44,11 +47,14 @@
 
 import { candidateId } from "../utils/dedup";
 
-/** Keys that move the focus down one group. */
-const NEXT_KEYS = new Set(["arrowdown", "j"]);
+/** Keys that move the focus down one group. `j` is deliberately UNCLAIMED
+ * (amendment #3): its old synonym role lost the letter to nothing, so the
+ * vocabulary stays small. */
+const NEXT_KEYS = new Set(["arrowdown"]);
 
-/** Keys that move the focus up one group. */
-const PREV_KEYS = new Set(["arrowup", "k"]);
+/** Keys that move the focus up one group. `k` now means Keep separate
+ * (amendment #3), so navigation is arrows alone. */
+const PREV_KEYS = new Set(["arrowup"]);
 
 /**
  * Take ownership of a key: stop the default action AND stop the event reaching
@@ -322,13 +328,16 @@ export function createDedupKeyHandler({
       // decisions is made without reopening anything. The zoom layer closes
       // (the next group starts un-zoomed by contract), and the view closes
       // the dialog itself once the queue has nothing left to show.
-      if (key === "enter") {
+      // S is a SYNONYM of Enter (amendment #3): the owner kept pressing S
+      // meaning Stack — a capture slip, not ignorance — and S's strongest
+      // reading IS Stack, so the slip is now self-healing.
+      if (key === "enter" || key === "s") {
         claim(event);
         zoom.close();
         store.stack(group);
         return;
       }
-      if (key === "s") {
+      if (key === "k") {
         claim(event);
         zoom.close();
         store.keepSeparate(group);
@@ -409,12 +418,13 @@ export function createDedupKeyHandler({
 
     if (isReadOnly() || store.busy) return;
 
-    if (key === "enter") {
+    // S is a synonym of Enter (amendment #3, see the compare branch's note).
+    if (key === "enter" || key === "s") {
       claim(event);
       store.stack(group);
       return;
     }
-    if (key === "s") {
+    if (key === "k") {
       claim(event);
       store.keepSeparate(group);
       return;

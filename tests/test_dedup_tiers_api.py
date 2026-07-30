@@ -322,6 +322,11 @@ def test_the_queue_page_carries_cover_evidence_and_progress():
         cover = next(c for c in group["candidates"] if c["picture_id"] == ids[0])
         assert cover["tag_count"] == 1
         assert cover["cover_score"] > 0
+        # The ranking signals ship null-safe: nothing in this env has a smart
+        # score or a quality row yet, so both serve null — a dash in Compare,
+        # never a fake zero.
+        assert "smart_score" in cover and cover["smart_score"] is None
+        assert "sharpness" in cover and cover["sharpness"] is None
         assert any(p["text"] == "Preselected as cover" for p in cover["why"])
         # Managed-library pictures hide their path.
         assert all(c["file_path"] is None for c in group["candidates"])

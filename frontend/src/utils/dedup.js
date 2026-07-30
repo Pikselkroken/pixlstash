@@ -167,6 +167,44 @@ export function candidateId(candidate) {
  * @param {function(Object): number} read - reads the field off a candidate.
  * @returns {number} the maximum, or 0 when nothing is comparable.
  */
+/**
+ * A candidate's displayable smart score, or null.
+ *
+ * The backend serves `smart_score` as NULL while the score is not yet
+ * computed and `-1.0` when computation failed; neither is a number a person
+ * should read, so both come back as null and every display simply omits the
+ * cell. A genuine 0 is displayable.
+ *
+ * @param {Object} candidate
+ * @returns {number|null}
+ */
+export function candidateSmartScore(candidate) {
+  const raw = candidate?.smart_score;
+  // Checked BEFORE coercion: Number(null) is 0, which would turn
+  // "not yet computed" into a confident 0.00 on screen.
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * A candidate's displayable sharpness, or null.
+ *
+ * The server serves `sharpness` (the cover ranking's third tier) already
+ * nulled for missing/failed, so null simply means "nothing to show"; the
+ * guard mirrors {@link candidateSmartScore}'s as a belt against older
+ * payloads. A genuine 0 is displayable.
+ *
+ * @param {Object} candidate
+ * @returns {number|null}
+ */
+export function candidateSharpness(candidate) {
+  const raw = candidate?.sharpness;
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 export function bestOf(candidates, read) {
   if (!Array.isArray(candidates) || !candidates.length) return 0;
   let best = 0;
