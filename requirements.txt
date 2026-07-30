@@ -43,3 +43,5 @@ ultralytics==8.4.21
 psutil==7.2.2
 nvidia-ml-py==13.590.48
 zstandard==0.25.0
+watchdog==6.0.0
+python-multipart==0.0.32
