@@ -3,52 +3,35 @@ import { ref, watch, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { getPictureStats } from "../../api/pictures";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useWsStore } from "../../stores/useWsStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+} from "../../stores/useViewStore";
 
-const props = defineProps({
-  backendUrl: { type: String, required: true },
-  // Filter props — mirrors the same params ImageGrid uses for fetching pictures
-  selectedCharacter: { type: [String, Number, null], default: null },
-  selectedCharacterIds: { type: Array, default: () => [] },
-  characterMode: { type: String, default: "union" },
-  selectedSet: { type: [Number, String, null], default: null },
-  selectedSetIds: { type: Array, default: () => [] },
-  setMode: { type: String, default: "union" },
-  setDifferenceBaseId: { type: Number, default: null },
-  projectViewMode: { type: String, default: null },
-  selectedProjectId: { type: [Number, String, null], default: null },
-  tagFilter: { type: Array, default: () => [] },
-  tagRejectedFilter: { type: Array, default: () => [] },
-  mediaTypeFilter: { type: String, default: null },
-  minScoreFilter: { type: [Number, String, null], default: null },
-  maxScoreFilter: { type: [Number, String, null], default: null },
-  smartScoreBucketFilter: { type: [String, null], default: null },
-  resolutionBucketFilter: { type: [String, null], default: null },
-  filePathPrefixFilter: { type: String, default: null },
-  importSourceFolderFilter: { type: String, default: null },
-  allPicturesId: { type: [String, Number], default: null },
-  unassignedPicturesId: { type: [String, Number], default: null },
-  scrapheapPicturesId: { type: [String, Number], default: null },
-  penalisedTagWeights: { type: Object, default: () => ({}) },
-  faceBboxFilter: { type: String, default: null },
-  tagConfidenceAboveFilter: { type: Array, default: () => [] },
-  tagConfidenceBelowFilter: { type: Array, default: () => [] },
-  open: { type: Boolean, default: true },
-  overlayMode: { type: Boolean, default: false },
-  wsTagUpdate: { type: Object, default: null },
-});
+// Store-direct (Phase 3): the panel reads the same filter/selection state the
+// grid queries from straight from the stores, and writes filter changes back
+// itself. App.vue no longer mirrors any of it through props.
+const filterStore = useFilterStore();
+const selectionStore = useSelectionStore();
+const projectStore = useProjectStore();
+const userPrefsStore = useUserPrefsStore();
+const sidebarStore = useSidebarStore();
+const wsStore = useWsStore();
 
-const emit = defineEmits([
-  "toggle",
-  "filter-tag",
-  "filter-tags",
-  "filter-confidence-above",
-  "clear-tag-filter",
-  "clear-confidence-filter",
-  "update:minScoreFilter",
-  "update:maxScoreFilter",
-  "update:smartScoreBucketFilter",
-  "update:resolutionBucketFilter",
-]);
+// The two folder facets are derived from the sidebar's folder selection, same
+// as App.vue used to compute them for the old props.
+const filePathPrefixFilter = computed(
+  () => selectionStore.selectedFolderFilter?.pathPrefix ?? null,
+);
+const importSourceFolderFilter = computed(
+  () => selectionStore.selectedFolderFilter?.importSourceFolder ?? null,
+);
 
 // ─── PIL / Video extension lists ─────────────────────────────────────────────
 const PIL_IMAGE_EXTENSIONS = [
@@ -132,22 +115,24 @@ const error = ref(null);
 function buildQueryParams() {
   const params = new URLSearchParams();
 
-  const normalizedSetIds = Array.isArray(props.selectedSetIds)
-    ? props.selectedSetIds
+  const normalizedSetIds = Array.isArray(selectionStore.selectedSetIds)
+    ? selectionStore.selectedSetIds
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0)
     : [];
   const hasSetSelection = !!(
-    (props.selectedSet != null && props.selectedSet !== "") ||
+    (selectionStore.selectedSet != null && selectionStore.selectedSet !== "") ||
     normalizedSetIds.length > 0
   );
   const isSetOverlap = normalizedSetIds.length > 1;
   const primarySetId =
-    !isSetOverlap && props.selectedSet != null && props.selectedSet !== ""
-      ? Number(props.selectedSet)
+    !isSetOverlap &&
+    selectionStore.selectedSet != null &&
+    selectionStore.selectedSet !== ""
+      ? Number(selectionStore.selectedSet)
       : null;
-  const normalizedCharIds = Array.isArray(props.selectedCharacterIds)
-    ? props.selectedCharacterIds
+  const normalizedCharIds = Array.isArray(selectionStore.selectedCharacterIds)
+    ? selectionStore.selectedCharacterIds
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0)
     : [];
@@ -156,92 +141,103 @@ function buildQueryParams() {
   if (hasSetSelection) {
     if (isSetOverlap) {
       for (const id of normalizedSetIds) params.append("set_ids", String(id));
-      params.append("set_mode", props.setMode || "intersection");
-      if (props.setMode === "difference" && props.setDifferenceBaseId != null) {
-        params.append("base_set_id", String(props.setDifferenceBaseId));
+      params.append("set_mode", selectionStore.setMultiMode || "intersection");
+      if (
+        selectionStore.setMultiMode === "difference" &&
+        selectionStore.setDifferenceBaseId != null
+      ) {
+        params.append(
+          "base_set_id",
+          String(selectionStore.setDifferenceBaseId),
+        );
       }
     } else if (primarySetId != null) {
       params.append("set_id", String(primarySetId));
     }
-    if (props.projectViewMode === "project") {
+    if (projectStore.projectViewMode === "project") {
       params.append(
         "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
+        projectStore.selectedProjectId != null
+          ? projectStore.selectedProjectId
           : "UNASSIGNED",
       );
     }
   } else if (isMultiCharacterView) {
     for (const id of normalizedCharIds)
       params.append("character_ids", String(id));
-    params.append("character_mode", props.characterMode || "union");
-    if (props.projectViewMode === "project") {
+    params.append(
+      "character_mode",
+      selectionStore.characterMultiMode || "union",
+    );
+    if (projectStore.projectViewMode === "project") {
       params.append(
         "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
+        projectStore.selectedProjectId != null
+          ? projectStore.selectedProjectId
           : "UNASSIGNED",
       );
     }
   } else if (
-    props.selectedCharacter != null &&
-    props.selectedCharacter !== "" &&
-    props.selectedCharacter !== props.allPicturesId
+    selectionStore.selectedCharacter != null &&
+    selectionStore.selectedCharacter !== "" &&
+    selectionStore.selectedCharacter !== ALL_PICTURES_ID
   ) {
-    if (props.selectedCharacter === String(props.scrapheapPicturesId)) {
+    if (selectionStore.selectedCharacter === String(SCRAPHEAP_PICTURES_ID)) {
       params.append("only_deleted", "true");
     } else {
-      params.append("character_id", props.selectedCharacter);
-      if (props.projectViewMode === "project") {
+      params.append("character_id", selectionStore.selectedCharacter);
+      if (projectStore.projectViewMode === "project") {
         params.append(
           "project_id",
-          props.selectedProjectId != null
-            ? props.selectedProjectId
+          projectStore.selectedProjectId != null
+            ? projectStore.selectedProjectId
             : "UNASSIGNED",
         );
       }
     }
   } else if (
-    props.selectedCharacter === props.allPicturesId &&
-    props.projectViewMode === "project"
+    selectionStore.selectedCharacter === ALL_PICTURES_ID &&
+    projectStore.projectViewMode === "project"
   ) {
     params.append(
       "project_id",
-      props.selectedProjectId != null ? props.selectedProjectId : "UNASSIGNED",
+      projectStore.selectedProjectId != null
+        ? projectStore.selectedProjectId
+        : "UNASSIGNED",
     );
   }
 
-  if (props.mediaTypeFilter === "images") {
+  if (filterStore.mediaTypeFilter === "images") {
     for (const ext of PIL_IMAGE_EXTENSIONS)
       params.append("format", ext.toUpperCase());
-  } else if (props.mediaTypeFilter === "videos") {
+  } else if (filterStore.mediaTypeFilter === "videos") {
     for (const ext of VIDEO_EXTENSIONS)
       params.append("format", ext.toUpperCase());
   }
 
-  if (props.minScoreFilter != null)
-    params.append("min_score", props.minScoreFilter);
-  if (props.maxScoreFilter != null)
-    params.append("max_score", props.maxScoreFilter);
-  if (props.smartScoreBucketFilter != null)
-    params.append("smart_score_bucket", props.smartScoreBucketFilter);
-  if (props.resolutionBucketFilter != null)
-    params.append("resolution_bucket", props.resolutionBucketFilter);
-  if (props.filePathPrefixFilter != null)
-    params.append("file_path_prefix", props.filePathPrefixFilter);
-  if (props.importSourceFolderFilter != null)
-    params.append("import_source_folder", props.importSourceFolderFilter);
-  (props.tagFilter || []).forEach((t) => params.append("tag", t));
-  (props.tagRejectedFilter || []).forEach((t) =>
+  if (filterStore.minScoreFilter != null)
+    params.append("min_score", filterStore.minScoreFilter);
+  if (filterStore.maxScoreFilter != null)
+    params.append("max_score", filterStore.maxScoreFilter);
+  if (filterStore.smartScoreBucketFilter != null)
+    params.append("smart_score_bucket", filterStore.smartScoreBucketFilter);
+  if (filterStore.resolutionBucketFilter != null)
+    params.append("resolution_bucket", filterStore.resolutionBucketFilter);
+  if (filePathPrefixFilter.value != null)
+    params.append("file_path_prefix", filePathPrefixFilter.value);
+  if (importSourceFolderFilter.value != null)
+    params.append("import_source_folder", importSourceFolderFilter.value);
+  (filterStore.tagFilter || []).forEach((t) => params.append("tag", t));
+  (filterStore.tagRejectedFilter || []).forEach((t) =>
     params.append("rejected_tag", t),
   );
-  if (props.faceBboxFilter != null) {
-    params.append("face_filter", props.faceBboxFilter);
+  if (filterStore.faceBboxFilter != null) {
+    params.append("face_filter", filterStore.faceBboxFilter);
   }
-  (props.tagConfidenceAboveFilter || []).forEach((e) =>
+  (filterStore.tagConfidenceAboveFilter || []).forEach((e) =>
     params.append("tag_confidence_above", e),
   );
-  (props.tagConfidenceBelowFilter || []).forEach((e) =>
+  (filterStore.tagConfidenceBelowFilter || []).forEach((e) =>
     params.append("tag_confidence_below", e),
   );
 
@@ -311,31 +307,14 @@ async function fetchConf() {
   }
 }
 
-// Watch all filter props that affect the picture query
+// Refetch when the query the panel would actually send changes.
+// buildQueryParams() reads every relevant piece of store state, so a computed
+// over it tracks exactly the right dependencies. Unlike the old per-prop
+// watch list, it also doesn't refire when a store write leaves the resulting
+// query string identical.
+const statsQueryParams = computed(() => buildQueryParams());
 watch(
-  [
-    () => props.selectedCharacter,
-    () => props.selectedCharacterIds,
-    () => props.characterMode,
-    () => props.selectedSet,
-    () => props.selectedSetIds,
-    () => props.setMode,
-    () => props.setDifferenceBaseId,
-    () => props.projectViewMode,
-    () => props.selectedProjectId,
-    () => props.tagFilter,
-    () => props.tagRejectedFilter,
-    () => props.mediaTypeFilter,
-    () => props.minScoreFilter,
-    () => props.maxScoreFilter,
-    () => props.smartScoreBucketFilter,
-    () => props.resolutionBucketFilter,
-    () => props.filePathPrefixFilter,
-    () => props.importSourceFolderFilter,
-    () => props.faceBboxFilter,
-    () => props.tagConfidenceAboveFilter,
-    () => props.tagConfidenceBelowFilter,
-  ],
+  statsQueryParams,
   () => {
     statsPenalised.value = null;
     statsPenalisedBoth.value = null;
@@ -364,7 +343,7 @@ watch(
       fetchStatsPenalised();
     if (penalisedOnlyCooc.value === 2) fetchStatsPenalisedBoth();
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 );
 
 // Belt-and-suspenders: if the immediate watch trigger fired before the component
@@ -382,9 +361,9 @@ onMounted(() => {
 // /pictures/stats on every task completion while the sidebar is closed.
 let _wsTagUpdateTimer = null;
 watch(
-  () => props.wsTagUpdate,
+  () => wsStore.wsTagUpdate,
   () => {
-    if (!props.open) return;
+    if (!sidebarStore.statsOpen) return;
     clearTimeout(_wsTagUpdateTimer);
     _wsTagUpdateTimer = setTimeout(() => {
       fetchStats().then(() => {
@@ -426,7 +405,9 @@ function tmRegisterCanvas(key, el) {
   });
   observer.observe(el);
   tmCanvasRefs.set(key, { el, observer });
-  requestAnimationFrame(() => tmDrawSparkline(el, tasksStore.series[key] || []));
+  requestAnimationFrame(() =>
+    tmDrawSparkline(el, tasksStore.series[key] || []),
+  );
 }
 
 function tmGetThemeRgb(name) {
@@ -668,13 +649,13 @@ function barWidth(count) {
 // ─── Penalised filter ─────────────────────────────────────────────────────────
 function isPenalised(tag) {
   return Object.prototype.hasOwnProperty.call(
-    props.penalisedTagWeights,
+    userPrefsStore.penalisedTagWeights,
     String(tag).trim().toLowerCase(),
   );
 }
 
 const hasPenalisedTags = computed(
-  () => Object.keys(props.penalisedTagWeights).length > 0,
+  () => Object.keys(userPrefsStore.penalisedTagWeights).length > 0,
 );
 
 async function fetchStatsPenalised() {
@@ -743,12 +724,14 @@ const COOC_FILTER_TITLES = [
 
 // ─── Histogram helpers ────────────────────────────────────────────────────────────────
 const anomalyTagOptions = computed(() =>
-  Object.keys(props.penalisedTagWeights).sort((a, b) => a.localeCompare(b)),
+  Object.keys(userPrefsStore.penalisedTagWeights).sort((a, b) =>
+    a.localeCompare(b),
+  ),
 );
 const regularTags = computed(() => stats.value?.regular_tags ?? []);
 
 // Active-state helpers
-const tagFilterSet = computed(() => new Set(props.tagFilter || []));
+const tagFilterSet = computed(() => new Set(filterStore.tagFilter || []));
 function isTagActive(tag) {
   return tagFilterSet.value.has(tag);
 }
@@ -769,14 +752,14 @@ function activeTagsInCooc() {
   return [...active];
 }
 function activeConfEntries() {
-  return (props.tagConfidenceAboveFilter || []).filter((e) => {
+  return (filterStore.tagConfidenceAboveFilter || []).filter((e) => {
     if (!selectedConfTag.value) return false;
     return e.startsWith(selectedConfTag.value + ":");
   });
 }
 function isConfEntryActive(bucketIndex) {
   const entry = `${selectedConfTag.value}:${(bucketIndex * 0.2).toFixed(2)}`;
-  return (props.tagConfidenceAboveFilter || []).includes(entry);
+  return (filterStore.tagConfidenceAboveFilter || []).includes(entry);
 }
 
 const confHistBuckets = computed(() => {
@@ -791,21 +774,63 @@ function histBarWidth(count, maxCount) {
   return Math.max(count > 0 ? 2 : 0, (count / maxCount) * 208);
 }
 
+// Tag / confidence filter writes. These used to be emits that App.vue turned
+// into the same store writes; the logic lives here now (Phase 3 store-direct).
+function toggleTagFilter(tag) {
+  if (filterStore.tagFilter.includes(tag))
+    filterStore.tagFilter = filterStore.tagFilter.filter((t) => t !== tag);
+  else filterStore.tagFilter = [...filterStore.tagFilter, tag];
+}
+
+// Toggles a co-occurrence pair as one gesture: active only when every tag of
+// the pair is filtered, so a click adds the missing ones or removes them all.
+function toggleTagsFilter(tags) {
+  const allPresent = tags.every((t) => filterStore.tagFilter.includes(t));
+  if (allPresent)
+    filterStore.tagFilter = filterStore.tagFilter.filter(
+      (t) => !tags.includes(t),
+    );
+  else
+    filterStore.tagFilter = [...new Set([...filterStore.tagFilter, ...tags])];
+}
+
+function toggleConfidenceAboveFilter(entry) {
+  if (filterStore.tagConfidenceAboveFilter.includes(entry))
+    filterStore.tagConfidenceAboveFilter =
+      filterStore.tagConfidenceAboveFilter.filter((e) => e !== entry);
+  else
+    filterStore.tagConfidenceAboveFilter = [
+      ...filterStore.tagConfidenceAboveFilter,
+      entry,
+    ];
+}
+
+function clearTagFilters(tags) {
+  filterStore.tagFilter = filterStore.tagFilter.filter(
+    (t) => !tags.includes(t),
+  );
+}
+
+function clearConfidenceFilters(entries) {
+  filterStore.tagConfidenceAboveFilter =
+    filterStore.tagConfidenceAboveFilter.filter((e) => !entries.includes(e));
+}
+
 function isScoreBarActive(label) {
   const n = parseInt(label);
   if (isNaN(n)) return false;
-  return props.minScoreFilter === n && props.maxScoreFilter === n;
+  return filterStore.minScoreFilter === n && filterStore.maxScoreFilter === n;
 }
 
 function handleScoreBarClick(label) {
   const n = parseInt(label);
   if (isNaN(n)) return;
   if (isScoreBarActive(label)) {
-    emit("update:minScoreFilter", null);
-    emit("update:maxScoreFilter", null);
+    filterStore.minScoreFilter = null;
+    filterStore.maxScoreFilter = null;
   } else {
-    emit("update:minScoreFilter", n);
-    emit("update:maxScoreFilter", n);
+    filterStore.minScoreFilter = n;
+    filterStore.maxScoreFilter = n;
   }
 }
 
@@ -820,16 +845,16 @@ const SMART_SCORE_LABEL_TO_BUCKET = {
 function isSmartScoreBarActive(label) {
   const key = SMART_SCORE_LABEL_TO_BUCKET[label];
   if (!key) return false;
-  return props.smartScoreBucketFilter === key;
+  return filterStore.smartScoreBucketFilter === key;
 }
 
 function handleSmartScoreBarClick(label) {
   const key = SMART_SCORE_LABEL_TO_BUCKET[label];
   if (!key) return;
   if (isSmartScoreBarActive(label)) {
-    emit("update:smartScoreBucketFilter", null);
+    filterStore.smartScoreBucketFilter = null;
   } else {
-    emit("update:smartScoreBucketFilter", key);
+    filterStore.smartScoreBucketFilter = key;
   }
 }
 
@@ -938,9 +963,9 @@ function agreementCellLabel(star, bucket) {
 
 function isAgreementCellActive(star, bucket) {
   return (
-    props.minScoreFilter === star &&
-    props.maxScoreFilter === star &&
-    props.smartScoreBucketFilter === bucket
+    filterStore.minScoreFilter === star &&
+    filterStore.maxScoreFilter === star &&
+    filterStore.smartScoreBucketFilter === bucket
   );
 }
 
@@ -951,9 +976,9 @@ const agreementCellSelected = computed(() =>
 );
 
 function clearAgreementFilter() {
-  emit("update:minScoreFilter", null);
-  emit("update:maxScoreFilter", null);
-  emit("update:smartScoreBucketFilter", null);
+  filterStore.minScoreFilter = null;
+  filterStore.maxScoreFilter = null;
+  filterStore.smartScoreBucketFilter = null;
 }
 
 // A cell click is a compound filter: the row sets the score range, the column
@@ -966,9 +991,9 @@ function onAgreementCellClick(star, bucket, row, col) {
     clearAgreementFilter();
     return;
   }
-  emit("update:minScoreFilter", star);
-  emit("update:maxScoreFilter", star);
-  emit("update:smartScoreBucketFilter", bucket);
+  filterStore.minScoreFilter = star;
+  filterStore.maxScoreFilter = star;
+  filterStore.smartScoreBucketFilter = bucket;
 }
 
 // Roving tabindex: the grid is one tab stop and arrow keys move within it, so 20
@@ -984,7 +1009,9 @@ function agreementTabIndex(row, col) {
 function focusAgreementCell(row, col) {
   agreementFocus.value = { row, col };
   nextTick(() => {
-    const cells = document.querySelectorAll(".agreement-grid [role='gridcell']");
+    const cells = document.querySelectorAll(
+      ".agreement-grid [role='gridcell']",
+    );
     cells[row * AGREEMENT_BUCKETS.length + col]?.focus?.();
   });
 }
@@ -994,9 +1021,11 @@ function onAgreementKeydown(event) {
   const lastRow = AGREEMENT_STARS.length - 1;
   const lastCol = AGREEMENT_BUCKETS.length - 1;
   let next = null;
-  if (event.key === "ArrowRight") next = { row, col: Math.min(lastCol, col + 1) };
+  if (event.key === "ArrowRight")
+    next = { row, col: Math.min(lastCol, col + 1) };
   else if (event.key === "ArrowLeft") next = { row, col: Math.max(0, col - 1) };
-  else if (event.key === "ArrowDown") next = { row: Math.min(lastRow, row + 1), col };
+  else if (event.key === "ArrowDown")
+    next = { row: Math.min(lastRow, row + 1), col };
   else if (event.key === "ArrowUp") next = { row: Math.max(0, row - 1), col };
   else if (event.key === "Home") next = { row, col: 0 };
   else if (event.key === "End") next = { row, col: lastCol };
@@ -1076,22 +1105,22 @@ const RESOLUTION_LABEL_TO_BUCKET = {
 function isResolutionBarActive(label) {
   const key = RESOLUTION_LABEL_TO_BUCKET[label];
   if (!key) return false;
-  return props.resolutionBucketFilter === key;
+  return filterStore.resolutionBucketFilter === key;
 }
 
 function handleResolutionBarClick(label) {
   const key = RESOLUTION_LABEL_TO_BUCKET[label];
   if (!key) return;
   if (isResolutionBarActive(label)) {
-    emit("update:resolutionBucketFilter", null);
+    filterStore.resolutionBucketFilter = null;
   } else {
-    emit("update:resolutionBucketFilter", key);
+    filterStore.resolutionBucketFilter = key;
   }
 }
 
 // Let a caller (e.g. the "View progress" action on the justified-layout
-// regeneration notice) deep-link to the Tasks tab. Opening the panel itself is
-// the parent's job (it owns `statsOpen`); this only selects the tab.
+// regeneration notice) deep-link to the Tasks tab. Opening the panel itself
+// happens via `sidebarStore.statsOpen`; this only selects the tab.
 function focusTasksTab() {
   activeTab.value = "tasks";
 }
@@ -1099,8 +1128,8 @@ defineExpose({ focusTasksTab });
 </script>
 
 <template>
-  <div class="stats-sidebar" :class="{ collapsed: !props.open }">
-    <div v-if="props.open" class="stats-sidebar-content">
+  <div class="stats-sidebar" :class="{ collapsed: !sidebarStore.statsOpen }">
+    <div v-if="sidebarStore.statsOpen" class="stats-sidebar-content">
       <div class="stats-sidebar-header">
         <div class="stats-sidebar-title-row">
           <span class="stats-sidebar-title-text">
@@ -1287,7 +1316,7 @@ defineExpose({ focusTasksTab });
               class="stats-clear-btn"
               type="button"
               title="Clear top-tag filters"
-              @click="emit('clear-tag-filter', activeTagsInTopTags())"
+              @click="clearTagFilters(activeTagsInTopTags())"
             >
               <v-icon size="11">mdi-close</v-icon>
             </button>
@@ -1310,8 +1339,8 @@ defineExpose({ focusTasksTab });
                 :transform="`translate(0, ${i * 18})`"
                 role="button"
                 tabindex="0"
-                @click="emit('filter-tag', item.tag)"
-                @keydown.enter="emit('filter-tag', item.tag)"
+                @click="toggleTagFilter(item.tag)"
+                @keydown.enter="toggleTagFilter(item.tag)"
               >
                 <title>{{ item.tag }}</title>
                 <rect
@@ -1385,7 +1414,7 @@ defineExpose({ focusTasksTab });
               class="stats-clear-btn"
               type="button"
               title="Clear co-occurrence filters"
-              @click="emit('clear-tag-filter', activeTagsInCooc())"
+              @click="clearTagFilters(activeTagsInCooc())"
             >
               <v-icon size="11">mdi-close</v-icon>
             </button>
@@ -1402,8 +1431,8 @@ defineExpose({ focusTasksTab });
               }"
               role="button"
               tabindex="0"
-              @click="emit('filter-tags', item.tags)"
-              @keydown.enter="emit('filter-tags', item.tags)"
+              @click="toggleTagsFilter(item.tags)"
+              @keydown.enter="toggleTagsFilter(item.tags)"
             >
               <span class="cooc-tags">
                 <span :class="{ 'tag-penalised': isPenalised(item.tags[0]) }">{{
@@ -1476,7 +1505,7 @@ defineExpose({ focusTasksTab });
                 class="stats-clear-btn"
                 type="button"
                 title="Clear confidence filters"
-                @click="emit('clear-confidence-filter', activeConfEntries())"
+                @click="clearConfidenceFilters(activeConfEntries())"
               >
                 <v-icon size="11">mdi-close</v-icon>
               </button>
@@ -1508,16 +1537,14 @@ defineExpose({ focusTasksTab });
                 "
                 @click="
                   selectedConfTag && item.count > 0
-                    ? emit(
-                        'filter-confidence-above',
+                    ? toggleConfidenceAboveFilter(
                         `${selectedConfTag}:${(i * 0.2).toFixed(2)}`,
                       )
                     : undefined
                 "
                 @keydown.enter="
                   selectedConfTag && item.count > 0
-                    ? emit(
-                        'filter-confidence-above',
+                    ? toggleConfidenceAboveFilter(
                         `${selectedConfTag}:${(i * 0.2).toFixed(2)}`,
                       )
                     : undefined
@@ -1589,13 +1616,16 @@ defineExpose({ focusTasksTab });
             <div class="stats-section-header">
               <span class="stats-section-title">Score</span>
               <button
-                v-if="minScoreFilter != null || maxScoreFilter != null"
+                v-if="
+                  filterStore.minScoreFilter != null ||
+                  filterStore.maxScoreFilter != null
+                "
                 class="stats-clear-btn"
                 type="button"
                 title="Clear score filter"
                 @click="
-                  emit('update:minScoreFilter', null);
-                  emit('update:maxScoreFilter', null);
+                  filterStore.minScoreFilter = null;
+                  filterStore.maxScoreFilter = null;
                 "
               >
                 <v-icon size="11">mdi-close</v-icon>
@@ -1697,11 +1727,11 @@ defineExpose({ focusTasksTab });
             <div class="stats-section-header">
               <span class="stats-section-title">Smart Score</span>
               <button
-                v-if="smartScoreBucketFilter != null"
+                v-if="filterStore.smartScoreBucketFilter != null"
                 class="stats-clear-btn"
                 type="button"
                 title="Clear smart score filter"
-                @click="emit('update:smartScoreBucketFilter', null)"
+                @click="filterStore.smartScoreBucketFilter = null"
               >
                 <v-icon size="11">mdi-close</v-icon>
               </button>
@@ -1832,7 +1862,10 @@ defineExpose({ focusTasksTab });
               <svg
                 :width="260"
                 :height="
-                  AGREEMENT_ROW_H * 5 + AGREEMENT_HEADER_H + AGREEMENT_AXIS_H + 2
+                  AGREEMENT_ROW_H * 5 +
+                  AGREEMENT_HEADER_H +
+                  AGREEMENT_AXIS_H +
+                  2
                 "
                 class="stats-bar-chart agreement-grid"
                 role="grid"
@@ -1861,7 +1894,9 @@ defineExpose({ focusTasksTab });
                 <text
                   v-for="(bucket, col) in AGREEMENT_BUCKETS"
                   :key="`col-${bucket}`"
-                  :x="AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2"
+                  :x="
+                    AGREEMENT_X0 + col * AGREEMENT_COL_W + AGREEMENT_CELL_W / 2
+                  "
                   y="9"
                   text-anchor="middle"
                   class="hist-label"
@@ -1962,11 +1997,11 @@ defineExpose({ focusTasksTab });
             <div class="stats-section-header">
               <span class="stats-section-title">Resolution</span>
               <button
-                v-if="resolutionBucketFilter != null"
+                v-if="filterStore.resolutionBucketFilter != null"
                 class="stats-clear-btn"
                 type="button"
                 title="Clear resolution filter"
-                @click="emit('update:resolutionBucketFilter', null)"
+                @click="filterStore.resolutionBucketFilter = null"
               >
                 <v-icon size="11">mdi-close</v-icon>
               </button>
@@ -2116,7 +2151,9 @@ defineExpose({ focusTasksTab });
               <div class="tm-worker-row-top">
                 <span
                   class="tm-status-dot"
-                  :class="{ 'tm-status-dot--running': entry.run.status === 'running' }"
+                  :class="{
+                    'tm-status-dot--running': entry.run.status === 'running',
+                  }"
                 ></span>
                 <span class="tm-worker-label">{{ entry.run.label }}</span>
                 <span v-if="entry.run.total > 0" class="tm-worker-progress">

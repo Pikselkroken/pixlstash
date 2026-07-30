@@ -215,6 +215,7 @@ jobs:
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
+          tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_dedup_sweep_api.py
           tests/test_dedup_sweep_service.py
@@ -595,6 +596,7 @@ jobs:
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
+          tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_watch_folder_worker.py
           tests/test_work_planner.py
