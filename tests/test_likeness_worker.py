@@ -210,6 +210,14 @@ def test_write_blob_updates_skips_hard_deleted_pictures():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server-config.json")
         with Server(server_config_path) as server:
+            # Stop the background WorkPlanner BEFORE seeding: otherwise it finds
+            # the freshly seeded rows and runs a QualityTask, whose
+            # QualityUtils.update_quality deliberately resets
+            # likeness_parameters/size_bin_index to NULL for every picture it
+            # writes quality for. That clobbers the write under test and makes
+            # the assertion below flaky. Seeding after the stop means no finder
+            # ever sees these rows.
+            server.vault._work_planner.stop()
 
             def _seed(session):
                 rows = [

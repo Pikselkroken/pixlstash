@@ -6,10 +6,7 @@ import os
 from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tagger_plugins.florence2 import (
-    FLORENCE_BASE_VRAM_MB,
-    FLORENCE_PER_IMAGE_VRAM_MB,
-)
+from pixlstash.tagger_plugins.florence2 import FLORENCE_PER_IMAGE_VRAM_MB
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 if TYPE_CHECKING:
@@ -155,7 +152,7 @@ class DescriptionWorkflow:
         if not pictures:
             return {}
 
-        self._engine.lifecycle.ensure_captioning_ready(self._engine.florence_service)
+        self._engine.ensure_captioning_ready()
 
         results: dict[int, str | None] = {}
         batch_items: list[tuple[int, str]] = []
@@ -192,7 +189,9 @@ class DescriptionWorkflow:
 
         When Florence is already resident in GPU memory only the per-image
         activation scratch is charged, avoiding a false-positive VRAM gate
-        stall on warm runs.
+        stall on warm runs. The cold-start charge follows the *configured*
+        checkpoint (``base`` ~900 MB, ``large-ft`` ~2.6 GB, issue #512) — a
+        constant pinned to base would under-count and spill on large-ft.
 
         Args:
             image_count: Number of images to be captioned.
@@ -202,10 +201,12 @@ class DescriptionWorkflow:
         """
         if self._engine.device != "cuda":
             return 0
-        florence_batch = max(
-            1, int(self._engine.florence_service.description_batch_size())
-        )
+        service = self._engine.florence_service
+        # The gate runs before the load, so charge the variant that is about to
+        # be loaded, not whichever one happens to be resident.
+        service.set_model_variant(self._engine.florence_model_variant)
+        florence_batch = max(1, int(service.description_batch_size()))
         batch = min(max(1, int(image_count or 1)), florence_batch)
-        if self._engine.florence_service.is_loaded():
+        if service.is_loaded():
             return int(FLORENCE_PER_IMAGE_VRAM_MB * batch)
-        return int(FLORENCE_BASE_VRAM_MB + FLORENCE_PER_IMAGE_VRAM_MB * batch)
+        return int(service.base_vram_mb + FLORENCE_PER_IMAGE_VRAM_MB * batch)

@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
+  // Same shape as the real helper: the header only exists when the caller is
+  // part of a gesture, so an ordinary call still sends no config at all.
+  operationBatchHeaders: (batchId) =>
+    batchId ? { headers: { "X-Operation-Batch-Id": batchId } } : undefined,
 }));
 
 import { apiClient } from "../utils/apiClient";
@@ -52,7 +56,10 @@ describe("api/tags", () => {
   it("removePictureTag addresses the tag by id", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
     await removePictureTag(42, 7);
-    expect(apiClient.delete).toHaveBeenCalledWith("/pictures/42/tags/7");
+    expect(apiClient.delete).toHaveBeenCalledWith(
+      "/pictures/42/tags/7",
+      undefined,
+    );
   });
 
   it("bulkFetchTags POSTs the picture ids", async () => {
@@ -71,6 +78,7 @@ describe("api/tags", () => {
     expect(apiClient.post).toHaveBeenCalledWith(
       "/pictures/42/tags/remove_all",
       { tag: "hat" },
+      undefined,
     );
   });
 
@@ -95,6 +103,8 @@ describe("api/tags", () => {
     await confirmTagPrediction(42, "red car");
     expect(apiClient.post).toHaveBeenCalledWith(
       "/pictures/42/tag_predictions/red%20car/confirm",
+      undefined,
+      undefined,
     );
   });
 
@@ -103,6 +113,44 @@ describe("api/tags", () => {
     await rejectTagPrediction(42, "red/car");
     expect(apiClient.post).toHaveBeenCalledWith(
       "/pictures/42/tag_predictions/red%2Fcar/reject",
+      undefined,
+      undefined,
+    );
+  });
+
+  // One gesture, one undo step: every request of a compound gesture carries the
+  // same X-Operation-Batch-Id, which the backend stores as the operations'
+  // batch_id (docs/backend_architecture.md §21.2).
+  it("puts the gesture batch id on the header of every tag mutation", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    apiClient.delete.mockResolvedValue({ data: {} });
+    const config = { headers: { "X-Operation-Batch-Id": "cli-gesture-1" } };
+
+    await removeTagEverywhere(42, "hat", { batchId: "cli-gesture-1" });
+    expect(apiClient.post).toHaveBeenLastCalledWith(
+      "/pictures/42/tags/remove_all",
+      { tag: "hat" },
+      config,
+    );
+
+    await rejectTagPrediction(42, "hat", { batchId: "cli-gesture-1" });
+    expect(apiClient.post).toHaveBeenLastCalledWith(
+      "/pictures/42/tag_predictions/hat/reject",
+      undefined,
+      config,
+    );
+
+    await confirmTagPrediction(42, "hat", { batchId: "cli-gesture-1" });
+    expect(apiClient.post).toHaveBeenLastCalledWith(
+      "/pictures/42/tag_predictions/hat/confirm",
+      undefined,
+      config,
+    );
+
+    await removePictureTag(42, 7, { batchId: "cli-gesture-1" });
+    expect(apiClient.delete).toHaveBeenLastCalledWith(
+      "/pictures/42/tags/7",
+      config,
     );
   });
 });

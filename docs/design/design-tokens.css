@@ -142,6 +142,12 @@
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
 
+  /* The countdown drain hairline on a self-dismissing transient surface: the
+     action receipt today, and the notice card is the obvious second consumer.
+     It is a rendered height rather than padding, so it cannot borrow from the
+     spacing scale; naming it is what stops the next surface picking 3px. */
+  --countdown-h: 2px;
+
   /* Contextual action bar / toolbar band — the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,
      overlay top bar). One height so these bands align. Desktop chrome compresses

@@ -9,6 +9,7 @@
     ]"
     :disabled="disabled"
     :title="title"
+    :aria-keyshortcuts="keyShortcut"
   >
     <v-icon
       v-if="iconLeft"
@@ -18,13 +19,17 @@
       mdi-{{ iconLeft }}
     </v-icon>
     <span v-if="!iconOnly" class="app-btn__label"><slot /></span>
+    <kbd v-if="keyHint" class="app-btn__key" aria-hidden="true">{{
+      keyLabel
+    }}</kbd>
   </button>
 </template>
 
 <script setup>
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-defineProps({
+const props = defineProps({
   // primary (amber accent) | primary_green (olive) | secondary (neutral) |
   // danger (error) | ghost (transparent)
   variant: { type: String, default: "secondary" },
@@ -33,7 +38,30 @@ defineProps({
   iconOnly: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   title: { type: String, default: "" },
+  // The visible shortcut affordance from the dialog keyboard contract:
+  // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
+  // the dedup Keep separate) wears its own uppercase label. A shortcut shown
+  // next to the action it triggers is the only kind anyone discovers.
+  keyHint: { type: String, default: "" },
 });
+
+const keyLabel = computed(() =>
+  props.keyHint === "enter"
+    ? "↵"
+    : props.keyHint === "esc"
+      ? "Esc"
+      : props.keyHint.toUpperCase(),
+);
+
+const keyShortcut = computed(() =>
+  props.keyHint === "enter"
+    ? "Enter"
+    : props.keyHint === "esc"
+      ? "Escape"
+      : props.keyHint
+        ? props.keyHint.toUpperCase()
+        : undefined,
+);
 </script>
 
 <style scoped>
@@ -136,5 +164,18 @@ defineProps({
 
 .app-btn__icon {
   flex-shrink: 0;
+}
+
+/* The key-hint badge. currentColor keeps it legible on every variant fill;
+   the reduced opacity keeps it a hint rather than a second label. */
+.app-btn__key {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  opacity: 0.55;
 }
 </style>

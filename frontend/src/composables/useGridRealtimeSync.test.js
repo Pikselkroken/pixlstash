@@ -758,3 +758,147 @@ describe("useGridRealtimeSync — coalescing window", () => {
     expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// change_kind: "restored" — a scrapheap comeback is not an import
+// ---------------------------------------------------------------------------
+//
+// A picture coming back out of the Scrapheap puts a card back, exactly as an
+// import does, and for a while both said `added`. The difference the SPA acts
+// on is that `added` means NEW TO THE VAULT: the sidebar answers it with its
+// NEW marker and the grid answers it with the new-picture flash. Neither is
+// true of a picture that has been in the library the whole time, which is why
+// `restored` is a kind of its own.
+
+describe("useGridRealtimeSync — restored (scrapheap comeback)", () => {
+  function restored(overrides = {}) {
+    return {
+      type: "pictures_changed",
+      source: "ui",
+      change_kind: "restored",
+      picture_ids: [3, 4],
+      ...overrides,
+    };
+  }
+
+  it("reinserts on this tab's OWN undo instead of suppressing the echo", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    // The bug this fixes: suppressed as "my own optimistic op already did it",
+    // when nothing local had. The grid kept showing the pre-undo state.
+    expect(res.action).toBe("targeted");
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([3, 4], {
+      highlight: false,
+    });
+    expect(h.grid.removeImagesById).not.toHaveBeenCalled();
+  });
+
+  it("reinserts without the new-picture flash — it is a comeback, not an arrival", () => {
+    const h = makeHarness();
+    h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    const [, options] = h.grid.insertGridImagesById.mock.calls[0];
+    expect(options).toEqual({ highlight: false });
+
+    // …whereas a genuine import still flashes (no options at all).
+    h.grid.insertGridImagesById.mockClear();
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+    });
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([9]);
+  });
+
+  it("refreshes the sidebar WITHOUT raising its NEW marker", () => {
+    const h = makeHarness();
+    h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    // The counts really did change (All Pictures up, Scrapheap down), so the
+    // sidebar must re-read — it just must not call it new.
+    expect(h.refreshSidebar).toHaveBeenCalledWith(false);
+
+    h.refreshSidebar.mockClear();
+    h.sync.handleMessage({
+      type: "picture_imported",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+    });
+    expect(h.refreshSidebar).toHaveBeenCalledWith(true);
+  });
+
+  it("applies another owner tab's restore in place", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(restored({ origin_client_id: OTHER_ID }));
+    expect(res.action).toBe("targeted");
+    expect(h.grid.insertGridImagesById).toHaveBeenCalledWith([3, 4], {
+      highlight: false,
+    });
+  });
+
+  it("raises the view-changed pill for an external restore, never the new-pictures one", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(
+      restored({ source: "external", origin_client_id: null }),
+    );
+    expect(res.action).toBe("pill");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([3, 4]);
+    // "↑ 2 new pictures, click to load" would be a lie about these pictures.
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("reloads when a restore-all names no ids", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage(
+      restored({ origin_client_id: MY_ID, picture_ids: [] }),
+    );
+    // `POST /pictures/scrapheap/restore` with no subset broadcasts an empty id
+    // list; a per-id insert would silently do nothing.
+    expect(res.action).toBe("reload");
+    expect(h.reload).toHaveBeenCalled();
+  });
+
+  it("defers under an open overlay rather than restructuring the filmstrip", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    expect(res.action).toBe("targeted");
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalled();
+    expect(h.grid.insertGridImagesById).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the view-changed pill while a streaming fetch owns the grid", () => {
+    const h = makeHarness();
+    h.grid.isImagesLoading.mockReturnValue(true);
+    const res = h.sync.handleMessage(restored({ origin_client_id: MY_ID }));
+    expect(res.action).toBe("pill");
+    expect(h.wsStore.addSortChangedExternalIds).toHaveBeenCalledWith([3, 4]);
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+  });
+
+  it("still treats a re-scrapheap on redo as a removal", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "removed",
+      picture_ids: [3, 4],
+    });
+    expect(res.action).toBe("targeted");
+    expect(h.grid.removeImagesById).toHaveBeenCalledWith([3, 4]);
+  });
+
+  it("degrades an unknown kind to updated, exactly as before", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      change_kind: "resurrected",
+      fields: ["tags"],
+      picture_ids: [3],
+    });
+    expect(res.reason).toBe("foreign-ui-updated");
+  });
+});

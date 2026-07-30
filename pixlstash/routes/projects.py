@@ -20,15 +20,23 @@ from pixlstash.authz.membership import enforce_project_scope
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Tag,
+    character_in_project,
+    picture_set_in_project,
 )
 from pixlstash.db_models.project import Project, ProjectAttachment
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.project_membership_service import (
+    character_project_ids,
+    picture_set_project_ids,
+)
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
@@ -333,7 +341,7 @@ def create_router(server) -> APIRouter:
             _require_scope_allows_project(request, project.id)
             sets = session.exec(
                 select(PictureSet)
-                .where(PictureSet.project_id == project.id)
+                .where(picture_set_in_project(project.id))
                 .order_by(PictureSet.name)
             ).all()
             return [
@@ -450,30 +458,58 @@ def create_router(server) -> APIRouter:
             # Collect attachment paths before cascade-delete removes the rows.
             attachment_paths = [a.stored_path for a in project.attachments]
 
-            # Null out project_id on characters and picture sets.
-            for character in session.exec(
-                select(Character).where(Character.project_id == pid)
-            ).all():
-                character.project_id = None
+            # Drop the project from every character / picture set that belongs to
+            # it, then re-derive each entity's primary-project pointer from the
+            # memberships that survive (issue #125: an entity may be in several
+            # projects, so losing one does not necessarily unassign it).
+            affected_characters = session.exec(
+                select(Character).where(character_in_project(pid))
+            ).all()
+            affected_sets = session.exec(
+                select(PictureSet).where(picture_set_in_project(pid))
+            ).all()
+
+            session.exec(
+                delete(CharacterProjectMember).where(
+                    CharacterProjectMember.project_id == pid
+                )
+            )
+            session.exec(
+                delete(PictureSetProjectMember).where(
+                    PictureSetProjectMember.project_id == pid
+                )
+            )
+            session.flush()
+
+            for character in affected_characters:
+                remaining = character_project_ids(session, int(character.id))
+                character.project_id = remaining[0] if remaining else None
                 session.add(character)
 
-            for picture_set in session.exec(
-                select(PictureSet).where(PictureSet.project_id == pid)
-            ).all():
-                picture_set.project_id = None
+            for picture_set in affected_sets:
+                remaining = picture_set_project_ids(session, int(picture_set.id))
+                picture_set.project_id = remaining[0] if remaining else None
                 session.add(picture_set)
-
-            for picture in session.exec(
-                select(Picture).where(Picture.project_id == pid)
-            ).all():
-                picture.project_id = None
-                session.add(picture)
 
             session.exec(
                 delete(PictureProjectMember).where(
                     PictureProjectMember.project_id == pid
                 )
             )
+            session.flush()
+
+            for picture in session.exec(
+                select(Picture).where(Picture.project_id == pid)
+            ).all():
+                # The picture's own memberships are gone for this project; fall
+                # back to any project it still belongs to, mirroring the
+                # reconciliation service's repoint rule.
+                picture.project_id = session.exec(
+                    select(PictureProjectMember.project_id)
+                    .where(PictureProjectMember.picture_id == picture.id)
+                    .order_by(PictureProjectMember.project_id.asc())
+                ).first()
+                session.add(picture)
 
             session.delete(project)  # cascade-deletes ProjectAttachment rows
             session.commit()
@@ -675,13 +711,13 @@ def create_router(server) -> APIRouter:
             characters_data = [
                 {"id": c.id, "name": c.name, "description": c.description}
                 for c in session.exec(
-                    select(Character).where(Character.project_id == pid)
+                    select(Character).where(character_in_project(pid))
                 ).all()
             ]
             picture_sets_data = [
                 {"id": s.id, "name": s.name, "description": s.description}
                 for s in session.exec(
-                    select(PictureSet).where(PictureSet.project_id == pid)
+                    select(PictureSet).where(picture_set_in_project(pid))
                 ).all()
             ]
             attachments_data = [

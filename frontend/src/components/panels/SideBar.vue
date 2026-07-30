@@ -73,6 +73,7 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
+import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
@@ -95,12 +96,17 @@ function noticeDetail(e) {
 // bar, so the sidebar copies below are gated on !isDesktop.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
+const dedupStore = useDedupStore();
+
 const props = defineProps({
   docked: { type: Boolean, default: false },
   selectedCharacter: { type: [String, Number, null], default: null },
   allPicturesId: { type: String, required: true },
   unassignedPicturesId: { type: String, required: true },
   scrapheapPicturesId: { type: String, required: true },
+  // The Duplicates destination is addressed by route, not by a selection
+  // sentinel, so its active state arrives as its own flag.
+  isDuplicatesView: { type: Boolean, default: false },
   selectedSet: { type: [Number, null], default: null },
   selectedSetIds: { type: Array, default: () => [] },
   selectedCharacterIds: { type: Array, default: () => [] },
@@ -127,6 +133,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  "select-duplicates",
   "select-character",
   "update:selected-sort",
   "update:search-query",
@@ -146,6 +153,7 @@ const emit = defineEmits([
   "update:theme-mode",
   "update:thumbnail-mode",
   "empty-scrapheap",
+  "suggest-pictures-for-character",
   "update:sort-options",
   "update:hidden-tags",
   "update:apply-tag-filter",
@@ -1473,7 +1481,7 @@ const setsCollapsed = computed(() => {
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
   if (!setCount || dockedScrollHeight.value === 0) return false;
-  const fixedH = 2 * h + _DOCK_DIV; // allPictures + scrapheap + divider after allPictures
+  const fixedH = 3 * h + _DOCK_DIV; // allPictures + duplicates + scrapheap + divider after allPictures
   const charH = (charCount + _addBtn.value) * h; // always include [+] row when editable
   const setDividerH = _DOCK_DIV;
   const allSetsH = (setCount + _addBtn.value) * h;
@@ -1486,7 +1494,7 @@ const charsCollapsed = computed(() => {
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
   if (!charCount || dockedScrollHeight.value === 0) return false;
-  const fixedH = 2 * h + _DOCK_DIV;
+  const fixedH = 3 * h + _DOCK_DIV; // allPictures + duplicates + scrapheap + divider
   const charH = (charCount + _addBtn.value) * h;
   const setDividerH = setCount > 0 ? _DOCK_DIV : 0;
   const collapsedSetH = setCount > 0 ? h : 0; // sets become 1 button
@@ -1987,9 +1995,75 @@ async function deleteImportFolderById(id) {
   }
 }
 
+/** Context-menu target types that can be scoped for a duplicate scan. */
+const DEDUP_SCOPE_TYPES = {
+  character: { scope: "character", icon: "mdi-account-box-outline", noun: "for" },
+  set: { scope: "set", icon: "mdi-folder-multiple-image", noun: "in this set" },
+  project: { scope: "project", icon: "mdi-briefcase-outline", noun: "in this project" },
+  folder: { scope: "folder", icon: "mdi-folder-outline", noun: "in this folder" },
+};
+
+/**
+ * Fetch the duplicate count for the object a context menu just opened on.
+ *
+ * Fire and forget: the row renders a placeholder until the number lands, which
+ * is the honest state, and a failed read leaves the row reading "Find
+ * duplicates" without a count rather than a wrong zero.
+ *
+ * @param {string} type - the context-menu target type.
+ * @param {Object} item - the target object.
+ */
+function primeDuplicateCount(type, item) {
+  if (isReadOnly.value) return;
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return;
+  dedupStore.fetchScopeCount(spec.scope, item.id);
+}
+
+/**
+ * The known duplicate count for one scope, or null while it is still unknown.
+ * @param {string} type
+ * @param {Object} item
+ * @returns {number|null}
+ */
+function duplicateCountFor(type, item) {
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return null;
+  const value = dedupStore.scopeCounts[scopeKey(spec.scope, item.id)];
+  return value === undefined ? null : value;
+}
+
+/**
+ * Open the duplicate queue scoped to the object the menu was opened on.
+ *
+ * Closes the menu first and acts afterwards, so the menu's own teardown cannot
+ * race the navigation for focus.
+ *
+ * @param {string} type
+ * @param {Object} item
+ */
+function findDuplicatesIn(type, item) {
+  const spec = DEDUP_SCOPE_TYPES[type];
+  if (!spec || !item?.id) return;
+  closeSidebarCtxMenu();
+  nextTick(() => {
+    emit("select-duplicates", {
+      type: spec.scope,
+      id: item.id,
+      label: item.name || item.label || "",
+      icon: spec.icon,
+    });
+  });
+}
+
 function openSidebarCtxMenu(type, item, event) {
   if (isReadOnly.value && (type === "folder" || type === "import-folder"))
     return;
+  // Warm the duplicate count for the object under the cursor, so the menu's
+  // "Find duplicates in..." row can carry a number rather than open a queue
+  // that turns out to be empty. A scoped count reuses cached hashes and is
+  // cheap; the store also de-duplicates repeat opens on the same object.
+  primeDuplicateCount(type, item);
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
@@ -2128,6 +2202,20 @@ function emptyScrapheapFromCtx() {
   closeSidebarCtxMenu();
   selectCharacter(props.scrapheapPicturesId, "Scrapheap");
   emit("empty-scrapheap");
+}
+
+// "Suggest more pictures of <person>" (#636): ranks the whole library against
+// this person's reference faces so their un-tagged pictures can be assigned in
+// one action. Deliberately does NOT select the person first — the search spans
+// the library, and narrowing the view to what is already assigned would hide
+// every result it is meant to find.
+function suggestPicturesForCharacterFromCtx(character) {
+  if (!character?.id) return;
+  closeSidebarCtxMenu();
+  emit("suggest-pictures-for-character", {
+    id: character.id,
+    name: character.name,
+  });
 }
 
 function openSetCtxIconMenu(event) {
@@ -2323,8 +2411,20 @@ function isCountSelected(id) {
   return props.selectedCharacter === id;
 }
 
+/**
+ * Whether a selection-driven row may render as active at all. The Duplicates
+ * view is addressed by ROUTE, not by the selection system, so while it is open
+ * the underlying selection (kept so back-navigation restores it) must yield
+ * the highlight — otherwise the sidebar shows two active destinations. A live
+ * folder filter suppresses the same rows for the same reason, so the two
+ * guards travel together.
+ */
+const selectionOwnsHighlight = computed(
+  () => !props.hasFolderFilter && !props.isDuplicatesView,
+);
+
 const isAllPicturesRowActive = computed(() => {
-  if (props.hasFolderFilter) return false;
+  if (!selectionOwnsHighlight.value) return false;
   if (props.selectedCharacter !== props.allPicturesId) return false;
   if (selectedSetIdSet.value.size > 0) return false;
   return true;
@@ -4063,7 +4163,8 @@ defineExpose({
               :class="{
                 active:
                   sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'rf-' + rf.id,
+                  selectedFolderKey === 'rf-' + rf.id &&
+                  !props.isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4094,7 +4195,8 @@ defineExpose({
               :class="{
                 active:
                   sidebarPrimaryTab === 'folders' &&
-                  selectedFolderKey === 'if-' + imf.id,
+                  selectedFolderKey === 'if-' + imf.id &&
+                  !props.isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4214,7 +4316,7 @@ defineExpose({
                 {
                   active:
                     props.selectedCharacter === char.id &&
-                    !props.hasFolderFilter,
+                    selectionOwnsHighlight,
                 },
               ]"
             >
@@ -4224,7 +4326,7 @@ defineExpose({
                   {
                     active:
                       props.selectedCharacter === char.id &&
-                      !props.hasFolderFilter,
+                      selectionOwnsHighlight,
                   },
                 ]"
                 :title="`${char.name || 'Character'} (Ctrl/Cmd + click to multi-select)`"
@@ -4294,7 +4396,7 @@ defineExpose({
               'sidebar-collapsed-row--has-flyout',
               {
                 active:
-                  selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
+                  selectedCharacterIdSet.size > 0 && selectionOwnsHighlight,
               },
             ]"
           >
@@ -4304,7 +4406,7 @@ defineExpose({
                 'sidebar-collapsed-item--has-flyout',
                 {
                   active:
-                    selectedCharacterIdSet.size > 0 && !props.hasFolderFilter,
+                    selectedCharacterIdSet.size > 0 && selectionOwnsHighlight,
                 },
               ]"
               :title="
@@ -4365,7 +4467,7 @@ defineExpose({
                     {
                       active:
                         props.selectedCharacter === char.id &&
-                        !props.hasFolderFilter,
+                        selectionOwnsHighlight,
                     },
                   ]"
                   @click="
@@ -4433,7 +4535,7 @@ defineExpose({
                 'sidebar-collapsed-row',
                 {
                   active:
-                    selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                    selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                 },
               ]"
             >
@@ -4442,7 +4544,7 @@ defineExpose({
                   'sidebar-collapsed-item',
                   {
                     active:
-                      selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                      selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                   },
                 ]"
                 :title="pset.name || 'Picture Set'"
@@ -4529,7 +4631,7 @@ defineExpose({
             :class="[
               'sidebar-collapsed-row',
               'sidebar-collapsed-row--has-flyout',
-              { active: selectedSetIdSet.size > 0 && !props.hasFolderFilter },
+              { active: selectedSetIdSet.size > 0 && selectionOwnsHighlight },
             ]"
           >
             <div
@@ -4537,7 +4639,7 @@ defineExpose({
                 'sidebar-collapsed-item',
                 'sidebar-collapsed-item--has-flyout',
                 {
-                  active: selectedSetIdSet.size > 0 && !props.hasFolderFilter,
+                  active: selectedSetIdSet.size > 0 && selectionOwnsHighlight,
                 },
               ]"
               :title="selectedSetObj ? selectedSetObj.name : 'Picture Sets'"
@@ -4619,7 +4721,7 @@ defineExpose({
                     'sidebar-collapsed-flyout-item',
                     {
                       active:
-                        selectedSetIdSet.has(pset.id) && !props.hasFolderFilter,
+                        selectedSetIdSet.has(pset.id) && selectionOwnsHighlight,
                     },
                   ]"
                   @click="
@@ -4685,6 +4787,30 @@ defineExpose({
             </div>
           </Teleport>
 
+          <!-- Duplicates keeps its dock row so the count stays reachable when
+               the sidebar is narrow; the badge is the only thing here that
+               reports pending work. -->
+          <div
+            v-if="!isReadOnly"
+            :class="['sidebar-collapsed-row', { active: props.isDuplicatesView }]"
+          >
+            <div
+              :class="[
+                'sidebar-collapsed-item',
+                { active: props.isDuplicatesView },
+              ]"
+              title="Duplicates"
+              @click="emit('select-duplicates', {})"
+            >
+              <v-icon>mdi-content-duplicate</v-icon>
+              <span
+                v-if="dedupStore.hasDuplicates"
+                class="sidebar-collapsed-dedup-badge"
+                title="There are duplicates to review"
+              ></span>
+            </div>
+          </div>
+
           <!-- Scrap Heap at bottom of dock. The flex spacer above it fills most
                of the dock's blank space; its right-clicks bubble to the list's
                catch-all handler, so it needs no handler of its own. -->
@@ -4696,7 +4822,7 @@ defineExpose({
               {
                 active:
                   props.selectedCharacter === props.scrapheapPicturesId &&
-                  !props.hasFolderFilter,
+                  selectionOwnsHighlight,
               },
             ]"
           >
@@ -4707,7 +4833,7 @@ defineExpose({
                 {
                   active:
                     props.selectedCharacter === props.scrapheapPicturesId &&
-                    !props.hasFolderFilter,
+                    selectionOwnsHighlight,
                 },
               ]"
               title="Scrapheap"
@@ -5096,6 +5222,42 @@ defineExpose({
               </div>
             </div>
 
+            <!-- Duplicates earns a sidebar row because it is the one thing
+                 here with a to-do count: the number goes down as the user
+                 works, which is what a destination is for. Stacked and
+                 unstacked stay a filter. -->
+            <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
+              <div
+                :class="[
+                  'sidebar-list-item',
+                  { active: props.isDuplicatesView },
+                ]"
+                @click="emit('select-duplicates', {})"
+              >
+                <span class="sidebar-list-icon sidebar-list-icon--toplevel"
+                  ><v-icon size="18">mdi-content-duplicate</v-icon></span
+                >
+                <span class="sidebar-list-label">Duplicates</span>
+                <span
+                  v-if="dedupStore.isScanning"
+                  class="sidebar-dedup-scanning"
+                  title="Still looking for duplicates. Groups appear as they are found."
+                >
+                  <v-progress-circular indeterminate size="10" width="1.5" />
+                </span>
+                <!-- A presence DOT, not a count (owner call, 2026-07-29): the
+                     group count moves with the tier gate and the threshold,
+                     so it read as churn. The dot only says "there are
+                     duplicates to review"; the queue's own header carries the
+                     numbers. -->
+                <span
+                  v-if="dedupStore.hasDuplicates"
+                  class="sidebar-dedup-dot"
+                  title="There are duplicates to review"
+                ></span>
+              </div>
+            </div>
+
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
               <div
                 :class="[
@@ -5103,7 +5265,7 @@ defineExpose({
                   {
                     active:
                       props.selectedCharacter === props.scrapheapPicturesId &&
-                      !props.hasFolderFilter,
+                      selectionOwnsHighlight,
                   },
                 ]"
                 @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
@@ -5225,7 +5387,7 @@ defineExpose({
                           (selectedCharacterIdSet.size > 0
                             ? selectedCharacterIdSet.has(char.id)
                             : selectedCharacter === char.id) &&
-                          !props.hasFolderFilter,
+                          selectionOwnsHighlight,
                         droppable: dragOverCharacter === char.id,
                       },
                     ]"
@@ -5372,7 +5534,7 @@ defineExpose({
                       {
                         active:
                           selectedSetIdSet.has(pset.id) &&
-                          !props.hasFolderFilter,
+                          selectionOwnsHighlight,
                         droppable: dragOverSet === pset.id,
                       },
                     ]"
@@ -5504,7 +5666,7 @@ defineExpose({
                         props.externalSelectedProjectId === p.id &&
                         props.selectedCharacter === props.allPicturesId &&
                         selectedSetIdSet.size === 0 &&
-                        !props.hasFolderFilter,
+                        selectionOwnsHighlight,
                       droppable: dragOverProjectId === p.id,
                       'project-move-target': moveDragOverProjectId === p.id,
                     },
@@ -5701,7 +5863,7 @@ defineExpose({
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
                                 : selectedCharacter === char.id) &&
-                              !props.hasFolderFilter,
+                              selectionOwnsHighlight,
                             droppable: dragOverCharacter === char.id,
                           },
                         ]"
@@ -5908,7 +6070,7 @@ defineExpose({
                           {
                             active:
                               selectedSetIdSet.has(pset.id) &&
-                              !props.hasFolderFilter,
+                              selectionOwnsHighlight,
                             droppable: dragOverSet === pset.id,
                           },
                         ]"
@@ -6097,6 +6259,40 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxCharacter">
         <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :title="`Rank the library against ${sidebarCtxCharacter.name}'s reference faces to find their un-tagged pictures`"
+          @click="suggestPicturesForCharacterFromCtx(sidebarCtxCharacter)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">mdi-account-search</v-icon>
+          <span class="sidebar-ctx-label"
+            >Suggest more pictures of {{ sidebarCtxCharacter.name }}</span
+          >
+        </button>
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :disabled="duplicateCountFor('character', sidebarCtxCharacter) === 0"
+          @click="findDuplicatesIn('character', sidebarCtxCharacter)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor('character', sidebarCtxCharacter) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor('character', sidebarCtxCharacter) === 0
+              ? "No duplicates for this person"
+              : "Find duplicates for this person"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('character', sidebarCtxCharacter)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor('character', sidebarCtxCharacter) }}</span
+          >
+        </button>
+        <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
+        <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"
           @click="
@@ -6166,6 +6362,29 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :disabled="duplicateCountFor('set', sidebarCtxSet) === 0"
+          @click="findDuplicatesIn('set', sidebarCtxSet)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor('set', sidebarCtxSet) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor('set', sidebarCtxSet) === 0
+              ? "No duplicates in this set"
+              : "Find duplicates in this set"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('set', sidebarCtxSet)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor('set', sidebarCtxSet) }}</span
+          >
+        </button>
+        <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
         <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"
@@ -6366,6 +6585,29 @@ defineExpose({
       </template>
       <template v-if="sidebarCtxProject">
         <button
+          v-if="!isReadOnly"
+          class="sidebar-ctx-item"
+          :disabled="duplicateCountFor('project', sidebarCtxProject) === 0"
+          @click="findDuplicatesIn('project', sidebarCtxProject)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor('project', sidebarCtxProject) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor('project', sidebarCtxProject) === 0
+              ? "No duplicates in this project"
+              : "Find duplicates in this project"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('project', sidebarCtxProject)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor('project', sidebarCtxProject) }}</span
+          >
+        </button>
+        <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
+        <button
           class="sidebar-ctx-item"
           :disabled="isReadOnly"
           @click="
@@ -6437,6 +6679,29 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxFolder && !isReadOnly">
+        <button
+          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-item"
+          :disabled="duplicateCountFor('folder', sidebarCtxFolder) === 0"
+          @click="findDuplicatesIn('folder', sidebarCtxFolder)"
+        >
+          <v-icon size="15" class="sidebar-ctx-icon">{{
+            duplicateCountFor('folder', sidebarCtxFolder) === 0
+              ? "mdi-check"
+              : "mdi-content-duplicate"
+          }}</v-icon>
+          <span class="sidebar-ctx-label">{{
+            duplicateCountFor('folder', sidebarCtxFolder) === 0
+              ? "No duplicates in this folder"
+              : "Find duplicates in this folder"
+          }}</span>
+          <span
+            v-if="duplicateCountFor('folder', sidebarCtxFolder)"
+            class="sidebar-ctx-count"
+            >{{ duplicateCountFor('folder', sidebarCtxFolder) }}</span
+          >
+        </button>
+        <div v-if="!isReadOnly && !sidebarCtxFolderScopePath" class="sidebar-ctx-divider"></div>
         <button
           v-if="!inDocker && !sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
@@ -7590,11 +7855,20 @@ defineExpose({
   object-fit: contain;
 }
 
+/* The brand row is the browser shell's top band, so it takes the band's height
+   and the columns line up: its bottom edge is the toolbar's bottom edge, and
+   the tab row below it starts where the grid does. MUST stay in sync with the
+   toolbar height (`.selection-bar-overlay` in Toolbar.vue) — the same pairing
+   `html.is-desktop .sidebar-view-header` already states in style.css.
+   `min-height`, not `height`: the "new version available" line flows under the
+   wordmark and must be allowed to grow the row rather than be clipped. */
 .sidebar-brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-1);
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0 var(--space-2) 0 var(--space-1);
   background: transparent;
 }
 
@@ -7602,12 +7876,14 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  padding: 0 var(--space-1) 0 var(--space-3);
 }
 
 .sidebar-brand-logo {
-  width: 40px;
-  height: 40px;
+  /* Sized to the band, not to itself: at 40px the mark alone was taller than
+     the whole strip it sits in. */
+  width: 28px;
+  height: 28px;
   object-fit: contain;
   transition:
     filter 0.2s ease,
@@ -8417,6 +8693,56 @@ defineExpose({
   word-break: break-word;
 }
 
+/* The scan spinner sits between the label and the count so the count never
+   moves when a scan starts: a number that jumps is a number people stop
+   trusting. */
+/* Separates the duplicate entry from the object's own actions. It is a
+   different kind of thing: everything above edits or shares the object, this
+   opens a task about it. */
+.sidebar-ctx-divider {
+  height: 1px;
+  margin: var(--space-2) var(--space-3);
+  background: rgb(var(--v-theme-divider));
+}
+
+/* The count on a context-menu row. Not a badge: it sits in the row's flow
+   rather than overlaying a host, so it takes the row's own quiet foreground. */
+.sidebar-ctx-count {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-sidebar-text), 0.6);
+}
+
+.sidebar-dedup-scanning {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--space-2);
+  opacity: 0.7;
+}
+
+/* The docked rail has no room for a label, so the count becomes a real badge.
+   `primary`, not accent: a count is information and reads on the workhorse
+   fill (visual-language.md section 12). */
+.sidebar-collapsed-item {
+  /* The dock badge overlays its host without shifting it, so the host has to be
+     the badge's containing block. */
+  position: relative;
+}
+
+.sidebar-collapsed-dedup-badge {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  /* The attention dot (visual-language §12): presence, not a count. */
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  pointer-events: none;
+}
+
 .sidebar-list-count {
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-sidebar-text));
@@ -8428,6 +8754,17 @@ defineExpose({
   align-self: center;
   display: inline-flex;
   justify-content: flex-end;
+}
+
+/* The Duplicates PRESENCE dot (visual-language §12, attention dot): there is
+   work here, without a number that would move with the tier gate. */
+.sidebar-dedup-dot {
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  flex-shrink: 0;
+  align-self: center;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
 }
 
 .sidebar-new-tag {

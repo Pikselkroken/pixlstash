@@ -1,9 +1,14 @@
 import tempfile
 import os
+
+import numpy as np
 from fastapi.testclient import TestClient
 from sqlmodel import select, func
+
 from pixlstash.server import Server
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
+from pixlstash.scoring.character_likeness import count_pictures_by_character_likeness
 from tests.utils import (
     upload_pictures_and_wait,
     wait_for_faces,
@@ -197,6 +202,181 @@ def test_score_character_likeness_requires_auth():
             assert resp.status_code == 401, resp.text
 
 
+def _face_features(seed: int) -> bytes:
+    """Deterministic synthetic face feature vector (float32 bytes)."""
+    rng = np.random.default_rng(seed)
+    return rng.normal(size=8).astype(np.float32).tobytes()
+
+
+def _add_face(server, pic_id, char_id, seed, face_index=0):
+    """Insert a Face row with synthetic features directly into the DB."""
+
+    def _add(session):
+        session.add(
+            Face(
+                picture_id=pic_id,
+                frame_index=0,
+                face_index=face_index,
+                character_id=char_id,
+                bbox_="0,0,10,10",
+                features=_face_features(seed),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_add)
+
+
+def _seed_likeness_stack_scenario(client, server):
+    """Seed the character-view stack scenario for CHARACTER_LIKENESS tests.
+
+    Layout (character X = the viewed character, R = the likeness reference):
+
+    - stack 1: leader ``a`` (position 0, NO face for X) + child ``b`` (X face).
+      Scoped-leader semantics must represent this stack by ``b``; the naive
+      global-leader clause dropped it entirely.
+    - stack 2: leader ``d`` (position 0, X face) + child ``e`` (no face).
+      Must still be represented by ``d`` (no over-blocking).
+    - ``c``: unstacked picture with an X face.
+    - ``r``: unstacked picture with R's reference face.
+
+    Returns:
+        (x_id, ref_id, ids) where ids is a dict of picture ids by key a-e, r.
+    """
+    images = [
+        ("file", (f"{key}.png", random_images[i], "image/png"))
+        for i, key in enumerate(["a", "b", "c", "d", "e", "r"])
+    ]
+    import_status = upload_pictures_and_wait(client, images)
+    assert import_status["status"] == "completed"
+    ids = dict(
+        zip(
+            ["a", "b", "c", "d", "e", "r"],
+            [r["picture_id"] for r in import_status["results"]],
+        )
+    )
+
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Viewed X"})
+    assert resp.status_code == 200, resp.text
+    x_id = resp.json()["character"]["id"]
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Likeness Ref"})
+    assert resp.status_code == 200, resp.text
+    ref_id = resp.json()["character"]["id"]
+
+    # Stack 1: a is the position-0 leader, b the child.
+    resp = client.post(
+        f"{API_PREFIX}/stacks", json={"picture_ids": [ids["a"], ids["b"]]}
+    )
+    assert resp.status_code == 200, resp.text
+    # Stack 2: d is the position-0 leader, e the child.
+    resp = client.post(
+        f"{API_PREFIX}/stacks", json={"picture_ids": [ids["d"], ids["e"]]}
+    )
+    assert resp.status_code == 200, resp.text
+
+    _add_face(server, ids["r"], ref_id, seed=1)
+    _add_face(server, ids["b"], x_id, seed=2)
+    _add_face(server, ids["c"], x_id, seed=3)
+    _add_face(server, ids["d"], x_id, seed=4)
+
+    return x_id, ref_id, ids
+
+
+def test_character_likeness_stack_scoped_leader_listing_and_count():
+    """CHARACTER_LIKENESS with stack_leaders_only uses scoped-leader semantics:
+    a stack whose global leader has no face for the viewed character is
+    represented by its lowest-positioned in-scope member instead of vanishing,
+    while stacks whose leader IS in scope are still returned (no over-blocking).
+    The count helper agrees with the listing."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            x_id, ref_id, ids = _seed_likeness_stack_scenario(client, server)
+
+            # fields=grid implies stack_leaders_only on /pictures.
+            resp = client.get(
+                f"{API_PREFIX}/pictures",
+                params={
+                    "sort": "CHARACTER_LIKENESS",
+                    "reference_character_id": ref_id,
+                    "character_id": x_id,
+                    "fields": "grid",
+                    "descending": "true",
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            listed_ids = [row["id"] for row in resp.json()]
+
+            # Stack 1 is represented by exactly its in-scope member b (the
+            # stack must not be dropped), stack 2 by its actual leader d, and
+            # the unstacked picture c is listed as itself.
+            assert ids["b"] in listed_ids, "stack with out-of-scope leader was dropped"
+            assert ids["d"] in listed_ids, "stack with in-scope leader was over-blocked"
+            assert ids["c"] in listed_ids
+            assert ids["a"] not in listed_ids
+            assert ids["e"] not in listed_ids
+            assert sorted(listed_ids) == sorted([ids["b"], ids["c"], ids["d"]])
+
+            # The count helper must yield exactly what the listing yields.
+            count = count_pictures_by_character_likeness(
+                server, x_id, stack_leaders_only=True
+            )
+            assert count == len(listed_ids)
+
+
+def test_pictures_count_character_likeness_matches_stream():
+    """/pictures/count with sort=CHARACTER_LIKENESS returns an integer (not
+    null) equal to the likeness stream row count, and agrees with the normal
+    (sort-less) count for the same character view."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            x_id, ref_id, ids = _seed_likeness_stack_scenario(client, server)
+
+            params = {
+                "sort": "CHARACTER_LIKENESS",
+                "reference_character_id": ref_id,
+                "descending": "true",
+                "character_id": x_id,
+                "stack_leaders_only": "true",
+            }
+            resp = client.get(f"{API_PREFIX}/pictures/count", params=params)
+            assert resp.status_code == 200, resp.text
+            likeness_count = resp.json()["count"]
+            assert isinstance(likeness_count, int)
+
+            # The likeness stream must deliver exactly that many rows.
+            resp = client.get(
+                f"{API_PREFIX}/pictures/stream",
+                params={**params, "fields": "grid", "batch_limit": 1000},
+            )
+            assert resp.status_code == 200, resp.text
+            stream = resp.json()
+            assert stream["done"] is True
+            assert len(stream["pictures"]) == likeness_count == 3
+
+            # The normal (sort-less) count the frontend grid uses must agree
+            # with the likeness count for the same character view.
+            resp = client.get(
+                f"{API_PREFIX}/pictures/count",
+                params={"character_id": x_id, "stack_leaders_only": "true"},
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["count"] == likeness_count
+
+
 def test_face_search_basic():
     with tempfile.TemporaryDirectory() as temp_dir:
         server_config_path = os.path.join(temp_dir, "server_config.json")
@@ -233,3 +413,288 @@ def test_face_search_basic():
             data = resp.json()
             assert isinstance(data, list)
             assert data
+            # Every match names the face that produced its score, so a caller
+            # assigning the results does not have to redo the comparison.
+            assert all(row.get("face_id") for row in data), data
+
+
+# ── Character-scoped face search ("Suggest more pictures of Alice", #636) ──
+
+
+def _vector_features(vec) -> bytes:
+    """Pack an explicit vector as float32 bytes, the way Face.features stores it."""
+    return np.asarray(vec, dtype=np.float32).tobytes()
+
+
+def _add_face_with_features(server, pic_id, char_id, features, face_index=0):
+    """Insert one Face row with the given raw features and return its id."""
+    holder = {}
+
+    def _add(session):
+        face = Face(
+            picture_id=pic_id,
+            frame_index=0,
+            face_index=face_index,
+            character_id=char_id,
+            bbox_="0,0,10,10",
+            features=features,
+        )
+        session.add(face)
+        session.commit()
+        session.refresh(face)
+        holder["id"] = face.id
+
+    server.vault.db.run_task(_add)
+    return holder["id"]
+
+
+def _seed_character_face_search_scenario(client, server):
+    """Seed a character with two reference faces plus un-assigned candidates.
+
+    All embeddings are explicit unit-ish vectors so every similarity in the
+    assertions is arithmetic rather than a property of a real face model:
+
+    - ``alice`` reference faces point along +x (cosine 1.0 with each other).
+    - ``near``  is 0.98 of the way to +x  → a strong match.
+    - ``far``   points along +y           → cosine 0.0, a non-match.
+    - ``two_faces`` holds both a +y face and a 0.9-to-+x face, so the endpoint
+      has to name the *second* one as the winner.
+
+    Returns:
+        ``(alice_id, ids, face_ids)``.
+    """
+    keys = ["ref1", "ref2", "near", "far", "two_faces"]
+    images = [
+        ("file", (f"{key}.png", random_images[i], "image/png"))
+        for i, key in enumerate(keys)
+    ]
+    import_status = upload_pictures_and_wait(client, images)
+    assert import_status["status"] == "completed"
+    ids = dict(zip(keys, [r["picture_id"] for r in import_status["results"]]))
+
+    resp = client.post(f"{API_PREFIX}/characters", json={"name": "Alice"})
+    assert resp.status_code == 200, resp.text
+    alice_id = resp.json()["character"]["id"]
+
+    along_x = _vector_features([1, 0, 0, 0, 0, 0, 0, 0])
+    along_y = _vector_features([0, 1, 0, 0, 0, 0, 0, 0])
+
+    face_ids = {}
+    # Alice's own pictures: these are the reference faces AND the rows that
+    # exclude_character_id must remove from the results.
+    face_ids["ref1"] = _add_face_with_features(server, ids["ref1"], alice_id, along_x)
+    face_ids["ref2"] = _add_face_with_features(server, ids["ref2"], alice_id, along_x)
+    # Un-assigned candidates.
+    face_ids["near"] = _add_face_with_features(
+        server, ids["near"], None, _vector_features([0.98, 0.199, 0, 0, 0, 0, 0, 0])
+    )
+    face_ids["far"] = _add_face_with_features(server, ids["far"], None, along_y)
+    face_ids["two_faces_wrong"] = _add_face_with_features(
+        server, ids["two_faces"], None, along_y, face_index=0
+    )
+    face_ids["two_faces_right"] = _add_face_with_features(
+        server,
+        ids["two_faces"],
+        None,
+        _vector_features([0.9, 0.436, 0, 0, 0, 0, 0, 0]),
+        face_index=1,
+    )
+
+    return alice_id, ids, face_ids
+
+
+def _face_search(client, **params):
+    """POST /pictures/face-search with query params; return the parsed body."""
+    resp = client.post(f"{API_PREFIX}/pictures/face-search", params=params)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_face_search_by_character_ranks_and_excludes_assigned():
+    """source_character_id searches with a character's reference faces, and
+    exclude_character_id drops the pictures already assigned to them, which is
+    what makes the result set the un-assigned candidates only (#636).
+
+    Asserts both directions: the strong match is found and ranked above the
+    non-match (no over-blocking), and the already-assigned references are gone.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            alice_id, ids, _face_ids = _seed_character_face_search_scenario(
+                client, server
+            )
+
+            # Without the exclusion, Alice's own reference pictures come back
+            # (they match themselves perfectly).
+            data = _face_search(
+                client, source_character_id=alice_id, top_n=500, threshold=0.5
+            )
+            by_id = {row["picture_id"]: row for row in data}
+            assert ids["ref1"] in by_id, data
+            assert ids["near"] in by_id, data
+
+            # With it, only the un-assigned candidates remain.
+            data = _face_search(
+                client,
+                source_character_id=alice_id,
+                exclude_character_id=alice_id,
+                top_n=500,
+                threshold=0.5,
+            )
+            by_id = {row["picture_id"]: row for row in data}
+            assert ids["ref1"] not in by_id, "already-assigned picture was not excluded"
+            assert ids["ref2"] not in by_id, "already-assigned picture was not excluded"
+            # In-scope candidates still arrive: over-blocking is its own bug.
+            assert ids["near"] in by_id, data
+            assert ids["two_faces"] in by_id, data
+            # The non-match is below the threshold.
+            assert ids["far"] not in by_id, data
+            # Ranked by likeness: the 0.98 match beats the 0.9 one.
+            assert by_id[ids["near"]]["likeness"] > by_id[ids["two_faces"]]["likeness"]
+            assert [row["picture_id"] for row in data].index(ids["near"]) == 0
+
+
+def test_face_search_names_the_best_matching_face():
+    """The reported face_id is the face that produced the picture's score, not
+    just the picture's first face — a bulk assignment writes to that row."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            alice_id, ids, face_ids = _seed_character_face_search_scenario(
+                client, server
+            )
+
+            data = _face_search(
+                client,
+                source_character_id=alice_id,
+                exclude_character_id=alice_id,
+                top_n=500,
+                threshold=0.5,
+            )
+            by_id = {row["picture_id"]: row for row in data}
+            assert by_id[ids["two_faces"]]["face_id"] == face_ids["two_faces_right"], (
+                "the wrong face of a two-face picture was named as the match"
+            )
+            assert by_id[ids["near"]]["face_id"] == face_ids["near"]
+
+
+def test_face_search_rejects_more_than_one_source_id():
+    """The three source ids are mutually exclusive; asking with two is a 400."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            resp = client.post(
+                f"{API_PREFIX}/pictures/face-search",
+                params={"source_character_id": 1, "source_face_id": 2},
+            )
+            assert resp.status_code == 400, resp.text
+            assert "exactly one source" in resp.json()["detail"]
+
+
+def test_face_search_by_character_still_scope_filters_for_a_share_token():
+    """A resource-scoped share token searching by character gets only the
+    pictures inside its grant.
+
+    `/pictures/face-search` is in READ_SAFE_POST_PATHS, so a share token really
+    does reach this handler, and source_character_id accepts any character id.
+    The scope filter is what keeps that from becoming a whole-library read.
+    Asserted in both directions: the out-of-scope match is gone AND the in-scope
+    one still arrives, because over-blocking is its own regression.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            alice_id, ids, _face_ids = _seed_character_face_search_scenario(
+                client, server
+            )
+
+            # A set holding only `near`; `two_faces` is deliberately left out.
+            resp = client.post(
+                f"{API_PREFIX}/picture_sets", json={"name": "Shared few"}
+            )
+            assert resp.status_code == 200, resp.text
+            set_id = resp.json().get("id") or resp.json().get("picture_set", {}).get(
+                "id"
+            )
+            assert set_id, resp.text
+            resp = client.post(
+                f"{API_PREFIX}/picture_sets/{set_id}/members/{ids['near']}"
+            )
+            assert resp.status_code in (200, 201), resp.text
+
+            resp = client.post(
+                f"{API_PREFIX}/users/me/token",
+                json={
+                    "description": "set share",
+                    "scope": "READ",
+                    "resource_type": "picture_set",
+                    "resource_id": set_id,
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            token = resp.json()["token"]
+
+            anon = TestClient(server.api)
+            resp = anon.post(
+                f"{API_PREFIX}/pictures/face-search",
+                params={
+                    "source_character_id": alice_id,
+                    "top_n": 500,
+                    "threshold": 0.5,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200, resp.text
+            returned = {row["picture_id"] for row in resp.json()}
+            assert ids["near"] in returned, "in-scope match was over-blocked"
+            assert ids["two_faces"] not in returned, "out-of-scope picture leaked"
+            assert ids["ref1"] not in returned, "out-of-scope picture leaked"
+
+
+def test_face_search_character_without_reference_faces_is_422():
+    """A character with no face carrying an embedding cannot be searched with,
+    and says so rather than returning a silently empty result."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            resp = client.post(f"{API_PREFIX}/characters", json={"name": "Empty"})
+            assert resp.status_code == 200, resp.text
+            empty_id = resp.json()["character"]["id"]
+
+            resp = client.post(
+                f"{API_PREFIX}/pictures/face-search",
+                params={"source_character_id": empty_id},
+            )
+            assert resp.status_code == 422, resp.text
+            assert "reference face" in resp.json()["detail"]

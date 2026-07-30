@@ -58,6 +58,7 @@
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
+      @open-duplicates="emit('open-duplicates')"
       @open-settings="emit('open-settings')"
       @open-import="emit('open-import')"
       @local-import="emit('local-import', $event)"
@@ -140,6 +141,7 @@
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @open-comfyui-panel="handleContextMenuOpenComfyuiPanel"
+      @open-remix-dialog="openRemixDialog"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -218,8 +220,8 @@
         </v-card-title>
         <v-card-text style="padding: 0 20px 4px">
           <div style="font-size: 0.875rem; opacity: 0.85; margin-bottom: 10px">
-            Leave the label empty for dense object detection, or type a phrase to
-            detect only that (e.g. "dog").
+            Leave the label empty for dense object detection, or type a phrase
+            to detect only that (e.g. "dog").
           </div>
           <v-text-field
             v-model="segmentPrompt"
@@ -231,7 +233,9 @@
           />
         </v-card-text>
         <v-card-actions style="padding: 8px 16px 16px">
-          <v-btn variant="text" @click="segmentDialogOpen = false">Cancel</v-btn>
+          <v-btn variant="text" @click="segmentDialogOpen = false"
+            >Cancel</v-btn
+          >
           <v-spacer />
           <v-btn color="primary" variant="tonal" @click="confirmSegment">
             Detect
@@ -266,7 +270,9 @@
       v-model="snapshotsWithDeletedOpen"
       :snapshots="snapshotsWithDeleted"
       :dont-show-again="userPrefsStore.hidePurgeSnapshotWarning"
-      @update:dont-show-again="userPrefsStore.setHidePurgeSnapshotWarning($event)"
+      @update:dont-show-again="
+        userPrefsStore.setHidePurgeSnapshotWarning($event)
+      "
     />
     <DeleteForeverDialog
       v-model:open="deleteForeverOpen"
@@ -352,6 +358,17 @@
       "
       anchor="top"
       @abort="abortExportZip"
+    />
+    <RemixDialog
+      :open="remixDialogOpen"
+      :image="remixImage"
+      :selected-image-ids="selectedImageIds"
+      :client-id="comfyuiClientId || ''"
+      :backend-url="props.backendUrl"
+      :stack-outputs="genStackPrefs.stackI2IOutputs"
+      @close="remixDialogOpen = false"
+      @run="handleComfyuiRun"
+      @use-batch="handleContextMenuOpenComfyuiPanel"
     />
     <ComfyUiRunner
       ref="comfyuiRunner"
@@ -519,8 +536,10 @@
                 hoveredStackId !== null &&
                 getPictureStackId(img) === hoveredStackId,
               'image-card-cursor': img.idx === cursorIdx,
+              'image-card--ghost': isImageGhosted(img),
             },
           ]"
+          :inert="isImageGhosted(img) || null"
           @click="handleImageCardClick(img, img.idx, $event)"
           @mouseenter="handleImageMouseEnter(img)"
           @mouseleave="handleImageMouseLeave(img)"
@@ -681,6 +700,7 @@
               </template>
               <template v-else-if="getThumbnailSrc(img)">
                 <img
+                  v-show="!failedThumbnailIds.has(img.id)"
                   :src="getThumbnailSrc(img)"
                   class="thumbnail-img"
                   :style="getSquareCropImgStyle(img)"
@@ -694,9 +714,17 @@
                   @pointercancel="handleThumbnailPointerRelease($event)"
                   @dragstart="handleThumbnailNativeDragStart(img, $event)"
                   @dragend="handleDragEnd"
-                  @error="handleImageError"
+                  @error="handleImageError(img, $event)"
                   @load="onThumbnailLoad(img.id, $event)"
                 />
+                <div
+                  v-if="failedThumbnailIds.has(img.id)"
+                  class="thumbnail-placeholder"
+                >
+                  <v-icon class="thumbnail-broken-icon"
+                    >mdi-image-broken-variant</v-icon
+                  >
+                </div>
                 <img
                   v-if="isVideo(img)"
                   class="thumbnail-drag-preview"
@@ -803,7 +831,32 @@
                 class="stack-band-overlay"
                 :style="getStackBandStyle(img)"
               ></div>
-              <!-- Top-right hover badges: stars + stack indicator -->
+              <!-- The stack count and the deck edges are permanent, not
+                   hover-only: how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made stacks
+                   invisible while browsing. -->
+              <StackEdgeTicks
+                v-if="shouldShowStackBadge(img)"
+                :count="getStackBadgeCount(img)"
+              />
+              <!-- Once a stack is expanded its members look like any other
+                   picture, so the one that the collapsed tile stands for has to
+                   say so. Without this, expanding a stack loses the answer to
+                   "which of these is the keeper". -->
+              <span
+                v-if="isExpandedStackCover(img)"
+                class="stack-cover-flag"
+                title="This picture is the stack's cover"
+                >Cover</span
+              >
+              <!-- Top-right badge column — the shared home for corner
+                   indicators (stars above, stack count below, right-aligned,
+                   2px gap). The stars are hover-only; the stack count is
+                   PERMANENT — how many pictures a tile stands for is a fact
+                   about the tile, and hiding it until hover is what made
+                   stacks invisible while browsing. The hover behaviour
+                   therefore lives on the container's other children, not the
+                   container. -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
@@ -819,19 +872,12 @@
                   :compact="true"
                   @set-score="setScore(img, $event)"
                 />
-                <div
+                <StackBadge
                   v-if="shouldShowStackBadge(img)"
-                  class="stack-indicator"
-                  :title="stackBadgeTitle(img)"
-                  @click.stop="toggleStackExpand(img)"
+                  :count="getStackBadgeCount(img)"
+                  @activate="toggleStackExpand(img)"
                   @mouseenter.stop="prefetchStackMembers(img)"
-                >
-                  <v-icon
-                    :size="badgeIconSizes.stack"
-                    :style="getStackBadgeIconStyle(img)"
-                    >mdi-layers-outline</v-icon
-                  >
-                </div>
+                />
               </div>
             </div>
           </div>
@@ -869,25 +915,41 @@
       v-if="
         (props.searchQuery && props.searchQuery.length > 0) ||
         reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId
+        faceLikenessSearchFaceId ||
+        faceSearchCharacter
       "
       :images-loading="imagesLoading"
       :count="allGridImages.length"
       :category-label="props.activeCategoryLabel"
       :is-all-pictures-active="
-        reverseImageSearchPictureIds.length || faceLikenessSearchFaceId
+        reverseImageSearchPictureIds.length ||
+        faceLikenessSearchFaceId ||
+        faceSearchCharacter
           ? true
           : props.isAllPicturesActive
       "
       :status-text="
-        faceLikenessSearchFaceId
-          ? `Similar faces: ${allGridImages.length} results`
-          : reverseImageSearchPictureIds.length > 1
-            ? `Multi-image search: ${allGridImages.length} results`
-            : reverseImageSearchPictureIds.length
-              ? `Reverse image search: ${allGridImages.length} results`
-              : null
+        faceSearchCharacter
+          ? faceSearchMatches.length === 1
+            ? `1 possible picture of ${faceSearchCharacter.name}`
+            : `${faceSearchMatches.length} possible pictures of ${faceSearchCharacter.name}`
+          : faceLikenessSearchFaceId
+            ? `Similar faces: ${allGridImages.length} results`
+            : reverseImageSearchPictureIds.length > 1
+              ? `Multi-image search: ${allGridImages.length} results`
+              : reverseImageSearchPictureIds.length
+                ? `Reverse image search: ${allGridImages.length} results`
+                : null
       "
+      :threshold="faceSearchCharacter ? faceSearchThreshold : null"
+      :threshold-min="FACE_SEARCH_FETCH_FLOOR"
+      :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+      :assign-target="faceSearchCharacter?.name ?? null"
+      :assign-count="faceSearchAssignIds.length"
+      :assign-from-selection="faceSearchAssignFromSelection"
+      :assign-busy="faceSearchAssignBusy"
+      @update:threshold="handleFaceSearchThreshold"
+      @assign="handleAssignFaceSearchResults"
       @search-all="emit('search-all')"
       @clear="clearSearchQuery"
     />
@@ -998,6 +1060,21 @@
       @reverse-image-search="handleReverseImageSearch"
       @selection-menu-open="toolbarSelectionMenuOpen = $event"
     />
+    <!-- The action receipt shares the selection pill's slot and lifts clear of
+         it when both are up. Owner-only, like the toolbar control.
+
+         `pill-hidden` while the lightbox is open, NOT `v-if`: the lightbox has
+         its own narration of the same single receipt, so two pills would render
+         it at two positions and the grid one would show through the backdrop.
+         The component stays mounted because it carries the one app-wide
+         `role="status"` region, which the lightbox deliberately does not
+         duplicate (the lightbox does not `inert` the grid, so that region still
+         speaks and a second one would double-speak). -->
+    <ActionReceipt
+      v-if="!isReadOnly"
+      :lift-px="actionReceiptLift"
+      :pill-hidden="overlayOpen"
+    />
   </div>
 </template>
 
@@ -1016,13 +1093,19 @@ import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
-  useNoticeStore,
-  DEFAULT_TIMEOUTS,
-} from "../../stores/useNoticeStore";
+  GHOST_PENDING,
+  useOperationStore,
+} from "../../stores/useOperationStore";
+import { useNoticeStore, DEFAULT_TIMEOUTS } from "../../stores/useNoticeStore";
 import { useBreadcrumb } from "../../composables/useBreadcrumb";
-import { useBottomAnchor } from "../../composables/useBottomAnchor";
+import {
+  useAnchorHeight,
+  useBottomAnchor,
+} from "../../composables/useBottomAnchor";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
@@ -1044,10 +1127,14 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
+import StackBadge from "../widgets/StackBadge.vue";
+import StackEdgeTicks from "../widgets/StackEdgeTicks.vue";
 import ComfyUiRunner from "../io/ComfyUiRunner.vue";
+import RemixDialog from "../io/RemixDialog.vue";
 import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
@@ -1085,7 +1172,11 @@ import {
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
-import { getPictureSet, addPictureToSet, removePictureFromSet } from "../../api/pictureSets";
+import {
+  getPictureSet,
+  addPictureToSet,
+  removePictureFromSet,
+} from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { runTextToImage } from "../../api/comfyui";
@@ -1115,7 +1206,6 @@ import {
   getStackPositionValue,
   selectNewestStackMember,
   shouldShowStackBadge,
-  stackBadgeTitle,
 } from "../../utils/stack.js";
 import { useVirtualScroll } from "../../composables/useVirtualScroll.js";
 import {
@@ -1127,6 +1217,7 @@ import { useGridDragDrop } from "../../composables/useGridDragDrop.js";
 import { useStackOrdering } from "../../composables/useStackOrdering.js";
 import { useGridFetch } from "../../composables/useGridFetch.js";
 import { useGridKeyboardNav } from "../../composables/useGridKeyboardNav.js";
+import { debounce } from "lodash-es";
 
 const emit = defineEmits([
   "open-overlay",
@@ -1150,6 +1241,7 @@ const emit = defineEmits([
   "load-sort-changed",
   "flag-sort-changed",
   "open-settings",
+  "open-duplicates",
   "open-import",
   "local-import",
   "confirm-export-zip",
@@ -1224,6 +1316,8 @@ const props = defineProps({
   tagConfidenceBelowFilter: { type: Array, default: () => [] },
   faceBboxFilter: { type: String, default: null },
   impossibleSources: { type: Array, default: () => [] },
+  // "all" | "stacked" | "unstacked" | "unresolved"
+  stackStateFilter: { type: String, default: "all" },
   sharedOnlyFilter: { type: Boolean, default: false },
   unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
@@ -1367,6 +1461,24 @@ const overlayCtxLockReason = computed(() =>
 );
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
+// ── "Suggest more pictures of <person>" (#636) ────────────────────────────────
+// The person whose reference faces are the active query, or null. Distinct from
+// `props.selectedCharacter`: this search deliberately runs across the whole
+// library, so it must not be mistaken for a character-scoped view.
+const faceSearchCharacter = ref(null); // { id, name }
+// The cut applied to the ranked list. Starts at the same value the backend's
+// SourceFaceLikenessTask already treats as "same person, safe to inherit a
+// character automatically" — a second, UI-local number would drift from it.
+const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
+// The fetch floor. Pictures below it are never fetched, so the slider cannot be
+// dragged under it without a refetch; that is why it is also the slider's min.
+const FACE_SEARCH_FETCH_FLOOR = 0.5;
+const FACE_SEARCH_MAX_THRESHOLD = 0.95;
+const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
+// { characterId, matches: [{picture_id, likeness, face_id}], rowsById } — the
+// whole ranked list plus its picture rows, so re-cutting it is free.
+const faceSearchRanked = ref(null);
+const faceSearchAssignBusy = ref(false);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
 const revokeSharesPending = ref(null); // { pictureId }
@@ -1399,6 +1511,19 @@ const badgeCssVars = computed(() => {
     "--badge-padding": `${paddingV}px ${paddingH}px`,
   };
 });
+
+/**
+ * Whether this tile is the cover of a stack the user has expanded.
+ *
+ * Only meaningful while the stack is expanded: collapsed, the cover IS the
+ * tile, so flagging it would be noise.
+ *
+ * @param {Object} img
+ * @returns {boolean}
+ */
+function isExpandedStackCover(img) {
+  return isStackExpandedForImage(img) && getStackPositionValue(img) === 0;
+}
 
 const badgeIconSizes = computed(() => {
   const t = badgeSizeT.value;
@@ -1763,6 +1888,23 @@ const comfyuiProgressPercent = computed(() => {
 
 function handleComfyuiRun(payload) {
   comfyuiRunner.value?.handleComfyuiRun(payload);
+}
+
+// ── Remix ("Generate variants…") ─────────────────────────────────────────
+// Acts on the RIGHT-CLICKED picture, not the selection — the dialog discloses
+// that and offers a route to the batch panel when a wider selection is live.
+const remixDialogOpen = ref(false);
+const remixImage = ref(null);
+
+function openRemixDialog(pictureId) {
+  const id = pictureId ?? contextMenuImage.value?.id;
+  if (id == null) return;
+  const image =
+    allGridImages.value.find((img) => String(img?.id) === String(id)) ||
+    contextMenuImage.value;
+  if (!image) return;
+  remixImage.value = image;
+  remixDialogOpen.value = true;
 }
 
 async function runComfyuiOnGridImages({
@@ -2319,7 +2461,13 @@ function isImageRecentlyAdded(id) {
 // ============================================================
 // THUMBNAIL HELPERS
 // ============================================================
+// Thumbnails whose <img> fired @error (e.g. an undecodable source, #585):
+// the browser's native broken-image glyph is replaced with a centered icon
+// until a later successful load clears the id again.
+const failedThumbnailIds = reactive(new Set());
+
 function onThumbnailLoad(id) {
+  failedThumbnailIds.delete(id);
   thumbnailLoadedMap[id] = (thumbnailLoadedMap[id] || 0) + 1;
   const assignedAt = Number(thumbnailAssignedAtMap[id]);
   if (Number.isFinite(assignedAt) && assignedAt > 0) {
@@ -2414,9 +2562,7 @@ function getVideoThumbnailSrc(img) {
 // yet been populated falls back to cover centring until they arrive.
 function isSquareCropActive(img) {
   return (
-    !isJustifiedMode.value &&
-    !isVideo(img) &&
-    squareCropParams(img) !== null
+    !isJustifiedMode.value && !isVideo(img) && squareCropParams(img) !== null
   );
 }
 
@@ -2542,6 +2688,10 @@ const hoveredImageIdx = ref(null);
 const hoveredStackId = ref(null);
 
 function handleImageMouseEnter(img) {
+  // `inert` already blocks the event in supporting browsers; this is the
+  // testable half of the same rule. `hoveredImageIdx` is what the digit-scoring
+  // shortcut acts on when nothing is selected, so a ghost must never be hovered.
+  if (isImageGhosted(img)) return;
   hoveredImageIdx.value = img.idx;
   hoveredStackId.value = getPictureStackId(img) ?? null;
 }
@@ -2796,7 +2946,9 @@ const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const lockedSetsStore = useLockedSetsStore();
+const genStackPrefs = useGenStackPrefsStore();
 const scrapheapRetentionStore = useScrapheapRetentionStore();
+const operationStore = useOperationStore();
 // Every failure path in this component reports through the notice surface. A
 // native alert() is unstyled, blocking and focus-stealing; a bare `catch` that
 // only logs is worse, because the user is never told at all.
@@ -2821,8 +2973,7 @@ const reviewOverlayOpen = computed(() => reviewSessionsStore.overlayOpen);
 // The trail logic lives in useBreadcrumb, shared with the desktop title bar.
 // In the desktop shell the breadcrumb renders in the title bar instead, so the
 // in-grid overlay below is gated on !isDesktop.
-const isDesktop =
-  typeof window !== "undefined" && !!window.pixlstashDesktop;
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 
 // Below 600px the centred notice card widens over the bottom-left breadcrumb, so
@@ -2831,6 +2982,18 @@ const { breadcrumb, navigateBreadcrumb } = useBreadcrumb();
 // which is what `narrowOnly` encodes.
 const breadcrumbEl = ref(null);
 useBottomAnchor("grid-breadcrumb", breadcrumbEl, { narrowOnly: true });
+
+// The action receipt shares the selection pill's slot, so when the pill is up
+// the receipt sits above it. The lift is the pill's MEASURED height plus the
+// standard gap, never a constant, because the pill wraps and grows on coarse
+// pointers (the 56px in floatingBottom.js is a first-frame fallback, not a
+// design token).
+const { height: selectionBarHeight } = useAnchorHeight("selection-bar");
+const actionReceiptLift = computed(() =>
+  selectionBarHeight.value > 0
+    ? selectionBarHeight.value + FLOATING_BOTTOM_GAP_PX
+    : 0,
+);
 
 watch(
   visibleRangeLabel,
@@ -2887,7 +3050,10 @@ function prefetchFullImage(img) {
 // ============================================================
 // SELECTION + DRAG HELPERS
 // ============================================================
-function handleImageError(event) {
+function handleImageError(img, event) {
+  if (img?.id != null) {
+    failedThumbnailIds.add(img.id);
+  }
   const imgEl = event?.target;
   if (imgEl instanceof HTMLImageElement) {
     const src = imgEl.src || "";
@@ -3432,7 +3598,15 @@ async function deleteSelected(idsOverride = null) {
     const removedIds = idsToRemove.filter(
       (id) => !skippedLocked.has(String(id)),
     );
-    removeImagesById(removedIds);
+    // Keep the tiles mounted and greyed while the undo is still one click away,
+    // and let the receipt's own clock decide when the grid closes the gap.
+    // `markGhosted` declines when there is no undo window to hold them open for
+    // (a read-only session), in which case they go immediately, as they always
+    // did. The own-origin `removed` echo of this same delete is suppressed by
+    // the realtime decision table, so nothing else races to drop them.
+    if (!operationStore.markGhosted(removedIds)) {
+      removeImagesById(removedIds);
+    }
     // Overlay path: don't touch the grid selection. removeImagesById already
     // drops any deleted id from it (a no-op when the overlay picture wasn't
     // grid-selected), so the user's grid selection is left exactly as it was.
@@ -3751,7 +3925,9 @@ const partialStackGroupingReason = computed(() => {
   const idSet = new Set(ids);
   const images = allGridImages.value || [];
   const byId = new Map(
-    images.filter((img) => img && img.id != null).map((img) => [String(img.id), img]),
+    images
+      .filter((img) => img && img.id != null)
+      .map((img) => [String(img.id), img]),
   );
 
   // Which stacks does the selection touch? (Members share stack_id even when
@@ -3771,7 +3947,9 @@ const partialStackGroupingReason = computed(() => {
     // An expanded stack is whole-stack only when every rendered member is
     // selected.
     const memberIds = images
-      .filter((img) => img && img.id != null && getPictureStackId(img) === stackId)
+      .filter(
+        (img) => img && img.id != null && getPictureStackId(img) === stackId,
+      )
       .map((img) => Number(img.id));
     const allSelected =
       memberIds.length > 0 && memberIds.every((mid) => idSet.has(mid));
@@ -4081,10 +4259,9 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     );
   } catch (err) {
     console.error("Scrapheap purge failed", err);
-    noticeStore.error(
-      `Couldn't delete those pictures. ${errorDetail(err)}`,
-      { key: "scrapheap-purge" },
-    );
+    noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
+      key: "scrapheap-purge",
+    });
   } finally {
     // The server spends the confirmation on the first attempt, so a retry must
     // go back through the preview rather than replaying a dead token.
@@ -4800,6 +4977,7 @@ const {
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted,
   },
   props,
 );
@@ -4855,6 +5033,9 @@ const {
     exportProgress,
     reverseImageSearchPictureIds,
     faceLikenessSearchFaceId,
+    faceSearchCharacter,
+    faceSearchThreshold,
+    faceSearchRanked,
   },
   props,
   {
@@ -4889,7 +5070,6 @@ const {
   showRemoveFromStack,
   mapGridImages,
   getStackCardStyle,
-  getStackBadgeIconStyle,
   getStackBandStyle,
   isStackExpandedForImage,
   rebuildGridImagesFromLastFetch,
@@ -5022,6 +5202,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     toolbarSelectionMenuOpen,
     isJustifiedMode,
     justifiedLayout,
+    isGhosted: isGridIndexGhosted,
   },
   props,
   emit,
@@ -5613,7 +5794,11 @@ function gridImageSortKey(img) {
 // v-for key embeds img.idx — splicing allGridImages directly would corrupt the
 // virtual-scroll window. Deferred to the pill while a streaming fetch is in
 // flight (that fetch writes allGridImages wholesale from a sized placeholder).
-async function insertGridImagesById(ids) {
+// `options.highlight` (default true) drives the new-picture flash. A scrapheap
+// comeback passes false: the flash means "this was not here before", which is
+// the wrong story for a picture the user just undid the removal of.
+async function insertGridImagesById(ids, options = {}) {
+  const highlight = options?.highlight !== false;
   const wanted = (Array.isArray(ids) ? ids : [])
     .map((id) => getPictureId(id))
     .filter((id) => id !== null);
@@ -5697,7 +5882,7 @@ async function insertGridImagesById(ids) {
 
   lastFetchedGridImages.value = base;
   rebuildGridImagesFromLastFetch();
-  triggerNewImageHighlight(inserted);
+  if (highlight) triggerNewImageHighlight(inserted);
 
   // An in-app ComfyUI result lands here (origin-aware WS picture_imported insert).
   // If the overlay is open with a pending comfyui refresh, reconcile it now that
@@ -5947,6 +6132,7 @@ watch(
     () => props.tagConfidenceBelowFilter,
     () => props.faceBboxFilter,
     () => props.impossibleSources,
+    () => props.stackStateFilter,
     () => props.sharedOnlyFilter,
     () => props.unassignedOnlyFilter,
   ],
@@ -6545,6 +6731,11 @@ function updateVisibleThumbnails() {
 // ============================================================
 function handleImageCardClick(img, idx, event) {
   if (!img.id) return;
+  // A ghosted tile is a placeholder for an undo decision, not content. It is
+  // already in the Scrapheap, so selecting it would arm the selection bar
+  // against a picture no bulk action can act on. Silent: the ghost's own
+  // marking already says "not available", and a notice per click is noise.
+  if (isImageGhosted(img)) return;
   // Suppress the synthesized click that fires right after a long-press touchend
   if (suppressTouchClickId.value === img.id) {
     suppressTouchClickId.value = null;
@@ -6578,7 +6769,11 @@ function handleImageCardClick(img, idx, event) {
     newSelection = allGrid
       .slice(start, end + 1)
       .map((i) => i.id)
-      .filter(Boolean);
+      .filter(Boolean)
+      // Ghosts inside the span are skipped silently: they read visually as
+      // excluded cells already, so a selection count that included them would
+      // be the surprising half.
+      .filter((id) => !isImageGhosted(id));
     // Do NOT merge with previous selection; replace it
   } else if (isShift && anchorIndex < 0) {
     newSelection = [img.id];
@@ -6593,6 +6788,14 @@ function handleImageCardClick(img, idx, event) {
 
 function handleThumbnailClick(img, idx, event) {
   if (!img.id) return;
+  // Never open the lightbox on a ghost. The overlay is the full editing surface
+  // and it FREEZES the sequence it opens on for its whole lifetime (§9.1), so
+  // opening it on a picture that is seconds from leaving the grid offers a pile
+  // of actions against a doomed object and pins a stale filmstrip while it does.
+  if (isImageGhosted(img)) {
+    event.stopPropagation();
+    return;
+  }
   // In touch-select mode, the toggle was already handled in handleTouchEnd.
   // Just suppress any synthesized click that slipped through.
   if (touchSelectMode.value) {
@@ -6643,6 +6846,12 @@ function handleGridBackgroundClick(e) {
 
 function handleImageContextMenu(img, event) {
   if (!img?.id) return;
+  // No menu on a ghost — before the select-on-right-click side effect below,
+  // which would otherwise put it in the selection. Every entry acts on the
+  // selection, so the menu would be entirely disabled; and the one entry that
+  // would make sense, Restore, is a second Undo affordance competing with the
+  // receipt already counting down a few seconds away.
+  if (isImageGhosted(img)) return;
   if (!selectedImageIds.value.includes(img.id)) {
     selectedImageIds.value = [img.id];
     lastSelectedImageId.value = img.id;
@@ -7034,6 +7243,10 @@ defineExpose({
   // It arrives mid-fetch by construction, which is why the confirm gates on a
   // purge already running rather than on the grid's load state.
   confirmEmptyScrapheap,
+  // Lets the sidebar's person context menu arm the character-scoped face search
+  // ("Suggest more pictures of <person>", #636). Same Tier-3 route as
+  // confirmEmptyScrapheap above: sidebar → App.vue → this grid.
+  suggestPicturesForCharacter: handleSuggestPicturesForCharacter,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -7044,6 +7257,162 @@ defineExpose({
 function markOverlayDeferredRefresh() {
   if (!overlayOpen.value) return;
   pendingOverlayGridRefresh.value = true;
+}
+
+// ============================================================
+// SCRAPHEAP GHOST TILES
+// ============================================================
+// A move to the Scrapheap does not take its thumbnails away. The tiles stay
+// exactly where they are, ghosted, for as long as the undo is one click away
+// (the receipt's destructive dwell, hover-freeze and hidden-tab pause included);
+// only when that window closes does the grid close the gap. Undo inside the
+// window un-ghosts them in place, with no refetch and no flash.
+//
+// The state machine and its clock live in `useOperationStore` — deliberately,
+// because the clock IS the receipt's. Everything here is the grid's half:
+// which tiles carry the flag, and the imperative collapse when the store hands
+// the ids back.
+//
+// The virtualisation rule is untouched: ghosting FLAGS items, it never
+// restructures `allGridImages` or `lastFetchedGridImages`. The only array
+// mutation is the collapse, which goes through `removeImagesById` exactly as a
+// plain delete always did.
+
+const ghostedIdSet = computed(() => {
+  // Not in the Scrapheap view. There these pictures are not on their way out,
+  // they have arrived — a ghosted tile would mean the opposite of what it means
+  // in the grid, and the view already renders the real auto-purge countdown.
+  if (isScrapheapView.value) return null;
+  const ids = operationStore.ghostPictureIds;
+  if (!ids || !ids.length) return null;
+  return new Set(ids.map((id) => String(getPictureId(id))));
+});
+
+function isImageGhosted(img) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const pictureId = getPictureId(img?.id ?? img);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+/** Index-based form, for the keyboard cursor's skip scan. */
+function isGridIndexGhosted(index) {
+  const set = ghostedIdSet.value;
+  if (!set) return false;
+  const img = allGridImages.value?.[index];
+  const pictureId = getPictureId(img?.id);
+  return pictureId !== null && set.has(String(pictureId));
+}
+
+// A ghost is never in the selection and never under the cursor: every bulk
+// action reads the selection, and arming one against pictures that are already
+// in the Scrapheap is the trap this whole state exists to avoid.
+watch(ghostedIdSet, (set) => {
+  if (!set || !set.size) return;
+  const isGhostId = (id) => set.has(String(getPictureId(id)));
+  if (selectedImageIds.value.some(isGhostId)) {
+    selectedImageIds.value = selectedImageIds.value.filter(
+      (id) => !isGhostId(id),
+    );
+  }
+  if (lastSelectedImageId.value != null && isGhostId(lastSelectedImageId.value)) {
+    lastSelectedImageId.value = null;
+  }
+  if (cursorIdx.value !== null && isGridIndexGhosted(cursorIdx.value)) {
+    cursorIdx.value = null;
+  }
+});
+
+// Any full refetch rebuilds the grid without the scrapheaped pictures, so there
+// is nothing left to grey out. Forget the set SILENTLY — no collapse, and the
+// receipt is untouched, because undo is still on offer, it just has no tiles to
+// put back in this view any more.
+watch(allGridImages, () => {
+  if (operationStore.ghostState !== GHOST_PENDING) return;
+  const present = new Set(
+    (allGridImages.value || []).map((img) => String(getPictureId(img?.id))),
+  );
+  const anyGone = operationStore.ghostPictureIds.some(
+    (id) => !present.has(String(getPictureId(id))),
+  );
+  if (anyGone) operationStore.dropGhosts();
+});
+
+// The store hands back the ids whose window has closed.
+watch(
+  () => operationStore.collapsingPictureIds,
+  (ids) => {
+    if (!ids || !ids.length) return;
+    const doomed = operationStore.takeCollapsingGhosts();
+    if (doomed.length) void collapseGhostedImages(doomed);
+  },
+);
+
+/** Pixel top of a grid item, in whichever layout mode is active. */
+function gridItemTopOffset(index) {
+  if (index == null || index < 0) return null;
+  if (isJustifiedMode.value) {
+    const layout = justifiedLayout.value;
+    if (!layout || !layout.rowOffsets?.length) return null;
+    const row = rowOfIndex(layout.rowStarts, index);
+    if (row == null || row < 0) return null;
+    const top = layout.rowOffsets[row];
+    return typeof top === "number" ? top : null;
+  }
+  const cols = Math.max(1, props.columns || 1);
+  return Math.floor(index / cols) * rowHeight.value;
+}
+
+/**
+ * Drop the ghosted tiles and close the gap, without yanking the viewport.
+ *
+ * The collapse is on a timer, which is the one thing the grid's own rules never
+ * do (the pills exist so nothing reshuffles under the user unprompted). What
+ * makes it acceptable is that content the user is actually looking at does not
+ * move: anchor on the topmost item still on screen, remove, then put that item
+ * back under the same pixel. Ghosts below the fold move nothing; ghosts on
+ * screen close their gap in plain sight, which is the expected consequence of
+ * the sentence the receipt just read out; ghosts scrolled off the top would
+ * otherwise drag the whole view up under someone who has moved on.
+ */
+async function collapseGhostedImages(ids) {
+  const wrapper = scrollWrapper.value;
+  const scrollTop = wrapper ? wrapper.scrollTop : 0;
+  let anchorId = null;
+  let anchorOffset = 0;
+  if (wrapper && scrollTop > 0) {
+    const doomed = new Set(
+      ids.map((id) => String(getPictureId(id))).filter((id) => id !== "null"),
+    );
+    const list = allGridImages.value || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const pictureId = getPictureId(list[i]?.id);
+      if (pictureId === null || doomed.has(String(pictureId))) continue;
+      const top = gridItemTopOffset(i);
+      if (top === null) break;
+      if (top >= scrollTop) {
+        anchorId = pictureId;
+        anchorOffset = top - scrollTop;
+        break;
+      }
+    }
+  }
+
+  removeImagesById(ids);
+
+  if (anchorId === null || !wrapper) return;
+  await nextTick();
+  const newIndex = (allGridImages.value || []).findIndex(
+    (img) => getPictureId(img?.id) === anchorId,
+  );
+  if (newIndex < 0) return;
+  const newTop = gridItemTopOffset(newIndex);
+  if (newTop === null) return;
+  const target = Math.max(0, newTop - anchorOffset);
+  // Sub-pixel churn is not worth a scroll write (and would fight momentum).
+  if (Math.abs(target - wrapper.scrollTop) > 1) {
+    wrapper.scrollTop = target;
+  }
 }
 
 // Remove images by ID (for event-driven removal)
@@ -7229,9 +7598,22 @@ function abortExportZip() {
 // ============================================================
 // SEARCH
 // ============================================================
-function clearSearchQuery() {
+/** Drop every non-text search mode. Called before arming a new one. */
+function resetFaceAndImageSearches() {
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
+}
+
+/** Forget the character search and its cached ranked list. */
+function clearCharacterFaceSearch() {
+  faceSearchCharacter.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+}
+
+function clearSearchQuery() {
+  resetFaceAndImageSearches();
   emit("clear-search", "");
 }
 
@@ -7246,6 +7628,7 @@ function handleReverseImageSearch() {
     ids.push(imgId);
   }
   faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
   reverseImageSearchPictureIds.value = ids;
   // Clear any active text search so the two modes don't overlap.
   emit("clear-search", "");
@@ -7254,8 +7637,120 @@ function handleReverseImageSearch() {
 function handleFindSimilarFaces(faceId) {
   if (!faceId) return;
   reverseImageSearchPictureIds.value = [];
+  clearCharacterFaceSearch();
   faceLikenessSearchFaceId.value = faceId;
   emit("clear-search", "");
+}
+
+/**
+ * Move the suggestion threshold.
+ *
+ * The ref is set synchronously so the count in the bar tracks the drag, while
+ * the grid rebuild is debounced: it costs no network call (the ranked list and
+ * its rows are cached) but it does re-render the virtual grid, and doing that on
+ * every pointer sample would stutter. 200ms is under the ~250ms at which a
+ * response stops reading as immediate.
+ *
+ * @param {number} value - the new cut, 0-1.
+ */
+function handleFaceSearchThreshold(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  faceSearchThreshold.value = next;
+  debouncedFaceSearchRecut();
+}
+
+const debouncedFaceSearchRecut = debounce(() => {
+  if (!faceSearchCharacter.value) return;
+  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
+}, 200);
+
+/**
+ * Arm "Suggest more pictures of <person>" from the sidebar's person menu (#636).
+ *
+ * @param {{id: number|string, name: string}} character
+ */
+function handleSuggestPicturesForCharacter(character) {
+  const id = character?.id;
+  if (id == null) return;
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
+  faceSearchRanked.value = null;
+  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchCharacter.value = { id, name: character.name ?? "this person" };
+  emit("clear-search", "");
+  // The clear-search emit bumps gridVersion, but that watcher throttles itself
+  // to one refresh per 1200ms — and this search is the direct result of a click,
+  // so it must not be the one that gets dropped. Fetching here as well is safe:
+  // the two calls share a fetch key and the second de-dups against the first.
+  nextTick(() => {
+    fetchAllGridImages({ force: true }).then(() => updateVisibleThumbnails());
+  });
+}
+
+// Every match above the cut. Computed from the cached ranked list rather than
+// from `allGridImages`, so the count in the bar tracks the slider immediately
+// while the grid rebuild debounces behind it.
+const faceSearchMatches = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return [];
+  if (cached.characterId !== faceSearchCharacter.value.id) return [];
+  const cut = faceSearchThreshold.value ?? 0;
+  return cached.matches.filter((m) => (m.likeness ?? 0) >= cut);
+});
+
+// Selection wins over the threshold: a button that ignored an explicit
+// selection of twelve to write forty-one would be the error, not the shortcut.
+const faceSearchAssignFromSelection = computed(
+  () => selectedImageIds.value.length > 0,
+);
+
+const faceSearchAssignIds = computed(() =>
+  faceSearchAssignFromSelection.value
+    ? selectedImageIds.value.slice()
+    : faceSearchMatches.value.map((m) => m.picture_id),
+);
+
+/**
+ * Assign the suggested (or selected) pictures to the searched person.
+ *
+ * Sends picture ids rather than the matches' `face_id`s on purpose: the
+ * assignment endpoint expands stacks and re-picks the best face per picture
+ * against the same reference faces this search used, so a stacked suggestion
+ * moves as a unit. The write is recorded in the operation log, so refreshing it
+ * raises the receipt that carries Undo — which is what lets this skip a
+ * confirmation dialog.
+ */
+async function handleAssignFaceSearchResults() {
+  const character = faceSearchCharacter.value;
+  const ids = faceSearchAssignIds.value;
+  if (!character || !ids.length || faceSearchAssignBusy.value) return;
+  faceSearchAssignBusy.value = true;
+  try {
+    await addCharacterFaces(character.id, ids, { baseUrl: props.backendUrl });
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId.value = null;
+    // Re-run the search against the server rather than pruning the cached list
+    // locally. Two reasons, both correctness: the assignment is stack-atomic, so
+    // it can have assigned MORE pictures than were named here (a suggestion's
+    // stack siblings would otherwise stay on screen as un-assigned), and the
+    // fetch key has not changed, so a non-forced call would be dropped by the
+    // de-dup window and leave the grid showing what was just assigned.
+    faceSearchRanked.value = null;
+    await fetchAllGridImages({ force: true });
+    updateVisibleThumbnails();
+    // Raises the "Assigned N pictures…· Undo" receipt for this client.
+    operationStore.refresh();
+    emit("refresh-sidebar");
+  } catch (e) {
+    noticeStore.error(
+      `Couldn't assign those pictures to ${character.name}. ${errorDetail(e)}`,
+      { scope: "character-face-search-assign" },
+    );
+  } finally {
+    faceSearchAssignBusy.value = false;
+  }
 }
 
 // Clear reverse image search / face search when the user starts a text search or navigates.
@@ -7263,8 +7758,7 @@ watch(
   () => props.searchQuery,
   (newVal) => {
     if (newVal && newVal.trim()) {
-      reverseImageSearchPictureIds.value = [];
-      faceLikenessSearchFaceId.value = null;
+      resetFaceAndImageSearches();
     }
   },
 );
@@ -7275,13 +7769,17 @@ watch([() => props.selectedCharacter, () => props.selectedSet], () => {
   if (faceLikenessSearchFaceId.value !== null) {
     faceLikenessSearchFaceId.value = null;
   }
+  // The character search is NOT cleared here. It is launched from the sidebar's
+  // person menu, and opening that menu can also select the person — clearing on
+  // a selection change would cancel the search the click just asked for. It is
+  // library-wide by construction, so a view change cannot invalidate it; the
+  // Clear search button and the other search modes are its exits.
 });
 
 function handleEmptyStateReset() {
   gridReady.value = false;
   emptyStateDelayPassed.value = false;
-  reverseImageSearchPictureIds.value = [];
-  faceLikenessSearchFaceId.value = null;
+  resetFaceAndImageSearches();
   emit("reset-to-all");
 }
 </script>
@@ -7461,7 +7959,7 @@ function handleEmptyStateReset() {
 
 /* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
    padding, same left edge and inset. See the shared
-   `.penalised-tag-indicator, .stack-indicator, .thumbnail-lock-badge` rules
+   `.penalised-tag-indicator, .thumbnail-lock-badge` rules
    below, which it joins rather than restating. */
 
 .thumbnail-share-badge {
@@ -7829,7 +8327,10 @@ function handleEmptyStateReset() {
 /* Suppress all hover-revealed elements in touch-select mode */
 .touch-select-mode .image-card:hover .resolution-hover-overlay,
 .touch-select-mode .image-card:hover .thumbnail-id-overlay,
-.touch-select-mode .image-card:hover .thumbnail-top-right-badges {
+.touch-select-mode .image-card:hover .thumbnail-top-right-badges > *,
+/* The permanent stack badge must also clear the corner for the ✓ that a
+   touch-selection stamps at top-right. */
+.touch-select-mode .image-card:has(.selection-overlay) .thumbnail-top-right-badges > * {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -7950,6 +8451,81 @@ function handleEmptyStateReset() {
   filter: grayscale(1) brightness(0.65);
   opacity: 0.75;
 }
+
+/* ── Scrapheap ghost: a tile held in place while its undo is still offered ──
+   The tile stays where it is, ghosted and hatched, for as long as the receipt
+   is live; the grid closes the gap only when that window ends.
+
+   Three signals, none of them chromatic, so none can be confused with the
+   loading placeholder or an error state: the image desaturates, the tile fades
+   toward the page, and a diagonal hatch covers it.
+
+   The veil is a `background`, not a scrim: it fades the tile toward the grid
+   canvas in BOTH themes off one token. The hatch is two-tone — `on-background`
+   against `background` at the same alpha — so its stripes contrast with EACH
+   OTHER by a fixed delta whatever photo is underneath; a single-tone hatch
+   bottoms out near 2.1:1 on a dark photo in light theme. Both tokens flip with
+   the Vuetify theme class, so there is no media query and no theme override.
+
+   `.thumbnail-container::before` and not `.image-card::after`: the latter is
+   already taken by `.touch-select-mode` (which would make the ghost vanish in
+   touch-select mode) and its box overshoots the thumbnail by the card padding
+   and the whole info row. This node is exactly the image box in square,
+   justified and cropped modes, and it is otherwise unused — zero new DOM. */
+.image-card--ghost .thumbnail-img,
+.image-card--ghost .thumbnail-placeholder {
+  /* The same desaturation the drag source uses: one value, one meaning in this
+     grid — "this tile is on its way somewhere else". The hatch and the
+     persistence are what tell the two apart. The transition is declared here
+     rather than on the shared `.thumbnail-img` rule to keep the diff local; the
+     consequence is that an undo snaps the tile back at full strength, which is
+     the clearest possible confirmation that it came back. */
+  filter: grayscale(1);
+  transition: filter var(--dur-2) var(--ease-standard);
+}
+
+.image-card--ghost .thumbnail-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  pointer-events: none;
+  border-radius: var(--radius-md);
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(var(--v-theme-on-background), 0.5) 0 var(--space-1),
+      rgba(var(--v-theme-background), 0.5) var(--space-1) var(--space-2),
+      transparent var(--space-2) var(--space-3)
+    ),
+    rgba(var(--v-theme-background), 0.62);
+  /* A pseudo-element created by a class change has no from-state to transition
+     from, so the fade-in is a one-shot animation. `both` is load-bearing: under
+     the global reduced-motion reset this runs in ~0ms and the fill keeps the
+     END state, so the hatch appears instantly and FULLY rather than blank. */
+  animation: ghostHatchIn var(--dur-2) var(--ease-standard) both;
+}
+
+/* Matches the existing `.compact-mode .thumbnail-container::after` override. */
+.compact-mode .image-card--ghost .thumbnail-container::before {
+  border-radius: 0;
+}
+
+@keyframes ghostHatchIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A departing tile does not offer the hover affordance. `inert` already stops
+   the pointer in supporting browsers; this keeps the visual honest either way. */
+.image-card--ghost:hover .thumbnail-container::after {
+  opacity: 0;
+}
+
 .thumbnail-img {
   width: 100%;
   height: 100%;
@@ -8075,7 +8651,6 @@ function handleEmptyStateReset() {
    Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
    track each other at every column count. */
 .penalised-tag-indicator,
-.stack-indicator,
 .thumbnail-lock-badge {
   display: flex;
   align-items: center;
@@ -8096,8 +8671,22 @@ function handleEmptyStateReset() {
   filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
 }
 
-.stack-indicator {
-  cursor: pointer;
+/* Bottom-left, on the photo scrim: the same corner and the same backing the
+   grid's other permanent chips use, so it reads as one family. */
+.stack-cover-flag {
+  position: absolute;
+  bottom: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-raised);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  pointer-events: none;
 }
 
 .stack-band-overlay {
@@ -8131,12 +8720,19 @@ function handleEmptyStateReset() {
   align-items: flex-end;
   gap: 2px;
   z-index: 120;
+  pointer-events: none;
+}
+
+/* Hover-only members of the badge column (the stars). The stack badge
+   (.sbadge) is exempt on purpose: the count is permanent. The opacity lives on
+   the CHILDREN, not the container, precisely so one column can hold both. */
+.thumbnail-top-right-badges > :not(.sbadge) {
   opacity: 0;
   transition: opacity 0.15s ease;
   pointer-events: none;
 }
 
-.image-card:hover .thumbnail-top-right-badges {
+.image-card:hover .thumbnail-top-right-badges > :not(.sbadge) {
   opacity: 1;
   pointer-events: auto;
 }
@@ -8158,6 +8754,11 @@ function handleEmptyStateReset() {
   font-size: 28px;
   opacity: 0.7;
   animation: thumbnailPlaceholderSpin 1.1s linear infinite;
+}
+
+.thumbnail-broken-icon {
+  font-size: 48px;
+  opacity: 0.5;
 }
 
 @keyframes thumbnailPlaceholderSpin {

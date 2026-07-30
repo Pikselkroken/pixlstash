@@ -68,9 +68,23 @@ function normaliseSource(payload) {
   return "external";
 }
 
+// The wire values for `change_kind`, mirroring the backend's
+// `WsBroadcasterMixin.CHANGE_KINDS` allowlist. The two are ONE contract: the
+// backend silently drops a kind missing from its tuple, and this function
+// silently degrades a kind missing from this set to "updated" — which for a
+// lifecycle change leaves a stale, 404-clickable card behind. Never add a value
+// on one side only.
+//
+// `restored` is a scrapheap comeback (undo of a move-to-Scrapheap, or
+// POST /pictures/scrapheap/restore). It is deliberately NOT `added`: both put a
+// card back, but only `added` means "new to the vault", and the sidebar reads
+// that difference — it raises its NEW marker for an import and must not for a
+// picture that has been in the library all along.
+const CHANGE_KINDS = new Set(["added", "updated", "removed", "restored"]);
+
 function resolveChangeKind(payload) {
   const kind = payload?.change_kind;
-  if (kind === "added" || kind === "updated" || kind === "removed") return kind;
+  if (CHANGE_KINDS.has(kind)) return kind;
   // `picture_imported` is implicitly an addition.
   if (payload?.type === "picture_imported") return "added";
   return "updated";
@@ -120,6 +134,7 @@ export function useGridRealtimeSync(deps) {
   // of the same id inside the window nets out to a remove (and remove→add to an
   // add), never both.
   let addedIds = new Set();
+  let restoredIds = new Set(); // scrapheap comebacks — inserted without the flash
   let updatedFields = new Map(); // id -> Set<field>
   let removedIds = new Set();
   let sawRemove = false; // a removal event arrived this window (even empty-id)
@@ -129,6 +144,7 @@ export function useGridRealtimeSync(deps) {
 
   function resetBuffers() {
     addedIds = new Set();
+    restoredIds = new Set();
     updatedFields = new Map();
     removedIds = new Set();
     sawRemove = false;
@@ -145,7 +161,23 @@ export function useGridRealtimeSync(deps) {
   function enqueueAdded(ids) {
     for (const id of ids) {
       removedIds.delete(id);
+      restoredIds.delete(id);
       addedIds.add(id);
+    }
+    ensureFlushScheduled();
+  }
+
+  // A comeback, not an arrival. Buffered apart from `addedIds` for exactly one
+  // reason: the insert must not fire the grid's new-picture highlight. That
+  // flash means "this was not here before", and strobing a 40-picture undo with
+  // it tells the user the wrong story about pictures they just asked to have
+  // back. The confirmation is the receipt, which has already flipped to
+  // "Undone: …" with a Redo.
+  function enqueueRestored(ids) {
+    for (const id of ids) {
+      removedIds.delete(id);
+      if (addedIds.has(id)) continue; // a genuine add in the same window wins
+      restoredIds.add(id);
     }
     ensureFlushScheduled();
   }
@@ -167,6 +199,7 @@ export function useGridRealtimeSync(deps) {
     sawRemove = true;
     for (const id of ids) {
       addedIds.delete(id);
+      restoredIds.delete(id);
       updatedFields.delete(id);
       removedIds.add(id);
     }
@@ -192,6 +225,7 @@ export function useGridRealtimeSync(deps) {
     const removed = [...removedIds];
     const hadRemove = sawRemove;
     const added = [...addedIds];
+    const restored = [...restoredIds];
     const updated = [...updatedFields.entries()];
     const addPill = [...addPillIds];
     const sortPill = [...sortPillIds];
@@ -205,6 +239,11 @@ export function useGridRealtimeSync(deps) {
     }
     if (added.length) {
       grid.insertGridImagesById?.(added);
+    }
+    if (restored.length) {
+      // Idempotent: ids still mounted as ghosts are already in the grid's base
+      // list, so this is a no-op for them and only the ghost flag clears.
+      grid.insertGridImagesById?.(restored, { highlight: false });
     }
     // The MAX_TARGETED_UPDATE escalation applies to the COALESCED batch: a
     // window that accreted >50 distinct per-id refreshes is a fetch storm, so
@@ -310,8 +349,53 @@ export function useGridRealtimeSync(deps) {
     grid.refreshGridImage?.(id);
   }
 
+  // --- Scrapheap comeback (any origin) ------------------------------------
+  // A `restored` event puts cards BACK. The insert is idempotent by
+  // construction: `insertGridImagesById` skips ids already in
+  // `lastFetchedGridImages`, so a tile still mounted as a ghost (its undo
+  // receipt was live when the undo landed) is left exactly where it is and only
+  // the ghost flag clears, while a tile whose ghost window had already elapsed —
+  // or that was never ghosted, because the undo came from the toolbar, the
+  // lightbox or Ctrl+Z long after the fact — is fetched and re-inserted at its
+  // sorted position. One path, both cases, no refetch flash for the live one.
+  function applyRestored(originLabel, pictureIds) {
+    if (!pictureIds.length) {
+      // "Restore everything" broadcasts no ids (see the restore endpoint), so
+      // there is nothing to target; the per-id ops below would be silent no-ops
+      // and the comeback would never show.
+      return reloadOrDefer(`${originLabel}-restored-untargetable-empty-ids`);
+    }
+    if (deferWhileOverlayOpen()) {
+      // Same contract as an add (§9.1): never restructure the grid under the
+      // frozen filmstrip. closeOverlay() reconciles.
+      return {
+        action: TARGETED,
+        reason: `${originLabel}-restored-overlay-deferred`,
+      };
+    }
+    if (grid.isImagesLoading?.()) {
+      // A streaming fetch owns `allGridImages` wholesale and an insert into it
+      // would be clobbered. Raise the "view changed" pill rather than dropping
+      // the comeback — deliberately NOT the "new pictures" pill, whose copy
+      // would call a restored picture new.
+      enqueueSortPill(pictureIds);
+      return { action: PILL, reason: `${originLabel}-restored-during-load` };
+    }
+    enqueueRestored(pictureIds);
+    return { action: TARGETED, reason: `${originLabel}-restored` };
+  }
+
   // --- Echo of this tab's own optimistic op -------------------------------
   function handleOwnOrigin(payload, changeKind, fields, pictureIds) {
+    // The one own-origin echo that must NOT be suppressed. Suppression assumes
+    // an optimistic local op already applied the change, and for a scrapheap
+    // undo there may be none: the tiles may have collapsed when the receipt
+    // expired, or the undo may have come from the toolbar / Ctrl+Z / the
+    // lightbox with no grid op at all. Suppressing it is what left the grid
+    // showing the pre-undo state after an undo (the reported bug).
+    if (changeKind === "restored") {
+      return applyRestored("own-origin", pictureIds);
+    }
     if (changeKind === "updated" && fieldsAreActiveServerSort(fields)) {
       // Optimistic guess for a server-computed sort field can diverge from
       // server truth — reconcile each card, never reload. Cap the per-id
@@ -333,6 +417,12 @@ export function useGridRealtimeSync(deps) {
     if (changeKind === "removed") {
       enqueueRemoved(pictureIds);
       return { action: TARGETED, reason: "foreign-ui-removed" };
+    }
+    // Another owner tab undid a scrapheap move (or hit Restore). Targeted, like
+    // its `added` sibling — but never the "new pictures" pill, whose copy would
+    // call a picture that has been here all along new.
+    if (changeKind === "restored") {
+      return applyRestored("foreign-ui", pictureIds);
     }
     // An empty-id add/update can't be targeted (e.g. restore-all broadcasts
     // change_kind:"added" with picture_ids:[]). The per-id ops below would be
@@ -380,6 +470,23 @@ export function useGridRealtimeSync(deps) {
       // Never leave a stale 404-clickable card; remove silently.
       enqueueRemoved(pictureIds);
       return { action: TARGETED, reason: "external-removed" };
+    }
+    // A restore from outside this UI never auto-inserts under the user — the
+    // external contract. It takes the "View changed externally" pill and NOT
+    // the "New pictures" one: the pictures are coming back, not arriving, and
+    // that pill's own copy would say otherwise.
+    if (changeKind === "restored") {
+      if (!pictureIds.length) {
+        return reloadOrDefer("external-restored-untargetable-empty-ids");
+      }
+      if (deferWhileOverlayOpen()) {
+        return {
+          action: TARGETED,
+          reason: "external-restored-overlay-deferred",
+        };
+      }
+      enqueueSortPill(pictureIds);
+      return { action: PILL, reason: "external-restored" };
     }
     // An empty-id add/update can't be targeted (e.g. a restore-all broadcast, or
     // an unattributed bulk change with no ids). The pill / per-id branches below
@@ -505,11 +612,23 @@ export function useGridRealtimeSync(deps) {
     // current sort/filter ignore (preserves the smart-score-under-date-sort
     // optimisation for the sidebar). refreshSidebar is itself debounced in
     // App.vue, so a burst already collapses to one count refresh.
+    //
+    // The boolean is the sidebar's FLASH (its NEW marker), which the sidebar
+    // raises on any count that grew since the last fetch. A `restored` event
+    // grows "All Pictures" exactly like an import does, so it must refresh the
+    // counts but must NOT flash: the NEW marker means "this arrived while you
+    // were not looking", and a picture you just pulled back out of the
+    // Scrapheap yourself is neither new nor unseen. That mislabelling is the
+    // reported bug, and it is why `restored` is a kind of its own rather than
+    // the `added` the undo path used to send.
     const changeKind = resolveChangeKind(payload);
     const touchesSidebar =
-      affectsView || changeKind === "added" || changeKind === "removed";
+      affectsView ||
+      changeKind === "added" ||
+      changeKind === "removed" ||
+      changeKind === "restored";
     if (!wsStore.isUploadInProgress && touchesSidebar) {
-      refreshSidebar(true);
+      refreshSidebar(changeKind !== "restored");
     }
 
     return handlePictureEvent(payload);

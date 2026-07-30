@@ -3228,3 +3228,86 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
         "picture A's content was genuinely destroyed; restore must never "
         "resurrect it and bind it to whatever now occupies that path"
     )
+
+
+def test_restore_resource_rebuilds_entity_project_membership(server):
+    """A restored parent character comes back with its project membership rows,
+    not just its scalar ``project_id`` (issue #125).
+
+    The join table is the read model: a character restored with the FK alone
+    would be silently invisible to ``GET /characters?project_id=…`` and refused
+    by a project-scoped share token, which is the same "restored but unusable"
+    failure class as the 2026-07-22 snapshot-restore incident.
+    """
+    from pixlstash.db_models import CharacterProjectMember, Project
+    from pixlstash.services.project_membership_service import set_character_projects
+
+    _create_file(server, "membership_restore.jpg")
+    pic = _add_picture(server, filename="membership_restore.jpg")
+
+    def _setup_snapshot_state(session):
+        p1 = Project(name="restore-proj-1")
+        p2 = Project(name="restore-proj-2")
+        session.add(p1)
+        session.add(p2)
+        session.flush()
+        c = Character(name="multi-project-char")
+        session.add(c)
+        session.flush()
+        set_character_projects(session, c, [p1.id, p2.id])
+        session.add(
+            Face(
+                picture_id=pic.id,
+                frame_index=0,
+                face_index=0,
+                character_id=c.id,
+                bbox_="[0,0,20,20]",
+            )
+        )
+        session.commit()
+        return c.id, sorted([p1.id, p2.id])
+
+    char_id, project_ids = server.vault.db.run_task(_setup_snapshot_state)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_char(session):
+        session.exec(
+            delete(CharacterProjectMember).where(
+                CharacterProjectMember.character_id == char_id
+            )
+        )
+        session.exec(delete(Character).where(Character.id == char_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_char)
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id,
+        "picture",
+        pic.id,
+        confirm_restore_dependencies=True,
+    )
+    assert report.upserted_count > 0
+
+    restored = server.vault.db.run_immediate_read_task(
+        lambda s: (
+            s.get(Character, char_id),
+            sorted(
+                int(r)
+                for r in s.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == char_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    char_after, membership_after = restored
+    assert char_after is not None
+    assert membership_after == project_ids, (
+        "restored character must regain BOTH project memberships; got "
+        f"{membership_after}"
+    )
+    assert char_after.project_id == project_ids[0], (
+        "the legacy primary-project FK must survive the restore too"
+    )

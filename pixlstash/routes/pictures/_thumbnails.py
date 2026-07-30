@@ -551,9 +551,10 @@ def register_routes(router, server):
                 # old key was imported_at, which never changed on regen -> the
                 # browser kept painting the pre-upgrade square bitmap into the
                 # justified layout's AR cell -> squashed thumbnails.
-                tw = getattr(pic, "thumbnail_width", None)
-                th = getattr(pic, "thumbnail_height", None)
-                v = f"{tw}x{th}" if tw and th else "0"
+                v = ImageUtils.thumbnail_cache_token(
+                    getattr(pic, "thumbnail_width", None),
+                    getattr(pic, "thumbnail_height", None),
+                )
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 # Whole-frame AR-bitmap dimensions and the face-weighted square-crop
                 # rectangle (bitmap pixel space). All are NULL until the picture is

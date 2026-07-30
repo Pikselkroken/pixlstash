@@ -4,7 +4,30 @@
 // have already migrated; the counts, scores, thumbnails, and export endpoints
 // join it as the grid and overlay move over.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken } from "../utils/apiClient";
+
+/**
+ * The URL a browser loads a picture's thumbnail from.
+ *
+ * Not a request function: an `<img src>` bypasses Axios entirely, so the share
+ * token has to be appended by hand. It still belongs in this module, because
+ * the path is part of the pictures contract and a second spelling of it
+ * elsewhere is exactly the drift the api layer exists to prevent.
+ *
+ * @param {number|string} id
+ * @param {Object} [options]
+ * @param {number|string} [options.version] - cache-buster, bumped when the
+ *   thumbnail is regenerated.
+ * @param {string} [options.baseUrl=""]
+ * @returns {string}
+ */
+export function pictureThumbnailUrl(id, { version, baseUrl = "" } = {}) {
+  const query =
+    version === undefined || version === null
+      ? ""
+      : `?v=${encodeURIComponent(version)}`;
+  return appendShareToken(`${baseUrl}/pictures/thumbnails/${id}.webp${query}`);
+}
 
 /**
  * Count the pictures matching a filter scope.
@@ -74,22 +97,67 @@ export async function getLikenessGroups(
 /**
  * Find pictures showing the same face as a given one.
  *
- * Returns ranked references (`picture_id` + score), not pictures: the caller
- * fetches the pictures separately and re-applies this ranking, because the
- * ranking is the result and the id-list read does not preserve order.
+ * Returns ranked references (`picture_id`, `likeness`, `face_id`), not
+ * pictures: the caller fetches the pictures separately and re-applies this
+ * ranking, because the ranking is the result and the id-list read does not
+ * preserve order. `face_id` is the detection that produced the score, which is
+ * the row a character assignment writes to.
  *
  * @param {number|string} sourceFaceId
  * @param {Object} [options]
  * @param {number} [options.topN=500]
+ * @param {number} [options.threshold] - minimum likeness to include.
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
 export async function faceSearch(
   sourceFaceId,
-  { topN = 500, baseUrl = "" } = {},
+  { topN = 500, threshold, baseUrl = "" } = {},
 ) {
+  const params = new URLSearchParams({
+    source_face_id: String(sourceFaceId),
+    top_n: String(topN),
+  });
+  if (threshold != null) params.append("threshold", String(threshold));
   const res = await apiClient.post(
-    `${baseUrl}/pictures/face-search?source_face_id=${sourceFaceId}&top_n=${topN}`,
+    `${baseUrl}/pictures/face-search?${params.toString()}`,
+  );
+  return res.data;
+}
+
+/**
+ * Find more pictures of a character, using their reference faces as the query.
+ *
+ * The pictures already assigned to that character are excluded server-side, so
+ * the result set is the un-assigned candidates and its length is a count the UI
+ * can put on an "assign these" button without over-promising.
+ *
+ * Ranked like {@link faceSearch}, and each match names the `face_id` that
+ * matched so the assignment can target that detection.
+ *
+ * @param {number|string} characterId
+ * @param {Object} [options]
+ * @param {number} [options.topN=500]
+ * @param {number} [options.threshold=0.5] - fetch floor, deliberately looser
+ *   than the UI's default cut so the slider can be widened without a refetch.
+ * @param {boolean} [options.excludeAssigned=true]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Array<Object>>} ranked matches (the response body).
+ */
+export async function characterFaceSearch(
+  characterId,
+  { topN = 500, threshold = 0.5, excludeAssigned = true, baseUrl = "" } = {},
+) {
+  const params = new URLSearchParams({
+    source_character_id: String(characterId),
+    top_n: String(topN),
+    threshold: String(threshold),
+  });
+  if (excludeAssigned) {
+    params.append("exclude_character_id", String(characterId));
+  }
+  const res = await apiClient.post(
+    `${baseUrl}/pictures/face-search?${params.toString()}`,
   );
   return res.data;
 }
@@ -316,7 +384,10 @@ export async function setPicturesProject(
  * @returns {Promise<Object>} the counts, the protected-file list, and
  *   `confirm_token`.
  */
-export async function previewScrapheapDelete(ids = null, { baseUrl = "" } = {}) {
+export async function previewScrapheapDelete(
+  ids = null,
+  { baseUrl = "" } = {},
+) {
   const res = await apiClient.post(
     `${baseUrl}/pictures/scrapheap/delete-preview`,
     { ids },
@@ -401,7 +472,11 @@ export async function openPictureLocation(id, { baseUrl = "" } = {}) {
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function detectPictures(pictureIds, prompt, { baseUrl = "" } = {}) {
+export async function detectPictures(
+  pictureIds,
+  prompt,
+  { baseUrl = "" } = {},
+) {
   const res = await apiClient.post(`${baseUrl}/pictures/detect`, {
     picture_ids: pictureIds,
     prompt,
@@ -568,7 +643,9 @@ export async function submitGuestScores(payload, { baseUrl = "" } = {}) {
  */
 export async function startExport(query = "", { baseUrl = "" } = {}) {
   const res = await apiClient.get(
-    query ? `${baseUrl}/pictures/export?${query}` : `${baseUrl}/pictures/export`,
+    query
+      ? `${baseUrl}/pictures/export?${query}`
+      : `${baseUrl}/pictures/export`,
   );
   return res.data;
 }

@@ -1,5 +1,7 @@
 """Shared filter helpers for picture query construction."""
 
+from typing import Iterable
+
 from fastapi import HTTPException
 from sqlalchemy import exists, select
 from sqlalchemy.orm import aliased
@@ -7,12 +9,12 @@ from sqlmodel import Session
 import numpy as np
 
 from pixlstash.db_models import (
-    Character,
+    CharacterProjectMember,
     Face,
     Picture,
     PictureProjectMember,
-    PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
 )
 from pixlstash.pixl_logging import get_logger
 
@@ -330,10 +332,14 @@ def fetch_scope_allowed_set_ids(server, request) -> set[int] | None:
     if token_scope.resource_type == "project":
 
         def _fetch_project_sets(session: Session, project_id: int) -> set[int]:
+            # Issue #125: a set may be in several projects, so membership comes
+            # from the join table, not the primary-project FK.
             return {
                 int(r[0])
                 for r in session.exec(
-                    select(PictureSet.id).where(PictureSet.project_id == project_id)
+                    select(PictureSetProjectMember.set_id).where(
+                        PictureSetProjectMember.project_id == project_id
+                    )
                 ).all()
             }
 
@@ -374,10 +380,14 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
     if token_scope.resource_type == "project":
 
         def _fetch_project_chars(session: Session, project_id: int) -> set[int]:
+            # Issue #125: a character may be in several projects, so membership
+            # comes from the join table, not the primary-project FK.
             return {
                 int(r[0])
                 for r in session.exec(
-                    select(Character.id).where(Character.project_id == project_id)
+                    select(CharacterProjectMember.character_id).where(
+                        CharacterProjectMember.project_id == project_id
+                    )
                 ).all()
             }
 
@@ -428,6 +438,99 @@ def fetch_scope_allowed_character_ids(server, request) -> set[int] | None:
         token_scope.resource_type,
     )
     return set()
+
+
+def visible_project_ids(server, request) -> set[int] | None:
+    """Return project IDs the current token scope may *learn about*.
+
+    A character or picture set may belong to several projects (issue #125) and
+    every serialisation of one carries a ``project_ids`` list. That list is
+    *membership metadata about other projects*, not part of the object the token
+    was granted: a token scoped to one character legitimately reads that
+    character, but the complete membership list tells it how many other projects
+    the character is filed under and what their ids are — facts it can obtain
+    from no endpoint it is allowed to call (``GET /projects/{other_id}`` is
+    project-scoped and 403s). Any handler that serialises ``project_ids`` must
+    intersect it with this function's result first.
+
+    The ladder mirrors :func:`fetch_scope_allowed_set_ids`: a ``project`` token
+    sees exactly its own project, and every other scoped token sees no projects
+    at all.
+
+    Args:
+        server: The server instance (unused; kept for signature symmetry with the
+            other scope helpers, which need it to run a read task).
+        request: The current FastAPI request.
+
+    Returns:
+        ``None`` when the token is unscoped / owner (no restriction — the caller
+        must not filter). ``{project_id}`` for a ``project``-scoped token. An
+        empty ``set`` for a ``character``, ``picture_set``, ``picture``, or
+        unrecognised ``resource_type`` (fail-closed: no project id is disclosed).
+    """
+    token_scope = getattr(request.state, "token_scope", None)
+    if token_scope is None or token_scope.resource_type is None:
+        return None
+
+    if token_scope.resource_type == "project":
+        return {int(token_scope.resource_id)}
+
+    # character / picture_set / picture / anything unrecognised: no project
+    # visibility at all. Deliberately fail-closed rather than defaulting to
+    # disclosure.
+    logger.debug(
+        "visible_project_ids: token_scope resource_type %r has no project"
+        " visibility; returning empty set",
+        token_scope.resource_type,
+    )
+    return set()
+
+
+def filter_visible_project_ids(
+    project_ids: Iterable[int] | None, visible: set[int] | None
+) -> list[int]:
+    """Narrow an entity's ``project_ids`` to what the caller may see.
+
+    Args:
+        project_ids: The entity's full project membership, from the join table.
+        visible: The result of :func:`visible_project_ids` — ``None`` for an
+            owner / unscoped token (no narrowing), otherwise the set of project
+            ids the token may learn about.
+
+    Returns:
+        A sorted list of project ids: the full membership for an owner, the
+        intersection with ``visible`` for a scoped token.
+    """
+    ids = sorted({int(pid) for pid in (project_ids or []) if pid is not None})
+    if visible is None:
+        return ids
+    return [pid for pid in ids if pid in visible]
+
+
+def narrow_project_fields(
+    payload: dict, project_ids: Iterable[int] | None, visible: set[int] | None
+) -> dict:
+    """Set scope-narrowed ``project_ids`` *and* ``project_id`` on *payload*.
+
+    The legacy scalar ``project_id`` must be derived from the narrowed list,
+    never serialised straight off the model: the stored scalar names the
+    entity's *primary* project, which a token scoped to a secondary project
+    (or to the entity itself) has no grant to learn (issue #125 / R1b).
+
+    Args:
+        payload: The response dict being built; mutated in place.
+        project_ids: The entity's full project membership, from the join table.
+        visible: The result of :func:`visible_project_ids`.
+
+    Returns:
+        The same *payload*, with ``project_ids`` narrowed and ``project_id``
+        set to the first narrowed id (the primary project when the caller may
+        see it) or ``None`` when none are visible.
+    """
+    narrowed = filter_visible_project_ids(project_ids, visible)
+    payload["project_ids"] = narrowed
+    payload["project_id"] = narrowed[0] if narrowed else None
+    return payload
 
 
 def _project_scope_picture_ids(session: Session, project_id: int) -> set[int]:

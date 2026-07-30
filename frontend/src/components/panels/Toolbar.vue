@@ -74,6 +74,36 @@
               Search relevance (fixed)
             </div>
 
+            <!-- Shown once, in the slot the removed sort order used to occupy.
+                 A user who reached for "Likeness Groups" here needs one line
+                 telling them where the capability went, not a changelog. -->
+            <div
+              v-if="dedupMigrationNotice.visible.value"
+              class="tbm-section gb-sort-migration-note"
+              data-testid="sort-migration-notice"
+            >
+              <v-icon size="16">mdi-content-duplicate</v-icon>
+              <span class="gb-sort-migration-text">
+                Looking for Likeness Groups? Duplicates now has its own place in
+                the sidebar, with a count and a one-key review queue.
+              </span>
+              <button
+                type="button"
+                class="gb-sort-migration-open"
+                @click="openDuplicatesFromNotice"
+              >
+                Open Duplicates
+              </button>
+              <button
+                type="button"
+                class="gb-sort-migration-dismiss"
+                aria-label="Hide this notice"
+                @click="dedupMigrationNotice.dismiss()"
+              >
+                <v-icon size="16">mdi-close</v-icon>
+              </button>
+            </div>
+
             <div class="tbm-section">
               <div class="tbm-grid-2">
                 <button
@@ -169,6 +199,10 @@
             </div>
           </div>
         </v-menu>
+        <!-- Undo/redo moved to the right-side app-wide tail (see below): the
+             canonical [separator][UndoControl][TbGlobalActions] cluster is
+             identical in every view, so the position learned here holds in
+             Duplicates too. -->
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -223,7 +257,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
+              class="bar-btn bar-btn--boxed tb-fold-600"
               :class="{ 'bar-btn--open': gbViewMenuOpen }"
               type="button"
               title="View options"
@@ -315,7 +349,13 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Toolbar: divider ─────────────────────────────────────── -->
+        <!-- ── Separator G-S1: the lens run | the action run ────────────
+             A separator marks a SEMANTIC boundary, not a group edge (the
+             amendments in docs/design/toolbar-responsive-decisions.md).
+             Renders at ALL widths: with the ⋯ standing at the end of the
+             action run it collapses (amendment #2), the run keeps two
+             members ([Search][⋯]) down to the floor, so both flanks stay
+             populated and the rule never sits boxed. -->
         <div class="bar-separator"></div>
         <!-- ── Toolbar: Search (icon trigger → search menu popover) ───── -->
         <v-menu
@@ -397,7 +437,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-export-btn"
+              class="bar-btn bar-btn--icon tb-export-btn tb-fold-700"
               :class="{ 'bar-btn--open': exportStore.exportMenuOpen }"
               type="button"
               title="Export current grid to zip"
@@ -420,7 +460,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
+              class="bar-btn bar-btn--icon tb-fold-700"
               :class="{ 'bar-btn--open': tbImportMenuOpen }"
               type="button"
               title="Import photos"
@@ -455,7 +495,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
+              class="bar-btn bar-btn--icon tb-fold-700"
               :class="{ 'bar-btn--open': tbComfyuiMenuOpen }"
               type="button"
               :disabled="isReadOnly"
@@ -473,13 +513,77 @@
             "
           />
         </v-menu>
+        <!-- ── The ⋯ overflow (amendment #2 in docs/design/
+             toolbar-responsive-decisions.md): a burger may only collapse
+             controls from its OWN visual group, and it stands where those
+             controls stood — so it lives HERE, at the end of the action run
+             it collapses (Export/Import/ComfyUI at ≤700, View at ≤600), and
+             never a control from across a group boundary. Fold = CSS both
+             ways: each row shares its bar button's v-if, and the container
+             queries flip which of the pair is visible. The panel keeps its
+             right-aligned anchoring, so it opens leftward and stays
+             on-screen. -->
+        <TbOverflowMenu class="tb-overflow">
+          <template #default="{ close }">
+            <button
+              type="button"
+              class="tbm-action tb-row-700"
+              @click="
+                emit('confirm-export-zip');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-tray-arrow-down</v-icon>
+              <span>Export grid to zip</span>
+            </button>
+            <button
+              v-if="!isReadOnly"
+              type="button"
+              class="tbm-action tb-row-700"
+              @click="
+                emit('open-import');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-cloud-upload-outline</v-icon>
+              <span>Import photos…</span>
+            </button>
+            <button
+              v-if="filterStore.comfyuiConfigured"
+              type="button"
+              class="tbm-action tb-row-700"
+              :disabled="isReadOnly"
+              @click="
+                close();
+                tbComfyuiMenuOpen = true;
+              "
+            >
+              <v-icon size="18">mdi-image-plus-outline</v-icon>
+              <span>Generate with ComfyUI…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action tb-row-600"
+              @click="
+                close();
+                gbViewMenuOpen = true;
+              "
+            >
+              <v-icon size="18">mdi-view-grid</v-icon>
+              <span>View options…</span>
+            </button>
+          </template>
+        </TbOverflowMenu>
       </div>
-      <!-- ── Conditional separator: ComfyUI | ApplyTo (shown when bar is narrow) ── -->
-      <div class="bar-separator bar-separator--gap-guard"></div>
+      <!-- No separator between the groups: the elastic gap IS the left|right
+           boundary (two-boundary rule, docs/design/toolbar-responsive-
+           decisions.md amendment). The old leading rule here boxed the Review
+           button, and its narrow-width gap-guard twin drew a double rule. -->
       <div class="selection-bar-right">
-        <!-- ── Separator: grid controls | actions ─────────────────────── -->
-        <div class="bar-separator"></div>
-        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
+        <!-- ── Toolbar: Review and fix tags (an action, not a menu) ─────
+             Visible at ALL widths (amendment #2): it is the review overlay's
+             only visible entry point, and folding it into the left group's
+             burger would cross the group boundary. -->
         <button
           class="bar-btn bar-btn--icon"
           type="button"
@@ -489,38 +593,19 @@
         >
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
-        <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
-        <button
-          class="bar-btn bar-btn--icon"
-          type="button"
-          title="Settings"
-          @click="emit('open-settings')"
-        >
-          <v-icon size="20">mdi-cog-outline</v-icon>
-        </button>
-        <!-- ── Toolbar: Stats toggle ──── -->
-        <button
-          class="bar-btn bar-btn--icon tb-stats-btn"
-          :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
-          type="button"
-          :title="
-            tasksStore.hasActiveTasks
-              ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'} running`
-              : sidebarStore.statsOpen
-                ? 'Hide stats sidebar'
-                : 'Show stats sidebar'
-          "
-          @click="sidebarStore.toggleStats()"
-        >
-          <v-icon size="20">mdi-chart-bar</v-icon>
-          <!-- App-wide activity light: pulses whenever the task manager has any
-               active work, so background tasks are visible without opening the
-               stats sidebar. -->
-          <span
-            v-if="tasksStore.hasActiveTasks"
-            class="tb-stats-activity"
-          ></span>
-        </button>
+        <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
+             The canonical toolbar tail, identical in every view:
+             [separator] [UndoControl] [TbGlobalActions]. The rule is
+             required AND stays at every width (it mirrors the Duplicates
+             bar's D-S2): proximity alone cannot separate identical 32px
+             icon buttons into "this view's tools" and "the app's chrome". -->
+        <div class="bar-separator"></div>
+        <UndoControl v-if="!isReadOnly" />
+        <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
+             queue, which is why they live in their own component). Never
+             folds (amendment #2); the activity dot stays first-class on the
+             Stats button at every width. -->
+        <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
   </div>
@@ -531,13 +616,10 @@ import { computed, nextTick, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
-import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
-import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
@@ -545,9 +627,13 @@ import {
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import GbFilterPanel from "./GbFilterPanel.vue";
+import TbGlobalActions from "./TbGlobalActions.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
+import TbOverflowMenu from "./TbOverflowMenu.vue";
+import UndoControl from "./UndoControl.vue";
+import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
   selectedCharacter: String,
@@ -566,33 +652,50 @@ const emit = defineEmits([
   "open-import",
   "local-import",
   "open-settings",
+  "open-duplicates",
 ]);
 
 const tbImportMenuOpen = ref(false);
 
-const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
-const SCRAPHEAP_PICTURES_ID = "SCRAPHEAP";
+// Shown once per browser and then never again. A migration nudge that came back
+// after a reload would be an ad, so the flag is persisted rather than held in
+// the transient notice store.
+const dedupMigrationNotice = useOneTimeNotice("dedup-sort-migration");
 
-const filteredSortOptions = computed(() => {
-  const options = sortStore.sortOptions ?? [];
-  if (selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID) {
-    return options.filter((opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY);
-  }
-  return options;
-});
+/** Dismiss the notice and take the user to where the capability moved. */
+function openDuplicatesFromNotice() {
+  dedupMigrationNotice.dismiss();
+  gbSortMenuOpen.value = false;
+  emit("open-duplicates");
+}
+
+const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
+
+// The Likeness Groups sort order is gone from the menu in 1.9. It was a lens,
+// not a task: it never told you how many duplicates you had, offered no verdict,
+// had no bulk action, and forgot everything the moment you changed sort. It also
+// implied a whole-library comparison every time it was used. The signal survives
+// in the Duplicates destination, which builds groups you can act on instead of
+// shuffling the grid.
+//
+// The backend still serves the mechanism, so a deep link or a saved preference
+// that names it keeps working; it simply has no menu row any more, and the
+// migration notice below points at where it went.
+const filteredSortOptions = computed(() =>
+  (sortStore.sortOptions ?? []).filter(
+    (opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY,
+  ),
+);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pinia stores (replaces gridBarState and toolbarState provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
 const filterStore = useFilterStore();
 const sortStore = useSortStore();
-const selectionStore = useSelectionStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
-const sidebarStore = useSidebarStore();
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
-const tasksStore = useTasksStore();
 const projectStore = useProjectStore();
 
 const tbComfyuiMenuOpen = ref(false);
@@ -954,13 +1057,21 @@ const gbCollapseAllStacksDisabled = computed(
   margin: 0;
   height: 36px;
   /* 1px divider along the bottom. box-sizing:border-box keeps the bar at 36px
-     (the border sits inside), so this doesn't grow the toolbar. */
+     (the border sits inside), so this doesn't grow the toolbar.
+     POINT OF TRUTH for the shell band's box recipe: `.dq-toolbar`
+     (DuplicateQueue.vue) copies `height`/`box-sizing`/zero vertical padding
+     from here so the two bars never step (guardrail in Toolbar.test.js).
+     A change to this recipe is a change to both bars. */
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   box-sizing: border-box;
   display: flex;
   align-items: center;
   container-type: inline-size;
-  container-name: selbar;
+  /* Two names on one container: `selbar` for this bar's own ladder, and the
+     shared `toolbar` name that UndoControl, TbGlobalActions and the overflow
+     write their scoped @container rules against — so the shared chrome
+     degrades identically here and in the Duplicates bar (`dqbar toolbar`). */
+  container-name: selbar toolbar;
 }
 .selection-bar-content {
   display: flex;
@@ -1127,42 +1238,6 @@ const gbCollapseAllStacksDisabled = computed(
   flex-shrink: 0;
 }
 
-/* App-wide task-activity light on the stats toggle. */
-.tb-stats-btn {
-  position: relative;
-}
-
-.tb-stats-activity {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
-  animation: tb-stats-pulse 1.4s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes tb-stats-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tb-stats-activity {
-    animation: none;
-  }
-}
-
 .bar-btn-label {
   max-width: 130px;
   overflow: hidden;
@@ -1226,22 +1301,68 @@ const gbCollapseAllStacksDisabled = computed(
   flex-shrink: 0;
 }
 
-/* Gap-guard: hidden by default, only shown via container query when the bar
-   is narrow enough that the left and right groups start crowding each other */
-.bar-separator--gap-guard {
-  display: none;
-}
-
-@container selbar (max-width: 800px) {
-  .bar-separator--gap-guard {
-    display: block;
-  }
-}
-
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
 .gb-sort-panel {
   width: 320px;
   max-width: 92vw;
+}
+
+/* The migration notice occupies the row the removed sort order used to hold, so
+   it is a menu section rather than a floating card: the user is already looking
+   here, which is the whole reason it works as a pointer. */
+.gb-sort-migration-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-accent), 0.12);
+  border: 1px solid rgba(var(--v-theme-accent), 0.35);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.gb-sort-migration-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.gb-sort-migration-open {
+  border: none;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: rgb(var(--v-theme-on-surface));
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.gb-sort-migration-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  cursor: pointer;
+}
+
+.gb-sort-migration-open:hover,
+.gb-sort-migration-dismiss:hover {
+  background: var(--hover-wash);
+}
+
+.gb-sort-migration-open:focus-visible,
+.gb-sort-migration-dismiss:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .gb-sort-search-note {
@@ -1426,6 +1547,43 @@ const gbCollapseAllStacksDisabled = computed(
 @container selbar (max-width: 580px) {
   .visible-range-pill {
     display: none;
+  }
+}
+
+/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md,
+   amendment #2). The burger stands at the end of its OWN group (the action
+   run) and collapses only that group's members. Fold = CSS both ways: a
+   control's bar button and its overflow row share one v-if, and these
+   queries flip which of the pair is visible. No JS measures anything. The
+   trigger appears with the FIRST fold step; Undo, Review, Settings and
+   Stats never fold at any width. ─────────────────────────────────────── */
+.tb-overflow {
+  display: none;
+}
+
+.tb-row-700,
+.tb-row-600 {
+  display: none;
+}
+
+@container selbar (max-width: 700px) {
+  .tb-fold-700 {
+    display: none;
+  }
+  .tb-overflow {
+    display: flex;
+  }
+  .tb-row-700 {
+    display: flex;
+  }
+}
+
+@container toolbar (max-width: 600px) {
+  .tb-fold-600 {
+    display: none;
+  }
+  .tb-row-600 {
+    display: flex;
   }
 }
 </style>

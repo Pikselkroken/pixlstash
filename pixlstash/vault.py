@@ -1355,20 +1355,26 @@ class Vault:
             return result[0]
         return result or 0
 
-    @staticmethod
-    def _count_missing_thumbnails(session: Session) -> int:
+    def _count_missing_thumbnails(self, session: Session) -> int:
         """Pictures awaiting whole-frame thumbnail (re)generation.
 
         Mirrors ``MissingThumbnailFinder._fetch_missing``: keyed on
-        ``thumbnail_width IS NULL`` for live, file-backed pictures.
+        ``thumbnail_width IS NULL`` for live, file-backed pictures. Excludes
+        undecodable pictures (issue #585) so the "Upgrading thumbnails"
+        progress bar can reach 0 instead of stalling on files that can never
+        produce a thumbnail.
         """
-        result = session.exec(
+        suppressed_ids = self.db.unprocessable_images.active_suppressed_ids()
+        stmt = (
             select(func.count())
             .select_from(Picture)
             .where(Picture.thumbnail_width.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
-        ).one()
+        )
+        if suppressed_ids:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
+        result = session.exec(stmt).one()
         if isinstance(result, (tuple, list)):
             return result[0]
         return result or 0

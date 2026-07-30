@@ -26,6 +26,7 @@
 16. [Versioning](#16-versioning)
 17. [Integration Pitfalls](#17-integration-pitfalls)
 18. [Integration Diagrams](#18-integration-diagrams)
+19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
 
 ---
 
@@ -53,6 +54,159 @@ PixlStash is designed to be served from **one origin**: the FastAPI server hosts
 **Contract rule**: every new backend router must be mounted with `prefix=API_V1_PREFIX`. Every new frontend call must use a relative URL (the client adds the prefix).
 
 ---
+
+### 2.1 The `/dedup` contract (v1.9)
+
+The duplicate queue was built by two lanes at once, so the agreement is written
+down rather than inferred from either side. The client half lives in
+[`api/dedup.js`](../frontend/src/api/dedup.js); this is the integration-side
+copy, reconciled against `routes/dedup.py` as shipped (2026-07-29).
+
+| Route | Purpose | Response |
+|---|---|---|
+| `GET /dedup/policy` | tier defaults, bounds and closed vocabularies | `{ defaults, bounds }` |
+| `GET /dedup/groups` | one page of the queue, confidence descending | `{ groups, total, offset, limit, next_cursor, policy, scope, scan }` |
+| `POST /dedup/counts` | the sidebar badge, the per-tier split, and N scoped counts | `{ unresolved_groups, by_tier, scopes, policy, scan }` |
+| `POST /dedup/scan` | queue a scan for one scope | `ScanProgressModel` |
+| `POST /dedup/verdicts/stack` | the "same picture" verdict | `VerdictResponse` |
+| `POST /dedup/verdicts/keep-separate` | the "different pictures" verdict | `VerdictResponse` |
+| `POST /dedup/verdicts/reopen` | un-resolve a group (clearing a stacked verdict also dissolves its stack) | `{ signature, previous_verdict, reopened_at, group_returned_to_queue, batch_id, unstacked_picture_ids }` |
+| `POST /dedup/auto-stack` | bulk-stack the exact tier, `dry_run` first | `{ batch_id, dry_run, groups, pictures, scope, dry_run_summary, results, failures }` |
+
+Shapes and rules the frontend depends on:
+
+- **A group is `{ signature, tier, confidence, member_count, cover_picture_id,
+  why, created_at, candidates }`.** `signature` is a hash of the sorted member
+  content hashes and is the id every verdict route takes, **in the request
+  body**, never in a path. `tier` is `exact | near | embedding`; the exact tier
+  is rendered as a different kind of claim, never as "100% similar".
+- **A candidate is `{ picture_id, width, height, megapixels, size_bytes, format,
+  is_raw, score, tag_count, created_at, imported_at, stack_id,
+  reference_folder_id, file_path, smart_score, sharpness, cover_score, why }`.**
+  `file_path` is populated **only** for a reference-folder picture and is null
+  for a managed one, which is exactly the design's "paths only where they
+  matter" rule enforced server-side rather than trusted to the client.
+  `smart_score` ([1, 5] scale) and `sharpness` (typical 0-0.5) are the cover
+  ranking's top signals, **null-safe**: null means not computed yet or failed —
+  render a dash, never a zero. `cover_score` is the **deprecated** legacy
+  composite; do not build new UI on it.
+- **A why-pill is `{ text, against }`.** `against: true` is counter-evidence and
+  renders as the red x; the client orders counter-evidence first, because a
+  collapsed row only has room for two pills and the warning is the half that
+  matters.
+- **`scan` is `{ status, scanned_pictures, total_pictures, scanned_buckets,
+  total_buckets, groups_found, error }`** and rides on the queue, the counts and
+  the scan trigger, so any of the three can feed the progress banner. `status`
+  is `idle | pending | running | complete | failed`. There is **no percentage
+  and no time estimate**: the client derives the percentage from pictures, or
+  from buckets when no picture total is known yet, and deliberately shows no
+  "N min left" rather than inventing one.
+- **Scope is `(scope_type, scope_id)`** with `scope_type` one of
+  `global | project | set | character | folder`, published in
+  `bounds.scope_types`. The whole vault is `global` and takes no id; every other
+  type requires one, and a folder's id is its absolute path. `ScopeRequestModel`
+  **forbids extra fields**, so a scope label or glyph is a 422: those are client
+  presentation state and live in the URL query instead.
+- **The tier gate is two booleans plus a threshold**, not a list of tier names:
+  `near_enabled`, then `embedding_enabled` which requires it. `bounds` carries
+  `tiers` (strongest first), `always_on_tiers`, `tier_requires`,
+  `min_threshold`, `max_threshold` and `max_page_size`, so no bound is stated
+  twice. A threshold below the floor is a **400, never a silent clamp**.
+- **Counts take a LIST of scopes and always return the global badge**, so a
+  context menu labelling three entries refreshes the sidebar in the same
+  request and the two can never disagree. `by_tier` deliberately includes tiers
+  that are switched off, so the tier menu can show what enabling one would add.
+- **`batch_id`** is what makes a bulk auto-stack reverse with one `Ctrl+Z`, so
+  it has to reach the client on the real run. `failures` names groups the run
+  skipped: one unstackable group never aborts it, so a partial result is
+  reported rather than hidden.
+
+**Keep-separate records one operation, exactly like stack (owner override,
+2026-07-30).** Until then it deliberately recorded nothing (the #644-era CSO
+ruling: no reversible picture facet, and an empty row would still consume a
+`Ctrl+Z`); the owner explicitly reversed that ruling. Every verdict — stack and
+keep-separate — now records one operation (`dedup.stack` /
+`dedup.keep_separate`), a client gesture id groups several into one undo, and
+both flow through the standard `ActionReceipt` with nothing dedup-specific. The
+keep-separate operation's before/after payloads are empty (no picture facet
+changed); its undo reopens the verdict and returns the group to the queue via
+the registered post-restore hook, and redo re-decides it. The explicit
+**Reopen** ("Clear decision") action remains available as the non-undo way
+back — and since the 2026-07-30 clear-decision fix it, too, records a
+`dedup.reopen` operation whenever clearing a stacked verdict has to dissolve
+the verdict's stack (the response carries the `batch_id`; undoing it restacks
+and re-decides). A picture-neutral clear still records nothing.
+
+**Paging is a keyset cursor; `offset` is the deprecated fallback.** The queue is
+ordered by confidence descending while a scan is still inserting rows, so an
+offset can re-serve a group the client already holds or skip one. `next_cursor`
+over `(confidence DESC, signature)` removes that hazard instead of mitigating
+it, so it is the **primary path**:
+
+- A first page is always `offset=0`. A cursor is a position inside one ordering,
+  and the policy, the threshold or the scope may have changed under it, so
+  `useDedupStore.loadFirstPage` never reuses one.
+- A response carrying a non-empty `next_cursor` puts that queue on the cursor
+  path: `loadMore` sends `cursor` and **never sends `offset` alongside it**,
+  because a server free to choose between the two could silently keep the weaker
+  one. `next_cursor: null` (or absent) ends the cursor path.
+- A cursor outranks the offset arithmetic in both directions. `total` is a live
+  count under a running scan, so a served cursor means "more" even when the
+  offset says the page was the last, and an **empty page ends the queue whatever
+  the cursor says**, or a server that kept minting cursors past the end would
+  loop the read-ahead.
+- A cursor needs no correction when a verdict removes a row: it names a position
+  in the ordering, not a count of rows before it. Only the offset is decremented
+  in `removeGroup`.
+- **The offset fallback stays seamless and keeps its mitigations.** A server that
+  publishes no `next_cursor` is paged exactly as before, and either path can hand
+  over to the other mid-queue. `loadMore` dedupes by signature on **both** paths
+  and drops a re-seen group (a duplicated row could be resolved twice, and the
+  second verdict would 400), and the offset still advances by the page's
+  **served** length rather than its kept length.
+
+**The sidebar badge is reconciled from the server after every verdict.** Both
+verdict kinds now raise the standard `pictures_changed` event (added 2026-07-30
+alongside the keep-separate op-logging; before that a keep-separate raised no
+event at all), so a second tab has a refresh signal — but the event names
+pictures, not dedup counts. `useDedupStore` therefore keeps the optimistic tick
+for immediacy and fires `POST /dedup/counts` behind it (one scope, one COUNT,
+not awaited so auto-advance is not held up), and `DuplicateQueue` refreshes the
+counts on queue open even when it is already showing the requested scope. **Do
+not treat a WebSocket event as the source of truth for a dedup count.**
+
+**The auto-stack consent dialog reads `dry_run_summary`, not the envelope.** The
+server derives `{ groups, groups_by_tier, pictures, covers_gaining_tags,
+covers_gaining_score, covers_gaining_metadata }` from one read of one group list,
+so the dialog's rows cannot disagree with each other across a landing scan. The
+design's "covers gaining metadata from copies" row is
+`covers_gaining_metadata`, and "Stacks to create" sums `groups_by_tier`. The
+top-level `groups` / `pictures` are used only as a fallback for a server that
+predates the summary. **`groups_by_tier` counts only what the run would act on**
+(exact-only today, zero-filled for the rest), so it is *not* the queue's
+remainder: the dialog's "Groups left in the queue to review" row stays on
+`POST /dedup/counts` -> `by_tier`, which is the only call that knows it. Those
+two rows therefore still come from different calls, deliberately, and could
+disagree across a race.
+
+**Punch-list for the backend lane** (fields a designed UI state wants and the
+shipped surface does not provide; none is worked around silently):
+
+1. **No thumbnail version on a candidate.** The grid busts its thumbnail cache
+   with `?v=<version>`; a dedup candidate carries none, so the queue's
+   thumbnails load without one. A thumbnail regenerated mid-triage therefore
+   shows stale until a reload. Non-blocking, and a wrong decision is not
+   possible from it.
+2. ~~**No "covers gaining metadata" count on the auto-stack dry run.**~~
+   **Resolved:** `dry_run_summary.covers_gaining_metadata`, and the row is back
+   in the dialog.
+3. **The queue remainder and the run's counts still come from two calls.**
+   `dry_run_summary.groups_by_tier` covers the run, not the queue, so the
+   "groups left in the queue" row is fed from `POST /dedup/counts` -> `by_tier`.
+   Noted so the two are known to be able to disagree across a race.
+
+---
+
 
 ## 3. API Client ([apiClient.js](../frontend/src/utils/apiClient.js))
 
@@ -192,7 +346,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
 | `picture_ids` | `number[]` | Affected picture ids. |
 | `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). |
-| `change_kind` | `"added"` \| `"updated"` \| `"removed"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. |
+| `change_kind` | `"added"` \| `"updated"` \| `"removed"` \| `"restored"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. `"restored"` is a scrapheap comeback (undo of a move, or `POST /pictures/scrapheap/restore`): the card returns, but the picture is **not** new to the vault, so the sidebar must not raise its NEW marker for it. The value set is a closed allowlist on **both** ends — `WsBroadcasterMixin.CHANGE_KINDS` and `resolveChangeKind` — and each silently degrades an unknown kind (the backend drops the field, the SPA falls back to `updated`), so the two move together or not at all. |
 
 Per-type payload specifics (all carry the envelope fields above):
 
@@ -319,6 +473,46 @@ The **Segment** action runs Florence-2 object detection over the selected pictur
      "compositional_deconstruction":{"background":"",
        "elements":[{"type":"obj","bbox":[y_min,x_min,y_max,x_max],"desc":"dog"}]}}
     ```
+
+### 11.2 Remix — "Generate variants" (v1.9)
+
+Right-clicking a grid image offers **Generate variants…**, which runs one picture through the shipped ComfyUI engine. It follows the WebSocket branch of the rule above: the dialog submits, closes, and the app-wide `ComfyUiRunner` owns progress; the output arrives as a normal `picture_imported` event and is inserted in place (§8).
+
+Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_POLICIES`):
+
+- **Ask** `GET /api/v1/comfyui/pictures/{id}/recipe`. Answers whether the file carries a *replayable* recipe — the embedded API-format `prompt` chunk, never the UI `workflow` chunk — and pre-flights it against the user's ComfyUI:
+  ```json
+  {"available": true, "reason": null, "summary": "API Workflow · 12 nodes",
+   "positive_prompt": "…", "seed": 12345, "models": ["…"], "loras": [],
+   "node_count": 12,
+   "node_classes": ["CheckpointLoaderSimple","CLIPTextEncode","KSampler","SaveImage"],
+   "source_is_imported": true, "source_label": "Watched folder",
+   "seed_inputs": [{"node_id":"3","class_type":"KSampler","field":"seed","value":1}],
+   "preflight": {"ok": true, "checked": true, "missing_node_classes": [],
+                 "missing_models": [], "missing_input_images": [],
+                 "has_save_image": true, "unchecked_fields": 0}}
+  ```
+  `node_classes` (distinct `class_type`, sorted) and `source_is_imported` / `source_label` exist for the owner's **consent** decision, not for display polish — see the untrusted-graph note below. `node_classes` is read from the file, so unlike everything under `preflight` it is populated even when ComfyUI was unreachable.
+  **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
+  | Response | Meaning | UI |
+  |---|---|---|
+  | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo, A1111 output, stripped metadata, or a UI-graph-only file | Recipe mode disabled: "No executable workflow embedded" |
+  | `available:false`, `reason:"no_seed_input"` | The graph has no seed to change, so a re-run would be byte-identical (and would be deduped on `pixel_sha`, emitting no event — the user would see nothing at all) | Recipe mode disabled, with that reason |
+  | `preflight.ok:false` | Checked, and this ComfyUI cannot run it | Recipe mode disabled, naming the missing node types / models / input images |
+  | `preflight.checked:false` | ComfyUI was unreachable — **the check did not run; this is NOT a pass** | Recipe mode stays *selectable* but is **refused by default**: the run needs an explicit acknowledgement (below) |
+
+  `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way.
+
+- **Run** `POST /api/v1/comfyui/run_recipe` with `{picture_id, seed_mode, seed?, client_id?, stack?, allow_unchecked?}`, or `POST /api/v1/comfyui/run_i2i` for template mode (which now takes the same `seed_mode`/`seed` pair as `run_t2i`). Both return `{status, prompts:[{picture_id, prompt_id}]}`; the SPA passes `prompts` to `ComfyUiRunner` so its ComfyUI-WebSocket progress tracking picks the run up.
+
+**The client never sends a graph.** `run_recipe` re-extracts the prompt chunk from the picture's file on every call. That keeps the picture-scoped authz declaration a complete access control for the endpoint, and it means a stale client cannot replay something the file no longer contains.
+
+**But the graph is still untrusted input, and the contract reflects that** (review finding R3, CWE-829). It is authored by whoever made the image file; replaying it executes it on the owner's ComfyUI, bounded only by their installed node packs. The owner is the trust anchor, so the two sides split the job:
+
+- **Server side.** `run_recipe` returns **400** when `preflight.checked` is false and the body carries no `allow_unchecked: true`. The refusal is enforced on the server, not only in the dialog — a UI-only gate is not a gate. `allow_unchecked` is accepted as `allow_unchecked` or `allowUnchecked`, matching the existing `client_id`/`clientId` pair, and an accepted override is logged with the node classes that ran.
+- **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as a warning rather than a gate. See the `RemixDialog.vue` consent section in `frontend_architecture.md` for why the gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one.
+
+**Seed ranges differ between the routes** — 32-bit for the template paths, 64-bit for replay (the shipped Flux2 Klein template's own `noise_seed` exceeds 2³²). The dialog caps its input at `Number.MAX_SAFE_INTEGER` regardless, because above 2⁵³ a JavaScript number cannot carry the value the user typed.
 
 ---
 
@@ -524,4 +718,297 @@ flowchart TB
 
 ---
 
-*Last updated: 2026-07-19. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+## 19. Duplicates Queue API (v1.9)
+
+The contract behind the sidebar **Duplicates** destination. Every route is
+`owner_only`; a share token gets 403 on all of them. Backend design is
+`docs/backend_architecture.md` §22.
+
+**Two rules the client must hold to.** The queue is *paged*, never fetched whole
+(`GET /dedup/groups` returns `total` so a scrollbar can be sized without a second
+request), and a group is addressed by its **`signature`**, never by an id. The
+signature is a hash of the group's member content hashes, so it survives a rescan
+and a re-import; a numeric id would not.
+
+### `GET /dedup/policy`
+
+No parameters. Renders the tier switches and the threshold slider so 0.90 and the
+0.65 floor are never hardcoded twice.
+
+```jsonc
+{
+  "defaults": { "near_enabled": false, "embedding_enabled": false,
+                "threshold": 0.9, "min_group_size": 2, "max_group_size": 24 },
+  "bounds": {
+    "min_threshold": 0.65, "max_threshold": 0.99999,
+    "tiers": ["exact", "near", "embedding"],
+    "always_on_tiers": ["exact"],
+    "tier_requires": { "exact": null, "near": "exact", "embedding": "near" },
+    "scope_types": ["global", "project", "set", "character", "folder"],
+    "verdicts": ["stacked", "keep_separate"],
+    "max_page_size": 200
+  }
+}
+```
+
+`always_on_tiers` is why the exact switch renders disabled; `tier_requires` is why
+enabling *embedding* must first enable *near*. Sending `embedding_enabled=true`
+without `near_enabled` is a **400**, and a `threshold` below `min_threshold` is a
+**422** — neither is silently corrected.
+
+### `GET /dedup/groups`
+
+Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
+`scope_id`, `cursor`, `limit` (≤ 200), the deprecated `offset`,
+`decided` (default `false`) and the repeatable `verdict`. With `decided=true` the same shape pages the
+**resolved** groups instead — each row additionally carrying its live
+`verdict` (`stacked` | `keep_separate`) and `decided_at` — so a decision can
+be reviewed and cleared via `POST /dedup/verdicts/reopen`. The decided page
+deliberately ignores the tier gate and the threshold: a decision made under
+yesterday's policy must not be hidden by today's. On the open queue both
+fields are `null`.
+
+**The decided page has its own filter: `verdict` (2026-07-30).** The tier gate
+is not in force there, so what the Duplicates toolbar's filter menu offers on
+that page is the *decision*: `verdict=stacked`, `verdict=keep_separate`, or
+neither for both (the param is repeatable, and listing every verdict means the
+same as omitting it). `total` and `next_cursor` are computed under the same
+filter as the page, so the scrollbar can never be sized for rows that will not
+be served. Every decided response also carries `by_verdict` — the per-verdict
+count taken **without** the filter, so the menu can say what turning a verdict
+back on would add — and `verdicts`, the echo of the filter in force. `by_verdict`
+may sum to less than `total`: a resolved group whose live verdict row is missing
+still lists (so its "clear decision" way back survives) but belongs to no
+verdict. Sending `verdict` **without** `decided` is a **400** — open-queue
+groups carry no verdict, so the filter could only silently empty the queue.
+
+**The decided page is ordered by `decided_at` descending** — most recent
+decision first (2026-07-30; the open queue keeps its confidence-descending
+order). A fresh verdict lands on top; a **redo** re-stamps `decided_at`, so a
+just-redone decision also sorts to the top rather than resurfacing at its old
+position. `next_cursor` works on both pages, but the two orderings mint
+**distinct cursor families** that reject each other with a 400 — never reuse a
+queue cursor on the decided page or across the flip.
+
+**`decided_at` is display-ready.** It is the stamp the ordering sorts by:
+"when this decision last became live" (a redo re-stamps it). Format is
+**naive-UTC ISO 8601** with microseconds and **no offset suffix**
+(`"2026-07-30T12:28:53.123456"`, no trailing `Z`) — the same convention as
+every other timestamp on this API (`created_at`, the operation log's stamps) —
+so parse it as UTC. It is `null` on the open queue and `null` for the stale
+edge of a resolved group whose verdict is missing or reopened (such rows sort
+into the list's tail); the server never invents a stamp for them.
+
+```jsonc
+{
+  "groups": [{
+    "signature": "9f2c…",           // the id every verdict route takes
+    "tier": "exact",                 // exact | near | embedding
+    "confidence": 1.0,               // 1.0 for exact; else the WEAKEST pairwise link
+    "member_count": 2,
+    "cover_picture_id": 41,          // a preselection, never a silent decision
+    "why": [                         // group evidence, BOTH directions
+      { "text": "Identical file hash", "against": false },
+      { "text": "Different resolution", "against": true }
+    ],
+    "created_at": "2026-07-29T09:00:00",
+    "candidates": [{
+      "picture_id": 41, "width": 6016, "height": 4016, "megapixels": 24.16,
+      "size_bytes": 14800000, "format": "jpeg", "is_raw": false,
+      "score": 4, "tag_count": 2,
+      "created_at": "2026-05-12T14:22:00", "imported_at": "2026-05-13T08:00:00",
+      "stack_id": null, "reference_folder_id": null,
+      "file_path": null,             // non-null ONLY for reference-folder pictures
+      "thumbnail_version": "320x240",// append as ?v= — same token the grid uses
+      "smart_score": 4.3,            // [1,5]; null = not computed/failed → dash
+      "sharpness": 0.31,             // typical 0–0.5; null = not computed/failed
+      "cover_score": 108.64,         // DEPRECATED legacy composite — do not use
+      "why": [{ "text": "Best smart score (4.3)", "against": false },
+              { "text": "Highest resolution", "against": false }]
+    }]
+  }],
+  "total": 128, "offset": 0, "limit": 20,
+  "cursor": null,                    // echo of the cursor this page was read from
+  "next_cursor": "MXwxfDQy",         // pass back as ?cursor=; null at end-of-found
+  "policy": { … }, "scope": { "scope_type": "global", "scope_id": null, "key": "global" },
+  "scan": { "status": "running", "scanned_pictures": 79412, "total_pictures": 128412,
+            "scanned_buckets": 210, "total_buckets": 940, "groups_found": 128,
+            "error": null }
+}
+```
+
+**Page with `cursor`, not `offset`.** Send the previous page's `next_cursor`
+back verbatim and stop when it is `null`. The queue is a live list: deciding a
+verdict removes the group the user just decided, and a tier-2 scan commits new
+groups after every bucket, so an `offset` re-read skips exactly as many groups as
+changed underneath it — reproducibly, with a single verdict between two pages.
+The cursor is **opaque**: never construct, parse or edit one. A cursor the server
+did not mint is a **400** (not a silent restart from page 1), `offset` is
+deprecated but still works, and sending **both** is a **400**.
+
+`scan` is the banner. `status` is `idle` when the scope has never been scanned —
+that is not an error, the queue still shows what an earlier global scan found.
+`file_path` is populated **only** for reference-folder pictures, where the user
+manages the files; for a managed-library picture the path is an implementation
+detail and the API returns `null`.
+
+Render the `why` pills as reasons, not conclusions: `against: false` is the olive
+check, `against: true` the red x. A group carrying red pills is the one that needs
+Compare.
+
+**`thumbnail_version` must be appended as `?v=`** to every thumbnail URL the queue
+builds — `/api/v1/pictures/thumbnails/{picture_id}.webp?v={thumbnail_version}` —
+exactly as the batch-thumbnail endpoint does (both come from the same server-side
+helper, so they cannot drift). Without it a thumbnail regenerated mid-triage keeps
+painting the stale cached bitmap, because the queue's URL never changes. The value
+is `"0"` until the picture has been processed.
+
+**Scope validation.** `scope_id` must be an integer for `project` / `set` /
+`character`; anything else is a **400** at the boundary on every route that takes a
+scope, including `POST /dedup/scan` (which writes nothing on a rejected scope). For
+`folder`, `%` and `_` are escaped rather than treated as wildcards, so a folder
+scope always means the folder it names.
+
+### `POST /dedup/counts`
+
+Read-only despite the verb (a scope list does not fit a URL). Body:
+`{ "policy": {…}, "scopes": [{ "scope_type": "set", "scope_id": "9" }] }`.
+
+```jsonc
+{
+  "unresolved_groups": 128,                              // the sidebar badge
+  "by_tier": { "exact": 96, "near": 30, "embedding": 2 },// INCLUDING disabled tiers
+  "scopes": [{ "scope_type": "set", "scope_id": "9", "key": "set:9",
+               "unresolved_groups": 4 }],
+  "policy": { … }, "scan": { … }
+}
+```
+
+`by_tier` deliberately reports tiers that are switched off, so a tier switch can
+be labelled with what enabling it would add. A non-global scope without a
+`scope_id` is a **400**, and the `scopes` list is capped at **200** entries (each
+is a separate correlated `COUNT`) — over that is a **422**.
+
+### `POST /dedup/scan`
+
+Body: `{ "policy": {…}, "scope": { "scope_type": "project", "scope_id": "3" } }`.
+Returns the scan progress row **immediately** — the queue is opened while the
+scan runs. Hashes are cached (computed on import), so a scoped scan only reads and
+compares them. Tier 1 lands in milliseconds; tier 2 groups appear as each
+candidate bucket finishes, so poll `GET /dedup/groups` and watch
+`scan.scanned_buckets` rather than waiting for `status: "complete"`.
+
+### Verdict routes
+
+All three take `{ "signature": "9f2c…", "batch_id": "…" }`; `POST
+/dedup/verdicts/stack` additionally takes `cover_picture_id` and
+`excluded_picture_ids`. An unknown signature, a cover outside the group, or
+excluding down to fewer than two members is a **400**. A member frozen by a locked
+picture set is a **423** with the usual `pictures_locked` detail.
+
+**`batch_id` is namespaced.** Omit it and the server mints its own `srv-…`;
+supply one only to make several calls reverse as one undo, and then it must match
+`cli-<4–76 chars of A-Z a-z 0-9 _ ->` (≤ 80). Any other shape — including a
+`srv-…` id — is a **400**, so a client cannot mint what reads as a server batch
+or graft its rows into an existing one.
+
+| Route | Effect |
+|---|---|
+| `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
+| `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
+| `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
+
+**Undoing a verdict also returns its group to the queue.** `POST
+/operations/undo` and `POST /operations/batches/{batch_id}/undo` restore the
+pictures (for a stack) *and* reopen the verdict — both kinds, since the
+2026-07-30 owner override made keep-separate op-logged (`dedup.keep_separate`)
+— so after an undo the group is back in `GET /dedup/groups` and back in the
+sidebar count with no extra call; do not follow an undo with a `reopen`. Redo
+re-decides it. A client gesture id shared across several verdicts (a bulk
+multi-select, or a mixed stack + keep-separate gesture) reverses as one batch
+undo, each verdict through its own listed operation. `reopen` remains the
+explicit, non-undo way back from either verdict kind.
+
+`stack` and `keep-separate` return the same shape (for keep-separate,
+`stack_id` / `cover_picture_id` are null and `metadata_union` is empty).
+`batch_id` is **always** populated on both — the client's `cli-…` gesture id
+when one was sent, a server-minted `srv-…` otherwise — and is the
+`POST /operations/batches/{batch_id}/undo` handle:
+
+```jsonc
+{ "signature": "9f2c…", "verdict": "stacked", "stack_id": 77,
+  "cover_picture_id": 41, "picture_ids": [41, 42], "excluded_picture_ids": [],
+  "batch_id": "a1b2…",
+  "metadata_union": { "tags_added": 3, "scores_lifted": 1,
+                      "characters_pending": 0, "membership_changed": true,
+                      "best_score": 5 } }
+```
+
+`metadata_union` is what the action receipt should say. Stacking **unions** tags,
+project membership and set membership onto every member and lifts every member to
+the highest score; nothing is overwritten and nothing is deleted.
+
+> **The union is also a visibility change.** Adding an out-of-scope duplicate to a
+> *shared* set means every live share token for that set now reaches it. That is
+> the shipped stack-atomic membership model (ordinary `POST /stacks` does the
+> same), but auto-stack applies it in bulk — worth saying out loud in the consent
+> copy. See backend §22.9 accepted risk A1.
+
+### `POST /dedup/auto-stack`
+
+Body: `{ "scope": {…}, "dry_run": true, "batch_id": null, "limit": null }`.
+**Defaults to `dry_run: true`**, which returns the counts the consent dialog shows
+and writes nothing. Send `dry_run: false` to apply.
+
+Dry run:
+
+```jsonc
+{ "batch_id": null, "dry_run": true, "groups": 1204, "pictures": 2611,
+  "scope": { … }, "results": [],
+  "dry_run_summary": {
+    "groups": 1204,
+    "groups_by_tier": { "exact": 1204, "near": 0, "embedding": 0 },
+    "pictures": 2611,
+    "covers_gaining_tags": 310,
+    "covers_gaining_score": 88,
+    "covers_gaining_metadata": 361   // the dialog's "covers gaining metadata" row
+  } }
+```
+
+`dry_run_summary` is derived from the **same** snapshot as the top-level counts in
+a single read, so the dialog's figures can never disagree with each other. The
+union is not executed to produce them and nothing is written; a cover "gains" a
+facet when some other member of its group carries something it does not.
+
+Applied (including a partially applied run):
+
+```jsonc
+{ "batch_id": "a1b2…", "dry_run": false, "groups": 1203, "pictures": 2609,
+  "scope": { … },
+  "results":  [ { …verdict…, "outcome": "applied" } ],
+  "failures": [ { "signature": "…", "outcome": "blocked", "status_code": 423,
+                  "error": { "code": "set_locked", … } } ],
+  "blocked": 1, "failed": 0 }
+```
+
+Only the **exact** tier is eligible; near and embedding groups always go through
+the queue no matter how confident they look. Every group in the run shares one
+`batch_id`, so N stacks reverse with a single `POST
+/operations/batches/{batch_id}/undo`.
+
+**Every group is accounted for under exactly one `outcome`** — `applied`,
+`blocked` (a guard refused it, in practice a locked picture set at 423) or
+`failed` (it could not be resolved at all). One bad group never aborts the run,
+and **the `batch_id` is returned even on a partially applied run**, so work that
+did happen always comes back with its undo handle. Show `blocked` groups to the
+user: they are still in the queue awaiting an individual decision.
+
+### Not in this API
+
+There is **no deletion route** anywhere in v1.9. A stack is a grouping row plus a
+cover pointer; dropping it restores the flat grid exactly. Any UI copy implying
+files are removed would be wrong.
+
+---
+
+*Last updated: 2026-07-29. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*

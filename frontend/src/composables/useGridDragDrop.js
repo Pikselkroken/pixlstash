@@ -19,6 +19,8 @@ import { useNoticeStore } from "../stores/useNoticeStore";
  * @param {Object} deps.thumbnailRefs - { [id]: HTMLImageElement }
  * @param {Object} deps.dragPreviewRefs - { [id]: HTMLImageElement }
  * @param {Function} deps.prefetchFullImage - fn(img) — prefetches full image
+ * @param {Function} [deps.isImageGhosted] - fn(img) — true for a tile held in
+ *   the grid only while its move-to-Scrapheap can still be undone.
  * @param {Object} props - component props (backendUrl, selectedCharacter, selectedProjectId)
  */
 export function useGridDragDrop(
@@ -30,6 +32,7 @@ export function useGridDragDrop(
     dragPreviewRefs,
     prefetchFullImage,
     reviewOverlayOpen,
+    isImageGhosted = () => false,
   },
   props,
 ) {
@@ -315,6 +318,14 @@ export function useGridDragDrop(
 
   function handleContainerDragStart(img, event) {
     if (!img || !event?.dataTransfer) return;
+    // A ghosted tile is already in the Scrapheap; dragging it into a set or a
+    // character would file a picture that is on its way out. The card carries
+    // `inert`, which stops this in browsers that support it — this is the same
+    // rule stated where it can be tested.
+    if (isImageGhosted(img)) {
+      event.preventDefault();
+      return;
+    }
     if (reviewOverlayOpen?.value) {
       event.preventDefault();
       return;
