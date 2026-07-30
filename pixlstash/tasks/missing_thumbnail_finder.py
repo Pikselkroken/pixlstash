@@ -32,7 +32,12 @@ class MissingThumbnailFinder(BaseTaskFinder):
         limit = ThumbnailGenerationTask.BATCH_SIZE * (
             max(1, self.max_inflight_tasks()) + 1
         )
-        pictures = self._db.run_immediate_read_task(self._fetch_missing, limit)
+        # Exclude undecodable pictures (issue #585) at the query so they cannot
+        # crowd the candidate window and stall real work behind them.
+        suppressed_ids = self._db.unprocessable_images.active_suppressed_ids()
+        pictures = self._db.run_immediate_read_task(
+            lambda session: self._fetch_missing(session, limit, suppressed_ids)
+        )
         if not pictures:
             return None
 
@@ -43,13 +48,15 @@ class MissingThumbnailFinder(BaseTaskFinder):
         return ThumbnailGenerationTask(database=self._db, pictures=selected)
 
     @staticmethod
-    def _fetch_missing(session: Session, limit: int):
-        return session.exec(
+    def _fetch_missing(session: Session, limit: int, suppressed_ids=None):
+        stmt = (
             select(Picture)
             .where(Picture.thumbnail_width.is_(None))
             .where(Picture.deleted.is_(False))
             .where(Picture.file_path.is_not(None))
-            .options(selectinload(Picture.faces))
-            .order_by(Picture.id)
-            .limit(limit)
+        )
+        if suppressed_ids:
+            stmt = stmt.where(Picture.id.notin_(tuple(suppressed_ids)))
+        return session.exec(
+            stmt.options(selectinload(Picture.faces)).order_by(Picture.id).limit(limit)
         ).all()

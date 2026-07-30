@@ -30,6 +30,8 @@ from sqlmodel import Session
 from pixlstash.db_models import Picture
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.missing_image_embedding_finder import MissingImageEmbeddingFinder
+from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
+from pixlstash.tasks.quality_task import QualityTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.vault import Vault
 
@@ -217,3 +219,75 @@ def test_585_filter_and_claim_never_reads_file_path(tmp_path):
         candidates = [_FilePathExplodes(1), _FilePathExplodes(2)]
         selected = finder._filter_and_claim(candidates, batch_limit=10)
         assert [c.id for c in selected] == [1, 2]
+
+
+def test_585_thumbnail_task_suppresses_corrupt_image(tmp_path):
+    """#585 follow-up: ThumbnailGenerationTask must mark undecodable sources.
+
+    Reported against v1.8.0: the original fix marked decode failures only in
+    ImageEmbeddingTask, so a corrupt picture whose thumbnail columns were NULL
+    (e.g. after the v1.8.0 thumbnail-regeneration reset) was re-selected by
+    MissingThumbnailFinder on every sweep forever.
+    """
+    corrupt_path = _write_corrupt_jpeg(tmp_path / "corrupt.jpg")
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        pic_id = _seed_picture(vault, corrupt_path)
+
+        # The finder selects it (thumbnail_width is NULL) and builds a task,
+        # and the "Upgrading thumbnails" progress count sees it as remaining.
+        finder = MissingThumbnailFinder(vault.db)
+        task = finder.find_task()
+        assert task is not None
+        assert task.params["picture_ids"] == [pic_id]
+        assert vault.db.run_task(vault._count_missing_thumbnails) == 1
+
+        # The task fails to decode the source: no columns are written...
+        result = task._run_task()
+        assert result == {"changed_count": 0}
+
+        # ...but the picture is now suppressed, so after the claim is released
+        # the finder no longer re-selects it — the old endless-retry loop —
+        # and the progress count reaches 0 so the bar can complete.
+        assert vault.db.unprocessable_images.is_suppressed(pic_id)
+        finder.on_task_complete(task, None)
+        assert finder.find_task() is None
+        assert vault.db.run_task(vault._count_missing_thumbnails) == 0
+
+
+def test_585_quality_metadata_backfill_marks_instead_of_raising(tmp_path):
+    """#585 follow-up: an undecodable file must not abort quality backfill.
+
+    ``_backfill_missing_picture_metadata`` used to raise on the first corrupt
+    picture, killing the whole batch (good pictures included) and leaving every
+    column unset, so the finder re-selected the same batch on every sweep.
+    """
+    from PIL import Image as PILImage
+
+    corrupt_path = _write_corrupt_jpeg(tmp_path / "corrupt.jpg")
+    valid_path = str(tmp_path / "valid.jpg")
+    PILImage.new("RGB", (8, 8), "red").save(valid_path)
+
+    class _MetadatalessPic:
+        """Stands in for a Picture whose format/width/height are unset."""
+
+        def __init__(self, pid: int, file_path: str):
+            self.id = pid
+            self.file_path = file_path
+            self.format = None
+            self.width = None
+            self.height = None
+
+    corrupt_pic = _MetadatalessPic(1, corrupt_path)
+    valid_pic = _MetadatalessPic(2, valid_path)
+
+    with Vault(image_root=str(tmp_path)) as vault:
+        task = QualityTask(database=vault.db, pictures=[corrupt_pic, valid_pic])
+
+        # Corrupt picture first: the loop must survive it and reach the valid one.
+        task._backfill_missing_picture_metadata([corrupt_pic, valid_pic])
+
+        assert vault.db.unprocessable_images.is_suppressed(corrupt_pic.id)
+        assert not vault.db.unprocessable_images.is_suppressed(valid_pic.id)
+        assert (valid_pic.width, valid_pic.height) == (8, 8)
+        assert valid_pic.format == "JPG"

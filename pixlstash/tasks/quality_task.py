@@ -312,9 +312,26 @@ class QualityTask(BaseTask):
             )
             img = ImageUtils.load_image_or_video(file_path)
             if img is None:
-                raise ValueError(
-                    f"Cannot infer metadata for picture id={pic.id} path={pic.file_path}: file could not be loaded"
-                )
+                # Raising here aborted the whole batch (good pictures included)
+                # and left every column unset, so the finder re-selected the
+                # same corrupt picture on every sweep (#585). Mark it and move
+                # on: _compute writes sentinel quality values for unloadable
+                # images, and _filter_and_claim skips it once marked.
+                registry = getattr(self._db, "unprocessable_images", None)
+                if registry is not None:
+                    registry.mark_unprocessable(
+                        getattr(pic, "id", None),
+                        str(file_path),
+                        reason="quality source could not be decoded",
+                    )
+                else:
+                    logger.warning(
+                        "QualityTask: cannot infer metadata for picture id=%s "
+                        "path=%s: file could not be loaded",
+                        pic.id,
+                        pic.file_path,
+                    )
+                continue
 
             height, width = img.shape[:2]
             ext = os.path.splitext(pic.file_path or "")[1].lstrip(".").upper()
