@@ -135,6 +135,18 @@ describe("Toolbar — the shell band's one box recipe", () => {
       expect(block).not.toContain("min-height");
       expect(block).toMatch(/padding: 0 var\(--space-\d\)/);
     }
+
+    // The RIGHT insets must be the same token: the app-wide tail is a stable
+    // anchor only if its icons land at the identical distance from the edge
+    // in every view. (The dq bar's LEFT inset may differ — it aligns with the
+    // queue's own content gutter.) Shorthand forms accepted: `0 X` (right =
+    // X) and `0 R 0 L` (right = first var).
+    const rightInset = (block) => {
+      const match = block.match(/padding:\s*0\s+var\((--space-\d)\)/);
+      expect(match).toBeTruthy();
+      return match[1];
+    };
+    expect(rightInset(dq)).toBe(rightInset(grid));
   });
 });
 

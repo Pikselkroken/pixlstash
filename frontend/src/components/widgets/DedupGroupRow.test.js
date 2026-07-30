@@ -4,12 +4,20 @@
 // neither of which is visible in a screenshot: only the focused row is a tab
 // stop, and the focused row says so in something other than CSS.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
 
 import DedupGroupRow from "./DedupGroupRow.vue";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { formatUserDate } from "../../utils/utils";
 
 const globalOpts = { global: { stubs: { "v-icon": true } } };
+
+// The row reads the user's date format from the prefs store.
+beforeEach(() => {
+  setActivePinia(createPinia());
+});
 
 /** A group of `n` candidates, in the backend's shape. */
 function group(n = 3) {
@@ -146,6 +154,81 @@ describe("DedupGroupRow — what the verdicts cost", () => {
     }
     // Comparing is reading, so it stays live.
     expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+  });
+});
+
+describe("DedupGroupRow — the decided row's timestamp and alignment", () => {
+  const ISO = "2026-07-30T14:05:00"; // naive UTC, the house convention
+
+  // The stamp follows the USER'S date-format setting, through the same
+  // formatUserDate(iso, dateFormat) pattern every other timestamp uses —
+  // proven by rendering differently under two settings, each matching the
+  // shared util's output for that setting.
+  it("stamps the decision time in the user's own date format", () => {
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "eu";
+    const eu = mountRow({ verdict: "stacked", decidedAt: ISO })
+      .find(".gdecided-at")
+      .text();
+    expect(eu).toBe(formatUserDate(ISO, "eu"));
+
+    prefs.dateFormat = "us";
+    const us = mountRow({ verdict: "stacked", decidedAt: ISO })
+      .find(".gdecided-at")
+      .text();
+    expect(us).toBe(formatUserDate(ISO, "us"));
+    expect(us).not.toBe(eu);
+  });
+
+  it("carries the formatted stamp in the verdict tooltip too", () => {
+    const prefs = useUserPrefsStore();
+    prefs.dateFormat = "eu";
+    const title = mountRow({ verdict: "keep_separate", decidedAt: ISO })
+      .find(".gverdict")
+      .attributes("title");
+    expect(title).toContain(formatUserDate(ISO, "eu"));
+  });
+
+  // An older backend (or older rows) serve no decided_at: no cell, no dash.
+  it("renders no timestamp cell when decided_at is absent", () => {
+    const wrapper = mountRow({ verdict: "stacked" });
+    expect(wrapper.find(".gdecided-at").exists()).toBe(false);
+    expect(wrapper.find(".gverdict").attributes("title")).toBe(
+      "This group was stacked.",
+    );
+  });
+
+  // The alignment mechanism (owner report: label text must align with the
+  // button's text, not outer borders): the label is a non-interactive span
+  // wearing the button's box with an invisible border. jsdom computes no
+  // layout, so the declarations are pinned at the source like the toolbar
+  // band guardrail.
+  it("the verdict label wears the Clear button's box with a transparent border", async () => {
+    const wrapper = mountRow({ verdict: "stacked", decidedAt: ISO });
+    expect(wrapper.find(".gverdict").element.tagName).toBe("SPAN");
+    expect(wrapper.find(".gbtn").exists()).toBe(true);
+
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      `${process.cwd()}/src/components/widgets/DedupGroupRow.vue`,
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const blockOf = (selector) => {
+      const start = source.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("}", start));
+    };
+    const label = blockOf(".gverdict");
+    expect(label).toContain("border: 1px solid transparent");
+    expect(label).toContain("padding: 0 var(--space-4)");
+    expect(label).toContain("height: 27px");
+    // The same inset the button's block declares (a `.gbtn, .gcompare`
+    // selector list, so it is located by its first selector).
+    const buttonStart = source.indexOf(".gbtn,");
+    expect(buttonStart).toBeGreaterThan(-1);
+    const button = source.slice(buttonStart, source.indexOf("}", buttonStart));
+    expect(button).toContain("padding: 0 var(--space-4)");
+    expect(button).toContain("height: 27px");
   });
 });
 

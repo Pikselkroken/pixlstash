@@ -83,11 +83,14 @@
            Clearing never touches pictures: a reopened "stacked" group stays
            stacked until unstacked from the Stacks view. -->
       <span class="gverdict" :title="decidedTitle">
-        <v-icon size="15">{{
+        <v-icon size="16">{{
           verdict === "stacked" ? "mdi-layers" : "mdi-call-split"
         }}</v-icon>
         {{ verdict === "stacked" ? "Stacked" : "Kept separate" }}
       </span>
+      <!-- When the decision was made, in the user's own date format. Older
+           rows (or an older backend) serve no decided_at: no cell, no dash. -->
+      <span v-if="decidedStamp" class="gdecided-at">{{ decidedStamp }}</span>
       <button
         type="button"
         class="gbtn"
@@ -185,11 +188,13 @@ import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
 import { candidateId } from "../../utils/dedup";
+import { formatUserDate } from "../../utils/utils";
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
 } from "../../utils/thumbnailSizes";
 import { MIN_STACK_MEMBERS } from "../../stores/useDedupStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 
 /** A candidate's picture id. The server calls the field `picture_id`. */
 const idOf = candidateId;
@@ -254,13 +259,28 @@ const emit = defineEmits([
   "clear-decision",
 ]);
 
+const userPrefsStore = useUserPrefsStore();
+
+/**
+ * When the decision was made, in the user's own date format — the same
+ * `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
+ * renders through (scrapheap deadlines, picture metadata). `decided_at`
+ * arrives as a naive-UTC ISO string per house convention; the util
+ * normalises it. Empty when the backend served none.
+ */
+const decidedStamp = computed(() =>
+  props.decidedAt
+    ? formatUserDate(props.decidedAt, userPrefsStore.dateFormat)
+    : "",
+);
+
 /** The verdict label's tooltip, carrying the timestamp when one is known. */
 const decidedTitle = computed(() => {
   const what =
     props.verdict === "stacked"
       ? "This group was stacked."
       : "This group was kept separate.";
-  return props.decidedAt ? `${what} Decided ${props.decidedAt}.` : what;
+  return decidedStamp.value ? `${what} Decided ${decidedStamp.value}.` : what;
 });
 
 const stackSize = computed(
@@ -537,14 +557,36 @@ function onDblClick(event) {
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
-/* The decided row's verdict statement — reads as state, not as a button. */
+/* The decided row's verdict statement — reads as state, not as a button.
+   TEXT-edge aligned with the Clear button below it (owner report: the outer
+   borders lined up, the text did not): the label wears the button's exact
+   box — a 1px border made transparent, the same horizontal padding, the same
+   height and icon gap — so its icon and text columns start precisely where
+   the button's do, in both themes. It stays a <span> with no hover, focus or
+   cursor treatment, so the invisible border can never read as an affordance. */
 .gverdict {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  height: 27px;
+  border: 1px solid transparent;
+  padding: 0 var(--space-4);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: rgba(var(--v-theme-on-surface), 0.75);
+}
+
+/* The decision's timestamp: the row's own muted-metadata treatment (the
+   `.gn span` recipe) with tabular numerals like every timestamp, sharing the
+   verdict label's transparent-border inset so all three text edges in the
+   column align. */
+.gdecided-at {
+  border-inline: 1px solid transparent;
+  padding: 0 var(--space-4);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .gstrip {

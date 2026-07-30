@@ -1627,7 +1627,15 @@ defineExpose({ windowedGroups, tierLabel });
      alone would just be drift in the other direction. */
   height: 36px;
   box-sizing: border-box;
-  padding: 0 var(--space-5);
+  /* Split inset, each side anchored to what it must align WITH. RIGHT is
+     --space-3, the grid bar's inset: the app-wide tail ([sep][Undo][Global])
+     is a stable anchor only if its icons land at the identical distance from
+     the edge in every view — a uniform --space-5 here put them 8px further
+     left than the grid's and the tail jumped on view switches (guardrail in
+     Toolbar.test.js pins the right insets equal). LEFT stays --space-5, the
+     queue's own content gutter: the count headline sits flush over the
+     list's rows (.qlist, .qselbar, .dq-state all inset by --space-5). */
+  padding: 0 var(--space-3) 0 var(--space-5);
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
