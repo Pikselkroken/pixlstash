@@ -995,11 +995,14 @@
           :threshold="faceSearchCharacter ? faceSearchThreshold : null"
           :threshold-min="FACE_SEARCH_FETCH_FLOOR"
           :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+          :min-refs="faceSearchMinRefs"
+          :reference-count="faceSearchRefCount"
           :assign-target="faceSearchCharacter?.name ?? null"
           :assign-count="faceSearchAssignIds.length"
           :assign-from-selection="faceSearchAssignFromSelection"
           :assign-busy="faceSearchAssignBusy"
           :owns-escape="!showSelectionBar"
+          @update:min-refs="handleFaceSearchMinRefs"
           @update:threshold="handleFaceSearchThreshold"
           @assign="handleAssignFaceSearchResults"
           @search-all="emit('search-all')"
@@ -1105,6 +1108,10 @@ import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
+import {
+  cutFaceSuggestions,
+  referenceFaceCount,
+} from "../../utils/faceSuggestionCut.js";
 import {
   squareCropParams,
   squareCropImgStyle,
@@ -1450,9 +1457,17 @@ const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
 const FACE_SEARCH_FETCH_FLOOR = 0.5;
 const FACE_SEARCH_MAX_THRESHOLD = 0.95;
 const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
-// { characterId, matches: [{picture_id, likeness, face_id}], rowsById } — the
-// whole ranked list plus its picture rows, so re-cutting it is free.
+// How many of the person's reference faces must clear that cut. Defaults to 1,
+// which is the behaviour the backend's `combine=max` gives on its own, so the
+// knob starts where the search has always been and only ever tightens.
+const faceSearchMinRefs = ref(1);
+// { characterId, matches: [{picture_id, likeness, face_id, reference_likeness}],
+// rowsById }: the whole ranked list plus its picture rows, so re-cutting it on
+// either knob is free.
 const faceSearchRanked = ref(null);
+// The view the search was armed from. A view change drops the search (below),
+// and this is what keeps the arming click itself from counting as one.
+const faceSearchArmedView = ref(null);
 const faceSearchAssignBusy = ref(false);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
@@ -3918,12 +3933,12 @@ const searchStatus = computed(() => {
   const total = allGridImages.value.length;
 
   if (faceSearchCharacter.value) {
+    // Just "N matches". The person is named twice over already, on the Assign
+    // button and by the sidebar row the search was armed from, and this label
+    // sat in front of the two sliders and a bulk-write button in a pill that
+    // has to fit them all without wrapping.
     const n = faceSearchMatches.value.length;
-    const name = faceSearchCharacter.value.name;
-    return {
-      count: n,
-      label: n === 1 ? `possible picture of ${name}` : `possible pictures of ${name}`,
-    };
+    return { count: n, label: n === 1 ? "match" : "matches" };
   }
   if (faceLikenessSearchFaceId.value) {
     return { count: total, label: "similar faces" };
@@ -5086,6 +5101,7 @@ const {
     faceLikenessSearchFaceId,
     faceSearchCharacter,
     faceSearchThreshold,
+    faceSearchMinRefs,
     faceSearchRanked,
   },
   props,
@@ -7660,11 +7676,13 @@ function resetFaceAndImageSearches() {
   clearCharacterFaceSearch();
 }
 
-/** Forget the character search and its cached ranked list. */
+/** Forget the character search, its cached ranked list and both its knobs. */
 function clearCharacterFaceSearch() {
   faceSearchCharacter.value = null;
   faceSearchRanked.value = null;
   faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
+  faceSearchArmedView.value = null;
 }
 
 function clearSearchQuery() {
@@ -7715,6 +7733,25 @@ function handleFaceSearchThreshold(value) {
   debouncedFaceSearchRecut();
 }
 
+/**
+ * Move the reference-agreement floor: how many of the person's reference faces
+ * must clear the strength cut.
+ *
+ * Same shape as the threshold above, and for the same reason: it re-cuts the
+ * cached ranked list, so it costs no network call and must not stutter the grid.
+ * Clamped against the reference count because that count only arrives with the
+ * ranked list, so a stale higher value would otherwise empty the results.
+ *
+ * @param {number} value - references that must agree, 1..N.
+ */
+function handleFaceSearchMinRefs(value) {
+  const next = Math.round(Number(value));
+  if (!Number.isFinite(next)) return;
+  const ceiling = Math.max(1, faceSearchRefCount.value || 1);
+  faceSearchMinRefs.value = Math.min(ceiling, Math.max(1, next));
+  debouncedFaceSearchRecut();
+}
+
 const debouncedFaceSearchRecut = debounce(() => {
   if (!faceSearchCharacter.value) return;
   fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
@@ -7732,7 +7769,16 @@ function handleSuggestPicturesForCharacter(character) {
   faceLikenessSearchFaceId.value = null;
   faceSearchRanked.value = null;
   faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
   faceSearchCharacter.value = { id, name: character.name ?? "this person" };
+  // Snapshot the view this was armed from. Opening the person's context menu can
+  // itself select that person, so "the view changed" has to mean "changed from
+  // where the search started", not "a selection watcher fired". Otherwise the
+  // clear below cancels the search the click just asked for.
+  faceSearchArmedView.value = {
+    character: props.selectedCharacter,
+    set: props.selectedSet,
+  };
   emit("clear-search", "");
   // The clear-search emit bumps gridVersion, but that watcher throttles itself
   // to one refresh per 1200ms — and this search is the direct result of a click,
@@ -7743,15 +7789,30 @@ function handleSuggestPicturesForCharacter(character) {
   });
 }
 
-// Every match above the cut. Computed from the cached ranked list rather than
-// from `allGridImages`, so the count in the bar tracks the slider immediately
-// while the grid rebuild debounces behind it.
+// Every match surviving both knobs. Computed from the cached ranked list rather
+// than from `allGridImages`, so the count in the bar tracks the sliders
+// immediately while the grid rebuild debounces behind it. Shares its cut with
+// the rebuild (`utils/faceSuggestionCut.js`) so the two cannot drift.
 const faceSearchMatches = computed(() => {
   const cached = faceSearchRanked.value;
   if (!cached || !faceSearchCharacter.value) return [];
   if (cached.characterId !== faceSearchCharacter.value.id) return [];
-  const cut = faceSearchThreshold.value ?? 0;
-  return cached.matches.filter((m) => (m.likeness ?? 0) >= cut);
+  return cutFaceSuggestions(
+    cached.matches,
+    faceSearchThreshold.value ?? 0,
+    faceSearchMinRefs.value,
+  );
+});
+
+// How many reference faces the query carried. 0 when the ranked list is not in
+// yet or the server did not send the per-reference rows. The agreement slider
+// then has nothing to offer and the panel drops it rather than show a control
+// whose only position is its minimum.
+const faceSearchRefCount = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return 0;
+  if (cached.characterId !== faceSearchCharacter.value.id) return 0;
+  return referenceFaceCount(cached.matches);
 });
 
 // Selection wins over the threshold: a button that ignored an explicit
@@ -7817,19 +7878,31 @@ watch(
     }
   },
 );
-watch([() => props.selectedCharacter, () => props.selectedSet], () => {
-  if (reverseImageSearchPictureIds.value?.length) {
-    reverseImageSearchPictureIds.value = [];
-  }
-  if (faceLikenessSearchFaceId.value !== null) {
-    faceLikenessSearchFaceId.value = null;
-  }
-  // The character search is NOT cleared here. It is launched from the sidebar's
-  // person menu, and opening that menu can also select the person — clearing on
-  // a selection change would cancel the search the click just asked for. It is
-  // library-wide by construction, so a view change cannot invalidate it; the
-  // Clear search button and the other search modes are its exits.
-});
+watch(
+  [() => props.selectedCharacter, () => props.selectedSet],
+  ([character, set]) => {
+    if (reverseImageSearchPictureIds.value?.length) {
+      reverseImageSearchPictureIds.value = [];
+    }
+    if (faceLikenessSearchFaceId.value !== null) {
+      faceLikenessSearchFaceId.value = null;
+    }
+    // The character search goes too. It is library-wide, so a view change cannot
+    // invalidate its *results*, but leaving it up meant navigating somewhere
+    // else and still being shown a grid of suggestions for a person, with a bulk
+    // Assign button armed, which reads as the new view's contents. Navigation is
+    // the ordinary way out of a mode; making it the exit here as well costs one
+    // re-arm and removes a standing bulk write from every view the user visits.
+    //
+    // Compared against the armed-from view rather than fired on any change:
+    // opening the sidebar's person menu can itself select that person, and that
+    // selection lands around the same click that arms the search.
+    if (!faceSearchCharacter.value) return;
+    const armed = faceSearchArmedView.value;
+    if (armed && armed.character === character && armed.set === set) return;
+    clearCharacterFaceSearch();
+  },
+);
 
 function handleEmptyStateReset() {
   gridReady.value = false;

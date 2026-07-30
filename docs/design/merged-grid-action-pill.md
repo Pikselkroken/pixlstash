@@ -1,6 +1,7 @@
 # Merged grid action pill — search + selection in one bottom-edge surface
 
-Status: **built, with the exceptions listed in §12.** Authored jointly by
+Status: **built, with the exceptions listed in §12 and the threshold reversal in
+§12.1.** Authored jointly by
 `lead-designer` (visual) and `ui-ux-expert` (behaviour/a11y), reconciled into one
 spec. Every conflict between the two lanes is resolved below under **Resolved
 conflicts**; where the resolution went against the visual lane it is because
@@ -258,6 +259,12 @@ a load.**
 ---
 
 ## 4. The vertical "Match at least" slider — rejected, on arithmetic
+
+> **Superseded in part by §12.1 (2026-07-30).** The rejection of *vertical*
+> stands on the arithmetic below and is still binding. The "instead" that follows
+> it (inline at wide widths, popover only when narrow or on touch) does not:
+> the control is a popover at every width now, and this section's 240px popover
+> figures are stale (it is 300px). Read §12.1 before changing this control.
 
 Both lanes independently reject it. The fatal number: the domain is 0.50→0.95 at
 `step 0.01` = **45–46 discrete stops**. A vertical range inside a 40px band gets
@@ -793,7 +800,7 @@ are cheap.
 | Question | Visual lane | Usability lane | Resolution |
 |---|---|---|---|
 | Vertical threshold slider | reject (0.7px/step, optics, platform risk) | reject (0.9px/step, target size vs travel) | **Rejected.** Horizontal inline at wide widths, chip + popover ≤780px and always on coarse pointers. |
-| Threshold visible or in a popover | popover always (frees ~130px) | inline while there is room; hiding loses the sweep gesture | **Usability wins** — the popover is the *narrow and touch* form, not the default. The visual lane's popover spec is used for that form. |
+| Threshold visible or in a popover | popover always (frees ~130px) | inline while there is room; hiding loses the sweep gesture | **Usability won, then was reversed**, see §12.1. Shipped inline-at-wide-widths; on 2026-07-30 the owner removed the inline form and the visual lane's original position (popover always) is what stands. |
 | `Clear search` weight | demote to a 40×40 icon immediately | keep the label so it can wear the `<kbd>Esc</kbd>` chip | **Usability wins** — quiet `.stack-btn` **with** label + keycap, icon-only at ≤680px. Satisfies the "one accent only" rule either way. |
 | The scope note | fold it and `Search All Pictures` into one clickable scope chip | delete it; fold the scope into the status sentence, keep `Search everything` as its own state-conditional button | **Usability wins** (it owns copy and flow). Fewer controls, and the sentence carries the fact. |
 | Expansion animation | do not transition width at all; animate seam + segment | width may transition at `--dur-1`; height never | **Visual lane's technical argument wins on width** (`max-content` is not interpolable, and a centred element's left edge moves). Both agree height never animates. The perceived expansion rides on the seam's `scaleY` and the segment's fade-in. |
@@ -911,6 +918,59 @@ keycap is *absent* rather than moved: `Clear selection` carries
 claims Esc at a time, which is the property that mattered; the visible chip is
 the part that degrades. Giving the selection half a labelled Clear button would
 restore it, at the cost of pill width.
+
+### 12.1 The inline threshold slider was removed (owner call, 2026-07-30)
+
+§4 and §11 both resolved in favour of keeping the slider **inline** at wide
+widths: "usability wins: the popover is the *narrow and touch* form, not the
+default", because the sweep-and-watch-the-count gesture is the feature. **That
+resolution is reversed.** The tuning control is now a value-carrying trigger and
+a popover at every width, and the inline form is deleted rather than hidden.
+
+What changed under the ruling, in order of weight:
+
+1. **A second knob arrived.** "Suggest more pictures of &lt;person&gt;" now also
+   filters on how many of the person's reference faces agree, not only on how
+   strongly the best one does (`combine=max` means one perfect match to one
+   reference is enough, which is how a haircut becomes a person). Two ranges do
+   not fit a 40px band: one already took `flex: 1 1 160px` up to 260px of a pill
+   that must not wrap, and §5's `flex-wrap: nowrap` is load-bearing for the
+   notice arithmetic.
+2. **The two knobs are read against each other**, and against the count. The
+   agreement slider counts references clearing the *strength* slider's floor, so
+   they describe one comparison together. Two sliders and the number they
+   produce want to be co-visible and stacked (a panel), not strung along a
+   strip in reading order with a rule between them.
+3. **§4's own arithmetic now favours the panel.** The popover was specced as the
+   fallback at 240px wide, giving ~2.8px/step once the ±1% steppers are in the
+   row. As the *only* form it is widened to 300px → ~4.1px/step, against the
+   inline form's 3–7px at widths that, per §7's budget, the pill rarely has.
+4. **The owner reported the pill as too wide in ordinary use.** Removing the
+   inline slider returns 160–260px, which is what let the ≤780px ladder step be
+   deleted outright and the assign step move from ≤1100px down to ≤900px.
+
+What was given up, stated plainly: the sweep-and-watch gesture now costs one
+click to reach. That is the real loss and it is not disputed. The judgement is
+that it buys a second filter the search needed more.
+
+Held from the original ruling: the standing state still **compresses to its
+value and never disappears** (§13): the trigger reads `82%`, and `· 3/7` once
+the agreement knob is off its floor, so neither filter can be live and unstated.
+Both knobs stay native ranges with real labels and `aria-valuetext`. Both fold
+into the one debounced live region rather than speaking separately (§6.4).
+Vertical sliders remain rejected on §4's arithmetic.
+
+Two smaller corrections taken at the same time:
+
+- **The status copy for person search is now `N matches`**, not `N possible
+  pictures of Anna` (§3's table). The person is named on the Assign button and by
+  the sidebar row the search was armed from; the sentence was spending the pill's
+  scarcest axis to say it a third time.
+- **`Assign N to <person>` drops the name whole**, via its own element, instead
+  of ellipsising the label. §7 always said the tail should go at the narrow step;
+  the implementation used `max-width: 10ch` on the whole label and produced
+  `Assign 2 t…`, a truncation mid-preposition that also costs the count its
+  neighbour.
 
 **Not built, each needing a decision this implementation had no mandate to
 make:**

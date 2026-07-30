@@ -7,9 +7,13 @@
          across screen-reader/browser pairs. It carries the full sentence even
          when the visible text is compressed, and it is debounced so a slider
          drag reads once instead of ~40 times. -->
-    <span class="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{{
-      announcement
-    }}</span>
+    <span
+      class="visually-hidden"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      >{{ announcement }}</span
+    >
 
     <span class="search-result-status" :title="statusSentence">
       <v-progress-circular
@@ -41,49 +45,22 @@
       </template>
     </span>
 
-    <!-- Threshold. Filters the already-fetched ranked list client-side, so the
-         count updates while dragging instead of per round-trip.
+    <!-- Tuning. Both knobs filter the already-fetched ranked list client-side,
+         so the count updates while dragging instead of per round-trip.
 
-         Two forms, swapped by the container query at the bottom of this file,
-         never both operable at once: `display: none` keeps the hidden one out
-         of the tab order, so this does not create an invisible tab stop. The
-         inline form keeps the sweep-and-watch-the-count gesture wherever there
-         is room for real travel; the popover form is what narrow widths and
-         every coarse pointer get, because a 40px inline slider under a finger
-         is a mis-hit generator. Vertical was rejected: 46 discrete steps in a
-         40px band is 0.9px per step (§4). -->
+         ONE form at every width: a value-carrying trigger and a popover. The
+         inline slider this replaces is gone, not hidden. See the note on
+         `Match ≥` in merged-grid-action-pill.md §12.1. Two knobs cannot both
+         live in a 40px band without taking half the pill, and a pair of sliders
+         is a thing to compare against each other and against the count, which is
+         a panel's job rather than a strip's. A standing state still compresses
+         to its value and never disappears (visual-language.md §13), and that
+         is what the trigger label carries. Vertical sliders remain rejected: 46
+         discrete steps in a 40px band is 0.9px per step (§4). -->
     <template v-if="showThreshold">
       <span class="search-result-rule" aria-hidden="true"></span>
 
-      <!-- Inline: the label IS the readout, one run instead of
-           label + gap + track + gap + output. -->
-      <div class="search-result-threshold search-result-threshold--inline">
-        <label class="search-result-threshold-label" :for="inlineThresholdId"
-          >Match ≥</label
-        >
-        <output
-          class="search-result-threshold-value"
-          :for="inlineThresholdId"
-          aria-live="off"
-          >{{ thresholdPercent }}%</output
-        >
-        <input
-          :id="inlineThresholdId"
-          class="search-result-threshold-input"
-          type="range"
-          :min="thresholdMin"
-          :max="thresholdMax"
-          step="0.01"
-          :value="threshold"
-          :aria-valuetext="`${thresholdPercent}%`"
-          :aria-disabled="imagesLoading ? 'true' : undefined"
-          @input="onThresholdInput"
-        />
-      </div>
-
-      <!-- Compressed: value-carrying trigger + popover. A standing state
-           compresses to its value and never disappears (visual-language.md §13). -->
-      <div class="search-result-threshold search-result-threshold--compact">
+      <div class="search-result-threshold">
         <v-menu
           v-model="thresholdMenuOpen"
           :close-on-content-click="false"
@@ -94,52 +71,121 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="stack-btn"
+              class="stack-btn search-result-tune-btn"
               type="button"
-              :aria-label="`Match at least ${thresholdPercent}%`"
+              :aria-label="tuneAccessibleName"
+              :title="tuneAccessibleName"
+              :aria-disabled="imagesLoading ? 'true' : undefined"
               aria-haspopup="dialog"
             >
               <v-icon size="18">mdi-tune-variant</v-icon>
               <span class="search-result-threshold-value">
                 {{ thresholdPercent }}%
               </span>
+              <!-- Only once the knob is off its default. At 1-of-N it filters
+                   nothing, and a permanent "1/7" would read as a live
+                   constraint the user did not set. -->
+              <span v-if="refsEngaged" class="search-result-threshold-refs">
+                · {{ minRefs }}/{{ referenceCount }}
+              </span>
             </button>
           </template>
           <div class="threshold-panel">
-            <label class="section-label" :for="popoverThresholdId"
-              >Match at least</label
-            >
-            <div class="threshold-panel-row">
-              <button
-                class="threshold-step"
-                type="button"
-                :disabled="threshold <= thresholdMin"
-                aria-label="Decrease by 1 percent"
-                @click="stepThreshold(-0.01)"
-              >
-                <v-icon size="18">mdi-minus</v-icon>
-              </button>
-              <input
-                :id="popoverThresholdId"
-                class="search-result-threshold-input"
-                type="range"
-                :min="thresholdMin"
-                :max="thresholdMax"
-                step="0.01"
-                :value="threshold"
-                :aria-valuetext="`${thresholdPercent}%`"
-                @input="onThresholdInput"
-              />
-              <button
-                class="threshold-step"
-                type="button"
-                :disabled="threshold >= thresholdMax"
-                aria-label="Increase by 1 percent"
-                @click="stepThreshold(0.01)"
-              >
-                <v-icon size="18">mdi-plus</v-icon>
-              </button>
+            <div class="threshold-group">
+              <div class="threshold-group-head">
+                <label class="section-label" :for="strengthId"
+                  >Match strength</label
+                >
+                <output
+                  class="threshold-readout"
+                  :for="strengthId"
+                  aria-live="off"
+                  >{{ thresholdPercent }}%</output
+                >
+              </div>
+              <div class="threshold-panel-row">
+                <button
+                  class="threshold-step"
+                  type="button"
+                  :disabled="threshold <= thresholdMin"
+                  aria-label="Decrease match strength by 1 percent"
+                  @click="stepThreshold(-0.01)"
+                >
+                  <v-icon size="18">mdi-minus</v-icon>
+                </button>
+                <input
+                  :id="strengthId"
+                  class="search-result-threshold-input"
+                  type="range"
+                  :min="thresholdMin"
+                  :max="thresholdMax"
+                  step="0.01"
+                  :value="threshold"
+                  :aria-valuetext="`${thresholdPercent}%`"
+                  @input="onThresholdInput"
+                />
+                <button
+                  class="threshold-step"
+                  type="button"
+                  :disabled="threshold >= thresholdMax"
+                  aria-label="Increase match strength by 1 percent"
+                  @click="stepThreshold(0.01)"
+                >
+                  <v-icon size="18">mdi-plus</v-icon>
+                </button>
+              </div>
+              <p class="threshold-group-hint">
+                How closely a face has to resemble a reference.
+              </p>
             </div>
+
+            <!-- Dropped entirely below two references: a slider whose only legal
+                 position is its minimum is chrome, not a control. -->
+            <div v-if="showRefs" class="threshold-group">
+              <div class="threshold-group-head">
+                <label class="section-label" :for="refsId"
+                  >Reference faces</label
+                >
+                <output class="threshold-readout" :for="refsId" aria-live="off"
+                  >{{ minRefs }} of {{ referenceCount }}</output
+                >
+              </div>
+              <div class="threshold-panel-row">
+                <button
+                  class="threshold-step"
+                  type="button"
+                  :disabled="minRefs <= 1"
+                  aria-label="Require one fewer reference face"
+                  @click="stepMinRefs(-1)"
+                >
+                  <v-icon size="18">mdi-minus</v-icon>
+                </button>
+                <input
+                  :id="refsId"
+                  class="search-result-threshold-input"
+                  type="range"
+                  min="1"
+                  :max="referenceCount"
+                  step="1"
+                  :value="minRefs"
+                  :aria-valuetext="`${minRefs} of ${referenceCount}`"
+                  @input="onMinRefsInput"
+                />
+                <button
+                  class="threshold-step"
+                  type="button"
+                  :disabled="minRefs >= referenceCount"
+                  aria-label="Require one more reference face"
+                  @click="stepMinRefs(1)"
+                >
+                  <v-icon size="18">mdi-plus</v-icon>
+                </button>
+              </div>
+              <p class="threshold-group-hint">
+                How many of them have to agree at that strength.
+              </p>
+            </div>
+
             <!-- The count repeated inside, so tuning does not require looking
                  back past the popover at the pill it covers. -->
             <p class="threshold-panel-count">{{ statusSentence }}</p>
@@ -162,7 +208,12 @@
 
       <!-- The one accent-weight action in the pill: it is the only bulk WRITE.
            The count is on the button, never "all" — the blast radius has to be
-           visible before the click, and it is what makes the slider legible. -->
+           visible before the click, and it is what makes the sliders legible.
+
+           The name is its own span so the ladder can DROP it and leave
+           `Assign 14`, which was §7's intent. Ellipsising the whole label
+           instead produced `Assign 2 t…`, a truncation mid-preposition that
+           reads as a bug and loses the count's neighbour anyway. -->
       <button
         v-if="assignTarget"
         class="assign-btn"
@@ -173,7 +224,11 @@
         @click="$emit('assign')"
       >
         <v-icon size="18">mdi-account-check-outline</v-icon>
-        <span class="assign-label">{{ assignLabel }}</span>
+        <span class="assign-label"
+          >Assign {{ assignCount
+          }}<span v-if="assignFromSelection"> selected</span
+          ><span class="assign-target"> to {{ assignTarget }}</span></span
+        >
       </button>
 
       <button
@@ -204,11 +259,15 @@ const props = defineProps({
   /** The rest of the sentence, e.g. `matches for "sunset" in Landscapes`. */
   statusLabel: { type: String, default: "results" },
   isAllPicturesActive: { type: Boolean, default: false },
-  /** Current likeness cut, 0-1. Null hides the threshold. */
+  /** Current likeness cut, 0-1. Null hides the whole tuning control. */
   threshold: { type: Number, default: null },
   /** Fetch floor: dragging below it would need a refetch, so it is the min. */
   thresholdMin: { type: Number, default: 0.5 },
   thresholdMax: { type: Number, default: 0.95 },
+  /** Reference faces that must clear the cut, 1..referenceCount. */
+  minRefs: { type: Number, default: 1 },
+  /** How many reference faces the query carried. Under 2 hides that slider. */
+  referenceCount: { type: Number, default: 0 },
   /** Person the results can be assigned to; null hides the assign action. */
   assignTarget: { type: String, default: null },
   /** How many pictures the assign action would write. Stated on the button. */
@@ -224,10 +283,16 @@ const props = defineProps({
   ownsEscape: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(["clear", "search-all", "update:threshold", "assign"]);
+const emit = defineEmits([
+  "clear",
+  "search-all",
+  "update:threshold",
+  "update:min-refs",
+  "assign",
+]);
 
-const inlineThresholdId = useId();
-const popoverThresholdId = useId();
+const strengthId = useId();
+const refsId = useId();
 const thresholdMenuOpen = ref(false);
 
 const showSearchAll = computed(() => !props.isAllPicturesActive);
@@ -240,6 +305,23 @@ const showThreshold = computed(() => Number.isFinite(props.threshold));
 
 const thresholdPercent = computed(() => Math.round(props.threshold * 100));
 
+const showRefs = computed(() => props.referenceCount > 1);
+
+// The agreement knob is "on" only above its floor. See the trigger markup.
+const refsEngaged = computed(() => showRefs.value && props.minRefs > 1);
+
+// The trigger's accessible name spells both knobs out. Its visible label is two
+// numbers and a separator, which is legible next to the count it shapes but is
+// not a sentence, and a control's name has to survive without the pill around
+// it (visual-language.md §13).
+const tuneAccessibleName = computed(() => {
+  const base = `Tune suggestions. Match strength ${thresholdPercent.value}%`;
+  if (!showRefs.value) return `${base}.`;
+  return props.minRefs > 1
+    ? `${base}, on at least ${props.minRefs} of ${props.referenceCount} reference faces.`
+    : `${base}, on any of ${props.referenceCount} reference faces.`;
+});
+
 const statusSentence = computed(() => {
   if (props.imagesLoading) return "Searching…";
   return props.statusCount === null
@@ -247,17 +329,13 @@ const statusSentence = computed(() => {
     : `${props.statusCount} ${props.statusLabel}`;
 });
 
-// The count is on the button, not "all": the blast radius of a bulk write has
-// to be visible before the click.
-const assignLabel = computed(() =>
-  props.assignFromSelection
-    ? `Assign ${props.assignCount} selected to ${props.assignTarget}`
-    : `Assign ${props.assignCount} to ${props.assignTarget}`,
-);
-
-// The label compresses down the ladder; the accessible name never does.
+// The label compresses down the ladder; the accessible name never does. The
+// count is in both, and never "all": the blast radius of a bulk write has to be
+// visible before the click.
 const assignAccessibleName = computed(() => {
-  const base = assignLabel.value;
+  const base = props.assignFromSelection
+    ? `Assign ${props.assignCount} selected to ${props.assignTarget}`
+    : `Assign ${props.assignCount} to ${props.assignTarget}`;
   if (!props.assignFromSelection || props.assignCount === props.statusCount) {
     return base;
   }
@@ -284,6 +362,18 @@ function stepThreshold(delta) {
   emit("update:threshold", Math.round(next * 100) / 100);
 }
 
+function onMinRefsInput(event) {
+  emit("update:min-refs", Number(event.target.value));
+}
+
+function stepMinRefs(delta) {
+  const next = Math.min(
+    props.referenceCount,
+    Math.max(1, props.minRefs + delta),
+  );
+  emit("update:min-refs", next);
+}
+
 // ── The one live region ─────────────────────────────────────────────────────
 // Debounced 300ms trailing, matching the grid's own 200ms recut: dragging the
 // slider must produce ONE announcement, not one per pointer sample. The
@@ -296,7 +386,12 @@ let announceTimer = null;
 const announcementSource = computed(() => {
   if (props.imagesLoading) return "Searching…";
   if (!showThreshold.value) return statusSentence.value;
-  return `${statusSentence.value} at ${thresholdPercent.value}% or better`;
+  const cut = `${statusSentence.value} at ${thresholdPercent.value}% or better`;
+  // Both knobs in the one sentence, for the same reason the percentage is: two
+  // regions racing over one drag is the defect §6.4 was written about.
+  return refsEngaged.value
+    ? `${cut}, on at least ${props.minRefs} of ${props.referenceCount} reference faces`
+    : cut;
 });
 
 watch(
@@ -366,26 +461,12 @@ onUnmounted(() => {
 }
 
 .search-result-threshold {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.search-result-threshold--inline {
-  display: inline-flex;
-  /* Real travel is the whole argument for keeping this inline. */
-  flex: 1 1 160px;
-  min-width: 120px;
-  max-width: 260px;
-}
-
-.search-result-threshold--compact {
-  display: none;
-}
-
-.search-result-threshold-label {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.65);
-  white-space: nowrap;
+  /* Never a flex line of its own: the trigger is two short numbers and must not
+     take width from the status sentence beside it. */
+  flex: 0 0 auto;
 }
 
 .search-result-threshold-value {
@@ -395,6 +476,16 @@ onUnmounted(() => {
   /* Reserved so the run does not shift as the number changes width. */
   min-width: 4ch;
   text-align: right;
+}
+
+/* The agreement half of the trigger. Quieter than the percentage: it is the
+   secondary knob and it is absent at its default, so it must not read as the
+   headline number when it does appear. */
+.search-result-threshold-refs {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  white-space: nowrap;
 }
 
 .search-result-threshold-input {
@@ -412,13 +503,46 @@ onUnmounted(() => {
 }
 
 .threshold-panel {
-  width: 240px;
+  /* 300px, not the 240px this panel had as the narrow-width fallback: it is now
+     the ONLY form of the strength slider, so its travel is the travel. 300 −
+     2×16 padding − 2×32 steppers − 2×8 gaps = 188px for 46 steps ≈ 4.1px/step,
+     against the ~2.8px/step the 240px panel gave (§4's arithmetic). */
+  width: 300px;
   padding: var(--space-4);
   background: rgba(var(--v-theme-surface), 0.96);
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
   border-radius: var(--radius-lg);
   box-shadow: var(--elevation-3);
+}
+
+/* Two knobs, so each needs a boundary of its own. Air, not a rule: a hairline
+   between two 3-row groups in a 300px panel is more furniture than structure. */
+.threshold-group + .threshold-group {
+  margin-top: var(--space-5);
+}
+
+.threshold-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* The value sits on the label's line rather than under the thumb: two sliders
+   with travelling readouts is two moving numbers to track. */
+.threshold-readout {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.threshold-group-hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-surface), 0.65);
 }
 
 .threshold-panel-row {
@@ -450,7 +574,9 @@ onUnmounted(() => {
 }
 
 .threshold-panel-count {
-  margin: var(--space-3) 0 0;
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-border));
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.65);
 }
@@ -512,9 +638,16 @@ onUnmounted(() => {
 }
 
 .assign-label {
-  max-width: 22ch;
+  white-space: nowrap;
+}
+
+/* Dropped whole by the ladder, never ellipsised. See the markup. */
+.assign-target {
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 16ch;
+  display: inline-block;
+  vertical-align: bottom;
 }
 
 /* Its own breathing room before Clear search: a bulk write and the button that
@@ -534,28 +667,19 @@ onUnmounted(() => {
 
 /* ── Responsive ladder (container `selbar`, declared on .grid-content-area) ──
    Each step gives up the least information still available. The full string
-   survives in `title` and in the live region at every width. */
-@container selbar (max-width: 1100px) {
-  /* A bulk write states its blast radius: the count stays, the name goes. */
-  .assign-label {
-    max-width: 10ch;
-  }
-}
+   survives in `title` and in the live region at every width.
 
+   The old ≤780px step is gone with the inline slider: the tuning control is a
+   value-carrying trigger at every width, so there is nothing left to fold. That
+   also moves the assign step down the ladder: dropping the popover reclaimed
+   the 160–260px the inline slider used to take from exactly this run. */
 @container selbar (max-width: 900px) {
+  /* A bulk write states its blast radius: the count stays, the name goes. */
+  .assign-target {
+    display: none;
+  }
   .search-all-label {
     display: none;
-  }
-}
-
-/* The threshold folds into its value + popover. Also unconditional on coarse
-   pointers below. */
-@container selbar (max-width: 780px) {
-  .search-result-threshold--inline {
-    display: none;
-  }
-  .search-result-threshold--compact {
-    display: inline-flex;
   }
 }
 
@@ -576,14 +700,14 @@ onUnmounted(() => {
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .search-result-threshold--inline {
-    display: none;
-  }
-  .search-result-threshold--compact {
-    display: inline-flex;
-  }
   .stack-btn,
   .assign-btn {
+    height: var(--bar-height);
+  }
+  /* The one thing touch still needs from the old §7 rule: the panel's own
+     controls at the touch-target floor. The trigger is already a button. */
+  .threshold-step {
+    width: var(--bar-height);
     height: var(--bar-height);
   }
 }

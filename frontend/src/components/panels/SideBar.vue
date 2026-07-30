@@ -6265,9 +6265,12 @@ defineExpose({
           @click="suggestPicturesForCharacterFromCtx(sidebarCtxCharacter)"
         >
           <v-icon size="15" class="sidebar-ctx-icon">mdi-account-search</v-icon>
-          <span class="sidebar-ctx-label"
-            >Suggest more pictures of {{ sidebarCtxCharacter.name }}</span
-          >
+          <!-- The name is deliberately NOT in the label. The menu is anchored to
+               that person's row and every other item in it is already about
+               them, so repeating the name only bought an ellipsis: the menu is
+               260px wide and "Suggest more pictures of <a real name>" does not
+               fit. The title below still names them in full. -->
+          <span class="sidebar-ctx-label">Suggest more pictures</span>
         </button>
         <button
           v-if="!isReadOnly"
