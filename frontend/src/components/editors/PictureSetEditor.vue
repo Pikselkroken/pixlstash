@@ -143,6 +143,7 @@
         variant="primary"
         icon-left="check"
         :disabled="!isValid"
+        :loading="saving"
         @click="save"
       >
         Save
@@ -158,6 +159,7 @@ import {
   createPictureSet,
   patchPictureSet,
 } from "../../api/pictureSets";
+import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
   SET_COLORS,
@@ -277,18 +279,25 @@ watch(
   { immediate: true },
 );
 
-function save() {
+async function submitSet() {
   if (!isValid.value) return;
   // A locked set only accepts an unlock: sending the other (unchanged, but
   // disabled) fields would 423 server-side. Send just id + locked so unticking
   // Locked and saving is the unlock path, and saving without unticking is a
   // no-op the server allows.
   if (isLockedSet.value) {
-    saveSetFromEditor({ id: localSet.value.id, locked: localSet.value.locked });
+    await saveSetFromEditor({
+      id: localSet.value.id,
+      locked: localSet.value.locked,
+    });
     return;
   }
-  saveSetFromEditor({ ...localSet.value });
+  await saveSetFromEditor({ ...localSet.value });
 }
+
+// One create at a time (#647): the button wears `saving`, and `save` refuses a
+// re-entrant call so the name field's Enter cannot slip a second set past it.
+const { pending: saving, run: save } = useSubmitGuard(submitSet);
 
 // Keyboard shortcuts
 function handleKeydown(event) {

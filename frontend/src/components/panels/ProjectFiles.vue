@@ -113,8 +113,12 @@
           <button
             class="pf-url-save"
             @click="addUrl"
-            :disabled="!urlInput.trim()"
+            :disabled="!urlInput.trim() || addingUrl"
+            :aria-busy="addingUrl ? 'true' : undefined"
           >
+            <v-icon size="12" :class="{ 'mdi-spin': addingUrl }">{{
+              addingUrl ? "mdi-loading" : "mdi-plus"
+            }}</v-icon>
             Add
           </button>
           <button class="pf-url-cancel" @click="showUrlForm = false">
@@ -138,6 +142,7 @@ import {
   addProjectAttachmentUrl,
   deleteProjectAttachment,
 } from "../../api/projects";
+import { useSubmitGuard } from "../../composables/useSubmitGuard";
 
 const props = defineProps({
   projectId: { type: Number, required: true },
@@ -267,7 +272,7 @@ async function deleteFile(file) {
   }
 }
 
-async function addUrl() {
+async function submitUrl() {
   const url = urlInput.value.trim();
   if (!url) return;
   const title = urlTitle.value.trim() || url;
@@ -286,6 +291,11 @@ async function addUrl() {
     uploadError.value = err?.response?.data?.detail ?? "Could not save URL.";
   }
 }
+
+// One attachment per submit (#647). The two inputs both submit on Enter and the
+// fields are only cleared after the await, so without this a second Enter or a
+// double-click on Add posts the same URL twice.
+const { pending: addingUrl, run: addUrl } = useSubmitGuard(submitUrl);
 
 function urlLabel(file) {
   const name = file.original_filename || "";
@@ -678,6 +688,9 @@ onMounted(() => {
 }
 
 .pf-url-save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   background: rgba(var(--v-theme-accent), 0.85);
   color: rgb(var(--v-theme-on-accent));
 }
@@ -689,6 +702,23 @@ onMounted(() => {
 .pf-url-save:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* Pending is not disabled: the spinner is the only thing telling the user their
+   click landed, so it must not fade with the rest (visual-language.md §11). The
+   spin also survives reduced motion — a frozen mdi-loading is a static broken
+   ring, and @mdi/font puts the animation on ::before, which is what the global
+   reset in design-tokens.css zeroes. */
+.pf-url-save:disabled[aria-busy="true"] {
+  opacity: 1;
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-url-save .mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 .pf-url-cancel {
