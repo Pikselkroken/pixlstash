@@ -118,14 +118,22 @@ class ImagePlugin(ABC):
     ) -> Callable[[list[int]], list[int]] | None:
         """Return a function that maps a bbox from source to output image space.
 
+        **Currently unused. Overriding it has no effect.** Its only caller was
+        the face-copy step in ``service.py``, which copied a source picture's
+        face rows onto plugin outputs. That was removed: outputs now get
+        ``source_picture_id`` and nothing else, so ``MissingFaceExtractionFinder``
+        detects their real faces and ``SourceFaceLikenessTask`` inherits a
+        character only where the faces actually match. Copying a box through a
+        transform assumed the output still contains the face, and a wrong
+        assumption there wrote boxes that captured nothing.
+
+        Kept because the contract is still the right one if bbox mapping is ever
+        needed again (a crop preview, say), and because plugins outside this repo
+        may already implement it. ``scaling`` and ``rotate`` still do.
+
         The callable receives ``[x1, y1, x2, y2]`` in source pixel coordinates
         and must return a new ``[x1, y1, x2, y2]`` in output pixel coordinates.
-        Return ``None`` to fall back to the default proportional scaling used
-        by the face-copy logic in ``service.py``.
-
-        Override this in plugins that apply a geometric transformation (rotation,
-        scaling, cropping, etc.) so that face bounding boxes are correctly
-        repositioned on the output image.
+        Return ``None`` to indicate no mapping is available.
 
         Args:
             parameters: The same parameter dict passed to ``run``/``run_video``.

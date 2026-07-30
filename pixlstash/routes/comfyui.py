@@ -64,7 +64,6 @@ from pixlstash.services.comfyui_service import (
 from pixlstash.services.comfyui_service import (  # noqa: F401
     _assign_outputs_to_stack_top,
     _assign_pictures_to_view_context,
-    _copy_face_assignments,
     _copy_set_and_project_assignments,
     _download_comfyui_image,
     _emit_comfyui_failure_progress,
@@ -782,8 +781,8 @@ def create_router(server) -> APIRouter:
                 _randomize_seeds(workflow_instance)
             # Only create/join a stack and tag the SaveImage filename when
             # stacking is requested. When disabled, stack_id stays None so the
-            # worker places nothing in a stack; associations are still copied
-            # because is_i2i=True drives the face/set/project copy below.
+            # worker places nothing in a stack; set/project associations and the
+            # source_picture_id marker are propagated either way.
             stack_id: int | None = None
             if should_stack:
                 stack_id = server.vault.db.run_task(
@@ -825,7 +824,6 @@ def create_router(server) -> APIRouter:
                         stack_id,
                         pic_id,
                     ),
-                    kwargs={"is_i2i": True},
                     daemon=True,
                 )
                 worker.start()
@@ -1251,7 +1249,6 @@ def create_router(server) -> APIRouter:
                     stack_id,
                     pic_id,
                 ),
-                kwargs={"is_i2i": True},
                 daemon=True,
             )
             worker.start()

@@ -10,7 +10,6 @@ from PIL import Image
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
-    Face,
     Picture,
     PictureProjectMember,
     PictureSetMember,
@@ -575,183 +574,6 @@ def _set_source_picture_ids_on_new_outputs(
     server.vault.db.run_task(update)
 
 
-def _copy_face_associations(
-    server,
-    source_picture_ids: list[int],
-    ordered_output_ids: list[int],
-    plugin: ImagePlugin | None = None,
-    params: dict[str, Any] | None = None,
-) -> None:
-    """Copy face/character associations from source pictures to their plugin outputs.
-
-    Bounding boxes are transformed using the plugin's ``get_bbox_transform``
-    method when available.  Plugins that apply geometric transforms (rotation,
-    scaling, …) override that method to return a callable that correctly maps
-    each ``[x1, y1, x2, y2]`` bbox from source to output coordinates.  When
-    the plugin returns ``None`` the code falls back to a simple proportional
-    scale based on the ratio of output to source dimensions.  Sentinel faces
-    (``face_index == -1``) and self-to-self mappings are always skipped.
-    """
-    pairs = [
-        (src, out)
-        for src, out in zip(source_picture_ids, ordered_output_ids)
-        if src is not None and out is not None and src != out
-    ]
-    if not pairs:
-        return
-
-    all_source_ids = list({src for src, _ in pairs})
-    all_output_ids = list({out for _, out in pairs})
-
-    def copy_faces(session: Session) -> None:
-        # Fetch real (non-sentinel) faces from source pictures.
-        source_faces = session.exec(
-            select(Face)
-            .where(Face.picture_id.in_(all_source_ids))
-            .where(Face.face_index != -1)
-        ).all()
-        if not source_faces:
-            return
-
-        # Index source faces by picture_id.
-        faces_by_source: dict[int, list[Face]] = {}
-        for face in source_faces:
-            faces_by_source.setdefault(int(face.picture_id), []).append(face)
-
-        # Fetch source + output pictures to read their dimensions.
-        all_ids = list(set(all_source_ids) | set(all_output_ids))
-        pictures = session.exec(select(Picture).where(Picture.id.in_(all_ids))).all()
-        pic_by_id: dict[int, Picture] = {
-            int(p.id): p for p in pictures if p.id is not None
-        }
-
-        # Check which (picture_id, frame_index, face_index) combos already exist
-        # on the output pictures to avoid UNIQUE constraint violations.
-        existing_faces = session.exec(
-            select(Face).where(Face.picture_id.in_(all_output_ids))
-        ).all()
-        existing_keys: set[tuple[int, int, int]] = {
-            (int(f.picture_id), int(f.frame_index), int(f.face_index))
-            for f in existing_faces
-        }
-
-        new_faces: list[Face] = []
-        for source_id, output_id in pairs:
-            faces = faces_by_source.get(source_id)
-            if not faces:
-                continue
-
-            source_pic = pic_by_id.get(source_id)
-            output_pic = pic_by_id.get(output_id)
-
-            src_w = int(source_pic.width or 0) if source_pic else 0
-            src_h = int(source_pic.height or 0) if source_pic else 0
-            out_w = int(output_pic.width or 0) if output_pic else 0
-            out_h = int(output_pic.height or 0) if output_pic else 0
-
-            # Step 1: account for the EXIF orientation applied by load_image_or_video.
-            # Face bboxes are in raw pixel space (cv2.imread ignores EXIF), but the
-            # plugin saw — and the output image contains — exif_transpose()'d pixels.
-            # We must first map bboxes through the same EXIF transform, then through
-            # whatever geometric transform the plugin applies.
-            exif_transform = None
-            inter_w, inter_h = src_w, src_h  # dimensions after EXIF transform
-            if source_pic is not None:
-                source_file = ImageUtils.resolve_picture_path(
-                    server.vault.image_root, source_pic.file_path
-                )
-                if source_file:
-                    # _get_exif_bbox_transform always reads actual dimensions
-                    # from the file, so this also fills in inter_w/inter_h even
-                    # when src_w/src_h are 0 (picture.width/height not yet set).
-                    exif_transform, inter_w, inter_h = _get_exif_bbox_transform(
-                        source_file, src_w, src_h
-                    )
-
-            # Step 2: ask the plugin for its geometric bbox transform, using the
-            # post-EXIF (intermediate) dimensions as the logical source size.
-            bbox_transform = None
-            if (
-                plugin is not None
-                and inter_w > 0
-                and inter_h > 0
-                and out_w > 0
-                and out_h > 0
-            ):
-                bbox_transform = plugin.get_bbox_transform(
-                    params,
-                    (inter_w, inter_h),
-                    (out_w, out_h),
-                )
-
-            # Step 3: fallback — proportional scale when dimensions differ.
-            if (
-                bbox_transform is None
-                and inter_w > 0
-                and inter_h > 0
-                and out_w > 0
-                and out_h > 0
-            ):
-                if inter_w != out_w or inter_h != out_h:
-                    scale_x = out_w / inter_w
-                    scale_y = out_h / inter_h
-
-                    def _make_scale_transform(sx: float, sy: float):
-                        def _transform(bbox: list[int]) -> list[int]:
-                            x1, y1, x2, y2 = bbox
-                            return [
-                                int(round(x1 * sx)),
-                                int(round(y1 * sy)),
-                                int(round(x2 * sx)),
-                                int(round(y2 * sy)),
-                            ]
-
-                        return _transform
-
-                    bbox_transform = _make_scale_transform(scale_x, scale_y)
-
-            for face in faces:
-                key = (int(output_id), int(face.frame_index), int(face.face_index))
-                if key in existing_keys:
-                    continue
-
-                scaled_bbox = None
-                if face.bbox and len(face.bbox) == 4:
-                    # Apply exif transform first (raw → post-exif space),
-                    # then the plugin transform (post-exif → output space).
-                    b = face.bbox
-                    if exif_transform is not None:
-                        b = exif_transform(b)
-                    if bbox_transform is not None:
-                        b = bbox_transform(b)
-                    scaled_bbox = b
-
-                new_face = Face(
-                    picture_id=output_id,
-                    frame_index=face.frame_index,
-                    face_index=face.face_index,
-                    character_id=face.character_id,
-                    bbox=scaled_bbox,
-                    # Copy embedding features so the likeness worker can use them
-                    # immediately without re-extracting.
-                    features=face.features,
-                )
-                new_faces.append(new_face)
-                existing_keys.add(key)
-
-        if new_faces:
-            session.add_all(new_faces)
-            session.commit()
-            logger.info(
-                "Copied %d face association(s) from %d source picture(s) to %d output picture(s).",
-                len(new_faces),
-                len(all_source_ids),
-                len(all_output_ids),
-            )
-
-    server.vault.db.run_task(copy_faces)
-
-
 def apply_plugin_to_pictures(
     server,
     plugin: ImagePlugin,
@@ -863,11 +685,23 @@ def apply_plugin_to_pictures(
     _propagate_output_project_memberships(
         server, source_picture_ids, ordered_output_ids
     )
+    # Setting source_picture_id above is the WHOLE face story for an output.
+    # `MissingFaceExtractionFinder` detects the output's real faces, then
+    # `MissingSourceFaceLikenessCharacterFinder` sees a picture with both a
+    # source_picture_id and an extracted embedding and runs
+    # `SourceFaceLikenessTask`, which inherits a character from the source only
+    # where the two faces actually match at >= 0.7 and then clears the marker.
+    #
+    # Copying the source's face rows here as a shortcut is what this used to do,
+    # and it was wrong twice over: a bbox is pixel coordinates, so on an output
+    # of a different size the source's numbers describe a different region (on a
+    # much larger canvas they collapse into the top-left corner and capture
+    # nothing), and copying `features` asserts the output contains that person
+    # without ever looking at the output's pixels. Real detection plus a
+    # similarity gate answers both questions properly, and it costs one
+    # extraction pass the finder was going to be able to do anyway.
     _set_source_picture_ids_on_new_outputs(
         server, source_picture_ids, ordered_output_ids, new_ids
-    )
-    _copy_face_associations(
-        server, source_picture_ids, ordered_output_ids, plugin=plugin, params=params
     )
 
     # Physical stacking is optional. Associations above (set/project/source/face)
