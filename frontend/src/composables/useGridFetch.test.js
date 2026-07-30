@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, reactive } from "vue";
+import { setActivePinia, createPinia } from "pinia";
 import { useGridFetch } from "./useGridFetch.js";
 import { getPictureCount, streamPictures } from "../api/pictures";
 
@@ -24,6 +25,9 @@ function makeHarness({
   selectedSort = "DATE_TAKEN",
   propOverrides = {},
 } = {}) {
+  // The composable reads the filter facets of the query straight from the
+  // stores, so every harness needs a live Pinia.
+  setActivePinia(createPinia());
   const startSmartScoreProgress = vi.fn();
   const completeSmartScoreProgress = vi.fn();
 

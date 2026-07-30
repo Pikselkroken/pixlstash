@@ -9,8 +9,8 @@
     :descriptionUpdate="props.wsDescriptionUpdate"
     :smartScoreUpdate="props.wsSmartScoreUpdate"
     :detectionUpdate="props.wsDetectionUpdate"
-    :hiddenTags="props.hiddenTags"
-    :applyTagFilter="props.applyTagFilter"
+    :hiddenTags="userPrefsStore.hiddenTags"
+    :applyTagFilter="userPrefsStore.applyTagFilter"
     :dateFormat="props.dateFormat"
     :showStacks="props.showStacks"
     :showProblemIcon="props.showProblemIcon"
@@ -20,7 +20,7 @@
     :pluginProgress="pluginProgress"
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiClientId="comfyuiClientId"
-    :comfyuiConfigured="props.comfyuiConfigured"
+    :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
     @close="closeOverlay"
     @apply-score="applyScore"
@@ -54,7 +54,7 @@
       :allPicturesId="String(props.allPicturesId)"
       :unassignedPicturesId="String(props.unassignedPicturesId)"
       :backend-url="props.backendUrl"
-      :comfyui-configured="props.comfyuiConfigured"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
       @expand-all-stacks="expandAllStacks"
       @collapse-all-stacks="collapseAllStacks"
@@ -113,7 +113,7 @@
       :unassigned-pictures-id="String(props.unassignedPicturesId)"
       :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
       :backend-url="props.backendUrl"
-      :comfyui-configured="props.comfyuiConfigured"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :grouping-lock-reason="partialStackGroupingReason"
@@ -1028,7 +1028,7 @@
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
       :comfyui-client-id="comfyuiClientId"
-      :comfyui-configured="props.comfyuiConfigured"
+      :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
       :grouping-lock-reason="partialStackGroupingReason"
@@ -1038,7 +1038,7 @@
       :all-grid-images="allGridImages"
       :selected-character="String(props.selectedCharacter)"
       :selected-set="String(props.selectedSet)"
-      :impossible-sources="props.impossibleSources"
+      :impossible-sources="filterStore.impossibleSources"
       :clearing-impossible="clearingImpossibleTags"
       @clear-impossible-tags="handleClearImpossibleTags"
       @clear-selection="clearSelection"
@@ -1089,6 +1089,7 @@ import {
   onUnmounted,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1302,34 +1303,12 @@ const props = defineProps({
     type: Object,
     default: () => ({ key: 0, payload: null }),
   },
-  mediaTypeFilter: { type: String, default: "all" },
-  comfyuiModelFilter: { type: Array, default: () => [] },
-  comfyuiLoraFilter: { type: Array, default: () => [] },
-  comfyuiConfigured: { type: Boolean, default: false },
-  minScoreFilter: { type: Number, default: null },
-  maxScoreFilter: { type: Number, default: null },
-  smartScoreBucketFilter: { type: String, default: null },
-  resolutionBucketFilter: { type: String, default: null },
-  tagFilter: { type: Array, default: () => [] },
-  tagRejectedFilter: { type: Array, default: () => [] },
-  tagConfidenceAboveFilter: { type: Array, default: () => [] },
-  tagConfidenceBelowFilter: { type: Array, default: () => [] },
-  faceBboxFilter: { type: String, default: null },
-  impossibleSources: { type: Array, default: () => [] },
   // "all" | "stacked" | "unstacked" | "unresolved"
-  stackStateFilter: { type: String, default: "all" },
-  sharedOnlyFilter: { type: Boolean, default: false },
-  unassignedOnlyFilter: { type: Boolean, default: false },
   columns: { type: Number, required: true },
-  hiddenTags: { type: Array, default: () => [] },
-  applyTagFilter: { type: Boolean, default: false },
   projectViewMode: { type: String, default: "global" },
   selectedProjectId: { type: Number, default: null },
   characterProjectIds: { type: Object, default: () => ({}) },
   setProjectIds: { type: Object, default: () => ({}) },
-  referenceFolderIdFilter: { type: Number, default: null },
-  filePathPrefixFilter: { type: String, default: null },
-  importSourceFolderFilter: { type: String, default: null },
   folderScanning: { type: Boolean, default: false },
   selectedCharacterIds: { type: Array, default: () => [] },
   characterMultiMode: { type: String, default: "union" },
@@ -1547,8 +1526,8 @@ async function handleClearImpossibleTags() {
   const pictureIds = selectedImageIds.value
     .map((id) => Number(id))
     .filter((id) => Number.isFinite(id) && id > 0);
-  const filters = Array.isArray(props.impossibleSources)
-    ? props.impossibleSources
+  const filters = Array.isArray(filterStore.impossibleSources)
+    ? filterStore.impossibleSources
     : [];
   if (!pictureIds.length || !filters.length || clearingImpossibleTags.value) {
     return;
@@ -2329,12 +2308,18 @@ watch(
     // tagging doesn't change anything visible in the grid (thumbnails and sort
     // order are unaffected), so refreshing just hammers the DB for no benefit.
     if (
-      !(props.tagFilter && props.tagFilter.length) &&
-      !(props.tagRejectedFilter && props.tagRejectedFilter.length) &&
+      !(filterStore.tagFilter && filterStore.tagFilter.length) &&
       !(
-        props.tagConfidenceAboveFilter && props.tagConfidenceAboveFilter.length
+        filterStore.tagRejectedFilter && filterStore.tagRejectedFilter.length
       ) &&
-      !(props.tagConfidenceBelowFilter && props.tagConfidenceBelowFilter.length)
+      !(
+        filterStore.tagConfidenceAboveFilter &&
+        filterStore.tagConfidenceAboveFilter.length
+      ) &&
+      !(
+        filterStore.tagConfidenceBelowFilter &&
+        filterStore.tagConfidenceBelowFilter.length
+      )
     )
       return;
     if (pauseGridAutoUpdates.value) {
@@ -2942,6 +2927,9 @@ const visibleRangeLabel = computed(() => {
   return `${first} – ${last}`;
 });
 
+// Store-direct (Phase 3): every picture-query filter facet is read from the
+// filter store, not mirrored in through props.
+const filterStore = useFilterStore();
 const userPrefsStore = useUserPrefsStore();
 const tasksStore = useTasksStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -4014,13 +4002,13 @@ const selectedExpandedCount = computed(() => {
 
   const hasNoAdditionalFilters =
     !(props.searchQuery || "").trim() &&
-    props.mediaTypeFilter === "all" &&
-    (props.comfyuiModelFilter || []).length === 0 &&
-    (props.comfyuiLoraFilter || []).length === 0 &&
-    props.minScoreFilter == null &&
-    props.maxScoreFilter == null &&
-    props.smartScoreBucketFilter == null &&
-    props.resolutionBucketFilter == null;
+    filterStore.mediaTypeFilter === "all" &&
+    (filterStore.comfyuiModelFilter || []).length === 0 &&
+    (filterStore.comfyuiLoraFilter || []).length === 0 &&
+    filterStore.minScoreFilter == null &&
+    filterStore.maxScoreFilter == null &&
+    filterStore.smartScoreBucketFilter == null &&
+    filterStore.resolutionBucketFilter == null;
 
   // Keep the info count aligned with sidebar summary for full category selections.
   if (
@@ -6119,22 +6107,22 @@ watch(
 
 watch(
   [
-    () => props.mediaTypeFilter,
-    () => props.comfyuiModelFilter,
-    () => props.comfyuiLoraFilter,
-    () => props.minScoreFilter,
-    () => props.maxScoreFilter,
-    () => props.smartScoreBucketFilter,
-    () => props.resolutionBucketFilter,
-    () => props.tagFilter,
-    () => props.tagRejectedFilter,
-    () => props.tagConfidenceAboveFilter,
-    () => props.tagConfidenceBelowFilter,
-    () => props.faceBboxFilter,
-    () => props.impossibleSources,
-    () => props.stackStateFilter,
-    () => props.sharedOnlyFilter,
-    () => props.unassignedOnlyFilter,
+    () => filterStore.mediaTypeFilter,
+    () => filterStore.comfyuiModelFilter,
+    () => filterStore.comfyuiLoraFilter,
+    () => filterStore.minScoreFilter,
+    () => filterStore.maxScoreFilter,
+    () => filterStore.smartScoreBucketFilter,
+    () => filterStore.resolutionBucketFilter,
+    () => filterStore.tagFilter,
+    () => filterStore.tagRejectedFilter,
+    () => filterStore.tagConfidenceAboveFilter,
+    () => filterStore.tagConfidenceBelowFilter,
+    () => filterStore.faceBboxFilter,
+    () => filterStore.impossibleSources,
+    () => filterStore.stackStateFilter,
+    () => filterStore.sharedOnlyFilter,
+    () => filterStore.unassignedOnlyFilter,
   ],
   () => {
     _resetGridState();
@@ -6301,7 +6289,7 @@ watch(
 // ============================================================
 function filterImagesByMediaType(images) {
   let filtered = images;
-  if (props.mediaTypeFilter === "images") {
+  if (filterStore.mediaTypeFilter === "images") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
       const candidates = [img.name, img.id, img.format]
@@ -6309,7 +6297,7 @@ function filterImagesByMediaType(images) {
         .map((v) => (typeof v === "string" ? v : ""));
       return candidates.some((val) => isSupportedImageFile(val));
     });
-  } else if (props.mediaTypeFilter === "videos") {
+  } else if (filterStore.mediaTypeFilter === "videos") {
     filtered = filtered.filter((img) => {
       if (!img) return false;
       const candidates = [img.name, img.id, img.format]
@@ -7089,7 +7077,7 @@ async function confirmRevokePictureShares() {
 // updateColumns removed; columns is now controlled by prop
 
 async function _afterTagMutation(imageId) {
-  if (props.applyTagFilter) {
+  if (userPrefsStore.applyTagFilter) {
     if (overlayOpen.value) {
       // The overlay is showing live tag state already. Defer the full
       // tag-filtered refetch until the overlay is closed to prevent the
@@ -7315,7 +7303,10 @@ watch(ghostedIdSet, (set) => {
       (id) => !isGhostId(id),
     );
   }
-  if (lastSelectedImageId.value != null && isGhostId(lastSelectedImageId.value)) {
+  if (
+    lastSelectedImageId.value != null &&
+    isGhostId(lastSelectedImageId.value)
+  ) {
     lastSelectedImageId.value = null;
   }
   if (cursorIdx.value !== null && isGridIndexGhosted(cursorIdx.value)) {
