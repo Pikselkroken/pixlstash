@@ -25,7 +25,6 @@ import {
   sessionContext,
 } from "../../utils/apiClient";
 import {
-  listCharacters,
   patchCharacter,
   getCharacterSummary,
   getCharacterThumbnail,
@@ -34,16 +33,11 @@ import {
   deleteCharacter as apiDeleteCharacter,
 } from "../../api/characters";
 import {
-  listPictureSets,
   patchPictureSet,
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
-import {
-  listProjects,
-  getProjectSummary,
-  deleteProject,
-} from "../../api/projects";
+import { getProjectSummary, deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
   listImportFolders,
@@ -68,6 +62,7 @@ import {
   ICON_CARDS,
 } from "../../utils/setAppearance.js";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -78,6 +73,9 @@ import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
 const entityNames = useEntityNamesStore();
+// The character / set / project lists themselves are shared with the image
+// context menu and the review scope pickers, so they live in one store (§4).
+const entityLists = useEntityListsStore();
 const sidebarStore = useSidebarStore();
 const lockedSetsStore = useLockedSetsStore();
 // Failures and outcomes report through the notice surface rather than a
@@ -239,7 +237,7 @@ function selectProjectNode(p) {
 const sortOptions = ref([]);
 
 // --- Character & Sidebar State ---
-const characters = ref([]);
+const characters = computed(() => entityLists.characters);
 const categoryCounts = ref({
   [props.allPicturesId]: 0,
   [props.unassignedPicturesId]: 0,
@@ -263,10 +261,10 @@ const dragOverCharacter = ref(null);
 const nextCharacterNumber = ref(1);
 
 // --- Picture Sets State ---
-const pictureSets = ref([]);
+const pictureSets = computed(() => entityLists.pictureSets);
 
 // --- Project State ---
-const projects = ref([]);
+const projects = computed(() => entityLists.projects);
 const projectViewMode = ref("global"); // 'global' | 'project'
 const selectedProjectId = ref(null); // null = 'No project' in project view
 // Tracks the view context when allPicturesId was last selected, so active state
@@ -1860,13 +1858,9 @@ async function deleteCharacter() {
   if (!window.confirm("Delete this character?")) return;
   try {
     await apiDeleteCharacter(props.selectedCharacter);
-
-    // Remove the deleted character from the characters array
-    characters.value = characters.value.filter(
-      (char) => char.id !== props.selectedCharacter,
-    );
-
-    await fetchCharacters(); // Refresh sidebar
+    // The list is shared state now: the server is asked again rather than the
+    // row being spliced out locally.
+    await fetchCharacters();
   } catch (e) {
     setError(e.message);
   }
@@ -1884,9 +1878,6 @@ async function deleteCharactersByIds(ids) {
   if (!window.confirm(msg)) return;
   try {
     await Promise.all(ids.map((id) => apiDeleteCharacter(id)));
-    characters.value = characters.value.filter(
-      (c) => !ids.includes(Number(c.id)),
-    );
     await fetchCharacters();
   } catch (e) {
     setError(e.message);
@@ -2554,15 +2545,9 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const chars = await listCharacters({ baseUrl: props.backendUrl });
-    const nextCharacters = Array.isArray(chars) ? chars : [];
-    if (!Array.isArray(chars)) {
-      console.warn(
-        "Unexpected /characters response; expected an array:",
-        chars,
-      );
-    }
-    characters.value = nextCharacters;
+    const nextCharacters = await entityLists.refresh("characters", {
+      baseUrl: props.backendUrl,
+    });
     entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
@@ -2587,9 +2572,14 @@ function refreshSidebar(options = {}) {
 
 async function fetchCharacterThumbnail(characterId) {
   try {
-    const blob = await getCharacterThumbnail(characterId, {
-      cacheBuster: Date.now(),
-    });
+    // No cache-buster: a fresh `?cb=` per call re-downloaded every character
+    // thumbnail on every sidebar refresh, against an already-expensive route
+    // (#651). Freshness is the *response's* job instead — the route sends
+    // `Cache-Control: private, no-cache` with an ETag and answers a conditional
+    // request with a 304, so the browser revalidates every time but transfers
+    // bytes only when the thumbnail actually changed. Re-adding a buster here
+    // would defeat that (integration_architecture.md §9).
+    const blob = await getCharacterThumbnail(characterId);
 
     // Create an object URL for the blob
     const blobUrl = URL.createObjectURL(blob);
@@ -2643,37 +2633,20 @@ async function fetchSortOptions() {
 
 // --- Picture Sets ---
 async function fetchProjects() {
-  // A token scoped to a non-project resource cannot access the projects list.
-  if (
-    isReadOnly.value &&
-    sessionContext.value?.resource_type != null &&
-    sessionContext.value.resource_type !== "project"
-  ) {
-    projects.value = [];
-    return;
-  }
-  try {
-    const rows = await listProjects({ baseUrl: props.backendUrl });
-    projects.value = Array.isArray(rows) ? rows : [];
-    entityNames.mergeProjectNames(projects.value);
-  } catch (e) {
-    console.error("Error fetching projects:", e);
-    projects.value = [];
-  }
+  // The store declines the call outright for a token scoped to a non-project
+  // resource, which cannot read the projects list.
+  const rows = await entityLists.refresh("projects", {
+    baseUrl: props.backendUrl,
+  });
+  entityNames.mergeProjectNames(rows);
 }
 
 async function fetchPictureSets() {
-  try {
-    // Always fetch all sets — in the flat project tree each project filters
-    // its own sets client-side, so we must not scope this call to a single project.
-    const sets = await listPictureSets({ baseUrl: props.backendUrl });
-    pictureSets.value = Array.isArray(sets) ? [...sets] : [];
-    entityNames.mergeSetNames(pictureSets.value);
-    await updateSetThumbnails(pictureSets.value);
-  } catch (e) {
-    console.error("Error fetching picture sets:", e);
-    pictureSets.value = [...pictureSets.value]; // force reactivity on error
-  }
+  // Always fetch all sets — in the flat project tree each project filters
+  // its own sets client-side, so we must not scope this call to a single project.
+  const sets = await entityLists.refresh("sets", { baseUrl: props.backendUrl });
+  entityNames.mergeSetNames(sets);
+  await updateSetThumbnails(sets);
 }
 
 async function fetchSharedIds() {
@@ -3168,8 +3141,8 @@ function handleDropOnCharacter(payload) {
 // --- Character Management ---
 async function characterSaved() {
   if (characterEditorCharacter.value && !characterEditorCharacter.value.id) {
-    characters.value.push(characterEditorCharacter.value);
-    // New character was created, increment nextCharacterNumber
+    // New character was created, increment nextCharacterNumber. The row itself
+    // comes from the refetch below — the shared list is never written locally.
     nextCharacterNumber.value++;
   }
   await fetchCharacters(); // Refresh characters

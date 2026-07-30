@@ -217,6 +217,7 @@ jobs:
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_database_engine_config.py
           tests/test_dedup_sweep_api.py
           tests/test_dedup_sweep_service.py
           tests/test_dedup_tier_service.py
@@ -258,6 +259,7 @@ jobs:
           tests/test_ssl_generation.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
+          tests/test_thumbnail_cache_headers.py
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py

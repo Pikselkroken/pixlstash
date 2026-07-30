@@ -19,7 +19,6 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import case as sa_case, exists, func
@@ -49,6 +48,7 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.picture_scoring import (
@@ -963,7 +963,7 @@ def create_router(server) -> APIRouter:
                         meta.get("picture_id") == best_picture.get("picture_id")
                         and meta.get("version") == thumbnail_cache_version
                     ):
-                        return FileResponse(cache_path, media_type="image/png")
+                        return conditional_file_response(request, cache_path)
                 except Exception as exc:
                     logger.debug("Failed to read character thumbnail cache: %s", exc)
             char = server.vault.db.run_immediate_read_task(
@@ -1111,7 +1111,7 @@ def create_router(server) -> APIRouter:
                     logger.debug(
                         "Failed to write character thumbnail metadata: %s", exc
                     )
-                return FileResponse(cache_path, media_type="image/png")
+                return conditional_file_response(request, cache_path)
             except Exception:
                 from io import BytesIO
 

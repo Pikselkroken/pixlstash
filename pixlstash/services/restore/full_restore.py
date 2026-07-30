@@ -930,12 +930,12 @@ class FullRestoreMixin:
                         os.close(live_dir_fd)
                 # Recreate engine
                 from sqlalchemy import event as sa_event
-                from pixlstash.database import init_database
+                from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, init_database
 
                 db._engine = create_engine(
                     f"sqlite:///{live_db_path}",
                     echo=False,
-                    connect_args={"timeout": 30},
+                    connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
                 )
                 sa_event.listen(db._engine, "connect", init_database)
             logger.info("RestoreService: DB swap complete, engine re-created.")

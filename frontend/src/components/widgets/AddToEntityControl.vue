@@ -121,18 +121,17 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
-  listPictureSets,
   getPictureSetMembership,
   addPictureToSet,
   removePictureFromSet,
 } from "../../api/pictureSets";
-import { listProjects, getProjectMembership } from "../../api/projects";
+import { getProjectMembership } from "../../api/projects";
 import {
-  listCharacters,
   getCharacterMembership,
   addCharacterFaces,
   removeCharacterFaces,
 } from "../../api/characters";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 
 const props = defineProps({
   type: { type: String, required: true }, // 'set' | 'project' | 'character'
@@ -198,12 +197,21 @@ const menuRef = ref(null);
 const searchInputRef = ref(null);
 const menuOpen = ref(false);
 const searchQuery = ref("");
-const isLoading = ref(false);
 const statusMessage = ref("");
-const items = ref([]);
 const membersById = ref({}); // key: item.key → Set<string> of picture IDs
-const lastFetchKey = ref("");
+// Membership is a live per-selection read, so until it lands we know which
+// entities exist but not which ones this selection is already in. Toggling is
+// held back until then; the list itself renders immediately.
+const membershipLoaded = ref(false);
 let statusTimer = null;
+
+// The entity lists are shared, cached and revalidated centrally, so this menu
+// renders from whatever the store already has and never waits on the network.
+const entityLists = useEntityListsStore();
+const entityKind = computed(() =>
+  isSet.value ? "sets" : isProject.value ? "projects" : "characters",
+);
+const isLoading = computed(() => entityLists.isLoading(entityKind.value));
 
 // Set-only state
 const lastUsedItem = ref(null); // { id, name }
@@ -248,6 +256,38 @@ const normalisedPictureIds = computed(() =>
 
 const normalisedIdsKey = computed(() => normalisedPictureIds.value.join("|"));
 
+// --- Items, read straight through the shared list store ---
+const items = computed(() => {
+  if (isSet.value) {
+    return entityLists.pictureSets
+      .filter((s) => !s?.reference_character)
+      .map((s) => ({
+        id: s.id,
+        key: String(s.id),
+        name: s.name,
+        count: s.picture_count ?? null,
+      }));
+  }
+  if (isProject.value) {
+    return entityLists.projects
+      .map((row) => ({
+        id: Number(row?.id),
+        name: String(row?.name || "").trim() || `Project ${row?.id}`,
+      }))
+      .filter((row) => Number.isFinite(row.id) && row.id > 0)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((p) => ({
+        id: p.id,
+        key: `project-${p.id}`,
+        name: p.name,
+        count: null,
+      }));
+  }
+  return [...entityLists.characters]
+    .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")))
+    .map((c) => ({ id: c.id, key: String(c.id), name: c.name, count: null }));
+});
+
 // --- Filtered items list ---
 const filteredItems = computed(() => {
   const needle = searchQuery.value.trim().toLowerCase();
@@ -270,7 +310,9 @@ function isItemDisabled(item) {
   if (!normalisedPictureIds.value.length) return true;
   if (isItemLocked(item)) return true;
   if (isCharacter.value) return false;
-  return !membersById.value?.[item.key];
+  // A set/project toggle is a diff against current membership, so it stays
+  // inert for the moment between the list rendering and the membership landing.
+  return !membershipLoaded.value;
 }
 
 function getItemState(item) {
@@ -322,7 +364,11 @@ function toggleMenu() {
 
 function openMenu() {
   menuOpen.value = true;
-  fetchItems(true);
+  // Stale-while-revalidate, both halves fired without awaiting: the list is
+  // already on screen from the store's cache, and revalidating on open is the
+  // only invalidation a share/scoped session gets (the ws stream is owner-only).
+  entityLists.refresh(entityKind.value, { baseUrl: baseUrl.value });
+  fetchMembers();
   sizeMenu();
   window.addEventListener("resize", sizeMenu);
   window.addEventListener("scroll", sizeMenu, true);
@@ -371,154 +417,108 @@ function handleOutsideClick(event) {
   closeMenu();
 }
 
-// --- Fetch ---
-async function fetchItems(force = false) {
-  if (!props.backendUrl || isLoading.value) return;
-  const key = normalisedIdsKey.value;
-  if (!force && key === lastFetchKey.value && items.value.length) return;
-  lastFetchKey.value = key;
-  isLoading.value = true;
-  try {
-    if (isSet.value) await fetchSetData();
-    else if (isProject.value) await fetchProjectData();
-    else await fetchCharacterData();
-  } catch {
-    items.value = [];
+// --- Membership (a live per-selection read) ---
+// Membership is NOT cached: it answers "is *this* selection in each entity",
+// which changes with every click. It is fetched alongside the list rather than
+// before it, so the flyout paints its rows immediately and the checkmarks fill
+// in a moment later. Every response is stamped with the selection it was asked
+// for and dropped if the selection has moved on, so one selection's membership
+// can never bleed into the next.
+async function fetchMembers() {
+  const ids = normalisedPictureIds.value;
+  const requestKey = normalisedIdsKey.value;
+  if (!props.backendUrl || !ids.length) {
     membersById.value = {};
-  } finally {
-    isLoading.value = false;
+    picturesWithFaces.value = new Set();
+    membershipLoaded.value = false;
+    return;
+  }
+  try {
+    const next = isSet.value
+      ? await readSetMembers(ids)
+      : isProject.value
+        ? await readProjectMembers(ids)
+        : await readCharacterMembers(ids);
+    if (requestKey !== normalisedIdsKey.value) return; // selection moved on
+    // Nothing above this guard may write component state: the readers are pure
+    // reads that hand everything back, so a superseded response is discarded
+    // whole rather than leaking one of its halves.
+    membersById.value = next.members;
+    if (next.withFaces) picturesWithFaces.value = next.withFaces;
+    membershipLoaded.value = true;
+  } catch (e) {
+    if (requestKey !== normalisedIdsKey.value) return;
+    console.warn(
+      `[AddToEntityControl] failed to read ${props.type} membership for ${ids.length} picture(s):`,
+      e,
+    );
+    membersById.value = {};
+    picturesWithFaces.value = new Set();
+    membershipLoaded.value = false;
   }
 }
 
-async function fetchSetData() {
-  const [rows] = await Promise.all([
-    listPictureSets(apiOpts.value),
-    fetchSetMembers(),
-  ]);
-  const list = (Array.isArray(rows) ? rows : []).filter(
-    (s) => !s?.reference_character,
+async function readSetMembers(ids) {
+  const data =
+    (await getPictureSetMembership(ids, {
+      ...apiOpts.value,
+      includeDeleted: props.includeDeletedMembers ?? false,
+    })) ?? {};
+  const members = {};
+  Object.entries(data).forEach(([setId, memberIds]) => {
+    members[String(setId)] = new Set(
+      (Array.isArray(memberIds) ? memberIds : []).map(String),
+    );
+  });
+  return { members, withFaces: null };
+}
+
+async function readProjectMembers(ids) {
+  const data = (await getProjectMembership(ids, apiOpts.value)) ?? {};
+  const assignments = data.project_assignments ?? {};
+  const unassignedIds = data.unassigned_picture_ids ?? [];
+  const members = { unassigned: new Set(unassignedIds.map(String)) };
+  Object.entries(assignments).forEach(([projectId, picIds]) => {
+    members[`project-${projectId}`] = new Set((picIds ?? []).map(String));
+  });
+  return { members, withFaces: null };
+}
+
+async function readCharacterMembers(ids) {
+  const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
+  const members = {};
+  Object.entries(data.character_assignments ?? {}).forEach(
+    ([charId, picIds]) => {
+      members[String(charId)] = new Set(picIds.map(String));
+    },
   );
-  items.value = list.map((s) => ({
-    id: s.id,
-    key: String(s.id),
-    name: s.name,
-    count: s.picture_count ?? null,
-  }));
-  // Ensure every known set has an entry so isItemDisabled returns false.
-  const current = membersById.value;
-  list.forEach((s) => {
-    if (!(String(s.id) in current)) current[String(s.id)] = new Set();
-  });
-  membersById.value = { ...current };
+  // Handed back rather than assigned here: this runs before fetchMembers'
+  // selection guard, so writing it in place would leak a superseded
+  // selection's face ids past the discard.
+  return {
+    members,
+    withFaces: new Set((data.pictures_with_faces ?? []).map(String)),
+  };
 }
 
-async function fetchSetMembers() {
-  const ids = normalisedPictureIds.value;
-  if (!props.backendUrl || !ids.length) {
-    membersById.value = {};
-    return;
+/**
+ * Handle a failed assignment.
+ *
+ * A 404 means the cached list named an entity the server no longer has, so the
+ * cache is refetched rather than left to offer the same dead row again.
+ */
+function reportToggleFailure(e, fallback) {
+  const status = e?.response?.status;
+  const detail = e?.response?.data?.detail || e?.message || String(e);
+  console.warn(
+    `[AddToEntityControl] ${props.type} assignment failed (status=${status ?? "n/a"}):`,
+    e,
+  );
+  if (status === 404) {
+    entityLists.invalidate([entityKind.value], { baseUrl: baseUrl.value });
+    return `${effectiveLabel.value} no longer exists`;
   }
-  try {
-    const data =
-      (await getPictureSetMembership(ids, {
-        ...apiOpts.value,
-        includeDeleted: props.includeDeletedMembers ?? false,
-      })) ?? {};
-    const next = {};
-    Object.entries(data).forEach(([setId, memberIds]) => {
-      next[String(setId)] = new Set(
-        (Array.isArray(memberIds) ? memberIds : []).map(String),
-      );
-    });
-    membersById.value = next;
-  } catch {
-    membersById.value = {};
-  }
-}
-
-async function fetchProjectData() {
-  const [rows] = await Promise.all([
-    listProjects(apiOpts.value),
-    fetchProjectMembers(),
-  ]);
-  const data = Array.isArray(rows) ? rows : [];
-  const projs = data
-    .map((row) => ({
-      id: Number(row?.id),
-      name: String(row?.name || "").trim() || `Project ${row?.id}`,
-    }))
-    .filter((row) => Number.isFinite(row.id) && row.id > 0)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  items.value = projs.map((p) => ({
-    id: p.id,
-    key: `project-${p.id}`,
-    name: p.name,
-    count: null,
-  }));
-  // Ensure every known project has an entry so isItemDisabled returns false.
-  const current = membersById.value;
-  if (!("unassigned" in current)) current["unassigned"] = new Set();
-  projs.forEach((p) => {
-    const k = `project-${p.id}`;
-    if (!(k in current)) current[k] = new Set();
-  });
-  membersById.value = { ...current };
-}
-
-async function fetchProjectMembers() {
-  const ids = normalisedPictureIds.value;
-  if (!props.backendUrl || !ids.length) {
-    membersById.value = {};
-    return;
-  }
-  try {
-    const data = (await getProjectMembership(ids, apiOpts.value)) ?? {};
-    const assignments = data.project_assignments ?? {};
-    const unassignedIds = data.unassigned_picture_ids ?? [];
-    const next = { unassigned: new Set(unassignedIds.map(String)) };
-    Object.entries(assignments).forEach(([projectId, picIds]) => {
-      next[`project-${projectId}`] = new Set((picIds ?? []).map(String));
-    });
-    membersById.value = next;
-  } catch {
-    membersById.value = {};
-  }
-}
-
-async function fetchCharacterData() {
-  const [rows] = await Promise.all([
-    listCharacters(apiOpts.value),
-    fetchCharacterMembers(),
-  ]);
-  const list = Array.isArray(rows) ? rows : [];
-  items.value = [...list]
-    .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || "")))
-    .map((c) => ({ id: c.id, key: String(c.id), name: c.name, count: null }));
-}
-
-async function fetchCharacterMembers() {
-  const ids = normalisedPictureIds.value;
-  if (!props.backendUrl || !ids.length) {
-    membersById.value = {};
-    picturesWithFaces.value = new Set();
-    return;
-  }
-  try {
-    const data = (await getCharacterMembership(ids, apiOpts.value)) ?? {};
-    picturesWithFaces.value = new Set(
-      (data.pictures_with_faces ?? []).map(String),
-    );
-    const next = {};
-    Object.entries(data.character_assignments ?? {}).forEach(
-      ([charId, picIds]) => {
-        next[String(charId)] = new Set(picIds.map(String));
-      },
-    );
-    membersById.value = next;
-  } catch {
-    membersById.value = {};
-    picturesWithFaces.value = new Set();
-  }
+  return detail ? String(detail) : fallback;
 }
 
 // --- Toggle dispatch ---
@@ -572,13 +572,17 @@ async function toggleSet(item) {
       lastUsedItem.value = { id: item.id, name: item.name };
       if (members) idsToAdd.forEach((id) => members.add(String(id)));
     }
+    // The membership just moved, so the list's picture counts did too: ask the
+    // server again rather than patching the shared cache from here.
+    entityLists.invalidate(["sets"], { baseUrl: baseUrl.value });
   } catch (e) {
     const detail = e?.response?.data?.detail || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? "Already in set"
-      : shouldRemove
-        ? "Failed to remove"
-        : "Failed to add";
+      : reportToggleFailure(
+          e,
+          shouldRemove ? "Failed to remove" : "Failed to add",
+        );
   }
   scheduleStatusClear();
 }
@@ -664,8 +668,7 @@ async function toggleCharacter(item) {
       if (members) ids.forEach((id) => members.delete(String(id)));
       closeMenu();
     } catch (e) {
-      const detail = e?.response?.data?.detail || e?.message || String(e);
-      statusMessage.value = detail ? String(detail) : "Failed to remove";
+      statusMessage.value = reportToggleFailure(e, "Failed to remove");
     }
   } else {
     const members = membersById.value?.[item.key];
@@ -687,8 +690,7 @@ async function toggleCharacter(item) {
       }
       closeMenu();
     } catch (e) {
-      const detail = e?.response?.data?.detail || e?.message || String(e);
-      statusMessage.value = detail ? String(detail) : "Failed to assign";
+      statusMessage.value = reportToggleFailure(e, "Failed to assign");
     }
   }
   scheduleStatusClear();
@@ -722,7 +724,7 @@ async function addToLastSet() {
     const detail = e?.response?.data?.detail || e?.message || String(e);
     statusMessage.value = String(detail).includes("already in set")
       ? `Already in ${item.name}`
-      : "Failed to add";
+      : reportToggleFailure(e, "Failed to add");
     scheduleStatusClear();
     return { error: detail };
   }
@@ -738,12 +740,13 @@ onBeforeUnmount(() => {
 watch(
   () => normalisedIdsKey.value,
   () => {
-    if (menuOpen.value) {
-      fetchItems(true);
-    } else {
-      membersById.value = {};
-      if (isCharacter.value) picturesWithFaces.value = new Set();
-    }
+    // Membership belongs to a selection, so it is dropped the moment the
+    // selection changes — never carried over — and re-read only if the menu is
+    // actually open. The entity list itself is selection-independent and stays.
+    membersById.value = {};
+    membershipLoaded.value = false;
+    if (isCharacter.value) picturesWithFaces.value = new Set();
+    if (menuOpen.value) fetchMembers();
   },
 );
 

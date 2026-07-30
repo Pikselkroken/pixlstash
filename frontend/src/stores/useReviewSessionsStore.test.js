@@ -4,6 +4,8 @@ import { setActivePinia, createPinia } from "pinia";
 // The store imports a singleton apiClient; mock the module so no real HTTP
 // happens and we can assert which per-item endpoints a decision hits.
 vi.mock("../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   isReadOnly: { value: false },
 }));
