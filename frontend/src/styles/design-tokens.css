@@ -121,6 +121,15 @@
      naming it now is what stops that surface picking 3px). It is a rendered
      height, not padding, so it cannot borrow from the spacing scale. */
   --countdown-h: 2px;
+  /* Vertical hairline inside a control band. Rendered lengths, not gaps, so
+     they cannot borrow from the spacing scale (same reasoning as
+     `--countdown-h`). 24px is not invented — it is already the de-facto value
+     of `.bar-separator` in Toolbar.vue. The taller variant marks a boundary
+     between two CONTEXTS in one container; its one consumer is the grid action
+     pill's search|selection seam (merged-grid-action-pill.md §2). The two
+     differ by height and air only, never by a second colour. */
+  --rule-h: 24px;
+  --rule-h-seam: 32px;
   --bar-height: 48px; /* contextual action-bar / toolbar band height */
   /* The right-hand stats rail's fixed column width. Not invented: it is already
      the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in

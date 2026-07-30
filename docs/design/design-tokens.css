@@ -148,6 +148,16 @@
      spacing scale; naming it is what stops the next surface picking 3px. */
   --countdown-h: 2px;
 
+  /* Vertical hairline inside a control band. Rendered lengths rather than gaps,
+     so they cannot borrow from the spacing scale (same reasoning as
+     `--countdown-h`). 24px is not invented: it is already the de-facto value of
+     `.bar-separator` in Toolbar.vue. The taller variant marks a boundary between
+     two CONTEXTS in one container — its one consumer is the grid action pill's
+     search|selection seam (merged-grid-action-pill.md §2). The two differ by
+     height and air only, never by a second colour. */
+  --rule-h: 24px;
+  --rule-h-seam: 32px;
+
   /* Contextual action bar / toolbar band — the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,
      overlay top bar). One height so these bands align. Desktop chrome compresses

@@ -22,6 +22,9 @@ function makeNav({
   scrollWrapper = null,
   lastSelectedImageId = null,
   ghostedIndexes = [],
+  showSelectionBar = true,
+  searchResultsActive = false,
+  searchQuery = "",
 } = {}) {
   const selectedImageIds = ref(["a", "b"]);
   const deleteSelected = vi.fn();
@@ -34,7 +37,8 @@ function makeNav({
     visibleStart: ref(0),
     overlayOpen: ref(false),
     reviewOverlayOpen: ref(reviewOverlayOpen),
-    showSelectionBar: ref(true),
+    showSelectionBar: ref(showSelectionBar),
+    searchResultsActive: ref(searchResultsActive),
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx: ref(cursorIdx),
@@ -48,9 +52,10 @@ function makeNav({
   };
 
   const openOverlay = vi.fn();
+  const clearSearchQuery = vi.fn();
   const callbacks = {
     clearFaceSelection: vi.fn(),
-    clearSearchQuery: vi.fn(),
+    clearSearchQuery,
     scrollCursorIntoView: vi.fn(),
     openOverlay,
     deleteSelected,
@@ -59,7 +64,7 @@ function makeNav({
     setScore: vi.fn(),
   };
 
-  const props = { columns: 3, searchQuery: "" };
+  const props = { columns: 3, searchQuery };
   const emit = vi.fn();
   const { handleKeyDown } = useGridKeyboardNav(deps, props, emit, callbacks);
   return {
@@ -68,6 +73,7 @@ function makeNav({
     deleteSelected,
     applyScoresForSelection,
     openOverlay,
+    clearSearchQuery,
   };
 }
 
@@ -299,5 +305,54 @@ describe("useGridKeyboardNav — ghosted tiles", () => {
     const before = [...deps.selectedImageIds.value];
     handleKeyDown(keyEvent({ key: " " }));
     expect(deps.selectedImageIds.value).toEqual(before);
+  });
+});
+
+// Esc peels one layer per press: an open menu, then the selection, then the
+// search. The grid action pill puts an Esc keycap on whichever button the key
+// will actually reach, so the ladder has to match what the keycap promises
+// (merged-grid-action-pill.md §6.1).
+describe("Escape ladder", () => {
+  it("clears the selection first and leaves the search alone", () => {
+    const { handleKeyDown, deps, clearSearchQuery } = makeNav({
+      showSelectionBar: true,
+      searchQuery: "sunset",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(deps.selectedImageIds.value).toEqual([]);
+    expect(clearSearchQuery).not.toHaveBeenCalled();
+  });
+
+  it("clears a text search once nothing is selected", () => {
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchQuery: "sunset",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a search that has no query string behind it", () => {
+    // Reverse image, similar faces and a person face search all produce results
+    // with an empty `searchQuery`. The gate only ever asked about the text
+    // query, so Esc silently did nothing in those modes even though
+    // `clearSearchQuery` has always reset them.
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchResultsActive: true,
+      searchQuery: "",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear a search that is not running", () => {
+    const { handleKeyDown, clearSearchQuery } = makeNav({
+      showSelectionBar: false,
+      searchResultsActive: false,
+      searchQuery: "",
+    });
+    handleKeyDown(keyEvent({ key: "Escape" }));
+    expect(clearSearchQuery).not.toHaveBeenCalled();
   });
 });

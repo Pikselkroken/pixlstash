@@ -910,50 +910,6 @@
       </div>
     </div>
 
-    <!-- Search Result Bar -->
-    <SearchResultBar
-      v-if="
-        (props.searchQuery && props.searchQuery.length > 0) ||
-        reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId ||
-        faceSearchCharacter
-      "
-      :images-loading="imagesLoading"
-      :count="allGridImages.length"
-      :category-label="props.activeCategoryLabel"
-      :is-all-pictures-active="
-        reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId ||
-        faceSearchCharacter
-          ? true
-          : props.isAllPicturesActive
-      "
-      :status-text="
-        faceSearchCharacter
-          ? faceSearchMatches.length === 1
-            ? `1 possible picture of ${faceSearchCharacter.name}`
-            : `${faceSearchMatches.length} possible pictures of ${faceSearchCharacter.name}`
-          : faceLikenessSearchFaceId
-            ? `Similar faces: ${allGridImages.length} results`
-            : reverseImageSearchPictureIds.length > 1
-              ? `Multi-image search: ${allGridImages.length} results`
-              : reverseImageSearchPictureIds.length
-                ? `Reverse image search: ${allGridImages.length} results`
-                : null
-      "
-      :threshold="faceSearchCharacter ? faceSearchThreshold : null"
-      :threshold-min="FACE_SEARCH_FETCH_FLOOR"
-      :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
-      :assign-target="faceSearchCharacter?.name ?? null"
-      :assign-count="faceSearchAssignIds.length"
-      :assign-from-selection="faceSearchAssignFromSelection"
-      :assign-busy="faceSearchAssignBusy"
-      @update:threshold="handleFaceSearchThreshold"
-      @assign="handleAssignFaceSearchResults"
-      @search-all="emit('search-all')"
-      @clear="clearSearchQuery"
-    />
-
     <!-- Guest scoring consent banner -->
     <v-snackbar
       v-if="isReadOnly"
@@ -1015,51 +971,90 @@
       </template>
     </v-snackbar>
 
-    <SelectionBar
-      ref="selectionBarRef"
-      :selected-count="selectedImageIds.length"
-      :selected-expanded-count="selectedExpandedCount"
-      :selected-face-count="selectedFaceIds.length"
-      :selected-group-name="selectedGroupName"
-      :selected-sort="props.selectedSort"
-      :visible="showSelectionBar"
-      :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
-      :backend-url="props.backendUrl"
-      :selected-image-ids="selectedImageIds"
-      :selected-media-support="selectedMediaSupport"
-      :comfyui-client-id="comfyuiClientId"
-      :comfyui-configured="filterStore.comfyuiConfigured"
-      :show-remove-from-stack="showRemoveFromStack"
-      :selected-multiple-stack-ids="selectedMultipleStackIds"
-      :grouping-lock-reason="partialStackGroupingReason"
-      :available-plugins="availablePlugins"
-      :tagger-plugins="taggerPlugins"
-      :captioner-plugins="captionerPlugins"
-      :all-grid-images="allGridImages"
-      :selected-character="String(props.selectedCharacter)"
-      :selected-set="String(props.selectedSet)"
-      :impossible-sources="filterStore.impossibleSources"
-      :clearing-impossible="clearingImpossibleTags"
-      @clear-impossible-tags="handleClearImpossibleTags"
-      @clear-selection="clearSelection"
-      @added-to-set="handleOverlayAddedToSet"
-      @remove-from-group="removeFromGroup"
-      @delete-selected="deleteSelected"
-      @set-project="handleSetProjectForSelected"
-      @add-to-character="handleAddToCharacter"
-      @remove-from-character="handleRemoveFromCharacter"
-      @create-stack="createStackFromSelection"
-      @remove-from-stack="removeSelectedFromStack"
-      @dissolve-stacks="dissolveSelectedStacks"
-      @create-stacks-from-groups="createStacksFromSelectedGroups"
-      @run-plugin="handlePluginRunRequest"
-      @comfyui-run="handleComfyuiRun"
-      @tags-applied="debouncedFetchAllGridImages({ force: true })"
-      @auto-tag="handleAutoTag"
-      @generate-description="handleGenerateDescription"
-      @reverse-image-search="handleReverseImageSearch"
-      @selection-menu-open="toolbarSelectionMenuOpen = $event"
-    />
+    <!-- The grid's ONE bottom-edge surface (merged-grid-action-pill.md). Before
+         the merge the search bar and the selection pill were independent mounts
+         that could both be up at once, and only the pill registered a bottom
+         anchor — so notice cards landed on top of the search bar. -->
+    <GridActionPill
+      :search-active="searchResultsActive"
+      :selection-active="showSelectionBar"
+      @focus-escaped="restoreGridFocus"
+    >
+      <template #search>
+        <SearchResultBar
+          :images-loading="imagesLoading"
+          :status-count="searchStatus.count"
+          :status-label="searchStatus.label"
+          :is-all-pictures-active="
+            reverseImageSearchPictureIds.length ||
+            faceLikenessSearchFaceId ||
+            faceSearchCharacter
+              ? true
+              : props.isAllPicturesActive
+          "
+          :threshold="faceSearchCharacter ? faceSearchThreshold : null"
+          :threshold-min="FACE_SEARCH_FETCH_FLOOR"
+          :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+          :assign-target="faceSearchCharacter?.name ?? null"
+          :assign-count="faceSearchAssignIds.length"
+          :assign-from-selection="faceSearchAssignFromSelection"
+          :assign-busy="faceSearchAssignBusy"
+          :owns-escape="!showSelectionBar"
+          @update:threshold="handleFaceSearchThreshold"
+          @assign="handleAssignFaceSearchResults"
+          @search-all="emit('search-all')"
+          @clear="clearSearchQuery"
+        />
+      </template>
+
+      <template #selection>
+        <SelectionBar
+          ref="selectionBarRef"
+          :selected-count="selectedImageIds.length"
+          :selected-expanded-count="selectedExpandedCount"
+          :selected-face-count="selectedFaceIds.length"
+          :selected-group-name="selectedGroupName"
+          :selected-sort="props.selectedSort"
+          :owns-escape="true"
+          :scrapheap-pictures-id="String(props.scrapheapPicturesId)"
+          :backend-url="props.backendUrl"
+          :selected-image-ids="selectedImageIds"
+          :selected-media-support="selectedMediaSupport"
+          :comfyui-client-id="comfyuiClientId"
+          :comfyui-configured="filterStore.comfyuiConfigured"
+          :show-remove-from-stack="showRemoveFromStack"
+          :selected-multiple-stack-ids="selectedMultipleStackIds"
+          :grouping-lock-reason="partialStackGroupingReason"
+          :available-plugins="availablePlugins"
+          :tagger-plugins="taggerPlugins"
+          :captioner-plugins="captionerPlugins"
+          :all-grid-images="allGridImages"
+          :selected-character="String(props.selectedCharacter)"
+          :selected-set="String(props.selectedSet)"
+          :impossible-sources="filterStore.impossibleSources"
+          :clearing-impossible="clearingImpossibleTags"
+          @clear-impossible-tags="handleClearImpossibleTags"
+          @clear-selection="clearSelection"
+          @added-to-set="handleOverlayAddedToSet"
+          @remove-from-group="removeFromGroup"
+          @delete-selected="deleteSelected"
+          @set-project="handleSetProjectForSelected"
+          @add-to-character="handleAddToCharacter"
+          @remove-from-character="handleRemoveFromCharacter"
+          @create-stack="createStackFromSelection"
+          @remove-from-stack="removeSelectedFromStack"
+          @dissolve-stacks="dissolveSelectedStacks"
+          @create-stacks-from-groups="createStacksFromSelectedGroups"
+          @run-plugin="handlePluginRunRequest"
+          @comfyui-run="handleComfyuiRun"
+          @tags-applied="debouncedFetchAllGridImages({ force: true })"
+          @auto-tag="handleAutoTag"
+          @generate-description="handleGenerateDescription"
+          @reverse-image-search="handleReverseImageSearch"
+          @selection-menu-open="toolbarSelectionMenuOpen = $event"
+        />
+      </template>
+    </GridActionPill>
     <!-- The action receipt shares the selection pill's slot and lifts clear of
          it when both are up. Owner-only, like the toolbar control.
 
@@ -1128,6 +1123,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
@@ -3898,6 +3894,73 @@ const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
 });
+
+// ── The grid action pill's search half ──────────────────────────────────────
+const searchResultsActive = computed(
+  () =>
+    Boolean(props.searchQuery && props.searchQuery.length > 0) ||
+    reverseImageSearchPictureIds.value.length > 0 ||
+    Boolean(faceLikenessSearchFaceId.value) ||
+    Boolean(faceSearchCharacter.value),
+);
+
+/**
+ * The status sentence, split into the numeral and the rest so the pill can give
+ * the count its own weight without regex-splitting a string that may contain
+ * the user's query.
+ *
+ * The scope is folded into the sentence rather than standing beside it as a
+ * separate "Searched X only" note, and the QUERY is named: nothing else on
+ * screen says what was searched once the toolbar popover closes, which made
+ * recall the only way back to it.
+ */
+const searchStatus = computed(() => {
+  const total = allGridImages.value.length;
+
+  if (faceSearchCharacter.value) {
+    const n = faceSearchMatches.value.length;
+    const name = faceSearchCharacter.value.name;
+    return {
+      count: n,
+      label: n === 1 ? `possible picture of ${name}` : `possible pictures of ${name}`,
+    };
+  }
+  if (faceLikenessSearchFaceId.value) {
+    return { count: total, label: "similar faces" };
+  }
+  if (reverseImageSearchPictureIds.value.length > 1) {
+    return {
+      count: total,
+      label: `matches for ${reverseImageSearchPictureIds.value.length} pictures`,
+    };
+  }
+  if (reverseImageSearchPictureIds.value.length) {
+    return { count: total, label: "matches for this picture" };
+  }
+
+  const query = (props.searchQuery || "").trim();
+  const scope = props.isAllPicturesActive
+    ? ""
+    : ` in ${props.activeCategoryLabel}`;
+  const forQuery = query ? ` for "${query}"` : "";
+  if (total === 0) {
+    return { count: null, label: `No matches${forQuery}${scope}` };
+  }
+  return { count: total, label: `matches${forQuery}${scope}` };
+});
+
+/**
+ * Focus rescue. GridActionPill raises this when the half holding focus is about
+ * to unmount and there is no sibling half to take it: without somewhere to go,
+ * focus falls to <body> and a keyboard user drops out of the tab order (WCAG
+ * 2.4.3). The scroll wrapper is the grid's own focus home.
+ */
+function restoreGridFocus() {
+  const el = scrollWrapper.value;
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+}
 // Grouping (project/set/character) membership is stack-atomic: it can only be
 // changed for a WHOLE stack at once — a collapsed stack tile (which represents
 // the whole stack) or every member of an expanded stack selected. Changing a
@@ -5181,6 +5244,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     overlayOpen,
     reviewOverlayOpen,
     showSelectionBar,
+    searchResultsActive,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
