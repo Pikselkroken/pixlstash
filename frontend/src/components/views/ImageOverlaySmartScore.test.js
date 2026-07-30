@@ -192,6 +192,7 @@ describe("ImageOverlay mounted smart-score refresh", () => {
     OverlayFilmstrip: true,
     OverlayDescriptionPanel: true,
     AddToEntityControl: true,
+    CharacterEditor: true,
     StarRatingOverlay: true,
     PluginParametersUI: true,
     ComfyUiRunner: true,

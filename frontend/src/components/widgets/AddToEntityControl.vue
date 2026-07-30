@@ -29,7 +29,7 @@
       }}</v-icon>
     </button>
 
-    <Teleport :disabled="true" to="body">
+    <Teleport :disabled="!floatMenu" to="body">
       <div
         ref="menuRef"
         class="ate-menu"
@@ -39,6 +39,7 @@
           open: menuOpen,
           flyout: placement === 'right',
           'force-dark': forceDark,
+          'ate-menu--floating': floatMenu,
         }"
       >
         <div class="ate-search">
@@ -49,6 +50,7 @@
             type="text"
             :placeholder="config.searchPlaceholder"
             @keydown.escape.stop.prevent="closeMenu"
+            @keydown.enter.prevent="onSearchEnter"
           />
         </div>
 
@@ -58,6 +60,24 @@
              running off the bottom. -->
         <div class="ate-list">
           <div v-if="isLoading" class="ate-empty">{{ config.loadingText }}</div>
+          <!-- No-match empty state (character only): the empty state itself
+               becomes the create action, quoting the typed query. Enter in the
+               search box activates it too (onSearchEnter). -->
+          <button
+            v-else-if="showEmptyCreateRow"
+            :class="[
+              'ate-item',
+              'ate-item--create',
+              { 'ate-item--disabled': createDisabled },
+            ]"
+            type="button"
+            role="menuitem"
+            :disabled="createDisabled"
+            @click.stop="requestCreate"
+          >
+            <v-icon size="16" class="ate-item-check">mdi-account-plus</v-icon>
+            <span class="ate-item-name">Create "{{ trimmedQuery }}"…</span>
+          </button>
           <div v-else-if="filteredItems.length === 0" class="ate-empty">
             {{ config.emptyText }}
           </div>
@@ -68,23 +88,19 @@
               'ate-item',
               {
                 'ate-item--disabled': isItemDisabled(item),
-                'ate-item--checked': getItemState(item) === 'checked',
+                'ate-item--checked':
+                  !isFace && getItemState(item) === 'checked',
               },
             ]"
             type="button"
-            role="menuitem"
+            :role="isFace ? 'menuitemradio' : 'menuitem'"
+            :aria-checked="isFace ? isFaceItemSelected(item) : undefined"
             :disabled="isItemDisabled(item)"
             :title="isItemLocked(item) ? 'This set is locked' : undefined"
             @click.stop="toggleItem(item)"
           >
             <v-icon size="16" class="ate-item-check">
-              {{
-                getItemState(item) === "checked"
-                  ? "mdi-checkbox-marked"
-                  : getItemState(item) === "partial"
-                    ? "mdi-minus-box-outline"
-                    : "mdi-checkbox-blank-outline"
-              }}
+              {{ getItemGlyph(item) }}
             </v-icon>
             <span class="ate-item-name">{{ item.name }}</span>
             <span v-if="isSet" class="ate-item-meta">
@@ -98,6 +114,27 @@
                 >A</span
               >
             </span>
+          </button>
+        </div>
+
+        <!-- Pinned create affordance (character only, allowCreate hosts
+             only): sits below the scrolling list so it stays visible however
+             long the list is. Creation itself is the host's job; this only
+             emits "create". -->
+        <div v-if="canCreate" class="ate-create-pinned">
+          <button
+            :class="[
+              'ate-item',
+              'ate-item--create',
+              { 'ate-item--disabled': createDisabled },
+            ]"
+            type="button"
+            role="menuitem"
+            :disabled="createDisabled"
+            @click.stop="requestCreate"
+          >
+            <v-icon size="16" class="ate-item-check">mdi-account-plus</v-icon>
+            <span class="ate-item-name">New person…</span>
           </button>
         </div>
 
@@ -135,7 +172,17 @@ import {
 } from "../../api/characters";
 
 const props = defineProps({
-  type: { type: String, required: true }, // 'set' | 'project' | 'character'
+  // 'set' | 'project' | 'character' | 'face'.
+  //
+  // `face` is a SEPARATE single-select mode, deliberately not bolted onto the
+  // character path: a face has exactly one person or none, so the character
+  // mode's tri-state checkboxes, toggle semantics and picture-id writes are all
+  // wrong for it. It lists people with radio glyphs plus an Unassigned row and
+  // performs NO writes of its own, emitting `assign` / `unassign` so the host
+  // keeps its face-level API calls. It lives here rather than in a local
+  // overlay menu because the `.ate-*` skin is scoped to this file, and one
+  // create rule has to serve both call sites.
+  type: { type: String, required: true },
   backendUrl: { type: String, required: true },
   pictureIds: { type: Array, default: () => [] },
   disabled: { type: Boolean, default: false },
@@ -148,14 +195,51 @@ const props = defineProps({
   // Ids of locked sets. A locked set can't take or drop members, so its row is
   // greyed and unselectable here (membership in *unlocked* sets is unaffected).
   lockedSetIds: { type: Object, default: () => new Set() },
+  // Opt-in create affordance (character type only): the pinned "New person…"
+  // row, the no-match Create "query"… row, and Enter-on-no-match. Off by
+  // default because only hosts that handle the "create" event may show it; a
+  // visible row that does nothing would be worse than no affordance. Enabled
+  // only by ImageGridContextMenu (#645).
+  allowCreate: { type: Boolean, default: false },
+  // Opt-in: teleport the menu to <body> and position it against the viewport
+  // instead of rendering it in place.
+  //
+  // The default (in place, `position: absolute`) is only safe when no ancestor
+  // clips or scrolls, which is true of every original call site: the grid
+  // context menu is itself fixed and teleported, and SelectionMenu and the
+  // overlay's top chrome have no clipping ancestor. It is NOT true inside the
+  // overlay's Faces panel, where `.overlay-sidebar` is `overflow: hidden` and
+  // `.face-assign-grid` is `overflow-y: auto`: an absolutely positioned menu
+  // there is both clipped AND inflates the scroller's extent, which is the
+  // spurious scrollbar this prop exists to remove.
+  //
+  // Host layout, not entity type, decides this, which is why it is a prop and
+  // not tied to `type === "face"`. Incompatible with `placement="right"`: the
+  // `.ate--flyout` rules position the menu at `left: 100%` of the root, which
+  // has no meaning once the node has left its parent.
+  floatMenu: { type: Boolean, default: false },
+  // Face mode only: which face the menu acts on, and who it currently shows.
+  faceId: { type: [String, Number], default: null },
+  assignedCharacterId: { type: [String, Number], default: null },
+  assignedCharacterName: { type: String, default: "" },
 });
 
-const emit = defineEmits(["added", "removed", "selected"]);
+const emit = defineEmits([
+  "added",
+  "removed",
+  "selected",
+  "create",
+  "assign",
+  "unassign",
+]);
 
 // --- Type-derived helpers ---
 const isSet = computed(() => props.type === "set");
 const isProject = computed(() => props.type === "project");
 const isCharacter = computed(() => props.type === "character");
+const isFace = computed(() => props.type === "face");
+// Both people modes list characters and can offer the create row.
+const listsPeople = computed(() => isCharacter.value || isFace.value);
 
 const config = computed(() => {
   if (isSet.value) {
@@ -176,6 +260,15 @@ const config = computed(() => {
       emptyText: "No projects found",
     };
   }
+  if (isFace.value) {
+    return {
+      icon: "mdi-account-outline",
+      ariaLabel: "Assign this face to a person",
+      searchPlaceholder: "Search people...",
+      loadingText: "Loading people...",
+      emptyText: "No people found",
+    };
+  }
   return {
     icon: "mdi-account-plus",
     ariaLabel: "Set character",
@@ -189,6 +282,8 @@ const effectiveLabel = computed(() => {
   if (props.label !== null) return props.label;
   if (isSet.value) return "Set";
   if (isProject.value) return "Project";
+  // The face trigger reads as the current state, like the select it replaced.
+  if (isFace.value) return props.assignedCharacterName || "Unassigned";
   return "Person";
 });
 
@@ -220,13 +315,63 @@ const flyoutClickedOpen = ref(false);
 // open and on resize/scroll (scroll uses capture, to catch a scrolling ancestor
 // such as the sidebar when this is a flyout).
 const menuStyle = ref({});
+
+// Breathing room to the trigger, keep-off distance from the viewport edges, and
+// the height below which "below the trigger" counts as not fitting.
+const MENU_GAP_PX = 8;
+const MENU_MARGIN_PX = 8;
+const MENU_MIN_HEIGHT_PX = 140;
+
 function sizeMenu() {
   nextTick(() => {
     const el = menuRef.value;
     if (!el) return;
-    const top = el.getBoundingClientRect().top;
-    const avail = window.innerHeight - top - 12;
-    menuStyle.value = { maxHeight: `${Math.max(140, Math.round(avail))}px` };
+    if (!props.floatMenu) {
+      const top = el.getBoundingClientRect().top;
+      const avail = window.innerHeight - top - 12;
+      menuStyle.value = {
+        maxHeight: `${Math.max(MENU_MIN_HEIGHT_PX, Math.round(avail))}px`,
+      };
+      return;
+    }
+    // Floating: the menu no longer moves with its parent, so POSITION is
+    // recomputed here too, not just height. This runs on open and on the
+    // resize / capture-phase scroll listeners openMenu() already registers;
+    // capture phase is what catches the overlay sidebar scrolling, since the
+    // scrolling ancestor is not the window.
+    const anchor = rootRef.value?.getBoundingClientRect();
+    if (!anchor) return;
+    const width = el.getBoundingClientRect().width || 220;
+    const left = Math.max(
+      MENU_MARGIN_PX,
+      Math.min(anchor.left, window.innerWidth - width - MENU_MARGIN_PX),
+    );
+    const below =
+      window.innerHeight - anchor.bottom - MENU_GAP_PX - MENU_MARGIN_PX;
+    const above = anchor.top - MENU_GAP_PX - MENU_MARGIN_PX;
+    // Flip up for a trigger low in the sidebar, but only when that is actually
+    // roomier: near the bottom of a short viewport both are cramped and the
+    // menu should stay put and scroll internally.
+    const flipUp = below < MENU_MIN_HEIGHT_PX && above > below;
+    const maxHeight = Math.max(
+      MENU_MIN_HEIGHT_PX,
+      Math.round(flipUp ? above : below),
+    );
+    // Anchoring the flipped menu by its BOTTOM avoids needing its height,
+    // which is not known until after max-height has been applied.
+    menuStyle.value = flipUp
+      ? {
+          left: `${Math.round(left)}px`,
+          top: "auto",
+          bottom: `${Math.round(window.innerHeight - anchor.top + MENU_GAP_PX)}px`,
+          maxHeight: `${maxHeight}px`,
+        }
+      : {
+          left: `${Math.round(left)}px`,
+          top: `${Math.round(anchor.bottom + MENU_GAP_PX)}px`,
+          bottom: "auto",
+          maxHeight: `${maxHeight}px`,
+        };
   });
 }
 
@@ -250,9 +395,14 @@ const normalisedIdsKey = computed(() => normalisedPictureIds.value.join("|"));
 
 // --- Filtered items list ---
 const filteredItems = computed(() => {
+  // Face mode leads with the clear-assignment row, the single-select
+  // counterpart of unchecking a box.
+  const base = isFace.value
+    ? [{ id: null, key: "face-unassigned", name: "Unassigned" }, ...items.value]
+    : items.value;
   const needle = searchQuery.value.trim().toLowerCase();
-  if (!needle) return items.value;
-  return items.value.filter((item) =>
+  if (!needle) return base;
+  return base.filter((item) =>
     String(item.name || "")
       .toLowerCase()
       .includes(needle),
@@ -267,10 +417,35 @@ function isItemLocked(item) {
 
 function isItemDisabled(item) {
   if (props.readonly) return true;
+  // Face mode is scoped by a face, not by a picture selection.
+  if (isFace.value) return !props.faceId;
   if (!normalisedPictureIds.value.length) return true;
   if (isItemLocked(item)) return true;
   if (isCharacter.value) return false;
   return !membersById.value?.[item.key];
+}
+
+// Face mode: exactly one row is selected, so the glyph is a radio, and it stays
+// on-dark-surface in BOTH states. The shape carries selected/unselected, which
+// is what lets the olive be spent on the create row alone.
+function isFaceItemSelected(item) {
+  if (!isFace.value) return false;
+  const current =
+    props.assignedCharacterId != null ? String(props.assignedCharacterId) : "";
+  const value = item?.id != null ? String(item.id) : "";
+  return current === value;
+}
+
+function getItemGlyph(item) {
+  if (isFace.value) {
+    return isFaceItemSelected(item)
+      ? "mdi-radiobox-marked"
+      : "mdi-radiobox-blank";
+  }
+  const state = getItemState(item);
+  if (state === "checked") return "mdi-checkbox-marked";
+  if (state === "partial") return "mdi-minus-box-outline";
+  return "mdi-checkbox-blank-outline";
 }
 
 function getItemState(item) {
@@ -294,6 +469,46 @@ function isLastUsedItem(item) {
   return Boolean(
     isSet.value && lastUsedItem.value && item?.id === lastUsedItem.value.id,
   );
+}
+
+// --- Create-person affordance (character type only, opt-in) ---
+// Rendered only when the host declares it handles the "create" event via
+// `allowCreate`. Disabled under the same conditions as sibling rows:
+// read-only sessions and an empty picture selection. Creation logic lives in
+// the host; this component only announces the intent, carrying the typed
+// query.
+const canCreate = computed(() => listsPeople.value && props.allowCreate);
+
+const trimmedQuery = computed(() => searchQuery.value.trim());
+
+const createDisabled = computed(() => {
+  if (props.readonly) return true;
+  // Each people mode is gated by whatever it acts on.
+  return isFace.value ? !props.faceId : !normalisedPictureIds.value.length;
+});
+
+const showEmptyCreateRow = computed(
+  () =>
+    canCreate.value &&
+    !isLoading.value &&
+    filteredItems.value.length === 0 &&
+    trimmedQuery.value.length > 0,
+);
+
+function requestCreate() {
+  if (!canCreate.value || createDisabled.value) return;
+  const query = trimmedQuery.value;
+  // Capture the query BEFORE closeMenu(), which clears the search box.
+  closeMenu();
+  emit("create", query);
+}
+
+// Enter in the search box activates the empty-state create row when the query
+// matches nothing; with matches on screen it stays inert (clicking a row is
+// the assignment gesture, and Enter must not create a duplicate person).
+function onSearchEnter() {
+  if (!showEmptyCreateRow.value) return;
+  requestCreate();
 }
 
 // --- Menu open/close ---
@@ -524,9 +739,33 @@ async function fetchCharacterMembers() {
 // --- Toggle dispatch ---
 async function toggleItem(item) {
   if (isItemDisabled(item)) return;
+  if (isFace.value) {
+    selectFacePerson(item);
+    return;
+  }
   if (isSet.value) await toggleSet(item);
   else if (isProject.value) toggleProject(item);
   else await toggleCharacter(item);
+}
+
+// Face mode performs no writes: the host owns the face-level API calls and its
+// optimistic bookkeeping, so this only announces the choice. Re-picking the
+// current person is a no-op rather than a redundant request.
+function selectFacePerson(item) {
+  if (isFaceItemSelected(item)) {
+    closeMenu();
+    return;
+  }
+  if (item?.id == null) {
+    emit("unassign", { faceId: props.faceId });
+  } else {
+    emit("assign", {
+      faceId: props.faceId,
+      characterId: item.id,
+      characterName: item.name,
+    });
+  }
+  closeMenu();
 }
 
 async function toggleSet(item) {
@@ -747,8 +986,19 @@ watch(
   },
 );
 
-// Expose for external keyboard shortcut access (set type only)
-defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
+// Return the keyboard to this control's trigger, e.g. after a host dialog that
+// this menu opened has closed.
+function focusTrigger() {
+  rootRef.value?.querySelector(".ate-btn")?.focus?.();
+}
+
+// Expose for external keyboard shortcut access (set type only) and focus return
+defineExpose({
+  addToLastSet,
+  lastUsedSet: lastUsedItem,
+  closeMenu,
+  focusTrigger,
+});
 </script>
 
 <style scoped>
@@ -820,6 +1070,18 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   z-index: 6;
 }
 
+/* Floating mode (opt-in, see the `floatMenu` prop): the node has been teleported
+   to <body>, so it is positioned against the viewport by sizeMenu() and needs
+   its own stacking level. `--z-overlay` is the same token the grid context menu
+   uses, and it clears the lightbox (z-index 1000) and its sidebar (4).
+   Declared after `.ate-menu` so it wins at equal specificity. */
+.ate-menu--floating {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-overlay);
+}
+
 /* The scrolling region: only the item list scrolls when the menu is height-capped.
    min-height:0 lets it shrink inside the flex column so overflow actually engages. */
 .ate-list {
@@ -829,8 +1091,11 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   overscroll-behavior: contain;
 }
 
+/* Opaque, not 0.9: the menu teleports to body and can sit over the lightbox
+   photo. At 0.9 over a white image region the panel composites to #3a3c3e and
+   the create row falls to 4.01:1. */
 .ate-menu.force-dark {
-  background-color: rgba(var(--v-theme-dark-surface), 0.9);
+  background-color: rgb(var(--v-theme-dark-surface));
   color: rgba(var(--v-theme-on-dark-surface), 1);
 }
 
@@ -911,6 +1176,9 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   align-items: center;
   gap: var(--space-3);
   cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-standard),
+    color var(--dur-1) var(--ease-standard);
 }
 
 .ate-item-check {
@@ -953,6 +1221,55 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
+/* The create row. Colour is one of THREE redundant channels (WCAG 1.4.1), the
+   others being the mdi-account-plus icon and the pinned position below the
+   hairline; the trailing ellipsis stays for the same reason.
+
+   Weight 500 is load-bearing, not decoration: any colour highlight is darker
+   than its near-white neighbours in greyscale, and without the extra weight the
+   row reads as disabled. Not 600.
+
+   On the dark panel plain `primary` (#567309) is only 2.79:1 and unusable at
+   this text size, so the force-dark skin switches to `dark-surface-primary`
+   (#8EA604): 5.50:1 over the light theme's #242628 and 6.25:1 over the dark
+   theme's #181b20. The 0.12 hover alpha is a ceiling, not taste: the family's
+   neutral 0.08 hover drops the olive to 4.45:1, and 0.14 of the tint drops it
+   to 4.40:1. */
+.ate-item--create {
+  color: rgb(var(--v-theme-primary));
+  font-weight: var(--weight-medium);
+}
+
+.ate-item--create .ate-item-check {
+  color: currentColor;
+}
+
+.ate-item--create:hover:not(.ate-item--disabled) {
+  background: rgba(var(--v-theme-primary), 0.1);
+}
+
+.ate-menu.force-dark .ate-item--create {
+  color: rgb(var(--v-theme-dark-surface-primary));
+}
+
+.ate-menu.force-dark .ate-item--create:hover:not(.ate-item--disabled) {
+  background: rgba(var(--v-theme-dark-surface-primary), 0.12);
+}
+
+/* `on-surface` flips with the theme but `dark-surface` does not, so without
+   these overrides the glyphs render warm near-black on the dark panel in the
+   light theme (about 1.05:1, effectively invisible). */
+.ate-menu.force-dark .ate-item-check,
+.ate-menu.force-dark .ate-item-lock {
+  color: rgba(var(--v-theme-on-dark-surface), 0.7);
+}
+
+/* `primary` is 2.79:1 on the dark panel, under even the 3:1 UI floor for an
+   icon, so the checked glyph takes the lighter olive there. */
+.ate-menu.force-dark .ate-item--checked .ate-item-check {
+  color: rgb(var(--v-theme-dark-surface-primary));
+}
+
 .ate-item-shortcut {
   border: 1px solid rgba(var(--v-theme-on-surface), 0.32);
   border-radius: var(--radius-sm);
@@ -967,6 +1284,19 @@ defineExpose({ addToLastSet, lastUsedSet: lastUsedItem, closeMenu });
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+/* Pinned create row: separated from the scrolling list by a hairline so it
+   reads as an action, not another list entry. */
+.ate-create-pinned {
+  flex: 0 0 auto;
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.14);
+}
+
+.ate-menu.force-dark .ate-create-pinned {
+  border-top-color: rgba(var(--v-theme-on-dark-surface), 0.14);
 }
 
 .ate-status {

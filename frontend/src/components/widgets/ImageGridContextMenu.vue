@@ -212,6 +212,7 @@
         <AddToEntityControl
           type="character"
           placement="right"
+          allow-create
           :backend-url="backendUrl"
           :picture-ids="selectedImageIds"
           :disabled="!selectedImageIds.length || !!groupingLockReason"
@@ -219,6 +220,7 @@
           :readonly="isReadOnly"
           @added="onAction('add-to-character', $event)"
           @removed="onAction('remove-from-character', $event)"
+          @create="delegateWith('create-character', $event)"
         />
         <AddToEntityControl
           type="set"
@@ -614,6 +616,7 @@ const emit = defineEmits([
   "added-to-set",
   "add-to-character",
   "remove-from-character",
+  "create-character",
   "set-project",
   "remove-from-stack",
   "dissolve-stacks",

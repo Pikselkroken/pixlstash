@@ -34,6 +34,7 @@
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
+    @character-created="emit('refresh-sidebar')"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -131,6 +132,7 @@
       @added-to-set="handleOverlayAddedToSet"
       @add-to-character="handleAddToCharacter"
       @remove-from-character="handleRemoveFromCharacter"
+      @create-character="handleCreateCharacterFromMenu"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -176,6 +178,19 @@
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
       @remove-from-group="handleOverlayScrapheapRestore"
+    />
+
+    <!-- ── New person from the context menu (#645) ─────────────
+         Grid-local instance of the person editor so the create-and-assign
+         flow's state (the captured selection) stays owned by the grid.
+         SideBar keeps its own instance for its own entry points. -->
+    <CharacterEditor
+      :open="createPersonOpen"
+      :character="createPersonCharacter"
+      :backend-url="props.backendUrl"
+      :projects="createPersonProjects"
+      @close="handleCreatePersonClose"
+      @saved="handleCreatePersonSaved"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -1172,10 +1187,18 @@ import { addPictureTag, removePictureTag } from "../../api/tags";
 import { getStack, removeStackMembers } from "../../api/stacks";
 import {
   getCharacter,
+  listCharacters,
   addCharacterFaces,
+  addCharacterFacesByFaceId,
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
+import { listProjects } from "../../api/projects";
+import {
+  chooseCharacterAssignment,
+  nextFreeCharacterName,
+} from "../../utils/characterCreateFlow.js";
+import CharacterEditor from "../editors/CharacterEditor.vue";
 import {
   getPictureSet,
   addPictureToSet,
@@ -3393,6 +3416,129 @@ function handleAddToCharacter(payload) {
     updateVisibleThumbnails();
   }
   emit("refresh-sidebar");
+}
+
+// ── Create a person from the context menu (#645) ─────────────────────────────
+// The Person flyout's "New person…" / Create "query" rows land here (via the
+// menu's delegate pattern). The selection is captured at flow start
+// (pendingCreatePersonAssign) so it survives the dialog; on save the captured
+// selection is assigned to the new person, on cancel nothing is created or
+// assigned and the grid selection is untouched.
+const createPersonOpen = ref(false);
+const createPersonCharacter = ref(null);
+const createPersonProjects = ref([]);
+let pendingCreatePersonAssign = null;
+
+async function handleCreateCharacterFromMenu(query) {
+  pendingCreatePersonAssign = chooseCharacterAssignment({
+    pictureIds: selectedImageIds.value.slice(),
+    faceEntries: selectedFaceIds.value.slice(),
+  });
+  const typed = typeof query === "string" ? query.trim() : "";
+  const apiOpts = { baseUrl: props.backendUrl };
+  // Projects feed the dialog's project select; the character list is only
+  // needed to derive the next free default name when nothing was typed.
+  const [projects, characters] = await Promise.all([
+    listProjects(apiOpts).catch((e) => {
+      console.warn("Couldn't list projects for the person editor", e);
+      return [];
+    }),
+    typed
+      ? Promise.resolve([])
+      : listCharacters(apiOpts).catch((e) => {
+          console.warn(
+            "Couldn't list characters to derive a default person name",
+            e,
+          );
+          return [];
+        }),
+  ]);
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  createPersonCharacter.value = {
+    id: null,
+    name: typed || nextFreeCharacterName(characters),
+    description: "",
+    extra_metadata: "",
+    // Same pre-fill as SideBar.createCharacter: the active project when the
+    // sidebar is in project view, otherwise none.
+    project_id:
+      props.projectViewMode === "project" ? props.selectedProjectId : null,
+  };
+  createPersonOpen.value = true;
+}
+
+function handleCreatePersonClose() {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  pendingCreatePersonAssign = null;
+}
+
+async function handleCreatePersonSaved(savedCharacter) {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  const pending = pendingCreatePersonAssign;
+  pendingCreatePersonAssign = null;
+  const characterId = savedCharacter?.id;
+  const name = savedCharacter?.name || "person";
+  if (characterId == null) {
+    // The editor reported success without a usable record; the person may
+    // exist server-side, but there is nothing to assign to. Surface it rather
+    // than failing silently, and refresh so the sidebar shows the truth.
+    // Defensive only: CharacterEditor unwraps `CharacterMutationResponse` and
+    // does not emit `saved` at all unless the record has an id, so this must
+    // never fire in normal operation. If it does, the payload shape is wrong.
+    console.error(
+      "create-person: `saved` payload carried no character id, so the " +
+        "selection was not assigned. Expected the unwrapped record " +
+        "{id, name, ...}; if this looks like {status, character} the " +
+        "CharacterMutationResponse unwrap in CharacterEditor has regressed.",
+      {
+        payloadKeys:
+          savedCharacter && typeof savedCharacter === "object"
+            ? Object.keys(savedCharacter)
+            : typeof savedCharacter,
+        savedCharacter,
+      },
+    );
+    noticeStore.error(
+      `Created ${name}, but the selection couldn't be assigned. Assign it from the Person menu.`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+    return;
+  }
+  if (!pending || pending.mode === "none") {
+    noticeStore.success(`Created ${name}.`, { key: "create-person-assign" });
+    emit("refresh-sidebar");
+    return;
+  }
+  try {
+    if (pending.mode === "faces") {
+      await addCharacterFacesByFaceId(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    } else {
+      await addCharacterFaces(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    }
+    const n = pending.ids.length;
+    const unit = pending.mode === "faces" ? "face" : "picture";
+    noticeStore.success(
+      `Created ${name}, assigned ${n} ${unit}${n === 1 ? "" : "s"}.`,
+      { key: "create-person-assign" },
+    );
+    // Standard post-assign bookkeeping: prunes the Unassigned view when
+    // relevant and emits refresh-sidebar (characters, sets, sort options).
+    handleAddToCharacter({ characterId, pictureIds: pending.pictureIds });
+  } catch (e) {
+    console.error("Failed to assign the selection to the new person", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't assign the selection. ${errorDetail(e)}`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+  }
 }
 
 function handleRemoveFromCharacter(payload) {

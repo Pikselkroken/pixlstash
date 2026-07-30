@@ -55,6 +55,7 @@ const STUBS = {
   OverlayDescriptionPanel: true,
   OverlayMetadataPanel: true,
   AddToEntityControl: true,
+  CharacterEditor: true,
   StarRatingOverlay: true,
   PluginParametersUI: true,
   "v-icon": true,

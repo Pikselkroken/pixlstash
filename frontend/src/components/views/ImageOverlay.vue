@@ -700,37 +700,30 @@
                       >
                         {{ face.label }}
                       </div>
-                      <select
-                        class="face-assign-select"
-                        :disabled="!face.id || isReadOnly"
-                        :value="
-                          face.character_id != null
-                            ? String(face.character_id)
-                            : ''
-                        "
-                        @change="handleFaceAssignChange(face, $event)"
-                      >
-                        <option value="">Unassigned</option>
-                        <option
-                          v-if="
-                            face.character_id != null &&
-                            !hasCharacterOption(face)
-                          "
-                          :value="String(face.character_id)"
-                        >
-                          {{
-                            face.character_name ||
-                            `Character ${face.character_id}`
-                          }}
-                        </option>
-                        <option
-                          v-for="char in sortedCharacters"
-                          :key="char.id"
-                          :value="String(char.id)"
-                        >
-                          {{ char.displayName }}
-                        </option>
-                      </select>
+                      <!-- A native <select> cannot carry the create row's
+                           highlight: macOS Chrome and Safari draw select
+                           popups as OS menus that ignore option colour. This
+                           is the same menu language as the rest of the app
+                           (AddToEntityControl's force-dark skin), in its
+                           single-select face mode. -->
+                      <div class="face-assign-person">
+                        <AddToEntityControl
+                          :ref="(el) => setFaceMenuRef(face.faceKey, el)"
+                          type="face"
+                          allow-create
+                          float-menu
+                          :force-dark="true"
+                          :backend-url="backendUrl"
+                          :face-id="face.id"
+                          :assigned-character-id="face.character_id"
+                          :assigned-character-name="faceAssignedName(face)"
+                          :readonly="isReadOnly"
+                          :disabled="!face.id || isReadOnly"
+                          @assign="handleFaceAssign(face, $event)"
+                          @unassign="unassignFaceCharacter(face)"
+                          @create="openCreatePersonForFace(face, $event)"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -774,6 +767,20 @@
         />
       </div>
     </div>
+
+    <!-- New person from a face row (#645). Overlay-hosted: the flow's state
+         (the target face, the select to return focus to) is overlay-local, and
+         living inside the `v-if="open"` root means it cannot outlive the
+         lightbox. `v-dialog` teleports the dialog itself to <body>, so nesting
+         here costs no layout or stacking context. -->
+    <CharacterEditor
+      :open="createPersonOpen"
+      :character="createPersonCharacter"
+      :backend-url="backendUrl"
+      :projects="createPersonProjects"
+      @close="handleCreatePersonClose"
+      @saved="handleCreatePersonSaved"
+    />
   </div>
 </template>
 
@@ -816,12 +823,16 @@ import {
   runImageToImage,
   getPictureWorkflow,
 } from "../../api/comfyui";
+import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
+import { useProjectStore } from "../../stores/useProjectStore";
 import { copyText } from "../../utils/clipboard";
+import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
+import CharacterEditor from "../editors/CharacterEditor.vue";
 import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
@@ -1085,6 +1096,7 @@ const emit = defineEmits([
   "comfyui-run",
   "run-plugin",
   "request-context-menu",
+  "character-created",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -3065,6 +3077,7 @@ onMounted(() => {
   updateViewportMetrics();
   window.addEventListener("resize", updateViewportMetrics);
   window.addEventListener("keydown", handleKeydown);
+  document.addEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.addEventListener("pointerdown", handleOverlayPointerDown, true);
   if (typeof ResizeObserver !== "undefined" && overlayMainRef.value) {
     overlayResizeObserver = new ResizeObserver(() => {
@@ -3082,6 +3095,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("resize", updateViewportMetrics);
   window.removeEventListener("keydown", handleKeydown);
+  document.removeEventListener("keydown", onCreatePersonKeydownCapture, true);
   window.removeEventListener("pointerdown", handleOverlayPointerDown, true);
   clearComfyuiCloseTimer();
   if (overlayResizeObserver) {
@@ -3572,26 +3586,185 @@ async function unassignFaceCharacter(face) {
   }
 }
 
-function handleFaceAssignChange(face, event) {
-  const rawValue = event?.target?.value ?? "";
-  const nextId = rawValue === "" ? null : rawValue;
-  if (!nextId) {
-    unassignFaceCharacter(face);
-    return;
-  }
-  const character = sortedCharacters.value.find(
-    (char) => String(char.id) === String(nextId),
-  );
-  if (character) {
-    assignFaceToCharacter(face, character);
-  }
+// The face menu performs no writes of its own, so the existing (and unchanged)
+// face-level assign path stays the single place that talks to the API.
+function handleFaceAssign(face, payload) {
+  const character =
+    sortedCharacters.value.find(
+      (char) => String(char.id) === String(payload?.characterId),
+    ) ??
+    (payload?.characterId != null
+      ? { id: payload.characterId, name: payload.characterName }
+      : null);
+  if (character) assignFaceToCharacter(face, character);
 }
 
-function hasCharacterOption(face) {
-  if (!face?.character_id) return false;
-  return sortedCharacters.value.some(
+// What the trigger reads when the face already has someone: prefer the stored
+// name, fall back to the character list, and finally to the id, which is what
+// the select's fallback <option> used to do.
+function faceAssignedName(face) {
+  if (face?.character_id == null) return "";
+  if (face.character_name) return face.character_name;
+  const known = sortedCharacters.value.find(
     (char) => String(char.id) === String(face.character_id),
   );
+  return known?.displayName || `Character ${face.character_id}`;
+}
+
+// Per-face menu instances, so focus can return to the one that opened the
+// dialog. A plain Map (not a ref): nothing renders from it.
+const faceMenuRefs = new Map();
+
+function setFaceMenuRef(key, el) {
+  if (el) faceMenuRefs.set(key, el);
+  else faceMenuRefs.delete(key);
+}
+
+// ── Create a person from a face row (#645) ───────────────────────────────────
+// The face id and the invoking select are captured at flow start so they
+// survive the dialog: on save the new person is assigned to exactly that face,
+// and either outcome returns focus to the select that opened the dialog.
+const projectStore = useProjectStore();
+const createPersonOpen = ref(false);
+const createPersonCharacter = ref(null);
+const createPersonProjects = ref([]);
+let createPersonFaceId = null;
+let createPersonFaceKey = null;
+
+async function openCreatePersonForFace(face, query) {
+  if (!face?.id || isReadOnly.value) return;
+  createPersonFaceId = face.id;
+  createPersonFaceKey = face.faceKey;
+  const typed = typeof query === "string" ? query.trim() : "";
+  const projects = await listProjects({ baseUrl: backendUrl.value }).catch(
+    (e) => {
+      console.warn("Couldn't list projects for the person editor", e);
+      return [];
+    },
+  );
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  createPersonCharacter.value = {
+    id: null,
+    // The menu has a search box, so an unmatched query is the name the user
+    // just typed; with nothing typed, the default series the sidebar and the
+    // grid flow use.
+    name: typed || nextFreeCharacterName(characters.value),
+    description: "",
+    extra_metadata: "",
+    // Same project pre-fill as the grid flow, read from the store rather than
+    // prop-drilled (frontend_architecture.md §4: Pinia for cross-component
+    // state).
+    project_id:
+      projectStore.projectViewMode === "project"
+        ? projectStore.selectedProjectId
+        : null,
+  };
+  createPersonOpen.value = true;
+}
+
+/**
+ * Own Escape while the person dialog is open, so it closes the dialog and
+ * never the lightbox underneath.
+ *
+ * Verified rather than assumed. `AppDialog` calls `stopPropagation()` on its
+ * own subtree, so an Escape from a focused field inside the dialog already
+ * never reaches this component's window handler. But an Escape whose target is
+ * OUTSIDE that subtree (focus resting on `<body>`) bubbles document → window
+ * straight into `handleKeydown`, which emits "close" and drops the whole
+ * lightbox behind the still-open dialog. A bubble-phase guard cannot fix that
+ * one: `CharacterEditor`'s own document listener runs first and has already
+ * flipped `createPersonOpen` to false by the time the window handler reads it.
+ * So the key is taken in the CAPTURE phase, ahead of every bubble listener,
+ * exactly as `ImageGridContextMenu` does, and the dialog is closed here.
+ */
+function onCreatePersonKeydownCapture(e) {
+  if (!createPersonOpen.value || e.key !== "Escape") return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  handleCreatePersonClose();
+}
+
+function restoreCreatePersonFocus() {
+  const key = createPersonFaceKey;
+  createPersonFaceKey = null;
+  if (key == null) return;
+  nextTick(() => faceMenuRefs.get(key)?.focusTrigger?.());
+}
+
+function handleCreatePersonClose() {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  createPersonFaceId = null;
+  restoreCreatePersonFocus();
+}
+
+async function handleCreatePersonSaved(savedCharacter) {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  const faceId = createPersonFaceId;
+  createPersonFaceId = null;
+  restoreCreatePersonFocus();
+  const characterId = savedCharacter?.id;
+  const name = savedCharacter?.name || "person";
+  if (characterId == null || faceId == null) {
+    // Defensive only: CharacterEditor unwraps `CharacterMutationResponse` and
+    // withholds `saved` unless the record has an id, so this must never fire in
+    // normal operation. If it does, the payload shape is wrong.
+    console.error(
+      "create-person: cannot assign the face. Expected the unwrapped record " +
+        "{id, name, ...}; if the payload looks like {status, character} the " +
+        "CharacterMutationResponse unwrap in CharacterEditor has regressed.",
+      {
+        payloadKeys:
+          savedCharacter && typeof savedCharacter === "object"
+            ? Object.keys(savedCharacter)
+            : typeof savedCharacter,
+        savedCharacter,
+        faceId,
+      },
+    );
+    noticeStore.error(
+      `Created ${name}, but the face couldn't be assigned. Pick the person from the face menu.`,
+      { key: "overlay-create-person" },
+    );
+    await fetchCharacters();
+    emit("character-created");
+    return;
+  }
+  const capturedImageId = image.value?.id ?? null;
+  try {
+    // Always the face-level path: the user pointed at one specific detection,
+    // so a picture-level assignment would claim faces they did not choose.
+    await addCharacterFacesByFaceId(characterId, [faceId], {
+      baseUrl: backendUrl.value,
+    });
+    if (Array.isArray(faceBboxes.value)) {
+      faceBboxes.value = faceBboxes.value.map((entry) =>
+        entry?.id === faceId
+          ? { ...entry, character_id: characterId, character_name: name }
+          : entry,
+      );
+    }
+    noticeStore.success(`Created ${name}, assigned to this face.`, {
+      key: "overlay-create-person",
+    });
+    if (capturedImageId) {
+      emit("overlay-change", {
+        imageId: capturedImageId,
+        fields: { faces: true },
+      });
+    }
+  } catch (e) {
+    console.error("Failed to assign the new person to the face", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't assign this face. ${e?.response?.data?.detail || e?.message || "Please try again."}`,
+      { key: "overlay-create-person" },
+    );
+  }
+  // Either way the person now exists: refresh the overlay's own list so every
+  // face select offers them, and tell the grid to refresh the sidebar.
+  await fetchCharacters();
+  emit("character-created");
 }
 
 // Keep preload Image objects alive so the browser doesn't discard the
@@ -4740,7 +4913,19 @@ function resetOverlayCopyState() {
   text-overflow: ellipsis;
 }
 
-.face-assign-select {
+/* The person menu's trigger keeps the exact look and metrics of the <select>
+   it replaced. Only the trigger: the menu rows themselves stay at the shared
+   --text-xs of the .ate-item family rather than inheriting this row's
+   --text-2xs. */
+.face-assign-person {
+  width: 100%;
+}
+
+.face-assign-person :deep(.ate) {
+  width: 100%;
+}
+
+.face-assign-person :deep(.ate-btn) {
   width: 100%;
   background: rgba(var(--v-theme-shadow), 0.45);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
@@ -4751,7 +4936,15 @@ function resetOverlayCopyState() {
   height: 22px;
 }
 
-.face-assign-select:disabled {
+.face-assign-person :deep(.ate-label) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.face-assign-person :deep(.ate-btn:disabled) {
   opacity: 0.6;
 }
 
