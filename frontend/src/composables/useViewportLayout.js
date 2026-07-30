@@ -1,4 +1,4 @@
-import { onMounted, onUnmounted } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 import { useGridStore } from "../stores/useGridStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 
@@ -67,6 +67,15 @@ export function useViewportLayout({ mainAreaRef }) {
       sidebarStore.hideAutoSidebar();
     }
   }
+
+  // Opening or closing the stats rail changes the width the grid has to work
+  // with, so the column ceiling is recomputed with it.
+  watch(
+    () => sidebarStore.statsOpen,
+    () => {
+      updateIsMobile();
+    },
+  );
 
   onMounted(() => window.addEventListener("resize", updateIsMobile));
   onUnmounted(() => window.removeEventListener("resize", updateIsMobile));

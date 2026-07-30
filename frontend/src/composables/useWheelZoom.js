@@ -73,9 +73,7 @@ export function useWheelZoom(options = {}) {
   let exitLastOutTs = 0;
   let settleTimer = null;
 
-  const effectiveMaxScale = computed(() =>
-    Math.max(maxScale, fitScale.value),
-  );
+  const effectiveMaxScale = computed(() => Math.max(maxScale, fitScale.value));
 
   /** Within the shared slack of a target scale. */
   function nearScale(target) {
@@ -118,8 +116,16 @@ export function useWheelZoom(options = {}) {
    * an axis where the image fits, the range is zero and the image re-centres. */
   function reclampOffset() {
     offset.value = {
-      x: clampOffsetAxis(offset.value.x, container.value.width, natural.value.width),
-      y: clampOffsetAxis(offset.value.y, container.value.height, natural.value.height),
+      x: clampOffsetAxis(
+        offset.value.x,
+        container.value.width,
+        natural.value.width,
+      ),
+      y: clampOffsetAxis(
+        offset.value.y,
+        container.value.height,
+        natural.value.height,
+      ),
     };
   }
 

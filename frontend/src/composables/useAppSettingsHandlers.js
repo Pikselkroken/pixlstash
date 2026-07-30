@@ -35,8 +35,6 @@ export function useAppSettingsHandlers({
   const sidebarStore = useSidebarStore();
   const userPrefsStore = useUserPrefsStore();
 
-
-
   // Explicit "view this project" entry click → navigate. useViewStore (watching
   // the route) sets projectViewMode/selectedProjectId from the URL, which scopes
   // the grid to the project.
@@ -51,7 +49,6 @@ export function useAppSettingsHandlers({
     onNavigated?.();
   }
 
-
   function handleStackStatsUpdate(payload) {
     const expanded = Number(payload?.expanded ?? 0);
     const total = Number(payload?.total ?? 0);
@@ -61,12 +58,6 @@ export function useAppSettingsHandlers({
     gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
   }
 
-
-
-
-
-
-
   async function handleUpdateCheckForUpdates(value) {
     userPrefsStore.checkForUpdates = value;
     try {
@@ -75,7 +66,6 @@ export function useAppSettingsHandlers({
       console.error("Failed to save check_for_updates preference:", e);
     }
   }
-
 
   // The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
   // already switched the view to the scrapheap; defer to the next tick so the grid
@@ -108,8 +98,6 @@ export function useAppSettingsHandlers({
     sidebarStore.statsOpen = true;
     nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
   }
-
-
 
   return {
     handleViewProject,

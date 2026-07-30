@@ -14,12 +14,10 @@ import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
-import { useExportStore } from "./stores/useExportStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
-import { useSearchStore } from "./stores/useSearchStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
@@ -39,6 +37,7 @@ import { useUpdatesSocket } from "./composables/useUpdatesSocket";
 import { useSidebarRefresh } from "./composables/useSidebarRefresh";
 import { useViewportLayout } from "./composables/useViewportLayout";
 import { useAppEntityActions } from "./composables/useAppEntityActions";
+import { useSearchBarSync } from "./composables/useSearchBarSync";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -59,12 +58,10 @@ const BACKEND_URL = API_BASE_URL;
 const selectionStore = useSelectionStore();
 const filterStore = useFilterStore();
 const gridStore = useGridStore();
-const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
-const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
@@ -145,7 +142,6 @@ const { updateIsMobile, updateMaxColumns, closeSidebarIfMobile } =
 const {
   connectUpdatesSocket,
   disconnectUpdatesSocket,
-  sendUpdatesFilters,
   loadPendingExternalImports,
   loadSortChangedExternal,
   onFlagSortChanged,
@@ -160,7 +156,6 @@ const {
   handleImagesAssignedToCharacter,
   handleImagesMoved,
   handleFacesAssignedToCharacter,
-  refreshExportCount,
   confirmExportZip,
   handleClearSearch,
   handleResetToAll,
@@ -168,7 +163,10 @@ const {
   gridContainer,
   refreshSidebar,
   onNavigated: () => closeSidebarIfMobile(),
+  onTagFilterChanged: () => refreshSidebarDebounced(),
 });
+
+useSearchBarSync();
 
 useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
 useWindowFileImport({ sidebarRef });
@@ -311,87 +309,11 @@ function resolveThemeName(mode) {
 }
 
 watch(
-  () => searchStore.searchQuery,
-  (newVal, oldVal) => {
-    if (searchStore.searchInput !== newVal) {
-      searchStore.searchInput = newVal || "";
-    }
-    if (!newVal && oldVal) {
-      gridStore.refreshGridVersion();
-    }
-  },
-);
-
-watch([() => searchStore.searchInput, () => searchStore.searchHistory], () => {
-  const needle = (searchStore.searchInput || "").trim();
-  if (!needle) {
-    searchStore.isSearchHistoryOpen = false;
-    return;
-  }
-  searchStore.isSearchHistoryOpen =
-    searchStore.filteredSearchHistory.length > 0;
-});
-
-watch(
-  () => userPrefsStore.hiddenTags,
-  () => {
-    gridStore.refreshGridVersion();
-    if (userPrefsStore.applyTagFilter) {
-      refreshSidebarDebounced();
-    }
-  },
-);
-
-watch(
-  () => userPrefsStore.applyTagFilter,
-  () => {
-    gridStore.refreshGridVersion();
-    refreshSidebarDebounced();
-  },
-);
-
-watch(
-  [
-    () => selectionStore.selectedCharacter,
-    () => selectionStore.selectedSet,
-    () => selectionStore.selectedSetIds,
-    () => searchStore.searchQuery,
-  ],
-  () => {
-    sendUpdatesFilters();
-  },
-);
-
-watch(
-  () => gridStore.gridVersion,
-  () => {
-    wsStore.clearPendingExternalImportIds();
-    wsStore.clearSortChangedExternalIds();
-  },
-);
-
-watch(
   () => userPrefsStore.themeMode,
   (value) => {
     theme.global.name.value = resolveThemeName(value);
   },
   { immediate: true },
-);
-
-watch(
-  () => exportStore.exportMenuOpen,
-  async (isOpen) => {
-    if (!isOpen) return;
-    await nextTick();
-    refreshExportCount();
-  },
-);
-
-watch(
-  () => sidebarStore.statsOpen,
-  () => {
-    updateIsMobile();
-  },
 );
 
 // --- Lifecycle ---
