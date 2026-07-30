@@ -12,11 +12,9 @@ import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import {
   API_BASE_URL,
-  appendShareToken,
   isReadOnly,
   sessionContext,
 } from "./utils/apiClient";
-import { patchUserConfig } from "./api/config";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useSortStore } from "./stores/useSortStore";
@@ -40,11 +38,12 @@ import {
   useViewStore,
 } from "./stores/useViewStore";
 import { redoKeyHint, undoKeyHint } from "./utils/shortcutHints";
-import { useGridRealtimeSync } from "./composables/useGridRealtimeSync";
 import { useAppConfig } from "./composables/useAppConfig";
 import { useAppNavigation } from "./composables/useAppNavigation";
 import { useGlobalKeydown } from "./composables/useGlobalKeydown";
 import { useWindowFileImport } from "./composables/useWindowFileImport";
+import { useAppSettingsHandlers } from "./composables/useAppSettingsHandlers";
+import { useUpdatesSocket } from "./composables/useUpdatesSocket";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -142,8 +141,52 @@ const {
   onNavigated: () => closeSidebarIfMobile(),
 });
 
+// The live-updates channel. App.vue owns its lifecycle - it connects on
+// mount and disconnects on unmount - but the socket, its filter handshake and
+// the realtime-sync wiring live in the composable.
+const {
+  connectUpdatesSocket,
+  disconnectUpdatesSocket,
+  sendUpdatesFilters,
+  loadPendingExternalImports,
+  loadSortChangedExternal,
+  onFlagSortChanged,
+} = useUpdatesSocket({
+  gridContainer,
+  refreshSidebar: (options) => refreshSidebar(options),
+  refreshSidebarPicturesDebounced: (flash) =>
+    refreshSidebarPicturesDebounced(flash),
+});
+
 useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
 useWindowFileImport({ sidebarRef });
+
+const {
+  handleUpdateProjectViewMode,
+  handleUpdateSelectedProjectId,
+  handleViewProject,
+  handleUpdateSelectedSort,
+  handleUpdateSortOptions,
+  handleStackStatsUpdate,
+  handleUpdateSimilarityCharacter,
+  handleUpdateSimilarityOptions,
+  handleUpdateHiddenTags,
+  handleUpdateApplyTagFilter,
+  handleUpdateDateFormat,
+  handleUpdateThemeMode,
+  handleUpdateCheckForUpdates,
+  handleUpdateSidebarThumbnailSize,
+  handleEmptyScrapheapFromSidebar,
+  handleSuggestPicturesForCharacter,
+  focusTasksTabPanel,
+  handleUpdateThumbnailMode,
+  handleUpdateSidebarWidth,
+} = useAppSettingsHandlers({
+  gridContainer,
+  statsSidebarRef,
+  onNavigated: () => closeSidebarIfMobile(),
+  pushAppRoute,
+});
 
 const { fetchConfig } = useAppConfig({
   onThumbnailSizeChanged: () => updateMaxColumns(),
@@ -161,20 +204,12 @@ const SIDEBAR_HIDE_BREAKPOINT = 790;
 const STATS_HIDE_BREAKPOINT = 1280;
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
 const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
-// Coalescing window for incoming grid-driving WS events (see
-// useGridRealtimeSync). A burst of foreign events accumulates over this window
-// and applies once per category instead of one fetch+rebuild per event.
-const GRID_WS_COALESCE_MS = 200;
-
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
-let updatesSocket = null;
-let updatesReconnectTimer = null;
 let columnsMenuCloseTimeout = null;
 let sidebarRefreshDebounceTimeout = null;
 let sidebarRefreshPicturesDebounceTimeout = null;
 let sidebarRefreshPicturesFlash = false;
-let gridWsCoalesceTimer = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -216,314 +251,6 @@ const activeCategoryLabel = computed(() => {
   }
   return "All Pictures";
 });
-
-// --- WebSocket ---
-// Event types that can carry a recorded operation (the reversible metadata
-// facets of backend_architecture.md §21). `picture_imported` is deliberately
-// absent: imports are not undoable in v1.9, so they never appear in the stack.
-const OPERATION_BEARING_EVENTS = new Set([
-  "pictures_changed",
-  "tags_changed",
-  "characters_changed",
-  "descriptions_changed",
-]);
-
-function buildUpdatesSocketUrl() {
-  if (!BACKEND_URL) return "";
-  const wsBase = BACKEND_URL.replace(/^http/i, "ws");
-  // The backend authenticates the WebSocket handshake (the HTTP auth
-  // middleware does not cover WebSockets). A full session authenticates via
-  // the same-origin session cookie; a share/read-only session has no cookie,
-  // so append its READ token as ?token= the same way HTTP requests do.
-  return appendShareToken(`${wsBase}/ws/updates`);
-}
-
-// A `pictures_changed` event may carry a `fields` list naming the columns that
-// changed. When every changed field is invisible to the current sort + active
-// filters (e.g. a background `smart_score` recompute while sorting by date),
-// the grid/sidebar don't need to react at all. An event with no `fields`
-// (user edits, imports, plugin output, …) is treated as "unknown" and always
-// refreshes, preserving the previous behaviour.
-function pictureChangeFieldAffectsView(field) {
-  if (field === "smart_score") {
-    return (
-      sortStore.selectedSort === "SMART_SCORE" ||
-      filterStore.smartScoreBucketFilter != null
-    );
-  }
-  // Detections are an opt-in overlay layer, never a sort/filter field, so a
-  // detection change never affects grid membership or order — don't reload or
-  // raise the "view changed" pill for it.
-  if (field === "detections") return false;
-  // Unknown field → assume it can affect the view, so refresh to be safe.
-  return true;
-}
-
-function pictureChangeAffectsView(fields) {
-  if (!Array.isArray(fields) || fields.length === 0) return true;
-  return fields.some(pictureChangeFieldAffectsView);
-}
-
-function sendUpdatesFilters() {
-  if (!updatesSocket) return;
-  if (updatesSocket.readyState !== WebSocket.OPEN) return;
-  updatesSocket.send(
-    JSON.stringify({
-      type: "set_filters",
-      client_id: wsStore.clientId,
-      selected_character: selectionStore.selectedCharacter,
-      selected_set: selectionStore.selectedSet,
-      selected_sets: selectionStore.selectedSetIds,
-      search_query: searchStore.searchQuery,
-    }),
-  );
-}
-
-// Imperative grid API surface used by the realtime-sync composable. Each method
-// delegates to the ImageGrid template-ref's defineExpose'd methods (Tier-3
-// imperative API), no-oping safely if the grid isn't mounted yet.
-const gridApi = {
-  insertGridImagesById: (ids) =>
-    gridContainer.value?.insertGridImagesById?.(ids),
-  refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
-  repositionImageByScore: (id, score) =>
-    gridContainer.value?.repositionImageByScore?.(id, score),
-  repositionImageBySmartScore: (id) =>
-    gridContainer.value?.repositionImageBySmartScore?.(id),
-  refreshSmartScoreForImage: (id) =>
-    gridContainer.value?.refreshSmartScoreForImage?.(id),
-  removeImagesById: (ids) => gridContainer.value?.removeImagesById?.(ids),
-  isImagesLoading: () => gridContainer.value?.isImagesLoading?.() ?? false,
-  isOverlayOpen: () => gridContainer.value?.isOverlayOpen?.() ?? false,
-  markOverlayDeferredRefresh: () =>
-    gridContainer.value?.markOverlayDeferredRefresh?.(),
-};
-
-function fullGridReload() {
-  gridStore.wsUpdateKey = Date.now();
-  gridStore.refreshGridVersion();
-}
-
-// Fixed-window scheduler for the realtime-sync coalescer. The composable arms
-// one flush per window (it skips schedule() while a flush is already pending),
-// so the first queued event starts a GRID_WS_COALESCE_MS timer and a
-// back-to-back burst flushes once at its end. cancel() lets onBeforeUnmount
-// drop a pending flush.
-const gridWsScheduler = {
-  schedule(flush) {
-    if (gridWsCoalesceTimer) clearTimeout(gridWsCoalesceTimer);
-    gridWsCoalesceTimer = setTimeout(() => {
-      gridWsCoalesceTimer = null;
-      flush();
-    }, GRID_WS_COALESCE_MS);
-  },
-  cancel() {
-    if (gridWsCoalesceTimer) {
-      clearTimeout(gridWsCoalesceTimer);
-      gridWsCoalesceTimer = null;
-    }
-  },
-};
-
-const gridRealtimeSync = useGridRealtimeSync({
-  getMyClientId: () => wsStore.clientId,
-  grid: gridApi,
-  wsStore,
-  pictureChangeAffectsView,
-  getSelectedSort: () => sortStore.selectedSort,
-  reload: fullGridReload,
-  refreshSidebar: (flash) => refreshSidebarPicturesDebounced(flash),
-  scheduler: gridWsScheduler,
-});
-
-function connectUpdatesSocket() {
-  if (updatesSocket) return;
-  const url = buildUpdatesSocketUrl();
-  if (!url) return;
-  const ws = new WebSocket(url);
-  updatesSocket = ws;
-
-  ws.onopen = () => {
-    sendUpdatesFilters();
-  };
-
-  ws.onmessage = (event) => {
-    let payload;
-    try {
-      payload = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    // The operation log has no WS event of its own: a metadata mutation
-    // announces itself as a picture/tag/character change, and that is the
-    // signal the undo stack may have moved. Origin is read from the event
-    // `data` (never a contextvar) and only decides whether the change may
-    // narrate itself; an external one updates the stack silently.
-    if (OPERATION_BEARING_EVENTS.has(payload?.type)) {
-      operationStore.onPictureEvent(payload);
-    }
-    const isPictureChange =
-      payload?.type === "pictures_changed" ||
-      payload?.type === "picture_imported";
-    if (isPictureChange) {
-      // LIKENESS_GROUPS reorders the whole grid wholesale, so a targeted op
-      // can't reconcile it — keep the existing wsTagUpdate signal that lets the
-      // grid re-rank in place. (Imports still flow through the normal path.)
-      const pictureIds = Array.isArray(payload.picture_ids)
-        ? payload.picture_ids
-        : [];
-      // Signal the open lightbox to re-fetch its card's smart_score. The overlay
-      // always displays the score (independent of grid sort), so this fires for
-      // any smart_score change regardless of the current sort and regardless of
-      // origin — matching on picture id + field, not origin, so it covers both
-      // origin-stamped interactive tag edits and the origin-less bulk drain that
-      // rides a penalised-tag settings change. `fields` absent = full change.
-      if (payload?.type === "pictures_changed" && pictureIds.length > 0) {
-        const changedFields = Array.isArray(payload.fields)
-          ? payload.fields
-          : [];
-        const touchesSmartScore =
-          changedFields.length === 0 || changedFields.includes("smart_score");
-        if (touchesSmartScore) {
-          const nextKey = (wsStore.wsSmartScoreUpdate?.key || 0) + 1;
-          wsStore.wsSmartScoreUpdate = { key: nextKey, pictureIds };
-        }
-        // Signal the open lightbox to re-fetch its detection boxes when a
-        // Segment run lands. The grid's card-content refresh is deferred under
-        // an open overlay (§9.1) and the overlay reads its boxes straight from
-        // the detections endpoint, so it needs its own signal. The backend
-        // always stamps this change `fields: ["detections"]`, so match on the
-        // explicit field only.
-        if (changedFields.includes("detections")) {
-          const nextKey = (wsStore.wsDetectionUpdate?.key || 0) + 1;
-          wsStore.wsDetectionUpdate = { key: nextKey, pictureIds };
-        }
-      }
-      if (
-        pictureIds.length > 0 &&
-        sortStore.selectedSort === "LIKENESS_GROUPS" &&
-        payload?.type !== "picture_imported" &&
-        pictureChangeAffectsView(payload.fields)
-      ) {
-        if (!wsStore.isUploadInProgress) {
-          refreshSidebarPicturesDebounced(true);
-        }
-        const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
-        wsStore.wsTagUpdate = { key: nextKey, pictureIds };
-        return;
-      }
-      // Own upload in progress: the import dialog drives the grid; ignore the
-      // echo so it doesn't double-count or reload mid-upload.
-      if (wsStore.isUploadInProgress && payload?.type === "picture_imported") {
-        return;
-      }
-      // Everything else goes through the origin-aware decision table.
-      gridRealtimeSync.handleMessage(payload);
-    } else if (payload?.type === "characters_changed") {
-      refreshSidebar();
-    } else if (payload?.type === "tags_changed") {
-      const pictureIds = Array.isArray(payload.picture_ids)
-        ? payload.picture_ids
-        : [];
-      // Origin-aware: only this tab's own tag edits may refresh a tag-filtered
-      // grid in place. A tag change from outside (background tagging, another
-      // tab) must not reshuffle the user's filtered view — the grid raises a
-      // click-to-refresh pill instead (see ImageGrid's wsTagUpdate watcher).
-      // The flag rides on wsTagUpdate; the overlay still refreshes its open
-      // card's tags for any origin.
-      const isOwn = !!(
-        payload.origin_client_id &&
-        wsStore.clientId &&
-        payload.origin_client_id === wsStore.clientId
-      );
-      const nextKey = (wsStore.wsTagUpdate?.key || 0) + 1;
-      wsStore.wsTagUpdate = { key: nextKey, pictureIds, external: !isOwn };
-    } else if (payload?.type === "descriptions_changed") {
-      const pictureIds = Array.isArray(payload.picture_ids)
-        ? payload.picture_ids
-        : [];
-      const nextKey = (wsStore.wsDescriptionUpdate?.key || 0) + 1;
-      wsStore.wsDescriptionUpdate = { key: nextKey, pictureIds };
-    } else if (payload?.type === "plugin_progress") {
-      wsStore.wsPluginProgress = {
-        key: Date.now(),
-        payload,
-      };
-    } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
-      snapshotsStore.onSnapshotCreated();
-    } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
-      snapshotsStore.onSnapshotDeleted(payload);
-    } else if (payload?.type === "restore_started" && !isReadOnly.value) {
-      snapshotsStore.onRestoreStarted(payload);
-    } else if (payload?.type === "restore_completed" && !isReadOnly.value) {
-      snapshotsStore.onRestoreCompleted();
-      gridStore.wsUpdateKey = Date.now();
-      gridStore.refreshGridVersion();
-      refreshSidebar();
-    } else if (payload?.type === "restore_failed" && !isReadOnly.value) {
-      snapshotsStore.onRestoreFailed(payload);
-      gridStore.wsUpdateKey = Date.now();
-      gridStore.refreshGridVersion();
-      refreshSidebar();
-    }
-  };
-
-  ws.onclose = () => {
-    updatesSocket = null;
-    if (updatesReconnectTimer) {
-      clearTimeout(updatesReconnectTimer);
-    }
-    updatesReconnectTimer = setTimeout(() => {
-      updatesReconnectTimer = null;
-      connectUpdatesSocket();
-    }, 2000);
-  };
-}
-
-function disconnectUpdatesSocket() {
-  if (updatesReconnectTimer) {
-    clearTimeout(updatesReconnectTimer);
-    updatesReconnectTimer = null;
-  }
-  if (updatesSocket) {
-    updatesSocket.close();
-    updatesSocket = null;
-  }
-}
-
-function loadPendingExternalImports() {
-  const ids = wsStore.pendingExternalImportIds.slice();
-  wsStore.clearPendingExternalImportIds();
-  if (!ids.length) {
-    fullGridReload();
-    return;
-  }
-  // Splice just the new ids in place; fall back to a full reload if the grid
-  // ref isn't available (e.g. unmounted) or is mid-fetch.
-  const grid = gridContainer.value;
-  if (grid?.insertGridImagesById && !grid.isImagesLoading?.()) {
-    grid.insertGridImagesById(ids);
-  } else {
-    fullGridReload();
-  }
-}
-
-function loadSortChangedExternal() {
-  // The user opted in to the reshuffle — reconcile by refetching + re-sorting.
-  wsStore.clearSortChangedExternalIds();
-  fullGridReload();
-}
-
-// ImageGrid asks to raise the "view changed externally" pill for an external
-// tag change under an active tag filter (instead of reshuffling the filtered
-// grid under the user). Skip ids already queued in the "new pictures" pill so a
-// just-imported batch being tagged doesn't double-pill.
-function onFlagSortChanged(ids) {
-  if (!Array.isArray(ids) || !ids.length) return;
-  const pending = new Set(wsStore.pendingExternalImportIds);
-  const fresh = ids.filter((id) => !pending.has(id));
-  if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
-}
 
 function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
@@ -679,143 +406,6 @@ watch(
 // into the store (used for sidebar scoping); they never push a route.
 // Grid navigation happens via explicit entry clicks (handleViewProject,
 // handleSelectCharacter, handleSelectSet, handleSelectFolder).
-function handleUpdateProjectViewMode(mode) {
-  projectStore.projectViewMode = mode;
-}
-
-function handleUpdateSelectedProjectId(id) {
-  projectStore.selectedProjectId = id;
-}
-
-// Explicit "view this project" entry click → navigate. useViewStore (watching
-// the route) sets projectViewMode/selectedProjectId from the URL, which scopes
-// the grid to the project.
-function handleViewProject(id) {
-  if (id == null) return;
-  pushAppRoute({ name: "project", params: { id: String(id) } });
-}
-
-async function handleUpdateSelectedSort({ sort, descending }) {
-  sortStore.selectedSort = sort;
-  sortStore.selectedDescending = descending;
-  closeSidebarIfMobile();
-}
-
-function handleUpdateSortOptions(options) {
-  sortStore.sortOptions = Array.isArray(options) ? options : [];
-}
-
-function handleStackStatsUpdate(payload) {
-  const expanded = Number(payload?.expanded ?? 0);
-  const total = Number(payload?.total ?? 0);
-  gridStore.expandedStackCount = Number.isFinite(expanded)
-    ? Math.max(0, expanded)
-    : 0;
-  gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
-}
-
-function handleUpdateSimilarityCharacter(val) {
-  sortStore.selectedSimilarityCharacter = val;
-  gridStore.refreshGridVersion();
-  closeSidebarIfMobile();
-}
-
-function handleUpdateSimilarityOptions(options) {
-  sortStore.similarityCharacterOptions = Array.isArray(options) ? options : [];
-}
-
-function handleUpdateHiddenTags(tags) {
-  const nextTags = Array.isArray(tags) ? tags : [];
-  if (
-    userPrefsStore.hiddenTags.length === nextTags.length &&
-    userPrefsStore.hiddenTags.every((tag, index) => tag === nextTags[index])
-  ) {
-    return;
-  }
-  userPrefsStore.hiddenTags = nextTags;
-}
-
-function handleUpdateApplyTagFilter(value) {
-  const nextValue = Boolean(value);
-  if (userPrefsStore.applyTagFilter === nextValue) return;
-  userPrefsStore.applyTagFilter = nextValue;
-}
-
-function handleUpdateDateFormat(value) {
-  if (value == null) return;
-  const nextValue = String(value);
-  if (nextValue === userPrefsStore.dateFormat) return;
-  userPrefsStore.dateFormat = nextValue;
-}
-
-function handleUpdateThemeMode(value) {
-  if (value == null) return;
-  userPrefsStore.themeMode = String(value);
-}
-
-async function handleUpdateCheckForUpdates(value) {
-  userPrefsStore.checkForUpdates = value;
-  try {
-    await patchUserConfig({ check_for_updates: value });
-  } catch (e) {
-    console.error("Failed to save check_for_updates preference:", e);
-  }
-}
-
-function handleUpdateSidebarThumbnailSize(value) {
-  const nextValue = Number(value);
-  if (!Number.isFinite(nextValue)) return;
-  userPrefsStore.sidebarThumbnailSize = nextValue;
-}
-
-// The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
-// already switched the view to the scrapheap; defer to the next tick so the grid
-// is showing that view before we open its existing consent-gated empty-forever
-// confirm (whose post-confirm refetch then reconciles the right view). The grid
-// is still fetching that view at this point, by construction — the confirm is
-// deliberately not gated on that, and takes its counts from the server preview.
-function handleEmptyScrapheapFromSidebar() {
-  nextTick(() => gridContainer.value?.confirmEmptyScrapheap?.());
-}
-
-// The sidebar's person context menu asks for more pictures of that person
-// (#636). The search runs across the whole library rather than inside the
-// current view, so nothing here changes the selection or the route: the grid
-// owns the search mode and shows its own result bar.
-function handleSuggestPicturesForCharacter(character) {
-  if (character?.id == null) return;
-  nextTick(() =>
-    gridContainer.value?.suggestPicturesForCharacter?.({
-      id: character.id,
-      name: character.name,
-    }),
-  );
-}
-
-// Open the stats sidebar and focus its Tasks tab. Shared by the thumbnail-mode
-// "View progress" notice action and the ThumbnailUpgradeBanner's link, so both
-// use the same statsSidebarRef.focusTasksTab() plumbing.
-function focusTasksTabPanel() {
-  sidebarStore.statsOpen = true;
-  nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
-}
-
-function handleUpdateThumbnailMode(value) {
-  if (value !== "square" && value !== "justified") return;
-  if (value === gridStore.thumbnailMode) return;
-  // Apply immediately with no regeneration: both modes render from the same
-  // stored bitmap (justified shows it whole; square crops it to the stored
-  // rectangle), so the grid re-lays-out at once. The persist watch saves it,
-  // and the radiogroup's aria-checked change is what a screen reader announces.
-  gridStore.thumbnailMode = value;
-}
-
-function handleUpdateSidebarWidth(value) {
-  const nextValue = Number(value);
-  if (!Number.isFinite(nextValue)) return;
-  userPrefsStore.sidebarWidth = nextValue;
-}
-
 function resolveThemeName(mode) {
   return mode === "dark" ? "pixlStashDark" : "pixlStashLight";
 }
@@ -1096,7 +686,6 @@ onBeforeUnmount(() => {
     clearTimeout(sidebarRefreshPicturesDebounceTimeout);
     sidebarRefreshPicturesDebounceTimeout = null;
   }
-  gridWsScheduler.cancel();
 });
 
 defineExpose({
