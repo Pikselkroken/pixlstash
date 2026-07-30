@@ -9,6 +9,8 @@
 // anything, and, since the merge into one pill, that exactly one live region
 // speaks and the controls do not vanish mid-search.
 
+import { readFileSync } from "node:fs";
+
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
 
@@ -99,9 +101,18 @@ describe("SearchResultBar — plain search", () => {
 describe("SearchResultBar — character face search", () => {
   it("states the blast radius on the assign button", () => {
     // "Assign all" hides how much is about to be written. The count is what
-    // makes the threshold slider legible and the click safe to make.
+    // makes the sliders legible and the click safe to make.
+    //
+    // Asserted on the accessible name, not on rendered text: the word space
+    // before the name is a CSS margin (see the .assign-target rule), so the
+    // DOM text runs the count into it. The accessible name is a real string
+    // built in JS and is the thing that must never degrade.
     const wrapper = mountBar(characterSearchProps());
-    expect(wrapper.find(".assign-btn").text()).toContain("Assign 41 to Alice");
+    expect(wrapper.find(".assign-btn").attributes("aria-label")).toBe(
+      "Assign 41 to Alice",
+    );
+    expect(wrapper.find(".assign-label").text()).toContain("Assign 41");
+    expect(wrapper.find(".assign-target").text()).toBe("to Alice");
   });
 
   it("follows an explicit grid selection instead of the threshold", () => {
@@ -110,8 +121,11 @@ describe("SearchResultBar — character face search", () => {
     const wrapper = mountBar(
       characterSearchProps({ assignCount: 12, assignFromSelection: true }),
     );
-    expect(wrapper.find(".assign-btn").text()).toContain(
+    expect(wrapper.find(".assign-btn").attributes("aria-label")).toContain(
       "Assign 12 selected to Alice",
+    );
+    expect(wrapper.find(".assign-label").text()).toContain(
+      "Assign 12 selected",
     );
   });
 
@@ -147,6 +161,27 @@ describe("SearchResultBar — character face search", () => {
     const wrapper = mountBar(characterSearchProps());
     expect(wrapper.find(".assign-target").text()).toBe("to Alice");
     expect(wrapper.find(".assign-label").text()).toContain("Assign 41");
+  });
+
+  it("spaces the name off the count with a margin, not a text space", () => {
+    // `.assign-target` is inline-block so `text-overflow: ellipsis` has a box to
+    // clip, and CSS strips leading whitespace at the start of an inline-block's
+    // line box. A leading space in the markup therefore vanishes and the button
+    // reads "Assign 0to Walter". jsdom applies no CSS, so no rendered-text
+    // assertion can catch that; this pins both halves of the fix instead.
+    const wrapper = mountBar(characterSearchProps());
+    const target = wrapper.find(".assign-target");
+    expect(target.text()).toBe("to Alice");
+    expect(target.element.textContent).not.toMatch(/^\s/);
+
+    const style = SearchResultBar.__file
+      ? readFileSync(SearchResultBar.__file, "utf8")
+      : readFileSync(new URL("./SearchResultBar.vue", import.meta.url), "utf8");
+    const rule = style.slice(
+      style.indexOf(".assign-target {"),
+      style.indexOf("}", style.indexOf(".assign-target {")),
+    );
+    expect(rule).toContain("margin-left");
   });
 
   it("renders both knobs as labelled range inputs", () => {

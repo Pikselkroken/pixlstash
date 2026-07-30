@@ -227,7 +227,7 @@
         <span class="assign-label"
           >Assign {{ assignCount
           }}<span v-if="assignFromSelection"> selected</span
-          ><span class="assign-target"> to {{ assignTarget }}</span></span
+          ><span class="assign-target">to {{ assignTarget }}</span></span
         >
       </button>
 
@@ -641,13 +641,21 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-/* Dropped whole by the ladder, never ellipsised. See the markup. */
+/* Dropped whole by the ladder, never ellipsised. See the markup.
+
+   The word space before it is this margin, NOT a leading space in the text.
+   `inline-block` is required for `text-overflow: ellipsis` to have a box to
+   clip, and CSS strips leading whitespace at the start of an inline-block's
+   line box, so a text space here renders as "Assign 0to Walter". --space-2 is
+   4px against a ~3.9px word space at --text-base, so it matches the type.
+   Do not move the space back into the markup. */
 .assign-target {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 16ch;
   display: inline-block;
   vertical-align: bottom;
+  margin-left: var(--space-2);
 }
 
 /* Its own breathing room before Clear search: a bulk write and the button that
