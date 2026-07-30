@@ -91,6 +91,39 @@ export function getStackColor(stackIndex, row = 0, col = 0) {
   return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
+// The stack colour, renormalised for use as a 14px glyph on the stack badge.
+//
+// `getStackColor` is tuned for FIELDS (the expanded card wash, the band), where
+// a dark, saturated value reads well and the row/col parity swing is invisible.
+// As a glyph on a scrimmed chip it fails twice: `hsl(H 60% 48%)` measures 1.04:1
+// against the badge's backing over a bright photo (the 3:1 non-text floor is
+// WCAG 1.4.11), and the same stack would change tint depending on where its
+// cover happened to land in the grid.
+//
+// So the hue is kept and everything else is discarded. 72% lightness is the
+// point at which the darkest hue in the palette (258) clears 3:1 on
+// `--scrim-photo-strong`; the badge pairs the two and neither works alone.
+const STACK_BADGE_TINT_SATURATION = 70;
+const STACK_BADGE_TINT_LIGHTNESS = 72;
+
+/**
+ * Renormalise a stack colour for the badge glyph, or null if it is not an
+ * `hsl()` colour.
+ *
+ * Null on anything unparseable is deliberate: `getStackCardColor` can return a
+ * server-supplied `stackColor` in an unknown format, and the badge must fall
+ * back to its known-legible `on-dark-surface` glyph rather than paint an
+ * unverified colour onto a photo.
+ */
+export function applyStackBadgeTint(color) {
+  if (!color || typeof color !== 'string') return null;
+  const match = /^hsla?\(\s*([\d.]+)(?:deg)?\s*[,\s]/i.exec(color.trim());
+  if (!match) return null;
+  const hue = Number(match[1]);
+  if (!Number.isFinite(hue)) return null;
+  return `hsl(${hue} ${STACK_BADGE_TINT_SATURATION}% ${STACK_BADGE_TINT_LIGHTNESS}%)`;
+}
+
 // Add this helper below your script setup imports
 export function faceBoxColor(idx) {
   // Pick from a palette, cycle if more faces than colors

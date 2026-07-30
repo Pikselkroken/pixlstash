@@ -475,18 +475,31 @@ lifting.
 ### Scrims (badges over imagery)
 
 A corner badge or chip that sits on top of a photo needs a translucent backing so
-its glyph stays legible over unknown content. Two tokens cover it, and neither is a
+its glyph stays legible over unknown content. Three tokens cover it, and none is a
 raw `rgba(0,0,0,…)`:
 
 | Token | Use |
 |---|---|
 | `--scrim-surface` | Light warm chip over the **bright grid/sidebar canvas** (dark glyph). Matches the other grid badges. |
 | `--scrim-photo` | Dark chip **directly over an arbitrary photo** (light glyph, `on-dark-surface`). On the theme `scrim` token so it stays reliably dark in both themes. |
+| `--scrim-photo-strong` | The same chip deepened to 0.78, for a **coloured** glyph over an arbitrary photo (the stack badge's per-stack hue). |
+
+The strong variant exists because contrast is not a property of the glyph alone.
+`--scrim-photo` at 0.55 is sized for a near-white glyph, which reaches for white's
+luminance and clears 4.76:1 over even a white photo. A hue cannot: normalised to the
+badge tint, the darkest colour in the stack palette measures **1.62:1** on that chip
+and is effectively invisible on a bright photo. Deepening the chip to 0.78 makes the
+backing photo-independent and lifts that worst case to **3.98:1**, over the 3:1
+non-text floor (WCAG 1.4.11). So: a coloured glyph over imagery buys its legibility
+with a darker chip, never by darkening the colour until it stops reading as a colour.
+Small text is not covered by this: no hue in the palette reaches 4.5:1 on any usable
+chip opacity, which is why the stack badge's **count stays `on-dark-surface`** and
+only its icon takes the hue (§13).
 
 Pick by what the chip sits on, and match the sibling chips already on that surface
 (a lock badge on a review card matches that card's tag chips; a lock badge on the
 grid matches the grid badges). Full-screen backdrops still use `rgba(var(--v-theme-scrim), …)`
-directly at their own tuned opacity; these two tokens are for the corner-chip case.
+directly at their own tuned opacity; these tokens are for the corner-chip case.
 
 ---
 

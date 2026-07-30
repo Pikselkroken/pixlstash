@@ -3,13 +3,16 @@
     v-if="visible"
     type="button"
     class="sbadge"
-    :class="{ 'sbadge--unresolved': unresolved }"
+    :class="{
+      'sbadge--unresolved': unresolved,
+      'sbadge--tinted': tinted,
+    }"
     :title="title"
     :aria-label="title"
     data-testid="stack-badge"
     @click.stop="emit('activate')"
   >
-    <v-icon class="sbico" size="14">{{ glyph }}</v-icon>
+    <v-icon class="sbico" size="14" :style="glyphStyle">{{ glyph }}</v-icon>
     <span class="sbcount">{{ label }}</span>
   </button>
 </template>
@@ -39,11 +42,28 @@ const props = defineProps({
   count: { type: Number, default: 0 },
   /** True while the group is still a queue suggestion rather than a stack. */
   unresolved: { type: Boolean, default: false },
+  /**
+   * This stack's colour, already renormalised for glyph use by
+   * `applyStackBadgeTint`. Null when the tile has no stack colour to show.
+   */
+  tint: { type: String, default: null },
 });
 
 const emit = defineEmits(["activate"]);
 
 const visible = computed(() => props.count >= 2);
+
+// An unresolved group has no stack, so it has no stack colour, and tinting it
+// would hand a suggestion the one signal that says "this stack exists".
+const tinted = computed(() => !!props.tint && !props.unresolved);
+
+// The glyph is the only thing the hue touches. The count is small text and
+// needs 4.5:1 (WCAG 1.4.3); no colour in the stack palette reaches that on any
+// usable chip opacity, so the number stays `on-dark-surface` (visual-language.md
+// §7, "Scrims").
+const glyphStyle = computed(() =>
+  tinted.value ? { color: props.tint } : null,
+);
 
 const glyph = computed(() =>
   props.unresolved ? "mdi-content-duplicate" : "mdi-image-multiple",
@@ -67,8 +87,11 @@ const title = computed(() =>
    glyph is `on-dark-surface`: the pair that stays legible over unknown content
    in both themes (visual-language.md §7, "Scrims"). Deliberately NOT
    self-positioned: it flows inside the tile's top-right badge column
-   (`.thumbnail-top-right-badges`, the shared home for corner indicators —
-   stars above, this below), so it can never land on top of a sibling badge.
+   (`.thumbnail-top-right-badges`, the shared home for corner indicators: this
+   first, the hover-only stars below it), so it can never land on top of a
+   sibling badge. It leads the column because it is the column's only PERMANENT
+   member: put it second and its rest position is set by the height of an
+   invisible star strip, which is how it ended up floating off the corner.
    `pointer-events` is explicit because that container is pointer-inert. */
 .sbadge {
   pointer-events: auto;
@@ -100,8 +123,19 @@ const title = computed(() =>
   outline: none;
 }
 
+/* A coloured glyph cannot reach `on-dark-surface`'s luminance, so the chip it
+   sits on carries the difference: on the 0.55 scrim the darkest hue in the
+   palette measures 1.62:1 over a bright photo, and on this one 3.98:1
+   (visual-language.md §7). The pair is the spec; tinting the glyph without
+   deepening the chip is the invisible-indicator bug this replaced. */
+.sbadge--tinted {
+  background-color: var(--scrim-photo-strong);
+}
+
 /* Quieter than a real stack, deliberately. Same scrim so it stays legible over
-   any photo, muted foreground so it never competes with a resolved count. */
+   any photo, muted foreground so it never competes with a resolved count. The
+   lighter chip is the second axis: a suggestion and a fact differ in both
+   chroma and weight, which is what keeps them apart at grid scale. */
 .sbadge--unresolved {
   color: rgba(var(--v-theme-on-dark-surface), 0.75);
 }

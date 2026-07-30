@@ -865,17 +865,31 @@
                 >Cover</span
               >
               <!-- Top-right badge column — the shared home for corner
-                   indicators (stars above, stack count below, right-aligned,
-                   2px gap). The stars are hover-only; the stack count is
+                   indicators (stack count in the corner, hover-only stars
+                   below it, right-aligned, 2px gap). The stack count is
                    PERMANENT — how many pictures a tile stands for is a fact
                    about the tile, and hiding it until hover is what made
                    stacks invisible while browsing. The hover behaviour
                    therefore lives on the container's other children, not the
-                   container. -->
+                   container.
+
+                   The permanent badge leads the column deliberately: below the
+                   stars its rest position was set by a strip that is
+                   `opacity: 0` but still in flow, so it hung a row off the
+                   corner and moved whenever the star size or `showStars`
+                   changed. Leading, it never moves; only what appears beneath
+                   it does. -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
               >
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <StarRatingOverlay
                   v-if="props.showStars"
                   :score="
@@ -886,12 +900,6 @@
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
                   @set-score="setScore(img, $event)"
-                />
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
                 />
               </div>
             </div>
@@ -5284,6 +5292,7 @@ const {
   mapGridImages,
   getStackCardStyle,
   getStackBandStyle,
+  getStackBadgeTint,
   isStackExpandedForImage,
   rebuildGridImagesFromLastFetch,
   refreshExpandedStacksAfterFetch,

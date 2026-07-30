@@ -70,6 +70,58 @@ describe("StackBadge — stacked vs unresolved", () => {
   });
 });
 
+describe("StackBadge: stack colour", () => {
+  it("puts the stack colour on the glyph", () => {
+    // The tint is the whole point of the badge carrying a colour: it is what
+    // links a collapsed cover to the stack it stands for.
+    const wrapper = mountBadge({ count: 3, tint: "hsl(220 70% 72%)" });
+    // jsdom normalises the colour to rgb() on the way into the style attribute,
+    // so the assertion is on the equivalent value, not the literal string.
+    expect(wrapper.get(".sbico").attributes("style")).toContain(
+      "rgb(134, 167, 234)",
+    );
+  });
+
+  it("never tints the count", () => {
+    // The number is small text and needs 4.5:1; no stack colour reaches that on
+    // the badge's chip, so the hue stops at the glyph.
+    const wrapper = mountBadge({ count: 3, tint: "hsl(220 70% 72%)" });
+    expect(wrapper.get(".sbcount").attributes("style")).toBeUndefined();
+  });
+
+  it("deepens its chip when tinted", () => {
+    // A coloured glyph on the standard 0.55 scrim measures 1.62:1 over a bright
+    // photo. Tint and chip ship together or the indicator disappears.
+    const wrapper = mountBadge({ count: 3, tint: "hsl(220 70% 72%)" });
+    expect(wrapper.get('[data-testid="stack-badge"]').classes()).toContain(
+      "sbadge--tinted",
+    );
+  });
+
+  it("keeps the default glyph and chip with no tint", () => {
+    const wrapper = mountBadge({ count: 3 });
+    expect(wrapper.get(".sbico").attributes("style")).toBeUndefined();
+    expect(wrapper.get('[data-testid="stack-badge"]').classes()).not.toContain(
+      "sbadge--tinted",
+    );
+  });
+
+  it("refuses a tint on an unresolved group", () => {
+    // An unresolved group has no stack, so it has no stack colour. Letting a
+    // caller tint one would hand a suggestion the signal that means "this
+    // stack exists".
+    const wrapper = mountBadge({
+      count: 3,
+      unresolved: true,
+      tint: "hsl(220 70% 72%)",
+    });
+    expect(wrapper.get(".sbico").attributes("style")).toBeUndefined();
+    expect(wrapper.get('[data-testid="stack-badge"]').classes()).not.toContain(
+      "sbadge--tinted",
+    );
+  });
+});
+
 describe("StackBadge — activation", () => {
   it("emits activate when clicked", () => {
     // The parent decides what a click means; the badge only reports it.

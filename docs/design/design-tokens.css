@@ -113,11 +113,14 @@
   /* ---------------------------------------------------------------------------
      SCRIMS — translucent legibility backings for corner badges/chips that sit on
      top of imagery (lock badges, tag chips). Both are theme-token based; the
-     audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Two contexts:
+     audit's raw `rgba(0,0,0,…)` chip scrims collapse to these. Three contexts:
      `--scrim-surface` is a light warm chip over the bright grid/sidebar canvas
      (dark glyph on it); `--scrim-photo` is a dark chip over an arbitrary photo
      (light glyph on it), on the theme `scrim` token so it stays reliably dark in
-     both themes and clears contrast on any image underneath.
+     both themes and clears contrast on any image underneath;
+     `--scrim-photo-strong` is that chip deepened for a CHROMATIC glyph, which
+     cannot reach a white glyph's luminance and so needs the darker backing to
+     clear the 3:1 non-text floor (§7).
      `--scrim-drawer` is the odd one out: not a chip backing but a full-surface
      dim under a TRANSIENT floating panel (the auto-hide sidebar drawer). It is
      deliberately lighter than both, because that panel is dismissed by moving
@@ -127,6 +130,7 @@
      --------------------------------------------------------------------------- */
   --scrim-surface: rgba(var(--v-theme-surface), 0.55);
   --scrim-photo: rgba(var(--v-theme-scrim), 0.55);
+  --scrim-photo-strong: rgba(var(--v-theme-scrim), 0.78);
   --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
   /* ---------------------------------------------------------------------------
