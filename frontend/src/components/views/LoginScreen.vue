@@ -49,7 +49,13 @@
           }}</v-icon>
         </button>
       </div>
-      <button class="login-button" type="submit">
+      <button
+        class="login-button"
+        type="submit"
+        :disabled="submitting"
+        :aria-busy="submitting ? 'true' : undefined"
+      >
+        <v-icon v-if="submitting" size="16" class="mdi-spin">mdi-loading</v-icon>
         {{ needsRegistration ? "Register" : "Login" }}
       </button>
       <p v-if="error" class="error">{{ error }}</p>
@@ -67,6 +73,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { checkLoginStatus, login } from "../../utils/apiClient";
+import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import WordmarkLogo from "../WordmarkLogo.vue";
 
 defineProps({
@@ -88,7 +95,7 @@ onMounted(async () => {
   }
 });
 
-async function handleLogin() {
+async function submitLogin() {
   try {
     error.value = null;
     await login(username.value, password.value); // Call the centralised login function
@@ -97,6 +104,11 @@ async function handleLogin() {
     error.value = err.response?.data?.detail || err.message || "Login failed.";
   }
 }
+
+// A form with a submit button submits on Enter as well as on click, and the
+// registration branch of this one claims ownership of the library — so a second
+// press while the first is in flight is exactly the double-create #647 is about.
+const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
 </script>
 
 <style scoped>
@@ -227,6 +239,10 @@ form {
 }
 
 .login-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   padding: var(--space-3);
   font-size: var(--text-md);
   border: none;
@@ -234,6 +250,22 @@ form {
   background-color: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
   cursor: pointer;
+}
+
+/* Pending is not disabled: the login button only ever goes disabled because a
+   request is in flight, so it keeps full strength and says "working" with the
+   spinner and the cursor rather than by fading (visual-language.md §11). The
+   spin survives reduced motion — a frozen mdi-loading reads as a broken glyph,
+   and @mdi/font puts the animation on ::before, where the global reset lands. */
+.login-button:disabled {
+  cursor: progress;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-button .mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 .error {
