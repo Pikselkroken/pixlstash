@@ -14,6 +14,12 @@ import {
   confidenceLabel,
   candidateSizeMb,
   evidenceLabel,
+  candidateStackable,
+  serverDetail,
+  lockedPictureIds,
+  partialStackSentence,
+  candidateBlockedBySets,
+  lockedCandidateIds,
   RAW_COVER_BONUS,
 } from "./dedup";
 
@@ -234,5 +240,116 @@ describe("candidateSmartScore", () => {
     expect(candidateSmartScore({ smart_score: -1.0 })).toBe(null);
     expect(candidateSmartScore({})).toBe(null);
     expect(candidateSmartScore(undefined)).toBe(null);
+  });
+});
+
+describe("locked-set candidate helpers", () => {
+  it("treats a missing stackable field as stackable", () => {
+    // An older backend serves no `stackable`; defaulting to blocked would empty
+    // every group on the queue.
+    expect(candidateStackable({ picture_id: 1 })).toBe(true);
+    expect(candidateStackable({ picture_id: 1, stackable: true })).toBe(true);
+    expect(candidateStackable({ picture_id: 1, stackable: false })).toBe(false);
+  });
+
+  it("reads the blocking sets, tolerating an absent field", () => {
+    expect(candidateBlockedBySets({ picture_id: 1 })).toEqual([]);
+    expect(
+      candidateBlockedBySets({
+        picture_id: 1,
+        blocked_by_sets: [{ id: 91, name: "Evaluation Set" }],
+      }),
+    ).toEqual([{ id: 91, name: "Evaluation Set" }]);
+  });
+
+  it("collects a group's locked candidate ids", () => {
+    const group = {
+      candidates: [
+        { picture_id: 1, stackable: true },
+        { picture_id: 2, stackable: false },
+        { picture_id: 3 },
+      ],
+    };
+    expect(lockedCandidateIds(group)).toEqual([2]);
+    expect(lockedCandidateIds({ candidates: [] })).toEqual([]);
+    expect(lockedCandidateIds(null)).toEqual([]);
+  });
+});
+
+describe("verdict-refusal copy", () => {
+  const reject = (detail) => ({ response: { data: { detail } } });
+
+  it("builds a sentence from a structured locked-set refusal", () => {
+    // The regression this exists for: the 423 detail is an OBJECT, and a
+    // string-only reader dropped the one reason the user can act on.
+    expect(
+      serverDetail(
+        reject({
+          code: "set_locked",
+          action: "stack duplicates together",
+          sets: [{ id: 91, name: "Evaluation Set" }],
+          picture_ids: [38025],
+        }),
+      ),
+    ).toBe(
+      "They are in the locked set 'Evaluation Set', which cannot gain or change members.",
+    );
+  });
+
+  it("pluralises across several locked sets", () => {
+    expect(
+      serverDetail(
+        reject({ code: "set_locked", sets: [{ name: "A" }, { name: "B" }] }),
+      ),
+    ).toContain("locked sets 'A, B'");
+  });
+
+  it("still quotes a plain string detail, and punctuates it", () => {
+    expect(serverDetail(reject("a stack needs at least two pictures"))).toBe(
+      "a stack needs at least two pictures.",
+    );
+    expect(serverDetail(reject("Already decided."))).toBe("Already decided.");
+  });
+
+  it("says nothing for a detail it does not understand", () => {
+    expect(serverDetail(reject({ code: "something_else" }))).toBe("");
+    expect(serverDetail(reject(["a", "b"]))).toBe("");
+    expect(serverDetail(reject("   "))).toBe("");
+    expect(serverDetail(undefined)).toBe("");
+  });
+
+  it("reads the picture ids a refusal named, for the flash", () => {
+    expect(lockedPictureIds(reject({ picture_ids: [1, 2] }))).toEqual([1, 2]);
+    expect(lockedPictureIds(reject({ code: "set_locked" }))).toEqual([]);
+    expect(lockedPictureIds(undefined)).toEqual([]);
+  });
+
+  it("summarises a partial stack in one sentence", () => {
+    expect(
+      partialStackSentence(
+        [
+          {
+            picture_id: 38025,
+            reason: "set_locked",
+            sets: [{ id: 91, name: "Evaluation Set" }],
+          },
+        ],
+        3,
+      ),
+    ).toBe("Stacked 3; 1 picture stayed out (locked set 'Evaluation Set').");
+  });
+
+  it("pluralises the held-back count and stays silent when nothing was skipped", () => {
+    expect(
+      partialStackSentence(
+        [
+          { picture_id: 1, sets: [{ name: "A" }] },
+          { picture_id: 2, sets: [{ name: "B" }] },
+        ],
+        5,
+      ),
+    ).toBe("Stacked 5; 2 pictures stayed out (locked sets 'A, B').");
+    expect(partialStackSentence([], 4)).toBe("");
+    expect(partialStackSentence(undefined, 4)).toBe("");
   });
 });

@@ -113,6 +113,11 @@ from pixlstash.services.dedup_tier_service import (
     DedupTier,
     prune_stale_groups_in_session,
 )
+from pixlstash.services.set_lock_service import (
+    LOCKED_STATUS_CODE,
+    enforce_stack_membership_not_locked,
+    partition_stackable_members,
+)
 from pixlstash.services.stack_membership import (
     expand_picture_ids_to_stacks,
     reconcile_stack_membership,
@@ -172,6 +177,12 @@ class VerdictResult:
         batch_id: The operation-log batch this verdict belongs to.
         metadata_union: What the union actually changed, so the receipt can say
             so instead of claiming a silent merge.
+        skipped: Members a locked set kept out of the stack, as
+            ``[{"picture_id", "reason", "sets": [{"id","name"}]}]``. Empty on the
+            everyday path. They are also listed in ``excluded_picture_ids`` (the
+            verdict records them as exclusions so a rescan does not re-ask); this
+            field is what tells the client the exclusion was the server's doing
+            rather than the user's.
         event_picture_ids: The pictures the WS ``pictures_changed`` announcement
             should name — for a stack verdict the stack-expanded set (folding a
             stack in touches siblings the group never named), for keep-separate
@@ -187,6 +198,7 @@ class VerdictResult:
     excluded_picture_ids: list[int]
     batch_id: Optional[str]
     metadata_union: dict[str, Any]
+    skipped: list[dict[str, Any]] = field(default_factory=list)
     event_picture_ids: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -199,6 +211,7 @@ class VerdictResult:
             "excluded_picture_ids": list(self.excluded_picture_ids),
             "batch_id": self.batch_id,
             "metadata_union": dict(self.metadata_union),
+            "skipped": [dict(entry) for entry in self.skipped],
         }
 
 
@@ -456,10 +469,6 @@ def _stack_members(
     group spans more than one. Always additive: no picture leaves a stack it was
     in, and no stack row is dropped that still has members.
     """
-    # Imported locally: set_lock_service imports stack_membership, which imports
-    # this package's siblings; a module-level import here would be circular.
-    from pixlstash.services.set_lock_service import enforce_stack_membership_not_locked
-
     pictures = {
         int(pic.id): pic
         for pic in session.exec(
@@ -636,11 +645,16 @@ def apply_stack_verdict_in_session(
         origin_client_id: WS-envelope per-tab origin, likewise.
 
     Returns:
-        The :class:`VerdictResult` behind the action receipt.
+        The :class:`VerdictResult` behind the action receipt. ``skipped`` names
+        any member a locked set kept out; ``picture_ids`` is what actually got
+        stacked, and ``cover_picture_id`` where the cover ended up.
 
     Raises:
         DedupVerdictError: Unknown signature, a cover that is not a member, or
             fewer than two members left after exclusions.
+        HTTPException: ``423`` when a locked set leaves fewer than two members
+            that may legally be stacked together, so there is no partial success
+            to report. The detail names both the sets and the picture ids.
     """
     group, member_ids = _load_group(session, signature)
     # Always under a batch id, even for a single verdict. The batch id is the key
@@ -671,6 +685,57 @@ def apply_stack_verdict_in_session(
         raise DedupVerdictError(
             f"cover {cover_id} is not an included member of group {signature!r}"
         )
+
+    # A frozen member can be in neither the stack (its set's membership cannot
+    # change) nor the metadata union (its labels cannot change), so a group
+    # straddling a locked set has no legal whole-group stack. Partial success
+    # rather than a whole-group refusal: the members that CAN be stacked are, and
+    # the rest are recorded as exclusions. The queue already marks them, so this
+    # path is the stale-client case, not the everyday one.
+    partition = partition_stackable_members(session, included)
+    skipped = list(partition.blocked)
+    if skipped:
+        included = list(partition.stackable)
+        excluded = sorted(set(excluded) | set(partition.blocked_ids))
+        logger.warning(
+            "[dedup-verdict] skipped %d locked member(s) %s of group %s: stacking "
+            "them would add member(s) to locked set(s) %s; the remaining %d "
+            "member(s) %s still stacked",
+            len(skipped),
+            partition.blocked_ids,
+            signature,
+            sorted({entry["name"] for m in skipped for entry in m.sets}),
+            len(included),
+            included,
+        )
+    if len(included) < 2:
+        # Nothing legal is left, so there is no partial success to report. This is
+        # the one dedup stack path that still refuses outright, and it names the
+        # pictures so the client can mark the exact thumbnails.
+        set_list = {
+            entry["id"]: entry["name"] for member in skipped for entry in member.sets
+        }
+        raise HTTPException(
+            status_code=LOCKED_STATUS_CODE,
+            detail={
+                "code": "set_locked",
+                "action": "stack duplicates together",
+                "sets": [
+                    {"id": sid, "name": name} for sid, name in sorted(set_list.items())
+                ],
+                "picture_ids": sorted(partition.blocked_ids),
+            },
+        )
+    if cover_id not in included:
+        # The cover the caller confirmed is one of the skipped members. Moving it
+        # is the same repair the client makes when a user excludes the cover, and
+        # the response reports where it landed. The group's own preselection gets
+        # first refusal, so the fallback is the server's ranking rather than
+        # whichever member happens to sort first.
+        preselected = (
+            int(group.cover_picture_id) if group.cover_picture_id is not None else None
+        )
+        cover_id = preselected if preselected in included else included[0]
 
     # Snapshot the stack-expanded set: folding an existing stack in reparents
     # co-members this group never named, and they must be restorable too.
@@ -720,6 +785,7 @@ def apply_stack_verdict_in_session(
         excluded_picture_ids=excluded,
         batch_id=batch_id,
         metadata_union=union,
+        skipped=[member.as_dict() for member in skipped],
         # The stack-expanded set: the fold and the renumber touch siblings the
         # group never named, and the WS announcement must cover them too.
         event_picture_ids=sorted(undo_targets),

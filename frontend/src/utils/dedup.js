@@ -159,6 +159,52 @@ export function candidateId(candidate) {
 }
 
 /**
+ * Whether a candidate may legally join its group's stack.
+ *
+ * False when a locked picture set freezes it: such a picture can be in neither
+ * the stack (a locked set's membership cannot change) nor the metadata union
+ * (its labels cannot change), so the server refuses it. The queue marks it and
+ * leaves it out of the request rather than letting the user press Stack into a
+ * guaranteed refusal.
+ *
+ * **Defaults to true.** A backend that predates the field serves no `stackable`,
+ * and treating "absent" as "blocked" would empty every group on the queue.
+ *
+ * @param {Object} candidate
+ * @returns {boolean}
+ */
+export function candidateStackable(candidate) {
+  return candidate?.stackable !== false;
+}
+
+/**
+ * The locked sets keeping a candidate out of the stack, as `[{id, name}]`.
+ *
+ * Empty for a stackable candidate, and for a backend that serves no
+ * `blocked_by_sets`.
+ *
+ * @param {Object} candidate
+ * @returns {Array<Object>}
+ */
+export function candidateBlockedBySets(candidate) {
+  const sets = candidate?.blocked_by_sets;
+  return Array.isArray(sets) ? sets : [];
+}
+
+/**
+ * The ids of a group's candidates that a locked set keeps out of the stack.
+ *
+ * @param {Object} group
+ * @returns {Array<number>}
+ */
+export function lockedCandidateIds(group) {
+  return (group?.candidates ?? [])
+    .filter((candidate) => !candidateStackable(candidate))
+    .map((candidate) => candidateId(candidate))
+    .filter((id) => id !== null);
+}
+
+/**
  * The largest value of one numeric field across a group's candidates.
  *
  * Drives the compare view's per-column "best value" highlight.
@@ -319,4 +365,84 @@ export function confidenceLabel(group) {
   const confidence = Number(group?.confidence);
   if (!Number.isFinite(confidence)) return { exact: false, label: "Similar" };
   return { exact: false, label: `${Math.round(confidence * 100)}% similar` };
+}
+
+// --- Verdict-refusal copy ---------------------------------------------------
+//
+// Pure string builders over a verdict response or an axios rejection. They live
+// here rather than in DuplicateQueue.vue because they are the wire contract
+// rendered as English, with no component state in them, and because a sentence
+// the user reads on a refusal deserves a test that does not need a mounted view.
+
+/**
+ * The server's own explanation for a refusal, when it gave one.
+ *
+ * A dedup verdict is refused for reasons the user can act on ("a stack needs at
+ * least two pictures", a locked set), and a generic "could not stack that
+ * group" hides every one of them behind the same sentence. FastAPI puts the
+ * reason in `detail`; anything else is not a message worth quoting.
+ *
+ * @param {*} err - the rejection the store recorded.
+ * @returns {string} the server's sentence, or the empty string.
+ */
+export function serverDetail(err) {
+  const detail = err?.response?.data?.detail;
+  // A locked-set refusal is a structured detail, not a sentence: the backend
+  // serves `{code, action, sets, picture_ids}` precisely so the client can build
+  // its own copy without string-parsing. Reading only strings here is what made
+  // the one refusal the user can actually act on arrive as the generic line.
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    if (detail.code !== "set_locked" && detail.code !== "pictures_locked") {
+      return "";
+    }
+    const names = (detail.sets ?? [])
+      .map((entry) => entry?.name)
+      .filter(Boolean);
+    if (!names.length) return "A locked set is freezing these pictures.";
+    const joined = names.join(", ");
+    return names.length === 1
+      ? `They are in the locked set '${joined}', which cannot gain or change members.`
+      : `They are in the locked sets '${joined}', which cannot gain or change members.`;
+  }
+  if (typeof detail !== "string") return "";
+  const text = detail.trim();
+  if (!text) return "";
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+/**
+ * The picture ids a refusal named, for the lock-chip flash.
+ *
+ * @param {*} err
+ * @returns {Array<number>}
+ */
+export function lockedPictureIds(err) {
+  const ids = err?.response?.data?.detail?.picture_ids;
+  return Array.isArray(ids) ? ids : [];
+}
+
+/**
+ * One sentence for a partial stack: what landed, and what a locked set held back.
+ *
+ * @param {Array<Object>} skipped - the response's `skipped` entries.
+ * @param {number} stacked - how many pictures actually went into the stack.
+ * @returns {string} empty when nothing was skipped.
+ */
+export function partialStackSentence(skipped, stacked) {
+  if (!skipped?.length) return "";
+  const names = [
+    ...new Set(
+      skipped.flatMap((entry) =>
+        (entry?.sets ?? []).map((s) => s?.name).filter(Boolean),
+      ),
+    ),
+  ];
+  const held =
+    skipped.length === 1
+      ? "1 picture stayed out"
+      : `${skipped.length} pictures stayed out`;
+  const where = names.length
+    ? ` (locked set${names.length > 1 ? "s" : ""} '${names.join(", ")}')`
+    : "";
+  return `Stacked ${stacked}; ${held}${where}.`;
 }

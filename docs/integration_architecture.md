@@ -90,6 +90,16 @@ Shapes and rules the frontend depends on:
   ranking's top signals, **null-safe**: null means not computed yet or failed —
   render a dash, never a zero. `cover_score` is the **deprecated** legacy
   composite; do not build new UI on it.
+- **A candidate also carries `stackable` and `blocked_by_sets`.** `stackable:
+  false` means a locked picture set freezes it, so it can be neither stacked nor
+  metadata-unioned, and `blocked_by_sets` is `[{id, name}]` for the tooltip.
+  **Nothing is filtered out of the listing**: a frozen candidate is still a real
+  member of the group, hiding it would make the row disagree with the scan, and
+  the user can still validly Keep separate. Render it as excluded-by-the-server
+  (the same treatment as a user exclusion, with a lock rather than an X) and act
+  on the `stackable` ones only. `cover_picture_id` is already moved onto a
+  stackable member when one exists. A group with fewer than two stackable
+  candidates has **no legal stack** and must offer Keep separate only.
 - **A why-pill is `{ text, against }`.** `against: true` is counter-evidence and
   renders as the red x; the client orders counter-evidence first, because a
   collapsed row only has room for two pills and the warning is the half that
@@ -903,8 +913,33 @@ candidate bucket finishes, so poll `GET /dedup/groups` and watch
 All three take `{ "signature": "9f2c…", "batch_id": "…" }`; `POST
 /dedup/verdicts/stack` additionally takes `cover_picture_id` and
 `excluded_picture_ids`. An unknown signature, a cover outside the group, or
-excluding down to fewer than two members is a **400**. A member frozen by a locked
-picture set is a **423** with the usual `pictures_locked` detail.
+excluding down to fewer than two members is a **400**.
+
+**A locked-set member is a partial success, not a refusal (2026-07-30).** A frozen
+picture can join neither the stack (its set's membership cannot change) nor the
+metadata union (its labels cannot change), so a group straddling a locked-set
+boundary has no legal *whole-group* stack. `POST /dedup/verdicts/stack` stacks the
+members it may and reports the rest in `skipped`, rather than costing the user the
+decision about the whole group:
+
+```jsonc
+"skipped": [ { "picture_id": 38025, "reason": "set_locked",
+               "sets": [ { "id": 91, "name": "Evaluation Set" } ] } ]
+```
+
+Skipped ids also appear in `excluded_picture_ids` (the verdict records them as
+exclusions so a rescan does not re-ask); `skipped` is what says the exclusion was
+the server's rather than the user's. The cover moves onto a member that survived,
+and `cover_picture_id` reports where it landed. **Only when fewer than two members
+survive is it a 423**, and that detail names the pictures as well as the sets, so
+a client can mark the exact thumbnails:
+`{ code: "set_locked", action, sets: [{id, name}], picture_ids: [...] }`.
+
+This path is the *stale-client* case. `GET /dedup/groups` already marks every
+frozen candidate `stackable: false`, so in the normal flow the user never presses
+Stack on one. The manual `POST /stacks` routes are unchanged and still refuse
+whole-request with 423: they act on exactly the pictures the user named, so there
+is no "rest of the group" to fall back to.
 
 **`batch_id` is namespaced.** Omit it and the server mints its own `srv-…`;
 supply one only to make several calls reverse as one undo, and then it must match
@@ -938,7 +973,7 @@ when one was sent, a server-minted `srv-…` otherwise — and is the
 ```jsonc
 { "signature": "9f2c…", "verdict": "stacked", "stack_id": 77,
   "cover_picture_id": 41, "picture_ids": [41, 42], "excluded_picture_ids": [],
-  "batch_id": "a1b2…",
+  "batch_id": "a1b2…", "skipped": [],
   "metadata_union": { "tags_added": 3, "scores_lifted": 1,
                       "characters_pending": 0, "membership_changed": true,
                       "best_score": 5 } }

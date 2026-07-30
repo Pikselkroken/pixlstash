@@ -1286,6 +1286,290 @@ def test_a_locked_co_member_of_a_folded_stack_is_refused(server):
     assert _operations(server) == []
 
 
+# ── partial success across a locked-set boundary ──────────────────────────────
+#
+# A locked set freezes its membership and a stack reconciles to the union of its
+# members' sets, so a group straddling a locked-set boundary has no legal
+# whole-group stack. The dedup queue answers that with partial success (stack the
+# side that can be stacked, report the rest) rather than the whole-group refusal
+# the manual /stacks routes still use, because a triage queue that dead-ends on
+# one frozen member costs the user the decision about all the others.
+
+
+def _set_member_ids(server, set_id: int) -> set[int]:
+    return _run(
+        server,
+        lambda session: {
+            int(pid)
+            for pid in session.exec(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.set_id == set_id
+                )
+            ).all()
+        },
+    )
+
+
+def _lock_set(server, name: str, picture_ids) -> int:
+    """Create a locked set holding *picture_ids* and return its id."""
+
+    def create(session):
+        picture_set = PictureSet(name=name, locked=True)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        for picture_id in picture_ids:
+            session.add(
+                PictureSetMember(set_id=int(picture_set.id), picture_id=int(picture_id))
+            )
+        session.commit()
+        return int(picture_set.id)
+
+    return _run(server, create)
+
+
+def test_a_group_straddling_a_locked_set_stacks_the_unlocked_side(server):
+    """The two loose members stack; the frozen one is skipped, not fatal."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[2]])
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+
+    assert result.picture_ids == [ids[0], ids[1]]
+    assert result.skipped == [
+        {
+            "picture_id": ids[2],
+            "reason": "set_locked",
+            "sets": [{"id": set_id, "name": "Evaluation Set"}],
+        }
+    ]
+    # Recorded as an exclusion, so a rescan does not read the group as undecided.
+    assert result.excluded_picture_ids == [ids[2]]
+    stack_id = _picture(server, ids[0]).stack_id
+    assert stack_id is not None
+    assert _picture(server, ids[1]).stack_id == stack_id
+    # The frozen member is untouched, and the locked set did not gain a member.
+    assert _picture(server, ids[2]).stack_id is None
+    assert _set_member_ids(server, set_id) == {ids[2]}
+
+
+def test_a_group_wholly_inside_one_locked_set_cannot_stack(server):
+    """Two gates, and the dedup path has to satisfy the tighter one.
+
+    ``enforce_stack_membership_not_locked`` alone would allow this: the set
+    already contains every resulting member, so it gains no row. But the stack
+    verdict also runs the metadata union, which writes tags and lifts scores and
+    therefore refuses *any* frozen member. So the honest answer for a wholly
+    frozen group is "no legal stack", and the partition has to say so up front
+    rather than letting the union refuse halfway through.
+    """
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "All Frozen", ids)
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _one_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    assert excinfo.value.detail["code"] == "set_locked"
+    assert excinfo.value.detail["picture_ids"] == sorted(ids)
+    # Refused up front: no stack row, no partial union, no verdict.
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+    assert _set_member_ids(server, set_id) == set(ids)
+    assert _operations(server) == []
+
+
+def test_a_pair_split_by_a_locked_set_is_refused_and_names_the_pictures(server):
+    """Nothing legal is left, so there is no partial success to report.
+
+    The 423 carries `picture_ids` as well as `sets`: without it the client can
+    name the set but cannot mark the thumbnail it belongs to.
+    """
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[1]])
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _one_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    detail = excinfo.value.detail
+    assert detail["code"] == "set_locked"
+    assert detail["sets"] == [{"id": set_id, "name": "Evaluation Set"}]
+    assert detail["picture_ids"] == [ids[1]]
+    # Nothing was written, and no verdict was recorded.
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
+    assert _operations(server) == []
+
+
+def test_members_in_two_different_locked_sets_cannot_stack(server):
+    """Each set would gain the other's member, so no pair is legal."""
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    left = _lock_set(server, "Left", [ids[0]])
+    right = _lock_set(server, "Right", [ids[1]])
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _one_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    assert [s["id"] for s in excinfo.value.detail["sets"]] == sorted([left, right])
+    assert _set_member_ids(server, left) == {ids[0]}
+    assert _set_member_ids(server, right) == {ids[1]}
+
+
+def test_the_cover_moves_off_a_skipped_member(server):
+    """A cover that turns out to be frozen does not sink the whole verdict.
+
+    The client normally moves the cover before Stack is ever pressed; this is the
+    stale-client path, where the set was locked after the page was loaded.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Evaluation Set", [ids[0]])
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+
+    assert result.cover_picture_id in (ids[1], ids[2])
+    assert sorted(result.picture_ids) == sorted([ids[1], ids[2]])
+    assert [entry["picture_id"] for entry in result.skipped] == [ids[0]]
+    # The chosen cover really did lead the stack.
+    cover = _picture(server, result.cover_picture_id)
+    assert cover.stack_position == 0
+
+
+def test_the_queue_marks_a_locked_member_as_unstackable(server):
+    """The listing hides nothing: the frozen member is still a row, marked."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[2]])
+    _scan(server)
+
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    group = page[0]
+    by_id = {c["picture_id"]: c for c in group["candidates"]}
+
+    assert sorted(by_id) == sorted(ids), "no member is filtered out of the listing"
+    assert by_id[ids[0]]["stackable"] is True
+    assert by_id[ids[0]]["blocked_by_sets"] == []
+    assert by_id[ids[2]]["stackable"] is False
+    assert by_id[ids[2]]["blocked_by_sets"] == [
+        {"id": set_id, "name": "Evaluation Set"}
+    ]
+    # The preselected cover is one the user can actually stack.
+    assert group["cover_picture_id"] in (ids[0], ids[1])
+
+
+def test_the_queue_marks_every_member_of_a_wholly_frozen_group(server):
+    """The listing's mark agrees with what the verdict would actually do.
+
+    A wholly frozen group has no legal stack (the metadata union refuses every
+    member), so every candidate is marked and the client offers Keep separate
+    only. A listing that marked none of them here would offer a Stack that is
+    guaranteed to 423.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "All Frozen", ids)
+    _scan(server)
+
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    candidates = page[0]["candidates"]
+    assert len(candidates) == 2, "no member is filtered out of the listing"
+    assert not any(c["stackable"] for c in candidates)
+    assert all(
+        c["blocked_by_sets"] == [{"id": set_id, "name": "All Frozen"}]
+        for c in candidates
+    )
+
+
 # ── clearing a decision (the Decided page's "Clear decision") ─────────────────
 
 

@@ -26,6 +26,9 @@ the **stack-expanded** id list, so a stacked sibling in a locked set blocks the
 whole operation.
 """
 
+from dataclasses import dataclass
+from typing import Optional
+
 from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlmodel import Session, select
@@ -376,10 +379,18 @@ def enforce_stack_membership_not_locked(
         return
 
     set_list = [{"id": sid, "name": names[sid]} for sid in sorted(gaining)]
+    # Name the pictures each gaining set would swallow, so a client can point at
+    # the thumbnails rather than re-deriving them from the set names. Restricted
+    # to the caller's own input ids: a stack sibling the caller never named is
+    # not a row it holds and could not mark.
+    gaining_pids = sorted(
+        ids & {pid for sid in gaining for pid in members - members_by_set[sid]}
+    )
     logger.info(
-        "Blocked '%s' on picture(s) %s — would add member(s) to locked set(s) %s",
+        "Blocked '%s' on picture(s) %s, would add member(s) %s to locked set(s) %s",
         action,
         sorted(ids),
+        gaining_pids,
         [s["name"] for s in set_list],
     )
     raise HTTPException(
@@ -388,7 +399,119 @@ def enforce_stack_membership_not_locked(
             "code": "set_locked",
             "action": action,
             "sets": set_list,
+            "picture_ids": gaining_pids,
         },
+    )
+
+
+@dataclass(frozen=True)
+class BlockedMember:
+    """One candidate that cannot join a dedup group's stack, and why.
+
+    Attributes:
+        picture_id: The candidate that has to stay out.
+        sets: ``[{"id", "name"}, ...]`` locked sets freezing it, sorted by set id.
+            Never empty: a member is only blocked because of a locked set.
+    """
+
+    picture_id: int
+    sets: list[dict]
+
+    def as_dict(self) -> dict:
+        return {
+            "picture_id": self.picture_id,
+            "reason": "set_locked",
+            "sets": [dict(entry) for entry in self.sets],
+        }
+
+
+@dataclass(frozen=True)
+class StackablePartition:
+    """The legally stackable subset of a duplicate group, and the rest.
+
+    Attributes:
+        stackable: Candidates that may be stacked together, in the caller's own
+            order. Fewer than two means the group has no legal stack at all.
+        blocked: Every frozen candidate, each with the sets that freeze it.
+    """
+
+    stackable: list[int]
+    blocked: list[BlockedMember]
+
+    @property
+    def blocked_ids(self) -> list[int]:
+        return [member.picture_id for member in self.blocked]
+
+    def sets_for(self, picture_id: int) -> list[dict]:
+        """The locked sets keeping *picture_id* out, or ``[]`` if it is in."""
+        for member in self.blocked:
+            if member.picture_id == int(picture_id):
+                return [dict(entry) for entry in member.sets]
+        return []
+
+
+def partition_stackable_members(
+    session: Session, picture_ids, locked_sets: Optional[dict] = None
+) -> StackablePartition:
+    """Split a duplicate group's candidates into the stackable ones and the frozen.
+
+    **A frozen picture cannot be in a dedup stack at all**, which is a stricter
+    rule than :func:`enforce_stack_membership_not_locked`'s on its own. Two gates
+    sit on the dedup stack path and this has to satisfy the tighter one:
+
+    * the membership guard, which refuses only when a locked set would *gain* a
+      member, so it would happily stack a group that already sits wholly inside
+      one locked set; but
+    * :func:`~pixlstash.services.dedup_verdict_service.apply_metadata_union_in_session`,
+      which unions tags and lifts scores onto every member and therefore calls
+      :func:`enforce_pictures_not_locked` - a hard refusal for *any* frozen
+      member, gain or no gain, because those are label edits.
+
+    So the stackable subset is exactly the candidates that are not frozen. Once
+    they are the only members, no locked set is touched at all and the membership
+    guard is satisfied for free, which is why this function does not restate it.
+
+    Args:
+        session: Pre-opened DB session.
+        picture_ids: A group's candidate ids, in the order the caller holds them.
+            Duplicates are collapsed and ``None`` dropped.
+        locked_sets: Optional pre-computed :func:`locked_sets_for_pictures` result
+            covering *picture_ids*. A queue page builds one for every candidate on
+            the page and passes it in for each group, so a page costs three
+            queries rather than three per group.
+
+    Returns:
+        A :class:`StackablePartition`. A group with fewer than two distinct
+        candidates is returned whole and unblocked: the stack floor is the
+        caller's error to raise, not this function's.
+    """
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for pid in picture_ids:
+        if pid is None:
+            continue
+        value = int(pid)
+        if value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    if len(ordered) < 2:
+        return StackablePartition(list(ordered), [])
+
+    frozen = (
+        locked_sets
+        if locked_sets is not None
+        else locked_sets_for_pictures(session, ordered)
+    )
+    blocked = [
+        BlockedMember(pid, [dict(entry) for entry in frozen[pid]])
+        for pid in ordered
+        if frozen.get(pid)
+    ]
+    if not blocked:
+        return StackablePartition(list(ordered), [])
+    blocked_ids = {member.picture_id for member in blocked}
+    return StackablePartition(
+        [pid for pid in ordered if pid not in blocked_ids], blocked
     )
 
 

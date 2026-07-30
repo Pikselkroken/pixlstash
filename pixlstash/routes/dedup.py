@@ -573,6 +573,31 @@ class WhyPillModel(BaseModel):
     )
 
 
+class LockedSetRefModel(BaseModel):
+    """A locked picture set, named so the client can explain a refusal."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int = Field(description="The picture set's id.")
+    name: str = Field(description="Its name, for the tooltip and the notice.")
+
+
+class LockedSkipModel(BaseModel):
+    """One member a locked set kept out of a stack."""
+
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int = Field(description="The member that stayed out.")
+    reason: str = Field(
+        default="set_locked",
+        description="Why it stayed out. `set_locked` is the only value today.",
+    )
+    sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description="The locked sets that would have gained a member.",
+    )
+
+
 class DedupCandidateModel(BaseModel):
     """One picture in a group, with the fields Compare shows column by column."""
 
@@ -660,6 +685,27 @@ class DedupCandidateModel(BaseModel):
             "Per-candidate evidence, both directions: what this picture is best "
             "at and where it loses. Rendered so the user can disagree with the "
             "preselection knowing why it was made."
+        ),
+    )
+    stackable: bool = Field(
+        default=True,
+        description=(
+            "Whether this candidate may be stacked with the rest of the group. "
+            "False when a **locked set** would gain a member: a locked set's "
+            "membership cannot change, and an enlarged stack reconciles to the "
+            "union of its members' sets, so a group straddling a locked-set "
+            "boundary can only stack the largest side of it. Render a false "
+            "candidate as excluded-by-the-server (it is still a real member of "
+            "the group and still worth showing); the Stack button acts on the "
+            "true ones only. A group with fewer than two true candidates has no "
+            "legal stack, and only Keep separate applies."
+        ),
+    )
+    blocked_by_sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description=(
+            "Empty when `stackable`. Otherwise the locked sets that would gain a "
+            "member, for the tooltip that says why this thumbnail is out."
         ),
     )
 
@@ -969,6 +1015,20 @@ class VerdictResponse(BaseModel):
             "`characters_pending`, `membership_changed`. Stacking unions tags, "
             "project and set membership onto every member and lifts every member "
             "to the highest score. Nothing is overwritten or lost."
+        ),
+    )
+    skipped: list[LockedSkipModel] = Field(
+        default_factory=list,
+        description=(
+            "Members a **locked set** kept out of the stack, so the verdict is a "
+            "partial success rather than a whole-group refusal. Empty on the "
+            "everyday path: the queue already marks these members, so this only "
+            "fills when the lock landed after the page was loaded. The ids also "
+            "appear in `excluded_picture_ids` (the verdict records them as "
+            "exclusions so a rescan does not re-ask); `skipped` is what says the "
+            "exclusion was the server's, not the user's. When fewer than two "
+            "members are left the route returns **423** instead, with "
+            "`{code: 'set_locked', action, sets, picture_ids}`."
         ),
     )
 

@@ -253,6 +253,9 @@
           :thumb-height="store.thumbHeight"
           :busy="store.busy"
           :read-only="readOnly"
+          :flash-ids="
+            flashSignature === entry.group.signature ? flashIds : EMPTY_IDS
+          "
           @focus="onRowFocus(entry.index, $event)"
           @stack="onStack(entry.group)"
           @keep-separate="onKeepSeparate(entry.group)"
@@ -399,7 +402,12 @@ import { useDedupStore } from "../../stores/useDedupStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
-import { candidateId } from "../../utils/dedup";
+import {
+  candidateId,
+  serverDetail,
+  lockedPictureIds,
+  partialStackSentence,
+} from "../../utils/dedup";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
@@ -455,6 +463,24 @@ const MIN_ROW_CONTENT_PX = 89;
  */
 const STACK_FLOOR_NOTICE =
   "A stack needs at least two pictures, so this one has to stay in. Keep the group separate instead.";
+
+/**
+ * How long the lock chip stays flashed after a refused Stack.
+ *
+ * Comfortably longer than the animation itself (`--dur-2`, 200ms) so the class
+ * is not pulled off mid-run, and short enough that a stale amber chip is never
+ * still on screen by the time the user acts again.
+ */
+const LOCK_FLASH_MS = 1000;
+
+/**
+ * A stable empty array for rows that are not flashing.
+ *
+ * A fresh `[]` in the template would be a new prop identity on every render of
+ * every row, which on a queue of twenty rows is twenty needless updates per
+ * keystroke.
+ */
+const EMPTY_IDS = Object.freeze([]);
 
 // The settings dialog is App.vue's; the queue only asks for it, the same way
 // the grid's toolbar does.
@@ -533,6 +559,13 @@ const autoStackLoading = ref(false);
 const autoStackPreview = ref(null);
 const autoStackPreviewFailed = ref(false);
 const announcement = ref("");
+
+// Which thumbnails are currently flashing their lock chip, and on which row.
+// Scoped by signature so a refusal on one group cannot light up a same-id
+// candidate that also appears in another.
+const flashIds = ref([]);
+const flashSignature = ref("");
+let flashTimer = null;
 
 const readOnly = computed(() => Boolean(isReadOnly.value));
 
@@ -931,18 +964,39 @@ async function onStack(group) {
     const result = await store.stack(group);
     if (result) {
       announcement.value = `Stacked ${targets.length} groups (${pictures} pictures). One undo reverses them all.`;
+      reportPartialStack(result, pictures);
       return;
     }
-    reportVerdictFailure("stack those groups", store.error);
+    reportVerdictFailure("stack those groups", store.error, group);
     return;
   }
   const size = store.stackSizeFor(group);
   const result = await store.stack(group);
   if (result) {
     announcement.value = `Stacked ${size} pictures. The cover is kept and nothing is deleted.`;
+    reportPartialStack(result, result.picture_ids?.length ?? size);
     return;
   }
-  reportVerdictFailure("stack that group", store.error);
+  reportVerdictFailure("stack that group", store.error, group);
+}
+
+/**
+ * Say so when a locked set held some members back.
+ *
+ * The everyday path never reaches this: the queue already marks a frozen
+ * candidate and leaves it out of the request, so `skipped` only fills when the
+ * set was locked after the page was loaded. It is a warning rather than an
+ * error because the verdict DID land, and the group is gone from the queue, so
+ * there is no row left to anchor the explanation to.
+ *
+ * @param {Object} result - the verdict response.
+ * @param {number} stacked - how many pictures went in.
+ */
+function reportPartialStack(result, stacked) {
+  const sentence = partialStackSentence(result?.gesture_skipped, stacked);
+  if (!sentence) return;
+  announcement.value = sentence;
+  noticeStore.warning(sentence);
 }
 
 /**
@@ -957,7 +1011,17 @@ async function onStack(group) {
  * @param {number} pictureId
  */
 function onToggleExcluded(group, pictureId) {
-  if (store.toggleExcluded(group, pictureId) !== false) return;
+  const outcome = store.toggleExcluded(group, pictureId);
+  if (outcome === true) return;
+  if (outcome === "locked") {
+    // A different refusal from the floor, so a different sentence: this one the
+    // user cannot get past by including something else, only by unlocking the
+    // set. The chip on the thumbnail carries the how.
+    announcement.value =
+      "That picture is in a locked set, so it cannot be put into the stack. Unlock the set to include it.";
+    flashLockedPictures([pictureId], group);
+    return;
+  }
   announcement.value = STACK_FLOOR_NOTICE;
 }
 
@@ -1024,25 +1088,6 @@ async function onClearDecision(group) {
 }
 
 /**
- * The server's own explanation for a refusal, when it gave one.
- *
- * A dedup verdict is refused for reasons the user can act on ("a stack needs at
- * least two pictures", a locked set), and a generic "could not stack that
- * group" hides every one of them behind the same sentence. FastAPI puts the
- * reason in `detail`; anything else is not a message worth quoting.
- *
- * @param {*} err - the rejection the store recorded.
- * @returns {string} the server's sentence, or the empty string.
- */
-function serverDetail(err) {
-  const detail = err?.response?.data?.detail;
-  if (typeof detail !== "string") return "";
-  const text = detail.trim();
-  if (!text) return "";
-  return /[.!?]$/.test(text) ? text : `${text}.`;
-}
-
-/**
  * Say so when a verdict did not land.
  *
  * A failed verdict leaves the row exactly where it was, which on a queue whose
@@ -1054,13 +1099,39 @@ function serverDetail(err) {
  * @param {string} what - the attempt, phrased to follow "could not".
  * @param {*} [err] - the rejection, for its `detail`.
  */
-function reportVerdictFailure(what, err) {
+function reportVerdictFailure(what, err, group = null) {
   const detail = serverDetail(err);
   const because = detail ? ` ${detail}` : "";
   announcement.value = `Could not ${what}.${because} The group is still in the queue, so nothing was lost.`;
   noticeStore.error(
     `Could not ${what}.${because} The group is still in the queue, so you can try again.`,
   );
+  // The row stays on screen, so the refusal has an anchor: flash the lock chip
+  // on the exact pictures the server named. The global sentence says what
+  // happened; the flash says WHICH, which no bottom-centre notice can.
+  flashLockedPictures(lockedPictureIds(err), group);
+}
+
+/**
+ * Draw the eye to the thumbnails a refusal named.
+ *
+ * One shot: the class is dropped again once the animation has run, so a second
+ * refusal on the same row flashes again rather than being a no-op. The chip
+ * itself is permanent; only the amber is transient.
+ *
+ * @param {Array<number>} pictureIds
+ * @param {Object|null} group
+ */
+function flashLockedPictures(pictureIds, group) {
+  if (!pictureIds.length) return;
+  if (group?.signature) flashSignature.value = group.signature;
+  flashIds.value = pictureIds;
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    flashIds.value = [];
+    flashSignature.value = "";
+    flashTimer = null;
+  }, LOCK_FLASH_MS);
 }
 
 /**
@@ -1586,6 +1657,10 @@ onBeforeUnmount(() => {
   // Leaving the destination mid-jump must stop the paging, not let it keep
   // fetching a queue nobody is looking at.
   store.cancelEndChase();
+  if (flashTimer) {
+    clearTimeout(flashTimer);
+    flashTimer = null;
+  }
   if (typeof document === "undefined") return;
   document.removeEventListener("mousedown", onDocumentPointerDown);
   document.removeEventListener("keydown", onKeydown);

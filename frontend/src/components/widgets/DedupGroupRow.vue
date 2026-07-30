@@ -37,8 +37,11 @@
         class="gthumb"
         :class="{
           'gthumb--cover':
-            idOf(candidate) === coverId && !isOut(idOf(candidate)),
-          'gthumb--out': isOut(idOf(candidate)),
+            idOf(candidate) === coverId &&
+            !isOut(idOf(candidate)) &&
+            !isLockedOut(candidate),
+          'gthumb--out': isOut(idOf(candidate)) && !isLockedOut(candidate),
+          'gthumb--locked': isLockedOut(candidate),
         }"
         :tabindex="focused ? 0 : -1"
         :aria-pressed="idOf(candidate) === coverId"
@@ -69,7 +72,11 @@
         ></span>
         <span v-if="focused" class="gnum">{{ i + 1 }}</span>
         <span
-          v-if="idOf(candidate) === coverId && !isOut(idOf(candidate))"
+          v-if="
+            idOf(candidate) === coverId &&
+            !isOut(idOf(candidate)) &&
+            !isLockedOut(candidate)
+          "
           class="gcv"
           >Cover</span
         >
@@ -96,9 +103,23 @@
           <v-icon size="12">mdi-brain</v-icon>
           {{ smartTextOf(candidate) }}
         </span>
-        <v-icon v-if="isOut(idOf(candidate))" class="gx" size="20"
+        <v-icon
+          v-if="isOut(idOf(candidate)) && !isLockedOut(candidate)"
+          class="gx"
+          size="20"
           >mdi-minus-circle-outline</v-icon
         >
+        <!-- The server's exclusion, not the user's, so it gets its own marker
+             and its own corner: the two can appear in the same strip and must
+             never be read as the same walk-back-able state. Same chip as
+             ReviewBinaryCard's .rs-thumb-lock, so the app has one lock chip. -->
+        <span
+          v-if="isLockedOut(candidate)"
+          class="glock"
+          :class="{ 'glock--flash': flashIds.includes(idOf(candidate)) }"
+        >
+          <v-icon size="12">mdi-lock-outline</v-icon>
+        </span>
       </button>
     </div>
 
@@ -127,7 +148,9 @@
         @click.stop="emit('clear-decision')"
       >
         <v-icon size="16">mdi-restore</v-icon>
-        <span>{{ bulk ? `Clear ${selectionCount} decisions` : "Clear decision" }}</span>
+        <span>{{
+          bulk ? `Clear ${selectionCount} decisions` : "Clear decision"
+        }}</span>
       </button>
     </div>
     <div v-else class="gact">
@@ -145,17 +168,21 @@
         type="button"
         class="gbtn gbtn--stack"
         :tabindex="focused ? 0 : -1"
-        :disabled="busy || readOnly"
+        :disabled="busy || readOnly || noLegalStack"
         aria-keyshortcuts="Enter S"
         :title="
-          bulk
-            ? `Stack every one of the ${selectionCount} selected groups behind its own cover. Every file stays on disk, and one Ctrl+Z reverses them all.`
-            : 'Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it.'
+          noLegalStack
+            ? lockedStackReason
+            : bulk
+              ? `Stack every one of the ${selectionCount} selected groups behind its own cover. Every file stays on disk, and one Ctrl+Z reverses them all.`
+              : 'Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it.'
         "
         @click.stop="emit('stack')"
       >
         <v-icon size="16">mdi-layers-plus</v-icon>
-        <span>{{ bulk ? `Stack ${selectionCount} groups` : `Stack ${stackSize}` }}</span>
+        <span>{{
+          bulk ? `Stack ${selectionCount} groups` : `Stack ${stackSize}`
+        }}</span>
         <kbd v-if="showsVerdictKeys" aria-hidden="true">Enter</kbd>
       </button>
       <button
@@ -172,7 +199,9 @@
         @click.stop="emit('keep-separate')"
       >
         <v-icon size="16">mdi-call-split</v-icon>
-        <span>{{ bulk ? `Keep ${selectionCount} separate` : "Keep separate" }}</span>
+        <span>{{
+          bulk ? `Keep ${selectionCount} separate` : "Keep separate"
+        }}</span>
         <kbd v-if="showsVerdictKeys" aria-hidden="true">K</kbd>
       </button>
       <button
@@ -219,7 +248,14 @@ import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
-import { candidateId, candidateSmartScore } from "../../utils/dedup";
+import {
+  candidateId,
+  candidateSmartScore,
+  candidateStackable,
+  candidateBlockedBySets,
+  lockedCandidateIds,
+} from "../../utils/dedup";
+import { buildLockReason } from "../../stores/useLockedSetsStore";
 import { formatUserDate } from "../../utils/utils";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import {
@@ -280,6 +316,9 @@ const props = defineProps({
   },
   busy: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
+  // Picture ids to flash the lock chip on: the sighted counterpart to the
+  // announcement when a Stack was refused. The queue sets it and clears it.
+  flashIds: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits([
@@ -316,9 +355,61 @@ const decidedTitle = computed(() => {
   return decidedStamp.value ? `${what} Decided ${decidedStamp.value}.` : what;
 });
 
+/**
+ * The candidates a locked picture set keeps out of the stack.
+ *
+ * The server's decision, served per candidate on the queue page. It is not a
+ * user exclusion and `X` cannot walk it back, which is why it is tracked
+ * separately from `excludedIds` all the way down to the marker.
+ */
+const lockedIds = computed(() => lockedCandidateIds(props.group));
+
+/**
+ * Whether a locked set keeps this candidate out.
+ * @param {Object} candidate
+ * @returns {boolean}
+ */
+function isLockedOut(candidate) {
+  return !candidateStackable(candidate);
+}
+
+/** Every id the stack would leave out, the user's and the server's together. */
+const outIds = computed(() => {
+  const merged = new Set(props.excludedIds);
+  for (const id of lockedIds.value) merged.add(id);
+  return merged;
+});
+
 const stackSize = computed(
-  () => props.group.candidates.length - props.excludedIds.length,
+  () => props.group.candidates.length - outIds.value.size,
 );
+
+/**
+ * True when no legal stack exists at all: a locked set leaves fewer than two
+ * members that may be stacked together. The row still offers Keep separate,
+ * which is a real decision about a real duplicate pair and the only one left.
+ */
+const noLegalStack = computed(
+  () => lockedIds.value.length > 0 && stackSize.value < MIN_STACK_MEMBERS,
+);
+
+/** Why Stack is unavailable, naming the sets so the fix is discoverable. */
+const lockedStackReason = computed(() => {
+  const names = [
+    ...new Set(
+      (props.group.candidates ?? [])
+        .filter((candidate) => !candidateStackable(candidate))
+        .flatMap((candidate) =>
+          candidateBlockedBySets(candidate).map((entry) => entry.name),
+        )
+        .filter(Boolean),
+    ),
+  ];
+  const reason = buildLockReason(names);
+  return reason
+    ? `A stack needs at least two pictures that are not frozen. ${reason} Keep separate still works.`
+    : "A stack needs at least two pictures that are not frozen by a locked set. Keep separate still works.";
+});
 
 /** Whether a verdict from this row would act on the whole selection. */
 const bulk = computed(() => props.selected && props.selectionCount > 1);
@@ -408,7 +499,18 @@ function thumbBoxStyle(candidate) {
  */
 function thumbLabel(candidate, i) {
   const parts = [`Picture ${i + 1} of ${props.group.candidates.length}`];
-  if (isOut(idOf(candidate))) parts.push("not in the stack");
+  if (isLockedOut(candidate)) {
+    // Named, not just "locked": the set is the thing the user has to unlock,
+    // and a screen reader gets no tooltip to fall back on.
+    const names = candidateBlockedBySets(candidate)
+      .map((entry) => entry.name)
+      .filter(Boolean);
+    parts.push(
+      names.length
+        ? `frozen by the locked set ${names.join(", ")}, cannot be stacked`
+        : "frozen by a locked set, cannot be stacked",
+    );
+  } else if (isOut(idOf(candidate))) parts.push("not in the stack");
   else if (idOf(candidate) === props.coverId) parts.push("cover");
   return parts.join(", ");
 }
@@ -424,6 +526,17 @@ function thumbLabel(candidate, i) {
  * @returns {string}
  */
 function thumbTitle(candidate, i) {
+  if (isLockedOut(candidate)) {
+    // The single-sourced "why is this read-only / how do I unlock" sentence, so
+    // the queue never re-words what the grid and the overlay already say.
+    const names = candidateBlockedBySets(candidate)
+      .map((entry) => entry.name)
+      .filter(Boolean);
+    const reason = buildLockReason(names);
+    return reason
+      ? `${reason} It stays out of the stack.`
+      : "This picture is in a locked set, so it stays out of the stack.";
+  }
   if (isOut(idOf(candidate))) {
     return props.focused
       ? "Right-click, or press X, to put this picture back in the stack"
@@ -471,6 +584,9 @@ function smartTextOf(candidate) {
  */
 function onPick(candidate) {
   emit("focus");
+  // A picture that is not in the stack cannot lead it. Focusing the row still
+  // happens, so the click is not a dead press.
+  if (isLockedOut(candidate)) return;
   emit("set-cover", idOf(candidate));
 }
 
@@ -730,6 +846,66 @@ function onDblClick(event) {
   left: 50%;
   transform: translate(-50%, -50%);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* A locked-out candidate is dimmed like a user exclusion, but it is NOT a
+   choice the user can walk back, so it does not take the pointer affordance.
+   Double-click still opens Compare: looking at it is always allowed. */
+.gthumb--locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The server's exclusion marker. Same chip as ReviewBinaryCard's
+   .rs-thumb-lock (one lock chip in the app), on the spacing scale rather than
+   that card's 3px one-off, and in the top-left corner because .gx owns the
+   middle and the two can appear in the same strip. Neutral at rest: the amber
+   is spent only on a refused press, or a page of frozen rows becomes a
+   warning field and the colour stops meaning anything. */
+.glock {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  pointer-events: none;
+}
+
+/* The sighted counterpart to the announcement, on the exact thumbnail that
+   blocked the press. Same recipe as ReviewDecisionBar's rs-lock-flash. */
+.glock--flash {
+  animation: g-lock-flash var(--dur-2) var(--ease-standard);
+}
+
+@keyframes g-lock-flash {
+  50% {
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+    color: rgb(var(--v-theme-warning));
+  }
+}
+
+/* Not a no-op: the refusal still has to be visible, so the animation collapses
+   to its own end state rather than disappearing. */
+@media (prefers-reduced-motion: reduce) {
+  .glock--flash {
+    animation: none;
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+    color: rgb(var(--v-theme-warning));
+  }
 }
 
 /* ── Hover-only score overlays ─────────────────────────────────────────────

@@ -2092,8 +2092,8 @@ extraction task consumes). A group spanning several characters is left alone and
 logged.
 
 The union writes tags and scores, which are curation state, so it calls
-`enforce_pictures_not_locked` first: a locked-set member makes the whole verdict a
-423 rather than a half-applied union.
+`enforce_pictures_not_locked` first: a locked-set member makes the union a 423
+rather than a half-applied write.
 
 **Guard ordering is load-bearing.** `_stack_members` calls
 `enforce_stack_membership_not_locked` **before** it folds any other stack in, and
@@ -2102,6 +2102,38 @@ co-member dragged in by the fold is caught even though
 `apply_metadata_union_in_session` only checks the group's own members. Moving the
 lock check after the fold would open that hole. Pinned by
 `test_a_locked_co_member_of_a_folded_stack_is_refused`.
+
+#### Locked members are partitioned out, not fatal (2026-07-30)
+
+**Two lock gates sit on this path, and they do not agree.**
+`enforce_stack_membership_not_locked` refuses only when a locked set would *gain*
+a member, so on its own it would allow a group already sitting wholly inside one
+locked set. `enforce_pictures_not_locked`, reached through the union, refuses
+**any** frozen member, gain or no gain, because tags and scores are label data.
+The union's rule is the tighter one, so it is the rule the whole dedup stack path
+has to obey: **a frozen picture cannot be in a dedup stack at all.**
+
+`set_lock_service.partition_stackable_members` is that rule, written once. It
+splits a group's candidates into the unfrozen ones (a legal stack, and one that no
+longer touches any locked set, so the membership guard is then satisfied for free)
+and the frozen ones. Both ends of the path use it, which is what stops the queue
+from offering a Stack the verdict would refuse:
+
+- **`GET /dedup/groups`** marks each candidate `stackable` and `blocked_by_sets`,
+  and moves `cover_picture_id` onto a stackable member. It **filters nothing**: a
+  frozen candidate is still a real member of the group, and Keep separate is still
+  a valid decision about it. The page resolves `locked_sets_for_pictures` once for
+  every candidate on the page and passes it into each group's partition, so a page
+  costs three queries rather than three per group.
+- **`POST /dedup/verdicts/stack`** stacks the survivors, records the frozen ones as
+  `excluded_picture_ids`, and reports them in `skipped`. Fewer than two survivors
+  is a 423 whose detail names `picture_ids` as well as `sets`. Skips log at
+  WARNING, mirroring `drop_locked_set_ids`.
+
+Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
+routes still refuse whole-request: they act on exactly the pictures the user
+named, so there is no remainder to fall back on, whereas a triage queue that
+dead-ends on one frozen member costs the user the decision about all the others.
 
 #### Accepted risk A1 — the union widens live share tokens
 

@@ -113,6 +113,10 @@ from pixlstash.db_models.quality import Quality
 from pixlstash.db_models.tag import Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service
+from pixlstash.services.set_lock_service import (
+    locked_sets_for_pictures,
+    partition_stackable_members,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -2119,9 +2123,11 @@ def page_queue_in_session(
     ids_by_group: dict[int, list[int]] = defaultdict(list)
     for group_id, picture_id, _position in member_rows:
         ids_by_group[int(group_id)].append(int(picture_id))
-    candidates = load_candidates(
-        session, [pid for ids in ids_by_group.values() for pid in ids]
-    )
+    all_member_ids = [pid for ids in ids_by_group.values() for pid in ids]
+    candidates = load_candidates(session, all_member_ids)
+    # Resolved once for the whole page rather than once per group: the lookup is
+    # stack-expanded and costs three queries, which would be three per group.
+    locked_sets = locked_sets_for_pictures(session, all_member_ids)
 
     payload: list[dict[str, Any]] = []
     for row in rows:
@@ -2144,6 +2150,19 @@ def page_queue_in_session(
             if row.cover_picture_id is not None
             else (members[0].id if members else None)
         )
+        # Nothing is filtered out of the listing: a locked-set member is still a
+        # real member of the group, and hiding it would make the row disagree
+        # with the scan and quietly withdraw the Keep-separate decision the user
+        # can still make. It is marked instead, and the cover moves onto the side
+        # that can actually be stacked so the client's default is a legal one.
+        partition = partition_stackable_members(
+            session, [member.id for member in members], locked_sets=locked_sets
+        )
+        stackable_ids = set(partition.stackable)
+        if cover_id not in stackable_ids and len(stackable_ids) >= 2:
+            cover_id = select_cover(
+                [member for member in members if member.id in stackable_ids]
+            )
         verdict = verdict_by_signature.get(row.signature)
         payload.append(
             {
@@ -2157,9 +2176,13 @@ def page_queue_in_session(
                 "verdict": verdict.verdict if verdict else None,
                 "decided_at": verdict.decided_at if verdict else None,
                 "candidates": [
-                    member.as_dict(
-                        why=build_candidate_evidence(member, members, cover_id)
-                    )
+                    {
+                        **member.as_dict(
+                            why=build_candidate_evidence(member, members, cover_id)
+                        ),
+                        "stackable": member.id in stackable_ids,
+                        "blocked_by_sets": partition.sets_for(member.id),
+                    }
                     for member in members
                 ],
             }

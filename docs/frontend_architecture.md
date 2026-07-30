@@ -1187,6 +1187,26 @@ Three rules from the design are load-bearing and are easy to break by accident:
   refusal into the live region rather than letting a one-key action read as a
   dead key, and a verdict that *is* refused by the server surfaces the server's
   own `detail` instead of a generic sentence.
+- **A locked-set candidate is the server's exclusion, not the user's.** A
+  candidate served `stackable: false` is frozen by a locked picture set and can
+  join neither the stack nor the metadata union. The row marks it (dimmed, plus a
+  lock chip distinct from the user-exclusion `X`, tooltip and `aria-label` from
+  `buildLockReason`), `useDedupStore.effectiveExcludedFor` sends it as an
+  exclusion so the server never has to skip it, `coverIdFor` keeps the cover off
+  it, and `toggleExcluded` returns `"locked"` rather than `false` so the queue can
+  narrate the one refusal that unlocking, not re-including, is the fix for. A
+  group with fewer than two stackable candidates disables **Stack** with a reason
+  and keeps **Keep separate**. Nothing is hidden from the listing: the frozen
+  candidate is still a member of the group and still worth a decision.
+- **A partial stack is a success.** When the lock lands after the page loaded, the
+  server stacks the rest and reports `skipped`; the store carries it up as
+  `gesture_skipped` (aggregated across a bulk gesture) and a bulk run does **not**
+  abort on one. `DuplicateQueue` raises a one-sentence `noticeStore.warning`,
+  because the row has left the queue and there is nothing left to anchor to. A
+  hard 423 keeps the row, so there the anchor is real: the named `picture_ids`
+  flash their lock chip. `serverDetail`, `lockedPictureIds` and
+  `partialStackSentence` live in `utils/dedup.js` (pure, unit-tested) rather than
+  in the view.
 
 **Compare is a working surface, not a detour** (owner requirements, 2026-07-30).
 A verdict given inside `DedupCompareDialog` — footer buttons, `Enter`/`S`
