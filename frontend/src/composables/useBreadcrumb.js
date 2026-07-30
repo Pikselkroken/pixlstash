@@ -25,9 +25,9 @@ export function useBreadcrumb() {
     const charName = (id) =>
       isMulti
         ? "Multiple People"
-        : entityNames.characterNames[id] ?? `Character ${id}`;
+        : (entityNames.characterNames[id] ?? `Character ${id}`);
     const setName = (id) =>
-      isMulti ? "Multiple Sets" : entityNames.setNames[id] ?? `Set ${id}`;
+      isMulti ? "Multiple Sets" : (entityNames.setNames[id] ?? `Set ${id}`);
     const projName = (id) => entityNames.projectNames[id] ?? `Project ${id}`;
     // Root scope crumb names the sidebar bar/tab the view belongs to. These are
     // scope *labels*, not destinations — plain text, not links. Only an

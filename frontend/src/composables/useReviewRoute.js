@@ -192,7 +192,8 @@ export function useReviewRoute(route, router, store, { watch }) {
       // redundant /tag_health request). `pendingRestoreViewId` is consumed by
       // load() once the session lists have landed — only then can an id be
       // resolved to a session vs an archived receipt vs nothing.
-      if (!scopeEquals(store.healthScope, scope)) store.healthScope = { ...scope };
+      if (!scopeEquals(store.healthScope, scope))
+        store.healthScope = { ...scope };
       store.pendingRestoreViewId = reviewId;
       store.overlayOpen = true;
       return;

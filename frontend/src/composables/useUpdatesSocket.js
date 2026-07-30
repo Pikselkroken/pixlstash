@@ -1,9 +1,5 @@
-import { onUnmounted } from "vue";
-import {
-  API_BASE_URL,
-  appendShareToken,
-  isReadOnly,
-} from "../utils/apiClient";
+import { onUnmounted, watch } from "vue";
+import { API_BASE_URL, appendShareToken, isReadOnly } from "../utils/apiClient";
 import { useGridRealtimeSync } from "./useGridRealtimeSync";
 import { useWsStore } from "../stores/useWsStore";
 import { useGridStore } from "../stores/useGridStore";
@@ -363,6 +359,30 @@ export function useUpdatesSocket({
     const fresh = ids.filter((id) => !pending.has(id));
     if (fresh.length) wsStore.addSortChangedExternalIds(fresh);
   }
+
+  // The backend only sends events this client's current view could care about,
+  // so any change to what the view is has to be re-announced.
+  watch(
+    [
+      () => selectionStore.selectedCharacter,
+      () => selectionStore.selectedSet,
+      () => selectionStore.selectedSetIds,
+      () => searchStore.searchQuery,
+    ],
+    () => {
+      sendUpdatesFilters();
+    },
+  );
+
+  // A grid rebuild has reconciled whatever the pills were offering, so the
+  // queued ids are stale.
+  watch(
+    () => gridStore.gridVersion,
+    () => {
+      wsStore.clearPendingExternalImportIds();
+      wsStore.clearSortChangedExternalIds();
+    },
+  );
 
   onUnmounted(() => {
     disconnectUpdatesSocket();

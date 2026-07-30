@@ -1,3 +1,5 @@
+import { nextTick, watch } from "vue";
+import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useSearchStore } from "../stores/useSearchStore";
 import { useSortStore } from "../stores/useSortStore";
@@ -23,18 +25,22 @@ import {
  * @param {object} deps
  * @param {import("vue").Ref} deps.gridContainer
  * @param {Function} deps.refreshSidebar
+ * @param {Function} deps.onTagFilterChanged - debounced sidebar refresh for a
+ *   tag-visibility change.
  * @param {Function} deps.onNavigated
  */
 export function useAppEntityActions({
   gridContainer,
   refreshSidebar,
   onNavigated,
+  onTagFilterChanged,
 }) {
   const selectionStore = useSelectionStore();
   const searchStore = useSearchStore();
   const sortStore = useSortStore();
   const gridStore = useGridStore();
   const exportStore = useExportStore();
+  const userPrefsStore = useUserPrefsStore();
   const filterStore = useFilterStore();
   const wsStore = useWsStore();
 
@@ -142,6 +148,35 @@ export function useAppEntityActions({
   }
 
   // --- Watchers ---
+
+  // Opening the export menu is when its count has to be right; computing it
+  // eagerly would cost a request per selection change.
+  watch(
+    () => exportStore.exportMenuOpen,
+    async (isOpen) => {
+      if (!isOpen) return;
+      await nextTick();
+      refreshExportCount();
+    },
+  );
+
+  // Hiding tags, or turning the tag filter on, changes which pictures the grid
+  // and the sidebar counts should show.
+  watch(
+    () => userPrefsStore.hiddenTags,
+    () => {
+      gridStore.refreshGridVersion();
+      if (userPrefsStore.applyTagFilter) onTagFilterChanged?.();
+    },
+  );
+
+  watch(
+    () => userPrefsStore.applyTagFilter,
+    () => {
+      gridStore.refreshGridVersion();
+      onTagFilterChanged?.();
+    },
+  );
 
   return {
     handleImagesAssignedToCharacter,
