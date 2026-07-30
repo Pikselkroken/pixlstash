@@ -55,11 +55,22 @@ export const useGridStore = defineStore("grid", () => {
     return Math.max(1, Math.min(maxColumns.value, desired));
   });
 
+  // Both modes render from the same stored bitmap - justified shows it whole,
+  // square crops it to the stored rectangle - so a valid change applies at once
+  // with no thumbnail regeneration. Rejecting the unchanged value keeps the
+  // persist watcher from firing for nothing.
+  function setThumbnailMode(value) {
+    if (value !== "square" && value !== "justified") return;
+    if (value === thumbnailMode.value) return;
+    thumbnailMode.value = value;
+  }
+
   function refreshGridVersion() {
     gridVersion.value++;
   }
 
   return {
+    setThumbnailMode,
     columns,
     sizeLevel,
     thumbnailSize,

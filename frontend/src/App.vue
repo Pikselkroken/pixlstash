@@ -13,7 +13,6 @@ import { useReviewRoute } from "./composables/useReviewRoute";
 import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
-import { useSortStore } from "./stores/useSortStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useExportStore } from "./stores/useExportStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
@@ -59,7 +58,6 @@ const BACKEND_URL = API_BASE_URL;
 // --- Stores ---
 const selectionStore = useSelectionStore();
 const filterStore = useFilterStore();
-const sortStore = useSortStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
 const sidebarStore = useSidebarStore();
@@ -73,7 +71,6 @@ const tasksStore = useTasksStore();
 const operationStore = useOperationStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
-const viewStore = useViewStore();
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
 // everywhere; only the hint is platform-specific.
 
@@ -109,7 +106,6 @@ const gridWrapperRef = ref(null);
 const shortcutsDialogOpen = ref(false);
 const updateCheckDialogOpen = ref(false);
 const photosDialogOpen = ref(false);
-const folderScanning = ref(false);
 const installType = ref("pip");
 const dockerVariant = ref("gpu");
 const loading = ref(null);
@@ -178,25 +174,13 @@ useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
 useWindowFileImport({ sidebarRef });
 
 const {
-  handleUpdateProjectViewMode,
-  handleUpdateSelectedProjectId,
   handleViewProject,
   handleUpdateSelectedSort,
-  handleUpdateSortOptions,
   handleStackStatsUpdate,
-  handleUpdateSimilarityCharacter,
-  handleUpdateSimilarityOptions,
-  handleUpdateHiddenTags,
-  handleUpdateApplyTagFilter,
-  handleUpdateDateFormat,
-  handleUpdateThemeMode,
   handleUpdateCheckForUpdates,
-  handleUpdateSidebarThumbnailSize,
   handleEmptyScrapheapFromSidebar,
   handleSuggestPicturesForCharacter,
   focusTasksTabPanel,
-  handleUpdateThumbnailMode,
-  handleUpdateSidebarWidth,
 } = useAppSettingsHandlers({
   gridContainer,
   statsSidebarRef,
@@ -221,7 +205,6 @@ let stopOpenSettings = null;
 // Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
 // Parsed once, by useViewStore.
-const activeFolderKey = computed(() => viewStore.activeFolderKey);
 
 const activeCategoryLabel = computed(() => {
   if (selectionStore.selectedFolderFilter) {
@@ -306,6 +289,15 @@ async function handleLocalImport({ files, projectId } = {}) {
 }
 
 // undo affordance itself.
+// Route -> stores: install the app's single route watcher (immediately on
+// mount for deep-linking, then on every navigation). The parsing and the
+// writes live in useViewStore; the route PUSHING lives in useAppNavigation.
+useViewStore().startRouteSync(route, { watch });
+
+// A navigation retires the live undo receipt (owner decision, 2026-07-29): the
+// pill narrates something that happened on the view being left, and a receipt
+// carried into the next view reads as a fresh event there. Ctrl+Z keeps working
+// regardless - the receipt is narration, not the undo affordance itself.
 watch(
   () => route.fullPath,
   (next, prev) => {
@@ -540,65 +532,19 @@ defineExpose({
         >
           <SideBar
             ref="sidebarRef"
-            :docked="sidebarStore.effectiveDocked"
-            :selectedCharacter="selectionStore.selectedCharacter"
-            :selectedCharacterIds="selectionStore.selectedCharacterIds"
-            :allPicturesId="ALL_PICTURES_ID"
-            :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-            :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-            :selectedSet="selectionStore.selectedSet"
-            :selectedSetIds="selectionStore.selectedSetIds"
-            :searchQuery="searchStore.searchQuery"
-            :selectedSort="sortStore.selectedSort"
-            :selectedDescending="sortStore.selectedDescending"
             :backendUrl="BACKEND_URL"
-            :publicUrl="userPrefsStore.publicUrl"
-            :embedWatermark="userPrefsStore.embedWatermark"
-            :selectedSimilarityCharacter="sortStore.selectedSimilarityCharacter"
-            :sidebarThumbnailSize="userPrefsStore.sidebarThumbnailSize"
-            :sidebarWidth="userPrefsStore.sidebarWidth"
-            :dateFormat="userPrefsStore.dateFormat"
-            :themeMode="userPrefsStore.themeMode"
-            :hasFolderFilter="selectionStore.selectedFolderFilter != null"
-            :activeFolderKey="activeFolderKey"
-            :externalProjectViewMode="projectStore.projectViewMode"
-            :externalSelectedProjectId="projectStore.selectedProjectId"
-            :checkForUpdates="userPrefsStore.checkForUpdates"
             :installType="installType"
             :dockerVariant="dockerVariant"
-            :showKeyboardHint="userPrefsStore.showKeyboardHint"
-            :thumbnailMode="gridStore.thumbnailMode"
-            @update:thumbnail-mode="handleUpdateThumbnailMode"
             @empty-scrapheap="handleEmptyScrapheapFromSidebar"
             @suggest-pictures-for-character="handleSuggestPicturesForCharacter"
-            @update:show-keyboard-hint="
-              userPrefsStore.showKeyboardHint = $event
-            "
-            @update:similarity-options="handleUpdateSimilarityOptions"
-            @update:sort-options="handleUpdateSortOptions"
-            @update:hidden-tags="handleUpdateHiddenTags"
-            @update:apply-tag-filter="handleUpdateApplyTagFilter"
-            @update:comfyui-configured="filterStore.comfyuiConfigured = $event"
-            @update:public-url="userPrefsStore.publicUrl = $event"
-            @update:embed-watermark="userPrefsStore.embedWatermark = $event"
-            @update:date-format="handleUpdateDateFormat"
-            @update:theme-mode="handleUpdateThemeMode"
-            @update:sidebar-thumbnail-size="handleUpdateSidebarThumbnailSize"
-            @update:sidebar-width="handleUpdateSidebarWidth"
-            @update:project-view-mode="handleUpdateProjectViewMode"
-            @update:selected-project-id="handleUpdateSelectedProjectId"
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
-            :isDuplicatesView="isDuplicatesView"
             @select-duplicates="handleSelectDuplicates"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
-            @update:folder-scanning="folderScanning = $event"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
-            @update:selected-sort="handleUpdateSelectedSort"
-            @update:similarity-character="handleUpdateSimilarityCharacter"
             @open-import-dialog="openImportDialog"
             @update:set-error="error = $event"
             @update:set-loading="loading = $event"
@@ -703,7 +649,6 @@ defineExpose({
                 ref="gridContainer"
                 :backendUrl="BACKEND_URL"
                 :activeCategoryLabel="activeCategoryLabel"
-                :folderScanning="folderScanning"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
