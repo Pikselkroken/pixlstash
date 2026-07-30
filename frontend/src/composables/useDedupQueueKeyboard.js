@@ -10,7 +10,10 @@
 //
 //   ArrowUp / ArrowDown   move the focus (k / j alias the same pair)
 //   PageUp / PageDown     move the focus a screenful of rows at a time
-//   Home / End            jump to the first / last open group
+//   Home / End            jump to the first / TRUE last open group. End over a
+//                         large unloaded gap fetches the tail page directly
+//                         (random access, one request); Home undoes the jump
+//                         by resetting to the first page.
 //   Enter                 stack the focused group
 //   S                     keep the focused group separate
 //   C                     open Compare on the focused group
@@ -22,11 +25,14 @@
 //   Escape                close Compare, otherwise hand control back to the
 //                         queue (`onEscape`)
 //
-// While Compare is open the row-to-row keys go quiet, but the per-group keys
-// stay live: `Enter`, `S`, `1`-`9`, `X` and `Escape` all work there, because
-// Compare exists so the decision is made without a second trip. Only the keys
-// that would move the row behind the open dialog are swallowed, since that is
-// how a user loses their place.
+// While Compare is open the per-group keys stay live (`Enter`, `S`, `1`-`9`,
+// `X`, `Escape`), because Compare exists so the decision is made without a
+// second trip — and `Up`/`Down` (or `j`/`k`) switch the COMPARED GROUP in
+// place, since the dialog renders the focused group and shows exactly where
+// you went. A verdict there keeps Compare open and the auto-advance flips it
+// to the next group; the view closes it only when the queue runs out. Only
+// the jump keys (`Home`, `End`, `PageUp`/`PageDown`) go quiet, since a
+// multi-row leap behind a dialog reads as the queue teleporting.
 //
 // Five guards decline the whole handler, each for its own reason:
 //   * a text field has focus (a control keeps its own editing keys),
@@ -69,7 +75,13 @@ function isTypingTarget(event) {
   if (!target) return false;
   if (target.isContentEditable) return true;
   const tag = String(target.tagName || "").toLowerCase();
-  return tag === "input" || tag === "textarea" || tag === "select";
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  // A slider or spinner thumb (Vuetify renders a focusable div, not an
+  // input) owns its arrow keys exactly as a native range input does. Acting
+  // on the queue as well would double every press: one size step AND one row
+  // moved.
+  const role = target.getAttribute?.("role");
+  return role === "slider" || role === "spinbutton";
 }
 
 /**
@@ -100,8 +112,8 @@ function isActivatableTarget(event) {
  * @param {Object} deps
  * @param {Object} deps.store - the dedup store (or any object with the same
  *   surface: `groups`, `focusIndex`, `focusedGroup`, `busy`, `focusNext`,
- *   `focusPrev`, `setFocus`, `setCover`, `toggleExcluded`, `coverIdFor`,
- *   `stack`, `keepSeparate`).
+ *   `focusPrev`, `setFocus`, `focusStart`, `focusEnd`, `setCover`,
+ *   `toggleExcluded`, `coverIdFor`, `stack`, `keepSeparate`).
  * @param {function(): boolean} deps.isCompareOpen
  * @param {function(): void} deps.openCompare
  * @param {function(): void} deps.closeCompare
@@ -110,8 +122,10 @@ function isActivatableTarget(event) {
  * @param {function(): void} [deps.selectAll] - what `Ctrl+A` runs. Defaults to
  *   the store's action; the view overrides it to narrate the result, which it
  *   has to await.
- * @param {function(): boolean} [deps.isBlocked] - an extra decline hook for a
- *   modal that is not Compare (the auto-stack dialog uses it).
+ * @param {function(KeyboardEvent=): boolean} [deps.isBlocked] - an extra
+ *   decline hook for a surface that is not Compare (the auto-stack dialog
+ *   blocks everything; the tier popover blocks only events from inside
+ *   itself, which is why the event is passed).
  * @param {function(): void} [deps.onEscape] - what `Escape` does when Compare
  *   is closed. The queue uses it to dismiss its popover and to hand control
  *   back to the list, so `Escape` is never a key that does nothing.
@@ -280,20 +294,43 @@ export function createDedupKeyHandler({
         closeCompare();
         return;
       }
+      // ── Up/Down switch GROUPS from inside Compare ─────────────────────
+      // The dialog renders the focused group, so a focus move flips it in
+      // place (zoom and fit reset per group, exactly as on a verdict's
+      // advance) — no place is lost, the dialog shows where you went. The
+      // ZOOM layer above keeps ALL its arrows for candidate flipping: two
+      // meanings for one axis in one layer is how a key stops being
+      // trusted. Clamped at the queue's ends like every focus move (the
+      // queue never wraps), live in read-only (reading is not a verdict),
+      // and a move mid end-chase cancels the chase like any other.
+      if (NEXT_KEYS.has(key)) {
+        claim(event);
+        store.focusNext();
+        return;
+      }
+      if (PREV_KEYS.has(key)) {
+        claim(event);
+        store.focusPrev();
+        return;
+      }
       if (isReadOnly() || store.busy) return;
       const group = store.focusedGroup;
       if (!group) return;
+      // A verdict from inside Compare does NOT close Compare: the store's
+      // auto-advance moves the focus to the next open group and the dialog,
+      // which renders the focused group, flips to it in place — a run of
+      // decisions is made without reopening anything. The zoom layer closes
+      // (the next group starts un-zoomed by contract), and the view closes
+      // the dialog itself once the queue has nothing left to show.
       if (key === "enter") {
         claim(event);
         zoom.close();
-        closeCompare();
         store.stack(group);
         return;
       }
       if (key === "s") {
         claim(event);
         zoom.close();
-        closeCompare();
         store.keepSeparate(group);
         return;
       }
@@ -312,7 +349,10 @@ export function createDedupKeyHandler({
       return;
     }
 
-    if (isBlocked()) return;
+    // The event is handed over so the view can scope a popover's block by
+    // TARGET: the tier menu owns only the keys pressed inside itself, so the
+    // queue keeps working underneath it once a commit handed focus back.
+    if (isBlocked(event)) return;
 
     // Navigation stays live in a read-only session: reading the queue is not a
     // verdict, and freezing the arrow keys there would make it unreadable.
@@ -340,16 +380,21 @@ export function createDedupKeyHandler({
       return;
     }
     if (key === "home") {
+      // The queue's first group. After an End jump the window no longer
+      // contains the top, so the store resets to the first page; on a
+      // top-anchored window it is a plain focus move.
       claim(event);
-      store.setFocus(0);
+      store.focusStart();
       return;
     }
     if (key === "end") {
-      // The last row the client HOLDS, which is the last row it can focus.
-      // Landing there asks the store for the next page, so repeated End walks
-      // a paging queue to its true end instead of stopping at the first page.
+      // The queue's TRUE end, not the last row the client happens to hold:
+      // the total is known a priori, so one press must reach the real last
+      // group. Over a large gap the store fetches the tail page directly and
+      // rebases its window onto it; either way the focus lands on the last
+      // row that actually exists.
       claim(event);
-      store.setFocus(store.groups.length - 1);
+      store.focusEnd();
       return;
     }
 

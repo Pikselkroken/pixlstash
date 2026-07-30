@@ -117,13 +117,17 @@ Shapes and rules the frontend depends on:
   skipped: one unstackable group never aborts it, so a partial result is
   reported rather than hidden.
 
-**Keep-separate records no operation, deliberately.** It changes no reversible
-picture facet, so there is nothing for undo to restore, and an empty operation
-row would still consume a `Ctrl+Z`. The frontend therefore must **not** wait for
-a receipt on this verdict: `DuplicateQueue` raises its own sticky notice with a
-**Reopen** action, which is the documented way back. Stack verdicts do record one
-operation each (bulk auto-stack shares one batch id) and flow through the
-standard `ActionReceipt` with nothing dedup-specific.
+**Keep-separate records one operation, exactly like stack (owner override,
+2026-07-30).** Until then it deliberately recorded nothing (the #644-era CSO
+ruling: no reversible picture facet, and an empty row would still consume a
+`Ctrl+Z`); the owner explicitly reversed that ruling. Every verdict — stack and
+keep-separate — now records one operation (`dedup.stack` /
+`dedup.keep_separate`), a client gesture id groups several into one undo, and
+both flow through the standard `ActionReceipt` with nothing dedup-specific. The
+keep-separate operation's before/after payloads are empty (no picture facet
+changed); its undo reopens the verdict and returns the group to the queue via
+the registered post-restore hook, and redo re-decides it. The explicit
+**Reopen** action remains available as the non-undo way back.
 
 **Paging is a keyset cursor; `offset` is the deprecated fallback.** The queue is
 ordered by confidence descending while a scan is still inserting rows, so an
@@ -153,13 +157,13 @@ it, so it is the **primary path**:
   second verdict would 400), and the offset still advances by the page's
   **served** length rather than its kept length.
 
-**The sidebar badge is reconciled from the server after every verdict.** A
-keep-separate mutates no picture row, so it raises no WebSocket event and
-`App.refreshSidebar` never runs for it: an optimistic decrement would never be
-corrected, would be wrong in a second tab from the first verdict, and would drift
-further with each one. `useDedupStore` therefore keeps the optimistic tick for
-immediacy and fires `POST /dedup/counts` behind it (one scope, one COUNT, not
-awaited so auto-advance is not held up), and `DuplicateQueue` refreshes the
+**The sidebar badge is reconciled from the server after every verdict.** Both
+verdict kinds now raise the standard `pictures_changed` event (added 2026-07-30
+alongside the keep-separate op-logging; before that a keep-separate raised no
+event at all), so a second tab has a refresh signal — but the event names
+pictures, not dedup counts. `useDedupStore` therefore keeps the optimistic tick
+for immediacy and fires `POST /dedup/counts` behind it (one scope, one COUNT,
+not awaited so auto-advance is not held up), and `DuplicateQueue` refreshes the
 counts on queue open even when it is already showing the requested scope. **Do
 not treat a WebSocket event as the source of truth for a dedup count.**
 
@@ -756,6 +760,23 @@ deliberately ignores the tier gate and the threshold: a decision made under
 yesterday's policy must not be hidden by today's. On the open queue both
 fields are `null`.
 
+**The decided page is ordered by `decided_at` descending** — most recent
+decision first (2026-07-30; the open queue keeps its confidence-descending
+order). A fresh verdict lands on top; a **redo** re-stamps `decided_at`, so a
+just-redone decision also sorts to the top rather than resurfacing at its old
+position. `next_cursor` works on both pages, but the two orderings mint
+**distinct cursor families** that reject each other with a 400 — never reuse a
+queue cursor on the decided page or across the flip.
+
+**`decided_at` is display-ready.** It is the stamp the ordering sorts by:
+"when this decision last became live" (a redo re-stamps it). Format is
+**naive-UTC ISO 8601** with microseconds and **no offset suffix**
+(`"2026-07-30T12:28:53.123456"`, no trailing `Z`) — the same convention as
+every other timestamp on this API (`created_at`, the operation log's stamps) —
+so parse it as UTC. It is `null` on the open queue and `null` for the stale
+edge of a resolved group whose verdict is missing or reopened (such rows sort
+into the list's tail); the server never invents a stamp for them.
+
 ```jsonc
 {
   "groups": [{
@@ -872,14 +893,22 @@ or graft its rows into an existing one.
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Does **not** unstack anything. |
 
-**Undoing a stack verdict also returns its group to the queue.** `POST
-/operations/undo` and `POST /operations/batches/{batch_id}/undo` unstack the
-pictures *and* reopen the verdict, so after an undo the group is back in `GET
-/dedup/groups` and back in the sidebar count with no extra call — do not follow an
-undo with a `reopen`. Redo re-decides it. `reopen` stays the explicit way back
-from a **keep-separate**, which records no operation and therefore has no undo.
+**Undoing a verdict also returns its group to the queue.** `POST
+/operations/undo` and `POST /operations/batches/{batch_id}/undo` restore the
+pictures (for a stack) *and* reopen the verdict — both kinds, since the
+2026-07-30 owner override made keep-separate op-logged (`dedup.keep_separate`)
+— so after an undo the group is back in `GET /dedup/groups` and back in the
+sidebar count with no extra call; do not follow an undo with a `reopen`. Redo
+re-decides it. A client gesture id shared across several verdicts (a bulk
+multi-select, or a mixed stack + keep-separate gesture) reverses as one batch
+undo, each verdict through its own listed operation. `reopen` remains the
+explicit, non-undo way back from either verdict kind.
 
-`stack` and `keep-separate` return:
+`stack` and `keep-separate` return the same shape (for keep-separate,
+`stack_id` / `cover_picture_id` are null and `metadata_union` is empty).
+`batch_id` is **always** populated on both — the client's `cli-…` gesture id
+when one was sent, a server-minted `srv-…` otherwise — and is the
+`POST /operations/batches/{batch_id}/undo` handle:
 
 ```jsonc
 { "signature": "9f2c…", "verdict": "stacked", "stack_id": 77,

@@ -2233,7 +2233,10 @@ defineExpose({
                    the grid rather than floating over it. The grid stays
                    unmounted while the queue is open, which is also what keeps
                    its fetches and its WebSocket reconciliation quiet. -->
-              <DuplicateQueue v-if="isDuplicatesView" />
+              <DuplicateQueue
+                v-if="isDuplicatesView"
+                @open-settings="openSettingsDialog"
+              />
               <ImageGrid
                 v-else
                 ref="gridContainer"

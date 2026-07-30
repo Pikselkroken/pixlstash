@@ -698,6 +698,29 @@ bar** — is one pattern. It reuses the grid; only the bar changes.
   bar. Its empty state uses the existing `EmptyTrash.png` art (§9) with a
   `--text-2xl` Tiny5 headline and a `--text-sm` line of guidance.
 
+### The toolbar overflow (⋯)
+
+When a 36px toolbar runs out of width, controls do not shrink, wrap, or
+vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
+`bar-btn--icon` trigger wearing `mdi-dots-horizontal`, opening an in-place
+`.tbm` panel at `--z-dropdown`). The rules of the pattern:
+
+- **Fold = CSS both ways.** A foldable control exists twice with one `v-if`:
+  as its bar button and as a `.tbm-action` row in the panel. The bar's
+  container queries flip which of the pair is visible; no JS ever measures
+  the bar. Each bar's ladder is a decision, not an accident — recorded in
+  `toolbar-responsive-decisions.md`.
+- **The trigger earns its place.** The ⋯ stays hidden until the first fold
+  step; an overflow with nothing in it is chrome without a job.
+- **Some controls never fold.** Undo is the recovery control and stays a
+  single visible target at every width. A standing state (the scope pill)
+  compresses to its icon rather than folding — a filter that hides is a
+  filter the user forgets.
+- **State travels with the row.** A folded toggle wears `aria-pressed` and
+  the primary-token pressed colour; the stats toggle's attention dot moves to
+  the ⋯ trigger while folded (same pulse recipe, `prefers-reduced-motion`
+  honoured), so background work never goes invisible.
+
 ---
 
 ## 14. Layers (`--z-*`)

@@ -12,6 +12,10 @@
 //   * **Never load the queue whole.** Groups are paged by confidence descending.
 //     `loadMore` is called when the focus walks close to the tail, not when the
 //     user scrolls, because the keyboard is the primary way through the queue.
+//     The loaded rows form a WINDOW (`groups` + `windowStart`): normally the
+//     queue's head, but an End jump rebases it straight onto the tail page and
+//     `loadPrevious` backfills upwards from there. All public indices are
+//     absolute queue positions.
 //   * **Verdicts auto-advance.** Resolving a group removes it from the list and
 //     the focus lands on the next open group, so a run of Enter presses works
 //     the queue without a single extra keystroke.
@@ -62,6 +66,7 @@ import {
 } from "../utils/thumbnailSizes";
 import { suggestedCoverId, candidateId } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
+import { useOperationStore } from "./useOperationStore";
 
 /** How many groups one queue page holds. */
 export const QUEUE_PAGE_SIZE = 20;
@@ -115,6 +120,44 @@ export const TIER_LABELS = Object.freeze({
  * Tiny-to-Huge language without dragging each other around.
  */
 const SIZE_LEVEL_KEY = "pixlstash:dedupSizeLevel";
+
+/**
+ * Where the queue's tier filters and threshold are remembered.
+ *
+ * Same tier of persistence as the queue's thumbnail size above: per-browser
+ * view state, restored on the next visit. The URL still outranks it when a
+ * link carries explicit filter params (a shared link must open exactly as
+ * sent), and the server's policy defaults apply when neither has an opinion.
+ * Promoting this to the account-level `/users/me/config` blob would need a
+ * backend schema change (the PATCH endpoint rejects unknown keys), recorded
+ * as a follow-up rather than half-done here.
+ */
+const FILTERS_KEY = "pixlstash:dedupFilters";
+
+/** Read the remembered filter selection, or null when there is none. */
+function storedFilters() {
+  try {
+    const raw = window.localStorage?.getItem(FILTERS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const filters = {};
+    if (typeof parsed.near === "boolean") filters.near = parsed.near;
+    if (typeof parsed.embedding === "boolean") {
+      filters.embedding = parsed.embedding;
+    }
+    if (Number.isFinite(parsed.threshold)) filters.threshold = parsed.threshold;
+    return Object.keys(filters).length ? filters : null;
+  } catch (err) {
+    // Private mode, or a corrupt blob. The server defaults are a fine
+    // outcome; a thrown getter that takes the queue with it is not.
+    console.warn(
+      "[dedup] could not read the remembered filter selection; using defaults",
+      err,
+    );
+    return null;
+  }
+}
 
 /** Read the remembered size level, falling back to the ladder's default. */
 function storedSizeLevel() {
@@ -216,7 +259,18 @@ export const useDedupStore = defineStore("dedup", () => {
   const scopeId = ref(null);
   const scopeLabel = ref("");
   const scopeIcon = ref("");
+  // `groups` is a contiguous WINDOW of the queue, not necessarily its head:
+  // `windowStart` is the absolute queue index of groups[0]. Every public index
+  // (focusIndex, the view's row indices) is ABSOLUTE; groups[i] is the group
+  // at absolute index windowStart + i. The window starts at 0 and stays there
+  // through normal top-down paging; an End jump rebases it onto the tail
+  // (see focusEnd), and paging then runs by offset in both directions.
   const groups = ref([]);
+  const windowStart = ref(0);
+  // Bumped every time the window is REPLACED (first page, End jump): a page
+  // request still in flight from before the rebase must discard its result
+  // rather than append rows from one window into another.
+  let windowEpoch = 0;
   const total = ref(0);
   const nextOffset = ref(0);
   // The opaque keyset cursor for the next page, when the server publishes one.
@@ -229,6 +283,8 @@ export const useDedupStore = defineStore("dedup", () => {
   // The page request currently on the wire, so a second caller joins it instead
   // of being dropped by the busy guard. Not a ref: nothing renders from it.
   let pageInFlight = null;
+  // The upward (backfill) page in flight, same joining contract.
+  let prevInFlight = null;
   const loadingMore = ref(false);
   const error = ref(null);
   const busy = ref(false);
@@ -241,6 +297,12 @@ export const useDedupStore = defineStore("dedup", () => {
   const nearEnabled = ref(false);
   const embeddingEnabled = ref(false);
   const threshold = ref(null);
+  // True once openQueue has adopted the URL's (and the remembered) filter
+  // selection. Until then the gate above still holds pristine DEFAULTS, and
+  // the view's URL mirror must not read that transient state as "the user
+  // chose the defaults" — doing so is exactly the bug that stripped the
+  // filter params off the URL on every full reload (see openQueue).
+  const filtersRestored = ref(false);
 
   // --- How big the queue draws its candidates ------------------------------
   // A view preference, so it lives on the client and survives a reload.
@@ -285,7 +347,10 @@ export const useDedupStore = defineStore("dedup", () => {
     return Object.values(byTier.value || {}).some((n) => Number(n) > 0);
   });
   const hasGroups = computed(() => groups.value.length > 0);
-  const focusedGroup = computed(() => groups.value[focusIndex.value] ?? null);
+  // focusIndex is ABSOLUTE; the group it names lives at the window offset.
+  const focusedGroup = computed(
+    () => groups.value[focusIndex.value - windowStart.value] ?? null,
+  );
   const doneCount = computed(() => stackedCount.value + separatedCount.value);
 
   /** Unresolved exact groups: what the auto-stack button offers to clear. */
@@ -579,6 +644,36 @@ export const useDedupStore = defineStore("dedup", () => {
     }
   }
 
+  /**
+   * Remember the current filter selection for the next visit.
+   *
+   * Called on every deliberate filter change, so a full page refresh (or a
+   * later session) reopens the queue the way the user left it. The Decided
+   * flip is deliberately NOT remembered: it is a place the user visits, not
+   * a lens they set.
+   */
+  function rememberFilters() {
+    // A remembered selection is by definition a deliberate one: from here on
+    // the gate's state is authoritative and the URL mirror may write it.
+    filtersRestored.value = true;
+    try {
+      const remembered = {
+        near: nearEnabled.value,
+        embedding: embeddingEnabled.value,
+      };
+      if (Number.isFinite(threshold.value)) {
+        remembered.threshold = threshold.value;
+      }
+      window.localStorage?.setItem(FILTERS_KEY, JSON.stringify(remembered));
+    } catch (err) {
+      // The selection still applies this session; only the memory is lost.
+      console.warn(
+        "[dedup] could not remember the filter selection for next time",
+        err,
+      );
+    }
+  }
+
   async function openQueue({
     type = GLOBAL_SCOPE,
     id = null,
@@ -596,9 +691,22 @@ export const useDedupStore = defineStore("dedup", () => {
     separatedCount.value = 0;
     showingDecided.value = false;
     await loadPolicy();
-    // The URL is the source of truth for a restored filter selection: a full
-    // refresh (or a shared link) reopens the queue exactly as it was set.
+    // Last visit's selection first (per-browser memory, same tier as the
+    // thumbnail size), then the URL's explicit filters on top: a shared or
+    // refreshed link opens exactly as sent, and a bare /duplicates reopens
+    // the way the user left it rather than on the server defaults. Both run
+    // through applyUrlFilters, so the tier chain and the threshold clamp
+    // hold whatever the source.
+    const remembered = storedFilters();
+    if (remembered) applyUrlFilters(remembered);
     if (filters) applyUrlFilters(filters);
+    if (remembered || filters) rememberFilters();
+    // Only NOW may the URL mirror trust the gate: between the policy landing
+    // and this line the store held plain defaults, and a mirror that ran in
+    // that window concluded "default selection" and replaced the URL without
+    // its filter params — while the real navigation from the params was still
+    // in flight, so the params were dropped for good.
+    filtersRestored.value = true;
     // Opening the queue IS the scan trigger (design contract: the queue opens
     // over whatever has been found while the banner streams progress). The
     // group cache only fills when a scan runs; without this the queue reads an
@@ -657,8 +765,12 @@ export const useDedupStore = defineStore("dedup", () => {
   async function loadFirstPage() {
     loading.value = true;
     error.value = null;
-    // The list is being rebuilt (scope change, tier change, rescan), so a
-    // selection over the old rows would silently point at different groups.
+    // The window is being rebuilt (scope change, tier change, rescan, Home
+    // after an End jump), so a selection over the old rows would silently
+    // point at different groups — and so would a jump-to-end still chasing
+    // the old list's tail, or a page request still in flight from it.
+    windowEpoch += 1;
+    cancelEndChase();
     clearSelection();
     try {
       const data = await listGroups({
@@ -670,6 +782,7 @@ export const useDedupStore = defineStore("dedup", () => {
         limit: QUEUE_PAGE_SIZE,
       });
       groups.value = Array.isArray(data?.groups) ? data.groups : [];
+      windowStart.value = 0;
       total.value = Number(data?.total) || groups.value.length;
       nextOffset.value = groups.value.length;
       nextCursor.value = cursorFrom(data);
@@ -682,6 +795,7 @@ export const useDedupStore = defineStore("dedup", () => {
     } catch (err) {
       error.value = err;
       groups.value = [];
+      windowStart.value = 0;
       total.value = 0;
       nextOffset.value = 0;
       nextCursor.value = null;
@@ -731,6 +845,7 @@ export const useDedupStore = defineStore("dedup", () => {
   /** The page request itself. Never called directly — go through `loadMore`. */
   async function fetchNextPage({ limit } = {}) {
     loadingMore.value = true;
+    const epoch = windowEpoch;
     try {
       const cursor = nextCursor.value;
       const ceiling = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
@@ -746,6 +861,10 @@ export const useDedupStore = defineStore("dedup", () => {
         ...(cursor === null ? { offset: nextOffset.value } : { cursor }),
         limit: pageSize,
       });
+      // The window was replaced under this request (a reload, or an End jump
+      // rebased onto the tail): these rows belong to the OLD window and
+      // appending them would splice the middle of the queue onto its end.
+      if (epoch !== windowEpoch) return;
       const page = Array.isArray(data?.groups) ? data.groups : [];
       const seen = new Set(groups.value.map((g) => g.signature));
       groups.value = [
@@ -765,7 +884,9 @@ export const useDedupStore = defineStore("dedup", () => {
       // A page that lands into an emptied queue has to be given the cursor, or
       // the rows arrive with nothing focused and the keyboard model is dead
       // until the user clicks.
-      if (focusIndex.value < 0 && groups.value.length) focusIndex.value = 0;
+      if (focusIndex.value < 0 && groups.value.length) {
+        focusIndex.value = windowStart.value;
+      }
     } catch (err) {
       console.warn("[dedup] failed to page the duplicate queue", err);
     } finally {
@@ -774,17 +895,252 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * Move the focus, clamped to the list, fetching ahead near the tail.
+   * Page the queue UPWARDS, prepending the rows just above the window.
+   *
+   * Only meaningful after an End jump has rebased the window off the top
+   * (`windowStart > 0`): scrolling or stepping up from the jumped tail
+   * backfills the rows above it, one offset page at a time, until the window
+   * reaches the top. Always offset-paged and never sends a cursor — the
+   * cursor chain names positions in a forward walk and is broken the moment
+   * an offset jump happens; the two must never travel in one request.
+   *
+   * @param {Object} [options]
+   * @param {number} [options.limit] - page size, defaulting to the queue's.
+   * @returns {Promise<void>}
+   */
+  function loadPrevious(options = {}) {
+    if (windowStart.value <= 0 || loading.value) return Promise.resolve();
+    if (prevInFlight) return prevInFlight;
+    prevInFlight = fetchPreviousPage(options).finally(() => {
+      prevInFlight = null;
+    });
+    return prevInFlight;
+  }
+
+  /** The upward page itself. Never called directly — go through loadPrevious. */
+  async function fetchPreviousPage({ limit } = {}) {
+    const epoch = windowEpoch;
+    try {
+      const ceiling = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
+      const pageSize = Math.min(
+        Math.max(Number(limit) || QUEUE_PAGE_SIZE, 1),
+        ceiling,
+      );
+      const prevOffset = Math.max(0, windowStart.value - pageSize);
+      const data = await listGroups({
+        ...policyArgs.value,
+        scopeType: scopeType.value,
+        scopeId: scopeId.value,
+        decided: showingDecided.value,
+        offset: prevOffset,
+        limit: windowStart.value - prevOffset,
+      });
+      if (epoch !== windowEpoch) return;
+      const page = Array.isArray(data?.groups) ? data.groups : [];
+      // Nothing served for a range that should exist: scan drift. Leave the
+      // window alone; the next scroll tick retries from the same place.
+      if (!page.length) return;
+      const before = windowStart.value;
+      const held = new Set(groups.value.map((g) => g.signature));
+      const kept = page.filter((g) => !held.has(g.signature));
+      groups.value = [...kept, ...groups.value];
+      windowStart.value = prevOffset;
+      // Under a running scan the page can be short, or overlap the window
+      // (offset drift re-serving a row the client already holds — the same
+      // hazard the downward fallback de-dupes). The pre-existing rows'
+      // absolute indices then shift; keep the focused GROUP under the cursor.
+      const shift = prevOffset + kept.length - before;
+      if (shift !== 0 && focusIndex.value >= before) focusIndex.value += shift;
+      if (focusIndex.value < 0 && groups.value.length) {
+        // A tail window emptied by verdicts refills from above; the last row
+        // is the nearest one to where the user was working.
+        focusIndex.value = windowStart.value + groups.value.length - 1;
+      }
+      total.value = Number(data?.total) || total.value;
+      scan.value = normalizeScan(data?.scan);
+    } catch (err) {
+      console.warn("[dedup] failed to page the duplicate queue upwards", err);
+    }
+  }
+
+  /**
+   * Move the focus (an ABSOLUTE queue index), clamped to the held window,
+   * fetching ahead near either edge of it.
    * @param {number} index
    */
   function setFocus(index) {
+    // Any focus move that is not the chase's own completion is the user (or a
+    // verdict's auto-advance) acting: their position outranks a jump-to-end
+    // still paging behind the scenes.
+    cancelEndChase();
     if (!groups.value.length) {
       focusIndex.value = -1;
       return;
     }
-    const clamped = Math.max(0, Math.min(groups.value.length - 1, index));
+    const first = windowStart.value;
+    const last = windowStart.value + groups.value.length - 1;
+    const clamped = Math.max(first, Math.min(last, index));
     focusIndex.value = clamped;
-    if (clamped >= groups.value.length - PREFETCH_MARGIN) loadMore();
+    if (clamped >= last + 1 - PREFETCH_MARGIN) loadMore();
+    if (first > 0 && clamped < first + PREFETCH_MARGIN) loadPrevious();
+  }
+
+  /**
+   * Jump to the FIRST group of the queue.
+   *
+   * On a top-anchored window this is just a focus move. After an End jump the
+   * window no longer contains the top, so Home is a reset to the normal
+   * cursor-paged first page — the exact inverse of the jump that left it.
+   *
+   * @returns {Promise<void>}
+   */
+  async function focusStart() {
+    if (windowStart.value > 0) {
+      await loadFirstPage();
+      return;
+    }
+    setFocus(0);
+  }
+
+  // ── The End-key jump to the true end ─────────────────────────────────────
+  // The queue's total is known a priori, so End does not have to walk there:
+  // over a large gap it fetches the LAST page directly by offset and REBASES
+  // the window onto it (windowStart moves), landing the focus on the true
+  // last group off one request. Over a small gap (or none) rebasing would be
+  // churn, so it keeps the old behaviour: focus the last held row, chasing
+  // the couple of missing pages in sequence. The token invalidates either
+  // path the moment anything else moves the focus; the ref lets the view pin
+  // its scroll to the track's bottom (already sized from the server total)
+  // while the work runs, and cancel it when the user scrolls away.
+
+  /** Gaps at most this many browsing pages are chased, not jumped. */
+  const END_JUMP_GAP_PAGES = 2;
+
+  const endChaseActive = ref(false);
+  let endChaseToken = 0;
+
+  /** Stop a running jump-to-end, leaving focus and scroll where they are. */
+  function cancelEndChase() {
+    if (!endChaseActive.value) return;
+    endChaseToken += 1;
+    endChaseActive.value = false;
+  }
+
+  /** The tail request: ALWAYS offset-paged, never a cursor — the server
+   * rejects the two together, and a jump is precisely the operation the
+   * forward cursor chain cannot express. */
+  function requestTailPage(offset) {
+    return listGroups({
+      ...policyArgs.value,
+      scopeType: scopeType.value,
+      scopeId: scopeId.value,
+      decided: showingDecided.value,
+      offset,
+      limit: QUEUE_PAGE_SIZE,
+    });
+  }
+
+  /**
+   * Fetch the queue's last page and rebase the window onto it.
+   *
+   * Offset paging under a running scan can skip or re-serve a row; for a jump
+   * that is acceptable and bounded (one page seam). If the aimed-at tail no
+   * longer exists (the served total came back below the requested offset),
+   * one re-aim from the served total is made; a still-empty page gives up and
+   * leaves the window untouched, so the caller lands on the last row actually
+   * held. Terminates in at most two requests by construction.
+   *
+   * @param {number} token - the chase token this jump runs under.
+   * @returns {Promise<void>}
+   */
+  async function jumpToTail(token) {
+    let tailOffset = Math.max(0, total.value - QUEUE_PAGE_SIZE);
+    let data = await requestTailPage(tailOffset);
+    if (token !== endChaseToken) return;
+    let page = Array.isArray(data?.groups) ? data.groups : [];
+    const servedTotal = Number(data?.total) || 0;
+    if (!page.length && servedTotal > 0) {
+      const retryOffset = Math.max(0, servedTotal - QUEUE_PAGE_SIZE);
+      if (retryOffset < tailOffset) {
+        data = await requestTailPage(retryOffset);
+        if (token !== endChaseToken) return;
+        page = Array.isArray(data?.groups) ? data.groups : [];
+        tailOffset = retryOffset;
+      }
+    }
+    if (Number(data?.total)) total.value = Number(data.total);
+    scan.value = normalizeScan(data?.scan);
+    if (!page.length) return;
+    // REBASE. The old window's rows are dropped, so a selection over them
+    // cannot survive (same rationale as loadFirstPage: a verdict must never
+    // silently act on rows the client no longer holds). The epoch bump makes
+    // any normal page still in flight discard itself on landing.
+    windowEpoch += 1;
+    clearSelection();
+    const seen = new Set();
+    groups.value = page.filter(
+      (g) => !seen.has(g.signature) && seen.add(g.signature),
+    );
+    windowStart.value = tailOffset;
+    nextCursor.value = null;
+    nextOffset.value = tailOffset + groups.value.length;
+    hasMore.value = nextOffset.value < total.value;
+  }
+
+  /**
+   * Focus the TRUE last group of the queue in one gesture.
+   *
+   * Everything loaded: focus the last row, synchronously, exactly as before.
+   * A small gap: chase the missing pages in sequence (rebasing for a page or
+   * two is churn). A large gap: {@link jumpToTail} — one offset request for
+   * the last page, window rebased onto it, no walk through the middle. All
+   * paths land the focus on the last row actually received and terminate
+   * under a running scan; and all die silently the moment the user moves the
+   * focus or the view cancels the jump — a stale jump that yanks the scroll
+   * later is worse than the bug it fixes.
+   *
+   * @returns {Promise<void>}
+   */
+  async function focusEnd() {
+    if (!groups.value.length) return;
+    if (!hasMore.value) {
+      setFocus(windowStart.value + groups.value.length - 1);
+      return;
+    }
+    const token = ++endChaseToken;
+    endChaseActive.value = true;
+    try {
+      const windowEnd = windowStart.value + groups.value.length;
+      const gap = Math.max(0, total.value - windowEnd);
+      if (gap > END_JUMP_GAP_PAGES * QUEUE_PAGE_SIZE) {
+        await jumpToTail(token);
+      } else {
+        const pageSize = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
+        while (hasMore.value) {
+          const before = groups.value.length;
+          await loadMore({ limit: pageSize });
+          // Someone moved the focus or reloaded the list: their position wins.
+          if (token !== endChaseToken) return;
+          // A page that added nothing is the end whatever `hasMore` claims,
+          // exactly as selectAll treats it: without this a failed request or
+          // a total that leads a running scan would spin the loop forever.
+          if (groups.value.length === before) break;
+        }
+      }
+    } catch (err) {
+      // loadMore and listGroups failures are already logged; this keeps a
+      // programming error from becoming an unhandled rejection on a keypress.
+      console.warn("[dedup] the jump to the end of the queue failed", err);
+    } finally {
+      if (token === endChaseToken) endChaseActive.value = false;
+    }
+    if (token !== endChaseToken) return;
+    // The chase is already over, so setFocus's cancelEndChase is a no-op here
+    // rather than a self-cancellation. After a successful jump this is the
+    // last row of the tail page; after a failed one, the last row still held.
+    if (groups.value.length) {
+      setFocus(windowStart.value + groups.value.length - 1);
+    }
   }
 
   // ── The decided page ─────────────────────────────────────────────────────
@@ -819,9 +1175,10 @@ export const useDedupStore = defineStore("dedup", () => {
     if (selectedSignatures.value.size) selectedSignatures.value = new Set();
   }
 
-  /** Ctrl+click: toggle one group, move the focus and the range anchor there. */
+  /** Ctrl+click: toggle one group, move the focus and the range anchor there.
+   * `index` is absolute, like every public index. */
   function toggleSelected(index) {
-    const sig = groups.value[index]?.signature;
+    const sig = groups.value[index - windowStart.value]?.signature;
     if (!sig) return;
     const next = new Set(selectedSignatures.value);
     // Grid parity: the FIRST Ctrl+click starts a multi-selection from the row
@@ -829,7 +1186,8 @@ export const useDedupStore = defineStore("dedup", () => {
     // one — both end up selected. (Ctrl+clicking the focused row itself still
     // just toggles it.)
     if (!next.size && focusIndex.value >= 0 && focusIndex.value !== index) {
-      const focusedSig = groups.value[focusIndex.value]?.signature;
+      const focusedSig =
+        groups.value[focusIndex.value - windowStart.value]?.signature;
       if (focusedSig) next.add(focusedSig);
     }
     if (next.has(sig)) next.delete(sig);
@@ -859,6 +1217,15 @@ export const useDedupStore = defineStore("dedup", () => {
       return { selected: 0, total: 0, truncated: false };
     }
     const pageSize = Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE;
+    // After an End jump the window hangs off the top: "all" still means the
+    // whole queue, so the rows ABOVE the window page back in first.
+    while (windowStart.value > 0 && groups.value.length < SELECT_ALL_MAX) {
+      const before = windowStart.value;
+      await loadPrevious({ limit: pageSize });
+      // An upward page that moved nothing (drift, a failed request) must not
+      // spin the loop; the truncation flag below reports the shortfall.
+      if (windowStart.value === before) break;
+    }
     while (hasMore.value && groups.value.length < SELECT_ALL_MAX) {
       const before = groups.value.length;
       await loadMore({ limit: pageSize });
@@ -871,19 +1238,20 @@ export const useDedupStore = defineStore("dedup", () => {
     return {
       selected: selectedSignatures.value.size,
       total: Math.max(total.value, selectedSignatures.value.size),
-      truncated: hasMore.value,
+      truncated: hasMore.value || windowStart.value > 0,
     };
   }
 
-  /** Shift+click: select the whole run from the anchor to `index`. */
+  /** Shift+click: select the whole run from the anchor to `index` (absolute). */
   function selectRange(index) {
     if (!groups.value.length) return;
     const from =
-      selectionAnchor ?? (focusIndex.value < 0 ? 0 : focusIndex.value);
+      selectionAnchor ??
+      (focusIndex.value < 0 ? windowStart.value : focusIndex.value);
     const [lo, hi] = from <= index ? [from, index] : [index, from];
     const next = new Set();
     for (let i = lo; i <= hi; i += 1) {
-      const sig = groups.value[i]?.signature;
+      const sig = groups.value[i - windowStart.value]?.signature;
       if (sig) next.add(sig);
     }
     selectedSignatures.value = next;
@@ -931,8 +1299,9 @@ export const useDedupStore = defineStore("dedup", () => {
    * @param {string} signature
    */
   function removeGroup(signature) {
-    const index = groups.value.findIndex((g) => g.signature === signature);
-    if (index < 0) return;
+    const local = groups.value.findIndex((g) => g.signature === signature);
+    if (local < 0) return;
+    const absolute = windowStart.value + local;
     groups.value = groups.value.filter((g) => g.signature !== signature);
     if (selectedSignatures.value.has(signature)) {
       const next = new Set(selectedSignatures.value);
@@ -956,10 +1325,47 @@ export const useDedupStore = defineStore("dedup", () => {
       // A page can be emptied faster than the read-ahead refills it. Without
       // this the queue shows its done state while the server still holds
       // thousands of groups, which is the one lie a to-do count cannot afford.
+      // A jumped tail window that empties refills from ABOVE itself: rows
+      // still exist there even when nothing is left below.
       if (hasMore.value) loadMore();
+      else if (windowStart.value > 0) loadPrevious();
       return;
     }
-    setFocus(Math.min(index, groups.value.length - 1));
+    setFocus(Math.min(absolute, windowStart.value + groups.value.length - 1));
+  }
+
+  /**
+   * Raise the standard action receipt for a verdict that recorded an
+   * operation.
+   *
+   * Everywhere else the receipt rides the mutation's own-origin WebSocket
+   * echo: the backend emits `pictures_changed`, App.vue hands it to
+   * `useOperationStore.onPictureEvent`, and the debounced refresh narrates
+   * the newest own operation. The dedup verdict service emits NO WebSocket
+   * event (backend gap, reported), so that pipeline never fires and a stack
+   * verdict produced no pill. The verdict RESPONSE is the trigger instead:
+   * the same `refresh({ narrate: true })` → `narrateNewest` → receipt path,
+   * just started by the response that proves the operation exists. The
+   * operation store's own guards keep it honest — it narrates only an
+   * own-origin operation above its high-water mark, so a WS echo arriving
+   * later cannot double-narrate.
+   *
+   * Called only when the response carries a `batch_id`: that is the marker
+   * that an operation-log row was recorded (a stack always mints one; a
+   * keep-separate does only on a backend that has made it undoable — older
+   * backends return null there and this degrades silently to no receipt).
+   */
+  function narrateVerdictOperation() {
+    try {
+      useOperationStore().refresh({ narrate: true });
+    } catch (err) {
+      // The verdict itself landed; only its narration is lost. Logged so the
+      // silent pill does not become an unexplained mystery.
+      console.warn(
+        "[dedup] could not refresh the operation log for the verdict receipt",
+        err,
+      );
+    }
   }
 
   /**
@@ -1010,9 +1416,13 @@ export const useDedupStore = defineStore("dedup", () => {
         if (!last) return null;
       }
       clearSelection();
+      // One receipt per GESTURE, not per group: the batch is one undo step.
+      if (last?.batch_id) narrateVerdictOperation();
       return last;
     }
-    return stackOne(group, { batchId });
+    const result = await stackOne(group, { batchId });
+    if (result?.batch_id) narrateVerdictOperation();
+    return result;
   }
 
   async function stackOne(group, { batchId } = {}) {
@@ -1060,9 +1470,15 @@ export const useDedupStore = defineStore("dedup", () => {
         if (!last) return null;
       }
       clearSelection();
+      // A backend that has made keep-separate undoable mirrors the stack
+      // response and carries a batch_id; an older one returns null there and
+      // the gesture stays receipt-less, exactly as before.
+      if (last?.batch_id) narrateVerdictOperation();
       return last;
     }
-    return keepSeparateOne(group);
+    const result = await keepSeparateOne(group);
+    if (result?.batch_id) narrateVerdictOperation();
+    return result;
   }
 
   async function keepSeparateOne(group) {
@@ -1176,6 +1592,7 @@ export const useDedupStore = defineStore("dedup", () => {
     ) {
       return;
     }
+    rememberFilters();
     // Enabling a tier loosens detection, and looser groups only exist in the
     // cache once a scan has looked for them. Disabling narrows a query over
     // the existing superset, so no rescan is needed there.
@@ -1206,6 +1623,7 @@ export const useDedupStore = defineStore("dedup", () => {
     if (clamped === threshold.value) return;
     const loosened = clamped < threshold.value;
     threshold.value = clamped;
+    rememberFilters();
     // Lowering the threshold asks for groups a stricter scan never wrote to
     // the cache; raising it just narrows the query over what is already there.
     if (loosened) await triggerScan();
@@ -1291,6 +1709,9 @@ export const useDedupStore = defineStore("dedup", () => {
         scopeId: scopeId.value,
       });
       invalidateScopeCounts();
+      // The whole run is one operation batch; the same response-driven
+      // narration as a single verdict raises its one receipt.
+      if (result?.batch_id) narrateVerdictOperation();
       await loadFirstPage();
       await refreshCounts();
       return result;
@@ -1313,6 +1734,7 @@ export const useDedupStore = defineStore("dedup", () => {
     nearEnabled,
     embeddingEnabled,
     threshold,
+    filtersRestored,
     setTierEnabled,
     setThreshold,
     // counts
@@ -1355,7 +1777,13 @@ export const useDedupStore = defineStore("dedup", () => {
     clearScope,
     loadFirstPage,
     loadMore,
+    loadPrevious,
+    windowStart,
     setFocus,
+    focusStart,
+    focusEnd,
+    cancelEndChase,
+    endChaseActive,
     selectionCount,
     isSelected,
     clearSelection,

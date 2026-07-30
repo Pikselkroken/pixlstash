@@ -7,7 +7,9 @@
     :aria-current="focused ? 'true' : undefined"
     :aria-selected="selected ? 'true' : undefined"
     :data-testid="`dedup-group-${group.signature}`"
+    @mousedown="onRowMouseDown"
     @click="emit('focus', $event)"
+    @dblclick="onDblClick"
   >
     <div class="ginfo">
       <div class="gn">
@@ -386,6 +388,19 @@ function thumbTitle(candidate, i) {
 }
 
 /**
+ * A modified press means "select rows", so the browser's own gesture on the
+ * same input — extending a text selection from wherever the caret last was —
+ * must not also run. Selection starts on mousedown, before the click handler
+ * ever sees the event, so this is the only place it can be refused.
+ * @param {MouseEvent} event
+ */
+function onRowMouseDown(event) {
+  if (event.shiftKey || event.ctrlKey || event.metaKey) {
+    event.preventDefault();
+  }
+}
+
+/**
  * Clicking a thumbnail focuses the row and makes that picture the cover.
  * @param {Object} candidate
  */
@@ -401,6 +416,31 @@ function onPick(candidate) {
 function onToggle(candidate) {
   emit("focus");
   emit("toggle-excluded", idOf(candidate));
+}
+
+/**
+ * Double-click means "open this": the same Compare the `C` key and the
+ * Compare button reach, from the row surface or a thumbnail.
+ *
+ * A double-click also delivers its two single clicks first, and that is fine
+ * by construction: on the row surface they focus (idempotent), on a thumbnail
+ * they pick the same cover twice, and Compare then opens over that state.
+ * Two carve-outs keep the gesture from surprising anyone:
+ *
+ *   * the action buttons (`.gbtn`, `.gcompare`, the Clear on a decided row)
+ *     keep their own double-click meaning — a fast double press on Stack is
+ *     two Stack clicks, already guarded by `busy`, and must not ALSO open a
+ *     dialog over the next group;
+ *   * a modified double-click belongs to the selection gestures (Ctrl/Shift
+ *     click), which double-fire harmlessly and must not open anything.
+ *
+ * @param {MouseEvent} event
+ */
+function onDblClick(event) {
+  if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+  const el = event.target instanceof Element ? event.target : null;
+  if (el && el.closest("button") && !el.closest(".gthumb")) return;
+  emit("compare");
 }
 </script>
 

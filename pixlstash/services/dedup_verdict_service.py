@@ -10,8 +10,8 @@ There are exactly two verdicts in v1.9 and neither of them deletes anything:
 Both are recorded against the group *signature*, not against picture or group
 ids, which is what makes the memory survive a re-import (see
 :func:`pixlstash.services.dedup_tier_service.group_signature`). "Keep separate"
-is permanent until :func:`reopen_verdict_in_session` is called from the Stacks
-view.
+stands until :func:`reopen_verdict_in_session` is called from the Stacks view —
+or, since 2026-07-30, until its own operation is undone (see below).
 
 Metadata union (design delta 5)
 -------------------------------
@@ -43,10 +43,17 @@ module calls it and adds the three the design requires on top:
 Operation log (§21)
 -------------------
 Every verdict raises an action receipt and lands in the operation log. Each
-verdict records **exactly one** :class:`~pixlstash.db_models.operation.Operation`
-row, and a bulk auto-stack shares a single ``batch_id`` across every group in the
-run, so ``POST /operations/batches/{batch_id}/undo`` reverses a thousand stacks in
-one step.
+verdict — stack **and** keep-separate — records **exactly one**
+:class:`~pixlstash.db_models.operation.Operation` row, and a bulk action shares a
+single ``batch_id`` across every group in the run, so
+``POST /operations/batches/{batch_id}/undo`` reverses a thousand verdicts in one
+step. Keep-separate changes no picture facet, so its row carries empty
+before/after payloads and the whole restore is done by its post-restore hook
+(undo reopens the verdict and returns the group to the queue; redo re-resolves
+it). Keep-separate was originally *not* op-logged (CSO ruling around #644: no
+reversible picture facet); the owner explicitly reversed that ruling on
+2026-07-30 and keep-separate is now a first-class, undoable operation,
+symmetric with the stack verdict.
 
 Two details this module owns rather than inherits:
 
@@ -67,8 +74,9 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 from fastapi import HTTPException
@@ -87,6 +95,7 @@ from pixlstash.db_models.dedup import (
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.operation import Operation
 from pixlstash.db_models.tag import Tag, is_tag_sentinel
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
 from pixlstash.services.dedup_tier_service import (
@@ -106,14 +115,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-# The one op_type this module records. Stable — part of the API contract the
-# frontend keys its undo affordances off. A bulk auto-stack shares one batch_id
+# The op_types this module records. Stable — part of the API contract the
+# frontend keys its undo affordances off. A bulk action shares one batch_id
 # across every row it writes, so the whole run reverses in a single step.
 #
-# Keep-separate and reopen have no op_type on purpose: they change no reversible
-# picture facet, so they record nothing rather than writing a no-op row that
-# would still consume a Ctrl+Z.
+# Keep-separate had no op_type until 2026-07-30 (it changes no reversible
+# picture facet, so the original CSO ruling around #644 recorded nothing rather
+# than writing a row); the owner explicitly reversed that ruling and it now
+# records one operation whose undo is carried entirely by its post-restore hook.
+# Reopen still records nothing: it IS the explicit inverse action, and logging
+# it would make undo-of-reopen a second, confusing way to re-decide a group.
 OP_TYPE_STACK = "dedup.stack"
+OP_TYPE_KEEP_SEPARATE = "dedup.keep_separate"
 
 # Per-group outcome vocabulary for a bulk auto-stack. Closed set; the response
 # reports every group under exactly one of these, so a partial run is legible
@@ -144,6 +157,11 @@ class VerdictResult:
         batch_id: The operation-log batch this verdict belongs to.
         metadata_union: What the union actually changed, so the receipt can say
             so instead of claiming a silent merge.
+        event_picture_ids: The pictures the WS ``pictures_changed`` announcement
+            should name — for a stack verdict the stack-expanded set (folding a
+            stack in touches siblings the group never named), for keep-separate
+            the group's members. Deliberately NOT part of :meth:`as_dict`: it is
+            broadcast plumbing, not response contract.
     """
 
     signature: str
@@ -154,6 +172,7 @@ class VerdictResult:
     excluded_picture_ids: list[int]
     batch_id: Optional[str]
     metadata_union: dict[str, Any]
+    event_picture_ids: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -191,6 +210,7 @@ def _record_operation(
     actor: Optional[str] = None,
     source: str = "external",
     origin_client_id: Optional[str] = None,
+    empty_diff_target_ids: Optional[list[int]] = None,
 ) -> None:
     """Append **one** operation row for this verdict.
 
@@ -199,6 +219,10 @@ def _record_operation(
     serialised writer (§21). The verdict path deliberately does not reuse
     ``routes/stacks.py``, which records itself; going through it would produce a
     second row and break "one verdict, one undo".
+
+    ``empty_diff_target_ids`` is the keep-separate path: that verdict changes no
+    picture facet, so its diff is empty by construction and the row is recorded
+    against the group's member ids instead (§21's empty-diff escape hatch).
     """
     operation_log_service.record_operation_in_session(
         session,
@@ -210,6 +234,7 @@ def _record_operation(
         actor=actor,
         source=source,
         origin_client_id=origin_client_id,
+        empty_diff_target_ids=empty_diff_target_ids,
     )
 
 
@@ -680,24 +705,52 @@ def apply_stack_verdict_in_session(
         excluded_picture_ids=excluded,
         batch_id=batch_id,
         metadata_union=union,
+        # The stack-expanded set: the fold and the renumber touch siblings the
+        # group never named, and the WS announcement must cover them too.
+        event_picture_ids=sorted(undo_targets),
     )
 
 
 def apply_keep_separate_in_session(
-    session: Session, signature: str, batch_id: Optional[str] = None
+    session: Session,
+    signature: str,
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> VerdictResult:
     """Remember that this group is *not* duplicates. Changes no picture row.
 
-    Permanent until :func:`reopen_verdict_in_session`. This is the verdict that
-    makes the sidebar count trustworthy: without it every rescan would re-offer
-    the same rejected group and the badge would never reach zero.
+    Records **one** operation (:data:`OP_TYPE_KEEP_SEPARATE`), exactly like the
+    stack verdict does — the owner's 2026-07-30 reversal of the #644-era CSO
+    ruling that kept this verdict out of the log. The verdict changes no picture
+    facet, so the operation's before/after payloads are empty and the whole
+    restore is the post-restore hook's: undo reopens the verdict and returns the
+    group to the queue; redo re-resolves it. :func:`reopen_verdict_in_session`
+    remains the explicit, always-available way back.
+
+    Args:
+        session: Pre-opened session; this function commits once, so the verdict
+            row and its operation land together or not at all.
+        signature: The group signature from the queue.
+        batch_id: Operation-log batch. A client gesture spanning several
+            verdicts passes one ``cli-`` id so the whole gesture reverses with a
+            single undo; minted server-side (``srv-``) when absent, exactly as
+            the stack verdict does — the batch id is what ties the Operation row
+            back to this verdict row on restore.
+        actor: Who performed the change, from ``request_context`` in the handler.
+        source: WS-envelope source, likewise read from the request (§21 origin
+            discipline: never from a contextvar, which is dead on this thread).
+        origin_client_id: WS-envelope per-tab origin, likewise.
     """
     _group, member_ids = _load_group(session, signature)
-    # batch_id is deliberately NOT stored on the row: keep-separate records no
-    # operation, so a stored id could only correlate it to OTHER verdicts'
-    # restores. With a shared client gesture id that made undoing a stack
-    # silently reverse an unrelated keep-separate (CSO R5). The id is still
-    # echoed in the response so the client can group its receipts.
+    # Always under a batch id, for the same reason the stack verdict is: the
+    # batch id is the key restore_verdicts_in_session uses to find this verdict
+    # row again on undo/redo. Stored on the row since 2026-07-30 — safe now that
+    # keep-separate records its own operation, so a shared gesture id reverses it
+    # only through THAT operation, explicitly and visibly, never as a silent
+    # side effect of undoing a sibling stack (the original CSO R5 concern).
+    batch_id = batch_id or new_batch_id()
     _upsert_verdict(
         session,
         signature=signature,
@@ -706,18 +759,29 @@ def apply_keep_separate_in_session(
         excluded_picture_ids=[],
         cover_picture_id=None,
         stack_id=None,
-        batch_id=None,
+        batch_id=batch_id,
     )
-    # No operation row: keep-separate changes no reversible picture facet, so
-    # there is nothing for undo to restore. Recording an empty diff would be a
-    # no-op row (``record_operation_in_session`` returns None for one) that still
-    # consumed a Ctrl+Z, which is worse than not offering undo here. The user's
-    # way back is the explicit reopen action, which is what the Stacks view shows.
+    # The diff is empty by construction (no picture facet changes), so the row
+    # is recorded through §21's empty-diff escape hatch against the member ids.
+    _record_operation(
+        session,
+        op_type=OP_TYPE_KEEP_SEPARATE,
+        before={},
+        after={},
+        batch_id=batch_id,
+        summary=f"Kept {len(member_ids)} pictures separate",
+        actor=actor,
+        source=source,
+        origin_client_id=origin_client_id,
+        empty_diff_target_ids=member_ids,
+    )
     session.commit()
     logger.info(
-        "[dedup-verdict] keep-separate recorded for signature=%s (%d members)",
+        "[dedup-verdict] keep-separate recorded for signature=%s (%d members, "
+        "batch=%s)",
         signature,
         len(member_ids),
+        batch_id,
     )
     return VerdictResult(
         signature=signature,
@@ -728,6 +792,9 @@ def apply_keep_separate_in_session(
         excluded_picture_ids=[],
         batch_id=batch_id,
         metadata_union={},
+        # No picture row changed, but the members' dedup state did (they left
+        # the queue), so other tabs get the standard refresh signal for them.
+        event_picture_ids=sorted(member_ids),
     )
 
 
@@ -754,8 +821,9 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
     if group is not None:
         group.resolved = False
         session.add(group)
-    # No operation row, for the same reason as keep-separate: reopening touches
-    # only the verdict row, which is not a reversible picture facet.
+    # No operation row: reopen IS the explicit inverse action (of either verdict
+    # kind), and logging it would make undo-of-reopen a second, confusing way to
+    # re-decide a group. The verdicts themselves are op-logged; this stays out.
     session.commit()
     logger.info("[dedup-verdict] reopened verdict for signature=%s", signature)
     return {
@@ -767,23 +835,29 @@ def reopen_verdict_in_session(session: Session, signature: str) -> dict[str, Any
 
 
 def restore_verdicts_in_session(
-    session: Session, operations: list[Operation], direction: str
+    session: Session,
+    operations: list[Operation],
+    direction: str,
+    verdict_kind: str = VERDICT_STACKED,
 ) -> None:
     """Reopen (on undo) or re-decide (on redo) the verdicts *operations* recorded.
 
-    Registered with the operation log as the post-restore hook for
-    :data:`OP_TYPE_STACK` (see
-    :func:`pixlstash.services.operation_log_service.register_post_restore_hook`).
+    Registered with the operation log as the post-restore hook for both
+    :data:`OP_TYPE_STACK` (with ``verdict_kind=VERDICT_STACKED``) and
+    :data:`OP_TYPE_KEEP_SEPARATE` (with ``verdict_kind=VERDICT_KEEP_SEPARATE``)
+    — see
+    :func:`pixlstash.services.operation_log_service.register_post_restore_hook`.
 
     Why this is needed at all: the operation log restores the reversible *picture*
-    facets, and a stack verdict changes two more things that are not picture
-    facets — the ``DedupVerdict`` row (decided) and the ``DedupGroup`` row
-    (resolved). Without this hook an undo unstacked the pictures but left the
-    group decided, so it never returned to the queue, survived a rescan (the
-    signature still carried a live verdict) and was recoverable only through
-    ``POST /dedup/verdicts/reopen``.
+    facets, and a verdict changes two more things that are not picture facets —
+    the ``DedupVerdict`` row (decided) and the ``DedupGroup`` row (resolved).
+    Without this hook an undo left the group decided, so it never returned to
+    the queue, survived a rescan (the signature still carried a live verdict)
+    and was recoverable only through ``POST /dedup/verdicts/reopen``. For
+    keep-separate this hook is the *entire* restore: the operation's recorded
+    diff is empty because the verdict changed no picture facet.
 
-    Correlation is by ``batch_id``: a stack verdict is always recorded under one
+    Correlation is by ``batch_id``: a verdict is always recorded under one
     (minted server-side when the caller supplies none), and the verdict row
     stores the same id. One query covers a 2 700-group batch undo, which is why
     the hook takes the whole list rather than one operation at a time.
@@ -792,8 +866,13 @@ def restore_verdicts_in_session(
         session: The restore's own session. Not committed here — the operation
             log commits the restore and this together, so the pictures and the
             queue can never disagree.
-        operations: Every :data:`OP_TYPE_STACK` operation in this restore.
+        operations: Every operation of this hook's ``op_type`` in this restore.
         direction: ``operation_log_service.RESTORE_UNDO`` or ``RESTORE_REDO``.
+        verdict_kind: Which ``DedupVerdict.verdict`` this hook owns. The filter
+            is what keeps each hook on its own rows when a client gesture id
+            spans both verdict kinds: the stack hook must not touch a
+            keep-separate row and vice versa — each is reversed only through its
+            OWN operation, so nothing is ever undone silently.
     """
     batch_ids = sorted({op.batch_id for op in operations if op.batch_id})
     unbatched = sorted(int(op.id) for op in operations if not op.batch_id and op.id)
@@ -813,24 +892,31 @@ def restore_verdicts_in_session(
         return
 
     is_redo = direction == operation_log_service.RESTORE_REDO
-    reopened_at = None if is_redo else datetime.utcnow()
+    now = datetime.utcnow()
+    reopened_at = None if is_redo else now
     signatures: list[str] = []
     for start in range(0, len(batch_ids), ID_CHUNK):
         chunk = batch_ids[start : start + ID_CHUNK]
         for row in session.exec(
-            # Only STACK verdicts: the restored operations are OP_TYPE_STACK, and
-            # a keep-separate sharing the same client gesture batch id (#644)
-            # must not be silently reversed by undoing the stack — the product
-            # calls keep-separate permanent-until-reopened (CSO R5).
             select(DedupVerdict).where(
                 DedupVerdict.batch_id.in_(chunk),
-                DedupVerdict.verdict == VERDICT_STACKED,
+                DedupVerdict.verdict == verdict_kind,
             )
         ).all():
-            # decided_at is deliberately not re-stamped on redo: it records when
-            # the user decided, and the row is "live" precisely when reopened_at
-            # is NULL, so one field carries the whole lifecycle honestly.
+            # The row is "live" precisely when reopened_at is NULL; one field
+            # carries the lifecycle. decided_at is RE-stamped on redo
+            # (2026-07-30): it means "when this decision last became live", not
+            # "when it was first made" — pressing redo is the user re-deciding
+            # now, and the Decided page sorts by decided_at descending, so
+            # restoring the old stamp would bury the just-redone verdict
+            # mid-list instead of putting it on top where the user looks for
+            # it. The original decision instant survives in the operation row's
+            # created_at, so no audit history is lost. (An undo leaves
+            # decided_at alone: the row is not live, and the stamp still names
+            # the decision the redo would restore.)
             row.reopened_at = reopened_at
+            if is_redo:
+                row.decided_at = now
             session.add(row)
             signatures.append(str(row.signature))
     if not signatures:
@@ -999,6 +1085,34 @@ def bulk_auto_stack_in_session(
 # --- Vault wrappers ---------------------------------------------------------
 
 
+def _notify_pictures_changed(
+    vault: "Vault",
+    picture_ids: list[int],
+    origin_client_id: Optional[str],
+    source: str,
+) -> None:
+    """Announce a committed verdict on the WS envelope (§15).
+
+    The standard ``pictures_changed`` emit every other mutation path raises, so
+    a second tab refreshes its grid, queue and counts. Called from the vault
+    wrappers, after the verdict's own commit, mirroring how the operation log's
+    undo/redo wrappers emit after their DB task returns. ``origin_client_id`` /
+    ``source`` are the values the handler read from the request and passed down
+    explicitly — never a contextvar, which is dead off the request's task.
+    """
+    if not picture_ids:
+        return
+    vault.notify(
+        EventType.CHANGED_PICTURES,
+        {
+            "picture_ids": sorted({int(pid) for pid in picture_ids}),
+            "origin_client_id": origin_client_id,
+            "change_kind": "updated",
+            "source": source,
+        },
+    )
+
+
 def apply_stack_verdict(
     vault: "Vault",
     signature: str,
@@ -1015,7 +1129,7 @@ def apply_stack_verdict(
     ``operation_log_service.request_context(request)``, evaluated in the handler
     on the request's own task — never read here, where the contextvar is dead.
     """
-    return vault.db.run_task(
+    result = vault.db.run_task(
         apply_stack_verdict_in_session,
         signature,
         cover_picture_id,
@@ -1025,13 +1139,34 @@ def apply_stack_verdict(
         source,
         origin_client_id,
     )
+    _notify_pictures_changed(vault, result.event_picture_ids, origin_client_id, source)
+    return result
 
 
 def apply_keep_separate(
-    vault: "Vault", signature: str, batch_id: Optional[str] = None
+    vault: "Vault",
+    signature: str,
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
 ) -> VerdictResult:
-    """Write-path vault wrapper around :func:`apply_keep_separate_in_session`."""
-    return vault.db.run_task(apply_keep_separate_in_session, signature, batch_id)
+    """Write-path vault wrapper around :func:`apply_keep_separate_in_session`.
+
+    ``actor`` / ``source`` / ``origin_client_id`` come from
+    ``operation_log_service.request_context(request)``, evaluated in the handler
+    on the request's own task — never read here, where the contextvar is dead.
+    """
+    result = vault.db.run_task(
+        apply_keep_separate_in_session,
+        signature,
+        batch_id,
+        actor,
+        source,
+        origin_client_id,
+    )
+    _notify_pictures_changed(vault, result.event_picture_ids, origin_client_id, source)
+    return result
 
 
 def reopen_verdict(vault: "Vault", signature: str) -> dict[str, Any]:
@@ -1050,7 +1185,7 @@ def bulk_auto_stack(
     origin_client_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Write-path vault wrapper around :func:`bulk_auto_stack_in_session`."""
-    return vault.db.run_task(
+    report = vault.db.run_task(
         bulk_auto_stack_in_session,
         scope,
         batch_id,
@@ -1060,14 +1195,36 @@ def bulk_auto_stack(
         source,
         origin_client_id,
     )
+    if not report.get("dry_run"):
+        # One announcement over every applied group's members. The per-result
+        # dicts carry the group members, not the stack-expanded set; a folded
+        # pre-existing stack's siblings are the (rare, exact-tier) gap.
+        _notify_pictures_changed(
+            vault,
+            [
+                pid
+                for item in report.get("results", [])
+                for pid in item.get("picture_ids", [])
+            ],
+            origin_client_id,
+            source,
+        )
+    return report
 
 
 # Registered at import time, and this module is imported by
-# ``pixlstash/routes/dedup.py``, which ``Server`` mounts at startup — so the hook
-# is in place before any request can reach undo. The registration lives here, not
-# in the operation log, so the op-log core keeps no dedup knowledge.
+# ``pixlstash/routes/dedup.py``, which ``Server`` mounts at startup — so the
+# hooks are in place before any request can reach undo. The registration lives
+# here, not in the operation log, so the op-log core keeps no dedup knowledge.
+# One hook per op_type, each scoped to its own verdict kind: a gesture batch
+# spanning both never lets one hook reverse the other's rows.
 operation_log_service.register_post_restore_hook(
-    OP_TYPE_STACK, restore_verdicts_in_session
+    OP_TYPE_STACK,
+    partial(restore_verdicts_in_session, verdict_kind=VERDICT_STACKED),
+)
+operation_log_service.register_post_restore_hook(
+    OP_TYPE_KEEP_SEPARATE,
+    partial(restore_verdicts_in_session, verdict_kind=VERDICT_KEEP_SEPARATE),
 )
 
 
@@ -1075,6 +1232,7 @@ __all__ = [
     "BULK_REASON_APPLIED",
     "BULK_REASON_BLOCKED",
     "BULK_REASON_FAILED",
+    "OP_TYPE_KEEP_SEPARATE",
     "OP_TYPE_STACK",
     "DedupVerdictError",
     "VerdictResult",

@@ -225,7 +225,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useGenStackPrefsStore` | `useGenStackPrefsStore.js` | Remembered client prefs for whether newly generated / filtered images stack with their source: `stackI2IOutputs` (ComfyUI image-to-image) and `stackFilterOutputs` (plugin "Filters" runs), both default ON and persisted to `localStorage`. |
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 | `useOperationStore` | `useOperationStore.js` | The undo/redo stack, mirrored from the backend's append-only operation log (`backend_architecture.md` §21): `operations` (newest 50, newest first), `canUndo`/`canRedo`/`nextUndo`/`nextRedo` from `GET /operations/undo-state`, and the single live `receipt` that narrates what just happened. Computeds `past` (applied steps), `future` (undone, redoable), `historyCount`, `nextUndoIsExternal`. Owns the receipt's dwell timer (5s, 8s destructive, paused on hover/focus/hidden tab) and the multi-step `undoTo` walk. Refreshed on a debounced WS picture/tag/character/description event; the receipt narrates THIS client's operations only (origin read from the event `data`), so another tab's work updates the stack silently. |
-| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `total` + `hasMore` (offset-paged by confidence descending, never loaded whole), `focusIndex`, the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. A **stack** verdict is recorded server-side like any other change, so its receipt and `Ctrl+Z` come from `useOperationStore` with nothing bespoke here; a **keep-separate** records no operation by design; its narration is a transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate's sticky notice reopens every group it covered. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
+| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `windowStart` + `total` + `hasMore` (a contiguous WINDOW of the confidence-descending queue, absolute indices, never loaded whole), `focusIndex` (+ `focusStart`/`focusEnd`/`loadPrevious`/`cancelEndChase`/`endChaseActive`, the one-press random-access End jump onto the tail page and its upward backfill — see §9.2), the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. Every verdict is recorded server-side (`dedup.stack`; `dedup.keep_separate` since the owner's 2026-07-30 override of #644), so receipts and `Ctrl+Z` come from `useOperationStore` — triggered from the verdict response, gated on its always-populated `batch_id` (see §9.2); against an older backend whose keep-separate returns no `batch_id`, the narration degrades to the transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate narrates once for the whole gesture. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
@@ -388,6 +388,16 @@ The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns 
 #### `Toolbar.vue` (`panels/`, ~1 410 lines)
 Top/grid toolbar. Imports state directly from Pinia stores (`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`, `useExportStore`, `useSidebarStore`) — no `inject` or prop drilling. The selection action UI that used to live here was extracted into `SelectionBar.vue` + `SelectionMenu.vue` (see below); the tag / ComfyUI / export / import / global-filter menu bodies were extracted into the `Tb*Panel` / `GbFilterPanel` sub-panels (see below). `Toolbar` no longer holds any selection state.
 
+**Responsive collapse (the ⋯ overflow pattern).** The bar is a container named
+`selbar toolbar` (the Duplicates bar is `dqbar toolbar`); shared chrome
+(`UndoControl`, `TbGlobalActions`, `TbOverflowMenu`) writes scoped
+`@container toolbar (…)` rules so it degrades identically in both bars. Fold =
+CSS both ways: every foldable control exists as its bar button AND as a
+`TbOverflowMenu` row with the same `v-if`, and container queries flip which of
+the pair is visible — no ResizeObserver, no JS measurement. The ladder and the
+never-fold floor are recorded in `docs/design/toolbar-responsive-decisions.md`;
+undo never enters the overflow.
+
 Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
@@ -515,8 +525,8 @@ The house-styled form/control primitives that wrap Vuetify with the PixlStash to
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
 The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
 
-#### `UndoControl.vue` (511 lines, `panels/`)
-The toolbar undo/redo pair plus a chevron opening the History popover. Mounted by `Toolbar` next to the sort split-button — the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
+#### `UndoControl.vue` (`panels/`)
+The toolbar undo/redo pair plus a chevron opening the History popover. Mounted in the **right-side app-wide cluster of every toolbar** — the canonical tail `[separator] [UndoControl] [TbGlobalActions]`, identical in the grid bar and the Duplicates bar (see `docs/design/toolbar-responsive-decisions.md`), and the same position in the Electron shell and in the browser, which is why it is not in the breadcrumb. Under the shared `toolbar` container it collapses in steps: ≤480px the chevron hides (the hosts' ⋯ overflow "History…" row calls the exposed `openHistory()` instead), ≤420px redo hides; **undo itself never folds or hides** — the recovery control stays a single visible target, which also keeps the "Changed elsewhere" warning surfaced. Buttons use `aria-disabled` + a guarded handler rather than the native `disabled`, so they stay tabbable and keep naming the step ("Nothing to undo"), and carry `aria-keyshortcuts`. The popover reuses the shared `.tbm*` menu chrome and is labelled `role="dialog"` (not `menu`): it is a list of ordinary tab-order buttons with no roving arrow-key navigation, so claiming a menu would promise a contract it does not honour. Rows are newest-first, undone steps struck through and inert; hovering **or focusing** a row previews how far back you would go (`--active-wash` + an `--active-bar` inset rail across the whole range), and activating it walks the stack via `undoTo`. Enter is handled explicitly because Vuetify's menu `preventDefault`s it. Focus returns to the chevron on a programmatic close. Exposes `openHistory()`.
 
 #### `OverlayActionReceipt.vue` (`widgets/`)
 The lightbox's own narration of the same single receipt, mounted by `ImageOverlay` as the last child of `.overlay-main`. The owner ruled that undo must work in the lightbox and that the affordance may be fitted differently there, because the lightbox has its own GUI — so this is not the grid pill promoted above the modal layer. Everything the receipt *means* comes from the shared `useActionReceipt` composable, so the two surfaces cannot drift; only the chrome differs: `dark-surface`/`on-dark-surface` at 0.9 (the exact fill `.overlay-topbar` and `.overlay-rail` carry), `--elevation-4` (the rung `visual-language.md` §7 names for lightbox chrome, and the reason the grid pill takes -3), a `0.2` border matching `.overlay-nav`, and its own 64px transient-status lane inset by `--filmstrip-rail-width` / `--sidebar-width` so it centres on the visible image. Three deliberate differences beyond the material: **no live region** (the grid's still speaks from underneath, so a second one would double-speak); **no History popover** (choosing a step is a browsing task whose preview has no referent on a surface showing one picture); and a **scope clause** above one target ("Across 2,700 pictures, not just this one"), derived from the count alone so navigating to the next picture cannot falsify it. Nothing on this surface ever says "this picture". Exposes `containsFocus()` / `dismiss()` for the overlay's Escape guard.
@@ -1044,6 +1054,37 @@ Three rules from the design are load-bearing and are easy to break by accident:
 - **Auto-advance.** A verdict removes its row and the focus lands on the next
   open group, so a run of `Enter` presses works the queue with no extra
   keystrokes.
+- **End means the true end, by random access.** The loaded rows are a
+  contiguous **window** of the queue, not necessarily its head:
+  `useDedupStore.groups` plus `windowStart` (the absolute queue index of
+  `groups[0]`, 0 through all normal top-down paging). Every public index —
+  `focusIndex`, the view's row indices, spacer arithmetic — is absolute,
+  mapped through `windowStart`; the scroll track is sized from the server
+  total, so the queue's bottom exists before its rows do. One `End` press
+  calls `focusEnd()`:
+  - everything loaded → focus the last row, synchronously;
+  - a small gap (≤ 2 browsing pages) → chase it in sequence, no rebase;
+  - a large gap → **jump**: ONE offset request for the last page
+    (`offset = max(0, total − page_size)`, never a cursor — the server 400s
+    the two together and the forward cursor chain is broken by any offset
+    jump), the window REBASED onto it, focus clamped to the last row actually
+    received. The selection is cleared on rebase (it would otherwise point at
+    rows no longer held — same rationale as `loadFirstPage`), and a
+    `windowEpoch` counter makes any ordinary page still in flight discard
+    itself instead of splicing the old window's rows onto the new one.
+  From a jumped tail, `loadPrevious()` backfills **upwards** by offset page
+  (prepends fill spacer, the scroll never moves), driven by the same
+  scroll/growth triggers as the downward chase; `Home` (`focusStart()`)
+  resets to the normal cursor-paged top window. `Ctrl+A` pages upwards first
+  after a jump, so "all" still means the whole queue. Under a running scan
+  the jump re-aims once from the served `total` and otherwise gives up onto
+  the best-known end; offset drift at page seams is tolerated by the same
+  de-dupe-by-signature the offset fallback always had. Cancellation
+  semantics are unchanged: any other focus move, a list rebuild, a scroll
+  away from the tail, or unmounting the view kills a running jump/chase via
+  `cancelEndChase()`. Known limitation: a `from_end`/anchored-tail server
+  parameter would remove the offset-instability window entirely; the
+  frontend is designed against the current contract instead.
 - **A stack needs two members.** `useDedupStore.toggleExcluded` refuses an `X`
   that would leave a single included candidate and returns `false`, so a
   two-candidate group accepts no exclusion at all and the Stack button the row is
@@ -1052,23 +1093,106 @@ Three rules from the design are load-bearing and are easy to break by accident:
   dead key, and a verdict that *is* refused by the server surfaces the server's
   own `detail` instead of a generic sentence.
 
-**Undo is not reimplemented for a stack verdict.** It is recorded server-side
-like any other change; `useOperationStore` notices the resulting event and
-raises the standard receipt. A **keep-separate** is the exception, and
-deliberately so: it changes no reversible picture facet, the backend records no
-operation for it, and an empty operation row would still consume a `Ctrl+Z`. No
-receipt will ever arrive for it, so `DuplicateQueue` raises its own sticky notice
-carrying a **Reopen** action, which is the only way back from that verdict.
+**Compare is a working surface, not a detour** (owner requirements, 2026-07-30).
+A verdict given inside `DedupCompareDialog` — footer buttons or `Enter`/`S` —
+does **not** close the dialog: the store's auto-advance moves the focus and the
+dialog, which renders `store.focusedGroup`, flips to the next group in place
+(zoom and fit/actual-pixels reset per group signature). It closes only when the
+queue runs out (`DuplicateQueue`'s `focusedGroup` watcher), and a failed
+verdict leaves the same group showing. Both verdict buttons wear their shortcut
+chips (`Enter`/`S`, via `AppButton key-hint`). A **double-click** on a queue
+row (surface or thumbnail, unmodified, not on the action buttons) opens
+Compare like `C`. The **mouse wheel** over a candidate's picture opens the
+blink-compare zoom on it; inside the zoom the wheel flips candidates in Fit
+(throttled), and stays native scroll in Actual pixels so drag/scroll panning
+keeps working. **Escape peels one layer**: zoom → Compare → queue. The
+keyboard model orders it that way, and `DedupCompareDialog.requestClose`
+routes AppDialog's own subtree-Escape/scrim close through the zoom layer so
+no path closes both at once.
+
+**The queue carries the shell chrome and closes the undo loop** (2026-07-30).
+Duplicates replaces the grid, and with it the grid's toolbar, so the queue's
+own bar mounts the same app-wide components: `TbGlobalActions` (Settings +
+stats toggle, shared with `Toolbar.vue`) and `UndoControl` (owner-only, hidden
+read-only), behind one separator. **The grid toolbar now matches**: its
+UndoControl moved out of the left group into the identical right-side tail
+`[separator] [UndoControl] [TbGlobalActions]`, so the position learned in one
+view holds in the other (`docs/design/toolbar-responsive-decisions.md`). Both
+bars also share the `toolbar` container name and the ⋯ overflow's collapse
+ladder, so the shared chrome degrades identically at every width. Undo/redo run through the shared
+`useOperationStore` and its receipt exactly as everywhere else; the queue's
+one addition is a Pinia `$onAction` subscription on that store which, after an
+`undo`/`redo`/`undoTo`/`undoBatchById` that touched a `dedup.*` operation,
+reloads the list (`invalidateScopeCounts` + `loadFirstPage` + `refreshCounts`,
+the same sequence as `reopen()`). That hook exists because the backend's
+post-restore hook reopens the verdict and returns the group to the unresolved
+queue, but the undo's own WebSocket echo is own-origin and suppressed like any
+other, and only the counts refresh via the sidebar path — without the
+subscription the badge said N+1 over a list of N. Scoped to dedup op types so
+an unrelated undo never yanks a triage back to the top. **Filter persistence:**
+the tier gate and threshold are remembered in `localStorage`
+(`pixlstash:dedupFilters`, written on every deliberate change and on queue
+open) and restored in `openQueue` between `loadPolicy()` and the URL filters,
+so precedence is URL > remembered > server defaults and the restored lens is
+in force for the first page. The Decided flip is deliberately not remembered.
+Account-level persistence in `/users/me/config` would need a backend schema
+change (the PATCH endpoint rejects unknown keys) and is recorded as a
+follow-up.
+
+**A committed toolbar change hands the keyboard back to the queue**
+(2026-07-30). A tier toggle closes the popover and focuses the queue root
+(Escape still returns to the trigger); a POINTER-committed threshold or size
+change focuses the queue root while keyboard tuning keeps the slider (each
+arrow fires its own `change`); the Decided flip focuses the list it revealed.
+The tier popover blocks only keys pressed *inside itself*
+(`tierMenuOwnsEvent`, the event now passed to `isBlocked`), so the rows stay
+workable under its live counts, and Escape anywhere in it (including the
+slider, a typing target the key model stands down for) dismisses it via a
+wrap-level handler. Slider thumbs (`role="slider"`) are typing targets, so
+their arrows never double as row moves. Settings/History/undo keep standard
+focus behaviour: the dialog/popover owns focus, and Enter-repeat on undo is
+meaningful. **Inside Compare, Up/Down (and j/k) switch the compared group in
+place** — clamped at the queue's ends, live in read-only, chase-cancelling
+like any focus move; the ZOOM layer keeps all its arrows for candidate
+flipping (one axis, one meaning per layer), and Home/End/Page keys stay quiet
+behind the dialog.
+
+**Undo is not reimplemented for any verdict.** Every verdict is recorded
+server-side — `dedup.stack`, and since the owner's override of the #644
+ruling (2026-07-30) `dedup.keep_separate` too, with the same
+`VerdictResponse` shape and a `batch_id` that is always populated — and
+verdict paths now also emit the standard own-origin `pictures_changed` event.
+The receipt still triggers from the verdict RESPONSE
+(`useDedupStore.narrateVerdictOperation` →
+`useOperationStore.refresh({ narrate: true })` → `narrateNewest`), once per
+gesture, gated on the response's `batch_id`: it is immediate, it covers older
+backends whose keep-separate returns no `batch_id` (those degrade to the
+transient info notice), and the operation store's own-origin/high-water
+guards make the later WS echo idempotent — one receipt per gesture, tested in
+`useOperationStore.test.js`. The queue's `$onAction dedup.*` watcher covers
+undo-reload for both verdict types, and for BOTH sides of the flip: its
+`loadFirstPage` carries `decided: showingDecided`, so an undo taken on the
+Decided screen removes the group from Decided (it is back in the queue) and a
+redo returns it there, counts reconciling on the same pass; a group whose
+lens no longer matches after the reopen simply reloads to an honest empty
+state.
+**The URL filter mirror is gated on `useDedupStore.filtersRestored`**: on a
+full reload the policy landing flipped `policyLoaded` one microtask before
+`openQueue` adopted the URL's filters, the mirror read the still-default gate
+as "the user chose defaults" and replaced the URL without its filter params —
+and because that navigation was still in flight when the mirror re-ran, the
+`same`-query check passed and no corrective write ever happened. The gate
+keeps the mirror silent until the store has adopted the URL (or a deliberate
+filter change makes the state authoritative via `rememberFilters`).
 The queue's only other undo-specific job is to *claim* `Ctrl+Z`
 (`preventDefault` **and** `stopPropagation`, see `useDedupQueueKeyboard.js`) so
 the app shell's global handler does not also fire and undo twice. Any new view
 that owns keys the shell also owns has the same obligation.
 
 **The sidebar badge is reconciled from the server, never inferred from
-WebSocket traffic.** A keep-separate mutates no picture row, so it raises no
-event and `App.refreshSidebar` never fires for it: the optimistic decrement in
-`useDedupStore` would be corrected by nothing, would already be wrong in a second
-tab, and would drift further with every verdict. Every verdict therefore refetches
+WebSocket traffic.** A picture event says something changed, not what the
+counts became, so the optimistic decrement in `useDedupStore` would drift in
+a second tab from the first verdict. Every verdict therefore refetches
 `POST /dedup/counts` behind its optimistic tick (unawaited, so auto-advance is
 not held up), and `syncQueueToRoute` refreshes the counts on queue open even when
 the requested scope is already showing.

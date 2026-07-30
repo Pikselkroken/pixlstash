@@ -31,7 +31,7 @@ const countText = computed(() =>
 </script>
 
 <template>
-  <span class="scope-pill">
+  <span class="scope-pill" :title="label">
     <v-icon class="scope-pill__ico" size="14">{{ icon }}</v-icon>
     <span class="scope-pill__label">{{ label }}</span>
     <span v-if="countText" class="scope-pill__count">{{ countText }}</span>
@@ -101,5 +101,17 @@ const countText = computed(() =>
 .scope-pill__dismiss:focus-visible {
   box-shadow: var(--focus-ring);
   outline: none;
+}
+
+/* ── Shared toolbar collapse (docs/design/toolbar-responsive-decisions.md).
+   The pill never folds while a scope is active — a filtered list that does
+   not say it is filtered is the bug this pill exists to prevent — so on a
+   narrow bar it compresses to the kind icon + dismiss, the full label
+   surviving as the pill's tooltip. ─────────────────────────────────────── */
+@container toolbar (max-width: 600px) {
+  .scope-pill__label,
+  .scope-pill__count {
+    display: none;
+  }
 }
 </style>

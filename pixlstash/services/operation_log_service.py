@@ -536,6 +536,7 @@ def record_operation_in_session(
     summary: SummarySpec = None,
     undoable: bool = True,
     target_type: str = TARGET_PICTURE,
+    empty_diff_target_ids: Optional[Iterable[Any]] = None,
 ) -> Optional[Operation]:
     """Append one operation row for the diff between two snapshots.
 
@@ -554,13 +555,25 @@ def record_operation_in_session(
         undoable: ``False`` records the change for audit without offering undo
             (the DAM 1.2 rule for file-mutating operations).
         target_type: Kind of object the target ids refer to.
+        empty_diff_target_ids: Normally an empty diff records nothing (a no-op
+            endpoint must not consume a Ctrl+Z). Pass the affected ids here for
+            an operation whose *entire* reversible state lives outside the
+            picture facets — the dedup keep-separate verdict is the case in
+            point — and the row is recorded anyway, with empty before/after
+            payloads and these target ids, so undo/redo still find it and its
+            registered post-restore hook performs the whole restore. Ignored
+            when the diff is non-empty.
 
     Returns:
-        The persisted :class:`Operation`, or ``None`` when nothing changed.
+        The persisted :class:`Operation`, or ``None`` when nothing changed and
+        no ``empty_diff_target_ids`` were declared.
     """
     before_delta, after_delta = diff_states(before, after)
+    forced_target_ids: Optional[list[int]] = None
     if not before_delta and not after_delta:
-        return None
+        if empty_diff_target_ids is None:
+            return None
+        forced_target_ids = _normalize_ids(empty_diff_target_ids)
 
     if callable(summary):
         try:
@@ -574,9 +587,11 @@ def record_operation_in_session(
             )
             summary = None
 
-    target_ids = sorted(
-        {int(pid) for pid in after_delta} | {int(pid) for pid in before_delta}
-    )
+    target_ids = forced_target_ids
+    if target_ids is None:
+        target_ids = sorted(
+            {int(pid) for pid in after_delta} | {int(pid) for pid in before_delta}
+        )
 
     # A new operation invalidates the redo stack: anything previously undone can
     # no longer be replayed onto a history that has moved on. The rows stay —
@@ -1356,6 +1371,14 @@ def _restore(
         state = _loads(
             operation.before_state if to_before else operation.after_state, {}
         )
+        if not state:
+            # An operation recorded through the empty-diff path (its whole
+            # reversible state lives outside the picture facets — the dedup
+            # keep-separate verdict). Its restore is entirely its post-restore
+            # hook's, but the pictures it named still change domain state, so
+            # they are returned and announced like any other restore target.
+            touched.update(int(pid) for pid in _loads(operation.target_ids, []))
+            continue
         touched.update(
             apply_state_in_session(
                 session,

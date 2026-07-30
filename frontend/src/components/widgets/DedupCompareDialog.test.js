@@ -3,7 +3,7 @@
 // value is marked best in each column, which candidate shows its path, and that
 // the two card gestures (pick a cover, leave a copy out) stay separate.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
 // The thumbnail URL builder pulls in the Axios client; the dialog only needs a
@@ -245,6 +245,106 @@ describe("DedupCompareDialog: the blink compare (zoom)", () => {
   });
 });
 
+describe("DedupCompareDialog: the wheel", () => {
+  function zoomEl() {
+    return document.querySelector('[data-testid="dedup-zoom"]');
+  }
+
+  /** The zero-based index of the candidate the zoom is showing. */
+  function zoomIndexShown() {
+    return Array.from(zoomEl().querySelectorAll(".dc-zv-flip button")).findIndex(
+      (b) => b.classList.contains("dc-zv-on"),
+    );
+  }
+
+  function wheel(el, deltaY) {
+    const event = new window.WheelEvent("wheel", {
+      deltaY,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.dispatchEvent(event);
+    return event;
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  // The mouse's way into the zoom: scrolling over a candidate's picture is the
+  // zoom button without the pixel hunt.
+  it("opens the zoom on the candidate under the wheel", async () => {
+    const wrapper = mountDialog();
+    await wrapper.findAll(".dc-thumb")[1].trigger("wheel", { deltaY: 3 });
+    expect(wrapper.vm.isZoomOpen()).toBe(true);
+    expect(zoomIndexShown()).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("flips candidates on the wheel in Fit, throttled", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+
+    const surface = zoomEl().querySelector(".dc-zv-img");
+    const first = wheel(surface, 5);
+    await wrapper.vm.$nextTick();
+    expect(zoomIndexShown()).toBe(1);
+    // The flip hijacks the wheel, so the dialog behind cannot also scroll.
+    expect(first.defaultPrevented).toBe(true);
+
+    // A second tick of the same physical flick lands inside the cooldown and
+    // must not race through the loop.
+    wheel(surface, 5);
+    await wrapper.vm.$nextTick();
+    expect(zoomIndexShown()).toBe(1);
+    wrapper.unmount();
+  });
+
+  it("leaves the wheel to native scrolling in actual-pixels mode", async () => {
+    // Actual pixels is a scroll-to-pan surface: hijacking the wheel there
+    // would kill the panning it exists for.
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(0);
+    await wrapper.vm.$nextTick();
+    wrapper.vm.toggleZoomPixels();
+    await wrapper.vm.$nextTick();
+
+    const surface = zoomEl().querySelector(".dc-zv-img");
+    const event = wheel(surface, 5);
+    await wrapper.vm.$nextTick();
+    expect(event.defaultPrevented).toBe(false);
+    expect(zoomIndexShown()).toBe(0);
+    wrapper.unmount();
+  });
+});
+
+describe("DedupCompareDialog: closing peels one layer", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  // AppDialog claims Escape on its own subtree and Vuetify's ESC/scrim close
+  // arrives the same way, so the dialog's close intent must respect the zoom
+  // layer or ESC with the zoom up would close both at once.
+  it("a close request with the zoom up closes only the zoom; the next one closes the dialog", async () => {
+    const wrapper = mountDialog();
+    wrapper.vm.openZoom(1);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.isZoomOpen()).toBe(true);
+
+    const dialog = wrapper.findComponent({ name: "AppDialog" });
+    dialog.vm.$emit("close");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.isZoomOpen()).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+
+    dialog.vm.$emit("close");
+    expect(wrapper.emitted("close")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
 describe("DedupCompareDialog: the card gestures", () => {
   it("makes a clicked card the cover, and marks only that card pressed", () => {
     // aria-pressed is the only cover signal a screen-reader user gets.
@@ -289,6 +389,14 @@ describe("DedupCompareDialog: the verdict footer", () => {
     expect(buttons[0].find("button").attributes("disabled")).toBeUndefined();
     expect(buttons[1].find("button").attributes("disabled")).toBeDefined();
     expect(buttons[2].find("button").attributes("disabled")).toBeDefined();
+  });
+
+  // A shortcut shown next to the action it triggers is the only kind anyone
+  // discovers; Stack always wore its Enter chip, Keep separate lacked its S.
+  it("shows the shortcut on both verdicts: Enter on Stack, S on Keep separate", () => {
+    const buttons = footerButtons(mountDialog());
+    expect(buttons[1].find("kbd").text()).toBe("S");
+    expect(buttons[2].find("kbd").text()).toBe("↵");
   });
 
   it("emits the verdict the user picked", () => {

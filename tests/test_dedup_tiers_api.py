@@ -22,6 +22,7 @@ import gc
 import json
 import os
 import tempfile
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,7 +30,7 @@ from sqlmodel import select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember
-from pixlstash.db_models.dedup import DedupScan, DedupVerdict
+from pixlstash.db_models.dedup import DedupGroup, DedupScan, DedupVerdict
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
@@ -571,6 +572,271 @@ def test_the_decided_page_lists_the_verdict_and_clears_via_reopen():
         _teardown(temp_dir, server)
 
 
+def test_the_decided_page_orders_by_decision_time_newest_first():
+    """The Decided flip is "review what I decided": most recent decision on top.
+
+    It used to reuse the queue's `(confidence DESC, id ASC)` ordering, which is
+    meaningless for a review list (every exact group ties at 1.0, so the list
+    came out in group-id order regardless of when anything was decided — the
+    user's "very weird" report, 2026-07-30). Both directions are asserted: the
+    decided page follows `decided_at` descending across both verdict kinds, and
+    the OPEN queue keeps its confidence ordering.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=2)
+        _rescan(server)
+        open_order = [g["signature"] for g in client.get(GROUPS_URL).json()["groups"]]
+        assert len(open_order) == 3
+
+        # The other direction first: the OPEN queue still orders by
+        # (confidence DESC, id ASC) — the fix must not leak into it.
+        def db_order(session):
+            rows = session.exec(
+                select(DedupGroup).where(DedupGroup.resolved.is_(False))
+            ).all()
+            return [
+                row.signature
+                for row in sorted(
+                    rows, key=lambda r: (-float(r.confidence or 0.0), int(r.id))
+                )
+            ]
+
+        assert open_order == _run(server, db_order)
+
+        # Decide in a deliberate order, mixing both verdict kinds. Decision
+        # order is deliberately NOT queue order, so the assertion below cannot
+        # pass by accident of id ordering.
+        first, second, third = open_order
+        for url, signature in (
+            (KEEP_SEPARATE_URL, second),
+            (STACK_URL, first),
+            (KEEP_SEPARATE_URL, third),
+        ):
+            response = client.post(url, json={"signature": signature})
+            assert response.status_code == 200, response.text
+
+        decided = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
+        assert [g["signature"] for g in decided] == [third, first, second]
+        stamps = [g["decided_at"] for g in decided]
+        assert stamps == sorted(stamps, reverse=True)
+
+        # A fresh decision lands on top: reopen the oldest and re-decide it.
+        assert client.post(REOPEN_URL, json={"signature": second}).status_code == 200
+        assert (
+            client.post(KEEP_SEPARATE_URL, json={"signature": second}).status_code
+            == 200
+        )
+        decided = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
+        assert [g["signature"] for g in decided] == [second, third, first]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_redo_restamps_the_decision_so_it_returns_to_the_top():
+    """Redo means "I re-decide this NOW", so it gets a fresh `decided_at`.
+
+    Non-vacuous by construction: the undone verdict's stamp is backdated an
+    hour below its sibling's, so a redo that restored the old stamp would sort
+    it UNDER the sibling — only the 2026-07-30 re-stamp puts it on top, which
+    is where the user who just pressed redo looks for it.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        sig_a, sig_b = sorted(_signatures(client))
+        assert client.post(STACK_URL, json={"signature": sig_a}).status_code == 200
+        assert (
+            client.post(KEEP_SEPARATE_URL, json={"signature": sig_b}).status_code == 200
+        )
+
+        def backdate(session):
+            row = session.exec(
+                select(DedupVerdict).where(DedupVerdict.signature == sig_b)
+            ).first()
+            row.decided_at = row.decided_at - timedelta(hours=1)
+            session.add(row)
+            session.commit()
+
+        _run(server, backdate)
+
+        def decided_order():
+            body = client.get(GROUPS_URL, params={"decided": True}).json()
+            return [g["signature"] for g in body["groups"]]
+
+        assert decided_order() == [sig_a, sig_b]
+
+        # Undo (the keep-separate on B is the newest operation) removes it...
+        assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+        assert decided_order() == [sig_a]
+
+        # ...and redo returns it TO THE TOP: decided_at now means "when this
+        # decision last became live", freshly stamped on redo.
+        assert client.post(f"{API}/operations/redo", json={}).status_code == 200
+        assert decided_order() == [sig_b, sig_a]
+        assert _verdict_row(server, sig_b).reopened_at is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_decided_rows_carry_the_display_ready_decision_stamp():
+    """`decided_at` on a decided row is the verdict's stamp, ready to display.
+
+    The frontend binds the Decided view's "decided when" column to this field,
+    so its contract is pinned end to end: the serialized value equals the
+    verdict row's stamp exactly, in the API's house format (naive-UTC ISO 8601,
+    microseconds, NO offset suffix); a redo's re-stamp is what the listing then
+    serves; the stale edge (a resolved group with no live verdict) serves
+    `null` rather than an invented stamp; and open-queue rows carry `null` in
+    both verdict fields as before.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        sig_a, sig_b = sorted(_signatures(client))
+
+        # Open-queue rows: both verdict fields null (no live verdict there).
+        for row in client.get(GROUPS_URL).json()["groups"]:
+            assert row["verdict"] is None
+            assert row["decided_at"] is None
+
+        assert client.post(STACK_URL, json={"signature": sig_a}).status_code == 200
+        assert (
+            client.post(KEEP_SEPARATE_URL, json={"signature": sig_b}).status_code == 200
+        )
+
+        def decided_rows():
+            body = client.get(GROUPS_URL, params={"decided": True}).json()
+            return {g["signature"]: g for g in body["groups"]}
+
+        # Both verdict kinds serve the stamp, byte-equal to the verdict row's
+        # isoformat: naive UTC, microseconds, no "Z", no "+00:00".
+        rows = decided_rows()
+        for signature in (sig_a, sig_b):
+            stamp = rows[signature]["decided_at"]
+            assert stamp == _verdict_row(server, signature).decided_at.isoformat()
+            assert not stamp.endswith("Z") and "+" not in stamp
+            assert datetime.fromisoformat(stamp).tzinfo is None
+
+        # A redo's fresh stamp is what the listing serves afterwards.
+        stamp_before = _verdict_row(server, sig_b).decided_at
+        assert client.post(f"{API}/operations/undo", json={}).status_code == 200
+        assert client.post(f"{API}/operations/redo", json={}).status_code == 200
+        restamped = _verdict_row(server, sig_b).decided_at
+        assert restamped > stamp_before
+        assert decided_rows()[sig_b]["decided_at"] == restamped.isoformat()
+
+        # The stale edge: a resolved group whose verdict is no longer live
+        # (reopened directly, group left resolved) still lists — in the tail —
+        # with BOTH fields null. The server never invents a stamp.
+        def go_stale(session):
+            row = session.exec(
+                select(DedupVerdict).where(DedupVerdict.signature == sig_a)
+            ).first()
+            row.reopened_at = datetime.utcnow()
+            session.add(row)
+            session.commit()
+
+        _run(server, go_stale)
+        body = client.get(GROUPS_URL, params={"decided": True}).json()
+        assert [g["signature"] for g in body["groups"]] == [sig_b, sig_a]
+        stale = body["groups"][-1]
+        assert stale["verdict"] is None
+        assert stale["decided_at"] is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_decided_page_paging_is_stable_across_seams():
+    """Cursor and offset paging of the decided list neither skip nor repeat.
+
+    Covers the ordinary case (distinct stamps), the tie case (a bulk run's
+    same-instant stamps, where the `id DESC` tie-break is what keeps the seam
+    stable), and the cursor-family separation: a queue cursor on the decided
+    page (and vice versa) is a 400, never a silently wrong resume.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=4)
+        _rescan(server)
+        open_order = [g["signature"] for g in client.get(GROUPS_URL).json()["groups"]]
+        assert len(open_order) == 5
+        # A queue-family cursor, captured while the queue still has rows.
+        queue_cursor = client.get(GROUPS_URL, params={"limit": 2}).json()["next_cursor"]
+        assert queue_cursor
+
+        for signature in open_order:
+            response = client.post(KEEP_SEPARATE_URL, json={"signature": signature})
+            assert response.status_code == 200, response.text
+        expected = list(reversed(open_order))
+
+        def collect(params):
+            collected, cursor = [], None
+            for _ in range(10):
+                query = dict(params)
+                if cursor:
+                    query["cursor"] = cursor
+                body = client.get(GROUPS_URL, params=query).json()
+                collected.extend(g["signature"] for g in body["groups"])
+                cursor = body.get("next_cursor")
+                if not cursor:
+                    break
+            return collected
+
+        assert collect({"decided": True, "limit": 2}) == expected
+
+        # The deprecated offset path pages the same ordering.
+        flat = [
+            signature
+            for off in (0, 2, 4)
+            for signature in (
+                g["signature"]
+                for g in client.get(
+                    GROUPS_URL, params={"decided": True, "limit": 2, "offset": off}
+                ).json()["groups"]
+            )
+        ]
+        assert flat == expected
+
+        # The tie case: flatten every stamp to one instant (a bulk auto-stack
+        # writes a same-instant run) and re-page. The id tie-break must carry
+        # the seam: nothing skipped, nothing repeated, deterministic order.
+        def flatten(session):
+            stamp = datetime.utcnow()
+            for row in session.exec(select(DedupVerdict)).all():
+                row.decided_at = stamp
+                session.add(row)
+            session.commit()
+
+        _run(server, flatten)
+        tied = collect({"decided": True, "limit": 2})
+        assert len(tied) == len(set(tied)) == 5, "a seam skipped or repeated a row"
+
+        def id_desc(session):
+            rows = session.exec(
+                select(DedupGroup).where(DedupGroup.resolved.is_(True))
+            ).all()
+            return [row.signature for row in sorted(rows, key=lambda r: -int(r.id))]
+
+        assert tied == _run(server, id_desc)
+
+        # Cursor families are mutually unreadable.
+        decided_cursor = client.get(
+            GROUPS_URL, params={"decided": True, "limit": 2}
+        ).json()["next_cursor"]
+        assert decided_cursor
+        rejected = client.get(
+            GROUPS_URL, params={"decided": True, "cursor": queue_cursor}
+        )
+        assert rejected.status_code == 400, rejected.text
+        rejected = client.get(GROUPS_URL, params={"cursor": decided_cursor})
+        assert rejected.status_code == 400, rejected.text
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_an_unknown_signature_is_a_400_not_a_500():
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -918,7 +1184,13 @@ def test_batch_undo_after_auto_stack_returns_every_group():
 
 
 def test_an_undo_does_not_reopen_a_group_it_never_touched():
-    """The hook is scoped to the undone batch, not to every decided group."""
+    """The hook is scoped to the undone batch, not to every decided group.
+
+    The two verdicts here share no gesture id, so each sits in its own
+    server-minted batch: undoing the newest (the stack) reverses only the stack.
+    The keep-separate stands — not because it is irreversible (it has been
+    undoable since 2026-07-30), but because its own operation was not undone.
+    """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
         _add_exact_groups(server, count=1)
@@ -944,14 +1216,65 @@ def test_an_undo_does_not_reopen_a_group_it_never_touched():
         _teardown(temp_dir, server)
 
 
-def test_an_undo_does_not_reverse_a_keep_separate_sharing_its_gesture_id():
-    """CSO R5: batch-id correlation must not over-reach the STACK verdicts.
+def test_undo_returns_a_kept_separate_group_to_the_queue():
+    """Keep-separate is undoable since the owner's 2026-07-30 override of #644.
 
-    One client gesture id across a stack and a keep-separate (exactly what the
-    gesture-batch header encourages) previously made undoing the stack silently
-    reverse the keep-separate too - a decision the product calls permanent. The
-    hook now filters on ``verdict == stacked`` and keep-separate rows store no
-    batch id at all, so both defenses are asserted here.
+    Both directions at the HTTP boundary: the response carries the operation's
+    ``batch_id`` (the undo handle, mirroring the stack response), undo returns
+    the group to the queue with the verdict row kept and reopened, and redo
+    re-decides it. No picture row changes in any direction.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        signature = _signature(client)
+        kept = client.post(KEEP_SEPARATE_URL, json={"signature": signature})
+        assert kept.status_code == 200, kept.text
+        body = kept.json()
+        assert body["verdict"] == "keep_separate"
+        # The undo handle, exactly as the stack response exposes it. No client
+        # batch was supplied, so the server minted a namespaced srv- id.
+        batch_id = body["batch_id"]
+        assert batch_id and batch_id.startswith("srv-")
+        assert _verdict_row(server, signature).batch_id == batch_id
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+
+        # The recorded operation is discoverable through the standard log.
+        state = client.get(f"{API}/operations/undo-state").json()
+        assert state["can_undo"] is True
+        assert state["next_undo"]["op_type"] == "dedup.keep_separate"
+
+        undone = client.post(f"{API}/operations/undo", json={})
+        assert undone.status_code == 200, undone.text
+        assert _signatures(client) == {signature}
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 1
+        verdict = _verdict_row(server, signature)
+        assert verdict is not None, "the verdict row is kept, only reopened"
+        assert verdict.reopened_at is not None
+        # It is genuinely back in the queue: a rescan does not re-decide it.
+        _rescan(server)
+        assert _signatures(client) == {signature}
+
+        redone = client.post(f"{API}/operations/redo", json={})
+        assert redone.status_code == 200, redone.text
+        assert client.post(COUNTS_URL, json={}).json()["unresolved_groups"] == 0
+        assert _verdict_row(server, signature).reopened_at is None
+        # No picture row changed in either direction.
+        assert _run(
+            server, lambda session: [session.get(Picture, pid).stack_id for pid in ids]
+        ) == [None, None, None]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
+    """One gesture id across a stack and a keep-separate is ONE undo unit.
+
+    Until 2026-07-30 the keep-separate half recorded no operation and the stack
+    hook deliberately left it standing (CSO R5: nothing may be reversed
+    *silently*). The owner's override makes keep-separate record its own
+    operation, so the shared batch now reverses both halves — each through its
+    own operation, explicitly listed in the undo response, which is what R5
+    actually demanded. Redo re-applies both.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -961,28 +1284,106 @@ def test_an_undo_does_not_reverse_a_keep_separate_sharing_its_gesture_id():
         assert len(signatures) == 2
         kept_separate, stacked = signatures
 
-        gesture = "cli-one-gesture-r5"
+        gesture = "cli-one-gesture-644"
         keep = client.post(
             KEEP_SEPARATE_URL,
             json={"signature": kept_separate, "batch_id": gesture},
         )
         assert keep.status_code == 200, keep.text
+        assert keep.json()["batch_id"] == gesture
         response = client.post(
             STACK_URL, json={"signature": stacked, "batch_id": gesture}
         )
         assert response.status_code == 200, response.text
         assert _signatures(client) == set()
+        assert _verdict_row(server, kept_separate).batch_id == gesture
 
-        # Defense 1: the keep-separate row never stored the gesture id.
-        assert _verdict_row(server, kept_separate).batch_id is None
+        undone = client.post(f"{API}/operations/undo", json={})
+        assert undone.status_code == 200, undone.text
+        # Explicit, not silent: both operations are named in the undo response.
+        assert {op["op_type"] for op in undone.json()["operations"]} == {
+            "dedup.stack",
+            "dedup.keep_separate",
+        }
 
-        assert client.post(f"{API}/operations/undo", json={}).status_code == 200
-
-        # Defense 2: only the stacked verdict reopened; keep-separate is live.
-        assert _signatures(client) == {stacked}
-        assert _verdict_row(server, kept_separate).reopened_at is None
+        # Both groups are back in the queue, both verdict rows reopened.
+        assert _signatures(client) == {kept_separate, stacked}
+        assert _verdict_row(server, kept_separate).reopened_at is not None
+        assert _verdict_row(server, stacked).reopened_at is not None
         _rescan(server)
-        assert _signatures(client) == {stacked}
+        assert _signatures(client) == {kept_separate, stacked}
+
+        # Redo re-applies the whole gesture.
+        assert client.post(f"{API}/operations/redo", json={}).status_code == 200
+        assert _signatures(client) == set()
+        assert _verdict_row(server, kept_separate).reopened_at is None
+        assert _verdict_row(server, stacked).reopened_at is None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_verdicts_announce_pictures_changed_on_the_ws_envelope():
+    """Both verdict kinds emit the standard refresh signal; so do undo and redo.
+
+    Verdicts used to emit nothing, so a second tab's grid, queue and counts had
+    no signal to refresh on. Both paths now raise the same
+    ``pictures_changed``-family event every other mutation raises, with the
+    caller's ``origin_client_id`` carried in the event data (§15) — and the
+    op-log restore announces the keep-separate's targets on undo/redo even
+    though its recorded diff is empty.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        signatures = sorted(_signatures(client))
+        assert len(signatures) == 2
+        kept_separate, stacked = signatures
+        by_signature = {
+            group["signature"]: sorted(c["picture_id"] for c in group["candidates"])
+            for group in client.get(GROUPS_URL).json()["groups"]
+        }
+
+        emitted: list[dict] = []
+        real_notify = server.vault.notify
+
+        def _capture(event_type, data=None):
+            if isinstance(data, dict) and "change_kind" in data:
+                emitted.append({"event": event_type, **data})
+            return real_notify(event_type, data)
+
+        server.vault.notify = _capture
+        headers = {"X-Client-Id": "tab-1"}
+
+        response = client.post(STACK_URL, json={"signature": stacked}, headers=headers)
+        assert response.status_code == 200, response.text
+        assert emitted, "a stack verdict must announce itself"
+        assert emitted[-1]["change_kind"] == "updated"
+        assert emitted[-1]["picture_ids"] == by_signature[stacked]
+        assert emitted[-1]["origin_client_id"] == "tab-1"
+
+        emitted.clear()
+        response = client.post(
+            KEEP_SEPARATE_URL, json={"signature": kept_separate}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        assert emitted, "a keep-separate verdict must announce itself"
+        assert emitted[-1]["change_kind"] == "updated"
+        assert emitted[-1]["picture_ids"] == by_signature[kept_separate]
+        assert emitted[-1]["origin_client_id"] == "tab-1"
+
+        # Undo (the keep-separate is newest) and redo announce the same targets
+        # through the op-log's own emit, empty recorded diff notwithstanding.
+        emitted.clear()
+        assert client.post(f"{API}/operations/undo", headers=headers).status_code == 200
+        undo_ids = {pid for kind in emitted for pid in (kind.get("picture_ids") or [])}
+        assert undo_ids == set(by_signature[kept_separate]), emitted
+        assert all("origin_client_id" in kind for kind in emitted)
+
+        emitted.clear()
+        assert client.post(f"{API}/operations/redo", headers=headers).status_code == 200
+        redo_ids = {pid for kind in emitted for pid in (kind.get("picture_ids") or [])}
+        assert redo_ids == set(by_signature[kept_separate]), emitted
     finally:
         _teardown(temp_dir, server)
 

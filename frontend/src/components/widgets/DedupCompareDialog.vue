@@ -249,6 +249,57 @@ function toggleZoomPixels() {
   zoomActualPixels.value = !zoomActualPixels.value;
 }
 
+/**
+ * Escape peels ONE layer: with the zoom up, a close request (AppDialog's own
+ * Escape handling on its subtree, Vuetify's ESC/scrim, the header X) closes
+ * the ZOOM and keeps the dialog; the next one closes the dialog. The queue's
+ * keyboard model already layers Escape this way when the event reaches it,
+ * but a keydown with DOM focus inside the dialog subtree is claimed by
+ * AppDialog first (it stopPropagation-s), so the dialog's close intent has to
+ * respect the layer here too or that path closes both at once.
+ */
+function requestClose() {
+  if (zoomOpen.value) {
+    closeZoom();
+    return;
+  }
+  emit("close");
+}
+
+// ── Wheel: the mouse's way into (and through) the zoom ─────────────────────
+// Scrolling over a candidate's picture opens the blink compare on it, like
+// the zoom button. Inside the zoom, the wheel flips candidates in Fit — the
+// same in-place flip the arrow keys do, so differences read as motion. In
+// Actual pixels the surface is a scroll-to-pan container, so the wheel stays
+// native there and the flip gesture deliberately does not exist.
+
+/**
+ * The cooldown between wheel actions. One physical flick of a wheel is a
+ * burst of events; without the gap, opening the zoom would immediately flip
+ * past the candidate the user pointed at, and a single scroll would race
+ * through the whole loop.
+ */
+const WHEEL_COOLDOWN_MS = 150;
+let wheelAt = 0;
+
+/** @param {number} index */
+function onThumbWheel(index) {
+  wheelAt = Date.now();
+  openZoom(index);
+}
+
+/** @param {WheelEvent} event */
+function onZoomWheel(event) {
+  if (zoomActualPixels.value) return;
+  event.preventDefault();
+  const now = Date.now();
+  if (now - wheelAt < WHEEL_COOLDOWN_MS) return;
+  const delta = event.deltaY || event.deltaX;
+  if (!delta) return;
+  wheelAt = now;
+  flipZoom(delta > 0 ? 1 : -1);
+}
+
 // The queue's keyboard model is the single key owner; it drives the zoom
 // through this surface instead of the dialog competing for the keydown.
 defineExpose({
@@ -318,7 +369,7 @@ function onZoomContextMenu() {
 </script>
 
 <template>
-  <AppDialog :open="open" title="Compare group" fullscreen @close="emit('close')">
+  <AppDialog :open="open" title="Compare group" fullscreen @close="requestClose">
     <!-- The confidence claim rides in the header, next to the close button, so
          it stays visible while the strip below scrolls. -->
     <template #header-right>
@@ -345,7 +396,9 @@ function onZoomContextMenu() {
           :title="'Make this the cover'"
           @click="emit('set-cover', candidateId(candidate))"
         >
-          <span class="dc-thumb">
+          <!-- Wheel over the picture starts the zoom on it: the mouse's
+               equivalent of the corner button, without the pixel hunt. -->
+          <span class="dc-thumb" @wheel.prevent.stop="onThumbWheel(index)">
             <img
               class="dc-thumb-img"
               :src="previewUrl(candidate)"
@@ -508,13 +561,14 @@ function onZoomContextMenu() {
         Click a picture, or press its number, to make it the cover. Right-click,
         or press X, to leave it out. Z zooms. No file is ever deleted.
       </span>
-      <AppButton variant="ghost" key-hint="esc" @click="emit('close')"
+      <AppButton variant="ghost" key-hint="esc" @click="requestClose"
         >Close</AppButton
       >
       <AppButton
         v-if="!readOnly"
         variant="secondary"
         icon-left="call-split"
+        key-hint="s"
         :disabled="busy"
         title="Leave these as separate pictures. They stay in your library and stop being suggested."
         @click="emit('keep-separate')"
@@ -598,6 +652,7 @@ function onZoomContextMenu() {
         ref="zoomScrollEl"
         class="dc-zv-img"
         :class="{ 'dc-zv-img--px': zoomActualPixels }"
+        @wheel="onZoomWheel"
         @mousedown="onZoomPointerDown"
         @mousemove="onZoomPointerMove"
         @mouseup="onZoomPointerUp"
@@ -618,7 +673,7 @@ function onZoomContextMenu() {
         />
       </div>
       <div class="dc-zv-foot" aria-hidden="true">
-        <span><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
+        <span><kbd>←</kbd><kbd>→</kbd>, scroll, or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
         <span><kbd>P</kbd> actual pixels</span>
         <span><kbd>Enter</kbd> stack</span>
         <span><kbd>S</kbd> keep separate</span>

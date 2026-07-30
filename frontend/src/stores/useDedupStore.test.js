@@ -13,6 +13,14 @@ vi.mock("../api/dedup", () => ({
   GLOBAL_SCOPE: "global",
 }));
 
+// The dedup store narrates a recorded verdict through the shared operation
+// store's refresh-and-narrate pipeline; the mock observes that call without
+// dragging the real store's network reads into these tests.
+vi.mock("./useOperationStore", () => {
+  const refresh = vi.fn();
+  return { useOperationStore: () => ({ refresh }) };
+});
+
 import {
   getPolicy,
   listGroups,
@@ -23,6 +31,7 @@ import {
   reopenGroup,
   autoStackExact,
 } from "../api/dedup";
+import { useOperationStore } from "./useOperationStore";
 import {
   useDedupStore,
   scopeKey,
@@ -82,6 +91,9 @@ function servePage(groups, over = {}) {
 }
 
 beforeEach(() => {
+  // Filter and size selections are remembered in localStorage; a test that
+  // sets one must not leak it into the next test's fresh store.
+  window.localStorage.clear();
   setActivePinia(createPinia());
   vi.spyOn(console, "warn").mockImplementation(() => {});
   for (const fn of [
@@ -96,6 +108,7 @@ beforeEach(() => {
   ]) {
     fn.mockReset();
   }
+  useOperationStore().refresh.mockReset();
   getPolicy.mockResolvedValue({
     defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
     bounds: BOUNDS,
@@ -497,6 +510,320 @@ describe("useDedupStore — the focus", () => {
   });
 });
 
+describe("useDedupStore — jumping to the true end (focusEnd)", () => {
+  // The regression this pins: End focused the last LOADED row, so on a paging
+  // queue it had to be pressed once per page to actually reach the end. The
+  // total is known a priori, so one gesture must land on the real last group.
+  // A SMALL gap (at most two browsing pages) is chased in sequence rather
+  // than jumped: rebasing the window for one missing page is churn.
+  it("chases a small gap in and lands on the true last group without rebasing", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 55 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+
+    let served = 20;
+    listGroups.mockImplementation(async ({ limit }) => {
+      const size = Math.min(limit, 55 - served);
+      const page = Array.from({ length: size }, (_, i) =>
+        group(`g${served + i + 1}`),
+      );
+      served += size;
+      return { groups: page, total: 55, offset: served, limit };
+    });
+
+    await store.focusEnd();
+    expect(store.groups).toHaveLength(55);
+    expect(store.focusIndex).toBe(54);
+    expect(store.hasMore).toBe(false);
+    expect(store.endChaseActive).toBe(false);
+    // No rebase for a small gap: the window stays anchored at the top.
+    expect(store.windowStart).toBe(0);
+    // At the server's page size, like Ctrl+A: one request for the missing 35.
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.calls[0][0].limit).toBe(200);
+  });
+
+  it("behaves exactly like the old End when everything is loaded", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    await store.focusEnd();
+    expect(store.focusIndex).toBe(1);
+    expect(store.endChaseActive).toBe(false);
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on an empty queue", async () => {
+    servePage([]);
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    await store.focusEnd();
+    expect(store.focusIndex).toBe(-1);
+    expect(store.endChaseActive).toBe(false);
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  // A stale chase that yanks the focus to the bottom seconds after the user
+  // went somewhere else would be worse than the bug it fixes.
+  it("a focus move mid-chase cancels it and the user's position wins", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 60 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+
+    let release;
+    listGroups.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const chase = store.focusEnd();
+    expect(store.endChaseActive).toBe(true);
+    // Home, mid-chase: the user took their place back.
+    store.setFocus(0);
+    expect(store.endChaseActive).toBe(false);
+
+    release({ groups: [group("g21")], total: 60 });
+    await chase;
+    // The page already in flight still lands, but the focus stays where the
+    // user put it and no further pages are chased.
+    expect(store.focusIndex).toBe(0);
+    expect(store.groups).toHaveLength(21);
+    expect(listGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it("a queue reload cancels the chase", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 60 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockImplementation(() => new Promise(() => {}));
+    store.focusEnd();
+    expect(store.endChaseActive).toBe(true);
+    // A tier toggle, a rescan, a scope change: they all rebuild the list
+    // through loadFirstPage, and a chase over the old list must die with it.
+    store.loadFirstPage();
+    expect(store.endChaseActive).toBe(false);
+  });
+
+  // A server that claims 900 rows and serves an empty tail page (extreme
+  // drift) must not wedge the jump: it gives up in bounded requests and the
+  // focus lands on the last row actually held.
+  it("terminates on an empty tail page and lands on the best-known end", async () => {
+    servePage([group("g1"), group("g2")], { total: 900 });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    listGroups.mockResolvedValue({
+      groups: [],
+      total: 900,
+      offset: 880,
+      limit: 20,
+    });
+
+    await store.focusEnd();
+    expect(store.focusIndex).toBe(1);
+    expect(store.windowStart).toBe(0);
+    expect(store.endChaseActive).toBe(false);
+    // The served total still names the requested tail, so there is no better
+    // offset to re-aim at: ONE tail request, then give up. (The second call
+    // is the ordinary focus-near-tail read-ahead, from the top window.)
+    const offsets = listGroups.mock.calls.map((c) => c[0].offset);
+    expect(offsets.filter((o) => o === 880)).toHaveLength(1);
+    expect(listGroups).toHaveBeenCalledTimes(2);
+    expect(offsets[1]).toBe(2);
+  });
+
+  // The user's words: "we know how far down we have to go so we should know
+  // which cards we have to fetch". Over a large gap End is random access —
+  // ONE offset request for the last page, no walk through the middle.
+  it("End over a large gap fetches the tail page directly and rebases", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 200 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    // A live selection points at rows the rebase drops; it must not survive
+    // to silently act on rows the client no longer holds.
+    store.toggleSelected(1);
+    expect(store.selectionCount).toBe(2);
+    listGroups.mockClear();
+    listGroups.mockImplementation(async ({ offset, limit }) => ({
+      groups: Array.from({ length: limit }, (_, i) =>
+        group(`g${offset + i + 1}`),
+      ),
+      total: 200,
+      offset,
+      limit,
+    }));
+
+    await store.focusEnd();
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    const args = listGroups.mock.calls[0][0];
+    expect(args.offset).toBe(180);
+    expect(args.limit).toBe(QUEUE_PAGE_SIZE);
+    // The server 400s a cursor and an offset together; a jump is offset-only.
+    expect(args.cursor).toBeUndefined();
+    expect(store.windowStart).toBe(180);
+    expect(store.groups).toHaveLength(20);
+    expect(store.groups[0].signature).toBe("g181");
+    expect(store.focusIndex).toBe(199);
+    expect(store.focusedGroup.signature).toBe("g200");
+    expect(store.hasMore).toBe(false);
+    expect(store.endChaseActive).toBe(false);
+    expect(store.selectionCount).toBe(0);
+  });
+
+  it("pages upwards from a jumped tail, keeping the focus on its group", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 200 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockImplementation(async ({ offset, limit }) => ({
+      groups: Array.from({ length: limit }, (_, i) =>
+        group(`g${offset + i + 1}`),
+      ),
+      total: 200,
+      offset,
+      limit,
+    }));
+    await store.focusEnd();
+    expect(store.windowStart).toBe(180);
+
+    listGroups.mockClear();
+    await store.loadPrevious();
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    const args = listGroups.mock.calls[0][0];
+    expect(args.offset).toBe(160);
+    expect(args.limit).toBe(20);
+    expect(args.cursor).toBeUndefined();
+    expect(store.windowStart).toBe(160);
+    expect(store.groups).toHaveLength(40);
+    expect(store.groups[0].signature).toBe("g161");
+    // The prepend fills spacer above the cursor; the cursor does not move.
+    expect(store.focusIndex).toBe(199);
+    expect(store.focusedGroup.signature).toBe("g200");
+  });
+
+  it("Home after an End jump resets to the normal top window", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 200 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockImplementation(async ({ offset = 0, limit }) => ({
+      groups: Array.from({ length: limit }, (_, i) =>
+        group(`g${offset + i + 1}`),
+      ),
+      total: 200,
+      offset,
+      limit,
+    }));
+    await store.focusEnd();
+    expect(store.windowStart).toBe(180);
+
+    listGroups.mockClear();
+    await store.focusStart();
+    const args = listGroups.mock.calls[0][0];
+    expect(args.offset).toBe(0);
+    expect(args.cursor).toBeUndefined();
+    expect(store.windowStart).toBe(0);
+    expect(store.focusIndex).toBe(0);
+    expect(store.groups[0].signature).toBe("g1");
+    // A top-anchored Home is a plain focus move, no reload.
+    listGroups.mockClear();
+    await store.focusStart();
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  // A running scan can move the goalposts between the count and the fetch:
+  // the jump re-aims once from the served total and lands on the last row
+  // actually received, in bounded requests.
+  it("re-aims once when the total shrank under the jump", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 200 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    listGroups.mockImplementation(async ({ offset, limit }) => {
+      const totalNow = 150;
+      const size = Math.max(0, Math.min(limit, totalNow - offset));
+      return {
+        groups: Array.from({ length: size }, (_, i) =>
+          group(`g${offset + i + 1}`),
+        ),
+        total: totalNow,
+        offset,
+        limit,
+      };
+    });
+
+    await store.focusEnd();
+    expect(listGroups).toHaveBeenCalledTimes(2);
+    expect(listGroups.mock.calls[0][0].offset).toBe(180);
+    expect(listGroups.mock.calls[1][0].offset).toBe(130);
+    expect(store.windowStart).toBe(130);
+    expect(store.total).toBe(150);
+    expect(store.focusIndex).toBe(149);
+    expect(store.hasMore).toBe(false);
+    expect(store.endChaseActive).toBe(false);
+  });
+
+  it("Ctrl+A after an End jump still selects the whole queue", async () => {
+    servePage(
+      Array.from({ length: 20 }, (_, i) => group(`g${i + 1}`)),
+      { total: 100 },
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    listGroups.mockImplementation(async ({ offset, limit }) => {
+      const size = Math.max(0, Math.min(limit, 100 - offset));
+      return {
+        groups: Array.from({ length: size }, (_, i) =>
+          group(`g${offset + i + 1}`),
+        ),
+        total: 100,
+        offset,
+        limit,
+      };
+    });
+    await store.focusEnd();
+    expect(store.windowStart).toBe(80);
+
+    const result = await store.selectAll();
+    expect(result).toEqual({ selected: 100, total: 100, truncated: false });
+    expect(store.selectionCount).toBe(100);
+    expect(store.windowStart).toBe(0);
+  });
+});
+
 describe("useDedupStore — cover and exclusion", () => {
   // The server runs the same formula and ships its answer on the group.
   it("takes the server's cover preselection", async () => {
@@ -752,6 +1079,80 @@ describe("useDedupStore — verdicts and auto-advance", () => {
     await store.stack(g);
     expect(store.coverChoices.g1).toBeUndefined();
     expect(store.exclusions.g1).toBeUndefined();
+  });
+});
+
+describe("useDedupStore — the verdict receipt", () => {
+  // The regression this pins: the dedup verdict service emits no WebSocket
+  // event, so the echo-driven receipt pipeline never fired and a stack
+  // verdict produced no undo pill. The verdict RESPONSE now triggers the
+  // same refresh-and-narrate path; batch_id is the marker that an operation
+  // row was actually recorded.
+  it("asks the operation store to narrate a recorded stack verdict", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    stackGroup.mockResolvedValue({ stack_id: 7, batch_id: "srv-1" });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.stack(store.groups[0]);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+    expect(useOperationStore().refresh).toHaveBeenCalledWith({
+      narrate: true,
+    });
+  });
+
+  it("narrates a bulk stack once — one gesture, one receipt", async () => {
+    servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
+    stackGroup.mockResolvedValue({ batch_id: "cli-1" });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    store.toggleSelected(0);
+    store.toggleSelected(1);
+    await store.stack(store.groups[0]);
+    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent when the verdict failed", async () => {
+    servePage([group("g1")], { total: 1 });
+    stackGroup.mockRejectedValue(new Error("locked"));
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.stack(store.groups[0]);
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
+  });
+
+  // Keep-separate on an OLDER backend records no operation and returns no
+  // batch_id: no receipt, exactly the behaviour shipped today.
+  it("stays silent for a keep-separate that recorded nothing", async () => {
+    servePage([group("g1")], { total: 1 });
+    keepGroupSeparate.mockResolvedValue({ verdict: "keep_separate" });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.keepSeparate(store.groups[0]);
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
+  });
+
+  // A backend that has made keep-separate undoable mirrors the stack
+  // response, batch_id included — and gets the same receipt.
+  it("narrates a keep-separate the backend recorded", async () => {
+    servePage([group("g1")], { total: 1 });
+    keepGroupSeparate.mockResolvedValue({
+      verdict: "keep_separate",
+      batch_id: "srv-2",
+    });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.keepSeparate(store.groups[0]);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("narrates the bulk auto-stack's single batch", async () => {
+    servePage([]);
+    autoStackExact.mockResolvedValue({ batch_id: "srv-3", groups: 12 });
+    const store = useDedupStore();
+    await store.runAutoStack();
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1133,6 +1534,61 @@ describe("useDedupStore — multi-select", () => {
     store.toggleSelected(0);
     await store.loadFirstPage();
     expect(store.selectionCount).toBe(0);
+  });
+});
+
+describe("useDedupStore — remembered filters", () => {
+  // The tier gate and threshold are a lens the user sets; a full page
+  // refresh (or the next session) must reopen the queue through it rather
+  // than on the server defaults. Same persistence tier as the queue's
+  // thumbnail size: this browser's localStorage.
+  it("restores the tier gate and threshold across a reload", async () => {
+    servePage([]);
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.setTierEnabled("near", true);
+    await store.setThreshold(0.8);
+
+    // A new Pinia is the simulated reload: same browser, fresh stores.
+    setActivePinia(createPinia());
+    servePage([]);
+    const fresh = useDedupStore();
+    await fresh.openQueue({});
+    expect(fresh.nearEnabled).toBe(true);
+    expect(fresh.embeddingEnabled).toBe(false);
+    expect(fresh.threshold).toBe(0.8);
+    // The restored selection is already in force for the FIRST page, so the
+    // queue never flashes the default lens.
+    expect(listGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ nearEnabled: true, threshold: 0.8 }),
+    );
+  });
+
+  // A shared or refreshed link must open exactly as sent: explicit URL
+  // filters outrank the remembered selection.
+  it("lets explicit URL filters outrank the remembered ones", async () => {
+    servePage([]);
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.setTierEnabled("near", true);
+    await store.setThreshold(0.8);
+
+    setActivePinia(createPinia());
+    servePage([]);
+    const fresh = useDedupStore();
+    await fresh.openQueue({ filters: { near: false } });
+    expect(fresh.nearEnabled).toBe(false);
+    // The URL said nothing about the threshold, so the memory stands.
+    expect(fresh.threshold).toBe(0.8);
+  });
+
+  it("survives a corrupt remembered blob", async () => {
+    window.localStorage.setItem("pixlstash:dedupFilters", "{not json");
+    servePage([]);
+    const store = useDedupStore();
+    await store.openQueue({});
+    expect(store.nearEnabled).toBe(false);
+    expect(store.threshold).toBe(0.9);
   });
 });
 

@@ -686,3 +686,31 @@ $ PYTHONPATH=<worktree> .venv/bin/python -m pytest -q --fast-captions --force-cp
 
 The branch is green as authored. Every finding above is a gap in what the tests
 *assert*, not a test the authors broke — which is the point of an adversarial pass.
+
+---
+
+## Addendum (2026-07-30) — keep-separate is now op-logged (owner override)
+
+The stance this review recorded — keep-separate writes **no** operation row
+(it changes no reversible picture facet; a row would consume a `Ctrl+Z` for
+nothing) and must never be reversed silently through a shared gesture batch id
+(the "R5" batch-correlation concern folded into the #644 round) — was
+**explicitly overridden by the owner on 2026-07-30**: keep-separate must be
+undoable, symmetric with the stack verdict.
+
+What shipped (branch `feature/keep-separate-undo`):
+
+- `POST /dedup/verdicts/keep-separate` records one `dedup.keep_separate`
+  operation via the operation log's empty-diff path (empty before/after
+  payloads, member ids as targets) and stores its `batch_id` on the verdict row.
+- Undo reopens the verdict and returns the group to the queue; redo re-decides
+  it — both via the same post-restore hook the stack verdict uses, now
+  registered per op_type and filtered per verdict kind.
+- The *no-silent-reversal* half of the original concern still holds by
+  construction: a shared gesture batch reverses a keep-separate only through
+  its **own** operation, named in the undo response — never as a side effect of
+  a sibling stack's restore. `reopen` remains unlogged (it is the explicit
+  inverse action).
+
+See `docs/backend_architecture.md` §22.10 and
+`docs/integration_architecture.md` for the current contract.

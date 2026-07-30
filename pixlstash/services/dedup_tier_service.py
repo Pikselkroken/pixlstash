@@ -1494,6 +1494,73 @@ def _keyset_predicate(cursor: str):
     )
 
 
+DECIDED_CURSOR_KIND = "d"
+"""Kind marker inside a decided-page cursor.
+
+The decided page orders by decision time, not confidence, so its cursor encodes
+a different keyset. The marker makes the two cursor families mutually
+unreadable: a queue cursor replayed onto the decided page (or vice versa) is a
+400, never a silently wrong resume position.
+"""
+
+
+def encode_decided_cursor(decided_at: Optional[datetime], group_id: int) -> str:
+    """Encode the keyset position of the last delivered *decided* row.
+
+    The decided page's order is ``(decided_at DESC, id DESC)`` with the
+    verdict-less tail last (see :func:`page_queue_in_session`), so the position
+    after a row is that pair. ``decided_at`` is written as an exact ISO string
+    (microseconds included) so the ``=`` tie-break branch round-trips reliably;
+    an empty timestamp field marks a row from the verdict-less tail. Opaque by
+    intent, like the queue cursor.
+    """
+    stamp = decided_at.isoformat() if decided_at is not None else ""
+    raw = f"{CURSOR_VERSION}|{DECIDED_CURSOR_KIND}|{stamp}|{int(group_id)}"
+    return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
+
+
+def decode_decided_cursor(cursor: str) -> tuple[Optional[datetime], int]:
+    """Decode a cursor produced by :func:`encode_decided_cursor`.
+
+    Raises:
+        DedupCursorError: Not a decided-page cursor this server minted (a queue
+            cursor included). Same contract as :func:`decode_queue_cursor`: a
+            bad cursor is a 400, never a silent restart from the top.
+    """
+    text = str(cursor or "")
+    try:
+        padded = text + "=" * (-len(text) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
+        version, kind, stamp, group_id = raw.split("|")
+        if version != CURSOR_VERSION:
+            raise ValueError(f"unsupported cursor version {version!r}")
+        if kind != DECIDED_CURSOR_KIND:
+            raise ValueError(f"not a decided-page cursor (kind {kind!r})")
+        decided_at = datetime.fromisoformat(stamp) if stamp else None
+        return decided_at, int(group_id)
+    except (ValueError, UnicodeDecodeError, BinasciiError) as exc:
+        raise DedupCursorError(f"malformed decided cursor {cursor!r}: {exc}") from exc
+
+
+def _decided_keyset_predicate(cursor: str):
+    """The ``WHERE`` that resumes ``(decided_at DESC, id DESC, NULL tail)``.
+
+    Mirrors :func:`_keyset_predicate` for the decided ordering. A cursor from
+    inside the timestamped run resumes at older stamps, the id tie-break within
+    an equal stamp, and always admits the verdict-less ``NULL`` tail (which
+    sorts after every real stamp); a cursor from inside that tail resumes on id
+    alone.
+    """
+    decided_at, group_id = decode_decided_cursor(cursor)
+    if decided_at is None:
+        return DedupVerdict.decided_at.is_(None) & (DedupGroup.id < group_id)
+    return (
+        (DedupVerdict.decided_at < decided_at)
+        | ((DedupVerdict.decided_at == decided_at) & (DedupGroup.id < group_id))
+        | (DedupVerdict.decided_at.is_(None))
+    )
+
+
 def _live_groups_filter():
     """Only groups that still POSE a decision.
 
@@ -1600,6 +1667,13 @@ def page_queue_in_session(
 ) -> tuple[list[dict[str, Any]], int, Optional[str]]:
     """One page of the queue, confidence descending. Never loads the whole list.
 
+    The **decided** page (``decided=True``) instead orders by the live verdict's
+    ``decided_at`` descending (id descending on ties): it is a
+    "review what I just decided" list, so the most recent decision sits on top
+    — the queue's confidence ordering is meaningless there. Its cursor is a
+    separate family encoding that keyset; the two cursor kinds reject each
+    other.
+
     Exactly ``limit`` group rows are read, then one candidate load for that
     page's members. 10 groups and 10,000 cost the same per page, which is the
     design's virtual-queue requirement expressed on the server side.
@@ -1621,6 +1695,8 @@ def page_queue_in_session(
             the route rejects the combination before it reaches here.
         limit: Page size, clamped to :data:`MAX_PAGE_SIZE`.
         cursor: Opaque keyset position from a previous page's ``next_cursor``.
+        decided: ``False`` (default) pages the open queue; ``True`` pages the
+            decided listing, newest decision first.
 
     Returns:
         ``(groups, total, next_cursor)``. *total* is the complete unresolved
@@ -1640,7 +1716,21 @@ def page_queue_in_session(
     # a decision was made under whatever policy was live at the time, and a
     # later policy change must not hide it from the "clear my decision" list.
     query = select(DedupGroup).where(DedupGroup.resolved.is_(decided))
-    if not decided:
+    if decided:
+        # The decided page is "review what I decided", so it orders by the
+        # decision stamp, most recent first — the queue's confidence ordering is
+        # meaningless there (user report, 2026-07-30). The live verdict is outer
+        # joined for the ORDER BY: a resolved group whose verdict row is missing
+        # or reopened (a stale edge state) sorts into a deterministic tail
+        # (SQLite puts NULLs last under DESC) rather than being hidden.
+        # ``signature`` is unique on dedupverdict, so the join cannot fan out.
+        query = query.join(
+            DedupVerdict,
+            (DedupVerdict.signature == DedupGroup.signature)
+            & (DedupVerdict.reopened_at.is_(None)),
+            isouter=True,
+        )
+    else:
         # The open queue lists only groups that still pose a decision — same
         # live-membership rule as the counts, so the badge and the list agree.
         # The decided page keeps thinned groups: the verdict already happened,
@@ -1660,11 +1750,22 @@ def page_queue_in_session(
             )
         )
     if cursor:
-        query = query.where(_keyset_predicate(cursor))
-    query = query.order_by(
-        DedupGroup.confidence.desc(),
-        DedupGroup.id.asc(),
-    ).limit(limit)
+        query = query.where(
+            _decided_keyset_predicate(cursor) if decided else _keyset_predicate(cursor)
+        )
+    if decided:
+        # Newest decision first; id DESC keeps a same-instant run (a bulk
+        # auto-stack) deterministic so cursor/offset seams cannot skip or
+        # repeat a row.
+        query = query.order_by(
+            DedupVerdict.decided_at.desc(),
+            DedupGroup.id.desc(),
+        ).limit(limit)
+    else:
+        query = query.order_by(
+            DedupGroup.confidence.desc(),
+            DedupGroup.id.asc(),
+        ).limit(limit)
     if not cursor:
         query = query.offset(offset)
     rows = session.exec(query).all()
@@ -1685,14 +1786,6 @@ def page_queue_in_session(
         total = count_unresolved_in_session(session, policy, scope)
     if not rows:
         return [], total, None
-    # A short page is end-of-found; a full page may or may not be, and handing
-    # back a cursor that yields one empty page is cheaper than the extra COUNT
-    # that would be needed to know for certain.
-    next_cursor = (
-        encode_queue_cursor(float(rows[-1].confidence or 0.0), int(rows[-1].id))
-        if len(rows) == limit
-        else None
-    )
 
     # A decided row says WHICH verdict resolved it, so the client can render
     # "Stacked" and "Kept separate" differently and offer the right way back.
@@ -1705,6 +1798,23 @@ def page_queue_in_session(
             )
         ).all()
         verdict_by_signature = {v.signature: v for v in verdict_rows}
+
+    # A short page is end-of-found; a full page may or may not be, and handing
+    # back a cursor that yields one empty page is cheaper than the extra COUNT
+    # that would be needed to know for certain. Each ordering mints its own
+    # cursor family; the decided one encodes the last row's decision stamp.
+    if len(rows) != limit:
+        next_cursor = None
+    elif decided:
+        last_verdict = verdict_by_signature.get(rows[-1].signature)
+        next_cursor = encode_decided_cursor(
+            last_verdict.decided_at if last_verdict is not None else None,
+            int(rows[-1].id),
+        )
+    else:
+        next_cursor = encode_queue_cursor(
+            float(rows[-1].confidence or 0.0), int(rows[-1].id)
+        )
 
     group_ids = [int(row.id) for row in rows]
     member_rows = session.exec(

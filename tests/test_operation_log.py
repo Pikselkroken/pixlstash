@@ -470,6 +470,57 @@ def test_no_op_mutation_records_nothing():
         _teardown(temp_dir, server)
 
 
+def test_an_empty_diff_is_recorded_only_when_targets_are_declared():
+    """The empty-diff escape hatch for operations with no picture facet.
+
+    Default behaviour is unchanged — an empty diff records nothing, so a no-op
+    endpoint cannot consume a Ctrl+Z. Passing ``empty_diff_target_ids`` records
+    the row anyway, with empty payloads and those targets: the path the dedup
+    keep-separate verdict uses, whose whole restore is its post-restore hook.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+
+        def record(session, target_ids):
+            # Serialized in-session: the row would be detached once the DB
+            # worker closes the session.
+            operation = operation_log_service.record_operation_in_session(
+                session,
+                op_type="test.no_facet",
+                before={},
+                after={},
+                summary="No facet changed",
+                empty_diff_target_ids=target_ids,
+            )
+            return (
+                operation_log_service.serialize(operation, include_state=True)
+                if operation is not None
+                else None
+            )
+
+        assert server.vault.db.run_task(record, None) is None
+        operation = server.vault.db.run_task(record, [picture_id])
+        assert operation is not None
+        assert operation["target_ids"] == [picture_id]
+        assert operation["target_count"] == 1
+        assert operation["before"] == {}
+        assert operation["after"] == {}
+        assert operation["undoable"] is True
+        assert operation["summary"] == "No facet changed"
+        # Undo finds it, writes no picture facet, and still reports (and
+        # announces) the declared targets — their domain state is what the
+        # operation's post-restore hook changes.
+        undone = client.post(f"{API}/operations/undo", json={})
+        assert undone.status_code == 200, undone.text
+        assert undone.json()["picture_ids"] == [picture_id]
+        assert [op["op_type"] for op in undone.json()["operations"]] == [
+            "test.no_facet"
+        ]
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_bulk_rating_is_one_operation_over_many_targets():
     temp_dir, client, server = _setup()
     try:

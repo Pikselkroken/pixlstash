@@ -199,11 +199,10 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Undo / redo + History ──────────────────────────────── -->
-        <!-- Same position in the Electron shell and in the browser, which is
-             the whole reason it is here and not in the breadcrumb. Owner-only
-             on the server, so a read-only session never sees it. -->
-        <UndoControl v-if="!isReadOnly" />
+        <!-- Undo/redo moved to the right-side app-wide tail (see below): the
+             canonical [separator][UndoControl][TbGlobalActions] cluster is
+             identical in every view, so the position learned here holds in
+             Duplicates too. -->
         <!-- ── Filter button ──────────────────────────────────────── -->
         <v-menu
           v-model="gbFilterMenuOpen"
@@ -258,7 +257,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--boxed"
+              class="bar-btn bar-btn--boxed tb-fold-600"
               :class="{ 'bar-btn--open': gbViewMenuOpen }"
               type="button"
               title="View options"
@@ -432,7 +431,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon tb-export-btn"
+              class="bar-btn bar-btn--icon tb-export-btn tb-fold-700"
               :class="{ 'bar-btn--open': exportStore.exportMenuOpen }"
               type="button"
               title="Export current grid to zip"
@@ -455,7 +454,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
+              class="bar-btn bar-btn--icon tb-fold-700"
               :class="{ 'bar-btn--open': tbImportMenuOpen }"
               type="button"
               title="Import photos"
@@ -490,7 +489,7 @@
           <template #activator="{ props: menuProps }">
             <button
               v-bind="menuProps"
-              class="bar-btn bar-btn--icon"
+              class="bar-btn bar-btn--icon tb-fold-700"
               :class="{ 'bar-btn--open': tbComfyuiMenuOpen }"
               type="button"
               :disabled="isReadOnly"
@@ -516,7 +515,7 @@
         <div class="bar-separator"></div>
         <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
         <button
-          class="bar-btn bar-btn--icon"
+          class="bar-btn bar-btn--icon tb-fold-700"
           type="button"
           :disabled="isReadOnly"
           title="Review and fix tags"
@@ -524,38 +523,123 @@
         >
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
-        <!-- ── Toolbar: Settings ─────────────────────────────────────── -->
-        <button
-          class="bar-btn bar-btn--icon"
-          type="button"
-          title="Settings"
-          @click="emit('open-settings')"
+        <!-- ── Separator: view-local actions | app-wide chrome ──────────
+             The canonical toolbar tail, identical in every view:
+             [separator] [UndoControl] [TbGlobalActions], with the ⋯ overflow
+             ahead of Undo once controls start folding. The rule is required:
+             proximity alone cannot separate identical 32px icon buttons into
+             "this view's tools" and "the app's chrome". -->
+        <div class="bar-separator"></div>
+        <!-- ── The ⋯ overflow. Fold = CSS both ways: every foldable control
+             exists as its bar button AND as a row here with the same v-if,
+             and the bar's container queries flip which one is visible. The
+             trigger itself appears with the first fold step (≤700). -->
+        <TbOverflowMenu
+          class="tb-overflow"
+          :attention="tasksStore.hasActiveTasks"
         >
-          <v-icon size="20">mdi-cog-outline</v-icon>
-        </button>
-        <!-- ── Toolbar: Stats toggle ──── -->
-        <button
-          class="bar-btn bar-btn--icon tb-stats-btn"
-          :class="{ 'bar-btn--active': sidebarStore.statsOpen }"
-          type="button"
-          :title="
-            tasksStore.hasActiveTasks
-              ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? '' : 's'} running`
-              : sidebarStore.statsOpen
-                ? 'Hide stats sidebar'
-                : 'Show stats sidebar'
-          "
-          @click="sidebarStore.toggleStats()"
-        >
-          <v-icon size="20">mdi-chart-bar</v-icon>
-          <!-- App-wide activity light: pulses whenever the task manager has any
-               active work, so background tasks are visible without opening the
-               stats sidebar. -->
-          <span
-            v-if="tasksStore.hasActiveTasks"
-            class="tb-stats-activity"
-          ></span>
-        </button>
+          <template #default="{ close }">
+            <button
+              type="button"
+              class="tbm-action tb-row-700"
+              @click="
+                emit('confirm-export-zip');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-tray-arrow-down</v-icon>
+              <span>Export grid to zip</span>
+            </button>
+            <button
+              v-if="!isReadOnly"
+              type="button"
+              class="tbm-action tb-row-700"
+              @click="
+                emit('open-import');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-cloud-upload-outline</v-icon>
+              <span>Import photos…</span>
+            </button>
+            <button
+              v-if="filterStore.comfyuiConfigured"
+              type="button"
+              class="tbm-action tb-row-700"
+              :disabled="isReadOnly"
+              @click="
+                close();
+                tbComfyuiMenuOpen = true;
+              "
+            >
+              <v-icon size="18">mdi-image-plus-outline</v-icon>
+              <span>Generate with ComfyUI…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action tb-row-700"
+              :disabled="isReadOnly"
+              @click="
+                reviewSessionsStore.overlayOpen = true;
+                close();
+              "
+            >
+              <v-icon size="18">mdi-tag-check-outline</v-icon>
+              <span>Review and fix tags…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action tb-row-600"
+              @click="
+                close();
+                gbViewMenuOpen = true;
+              "
+            >
+              <v-icon size="18">mdi-view-grid</v-icon>
+              <span>View options…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action tb-row-600"
+              @click="
+                emit('open-settings');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-cog-outline</v-icon>
+              <span>Settings…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action tb-row-600"
+              :class="{ 'tb-row--on': sidebarStore.statsOpen }"
+              :aria-pressed="sidebarStore.statsOpen ? 'true' : 'false'"
+              @click="
+                sidebarStore.toggleStats();
+                close();
+              "
+            >
+              <v-icon size="18">mdi-chart-bar</v-icon>
+              <span>Stats sidebar</span>
+            </button>
+            <button
+              v-if="!isReadOnly"
+              type="button"
+              class="tbm-action tb-row-480"
+              @click="
+                close();
+                undoControlRef?.openHistory();
+              "
+            >
+              <v-icon size="18">mdi-history</v-icon>
+              <span>History…</span>
+            </button>
+          </template>
+        </TbOverflowMenu>
+        <UndoControl v-if="!isReadOnly" ref="undoControlRef" />
+        <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
+             queue, which is why they live in their own component) ──────── -->
+        <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
   </div>
@@ -568,10 +652,8 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useExportStore } from "../../stores/useExportStore";
-import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
-import { useTasksStore } from "../../stores/useTasksStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
@@ -579,10 +661,14 @@ import {
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import GbFilterPanel from "./GbFilterPanel.vue";
+import TbGlobalActions from "./TbGlobalActions.vue";
 import TbComfyPanel from "./TbComfyPanel.vue";
 import TbExportPanel from "./TbExportPanel.vue";
 import TbImportPanel from "./TbImportPanel.vue";
+import TbOverflowMenu from "./TbOverflowMenu.vue";
 import UndoControl from "./UndoControl.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useOneTimeNotice } from "../../composables/useOneTimeNotice";
 const props = defineProps({
   selectedCount: Number,
@@ -644,10 +730,14 @@ const filterStore = useFilterStore();
 const sortStore = useSortStore();
 const gridStore = useGridStore();
 const exportStore = useExportStore();
+// The overflow rows for the folded Stats toggle and the ⋯ attention dot read
+// the same stores TbGlobalActions does.
 const sidebarStore = useSidebarStore();
+const tasksStore = useTasksStore();
+// The overflow's "History…" row reaches the popover UndoControl exposes.
+const undoControlRef = ref(null);
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
-const tasksStore = useTasksStore();
 const projectStore = useProjectStore();
 
 const tbComfyuiMenuOpen = ref(false);
@@ -1015,7 +1105,11 @@ const gbCollapseAllStacksDisabled = computed(
   display: flex;
   align-items: center;
   container-type: inline-size;
-  container-name: selbar;
+  /* Two names on one container: `selbar` for this bar's own ladder, and the
+     shared `toolbar` name that UndoControl, TbGlobalActions and the overflow
+     write their scoped @container rules against — so the shared chrome
+     degrades identically here and in the Duplicates bar (`dqbar toolbar`). */
+  container-name: selbar toolbar;
 }
 .selection-bar-content {
   display: flex;
@@ -1180,42 +1274,6 @@ const gbCollapseAllStacksDisabled = computed(
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-/* App-wide task-activity light on the stats toggle. */
-.tb-stats-btn {
-  position: relative;
-}
-
-.tb-stats-activity {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-primary));
-  box-shadow: 0 0 5px rgba(var(--v-theme-primary), 0.7);
-  animation: tb-stats-pulse 1.4s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes tb-stats-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.7);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tb-stats-activity {
-    animation: none;
-  }
 }
 
 .bar-btn-label {
@@ -1539,6 +1597,55 @@ const gbCollapseAllStacksDisabled = computed(
 @container selbar (max-width: 580px) {
   .visible-range-pill {
     display: none;
+  }
+}
+
+/* ── The ⋯ overflow ladder (see docs/design/toolbar-responsive-decisions.md).
+   Fold = CSS both ways: a control's bar button and its overflow row share one
+   v-if, and these queries flip which of the pair is visible. No JS measures
+   anything. The overflow trigger appears with the FIRST fold step; Undo never
+   folds or hides at any width (the recovery control stays a single visible
+   target, and the "Changed elsewhere" warning stays surfaced). ───────────── */
+.tb-overflow {
+  display: none;
+}
+
+.tb-row-700,
+.tb-row-600,
+.tb-row-480 {
+  display: none;
+}
+
+/* Pressed state on an overflow row (the folded Stats toggle): the same
+   primary token the bar button's active state uses. */
+.tb-row--on {
+  color: rgb(var(--v-theme-primary));
+}
+
+@container selbar (max-width: 700px) {
+  .tb-fold-700 {
+    display: none;
+  }
+  .tb-overflow {
+    display: flex;
+  }
+  .tb-row-700 {
+    display: flex;
+  }
+}
+
+@container toolbar (max-width: 600px) {
+  .tb-fold-600 {
+    display: none;
+  }
+  .tb-row-600 {
+    display: flex;
+  }
+}
+
+@container toolbar (max-width: 480px) {
+  .tb-row-480 {
+    display: flex;
   }
 }
 </style>

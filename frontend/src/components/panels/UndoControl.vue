@@ -508,4 +508,23 @@ defineExpose({
     transition: none;
   }
 }
+
+/* ── Shared toolbar collapse (docs/design/toolbar-responsive-decisions.md).
+   Both host bars name their container `toolbar`, so these steps degrade
+   identically everywhere the control mounts. Undo itself NEVER hides: the
+   recovery control stays a single visible target at every width, which is
+   also what keeps the "Changed elsewhere" warning surfaced. The hidden
+   History popover stays reachable through the hosts' ⋯ "History…" row, which
+   calls the exposed openHistory(). ─────────────────────────────────────── */
+@container toolbar (max-width: 480px) {
+  .uc-btn--chevron {
+    display: none;
+  }
+}
+
+@container toolbar (max-width: 420px) {
+  .uc-btn--redo {
+    display: none;
+  }
+}
 </style>

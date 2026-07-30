@@ -20,7 +20,7 @@
     </v-icon>
     <span v-if="!iconOnly" class="app-btn__label"><slot /></span>
     <kbd v-if="keyHint" class="app-btn__key" aria-hidden="true">{{
-      keyHint === "enter" ? "↵" : "Esc"
+      keyLabel
     }}</kbd>
   </button>
 </template>
@@ -38,13 +38,29 @@ const props = defineProps({
   iconOnly: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   title: { type: String, default: "" },
-  // "enter" | "esc" — the dialog keyboard contract's visible affordance: the
-  // accept/confirm button wears ↵, the cancel/abort button wears Esc.
+  // The visible shortcut affordance from the dialog keyboard contract:
+  // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
+  // the dedup Keep separate) wears its own uppercase label. A shortcut shown
+  // next to the action it triggers is the only kind anyone discovers.
   keyHint: { type: String, default: "" },
 });
 
+const keyLabel = computed(() =>
+  props.keyHint === "enter"
+    ? "↵"
+    : props.keyHint === "esc"
+      ? "Esc"
+      : props.keyHint.toUpperCase(),
+);
+
 const keyShortcut = computed(() =>
-  props.keyHint === "enter" ? "Enter" : props.keyHint === "esc" ? "Escape" : undefined,
+  props.keyHint === "enter"
+    ? "Enter"
+    : props.keyHint === "esc"
+      ? "Escape"
+      : props.keyHint
+        ? props.keyHint.toUpperCase()
+        : undefined,
 );
 </script>
 

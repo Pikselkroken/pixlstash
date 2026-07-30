@@ -781,13 +781,44 @@ def test_undoing_any_member_of_the_batch_reverts_the_whole_run(server):
     assert {row.status for row in _operations(server)} == {"undone"}
 
 
-def test_keep_separate_and_reopen_record_no_operation(server):
-    """Neither changes a reversible picture facet, so neither writes a row.
+def test_keep_separate_records_exactly_one_operation(server):
+    """Keep-separate is op-logged since 2026-07-30 (owner override of #644 CSO).
 
-    A no-op operation row would still consume a Ctrl+Z, which is worse than
-    offering no undo here: the way back from keep-separate is the explicit
-    reopen action the Stacks view shows.
+    It changes no picture facet, so the row goes through the empty-diff path:
+    empty before/after payloads, the member ids as targets, and the batch id
+    stored on the verdict row — the correlation the post-restore hook needs.
     """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    result = _run(server, verdicts.apply_keep_separate_in_session, signature, None)
+    rows = _operations(server)
+    assert len(rows) == 1
+    assert rows[0].op_type == verdicts.OP_TYPE_KEEP_SEPARATE
+    assert rows[0].undoable is True
+    assert rows[0].batch_id == result.batch_id
+    assert result.batch_id, "a batch id is minted when the caller supplies none"
+    assert json.loads(rows[0].target_ids) == sorted(ids)
+    assert json.loads(rows[0].before_state) == {}
+    assert json.loads(rows[0].after_state) == {}
+    assert "Kept 2 pictures separate" in (rows[0].summary or "")
+    verdict_row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert verdict_row.batch_id == result.batch_id
+
+
+def test_reopen_records_no_operation(server):
+    """Reopen IS the explicit inverse action, so it stays out of the log."""
     _seed(
         server,
         [
@@ -798,9 +829,97 @@ def test_keep_separate_and_reopen_record_no_operation(server):
     _scan(server)
     signature = _one_signature(server)
     _run(server, verdicts.apply_keep_separate_in_session, signature, None)
-    assert _operations(server) == []
+    before = len(_operations(server))
     _run(server, verdicts.reopen_verdict_in_session, signature)
-    assert _operations(server) == []
+    assert len(_operations(server)) == before
+
+
+def test_undoing_a_keep_separate_reopens_the_group_and_redo_re_resolves(server):
+    """Both directions: undo returns the group to the queue, redo re-decides it.
+
+    The pictures are untouched in every direction — keep-separate never had a
+    picture facet to restore; the verdict row and the group's resolved flag are
+    the whole reversible state, carried by the post-restore hook.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100, "score": 3},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    _run(server, verdicts.apply_keep_separate_in_session, signature, None)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+    _run(server, operation_log_service.undo_in_session, None)
+    # The group is queue-visible again and the verdict row is kept, reopened.
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row is not None and row.reopened_at is not None
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+    assert _picture(server, ids[0]).score == 3
+
+    _run(server, operation_log_service.redo_in_session)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+    row = _run(
+        server,
+        lambda session: session.exec(
+            select(DedupVerdict).where(DedupVerdict.signature == signature)
+        ).first(),
+    )
+    assert row.reopened_at is None
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+
+
+def test_batch_undo_restores_a_mixed_stack_and_keep_separate_gesture(server):
+    """One gesture batch spanning both verdict kinds reverses as one undo.
+
+    Each hook is scoped to its own verdict kind, so the stack hook restores the
+    stacked group and the keep-separate hook restores the kept-separate one —
+    both explicitly, through their own operations, in a single batch undo.
+    """
+    ids = _seed_two_exact_groups(server)
+    _scan(server)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    signatures = sorted(group["signature"] for group in page)
+    assert len(signatures) == 2
+    gesture = verdicts.new_batch_id()
+    _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        signatures[0],
+        None,
+        [],
+        gesture,
+    )
+    _run(server, verdicts.apply_keep_separate_in_session, signatures[1], gesture)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+    rows = _operations(server)
+    assert {row.op_type for row in rows} == {
+        verdicts.OP_TYPE_STACK,
+        verdicts.OP_TYPE_KEEP_SEPARATE,
+    }
+    assert {row.batch_id for row in rows} == {gesture}
+
+    _run(server, operation_log_service.undo_batch_in_session, gesture)
+    # Both kinds restored: the stack reversed, both groups back in the queue.
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 2
+    reopened = _run(
+        server,
+        lambda session: [
+            row.reopened_at is not None
+            for row in session.exec(select(DedupVerdict)).all()
+        ],
+    )
+    assert reopened == [True, True]
 
 
 # ── R2: the bulk path must never lose its undo handle ─────────────────────────

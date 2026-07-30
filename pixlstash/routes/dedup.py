@@ -16,7 +16,8 @@ Two surfaces live here, and every route is owner-only.
 * ``POST /dedup/scan``              — queue a scoped scan; returns immediately.
 * ``POST /dedup/verdicts/stack``    — stack a group behind a chosen cover.
 * ``POST /dedup/verdicts/keep-separate`` — remember that a group is not
-  duplicates; permanent until reopened.
+  duplicates; undoable through the operation log (owner override, 2026-07-30)
+  and reopenable from the Stacks view.
 * ``POST /dedup/verdicts/reopen``   — return a decided group to the queue.
 * ``POST /dedup/auto-stack``        — the exact tier's bulk action, one
   operation-log batch id so N stacks reverse with one undo.
@@ -682,7 +683,15 @@ class DedupGroupModel(BaseModel):
     )
     decided_at: Optional[datetime] = Field(
         default=None,
-        description="On a `decided=true` page only: when the verdict was made.",
+        description=(
+            "On a `decided=true` page only: when the decision last became live "
+            "(a redo re-stamps it), naive-UTC ISO 8601 with microseconds and "
+            "no offset suffix, like every timestamp on this API. This is the "
+            "value the decided ordering sorts by, so it is display-ready as "
+            "the row's decision time. Null on the open queue, and null for "
+            "the stale edge of a resolved group with no live verdict - never "
+            "an invented stamp."
+        ),
     )
     candidates: list[DedupCandidateModel] = Field(
         default_factory=list,
@@ -1194,8 +1203,11 @@ def create_router(server) -> APIRouter:
                 "Page the DECIDED groups instead of the open queue: resolved "
                 "groups with their live verdict (`stacked` / `keep_separate`) "
                 "and `decided_at`, so a decision can be reviewed and cleared "
-                "via `POST /dedup/verdicts/reopen`. Ignores the tier gate and "
-                "the threshold - a policy change must not hide a decision."
+                "via `POST /dedup/verdicts/reopen`. Ordered by `decided_at` "
+                "descending - most recent decision first, not by confidence. "
+                "Ignores the tier gate and the threshold - a policy change "
+                "must not hide a decision. `next_cursor` values from the two "
+                "orderings are distinct families and reject each other."
             ),
         ),
     ):
@@ -1308,21 +1320,30 @@ def create_router(server) -> APIRouter:
         summary="Record that a group is not duplicates",
         description=(
             "Remembers that these pictures should stay separate. No picture row "
-            "changes. The decision is permanent until it is reopened from the "
-            "Stacks view, which is what lets the sidebar count reach zero and "
-            "stay there across rescans and re-imports."
+            "changes. The decision is recorded as one undoable operation "
+            "(`dedup.keep_separate`), exactly like a stack verdict: the "
+            "returned `batch_id` is the `POST /operations/batches/{batch_id}/"
+            "undo` handle, an undo returns the group to the queue and a redo "
+            "re-decides it. The explicit reopen from the Stacks view remains "
+            "available. The memory is what lets the sidebar count reach zero "
+            "and stay there across rescans and re-imports."
         ),
         response_model=VerdictResponse,
     )
-    def post_keep_separate_verdict(payload: SignatureRequestModel):
-        # No request_context here on purpose: keep-separate writes no operation
-        # row (it changes no reversible picture facet — see
-        # dedup_verdict_service.OP_TYPE_STACK), so actor / source would be dead
-        # arguments. If this verdict ever starts recording, wire it up like
-        # post_stack_verdict does.
+    def post_keep_separate_verdict(request: Request, payload: SignatureRequestModel):
+        # §21 origin discipline, read in the handler — see post_stack_verdict.
+        # Recording here is the owner's 2026-07-30 reversal of the #644-era
+        # ruling that kept this verdict out of the operation log.
+        context = operation_log_service.request_context(request)
+        # Body batch_id wins over the ambient gesture header (see
+        # post_stack_verdict); the service mints srv- when both are absent.
+        header_batch_id = context.pop("batch_id", None)
         try:
             result = dedup_verdict_service.apply_keep_separate(
-                server.vault, payload.signature, _batch_id(payload.batch_id)
+                server.vault,
+                payload.signature,
+                _batch_id(payload.batch_id) or header_batch_id,
+                **context,
             )
         except DedupVerdictError as exc:
             logger.info("[dedup] keep-separate verdict rejected: %s", exc)
@@ -1342,9 +1363,10 @@ def create_router(server) -> APIRouter:
         response_model=ReopenResponse,
     )
     def post_reopen_verdict(payload: SignatureRequestModel):
-        # No request_context here on purpose — see post_keep_separate_verdict.
-        # batch_id is unused by reopen (it records no operation) but is still
-        # validated, so no route on this surface accepts a malformed one.
+        # No request_context here on purpose: reopen records no operation (it IS
+        # the explicit inverse action), so actor / source would be dead
+        # arguments. batch_id is unused by reopen but is still validated, so no
+        # route on this surface accepts a malformed one.
         _batch_id(payload.batch_id)
         try:
             return dedup_verdict_service.reopen_verdict(server.vault, payload.signature)

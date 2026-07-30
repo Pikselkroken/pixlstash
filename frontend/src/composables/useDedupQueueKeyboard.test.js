@@ -22,6 +22,8 @@ function makeStore() {
     focusNext: vi.fn(),
     focusPrev: vi.fn(),
     setFocus: vi.fn(),
+    focusStart: vi.fn(),
+    focusEnd: vi.fn(),
     setCover: vi.fn(),
     toggleExcluded: vi.fn(),
     coverIdFor: vi.fn(() => 2),
@@ -83,11 +85,25 @@ describe("dedup keyboard — moving the focus", () => {
     expect(store.focusPrev).toHaveBeenCalledTimes(2);
   });
 
-  it("Home and End jump to the ends of the queue", () => {
+  // Home goes through the store's own jump-to-start: after an End jump the
+  // window no longer contains the top, so a bare setFocus(0) could not reach
+  // it — the store resets to the first page instead.
+  it("Home jumps to the first group through the store", () => {
     handle(keyEvent("Home"));
-    expect(store.setFocus).toHaveBeenCalledWith(0);
-    handle(keyEvent("End"));
-    expect(store.setFocus).toHaveBeenCalledWith(1);
+    expect(store.focusStart).toHaveBeenCalledTimes(1);
+    expect(store.setFocus).not.toHaveBeenCalled();
+  });
+
+  // The regression this pins: End used to focus the last LOADED row
+  // (groups.length - 1), so on a paging queue it had to be pressed once per
+  // page. The store's focusEnd pages the rest in and lands on the true end,
+  // so one press is the whole gesture.
+  it("End goes to the queue's true end through the store, and claims the key", () => {
+    const event = keyEvent("End");
+    handle(event);
+    expect(store.focusEnd).toHaveBeenCalledTimes(1);
+    expect(store.setFocus).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
   });
 
   it("PageDown and PageUp move a screenful, as the view measures it", () => {
@@ -242,28 +258,52 @@ describe("dedup keyboard — Compare", () => {
     expect(deps.closeCompare).toHaveBeenCalled();
   });
 
-  // Compare exists so the decision is made without a second trip.
-  it("Enter and S still give a verdict from inside Compare", () => {
+  // Compare exists so the decision is made without a second trip — and a run
+  // of decisions without reopening it every time. The verdict keys leave the
+  // dialog up; the auto-advance flips it to the next group, and the view
+  // closes it only when the queue runs out.
+  it("Enter and S give a verdict from inside Compare without closing it", () => {
     compareOpen = true;
     handle(keyEvent("Enter"));
-    expect(deps.closeCompare).toHaveBeenCalled();
     expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
+    expect(deps.closeCompare).not.toHaveBeenCalled();
 
-    compareOpen = true;
     handle(keyEvent("s"));
     expect(store.keepSeparate).toHaveBeenCalledWith(store.groups[0]);
+    expect(deps.closeCompare).not.toHaveBeenCalled();
   });
 
-  // An arrow key moving the row behind an open dialog is how a user loses
-  // their place. Only the row-to-row keys are swallowed.
-  it("swallows the row-to-row keys while Compare is open", () => {
+  // The dialog renders the focused group, so a focus move flips it in place
+  // and no place is lost — Up/Down (and j/k) switch the compared group.
+  it("Up/Down switch the compared group in place", () => {
     compareOpen = true;
     handle(keyEvent("ArrowDown"));
+    handle(keyEvent("j"));
+    expect(store.focusNext).toHaveBeenCalledTimes(2);
     handle(keyEvent("ArrowUp"));
+    handle(keyEvent("k"));
+    expect(store.focusPrev).toHaveBeenCalledTimes(2);
+  });
+
+  // Reading the queue is not a verdict, and neither is comparing it.
+  it("still switches groups inside Compare in a read-only session", () => {
+    compareOpen = true;
+    deps.isReadOnly.mockReturnValue(true);
+    handle(keyEvent("ArrowDown"));
+    expect(store.focusNext).toHaveBeenCalled();
+  });
+
+  // A multi-row leap behind the dialog reads as the queue teleporting, so
+  // the jump keys stay quiet there.
+  it("swallows the jump keys while Compare is open", () => {
+    compareOpen = true;
     handle(keyEvent("Home"));
-    expect(store.focusNext).not.toHaveBeenCalled();
-    expect(store.focusPrev).not.toHaveBeenCalled();
+    handle(keyEvent("End"));
+    handle(keyEvent("PageDown"));
+    handle(keyEvent("PageUp"));
     expect(store.setFocus).not.toHaveBeenCalled();
+    expect(store.focusStart).not.toHaveBeenCalled();
+    expect(store.focusEnd).not.toHaveBeenCalled();
   });
 
   // Compare is the view that shows the fields a cover is chosen on, so making
@@ -361,11 +401,12 @@ describe("dedup keyboard — the blink compare (zoom)", () => {
     expect(deps.closeCompare).toHaveBeenCalled();
   });
 
-  it("Enter stacks from inside the zoom, closing both layers", () => {
+  it("Enter stacks from inside the zoom, closing the zoom but not Compare", () => {
     zoomOpen = true;
     handle(keyEvent("Enter"));
     expect(zoom.close).toHaveBeenCalled();
-    expect(deps.closeCompare).toHaveBeenCalled();
+    // Compare stays up: the next group appears in it, un-zoomed.
+    expect(deps.closeCompare).not.toHaveBeenCalled();
     expect(store.stack).toHaveBeenCalled();
   });
 });
@@ -487,6 +528,32 @@ describe("dedup keyboard — undo and the guards", () => {
       }),
     );
     expect(store.stack).not.toHaveBeenCalled();
+  });
+
+  // Vuetify renders a slider's focusable thumb as a div, not an input. Its
+  // arrows must operate the slider ALONE — acting on the queue as well would
+  // double every press: one size step and one row moved.
+  it("leaves every key to a focused slider thumb", () => {
+    const thumb = {
+      tagName: "DIV",
+      isContentEditable: false,
+      getAttribute: (name) => (name === "role" ? "slider" : null),
+    };
+    handle(keyEvent("ArrowDown", { target: thumb }));
+    handle(keyEvent("Enter", { target: thumb }));
+    handle(keyEvent("s", { target: thumb }));
+    expect(store.focusNext).not.toHaveBeenCalled();
+    expect(store.stack).not.toHaveBeenCalled();
+    expect(store.keepSeparate).not.toHaveBeenCalled();
+  });
+
+  // The tier popover blocks only the keys pressed inside itself; the view
+  // needs the event to make that call.
+  it("hands the event to isBlocked so a popover can scope its block", () => {
+    deps.isBlocked.mockReturnValue(false);
+    const event = keyEvent("ArrowDown");
+    handle(event);
+    expect(deps.isBlocked).toHaveBeenCalledWith(event);
   });
 
   // The auto-stack dialog owns the screen while it is up.

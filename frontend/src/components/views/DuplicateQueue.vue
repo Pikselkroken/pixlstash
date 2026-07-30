@@ -38,10 +38,10 @@
              clear a decision. -->
         <button
           type="button"
-          class="qdecided"
+          class="qdecided dq-fold-720"
           :class="{ 'qdecided--on': store.showingDecided }"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
-          @click="store.toggleDecided()"
+          @click="onToggleDecided"
         >
           <v-icon size="15">{{
             store.showingDecided ? "mdi-arrow-left" : "mdi-history"
@@ -51,7 +51,14 @@
 
         <span class="dq-tb-sep" aria-hidden="true"></span>
 
-        <div ref="tierWrapEl" class="dq-tier-wrap">
+        <!-- Escape inside the popover (including on its threshold slider,
+             where the queue's key model stands down for a typing target)
+             dismisses it back to the trigger, the standard popover exit. -->
+        <div
+          ref="tierWrapEl"
+          class="dq-tier-wrap"
+          @keydown.esc.stop.prevent="closeTierMenu()"
+        >
           <button
             ref="tierButtonEl"
             type="button"
@@ -90,7 +97,7 @@
              picture height and therefore the row's. Live on drag: unlike the
              grid's, this control changes a list that is already on screen, so
              the user is looking straight at the answer. -->
-        <div v-if="store.hasGroups" class="dq-size">
+        <div v-if="store.hasGroups" class="dq-size dq-fold-720">
           <v-icon size="16" aria-hidden="true">mdi-image-size-select-large</v-icon>
           <v-slider
             class="dq-size-slider"
@@ -104,22 +111,119 @@
             thumb-color="primary"
             :aria-label="`Thumbnail size: ${sizeLabel}`"
             @update:model-value="store.setSizeLevel($event)"
+            @end="onSizeCommitted"
           />
           <span class="dq-size-value">{{ sizeLabel }}</span>
         </div>
 
+        <!-- Compresses with the bar rather than folding: a bulk action with
+             an accent fill must stay a visible target. Full label → short
+             "Auto-stack N" (≤720) → icon + count (≤600), the sentence
+             surviving as tooltip and accessible name throughout. -->
         <button
           v-if="store.exactCount > 0 && !readOnly"
           type="button"
           class="dq-btn dq-btn--accent"
+          :title="autoStackLabel"
+          :aria-label="autoStackLabel"
           @click="openAutoStack"
         >
           <v-icon size="16">mdi-flash-outline</v-icon>
-          <span
-            >Auto-stack {{ store.exactCount.toLocaleString() }} exact
-            {{ store.exactCount === 1 ? "match" : "matches" }}</span
+          <span class="dq-auto-full">{{ autoStackLabel }}</span>
+          <span class="dq-auto-short" aria-hidden="true"
+            >Auto-stack {{ store.exactCount.toLocaleString() }}</span
           >
+          <span class="dq-auto-count" aria-hidden="true">{{
+            store.exactCount.toLocaleString()
+          }}</span>
         </button>
+
+        <!-- The app-wide chrome, the same components the grid's toolbar
+             mounts: Duplicates replaces the grid (and with it that toolbar),
+             but undo/redo, Settings and the stats rail are not the grid's —
+             they must not vanish with it. One separator divides the queue's
+             own controls from the app-wide cluster. -->
+        <span class="dq-tb-sep" aria-hidden="true"></span>
+        <!-- ── The ⋯ overflow, ahead of Undo (which never folds). Fold = CSS
+             both ways: each row shares its bar control's v-if, and the bar's
+             container queries flip which of the pair shows. -->
+        <TbOverflowMenu
+          class="dq-overflow"
+          :attention="tasksStore.hasActiveTasks"
+        >
+          <template #default="{ close }">
+            <button
+              type="button"
+              class="tbm-action dq-row-720"
+              :class="{ 'dq-row--on': store.showingDecided }"
+              :aria-pressed="store.showingDecided ? 'true' : 'false'"
+              @click="
+                onToggleDecided();
+                close();
+              "
+            >
+              <v-icon size="18">mdi-history</v-icon>
+              <span>Show decided</span>
+            </button>
+            <div v-if="store.hasGroups" class="dq-row-720 dq-size-row">
+              <v-icon size="18" aria-hidden="true"
+                >mdi-image-size-select-large</v-icon
+              >
+              <span>Thumbnail size</span>
+              <v-slider
+                class="dq-size-slider"
+                :model-value="store.sizeLevel"
+                :min="0"
+                :max="maxSizeLevel"
+                :step="1"
+                density="compact"
+                hide-details
+                color="primary"
+                thumb-color="primary"
+                :aria-label="`Thumbnail size: ${sizeLabel}`"
+                @update:model-value="store.setSizeLevel($event)"
+              />
+            </div>
+            <button
+              type="button"
+              class="tbm-action dq-row-600"
+              @click="
+                emit('open-settings');
+                close();
+              "
+            >
+              <v-icon size="18">mdi-cog-outline</v-icon>
+              <span>Settings…</span>
+            </button>
+            <button
+              type="button"
+              class="tbm-action dq-row-600"
+              :class="{ 'dq-row--on': sidebarStore.statsOpen }"
+              :aria-pressed="sidebarStore.statsOpen ? 'true' : 'false'"
+              @click="
+                sidebarStore.toggleStats();
+                close();
+              "
+            >
+              <v-icon size="18">mdi-chart-bar</v-icon>
+              <span>Stats sidebar</span>
+            </button>
+            <button
+              v-if="!readOnly"
+              type="button"
+              class="tbm-action dq-row-480"
+              @click="
+                close();
+                undoControlRef?.openHistory();
+              "
+            >
+              <v-icon size="18">mdi-history</v-icon>
+              <span>History…</span>
+            </button>
+          </template>
+        </TbOverflowMenu>
+        <UndoControl v-if="!readOnly" ref="undoControlRef" />
+        <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
 
@@ -233,7 +337,7 @@
         just this one — and every decision can be reviewed and cleared until
         you do.
       </p>
-      <button type="button" class="qdecided" @click="store.toggleDecided()">
+      <button type="button" class="qdecided" @click="onToggleDecided">
         <v-icon size="15">mdi-arrow-left</v-icon>
         Back to review
       </button>
@@ -252,7 +356,7 @@
       <!-- Always offered: decisions are SERVER state, remembered across
            sessions, so the way to them must not depend on this session's
            tally. An empty Decided page explains itself. -->
-      <button type="button" class="qdecided" @click="store.toggleDecided()">
+      <button type="button" class="qdecided" @click="onToggleDecided">
         <v-icon size="15">mdi-history</v-icon>
         Review decided groups
       </button>
@@ -344,6 +448,11 @@ import {
   sizeLabelForLevel,
 } from "../../utils/thumbnailSizes";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import TbGlobalActions from "../panels/TbGlobalActions.vue";
+import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
+import UndoControl from "../panels/UndoControl.vue";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
 import DedupScanBanner from "../widgets/DedupScanBanner.vue";
@@ -391,11 +500,77 @@ const MIN_ROW_CONTENT_PX = 89;
 const STACK_FLOOR_NOTICE =
   "A stack needs at least two pictures, so this one has to stay in. Keep the group separate instead.";
 
+// The settings dialog is App.vue's; the queue only asks for it, the same way
+// the grid's toolbar does.
+const emit = defineEmits(["open-settings"]);
+
 const route = useRoute();
 const router = useRouter();
 const store = useDedupStore();
 const operationStore = useOperationStore();
 const noticeStore = useNoticeStore();
+// The overflow's folded Stats row and the ⋯ attention dot read the same
+// stores TbGlobalActions does.
+const sidebarStore = useSidebarStore();
+const tasksStore = useTasksStore();
+// The overflow's "History…" row reaches the popover UndoControl exposes.
+const undoControlRef = ref(null);
+
+// ── Undo/redo must put the queue back, not just fix the badge ─────────────
+// Reverting a stack verdict reopens the group server-side (the op log's
+// post-restore hook), but no WebSocket event says "a dedup group returned":
+// the undo's pictures_changed echo carries this client's own origin and is
+// suppressed like any other echo, and only the COUNTS refresh through the
+// sidebar path. So the queue subscribes to the shared operation store's own
+// actions and reloads itself after an undo/redo that touched a dedup
+// operation — the same reload reopen() performs, through the same store, not
+// a new mechanism. Scoped to dedup op types so undoing an unrelated tag edit
+// does not yank a triage in progress back to the top. The subscription is
+// made in setup, so Pinia removes it when the view unmounts.
+
+const UNDO_REDO_ACTIONS = new Set(["undo", "redo", "undoTo", "undoBatchById"]);
+
+/**
+ * The operations an undo/redo action is ABOUT to touch, read before the
+ * action runs (afterwards the stack has already moved past them).
+ * @param {string} name
+ * @param {Array} args
+ * @returns {Object[]}
+ */
+function opsUndoActionTouches(name, args) {
+  if (name === "undo") {
+    return operationStore.nextUndo ? [operationStore.nextUndo] : [];
+  }
+  if (name === "redo") {
+    return operationStore.nextRedo ? [operationStore.nextRedo] : [];
+  }
+  if (name === "undoTo") {
+    const past = operationStore.past ?? [];
+    const index = past.findIndex((op) => op?.id === args?.[0]);
+    return index < 0 ? past : past.slice(0, index + 1);
+  }
+  if (name === "undoBatchById") {
+    return (operationStore.operations ?? []).filter(
+      (op) => op?.batch_id === args?.[0],
+    );
+  }
+  return [];
+}
+
+operationStore.$onAction(({ name, args, after }) => {
+  if (readOnly.value || !UNDO_REDO_ACTIONS.has(name)) return;
+  const touched = opsUndoActionTouches(name, args);
+  if (!touched.some((op) => String(op?.op_type || "").startsWith("dedup."))) {
+    return;
+  }
+  after(async () => {
+    // Same sequence as reopen(): the group is back in the server's unresolved
+    // set, so the list, the per-scope caches and the badge all re-read.
+    store.invalidateScopeCounts();
+    await store.loadFirstPage();
+    store.refreshCounts();
+  });
+});
 
 const rootEl = ref(null);
 const listEl = ref(null);
@@ -413,6 +588,15 @@ const readOnly = computed(() => Boolean(isReadOnly.value));
 
 const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
+
+/** The auto-stack button's full sentence: the visible label on a wide bar,
+ * the tooltip and accessible name always. */
+const autoStackLabel = computed(
+  () =>
+    `Auto-stack ${store.exactCount.toLocaleString()} exact ${
+      store.exactCount === 1 ? "match" : "matches"
+    }`,
+);
 
 /** What the toolbar calls the queue: the count, and which side of it is shown. */
 const headline = computed(() =>
@@ -457,12 +641,24 @@ function measureRowPitch() {
  * stall one page short of where the user is looking.
  */
 function maybeLoadMore() {
-  if (!store.hasMore) return;
+  // While an End jump/chase is in flight the store drives its own loading;
+  // scroll-position math over a window that is about to be replaced would
+  // fire pages the rebase then has to discard.
+  if (store.endChaseActive) return;
+  const windowEnd = store.windowStart + store.groups.length;
   if (
-    scrollIndex.value + viewportRows.value + WINDOW_AFTER >=
-    store.groups.length
+    store.hasMore &&
+    scrollIndex.value + viewportRows.value + WINDOW_AFTER >= windowEnd
   ) {
     store.loadMore();
+  }
+  // The mirror image after an End jump: the scroll reaching up past the
+  // window's start backfills the rows above it, page by page, to the top.
+  if (
+    store.windowStart > 0 &&
+    scrollIndex.value - WINDOW_BEFORE < store.windowStart
+  ) {
+    store.loadPrevious();
   }
 }
 
@@ -470,12 +666,38 @@ function onListScroll() {
   const list = listEl.value;
   if (!list) return;
   scrollIndex.value = Math.max(0, Math.floor(list.scrollTop / rowPitchPx.value));
+  // A scroll away from the tail while an End jump is still paging is the user
+  // taking their place back: the chase dies here rather than yanking them to
+  // the bottom when its last page lands. Slack of one row keeps the pin's own
+  // rounding from reading as a user move.
+  if (
+    store.endChaseActive &&
+    scrollIndex.value + viewportRows.value < totalRows.value - 1
+  ) {
+    store.cancelEndChase();
+  }
   // Mouse-wheel users reach the tail without ever moving the keyboard focus,
   // so the scroll position must drive loadMore exactly as the focus does.
   maybeLoadMore();
 }
 
 const focusAnchor = computed(() => (store.focusIndex < 0 ? 0 : store.focusIndex));
+
+/**
+ * A rebase (windowStart moving FORWARD: the End jump) relocates the held span
+ * wholesale, but `scrollIndex` still reflects the last scroll event — load
+ * decisions made from that stale value would immediately backfill the very
+ * pages the jump skipped. Snap it to the focus the jump just set; the real
+ * scrollbar follows through scrollFocusIntoView in the same breath. Created
+ * BEFORE the groups-length watcher below, so it runs first in the flush.
+ * Backward moves (upward backfill, Home's reset) keep the user's scroll.
+ */
+watch(
+  () => store.windowStart,
+  (now, before) => {
+    if (now > before) scrollIndex.value = Math.max(0, focusAnchor.value);
+  },
+);
 
 /**
  * Whether Enter/S would genuinely take the whole selection: two or more
@@ -496,14 +718,22 @@ const bulkKeysActive = computed(() => {
 // union with the focus window would mount the whole span between the keyboard
 // cursor and a far-away scrollbar. Keyboard moves stay covered because
 // scrollFocusIntoView drags the scroll (and thus this window) to the cursor.
+//
+// Everything here is in ABSOLUTE queue indices, clamped to the span the store
+// actually HOLDS ([windowStart, windowStart + groups.length]) — after an End
+// jump that span hangs off the queue's tail, and a scroll position outside it
+// renders spacer alone while the backfill catches up.
+function clampToHeld(index) {
+  return Math.max(
+    store.windowStart,
+    Math.min(store.windowStart + store.groups.length, index),
+  );
+}
 const renderStart = computed(() =>
-  Math.max(0, scrollIndex.value - WINDOW_BEFORE),
+  clampToHeld(scrollIndex.value - WINDOW_BEFORE),
 );
 const renderEnd = computed(() =>
-  Math.min(
-    store.groups.length,
-    scrollIndex.value + viewportRows.value + WINDOW_AFTER,
-  ),
+  clampToHeld(scrollIndex.value + viewportRows.value + WINDOW_AFTER),
 );
 /**
  * How many rows the scroll height stands for: every group the queue HAS, not
@@ -513,36 +743,43 @@ const renderEnd = computed(() =>
  * user's hand — the thumb shrank and jumped on every page, and the track never
  * meant anything, because "the bottom" moved each time it was reached. The
  * server's total is the only number that does not move as paging proceeds.
- * Once `hasMore` goes false the loaded length is the truth (a total counted
- * under a running scan can lag the rows it already handed out).
+ * Once `hasMore` goes false AND the window is anchored at the top, the loaded
+ * length is the truth (a total counted under a running scan can lag the rows
+ * it already handed out); a window rebased onto the tail always stands for
+ * the rows above it too.
  */
-const totalRows = computed(() =>
-  store.hasMore
-    ? Math.max(store.groups.length, store.total)
-    : store.groups.length,
-);
+const totalRows = computed(() => {
+  const held = store.windowStart + store.groups.length;
+  if (!store.hasMore && store.windowStart === 0) return store.groups.length;
+  return Math.max(held, store.total);
+});
 
+// Absolute spacers: the top one covers every row above the render window,
+// including rows above windowStart that are not held at all, so the track
+// keeps its full height (and the thumb its position) across a tail jump and
+// the upward backfill — a prepended page fills spacer, it never moves the
+// scroll.
 const topSpacer = computed(() => renderStart.value * rowPitchPx.value);
 const bottomSpacer = computed(() =>
   Math.max(0, (totalRows.value - renderEnd.value) * rowPitchPx.value),
 );
 
 /**
- * The rows that are actually mounted, each carrying its true index. Every
- * mounted row may decode thumbnails: the window itself is the budget, and the
- * imgs are `loading="lazy"`, so off-viewport rows inside it cost a request
- * only as they approach.
+ * The rows that are actually mounted, each carrying its true (absolute)
+ * index. Every mounted row may decode thumbnails: the window itself is the
+ * budget, and the imgs are `loading="lazy"`, so off-viewport rows inside it
+ * cost a request only as they approach.
  */
-const windowedGroups = computed(() =>
-  store.groups.slice(renderStart.value, renderEnd.value).map((group, i) => {
-    const index = renderStart.value + i;
-    return {
-      group,
-      index,
-      loadThumbnails: true,
-    };
-  }),
-);
+const windowedGroups = computed(() => {
+  const localStart = renderStart.value - store.windowStart;
+  const localEnd = renderEnd.value - store.windowStart;
+  if (localEnd <= localStart) return [];
+  return store.groups.slice(localStart, localEnd).map((group, i) => ({
+    group,
+    index: renderStart.value + i,
+    loadThumbnails: true,
+  }));
+});
 
 watch(
   () => store.groups.length,
@@ -572,6 +809,34 @@ watch(
 );
 
 /**
+ * One End press pins the scroll to the queue's true end at once: the spacers
+ * already stand for every unloaded row (the track is sized from the server
+ * total), so the track's bottom exists before its rows do. The store keeps
+ * paging behind the pin and lands the focus on the real last group when the
+ * chase completes — or the chase dies the moment the user moves the focus
+ * (store-side) or scrolls away from the tail (onListScroll above).
+ */
+watch(
+  () => store.endChaseActive,
+  async (active) => {
+    if (!active) return;
+    announcement.value =
+      "Jumping to the end of the queue. Loading the remaining groups.";
+    await nextTick();
+    // The chase can be over or cancelled by the time the DOM settles; pinning
+    // then would be exactly the late yank cancellation exists to prevent.
+    if (!store.endChaseActive) return;
+    const list = listEl.value;
+    if (!list) return;
+    list.scrollTop = Math.max(
+      0,
+      totalRows.value * rowPitchPx.value - list.clientHeight,
+    );
+    onListScroll();
+  },
+);
+
+/**
  * What the tier button says the queue is currently showing.
  *
  * Named after the loosest tier that is on, because that is the one that decides
@@ -593,7 +858,8 @@ const tierLabel = computed(() => {
  * rule back into "load the whole queue", slowly.
  */
 function prefetchNextGroup() {
-  const next = store.groups[store.focusIndex + 1];
+  // focusIndex is absolute; the array holds the window.
+  const next = store.groups[store.focusIndex - store.windowStart + 1];
   if (!next || typeof Image === "undefined") return;
   for (const candidate of next.candidates ?? []) {
     const img = new Image();
@@ -656,9 +922,19 @@ watch(
 watch(
   () => store.focusedGroup,
   (group) => {
-    if (!group) return;
+    if (!group) {
+      // The queue ran out from under Compare — the last verdict, whichever
+      // path gave it (footer buttons, Enter/S), or a reload that emptied the
+      // list. Nothing is left to compare, so the dialog closes back to the
+      // queue's done state. This is the ONLY way a verdict closes Compare:
+      // with groups still open, a verdict advances in place instead.
+      if (compareOpen.value) closeCompare();
+      return;
+    }
     const n = group.candidates?.length ?? 0;
-    announcement.value = `Group ${store.focusIndex + 1} of ${store.groups.length}, ${n} pictures.`;
+    // Against the whole queue's length, not the held window's: after an End
+    // jump "Group 200 of 200" is the truth and "of 20" would be nonsense.
+    announcement.value = `Group ${store.focusIndex + 1} of ${totalRows.value}, ${n} pictures.`;
   },
 );
 
@@ -739,7 +1015,11 @@ async function onKeepSeparate(group) {
   // No sticky notice any more (owner call, 2026-07-29): the Decided page is
   // the standing way back, so the narration can be transient.
   announcement.value = sentence;
-  noticeStore.info(sentence);
+  // A backend that records the verdict (batch_id in the response) raises the
+  // standard undo receipt through the store; a second toast on top of it
+  // would say the same thing twice. Older backends record nothing, so the
+  // info notice remains their only visible confirmation.
+  if (!result?.batch_id) noticeStore.info(sentence);
 }
 
 /**
@@ -814,15 +1094,24 @@ function reportVerdictFailure(what, err) {
   );
 }
 
+/**
+ * A verdict given from inside Compare STAYS in Compare (owner requirement,
+ * 2026-07-30): the store's auto-advance lands the focus on the next open
+ * group and the dialog, which renders `store.focusedGroup`, flips to it in
+ * place — the next decision starts without reopening anything, which is the
+ * whole point of comparing a run of groups. The dialog closes only when the
+ * verdict emptied the queue (the focusedGroup watcher above), and a FAILED
+ * verdict changes nothing: the same group stays on screen with the failure
+ * notice over it. The zoom needs no handling here — the dialog resets it on
+ * every group signature change.
+ */
 function onCompareStack() {
   const group = store.focusedGroup;
-  compareOpen.value = false;
   if (group) onStack(group);
 }
 
 function onCompareKeepSeparate() {
   const group = store.focusedGroup;
-  compareOpen.value = false;
   if (group) onKeepSeparate(group);
 }
 
@@ -844,20 +1133,55 @@ function toggleTierMenu() {
 }
 
 /**
- * Dismiss the tier popover and put the focus back on the control that opened
- * it, so the keyboard never has to hunt for where it went.
+ * True from a pointer press inside the tier popover until the next threshold
+ * commit: it is what tells a POINTER-committed threshold change apart from a
+ * keyboard one, because only the pointer path may hand focus back to the
+ * queue (see onThresholdChange).
  */
-function closeTierMenu() {
+let thresholdPointerTuning = false;
+
+/**
+ * Dismiss the tier popover.
+ *
+ * By default the focus goes back to the control that opened it (Escape, and
+ * any dismissal that is *about the popover*), so the keyboard never has to
+ * hunt for where it went. A dismissal caused by a COMMITTED change passes
+ * `focusTrigger: false` and hands the focus to the queue instead — the
+ * popover session is over and the next keys are for the rows.
+ */
+function closeTierMenu({ focusTrigger = true } = {}) {
   if (!tierMenuOpen.value) return;
   tierMenuOpen.value = false;
-  tierButtonEl.value?.focus?.();
+  thresholdPointerTuning = false;
+  if (focusTrigger) tierButtonEl.value?.focus?.();
 }
 
-/** A pointer press anywhere outside the popover dismisses it. */
+/**
+ * A pointer press anywhere outside the popover dismisses it; one inside it
+ * marks the start of a pointer gesture (a slider drag) for onThresholdChange.
+ */
 function onDocumentPointerDown(event) {
   if (!tierMenuOpen.value) return;
-  if (tierWrapEl.value?.contains?.(event.target)) return;
+  if (tierWrapEl.value?.contains?.(event.target)) {
+    thresholdPointerTuning = true;
+    return;
+  }
   tierMenuOpen.value = false;
+}
+
+/**
+ * Whether a key event belongs to the open tier popover rather than the queue.
+ *
+ * The popover blocks only the keys pressed INSIDE itself: once a committed
+ * change has handed focus back to the queue, the keys must work the rows even
+ * while the popover stays open showing its live counts. (The auto-stack
+ * dialog, a true modal, still blocks everything — see the isBlocked dep.)
+ *
+ * @param {KeyboardEvent} [event]
+ * @returns {boolean}
+ */
+function tierMenuOwnsEvent(event) {
+  return Boolean(tierWrapEl.value?.contains?.(event?.target));
 }
 
 /**
@@ -876,6 +1200,14 @@ function onEscape() {
   // the user their place, so the focus stays where it is.
   if (store.selectionCount > 0) {
     store.clearSelection();
+    return;
+  }
+  // The Decided flip is an Escape layer of its own: one press returns to the
+  // review queue, exactly as the Back-to-review toggle does (same reload
+  // semantics — the queue reopens at its top, which is what toggleDecided has
+  // always meant), with the keyboard handed straight back to the list.
+  if (store.showingDecided) {
+    onToggleDecided();
     return;
   }
   rootEl.value?.focus?.();
@@ -913,10 +1245,15 @@ function onRowFocus(index, event) {
 
 /**
  * Move the tier gate. The store reloads the queue, so the menu closes: leaving
- * it open over a list that just changed underneath reads as a glitch.
+ * it open over a list that just changed underneath reads as a glitch. The
+ * COMMIT ends the popover session, so the focus goes to the queue, not back
+ * to the trigger — the user changed the lens and expects Enter/S/arrows to
+ * work the rows now, without a click first (Escape, by contrast, still
+ * returns to the trigger).
  */
 async function onTierToggle(id, on) {
-  closeTierMenu();
+  closeTierMenu({ focusTrigger: false });
+  rootEl.value?.focus?.();
   await store.setTierEnabled(id, on);
 }
 
@@ -926,9 +1263,38 @@ async function onTierToggle(id, on) {
  * The popover stays open: a threshold is a value the user tunes and re-reads
  * against the count next to it, unlike a tier switch, which is a decision they
  * make once and then want to see the result of.
+ *
+ * A POINTER-committed change (drag released — `change` fires once) hands the
+ * keyboard back to the queue while the popover stays up with its live count.
+ * A KEYBOARD-committed one keeps focus on the slider: every arrow press fires
+ * its own `change`, and yanking focus after the first would turn the rest of
+ * the tuning into row moves.
  */
 async function onThresholdChange(value) {
+  const byPointer = thresholdPointerTuning;
+  thresholdPointerTuning = false;
   await store.setThreshold(value);
+  if (byPointer) rootEl.value?.focus?.();
+}
+
+/**
+ * A pointer-committed size change hands the keyboard back to the queue.
+ * Vuetify's `end` fires on drag/track release only, so keyboard sizing keeps
+ * focus on the thumb — whose arrow keys the queue's model already leaves
+ * alone (`role="slider"` is a typing target).
+ */
+function onSizeCommitted() {
+  rootEl.value?.focus?.();
+}
+
+/**
+ * Flip to or from the Decided page and hand the keyboard straight to the list
+ * that just appeared: focus left on the toggle makes the next Enter flip the
+ * page straight back.
+ */
+function onToggleDecided() {
+  store.toggleDecided();
+  rootEl.value?.focus?.();
 }
 
 /** Open the bulk dialog on its dry run, so the preview is never stale. */
@@ -1021,7 +1387,12 @@ const handleKeydown = createDedupKeyHandler({
   closeCompare,
   undo: () => operationStore.undo(),
   isReadOnly: () => readOnly.value,
-  isBlocked: () => autoStackOpen.value || tierMenuOpen.value,
+  // The auto-stack dialog is a modal and blocks everything; the tier popover
+  // owns only the keys pressed inside itself, so a committed change that
+  // handed focus back to the queue leaves the rows workable underneath it.
+  isBlocked: (event) =>
+    autoStackOpen.value ||
+    (tierMenuOpen.value && tierMenuOwnsEvent(event)),
   // One row less than the viewport holds, so a page move keeps the row the
   // user was reading on screen as the anchor for the next one.
   pageRows: () => Math.max(1, viewportRows.value - 1),
@@ -1120,9 +1491,25 @@ watch(
     store.threshold,
     store.showingDecided,
     store.policyLoaded,
+    store.filtersRestored,
   ],
   () => {
-    if (route.name !== "duplicates" || !store.policyLoaded) return;
+    // filtersRestored is load-bearing, not belt-and-braces. The regression it
+    // closes: on a full reload the policy landing flipped policyLoaded one
+    // microtask BEFORE openQueue applied the URL's filters, this mirror ran on
+    // that flip, saw a pristine default gate, and replaced the URL WITHOUT its
+    // filter params. By the time the store adopted the params and the mirror
+    // re-ran, `route.query` still showed the old query (the stripping
+    // navigation was async and in flight), the `same` check passed, no
+    // corrective write happened — and the params were gone for good. The gate
+    // keeps the mirror silent until the store has actually adopted the URL.
+    if (
+      route.name !== "duplicates" ||
+      !store.policyLoaded ||
+      !store.filtersRestored
+    ) {
+      return;
+    }
     const defaults = store.policyDefaults ?? {};
     const next = { ...route.query };
     for (const key of FILTER_QUERY_KEYS) delete next[key];
@@ -1185,6 +1572,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // Leaving the destination mid-jump must stop the paging, not let it keep
+  // fetching a queue nobody is looking at.
+  store.cancelEndChase();
   if (typeof document === "undefined") return;
   document.removeEventListener("mousedown", onDocumentPointerDown);
   document.removeEventListener("keydown", onKeydown);
@@ -1221,6 +1611,12 @@ defineExpose({ windowedGroups, tierLabel });
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
+  container-type: inline-size;
+  /* `dqbar` for this bar's own ladder; the shared `toolbar` name is what the
+     shared chrome (UndoControl, TbGlobalActions, the overflow) writes its
+     scoped @container rules against, so it degrades identically here and in
+     the grid bar (`selbar toolbar`). */
+  container-name: dqbar toolbar;
 }
 
 .dq-tb-left,
@@ -1480,5 +1876,84 @@ defineExpose({ windowedGroups, tierLabel });
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* ── The ⋯ overflow ladder (docs/design/toolbar-responsive-decisions.md).
+   Fold = CSS both ways: a control's bar button and its overflow row share
+   one v-if, and these queries flip which of the pair shows. Undo never folds
+   or hides. Floor: count, Tier gate, scope pill (if scoped), Auto-stack
+   (compressed, if present), separator, Undo, ⋯. ─────────────────────────── */
+.dq-overflow,
+.dq-row-720,
+.dq-row-600,
+.dq-row-480 {
+  display: none;
+}
+
+.dq-row--on {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* The size row hosts the same slider as the bar; a label beside a track. */
+.dq-size-row {
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.dq-size-row .dq-size-slider {
+  flex: 1;
+}
+
+.dq-auto-short,
+.dq-auto-count {
+  display: none;
+}
+
+@container dqbar (max-width: 860px) {
+  .qsub {
+    display: none;
+  }
+  .dq-size-value {
+    display: none;
+  }
+}
+
+@container dqbar (max-width: 720px) {
+  .dq-fold-720 {
+    display: none;
+  }
+  .dq-overflow {
+    display: flex;
+  }
+  .dq-row-720 {
+    display: flex;
+  }
+  .dq-auto-full {
+    display: none;
+  }
+  .dq-auto-short {
+    display: inline;
+  }
+}
+
+@container toolbar (max-width: 600px) {
+  .dq-row-600 {
+    display: flex;
+  }
+  .dq-auto-short {
+    display: none;
+  }
+  .dq-auto-count {
+    display: inline;
+  }
+}
+
+@container toolbar (max-width: 480px) {
+  .dq-row-480 {
+    display: flex;
+  }
 }
 </style>

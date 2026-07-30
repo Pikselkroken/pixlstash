@@ -1973,6 +1973,16 @@ verdict between two pages.
 - `offset` still works and is **deprecated**; sending both is a **400** rather
   than a silent preference, because a client that sends both has two different
   ideas of where it is.
+- **The decided page has its own ordering and its own cursor family
+  (2026-07-30).** `decided=true` is "review what I decided", so it orders by
+  the live verdict's **`decided_at DESC, id DESC`** — most recent decision
+  first — with the (stale-edge) verdict-less tail last; the queue's confidence
+  ordering was meaningless there (user report). Its cursor encodes
+  `"1|d|<decided_at iso>|<group id>"`; the two cursor kinds reject each other
+  with a 400, so a queue cursor can never resume a decided page at a silently
+  wrong position (or vice versa). The id tie-break keeps a same-instant run (a
+  bulk auto-stack) stable across page seams. Redo re-stamps `decided_at` so a
+  redone decision honestly sorts to the top — see §22.10.
 
 ### 22.8 Streaming and the background path
 
@@ -2062,7 +2072,8 @@ live share token for that set immediately reaches it — the picture, its tags, 
 
 ### 22.10 Operation-log integration (§21)
 
-Every stack verdict records **exactly one** `Operation` row.
+Every verdict — stack **and** keep-separate — records **exactly one**
+`Operation` row.
 
 - **One verdict, one row.** The verdict path deliberately does *not* call
   `routes/stacks.py`, whose handlers already wrap themselves in
@@ -2077,27 +2088,49 @@ Every stack verdict records **exactly one** `Operation` row.
   with `include_deleted=True`: folding a stack reparents co-members the group
   never named, and `normalize_stack_positions` renumbers soft-deleted members too
   (§21.1). Both are pinned by non-vacuous tests.
-- **Keep-separate and reopen record nothing.** Neither changes a reversible
-  picture facet, so `record_operation_in_session` would return `None` anyway;
-  writing a no-op row would still consume a Ctrl+Z. The way back from
-  keep-separate is the explicit reopen action.
-- **A stack verdict is always recorded under a `batch_id`**, minted server-side
+- **Keep-separate records one operation too (`dedup.keep_separate`) — owner
+  override, 2026-07-30.** The original CSO ruling (recorded around #644 / CSO
+  R5) kept it out of the log: it changes no reversible picture facet, so an
+  operation row looked like a no-op that would still consume a Ctrl+Z, and a
+  keep-separate sharing a client gesture batch id with a stack must never be
+  reversed *silently* by undoing the stack. **The owner explicitly reversed the
+  "not op-logged" half of that ruling on 2026-07-30**: keep-separate is now a
+  first-class undoable operation, symmetric with the stack verdict. The
+  reversible state is the verdict itself, so the row is recorded through
+  `record_operation_in_session`'s `empty_diff_target_ids` escape hatch (empty
+  before/after payloads, the group's member ids as targets) and the whole
+  restore is the post-restore hook's. The *silence* half of R5 still stands, by
+  construction: each hook filters on its own verdict kind, so a shared gesture
+  batch reverses the keep-separate only through its **own** operation, named in
+  the undo response — never as a side effect of the stack's. **Reopen still
+  records nothing**: it is the explicit inverse action, and logging it would
+  make undo-of-reopen a second, confusing way to re-decide a group.
+- **A verdict is always recorded under a `batch_id`**, minted server-side
   (`srv-…`, §21.3) when the caller supplies none. The batch id is what ties the
-  `Operation` row back to its `DedupVerdict` row, and that correlation is what
-  makes the undo complete — see below.
+  `Operation` row back to its `DedupVerdict` row (keep-separate rows store it
+  too, since 2026-07-30), and that correlation is what makes the undo complete
+  — see below.
 - **Undo reopens the verdict, not only the pictures.** `restore_verdicts_in_session`
-  is registered as the §21.2 post-restore hook for `dedup.stack`. On **undo** it
-  stamps `reopened_at` on every verdict in the restored batches (the row is kept
-  — the decision history is worth keeping) and sets its group `resolved=False`;
-  on **redo** it clears `reopened_at` and re-resolves the group. `decided_at` is
-  never re-stamped: it records when the user decided, and "live" is exactly
-  `reopened_at IS NULL`. One query covers a 2 700-group batch undo. Without this
+  is registered as the §21.2 post-restore hook for both `dedup.stack`
+  (`verdict_kind=stacked`) and `dedup.keep_separate`
+  (`verdict_kind=keep_separate`). On **undo** it stamps `reopened_at` on every
+  matching verdict in the restored batches (the row is kept — the decision
+  history is worth keeping) and sets its group `resolved=False`; on **redo** it
+  clears `reopened_at` **and re-stamps `decided_at`** (2026-07-30): the stamp
+  means "when this decision last became live", not "when it was first made" —
+  a redo is the user re-deciding now, and the Decided page orders by
+  `decided_at` descending, so restoring the old stamp would bury the
+  just-redone verdict mid-list. The original instant survives in the operation
+  row's `created_at`. "Live" is exactly `reopened_at IS NULL` (undo leaves
+  `decided_at` alone). One query covers a 2 700-group batch undo. Without this
   the undo was half an undo: the pictures came back unstacked while the group
   stayed decided, invisible in the queue and in the counts, and it **survived a
   rescan** because `verdict_signatures_in_session` still saw a live verdict.
   Pinned at the HTTP level by `test_undo_returns_the_stacked_group_to_the_queue`,
-  `test_batch_undo_after_auto_stack_returns_every_group` (QA's exact repro) and
-  `test_an_undo_does_not_reopen_a_group_it_never_touched`.
+  `test_batch_undo_after_auto_stack_returns_every_group` (QA's exact repro),
+  `test_an_undo_does_not_reopen_a_group_it_never_touched`,
+  `test_undo_returns_a_kept_separate_group_to_the_queue` and
+  `test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds`.
 - **A pre-existing row without a batch id cannot be correlated**, and the hook
   says so with a warning naming the operation ids rather than half-restoring in
   silence: the pictures are back, the group stays decided until the user reopens
@@ -2105,9 +2138,9 @@ Every stack verdict records **exactly one** `Operation` row.
 - **Origin discipline.** `actor` / `source` / `origin_client_id` come from
   `operation_log_service.request_context(request)`, read in the handler on the
   request's own task and passed down explicitly — never from the contextvar, which
-  is dead on the DB worker thread. Only the two recording handlers take a
-  `Request`; keep-separate and reopen deliberately do not, since the values would
-  be dead arguments.
+  is dead on the DB worker thread. The three recording handlers (stack,
+  keep-separate, auto-stack) take a `Request`; reopen deliberately does not,
+  since the values would be dead arguments.
 
 **A bulk run is never aborted by one bad group.** The locked-set guards raise
 `HTTPException(423)`, so the loop catches that alongside `DedupVerdictError`,
@@ -2119,6 +2152,6 @@ server-minted batch id the caller never saw.
 
 ---
 
-*Last updated: 2026-07-29. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-07-30. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

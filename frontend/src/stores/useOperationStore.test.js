@@ -237,6 +237,28 @@ describe("useOperationStore — receipts narrate this client only", () => {
     });
   });
 
+  // A dedup verdict now has TWO narration triggers: the response-driven
+  // refresh (useDedupStore.narrateVerdictOperation, added because verdicts
+  // once emitted no WS event) and the backend's own-origin pictures_changed
+  // echo a moment later. The high-water mark is what keeps that ONE receipt:
+  // the echo's refresh finds nothing newer to narrate.
+  it("narrates one gesture once even when a WS echo follows the response-driven refresh", async () => {
+    const store = await primed([op({ id: 9 })]);
+    serve([
+      op({ id: 10, op_type: "dedup.stack", summary: "Stacked 3 duplicates" }),
+      op({ id: 9 }),
+    ]);
+    // The verdict response triggers the first refresh, which narrates...
+    await store.refresh();
+    expect(store.receipt).toMatchObject({ mode: "did", operationId: 10 });
+    store.dismissReceipt();
+    expect(store.receipt).toBeNull();
+
+    // ...and the WS echo's refresh, same rows, raises nothing new.
+    await store.refresh();
+    expect(store.receipt).toBeNull();
+  });
+
   it("stays silent for an operation from another client", async () => {
     const store = await primed([op({ id: 9 })]);
     serve([op({ id: 10, origin_client_id: OTHER_CLIENT }), op({ id: 9 })]);

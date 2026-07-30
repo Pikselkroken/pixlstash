@@ -54,6 +54,32 @@ describe("DedupGroupRow — the tab order", () => {
   });
 });
 
+describe("DedupGroupRow — modified clicks select rows, not text", () => {
+  // Shift-click means "extend the row selection". The browser reads the same
+  // gesture as "extend the text selection", and it acts on mousedown, before
+  // the click handler runs — so the row must refuse the default there.
+  it("prevents the browser default on a shift or ctrl/cmd press", () => {
+    const wrapper = mountRow();
+    for (const modifier of ["shiftKey", "ctrlKey", "metaKey"]) {
+      const event = new MouseEvent("mousedown", {
+        [modifier]: true,
+        cancelable: true,
+      });
+      wrapper.element.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+  });
+
+  // A plain press keeps its default: text in the row stays selectable the
+  // ordinary way.
+  it("leaves an unmodified press alone", () => {
+    const wrapper = mountRow();
+    const event = new MouseEvent("mousedown", { cancelable: true });
+    wrapper.element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
 describe("DedupGroupRow — what assistive tech is told", () => {
   // The focused-row treatment is five CSS signals and nothing else, which says
   // nothing at all to a screen reader.
@@ -120,6 +146,46 @@ describe("DedupGroupRow — what the verdicts cost", () => {
     }
     // Comparing is reading, so it stays live.
     expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+  });
+});
+
+describe("DedupGroupRow — double-click opens Compare", () => {
+  // Double-click means "open this" everywhere files are listed, so the row
+  // answers it with the same Compare the C key and the button reach.
+  it("emits compare on a double-click on the row surface", async () => {
+    const wrapper = mountRow();
+    await wrapper.trigger("dblclick");
+    expect(wrapper.emitted("compare")).toHaveLength(1);
+  });
+
+  // The two single clicks a dblclick delivers pick the same cover twice,
+  // which is idempotent; Compare then opens over exactly that state.
+  it("opens compare from a thumbnail without losing the cover pick", async () => {
+    const wrapper = mountRow();
+    const thumb = wrapper.findAll(".gthumb")[1];
+    await thumb.trigger("click");
+    await thumb.trigger("click");
+    await thumb.trigger("dblclick");
+    expect(wrapper.emitted("set-cover")).toEqual([[2], [2]]);
+    expect(wrapper.emitted("compare")).toHaveLength(1);
+  });
+
+  // A fast double press on Stack is two Stack clicks (guarded by busy); it
+  // must not ALSO raise a dialog over whatever group slid into the row.
+  it("leaves the action buttons their own double-click meaning", async () => {
+    const wrapper = mountRow();
+    await wrapper.find(".gbtn--stack").trigger("dblclick");
+    await wrapper.find(".gcompare").trigger("dblclick");
+    expect(wrapper.emitted("compare")).toBeUndefined();
+  });
+
+  // Ctrl/Shift clicks are the selection gestures, and they double-fire
+  // harmlessly; a modified double-click must not open anything.
+  it("ignores a modified double-click", async () => {
+    const wrapper = mountRow();
+    await wrapper.trigger("dblclick", { ctrlKey: true });
+    await wrapper.trigger("dblclick", { shiftKey: true });
+    expect(wrapper.emitted("compare")).toBeUndefined();
   });
 });
 

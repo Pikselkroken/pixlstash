@@ -274,6 +274,30 @@ describe("UndoControl — the hover preview", () => {
   });
 });
 
+describe("UndoControl — the History popover stays reachable without its chevron", () => {
+  // The shared toolbar collapse hides the chevron at the ≤480 container step
+  // (jsdom does not evaluate container queries — the CSS being shared with
+  // both bars is the coverage for the step itself). What must hold here is
+  // the CONTRACT that replaces the chevron: the exposed openHistory() opens
+  // the same popover, and the aria state on the (hidden) activator follows,
+  // so the hosts' ⋯ "History…" row is a full substitute.
+  it("openHistory() opens the popover with its rows and aria state", async () => {
+    const store = useOperationStore();
+    seed(store, [op({ id: 9 })]);
+    const wrapper = mount(UndoControl, globalOpts);
+
+    wrapper.vm.openHistory();
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".uc-btn--chevron").attributes("aria-expanded")).toBe(
+      "true",
+    );
+    expect(wrapper.findAll(".uc-row")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
 describe("UndoControl — undo to a step", () => {
   it("undoes back to the clicked step and closes the popover", async () => {
     const { store, wrapper } = await mountOpen([
