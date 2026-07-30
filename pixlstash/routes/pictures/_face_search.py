@@ -16,6 +16,9 @@ the picture's best face is chosen.
 ``source_character_id`` queries with a character's reference faces, which is how
 the UI finds more pictures of a person; ``exclude_character_id`` drops the ones
 already assigned to them so the result set is only the un-assigned candidates.
+``include_reference_scores`` additionally returns the winning face's similarity
+to *each* reference, which is what lets a caller ask "how many of this person's
+reference faces agree?" without a second round trip.
 """
 
 from __future__ import annotations
@@ -56,13 +59,17 @@ class FaceLikenessMatchResponse(BaseModel):
     picture_id: int
     likeness: float
     face_id: int | None = None
+    # The winning face's similarity to each query embedding, in query order.
+    # Only populated when `include_reference_scores` is set; `likeness` is the
+    # `combine` of these, so for `combine=max` it is exactly their maximum.
+    reference_likeness: list[float] | None = None
 
 
 def _score_best_faces(
     query_embeddings: list[np.ndarray],
     candidates: list[tuple[int, list[tuple[int, np.ndarray]]]],
     combine: str,
-) -> tuple[list[int], np.ndarray, list[int]]:
+) -> tuple[list[int], np.ndarray, list[int], np.ndarray]:
     """Score every candidate picture by its best-matching face.
 
     Combines across queries **per face** and only then takes the maximum over a
@@ -84,9 +91,13 @@ def _score_best_faces(
         combine: A member of ``VALID_COMBINE_MODES``.
 
     Returns:
-        ``(picture_ids, scores, face_ids)`` — one entry each, aligned, in the
-        order the comparable candidates were seen.  ``scores`` is a float32
-        array in ``[-1, 1]``.
+        ``(picture_ids, scores, face_ids, per_query)``: one entry each,
+        aligned, in the order the comparable candidates were seen.  ``scores``
+        is a float32 array in ``[-1, 1]``; ``per_query`` is the ``(P, Q)``
+        float32 array of the winning face's similarity to every query
+        embedding, from which ``scores`` is the ``combine``.  Keeping the
+        un-combined row is what lets a caller ask how *many* queries a match
+        satisfies, not merely how well it satisfies the best one.
     """
     query_matrix = np.stack(query_embeddings).astype(np.float32)  # (Q, D)
     query_dim = query_matrix.shape[1]
@@ -118,7 +129,7 @@ def _score_best_faces(
         )
 
     if not embeddings:
-        return [], np.empty(0, dtype=np.float32), []
+        return [], np.empty(0, dtype=np.float32), [], np.empty((0, 0), dtype=np.float32)
 
     # One matmul over every candidate face beats a per-picture Python loop: a
     # mature vault holds six figures of faces and this endpoint is interactive.
@@ -139,12 +150,16 @@ def _score_best_faces(
 
     scores = np.zeros(len(picture_ids), dtype=np.float32)
     best_face_ids = [0] * len(picture_ids)
+    # The winning face's whole similarity row, not just its combined score: the
+    # combine collapses Q numbers into one and there is no way back from it.
+    per_query = np.zeros((len(picture_ids), query_matrix.shape[0]), dtype=np.float32)
     for row in best:
         slot = int(pic_index_arr[row])
         scores[slot] = face_scores[row]
         best_face_ids[slot] = face_ids[row]
+        per_query[slot] = sims[row]
 
-    return picture_ids, scores, best_face_ids
+    return picture_ids, scores, best_face_ids, per_query
 
 
 def register_routes(router, server):
@@ -172,6 +187,11 @@ def register_routes(router, server):
             "is how you find more pictures of a person you have already started "
             "tagging; pair it with `exclude_character_id` to leave out the pictures "
             "already assigned to them.\n\n"
+            "`include_reference_scores` adds `reference_likeness` to each match: the "
+            "winning face's similarity to every query embedding, in query order. "
+            "Since `likeness` is the `combine` of that row, it answers how *well* a "
+            "match scores; `reference_likeness` is what answers how *many* of the "
+            "references it satisfies, and it costs no extra work to compute.\n\n"
             "**Combine modes**\n"
             "- `mean` (default): arithmetic mean across query images.\n"
             "- `max`: best match to any query image.\n"
@@ -251,6 +271,14 @@ def register_routes(router, server):
                 "How to combine scores when the query has several embeddings. "
                 "One of: mean, max, min, harmonic_mean, geometric_mean. "
                 "Defaults to `max` for `source_character_id` and `mean` otherwise."
+            ),
+        ),
+        include_reference_scores: bool = Query(
+            False,
+            description=(
+                "Include `reference_likeness` on every match: the winning face's "
+                "similarity to each query embedding, in query order. Lets a caller "
+                "filter on how many references a match satisfies without refetching."
             ),
         ),
         project_id: str | None = Query(
@@ -553,7 +581,7 @@ def register_routes(router, server):
             return []
 
         # ── Score each picture by its best-matching face ───────────────────
-        pic_ids, combined, best_face_ids = _score_best_faces(
+        pic_ids, combined, best_face_ids, per_query = _score_best_faces(
             query_embeddings, candidates, combine
         )
         if not pic_ids:
@@ -564,6 +592,7 @@ def register_routes(router, server):
         filtered_ids = [pic_ids[i] for i in range(len(pic_ids)) if mask[i]]
         filtered_faces = [best_face_ids[i] for i in range(len(pic_ids)) if mask[i]]
         filtered_scores = combined[mask]
+        filtered_per_query = per_query[mask]
 
         if not filtered_ids:
             return []
@@ -573,12 +602,14 @@ def register_routes(router, server):
         sorted_ids = [filtered_ids[i] for i in order]
         sorted_faces = [filtered_faces[i] for i in order]
         sorted_scores = filtered_scores[order]
+        sorted_per_query = filtered_per_query[order]
 
         # ── Select results ────────────────────────────────────────────────
         effective_pool = top_n if not use_random or pool_m <= 0 else pool_m
         pool_ids = sorted_ids[:effective_pool]
         pool_faces = sorted_faces[:effective_pool]
         pool_scores = sorted_scores[:effective_pool]
+        pool_per_query = sorted_per_query[:effective_pool]
 
         if use_random and pool_m > 0 and len(pool_ids) > top_n:
             indices = _random.sample(range(len(pool_ids)), top_n)
@@ -586,12 +617,14 @@ def register_routes(router, server):
             pool_ids = [pool_ids[i] for i in indices]
             pool_faces = [pool_faces[i] for i in indices]
             pool_scores = pool_scores[indices]
+            pool_per_query = pool_per_query[indices]
         else:
             pool_ids = pool_ids[:top_n]
             pool_faces = pool_faces[:top_n]
             pool_scores = pool_scores[:top_n]
+            pool_per_query = pool_per_query[:top_n]
 
-        return [
+        results = [
             {
                 "picture_id": pid,
                 "likeness": round(float(score), 6),
@@ -599,3 +632,9 @@ def register_routes(router, server):
             }
             for pid, face_id, score in zip(pool_ids, pool_faces, pool_scores)
         ]
+        if include_reference_scores:
+            # 4 decimals, not 6: this is Q floats per row over up to 500 rows and
+            # the consumer compares it against a slider quantised to 1%.
+            for entry, row in zip(results, pool_per_query):
+                entry["reference_likeness"] = [round(float(v), 4) for v in row]
+        return results

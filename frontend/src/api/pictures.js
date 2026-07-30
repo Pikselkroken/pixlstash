@@ -135,18 +135,32 @@ export async function faceSearch(
  * Ranked like {@link faceSearch}, and each match names the `face_id` that
  * matched so the assignment can target that detection.
  *
+ * Each match also carries `reference_likeness`: the winning face's similarity
+ * to every one of the person's reference faces, in query order. `likeness` is
+ * the maximum of that row, so it says how *well* a candidate matches; the row
+ * itself is the only thing that says how *many* references agree, which is what
+ * the suggestion panel's second slider cuts on, client-side, so both knobs
+ * re-cut the cached list without a round trip.
+ *
  * @param {number|string} characterId
  * @param {Object} [options]
  * @param {number} [options.topN=500]
  * @param {number} [options.threshold=0.5] - fetch floor, deliberately looser
  *   than the UI's default cut so the slider can be widened without a refetch.
  * @param {boolean} [options.excludeAssigned=true]
+ * @param {boolean} [options.includeReferenceScores=true]
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
 export async function characterFaceSearch(
   characterId,
-  { topN = 500, threshold = 0.5, excludeAssigned = true, baseUrl = "" } = {},
+  {
+    topN = 500,
+    threshold = 0.5,
+    excludeAssigned = true,
+    includeReferenceScores = true,
+    baseUrl = "",
+  } = {},
 ) {
   const params = new URLSearchParams({
     source_character_id: String(characterId),
@@ -155,6 +169,9 @@ export async function characterFaceSearch(
   });
   if (excludeAssigned) {
     params.append("exclude_character_id", String(characterId));
+  }
+  if (includeReferenceScores) {
+    params.append("include_reference_scores", "true");
   }
   const res = await apiClient.post(
     `${baseUrl}/pictures/face-search?${params.toString()}`,
