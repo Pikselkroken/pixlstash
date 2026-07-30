@@ -1592,6 +1592,85 @@ describe("useDedupStore — remembered filters", () => {
   });
 });
 
+describe("useDedupStore — the Decided flip vs the scan poll", () => {
+  // The user's report, verbatim sequence: open the queue mid-scan ("Still
+  // scanning…" streaming, cache still empty), flip to Decided, decided rows
+  // land — and then the scan poll's OWN reload, fired while the list was
+  // empty and still on the wire from before the flip, lands last and writes
+  // the open queue's empty page over the decided rows. "…which then promptly
+  // disappears and I get nothing."
+  it("a stale scan-poll reload cannot clobber the decided rows", async () => {
+    vi.useFakeTimers();
+    try {
+      startScan.mockResolvedValue({
+        status: "running",
+        scanned_pictures: 0,
+        total_pictures: 10,
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "running", scanned_pictures: 1, total_pictures: 10 },
+      });
+      servePage([], {
+        scan: { status: "running", scanned_pictures: 1, total_pictures: 10 },
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      expect(store.groups).toHaveLength(0);
+
+      // The poll tick's reload goes on the wire and stalls there...
+      let resolvePollReload;
+      listGroups.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePollReload = resolve;
+          }),
+      );
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(resolvePollReload).toBeTruthy();
+
+      // ...the user flips to Decided and its rows land first...
+      listGroups.mockResolvedValueOnce({
+        groups: [
+          {
+            ...group("g9"),
+            verdict: "keep_separate",
+            decided_at: "2026-07-30",
+          },
+        ],
+        total: 1,
+        offset: 0,
+        limit: 20,
+        scan: { status: "running", scanned_pictures: 5, total_pictures: 10 },
+      });
+      await store.toggleDecided();
+      expect(store.showingDecided).toBe(true);
+      expect(store.groups.map((g) => g.signature)).toEqual(["g9"]);
+
+      // ...and the stale open-queue response (empty — the scan was still
+      // streaming when it was requested) lands LAST. It must be discarded,
+      // never written.
+      resolvePollReload({
+        groups: [],
+        total: 0,
+        offset: 0,
+        limit: 20,
+        scan: { status: "complete", scanned_pictures: 10, total_pictures: 10 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(store.groups.map((g) => g.signature)).toEqual(["g9"]);
+      expect(store.focusIndex).toBe(0);
+      expect(store.showingDecided).toBe(true);
+    } finally {
+      useDedupStore().stopScanPoll();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("useDedupStore — scans and bulk auto-stack", () => {
   it("opening the queue queues a scan: the cache only fills when one runs", async () => {
     // The regression this pins: openQueue read the (empty) cache and nothing

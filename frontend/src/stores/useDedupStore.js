@@ -770,6 +770,13 @@ export const useDedupStore = defineStore("dedup", () => {
     // point at different groups — and so would a jump-to-end still chasing
     // the old list's tail, or a page request still in flight from it.
     windowEpoch += 1;
+    // This rebuild's own claim on the window. Two first-page loads CAN be in
+    // flight at once — the scan poll reloads an empty list on its own clock,
+    // and the user can flip to Decided (or change scope/tier) meanwhile —
+    // and only the NEWEST rebuild may write. Without this check the poll's
+    // stale open-queue response landed after the Decided flip's rows and
+    // wrote its empty page over them: "Still scanning…", then nothing.
+    const epoch = windowEpoch;
     cancelEndChase();
     clearSelection();
     try {
@@ -781,6 +788,7 @@ export const useDedupStore = defineStore("dedup", () => {
         offset: 0,
         limit: QUEUE_PAGE_SIZE,
       });
+      if (epoch !== windowEpoch) return;
       groups.value = Array.isArray(data?.groups) ? data.groups : [];
       windowStart.value = 0;
       total.value = Number(data?.total) || groups.value.length;
@@ -793,6 +801,15 @@ export const useDedupStore = defineStore("dedup", () => {
       scan.value = normalizeScan(data?.scan);
       focusIndex.value = groups.value.length ? 0 : -1;
     } catch (err) {
+      // A stale rebuild's failure must not blank the fresh rebuild's rows
+      // either — logged (never swallowed), then discarded like its success.
+      if (epoch !== windowEpoch) {
+        console.warn(
+          "[dedup] discarding a superseded first-page load's failure",
+          err,
+        );
+        return;
+      }
       error.value = err;
       groups.value = [];
       windowStart.value = 0;
@@ -803,7 +820,9 @@ export const useDedupStore = defineStore("dedup", () => {
       focusIndex.value = -1;
       console.warn("[dedup] failed to load the duplicate queue", err);
     } finally {
-      loading.value = false;
+      // Only the CURRENT rebuild owns the loading flag: a superseded one
+      // finishing late must not clear (or appear to clear) the fresh one's.
+      if (epoch === windowEpoch) loading.value = false;
     }
   }
 
