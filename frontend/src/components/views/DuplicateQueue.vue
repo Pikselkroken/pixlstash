@@ -49,7 +49,13 @@
           {{ store.showingDecided ? "Back to review" : "Decided" }}
         </button>
 
-        <span class="dq-tb-sep" aria-hidden="true"></span>
+        <!-- Separator D-S1 wears the fold class of the group it bounds
+             (two-boundary rule, docs/design/toolbar-responsive-decisions.md
+             amendment): once the Decided toggle folds at ≤720 this rule
+             would sit flankless — and on an empty queue, with the headline
+             v-if'd away, it rendered as the bar's LEADING rule. The tail's
+             D-S2 below stays at every width. -->
+        <span class="dq-tb-sep dq-fold-720" aria-hidden="true"></span>
 
         <!-- Escape inside the popover (including on its threshold slider,
              where the queue's key model stands down for a typing target)
@@ -59,16 +65,23 @@
           class="dq-tier-wrap"
           @keydown.esc.stop.prevent="closeTierMenu()"
         >
+          <!-- The label ellipsizes under pressure and hides at ≤720 (the
+               compressed form is [filter icon][chevron], the grid Filter
+               trigger's grammar), so the button carries its own accessible
+               name at every width — without it the hidden span would leave
+               the name empty (WCAG 4.1.2). -->
           <button
             ref="tierButtonEl"
             type="button"
             class="dq-btn"
+            :title="tierLabel"
+            :aria-label="tierLabel"
             :aria-expanded="tierMenuOpen"
             aria-haspopup="true"
             @click="toggleTierMenu"
           >
             <v-icon size="16">mdi-filter-outline</v-icon>
-            <span>{{ tierLabel }}</span>
+            <span class="dq-tier-label">{{ tierLabel }}</span>
             <v-icon size="16">mdi-menu-down</v-icon>
           </button>
           <DedupTierMenu
@@ -1599,15 +1612,22 @@ defineExpose({ windowedGroups, tierLabel });
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  /* The shell's top band, which in the browser is 36px: the grid toolbar
-     (`.selection-bar-overlay`), the sidebar's brand row and its tab row all
-     sit on it, so this bar has to as well or the columns step. This is NOT
-     `--bar-height` (48px): that token is the design manual's target for the
-     band, and unifying the shipped 34/36/40/48/56 onto it is the open,
-     UI/UX-gated reconciliation item in visual-language.md §5 — a bar that
-     jumped there alone would just be drift in the other direction. */
-  min-height: 36px;
-  padding: var(--space-2) var(--space-5);
+  /* The shell's top band. The GRID toolbar (`.selection-bar-overlay` in
+     Toolbar.vue) is the point of truth for the band's box recipe, and this
+     bar copies it exactly: `height: 36px` + `box-sizing: border-box` (the
+     1px bottom border sits INSIDE the 36) + zero vertical padding, with
+     `align-items: center` doing the vertical work. The previous recipe here
+     (`min-height: 36px` + `var(--space-2)` vertical padding, content-box)
+     rendered 41px once the 32px app-wide tail buttons landed — the bars
+     visibly stepped. Guardrail: Toolbar.test.js asserts both bars carry the
+     same recipe. This is NOT `--bar-height` (48px): that token is the design
+     manual's target for the band, and unifying the shipped 34/36/40/48/56
+     onto it (or tokenising the shipped 36) is the open, UI/UX-gated
+     reconciliation item in visual-language.md §5 — a bar that jumped there
+     alone would just be drift in the other direction. */
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 var(--space-5);
   background: rgb(var(--v-theme-toolbar));
   color: rgb(var(--v-theme-toolbar-text));
   border-bottom: 1px solid rgb(var(--v-theme-divider));
@@ -1673,6 +1693,20 @@ defineExpose({ windowedGroups, tierLabel });
 
 .dq-tier-wrap {
   position: relative;
+  /* Part of the tier button's shrink chain: without this the flex default
+     (min-width: auto) refuses to shrink and the label wraps instead. */
+  min-width: 0;
+}
+
+/* The icons flank the ellipsis, never feed it. */
+.dq-btn .v-icon {
+  flex-shrink: 0;
+}
+
+.dq-tier-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dq-tier-menu {
@@ -1686,6 +1720,10 @@ defineExpose({ windowedGroups, tierLabel });
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  /* Structural no-wrap: under width pressure the LABEL ellipsizes on one
+     line; the 27px button and the 36px band never grow. */
+  white-space: nowrap;
+  min-width: 0;
   height: 27px;
   padding: 0 var(--space-4);
   border-radius: var(--radius-md);
@@ -1727,6 +1765,8 @@ defineExpose({ windowedGroups, tierLabel });
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
+  /* The to-do count is the queue's one number; it never truncates. */
+  flex-shrink: 0;
 }
 
 .qsub {
@@ -1912,6 +1952,13 @@ defineExpose({ windowedGroups, tierLabel });
   display: none;
 }
 
+/* Auto-stack's full label shares the tier label's latent wrap; same cure. */
+.dq-auto-full {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @container dqbar (max-width: 860px) {
   .qsub {
     display: none;
@@ -1936,6 +1983,11 @@ defineExpose({ windowedGroups, tierLabel });
   }
   .dq-auto-short {
     display: inline;
+  }
+  /* The tier trigger compresses to [filter icon][chevron] — the grid Filter
+     trigger's grammar; the button's own title/aria-label carry the name. */
+  .dq-tier-label {
+    display: none;
   }
 }
 

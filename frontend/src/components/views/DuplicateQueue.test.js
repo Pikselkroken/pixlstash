@@ -684,6 +684,34 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
+  // The separator amendment: D-S1 folds with the group it bounds (once the
+  // Decided toggle folds, the rule would sit flankless — and on an empty
+  // queue it rendered as the bar's LEADING rule); D-S2, the tail boundary,
+  // never folds. Class contract is the testable surface under jsdom.
+  it("D-S1 wears the Decided group's fold class; the tail's D-S2 does not", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    const separators = wrapper.findAll(".dq-toolbar .dq-tb-sep");
+    expect(separators).toHaveLength(2);
+    const [dS1, dS2] = separators;
+    expect(dS1.classes()).toContain("dq-fold-720");
+    expect(dS2.classes()).not.toContain("dq-fold-720");
+    wrapper.unmount();
+  });
+
+  // The tier trigger's label ellipsizes under pressure and hides entirely at
+  // ≤720, so the button must carry its own accessible name at every width
+  // (WCAG 4.1.2 — a hidden span would leave it empty).
+  it("the tier button exposes its label as title and aria-label", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    const button = wrapper.find(".dq-tier-wrap .dq-btn");
+    const label = wrapper.vm.tierLabel;
+    expect(label).toBeTruthy();
+    expect(button.attributes("title")).toBe(label);
+    expect(button.attributes("aria-label")).toBe(label);
+    expect(button.find(".dq-tier-label").text()).toBe(label);
+    wrapper.unmount();
+  });
+
   // Fold = CSS both ways: every foldable control has its overflow row with
   // the same v-if. jsdom does not evaluate container queries; the width steps
   // are covered by the CSS being shared between both bars.

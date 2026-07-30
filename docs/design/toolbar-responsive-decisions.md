@@ -124,6 +124,53 @@ shared) / 10 qsub (hides 860, no row).
    sentence; the toolbar section gains the overflow pattern note. Append the ⋯
    overflow as a named toolbar pattern in `docs/design/visual-language.md`.
 
+## Amendment (2026-07-30): separators and the tier label
+
+**Separators — the principle:** a separator marks a SEMANTIC boundary, not a
+group edge; the elastic gap already draws the left|right boundary. Inventory:
+grid G-S1 (between View and Search), G-S2 (gap-guard), G-S3 (first child of
+`.selection-bar-right`), G-S4 (between Review and the ⋯/Undo/Global tail);
+duplicates D-S1 (between the Decided toggle and the tier gate), D-S2 (before
+the tail).
+
+1. G-S3 is DELETED at all widths — its boundary is already the elastic gap;
+   it is what boxed the Review button.
+2. G-S2 (gap-guard) and its whole `@container selbar (max-width: 800px)`
+   block are DELETED — it existed only to patch G-S3's gap-dependence, and
+   below 800 it drew a double rule 8px from G-S3.
+3. G-S4 stays at every width (the canonical tail boundary, mirroring D-S2).
+4. Mechanism for narrowing: a separator wears the fold class of the group it
+   bounds. G-S1 gains `tb-fold-700` (when Export/Import/ComfyUI fold, a lone
+   Search must join the lens run, not sit boxed). D-S1 gains `dq-fold-720`
+   (also fixes: on an empty queue the headline is v-if'd away and D-S1
+   rendered as the bar's LEADING rule). D-S2 stays at every width.
+5. Testable invariants: no separator is the first or last visible child; no
+   two separators are visibly adjacent; every visible separator has a visible
+   control on each flank.
+
+Full-width grid result:
+`Sort Filter View │G-S1│ Search Export Import ComfyUI …gap… Review │G-S4│ Undo Settings Stats`.
+
+**Tier label:** the tier gate button's `{{ tierLabel }}` span wrapped because
+`.dq-btn` lacked nowrap and the shrink chain (`.dq-tb-left` → `.dq-tier-wrap`
+→ button) had no `min-width` guards; Auto-stack's `.dq-auto-full` shared the
+latent wrap.
+
+1. Structural no-wrap at every width: `.dq-btn { white-space: nowrap;
+   min-width: 0; }`; the label span (`.dq-tier-label`) gets `min-width: 0;
+   overflow: hidden; text-overflow: ellipsis;`; `.dq-btn .v-icon
+   { flex-shrink: 0; }`; `.dq-tier-wrap { min-width: 0; }`. One line with an
+   ellipsis under pressure; the 36px band and the 27px button never move.
+2. `.dq-tier-label { display: none; }` joins the EXISTING dqbar ≤720 block
+   (no new breakpoint) — the compressed form is [filter icon][chevron],
+   matching the grid Filter trigger's grammar.
+3. A11y, mandatory: the tier button had NO title/aria-label — with the span
+   hidden its accessible name would be empty (WCAG 4.1.2). It carries
+   `:title="tierLabel"` and `:aria-label="tierLabel"` at all widths.
+4. Siblings hardened: `.dq-auto-full { min-width: 0; overflow: hidden;
+   text-overflow: ellipsis; }`; `.qtitle { flex-shrink: 0; }` (the count
+   must never truncate).
+
 ## (d) Deliberately rejected, and why
 
 - **Left-side standardisation**: no shared anchor exists on the left (the grid

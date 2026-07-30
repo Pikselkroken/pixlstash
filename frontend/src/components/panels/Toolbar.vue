@@ -349,8 +349,13 @@
             </div>
           </div>
         </v-menu>
-        <!-- ── Toolbar: divider ─────────────────────────────────────── -->
-        <div class="bar-separator"></div>
+        <!-- ── Separator G-S1: the lens run | the action run ────────────
+             A separator marks a SEMANTIC boundary, not a group edge (the
+             amendment in docs/design/toolbar-responsive-decisions.md).
+             It wears the fold class of the group it bounds: when Export/
+             Import/ComfyUI fold at ≤700 a lone Search must join the lens
+             run, not sit boxed between two rules. -->
+        <div class="bar-separator tb-fold-700"></div>
         <!-- ── Toolbar: Search (icon trigger → search menu popover) ───── -->
         <v-menu
           v-model="gbSearchMenuOpen"
@@ -508,11 +513,11 @@
           />
         </v-menu>
       </div>
-      <!-- ── Conditional separator: ComfyUI | ApplyTo (shown when bar is narrow) ── -->
-      <div class="bar-separator bar-separator--gap-guard"></div>
+      <!-- No separator between the groups: the elastic gap IS the left|right
+           boundary (two-boundary rule, docs/design/toolbar-responsive-
+           decisions.md amendment). The old leading rule here boxed the Review
+           button, and its narrow-width gap-guard twin drew a double rule. -->
       <div class="selection-bar-right">
-        <!-- ── Separator: grid controls | actions ─────────────────────── -->
-        <div class="bar-separator"></div>
         <!-- ── Toolbar: Review and fix tags (an action, not a menu) ───── -->
         <button
           class="bar-btn bar-btn--icon tb-fold-700"
@@ -523,10 +528,11 @@
         >
           <v-icon size="20">mdi-tag-check-outline</v-icon>
         </button>
-        <!-- ── Separator: view-local actions | app-wide chrome ──────────
+        <!-- ── Separator G-S4: view-local actions | app-wide chrome ─────
              The canonical toolbar tail, identical in every view:
              [separator] [UndoControl] [TbGlobalActions], with the ⋯ overflow
-             ahead of Undo once controls start folding. The rule is required:
+             ahead of Undo once controls start folding. The rule is required
+             AND stays at every width (it mirrors the Duplicates bar's D-S2):
              proximity alone cannot separate identical 32px icon buttons into
              "this view's tools" and "the app's chrome". -->
         <div class="bar-separator"></div>
@@ -1099,7 +1105,11 @@ const gbCollapseAllStacksDisabled = computed(
   margin: 0;
   height: 36px;
   /* 1px divider along the bottom. box-sizing:border-box keeps the bar at 36px
-     (the border sits inside), so this doesn't grow the toolbar. */
+     (the border sits inside), so this doesn't grow the toolbar.
+     POINT OF TRUTH for the shell band's box recipe: `.dq-toolbar`
+     (DuplicateQueue.vue) copies `height`/`box-sizing`/zero vertical padding
+     from here so the two bars never step (guardrail in Toolbar.test.js).
+     A change to this recipe is a change to both bars. */
   border-bottom: 1px solid rgb(var(--v-theme-divider));
   box-sizing: border-box;
   display: flex;
@@ -1337,18 +1347,6 @@ const gbCollapseAllStacksDisabled = computed(
   margin: 0 var(--space-2);
   align-self: center;
   flex-shrink: 0;
-}
-
-/* Gap-guard: hidden by default, only shown via container query when the bar
-   is narrow enough that the left and right groups start crowding each other */
-.bar-separator--gap-guard {
-  display: none;
-}
-
-@container selbar (max-width: 800px) {
-  .bar-separator--gap-guard {
-    display: block;
-  }
 }
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */

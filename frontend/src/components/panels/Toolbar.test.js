@@ -94,6 +94,50 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
+describe("Toolbar — the shell band's one box recipe", () => {
+  // jsdom computes no layout, so rendered heights cannot be asserted; what
+  // CAN be pinned is the coupling itself. `.selection-bar-overlay` is the
+  // point of truth for the 36px band recipe and `.dq-toolbar` copies it —
+  // the drift this guards against: the dq bar shipped with `min-height` +
+  // vertical padding on a content-box, which rendered 41px next to the
+  // grid's exact 36px once the 32px app-wide tail buttons landed.
+  // (Tokenising the shipped 36px is a recorded lead-designer follow-up;
+  // until then this test is the shared source of truth.)
+  it("both bars declare the identical height-determining recipe", async () => {
+    const { readFileSync } = await import("node:fs");
+    // Vitest serves modules from a virtual scheme, so the SFC sources are
+    // read relative to the frontend/ working directory instead.
+    const blockOf = (path, selector) => {
+      // Comments stripped: the dq bar's comment NAMES the drifted recipe it
+      // replaced, and the guard is about declarations, not prose.
+      const source = readFileSync(`${process.cwd()}/${path}`, "utf8").replace(
+        /\/\*[\s\S]*?\*\//g,
+        "",
+      );
+      const start = source.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      return source.slice(start, source.indexOf("}", start));
+    };
+
+    const grid = blockOf(
+      "src/components/panels/Toolbar.vue",
+      ".selection-bar-overlay",
+    );
+    const dq = blockOf(
+      "src/components/views/DuplicateQueue.vue",
+      ".dq-toolbar",
+    );
+
+    for (const block of [grid, dq]) {
+      expect(block).toContain("height: 36px");
+      expect(block).toContain("box-sizing: border-box");
+      // min-height + vertical padding is exactly the recipe that drifted.
+      expect(block).not.toContain("min-height");
+      expect(block).toMatch(/padding: 0 var\(--space-\d\)/);
+    }
+  });
+});
+
 describe("Toolbar — the canonical app-wide tail", () => {
   // The decision record: EVERY toolbar ends [separator][UndoControl]
   // [TbGlobalActions], with the ⋯ overflow ahead of Undo once folding starts.
@@ -110,6 +154,28 @@ describe("Toolbar — the canonical app-wide tail", () => {
     ).toBe(true);
     expect(precedes(overflow, undo)).toBe(true);
     expect(precedes(undo, globalActions)).toBe(true);
+  });
+
+  // The separator amendment: a rule marks a SEMANTIC boundary, not a group
+  // edge — the elastic gap already draws left|right. Two rules remain: G-S1
+  // (lens run | action run, folding with the actions at ≤700) and G-S4 (the
+  // tail boundary, every width). G-S3 (the right group's leading rule) and
+  // the G-S2 gap-guard are gone. Width steps live in shared CSS; the class
+  // contract is the testable surface under jsdom.
+  it("renders exactly two separators: G-S1 (folds at 700) and G-S4 (never)", () => {
+    const wrapper = mountToolbar();
+    const separators = wrapper.findAll(".bar-separator");
+    expect(separators).toHaveLength(2);
+    const [gS1, gS4] = separators;
+    expect(gS1.classes()).toContain("tb-fold-700");
+    expect(gS4.classes()).not.toContain("tb-fold-700");
+    // The gap-guard variant is deleted outright.
+    expect(wrapper.find(".bar-separator--gap-guard").exists()).toBe(false);
+    // No rule leads the right group: its first element child is a control.
+    const right = wrapper.find(".selection-bar-right").element;
+    expect(
+      right.firstElementChild.classList.contains("bar-separator"),
+    ).toBe(false);
   });
 
   it("mounts UndoControl exactly once — the left-group copy is gone", () => {
