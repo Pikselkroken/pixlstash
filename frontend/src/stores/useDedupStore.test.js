@@ -162,6 +162,9 @@ describe("useDedupStore — loading the queue", () => {
       nearEnabled: false,
       embeddingEnabled: false,
       decided: false,
+      // The Decided page's verdict gate; empty is every decision, and it is
+      // sent empty from the open queue, whose groups carry no verdict at all.
+      verdicts: [],
       scopeType: "global",
       scopeId: null,
       offset: 0,
@@ -386,7 +389,11 @@ describe("useDedupStore — paging", () => {
     await store.loadFirstPage();
     expect(store.nextCursor).toBe(null);
     expect(store.hasMore).toBe(true);
-    listGroups.mockResolvedValueOnce({ groups: [group("g3")], total: 9, scan: {} });
+    listGroups.mockResolvedValueOnce({
+      groups: [group("g3")],
+      total: 9,
+      scan: {},
+    });
     await store.loadMore();
     expect(listGroups.mock.calls.at(-1)[0].offset).toBe(2);
   });
@@ -993,9 +1000,7 @@ describe("useDedupStore — verdicts and auto-advance", () => {
     expect(store.openCount).toBe(2);
     // The optimistic tick lands with the verdict, before the reconciling
     // refetch resolves: that immediacy is the whole point of it.
-    getCounts.mockImplementation(
-      () => new Promise(() => {}),
-    );
+    getCounts.mockImplementation(() => new Promise(() => {}));
     await store.stack(store.groups[0]);
     await store.keepSeparate(store.groups[0]);
     expect(store.openCount).toBe(0);
@@ -1228,6 +1233,130 @@ describe("useDedupStore — the tier gate", () => {
   });
 });
 
+describe("useDedupStore — the decided page's verdict gate", () => {
+  /** A store on the Decided page with the policy loaded. */
+  async function decidedStore(over = {}) {
+    servePage([], { by_verdict: { stacked: 7, keep_separate: 3 }, ...over });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.toggleDecided();
+    return store;
+  }
+
+  // The vocabulary is the server's, exactly as the tier rows are: a verdict it
+  // adds later renders under its own id rather than vanishing from the menu.
+  it("builds the rows from the server's verdicts and the page's counts", async () => {
+    const store = await decidedStore();
+    expect(store.verdictRows.map((r) => r.id)).toEqual([
+      "stacked",
+      "keep_separate",
+    ]);
+    expect(store.verdictRows.map((r) => r.label)).toEqual([
+      "Stacked",
+      "Kept separate",
+    ]);
+    expect(store.verdictRows.map((r) => r.count)).toEqual([7, 3]);
+    expect(store.verdictRows.every((r) => r.enabled)).toBe(true);
+  });
+
+  // "Everything" is expressed by ABSENCE, never by re-listing the vocabulary:
+  // a full list would also drop the verdict-less tail the server still serves.
+  it("sends no filter while every verdict is shown", async () => {
+    const store = await decidedStore();
+    expect(store.verdictArgs).toEqual([]);
+    expect(listGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decided: true, verdicts: [] }),
+    );
+  });
+
+  it("narrows to one verdict and reloads under the same filter", async () => {
+    const store = await decidedStore();
+    listGroups.mockClear();
+    expect(await store.setVerdictEnabled("keep_separate", false)).toBe(true);
+    expect(store.enabledVerdicts).toEqual(["stacked"]);
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(listGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decided: true, verdicts: ["stacked"] }),
+    );
+  });
+
+  // Over-filtering is its own regression: the way back has to work too.
+  it("puts a hidden verdict back", async () => {
+    const store = await decidedStore();
+    await store.setVerdictEnabled("stacked", false);
+    expect(await store.setVerdictEnabled("stacked", true)).toBe(true);
+    expect(store.verdictArgs).toEqual([]);
+  });
+
+  // An empty gate can only ever render an empty page, which reads as a broken
+  // queue rather than as a choice the user made.
+  it("refuses to switch the last verdict off", async () => {
+    const store = await decidedStore();
+    await store.setVerdictEnabled("stacked", false);
+    listGroups.mockClear();
+    expect(await store.setVerdictEnabled("keep_separate", false)).toBe(false);
+    expect(store.enabledVerdicts).toEqual(["keep_separate"]);
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  // The counts are the MENU's, so they must survive the filter that hides
+  // their rows — otherwise a hidden verdict reads as "there are none".
+  it("keeps the unfiltered counts while a verdict is hidden", async () => {
+    const store = await decidedStore();
+    await store.setVerdictEnabled("keep_separate", false);
+    expect(store.verdictRows.map((r) => r.count)).toEqual([7, 3]);
+  });
+
+  // A link carries what to SHOW; anything the server does not publish is not
+  // trusted, and a selection that would empty the page falls back to all.
+  it("restores a selection from the URL and ignores a bogus one", async () => {
+    servePage([]);
+    const store = useDedupStore();
+    await store.loadPolicy();
+    store.applyUrlFilters({ decided: true, verdicts: ["keep_separate"] });
+    expect(store.enabledVerdicts).toEqual(["keep_separate"]);
+    store.applyUrlFilters({ verdicts: ["deleted"] });
+    expect(store.enabledVerdicts).toEqual(["stacked", "keep_separate"]);
+  });
+
+  // The open queue's groups carry no verdict, so the gate is state waiting for
+  // the flip: moving it there must not fire a pointless request.
+  it("does not reload the open queue when the gate moves", async () => {
+    servePage([]);
+    const store = useDedupStore();
+    await store.loadPolicy();
+    listGroups.mockClear();
+    expect(await store.setVerdictEnabled("stacked", false)).toBe(true);
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  // The decided page is a place the user visits, not a lens they set — and
+  // neither is its gate, so arriving starts from every decision.
+  it("clears the gate when the queue is opened", async () => {
+    const store = await decidedStore();
+    await store.setVerdictEnabled("stacked", false);
+    getCounts.mockResolvedValue({
+      unresolved_groups: 0,
+      by_tier: {},
+      scopes: [],
+    });
+    startScan.mockResolvedValue({ status: "complete" });
+    await store.openQueue();
+    expect(store.enabledVerdicts).toEqual(["stacked", "keep_separate"]);
+    expect(store.decidedByVerdict).toEqual({});
+  });
+
+  // The open queue never carries the counts, so a flip back must not leave the
+  // decided page's numbers standing behind a menu that no longer shows them.
+  it("drops the counts on the way back to the open queue", async () => {
+    const store = await decidedStore();
+    expect(store.decidedByVerdict).toEqual({ stacked: 7, keep_separate: 3 });
+    servePage([]);
+    await store.toggleDecided();
+    expect(store.decidedByVerdict).toEqual({});
+  });
+});
+
 describe("useDedupStore — the threshold", () => {
   // Below the floor is a 400 by design, so the client must not send one.
   it("clamps to the server's published bounds", async () => {
@@ -1430,7 +1559,12 @@ describe("useDedupStore — multi-select", () => {
   }
 
   it("toggles per group and ranges from the anchor", async () => {
-    const store = await openWith([group("g1"), group("g2"), group("g3"), group("g4")]);
+    const store = await openWith([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+      group("g4"),
+    ]);
     store.toggleSelected(1);
     expect(store.isSelected("g2")).toBe(true);
     store.selectRange(3);
@@ -1483,7 +1617,9 @@ describe("useDedupStore — multi-select", () => {
     store.toggleSelected(2);
     stackGroup.mockResolvedValue({});
 
-    const result = await store.stack(store.groups.find((g) => g.signature === "g3"));
+    const result = await store.stack(
+      store.groups.find((g) => g.signature === "g3"),
+    );
     expect(result).toBeTruthy();
     expect(stackGroup).toHaveBeenCalledTimes(2);
     expect(stackGroup.mock.calls.map((c) => c[0])).toEqual(["g1", "g3"]);
@@ -1521,7 +1657,9 @@ describe("useDedupStore — multi-select", () => {
     const store = await openWith([group("g1"), group("g2")]);
     store.toggleSelected(0);
     store.toggleSelected(1);
-    stackGroup.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("locked"));
+    stackGroup
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("locked"));
     const result = await store.stack(store.groups[0]);
     expect(result).toBeNull();
     // g1 landed and left; g2 failed and stays both queued and selected.
@@ -1812,14 +1950,14 @@ describe("useDedupStore — the thumbnail size", () => {
   it("starts at the ladder's default and maps the level to a strip height", () => {
     const store = useDedupStore();
     expect(store.sizeLevel).toBe(3);
-    expect(store.thumbHeight).toBe(112);
+    expect(store.thumbHeight).toBe(196);
   });
 
   it("remembers a new size and clamps one off the ladder", () => {
     const store = useDedupStore();
     store.setSizeLevel(5);
     expect(store.sizeLevel).toBe(5);
-    expect(store.thumbHeight).toBe(184);
+    expect(store.thumbHeight).toBe(322);
     expect(window.localStorage.getItem("pixlstash:dedupSizeLevel")).toBe("5");
 
     store.setSizeLevel(99);
@@ -1911,7 +2049,12 @@ describe("useDedupStore — Ctrl+A", () => {
     await store.loadFirstPage();
     // A server that keeps saying "there is more" and serving nothing.
     listGroups.mockClear();
-    listGroups.mockResolvedValue({ groups: [], total: 900, offset: 2, limit: 200 });
+    listGroups.mockResolvedValue({
+      groups: [],
+      total: 900,
+      offset: 2,
+      limit: 200,
+    });
 
     const result = await store.selectAll();
     expect(result.selected).toBe(2);

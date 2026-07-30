@@ -309,6 +309,17 @@ The core image display engine. Responsibilities:
 - Emits: `open-overlay`, `refresh-sidebar`, `clear-search`, `reset-to-all`, `search-all`, `update:selected-sort`, `update:stack-stats`, `import-started`, `import-ended`, `clear-multi-selection`, `update:character-multi-mode`, `update:set-multi-mode`, `update:set-difference-base-id`, `update:embed-watermark`, `update:visible-range-label`, `load-pending-imports`
 - Key props: `thumbnailSize`, `columns`, `selectedCharacter`, `selectedSet`, `searchQuery`, `selectedSort`, `wsTagUpdate`, `wsPluginProgress`, `gridVersion`, `wsUpdateKey`, `publicUrl`, `embedWatermark`, + all filter props.
 
+##### The four grid fetch modes, and the character face search
+
+`useGridFetch` picks one branch per fetch (`fetchMode`): `likeness-groups`, `character-face-search`, `face-likeness-search`, `reverse-image-search`, `text-search`, or `stream`. The first five build an **ordered id list** and re-read the pictures by id, because the ranking *is* the result and a plain id-list read does not preserve order.
+
+**`character-face-search` — "Suggest more pictures of &lt;person&gt;" (#636).** Launched from the sidebar's person context menu (`SideBar` → `suggest-pictures-for-character` → `App.handleSuggestPicturesForCharacter` → the grid's exposed `suggestPicturesForCharacter`, the same Tier-3 route as `confirmEmptyScrapheap`). It queries `POST /pictures/face-search?source_character_id=…&exclude_character_id=…`, i.e. the person's reference faces, minus the pictures already assigned to them.
+
+- **State**: `faceSearchCharacter` (`{id, name}`, null when inactive), `faceSearchThreshold` (default **0.7**, the same cut `SourceFaceLikenessTask.SIMILARITY_THRESHOLD` already uses for "same person"; a second UI-local number would drift from it), and `faceSearchRanked` (`{characterId, matches, rowsById}`).
+- **The ranked list and its picture rows are both cached**, so moving the threshold **re-cuts the same list with no network call**. The threshold is in the fetch key (a rebuild that early-returned as a no-op would leave the grid disagreeing with the count), and the rebuild is debounced 200ms while the count in the bar updates synchronously from `faceSearchMatches`.
+- **It is not a character-scoped *view*.** `faceSearchCharacter` is deliberately independent of `props.selectedCharacter`, and the `selectedCharacter`/`selectedSet` watcher that clears the other search modes **must not clear this one**: opening the sidebar's person menu can also select that person, so clearing on a selection change would cancel the search the click just requested. The search spans the library by construction, so a view change cannot invalidate it.
+- **After the assign, the search is re-run against the server (`force: true`), not pruned locally.** Two correctness reasons: `POST /characters/{id}/faces` is stack-atomic, so it can assign *more* pictures than were named (a suggestion's stack siblings would otherwise linger as un-assigned), and the fetch key is unchanged, so a non-forced call would be dropped by the 1200ms de-dup window. `operationStore.refresh()` then raises the "Assigned N pictures…· Undo" receipt, which is what lets this bulk write skip a confirmation dialog.
+
 ##### Entity-assignment refetch rule (set / project / character)
 
 **An assignment refetches the grid only when the active view is scoped by the thing that changed.** Grouping membership is not part of the grid query in the global view, so assigning a picture to a set or project from **All Pictures** cannot change which pictures match or their sort position, and the card renders no set/project data, so a refetch there is pure churn (flicker, lost scroll position, lost selection). The three handlers each gate on their own view scope:
@@ -611,8 +622,15 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 #### `SearchOverlay.vue` (273 lines)
 Full-screen search input with history. Props: `modelValue`, `history`. Emits: `search`, `close`, `clear-history`. Keyboard: Enter to search, Escape to close.
 
-#### `SearchResultBar.vue` (95 lines)
-Active-search banner. Props: `query`, `scope`, `resultCount`. Emits: `clear`, `search-all`.
+#### `SearchResultBar.vue` (~200 lines)
+Active-search banner. Props: `imagesLoading`, `count`, `categoryLabel`, `isAllPicturesActive`, `statusText`, plus the person-search set below. Emits: `clear`, `search-all`, `update:threshold`, `assign`.
+
+**Person-search mode (`assignTarget` / `threshold` non-null).** Serves "Suggest more pictures of &lt;person&gt;" (see `ImageGrid` below). Adds two controls, both optional so the text and reverse-image callers render unchanged:
+
+- A **threshold** range input (`threshold`, `thresholdMin`, `thresholdMax`), same native-input pattern as `DedupTierMenu` — real `<label for>` plus an `<output>` in percent, so it is keyboard-operable and named. It emits on `input`, not `change`: the count has to track the drag, not wait for the pointer release. `thresholdMin` is the **fetch floor**, since below it there are no fetched results to reveal.
+- An **assign** action (`assignTarget`, `assignCount`, `assignFromSelection`, `assignBusy`) labelled `Assign N to <person>`. **The count is on the button, never "all"** — the blast radius of a bulk write is stated before the click, and it is what makes the slider legible. When the grid has an explicit selection the label becomes `Assign N selected to <person>` and the action follows the selection: silently writing the whole result set over a deliberate selection is the error the mode exists to prevent. Disabled at count 0 and while a write is in flight (a double submit would raise two operation-log entries, so Undo would reverse only half).
+
+The status text sits in an `aria-live="polite"` region because the count moves with the slider (WCAG 4.1.3). Covered by `SearchResultBar.test.js`.
 
 #### `ShareDialog.vue` (286 lines)
 Share link creation. Props: `modelValue` (v-model for open), `pictureId`, `embedWatermark`. Emits: `update:modelValue`, `update:embed-watermark`, `created`. Calls `POST /shares`.
@@ -1186,6 +1204,30 @@ in force for the first page. The Decided flip is deliberately not remembered.
 Account-level persistence in `/users/me/config` would need a backend schema
 change (the PATCH endpoint rejects unknown keys) and is recorded as a
 follow-up.
+
+**One filter button, two filters** (owner call, 2026-07-30). The tier gate says
+nothing about a decision already made — the server ignores the gate and the
+threshold entirely on `decided=true` — so while the Decided page is showing,
+the toolbar's filter button opens `DedupVerdictMenu` instead of
+`DedupTierMenu`, and its label names the verdict filter (`All decisions` /
+`Stacked` / `Kept separate`) rather than a tier the page is not filtered by.
+The rows are built from `bounds.verdicts` and their counts from the decided
+page's `by_verdict`, which is served **without** the filter in force so a
+hidden row says what turning it back on would add rather than reading as "there
+are none". `useDedupStore` holds the gate as the verdicts switched **off**
+(`hiddenVerdicts`), so a verdict the server adds later is included by default;
+`verdictArgs` sends the selection only when it is a strict subset, because
+"everything" must be expressed by absence — a full list would also drop the
+verdict-less tail the server still serves. Switching the **last** verdict off
+is refused in both the store and the menu: an empty gate can only render an
+empty page, which reads as a broken queue rather than a choice. Unlike a tier
+toggle the popover stays open (with two verdicts, hiding one is usually
+followed by hiding or restoring the other) while the keyboard goes back to the
+rows. The selection is mirrored into the URL as `verdict=<comma-joined>`
+alongside `view=decided` — one scalar, so the mirror's identity check needs no
+array handling — but it is not remembered in `localStorage`: like the Decided
+flip itself, it is a place the user visits rather than a lens they set, and
+`openQueue` clears it.
 
 **A committed toolbar change hands the keyboard back to the queue**
 (2026-07-30). A tier toggle closes the popover and focuses the queue root

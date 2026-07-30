@@ -172,13 +172,20 @@ export async function getPolicy({ baseUrl = "" } = {}) {
  *   `next_cursor`.
  * @param {number} [options.limit=20] - clamped server-side to
  *   `bounds.max_page_size`; the response echoes the effective value.
+ * @param {Array<string>} [options.verdicts=[]] - **decided page only**: list
+ *   only groups whose live verdict is one of these (`bounds.verdicts`). Empty
+ *   is every decision. The server refuses it without `decided`, because an
+ *   open-queue group carries no verdict and the filter would silently empty
+ *   the queue.
  * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
- *   `{ groups, total, offset, limit, policy, scope, scan }`, plus `next_cursor`
- *   from a cursor-paging server: an opaque string while more pages remain and
- *   null (or absent) at the end. A group is
+ *   `{ groups, total, offset, limit, policy, scope, verdicts, by_verdict,
+ *   scan }`, plus `next_cursor` from a cursor-paging server: an opaque string
+ *   while more pages remain and null (or absent) at the end. A group is
  *   `{ signature, tier, confidence, member_count, cover_picture_id, why,
- *   created_at, candidates }`.
+ *   created_at, candidates }`. `by_verdict` is the decided page's per-verdict
+ *   count, taken WITHOUT the filter in force so the filter menu can say what
+ *   turning a verdict back on would add.
  */
 export async function listGroups({
   nearEnabled = false,
@@ -190,6 +197,7 @@ export async function listGroups({
   offset = 0,
   limit = 20,
   decided = false,
+  verdicts = [],
   baseUrl = "",
 } = {}) {
   const params = {
@@ -200,13 +208,20 @@ export async function listGroups({
   // The decided page: resolved groups with their live verdict, so a decision
   // can be reviewed and cleared. Omitted entirely for the open queue.
   if (decided) params.decided = true;
+  if (decided && verdicts.length) params.verdict = [...verdicts];
   // Never both: a cursor and an offset describe the same position two ways, and
   // a server free to choose between them could silently keep the weaker one.
   if (typeof cursor === "string" && cursor) params.cursor = cursor;
   else params.offset = offset;
   if (Number.isFinite(threshold)) params.threshold = threshold;
   Object.assign(params, scopeBody(scopeType, scopeId));
-  const res = await apiClient.get(dedupUrl("/groups", baseUrl), { params });
+  const res = await apiClient.get(dedupUrl("/groups", baseUrl), {
+    params,
+    // `verdict` is a repeatable query param, which is what FastAPI's
+    // `list[...]` reads. Axios' default array form is `verdict[]=`, a key the
+    // server does not know, so the filter would be silently dropped.
+    paramsSerializer: { indexes: null },
+  });
   return res.data;
 }
 

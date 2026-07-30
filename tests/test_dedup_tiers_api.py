@@ -638,6 +638,73 @@ def test_the_decided_page_orders_by_decision_time_newest_first():
         _teardown(temp_dir, server)
 
 
+def test_the_decided_page_filters_by_verdict_in_both_directions():
+    """`verdict=` narrows the decided page to one kind of decision.
+
+    The tier gate is meaningless on the decided page (a decision was made under
+    whatever policy was live then), so the Duplicates filter menu offers the two
+    verdicts there instead: stacked, kept separate, or both. Every direction is
+    asserted, because over-filtering is its own regression: each filter serves
+    exactly its own rows AND still serves them all with the filter off, `total`
+    is counted under the same filter as the page, `by_verdict` reports both
+    counts regardless of the filter (so the menu can say what turning one back
+    on would add), and the filter is refused on the open queue rather than
+    silently emptying it.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=2)
+        _rescan(server)
+        stacked, separate_a, separate_b = sorted(_signatures(client))
+        for url, signature in (
+            (STACK_URL, stacked),
+            (KEEP_SEPARATE_URL, separate_a),
+            (KEEP_SEPARATE_URL, separate_b),
+        ):
+            assert client.post(url, json={"signature": signature}).status_code == 200
+
+        def decided(**params):
+            response = client.get(GROUPS_URL, params={"decided": True, **params})
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        both = decided()
+        assert sorted(g["signature"] for g in both["groups"]) == sorted(
+            [stacked, separate_a, separate_b]
+        )
+        assert both["total"] == 3
+        assert both["verdicts"] == []
+
+        only_stacked = decided(verdict="stacked")
+        assert [g["signature"] for g in only_stacked["groups"]] == [stacked]
+        assert only_stacked["total"] == 1
+        assert only_stacked["verdicts"] == ["stacked"]
+
+        only_separate = decided(verdict="keep_separate")
+        assert sorted(g["signature"] for g in only_separate["groups"]) == sorted(
+            [separate_a, separate_b]
+        )
+        assert only_separate["total"] == 2
+
+        # Both verdicts asked for is no filter at all, not an intersection.
+        everything = decided(verdict=["stacked", "keep_separate"])
+        assert everything["total"] == 3
+
+        # The counts are the menu's, so they ignore the filter in force.
+        for body in (both, only_stacked, only_separate):
+            assert body["by_verdict"] == {"stacked": 1, "keep_separate": 2}
+
+        # The open queue carries neither the counts nor the filter.
+        open_page = client.get(GROUPS_URL).json()
+        assert open_page["by_verdict"] == {}
+        assert open_page["verdicts"] == []
+        refused = client.get(GROUPS_URL, params={"verdict": "stacked"})
+        assert refused.status_code == 400, refused.text
+        assert "decided=true" in refused.json()["detail"]
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_redo_restamps_the_decision_so_it_returns_to_the_top():
     """Redo means "I re-decide this NOW", so it gets a fresh `decided_at`.
 

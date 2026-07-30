@@ -14,11 +14,11 @@
     <p id="dq-key-help" class="visually-hidden">
       Up and Down arrows choose a group. Page Up and Page Down move a screenful
       at a time, and Home and End jump to the first and last group. Enter or S
-      stacks it. K keeps it separate. Down moves on without deciding. C
-      compares every copy field by field. The number keys 1 to 9 choose the
-      cover. X leaves the picture under the cursor out of the stack. Control Z
-      undoes the last verdict. Escape returns here from a control. No picture
-      is ever deleted, and a stack can be undone.
+      stacks it. K keeps it separate. Down moves on without deciding. C compares
+      every copy field by field. The number keys 1 to 9 choose the cover. X
+      leaves the picture under the cursor out of the stack. Control Z undoes the
+      last verdict. Escape returns here from a control. No picture is ever
+      deleted, and a stack can be undone.
     </p>
 
     <!-- One toolbar, not two. The queue's count, the way to the Decided page,
@@ -90,8 +90,19 @@
             <span class="dq-tier-label">{{ tierLabel }}</span>
             <v-icon size="16">mdi-menu-down</v-icon>
           </button>
+          <!-- Two menus behind one button. The tier gate says nothing about a
+               decision already made — the server ignores it on the decided
+               page entirely — so what a user reviewing decisions wants to
+               narrow by is the DECISION (owner call, 2026-07-30). -->
+          <DedupVerdictMenu
+            v-if="tierMenuOpen && store.showingDecided"
+            class="dq-tier-menu"
+            :verdicts="store.verdictRows"
+            :group-count="store.total"
+            @toggle="onVerdictToggle"
+          />
           <DedupTierMenu
-            v-if="tierMenuOpen"
+            v-else-if="tierMenuOpen"
             class="dq-tier-menu"
             :tiers="store.tierRows"
             :group-count="store.openCount"
@@ -117,7 +128,9 @@
              grid's, this control changes a list that is already on screen, so
              the user is looking straight at the answer. -->
         <div v-if="store.hasGroups" class="dq-size dq-fold-720">
-          <v-icon size="16" aria-hidden="true">mdi-image-size-select-large</v-icon>
+          <v-icon size="16" aria-hidden="true"
+            >mdi-image-size-select-large</v-icon
+          >
           <v-slider
             class="dq-size-slider"
             :model-value="store.sizeLevel"
@@ -279,9 +292,8 @@
       <v-icon size="48">mdi-history</v-icon>
       <h3>No decided groups</h3>
       <p>
-        Groups you stack or keep separate land here — from any session, not
-        just this one — and every decision can be reviewed and cleared until
-        you do.
+        Groups you stack or keep separate land here — from any session, not just
+        this one — and every decision can be reviewed and cleared until you do.
       </p>
       <button type="button" class="qdecided" @click="onToggleDecided">
         <v-icon size="15">mdi-arrow-left</v-icon>
@@ -398,6 +410,7 @@ import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
+import DedupVerdictMenu from "../widgets/DedupVerdictMenu.vue";
 import DedupScanBanner from "../widgets/DedupScanBanner.vue";
 import DedupScopePill from "../widgets/DedupScopePill.vue";
 import DedupCompareDialog from "../widgets/DedupCompareDialog.vue";
@@ -550,9 +563,7 @@ const headline = computed(() =>
 
 /** The row pitch a given picture height implies, before anything is measured. */
 function estimatedPitch() {
-  return (
-    Math.max(store.thumbHeight, MIN_ROW_CONTENT_PX) + ROW_CHROME_PX
-  );
+  return Math.max(store.thumbHeight, MIN_ROW_CONTENT_PX) + ROW_CHROME_PX;
 }
 
 /** The real row pitch, measured once two rows exist; the estimate until then. */
@@ -608,7 +619,10 @@ function maybeLoadMore() {
 function onListScroll() {
   const list = listEl.value;
   if (!list) return;
-  scrollIndex.value = Math.max(0, Math.floor(list.scrollTop / rowPitchPx.value));
+  scrollIndex.value = Math.max(
+    0,
+    Math.floor(list.scrollTop / rowPitchPx.value),
+  );
   // A scroll away from the tail while an End jump is still paging is the user
   // taking their place back: the chase dies here rather than yanking them to
   // the bottom when its last page lands. Slack of one row keeps the pin's own
@@ -624,7 +638,9 @@ function onListScroll() {
   maybeLoadMore();
 }
 
-const focusAnchor = computed(() => (store.focusIndex < 0 ? 0 : store.focusIndex));
+const focusAnchor = computed(() =>
+  store.focusIndex < 0 ? 0 : store.focusIndex,
+);
 
 /**
  * A rebase (windowStart moving FORWARD: the End jump) relocates the held span
@@ -652,8 +668,8 @@ const bulkKeysActive = computed(() => {
   const focusedGroup = store.focusedGroup;
   return Boolean(
     focusedGroup &&
-      store.selectionCount > 1 &&
-      store.isSelected(focusedGroup.signature),
+    store.selectionCount > 1 &&
+    store.isSelected(focusedGroup.signature),
   );
 });
 
@@ -780,14 +796,24 @@ watch(
 );
 
 /**
- * What the tier button says the queue is currently showing.
+ * What the filter button says the list is currently showing.
  *
- * Named after the loosest tier that is on, because that is the one that decides
- * how speculative the list is. Built from the server's tier rows, so a tier the
- * server adds later names itself here rather than falling through to a wrong
- * label.
+ * On the QUEUE it names the loosest tier that is on, because that is the one
+ * that decides how speculative the list is. On the DECIDED page the tier gate
+ * is not in force at all (the server ignores it there), so the button names the
+ * verdict filter instead — a button reading "Exact only" over a page that is
+ * showing every decision would be a plain lie. Both are built from the server's
+ * own rows, so a tier or verdict added later names itself here rather than
+ * falling through to a wrong label.
  */
 const tierLabel = computed(() => {
+  if (store.showingDecided) {
+    const on = store.verdictRows.filter((verdict) => verdict.enabled);
+    if (!on.length || on.length === store.verdictRows.length) {
+      return "All decisions";
+    }
+    return on.map((verdict) => verdict.label).join(" and ");
+  }
   const on = store.tierRows.filter((tier) => tier.enabled);
   const loosest = on[on.length - 1];
   if (!loosest || loosest.locked) return "Exact only";
@@ -1201,6 +1227,25 @@ async function onTierToggle(id, on) {
 }
 
 /**
+ * Narrow the Decided page to one kind of decision.
+ *
+ * The menu STAYS open, unlike a tier toggle: with only two verdicts, hiding one
+ * is usually followed by hiding or restoring the other, and a popover that shut
+ * after every press would make a two-press adjustment a four-press one. The
+ * keyboard still goes back to the list, so the rows are workable underneath —
+ * the same split the threshold slider already uses.
+ */
+async function onVerdictToggle(id, on) {
+  const changed = await store.setVerdictEnabled(id, on);
+  if (!changed) return;
+  const row = store.verdictRows.find((verdict) => verdict.id === id);
+  const label = row?.label ?? id;
+  announcement.value = on
+    ? `Showing ${label.toLowerCase()} groups again. ${store.total.toLocaleString()} decided ${store.total === 1 ? "group" : "groups"}.`
+    : `Hiding ${label.toLowerCase()} groups. ${store.total.toLocaleString()} decided ${store.total === 1 ? "group" : "groups"} left.`;
+}
+
+/**
  * Move the similarity threshold.
  *
  * The popover stays open: a threshold is a value the user tunes and re-reads
@@ -1334,8 +1379,7 @@ const handleKeydown = createDedupKeyHandler({
   // owns only the keys pressed inside itself, so a committed change that
   // handed focus back to the queue leaves the rows workable underneath it.
   isBlocked: (event) =>
-    autoStackOpen.value ||
-    (tierMenuOpen.value && tierMenuOwnsEvent(event)),
+    autoStackOpen.value || (tierMenuOpen.value && tierMenuOwnsEvent(event)),
   // One row less than the viewport holds, so a page move keeps the row the
   // user was reading on screen as the anchor for the next one.
   pageRows: () => Math.max(1, viewportRows.value - 1),
@@ -1417,6 +1461,12 @@ function filtersFromRoute() {
   const parsed = Number(query.threshold);
   if (Number.isFinite(parsed)) filters.threshold = parsed;
   if (query.view !== undefined) filters.decided = query.view === "decided";
+  // The Decided page's own filter, comma-joined so it stays ONE scalar the
+  // mirror below can compare against the live URL without array identity
+  // games. The store drops any id the server does not publish.
+  if (query.verdict !== undefined) {
+    filters.verdicts = String(query.verdict).split(",").filter(Boolean);
+  }
   return Object.keys(filters).length ? filters : null;
 }
 
@@ -1425,7 +1475,7 @@ function filtersFromRoute() {
 // tier gate is not a history step the Back button should have to unwind.
 // Non-default tier/threshold values are written explicitly (near=0 included):
 // "absent" always means "the server's default", never "whatever it was".
-const FILTER_QUERY_KEYS = ["near", "embedding", "threshold", "view"];
+const FILTER_QUERY_KEYS = ["near", "embedding", "threshold", "view", "verdict"];
 
 watch(
   () => [
@@ -1433,6 +1483,7 @@ watch(
     store.embeddingEnabled,
     store.threshold,
     store.showingDecided,
+    store.enabledVerdicts.join(","),
     store.policyLoaded,
     store.filtersRestored,
   ],
@@ -1468,7 +1519,16 @@ watch(
         next.threshold = String(store.threshold);
       }
     }
-    if (store.showingDecided) next.view = "decided";
+    if (store.showingDecided) {
+      next.view = "decided";
+      // Only a NARROWED selection is written: absent means every decision, the
+      // same "absent is the default" rule the tier params follow. The gate is
+      // meaningless off the Decided page, so it is never written there.
+      const shown = store.enabledVerdicts;
+      if (shown.length && shown.length < store.verdictRows.length) {
+        next.verdict = shown.join(",");
+      }
+    }
     const current = route.query ?? {};
     const same = FILTER_QUERY_KEYS.every(
       (key) => (next[key] ?? null) === (current[key] ?? null),
@@ -1507,10 +1567,7 @@ function syncQueueToRoute() {
 // (which requires held rows) into a full openQueue, which force-reset the
 // Decided flip the mirror was in the middle of recording: the decided rows
 // flashed and were replaced by "Queue clear".
-watch(
-  [() => route.query.scope, () => route.query.scope_id],
-  syncQueueToRoute,
-);
+watch([() => route.query.scope, () => route.query.scope_id], syncQueueToRoute);
 
 onMounted(() => {
   syncQueueToRoute();

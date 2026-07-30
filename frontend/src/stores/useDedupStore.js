@@ -111,6 +111,19 @@ export const TIER_LABELS = Object.freeze({
 });
 
 /**
+ * The verdict ids the server publishes, mapped to the copy the decided page's
+ * filter renders.
+ *
+ * Same contract as {@link TIER_LABELS}: the server owns the vocabulary
+ * (`bounds.verdicts`), the client owns the words. A verdict the server adds
+ * later renders under its own id rather than vanishing from the menu.
+ */
+export const VERDICT_LABELS = Object.freeze({
+  stacked: { label: "Stacked", hint: "folded into one stack" },
+  keep_separate: { label: "Kept separate", hint: "not duplicates" },
+});
+
+/**
  * Where the queue's thumbnail size is remembered.
  *
  * Deliberately NOT the grid's server-side `thumbnail_size_level`: the queue
@@ -291,6 +304,18 @@ export const useDedupStore = defineStore("dedup", () => {
   const stackedCount = ref(0);
   const separatedCount = ref(0);
 
+  // --- The decided page's verdict gate -------------------------------------
+  // The tier gate says nothing on the decided page — a decision was made under
+  // whatever policy was live then, and the server ignores the gate there — so
+  // the filter menu offers the two VERDICTS instead (owner call, 2026-07-30).
+  // Held as the verdicts switched OFF rather than on, so a verdict the server
+  // adds later is included by default instead of silently filtered out.
+  const hiddenVerdicts = ref(new Set());
+  // The per-verdict counts the menu shows, from the decided page's response.
+  // Taken WITHOUT the filter in force, so a row says what turning it back on
+  // would add rather than the zero its own exclusion produced.
+  const decidedByVerdict = ref({});
+
   // --- The tier gate ------------------------------------------------------
   // Tier 1 is always in and has no switch. Tier 2 is an opt-in; tier 3 requires
   // tier 2, which the server enforces and this mirrors.
@@ -393,6 +418,68 @@ export const useDedupStore = defineStore("dedup", () => {
       enabled: isTierEnabled(id),
     }));
   });
+
+  /** Every verdict the server publishes, in the order it publishes them. */
+  const verdictIds = computed(() => bounds.value?.verdicts ?? []);
+
+  /**
+   * The verdict rows the decided page's filter renders: the server's ids, this
+   * client's copy, and the live per-verdict counts.
+   */
+  const verdictRows = computed(() =>
+    verdictIds.value.map((id) => ({
+      id,
+      label: VERDICT_LABELS[id]?.label ?? id,
+      hint: VERDICT_LABELS[id]?.hint ?? "",
+      count: Number(decidedByVerdict.value[id]) || 0,
+      enabled: !hiddenVerdicts.value.has(id),
+    })),
+  );
+
+  /** The verdicts currently listed, in the server's order. */
+  const enabledVerdicts = computed(() =>
+    verdictIds.value.filter((id) => !hiddenVerdicts.value.has(id)),
+  );
+
+  /**
+   * The `verdicts` argument every decided-page request travels with.
+   *
+   * Empty when nothing is filtered out, so "no filter" is expressed by absence
+   * rather than by re-listing the whole vocabulary — the server treats a full
+   * list as no filter too, but only absence also keeps the verdict-less tail
+   * (a resolved group whose live verdict row is gone) reachable.
+   */
+  const verdictArgs = computed(() =>
+    enabledVerdicts.value.length === verdictIds.value.length
+      ? []
+      : enabledVerdicts.value,
+  );
+
+  /**
+   * Show or hide one verdict on the decided page, then reload.
+   *
+   * Turning the LAST one off is refused: an empty gate can only ever render an
+   * empty page, and a filter that can hide everything reads as a broken queue
+   * rather than as a choice the user made. The menu disables that row for the
+   * same reason, so this is the floor rather than the message.
+   *
+   * @param {string} id - a verdict id from `bounds.verdicts`.
+   * @param {boolean} on
+   * @returns {Promise<boolean>} whether the change was applied.
+   */
+  async function setVerdictEnabled(id, on) {
+    if (!verdictIds.value.includes(id)) return false;
+    if (on === !hiddenVerdicts.value.has(id)) return false;
+    if (!on && enabledVerdicts.value.length <= 1) return false;
+    const next = new Set(hiddenVerdicts.value);
+    if (on) next.delete(id);
+    else next.add(id);
+    hiddenVerdicts.value = next;
+    // Only the decided page reads this gate; on the open queue it is state
+    // waiting for the flip, and reloading there would be a pointless request.
+    if (showingDecided.value) await loadFirstPage();
+    return true;
+  }
 
   /**
    * Whether a tier currently feeds the queue.
@@ -642,6 +729,18 @@ export const useDedupStore = defineStore("dedup", () => {
     if (typeof filters.decided === "boolean") {
       showingDecided.value = filters.decided;
     }
+    if (Array.isArray(filters.verdicts)) {
+      // The URL names what to SHOW; the store holds what to hide. An id the
+      // server does not publish is ignored rather than trusted, and a selection
+      // that would leave nothing on screen falls back to showing everything —
+      // a link must not open onto a page that can only be empty.
+      const shown = filters.verdicts.filter((id) =>
+        verdictIds.value.includes(id),
+      );
+      hiddenVerdicts.value = shown.length
+        ? new Set(verdictIds.value.filter((id) => !shown.includes(id)))
+        : new Set();
+    }
   }
 
   /**
@@ -690,6 +789,11 @@ export const useDedupStore = defineStore("dedup", () => {
     stackedCount.value = 0;
     separatedCount.value = 0;
     showingDecided.value = false;
+    // The decided page is a place the user visits, not a lens they set, and so
+    // is its verdict gate: arriving at the queue starts from every decision.
+    // A link that carries one restores it below, through applyUrlFilters.
+    hiddenVerdicts.value = new Set();
+    decidedByVerdict.value = {};
     await loadPolicy();
     // Last visit's selection first (per-browser memory, same tier as the
     // thumbnail size), then the URL's explicit filters on top: a shared or
@@ -754,6 +858,26 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
+   * Adopt the decided page's per-verdict counts from a queue response.
+   *
+   * Only the decided page carries them, and only the FIRST page is read for
+   * them: the counts describe the whole scope, so re-reading them off every
+   * appended page would be the same number three times. A server that predates
+   * the field leaves the menu's counts at zero rather than at a stale figure.
+   *
+   * @param {Object} [data] - a queue response.
+   */
+  function adoptVerdictCounts(data) {
+    if (!showingDecided.value) {
+      decidedByVerdict.value = {};
+      return;
+    }
+    const counts = data?.by_verdict;
+    decidedByVerdict.value =
+      counts && typeof counts === "object" ? { ...counts } : {};
+  }
+
+  /**
    * Load the first page of the queue, replacing whatever was there.
    *
    * Always an offset-0 request: a cursor is a position inside one ordering, so
@@ -785,10 +909,12 @@ export const useDedupStore = defineStore("dedup", () => {
         scopeType: scopeType.value,
         scopeId: scopeId.value,
         decided: showingDecided.value,
+        verdicts: verdictArgs.value,
         offset: 0,
         limit: QUEUE_PAGE_SIZE,
       });
       if (epoch !== windowEpoch) return;
+      adoptVerdictCounts(data);
       groups.value = Array.isArray(data?.groups) ? data.groups : [];
       windowStart.value = 0;
       total.value = Number(data?.total) || groups.value.length;
@@ -877,6 +1003,7 @@ export const useDedupStore = defineStore("dedup", () => {
         scopeType: scopeType.value,
         scopeId: scopeId.value,
         decided: showingDecided.value,
+        verdicts: verdictArgs.value,
         ...(cursor === null ? { offset: nextOffset.value } : { cursor }),
         limit: pageSize,
       });
@@ -951,6 +1078,7 @@ export const useDedupStore = defineStore("dedup", () => {
         scopeType: scopeType.value,
         scopeId: scopeId.value,
         decided: showingDecided.value,
+        verdicts: verdictArgs.value,
         offset: prevOffset,
         limit: windowStart.value - prevOffset,
       });
@@ -1054,6 +1182,7 @@ export const useDedupStore = defineStore("dedup", () => {
       scopeType: scopeType.value,
       scopeId: scopeId.value,
       decided: showingDecided.value,
+      verdicts: verdictArgs.value,
       offset,
       limit: QUEUE_PAGE_SIZE,
     });
@@ -1814,6 +1943,12 @@ export const useDedupStore = defineStore("dedup", () => {
     hasDuplicates,
     showingDecided,
     toggleDecided,
+    // the decided page's verdict gate
+    verdictRows,
+    enabledVerdicts,
+    verdictArgs,
+    decidedByVerdict,
+    setVerdictEnabled,
     applyUrlFilters,
     focusNext,
     focusPrev,

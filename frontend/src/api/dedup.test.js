@@ -71,15 +71,37 @@ describe("api/dedup — the queue", () => {
   it("listGroups reads the first page with the tier gate off", async () => {
     apiClient.get.mockResolvedValue({ data: { groups: [], scan: {} } });
     await listGroups();
-    expect(apiClient.get).toHaveBeenCalledWith("/dedup/groups", {
-      params: {
-        near_enabled: false,
-        embedding_enabled: false,
-        offset: 0,
-        limit: 20,
-        scope_type: GLOBAL_SCOPE,
-      },
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/dedup/groups",
+      expect.objectContaining({
+        params: {
+          near_enabled: false,
+          embedding_enabled: false,
+          offset: 0,
+          limit: 20,
+          scope_type: GLOBAL_SCOPE,
+        },
+      }),
+    );
+  });
+
+  // The decided page's own filter. The open queue's groups carry no verdict, so
+  // the server refuses the param there — the client must not send it either.
+  it("listGroups sends the verdict filter on the decided page only", async () => {
+    apiClient.get.mockResolvedValue({ data: { groups: [] } });
+    await listGroups({ decided: true, verdicts: ["stacked"] });
+    expect(apiClient.get.mock.calls[0][1].params.verdict).toEqual(["stacked"]);
+    // A repeatable query param, not axios' default `verdict[]=` — that key
+    // means nothing to FastAPI and the filter would be dropped in silence.
+    expect(apiClient.get.mock.calls[0][1].paramsSerializer).toEqual({
+      indexes: null,
     });
+
+    await listGroups({ verdicts: ["stacked"] });
+    expect(apiClient.get.mock.calls[1][1].params.verdict).toBeUndefined();
+
+    await listGroups({ decided: true });
+    expect(apiClient.get.mock.calls[2][1].params.verdict).toBeUndefined();
   });
 
   it("listGroups pages by offset", async () => {

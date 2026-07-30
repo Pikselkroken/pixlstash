@@ -326,6 +326,7 @@ Key endpoints (see the auto-generated index below for the full set):
 | POST | `/pictures/detect` | Queue object detection (Segment) for a batch; optional `prompt` for open-vocab grounding |
 | GET | `/pictures/{id}/detections` | Stored detection boxes for a picture (registered before the `/{id}/{field}` catch-all) |
 | POST | `/pictures/likeness-search` | Reverse-image likeness search |
+| POST | `/pictures/face-search` | Face-likeness search (see below) |
 | POST | `/pictures/scrapheap/delete-preview` | What a delete-forever would destroy + the `confirm_token` the delete requires |
 | DELETE | `/pictures/scrapheap` | **The one irreversible endpoint.** Requires `confirm_token` |
 
@@ -336,6 +337,14 @@ Key endpoints (see the auto-generated index below for the full set):
 Echoing the preview's `total_count` was considered and rejected as the primary control: a small integer is stable and enumerable, and ordinary concurrent scrapheaping would make it fail spuriously. A required custom header was rejected too — a DELETE with a JSON body already preflights, and `allow_headers=["*"]` lets the preflight pass for every origin the regex admits.
 
 **This is an intent control, not an authorization control.** Authorization for both routes stays with the AuthzGate (`OWNER_ONLY` in `authz/registry.py`, §16.1); no per-handler scope check was added and none should be. The unattended retention sweep calls `purge_scrapheap_pictures` directly and needs no confirmation — the gate is on the HTTP endpoint, which is where the CSRF exposure is.
+
+**`POST /pictures/face-search` — one query, four sources.** The query embeddings come from uploaded files, `source_picture_id`, `source_face_id`, or `source_character_id` (exactly one; more than one is a 400). `source_character_id` resolves through `select_reference_faces_for_character` — **the same selection the character-likeness sort and the picture-id branch of `POST /characters/{id}/faces` use**. Deriving it by any other rule would let the search rank pictures against one set of references while the assignment it feeds picks the winning face against another. It defaults `combine` to `max` (a character's ~10 references are the same person years and angles apart, so their mean is nobody and a good match to one reference must not be averaged away); every other source still defaults to `mean`.
+
+`exclude_character_id` drops pictures that already contain a face assigned to that character. Paired with `source_character_id` it is what makes the result set the *un-assigned* candidates, so a caller can put its length on a button without over-promising — the assignment endpoint would skip those rows anyway and report them as `already_assigned_ids`. It is subtracted from the fetched candidates rather than intersected into `filter_candidate_ids`, because `None` there means "unrestricted" and has no set to subtract from.
+
+Each match reports the **`face_id` that produced its score**, so a caller assigning the results does not repeat the comparison. Scoring combines across queries **per face** and only then takes the max over a picture's faces: the reverse order lets different faces satisfy different queries, which makes `combine=min` mean something other than its documented "must match all query images", and leaves no single face to name as the winner. For a single query embedding the two orders are identical. The comparison is one matmul over every candidate face rather than a per-picture Python loop, and **faces whose embedding width differs from the query's are skipped with a warning** — a vault that has been through a `FaceModelRefreshTask` holds two widths, and a cosine between them is not a similarity.
+
+Authorization is unchanged: the route is already declared `SCOPED_LIST` in `authz/registry.py` and scope-filters its ids through `fetch_scope_allowed_picture_ids`, which still holds for the character source (`tests/test_likeness_and_face_search.py::test_face_search_by_character_still_scope_filters_for_a_share_token` asserts both directions). Note the route is in `READ_SAFE_POST_PATHS`, so share tokens do reach it.
 
 **`score_agreement` (stats section, `include=picture`).** Cross-tabulates the user's star rating against the smart score for the stats sidebar's agreement heatmap. Shape: `{cells: [{score, bucket, count}] (dense, all 20), rated, pairs, total, pearson, spearman, tau_b}`.
 
@@ -2019,6 +2028,20 @@ verdict between two pages.
   wrong position (or vice versa). The id tie-break keeps a same-instant run (a
   bulk auto-stack) stable across page seams. Redo re-stamps `decided_at` so a
   redone decision honestly sorts to the top — see §22.10.
+- **The decided page has its own filter, `verdict` (2026-07-30).** The tier gate
+  is not in force there, so the repeatable `verdict` query param narrows the page
+  to `stacked`, `keep_separate`, or both (omitted, which is also what listing
+  every verdict means — only *absence* keeps the verdict-less tail, which an `IN`
+  clause over the outer-joined verdict necessarily drops). `total` is counted
+  under the **same** filter as the page, so the client's scroll track is never
+  sized for rows it will not be served. Each decided response also carries
+  `by_verdict` — `count_decided_by_verdict_in_session`, taken **without** the
+  filter, so the client's menu can state what turning a verdict back on would add
+  (the same contract `by_tier` has on the open queue) — and `verdicts`, the echo
+  of the filter. `by_verdict` may sum to less than `total` by exactly the
+  verdict-less tail. Sending `verdict` without `decided` is a **400**: an
+  open-queue group carries no verdict, so the filter could only silently empty
+  the queue.
 
 ### 22.8 Streaming and the background path
 

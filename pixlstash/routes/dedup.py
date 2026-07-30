@@ -57,9 +57,11 @@ from pixlstash.services.dedup_tier_service import (
     MAX_PAGE_SIZE,
     MAX_THRESHOLD,
     MIN_THRESHOLD,
+    VERDICT_ORDER,
     DedupCursorError,
     DedupScope,
     DedupTier,
+    DedupVerdictKind,
     ScopeType,
     TierPolicy,
 )
@@ -753,9 +755,10 @@ class DedupQueueResponse(BaseModel):
     )
     total: int = Field(
         description=(
-            "Complete unresolved-group count in scope, so the client can size "
-            "its scrollbar without a second request. The queue is paged from the "
-            "database and is never loaded whole."
+            "Complete group count in scope under this page's own filter - the "
+            "unresolved queue, or the decided page narrowed to `verdict` - so "
+            "the client can size its scrollbar without a second request. The "
+            "queue is paged from the database and is never loaded whole."
         )
     )
     offset: int = Field(
@@ -780,6 +783,24 @@ class DedupQueueResponse(BaseModel):
     )
     policy: TierPolicyModel = Field(description="The policy this page was read under.")
     scope: dict[str, Any] = Field(description="The scope this page was read under.")
+    verdicts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Echo of the `verdict` filter in force, sorted. Empty means every "
+            "decision (and is always empty on the open queue)."
+        ),
+    )
+    by_verdict: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "On a `decided=true` page: decided groups per verdict in scope, "
+            "counted **without** the `verdict` filter so the client can show "
+            "what turning a verdict back on would add. Empty on the open queue. "
+            "May sum to less than `total`: a resolved group whose live verdict "
+            "row is missing is a stale edge state that still lists (so its "
+            '"clear decision" way back survives) but belongs to no verdict.'
+        ),
+    )
     scan: ScanProgressModel = Field(description="Scan progress for this scope.")
 
 
@@ -1149,10 +1170,7 @@ def create_router(server) -> APIRouter:
                     DedupTier.EMBEDDING.value: DedupTier.NEAR.value,
                 },
                 "scope_types": [item.value for item in ScopeType],
-                "verdicts": [
-                    dedup_tier_service.VERDICT_STACKED,
-                    dedup_tier_service.VERDICT_KEEP_SEPARATE,
-                ],
+                "verdicts": [item.value for item in VERDICT_ORDER],
                 "max_page_size": MAX_PAGE_SIZE,
             },
         }
@@ -1234,6 +1252,18 @@ def create_router(server) -> APIRouter:
                 "orderings are distinct families and reject each other."
             ),
         ),
+        verdict: Optional[list[DedupVerdictKind]] = Query(
+            default=None,
+            description=(
+                "Repeatable. On a `decided=true` page, list only groups whose "
+                "live verdict is one of these (`stacked`, `keep_separate`); "
+                "omit for every decision. `total` and `next_cursor` are "
+                "computed under the same filter, so the page and the count "
+                "cannot disagree. Sending it without `decided` is a 400: the "
+                "open queue's groups carry no verdict, so a filter there would "
+                "silently empty it."
+            ),
+        ),
     ):
         if cursor is not None and offset is not None:
             # Refused rather than silently preferring one: a client that sends
@@ -1246,6 +1276,17 @@ def create_router(server) -> APIRouter:
                     "(offset is deprecated)"
                 ),
             )
+        if verdict and not decided:
+            # Refused rather than ignored: a client that filters the OPEN queue
+            # by verdict is asking for rows that cannot exist, and answering the
+            # unfiltered queue would hand it a page it did not ask for.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "verdict filters the decided page; send it with decided=true "
+                    "(open-queue groups carry no verdict)"
+                ),
+            )
         policy = _policy(
             TierPolicyModel(
                 near_enabled=near_enabled,
@@ -1256,7 +1297,14 @@ def create_router(server) -> APIRouter:
         scope = _scope(ScopeRequestModel(scope_type=scope_type, scope_id=scope_id))
         try:
             return dedup_tier_service.queue_response(
-                server.vault, policy, scope, offset or 0, limit, cursor, decided
+                server.vault,
+                policy,
+                scope,
+                offset or 0,
+                limit,
+                cursor,
+                decided,
+                [item.value for item in verdict or []],
             )
         except DedupCursorError as exc:
             logger.info("[dedup] rejected queue cursor: %s", exc)

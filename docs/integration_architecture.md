@@ -755,14 +755,28 @@ without `near_enabled` is a **400**, and a `threshold` below `min_threshold` is 
 ### `GET /dedup/groups`
 
 Query: `near_enabled`, `embedding_enabled`, `threshold`, `scope_type`,
-`scope_id`, `cursor`, `limit` (≤ 200), the deprecated `offset`, and
-`decided` (default `false`). With `decided=true` the same shape pages the
+`scope_id`, `cursor`, `limit` (≤ 200), the deprecated `offset`,
+`decided` (default `false`) and the repeatable `verdict`. With `decided=true` the same shape pages the
 **resolved** groups instead — each row additionally carrying its live
 `verdict` (`stacked` | `keep_separate`) and `decided_at` — so a decision can
 be reviewed and cleared via `POST /dedup/verdicts/reopen`. The decided page
 deliberately ignores the tier gate and the threshold: a decision made under
 yesterday's policy must not be hidden by today's. On the open queue both
 fields are `null`.
+
+**The decided page has its own filter: `verdict` (2026-07-30).** The tier gate
+is not in force there, so what the Duplicates toolbar's filter menu offers on
+that page is the *decision*: `verdict=stacked`, `verdict=keep_separate`, or
+neither for both (the param is repeatable, and listing every verdict means the
+same as omitting it). `total` and `next_cursor` are computed under the same
+filter as the page, so the scrollbar can never be sized for rows that will not
+be served. Every decided response also carries `by_verdict` — the per-verdict
+count taken **without** the filter, so the menu can say what turning a verdict
+back on would add — and `verdicts`, the echo of the filter in force. `by_verdict`
+may sum to less than `total`: a resolved group whose live verdict row is missing
+still lists (so its "clear decision" way back survives) but belongs to no
+verdict. Sending `verdict` **without** `decided` is a **400** — open-queue
+groups carry no verdict, so the filter could only silently empty the queue.
 
 **The decided page is ordered by `decided_at` descending** — most recent
 decision first (2026-07-30; the open queue keeps its confidence-descending

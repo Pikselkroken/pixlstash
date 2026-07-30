@@ -10,6 +10,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { reactive } from "vue";
+import {
+  DEFAULT_THUMBNAIL_SIZE_LEVEL,
+  stripHeightForSizeLevel,
+} from "../../utils/thumbnailSizes";
+
+/**
+ * The row pitch the view ESTIMATES at the default size — the strip height (or
+ * the info column's floor, whichever is taller) plus the row's own chrome.
+ *
+ * Derived from the ladder rather than written out, because happy-dom lays
+ * nothing out: `measureRowPitch` never refines the estimate here, so every
+ * scroll assertion below is in units of this number, and re-scaling the ladder
+ * must not turn them into arithmetic puzzles.
+ */
+const MIN_ROW_CONTENT_PX = 89;
+const ROW_CHROME_PX = 28;
+const PITCH =
+  Math.max(
+    stripHeightForSizeLevel(DEFAULT_THUMBNAIL_SIZE_LEVEL),
+    MIN_ROW_CONTENT_PX,
+  ) + ROW_CHROME_PX;
 
 vi.mock("../../api/dedup", () => ({
   getPolicy: vi.fn(),
@@ -329,6 +350,105 @@ describe("DuplicateQueue — the tier popover", () => {
   });
 });
 
+describe("DuplicateQueue — the filter on the Decided page", () => {
+  /** Flip to Decided and open the filter popover over it. */
+  async function decidedQueue(over = {}) {
+    const mounted = await mountQueue([group("g1")], { total: 1 });
+    // Opening the queue from the route is what marks the filter selection as
+    // adopted, and until it is the URL mirror deliberately stays silent.
+    // mountQueue pre-loads the rows, so the view's own mount takes the
+    // already-showing fast path; the open is done here instead.
+    await mounted.store.openQueue();
+    await flushPromises();
+    listGroups.mockResolvedValue({
+      groups: [group("d1", 2, { verdict: "stacked" })],
+      total: 5,
+      offset: 0,
+      limit: 20,
+      by_verdict: { stacked: 3, keep_separate: 2 },
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+      ...over,
+    });
+    await mounted.wrapper.find(".qdecided").trigger("click");
+    await flushPromises();
+    await mounted.wrapper.vm.$nextTick();
+    return mounted;
+  }
+
+  // The tier gate says nothing about a decision already made — the server
+  // ignores it on the decided page — so the button behind the filter icon has
+  // to open the control that is actually in force.
+  it("swaps the tier menu for the verdict menu", async () => {
+    const { wrapper } = await decidedQueue();
+    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    expect(wrapper.findComponent({ name: "DedupVerdictMenu" }).exists()).toBe(
+      true,
+    );
+    expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
+      false,
+    );
+    wrapper.unmount();
+  });
+
+  // A trigger reading "Exact only" over a page showing every decision would be
+  // a plain lie: the label has to name the filter that is in force.
+  it("names the verdict filter on its own button", async () => {
+    const { wrapper, store } = await decidedQueue();
+    const button = wrapper.find(".dq-tier-wrap .dq-btn");
+    expect(button.attributes("aria-label")).toBe("All decisions");
+
+    await store.setVerdictEnabled("keep_separate", false);
+    await wrapper.vm.$nextTick();
+    expect(button.attributes("aria-label")).toBe("Stacked");
+    wrapper.unmount();
+  });
+
+  it("narrows the page from the menu and says so", async () => {
+    const { wrapper } = await decidedQueue();
+    await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
+    listGroups.mockClear();
+    wrapper
+      .findComponent({ name: "DedupVerdictMenu" })
+      .vm.$emit("toggle", "keep_separate", false);
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(listGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decided: true, verdicts: ["stacked"] }),
+    );
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Hiding kept separate groups",
+    );
+    // The popover stays up: with two verdicts, hiding one is usually followed
+    // by hiding or restoring the other.
+    expect(wrapper.findComponent({ name: "DedupVerdictMenu" }).exists()).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  // The selection is part of the ADDRESS, exactly as the tier gate is, so a
+  // refresh or a shared link reopens the page the same way.
+  it("mirrors a narrowed selection into the URL and drops it when widened", async () => {
+    const { wrapper, store } = await decidedQueue();
+    routerReplace.mockClear();
+    await store.setVerdictEnabled("stacked", false);
+    await wrapper.vm.$nextTick();
+    expect(routerReplace).toHaveBeenLastCalledWith({
+      query: expect.objectContaining({
+        view: "decided",
+        verdict: "keep_separate",
+      }),
+    });
+
+    routerReplace.mockClear();
+    await store.setVerdictEnabled("stacked", true);
+    await wrapper.vm.$nextTick();
+    expect(routerReplace.mock.calls.at(-1)[0].query.verdict).toBeUndefined();
+    wrapper.unmount();
+  });
+});
+
 describe("DuplicateQueue — when a verdict does not land", () => {
   // A failed verdict leaves the row where it was, which on a queue whose whole
   // promise is auto-advance reads as a dead keypress.
@@ -430,11 +550,11 @@ describe("DuplicateQueue — one toolbar", () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     const heightOf = () =>
       wrapper.findComponent({ name: "DedupGroupRow" }).props("thumbHeight");
-    expect(heightOf()).toBe(112);
+    expect(heightOf()).toBe(196);
 
     store.setSizeLevel(6);
     await wrapper.vm.$nextTick();
-    expect(heightOf()).toBe(232);
+    expect(heightOf()).toBe(406);
     wrapper.unmount();
   });
 });
@@ -584,7 +704,9 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     await wrapper.vm.$nextTick();
     const input = wrapper.find(".tm-threshold-input");
     input.element.focus();
-    wrapper.findComponent({ name: "DedupTierMenu" }).vm.$emit("threshold", 0.85);
+    wrapper
+      .findComponent({ name: "DedupTierMenu" })
+      .vm.$emit("threshold", 0.85);
     await flushPromises();
     expect(document.activeElement).toBe(input.element);
     wrapper.unmount();
@@ -1123,9 +1245,9 @@ describe("DuplicateQueue — End means the true end", () => {
     expect(store.hasMore).toBe(false);
     expect(store.endChaseActive).toBe(false);
     // The completion is narrated as an ordinary focus move onto the last row.
-    expect(
-      wrapper.find('[data-testid="dedup-announcement"]').text(),
-    ).toContain("Group 60 of 60");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Group 60 of 60",
+    );
     wrapper.unmount();
   });
 
@@ -1168,9 +1290,9 @@ describe("DuplicateQueue — End means the true end", () => {
     // The tail's cards are mounted at their absolute indices.
     const indices = wrapper.vm.windowedGroups.map((e) => e.index);
     expect(indices).toContain(199);
-    expect(
-      wrapper.find('[data-testid="dedup-announcement"]').text(),
-    ).toContain("Group 200 of 200");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Group 200 of 200",
+    );
     wrapper.unmount();
   });
 
@@ -1204,10 +1326,10 @@ describe("DuplicateQueue — End means the true end", () => {
       const spacers = wrapper
         .findAll(".qspacer")
         .reduce((px, s) => px + parseFloat(s.element.style.height || "0"), 0);
-      return spacers / 140 + wrapper.vm.windowedGroups.length;
+      return spacers / PITCH + wrapper.vm.windowedGroups.length;
     };
     const list = wrapper.find(".qlist");
-    list.element.scrollTop = 170 * 140;
+    list.element.scrollTop = 170 * PITCH;
     await list.trigger("scroll");
     await flushPromises();
     await wrapper.vm.$nextTick();
@@ -1487,11 +1609,15 @@ describe("DuplicateQueue — the Decided page", () => {
     await rows[0].trigger("click", { ctrlKey: true });
     await rows[1].trigger("click", { ctrlKey: true });
     await wrapper.vm.$nextTick();
-    expect(wrapper.find(".qselchip").text()).toContain("Clear decision applies");
+    expect(wrapper.find(".qselchip").text()).toContain(
+      "Clear decision applies",
+    );
 
     reopenGroup.mockResolvedValue({ group_returned_to_queue: true });
     const clearButtons = wrapper.findAll(".gbtn");
-    const bulkClear = clearButtons.find((b) => b.text().includes("Clear 2 decisions"));
+    const bulkClear = clearButtons.find((b) =>
+      b.text().includes("Clear 2 decisions"),
+    );
     expect(bulkClear).toBeTruthy();
     await bulkClear.trigger("click");
     await flushPromises();
@@ -1511,7 +1637,11 @@ describe("DuplicateQueue — filters in the URL", () => {
       view: "decided",
     };
     getPolicy.mockResolvedValue({
-      defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
+      defaults: {
+        near_enabled: false,
+        embedding_enabled: false,
+        threshold: 0.9,
+      },
       bounds: BOUNDS,
     });
     listGroups.mockResolvedValue({
@@ -1550,7 +1680,11 @@ describe("DuplicateQueue — filters in the URL", () => {
   it("a full reload keeps the filter params in the URL", async () => {
     routeMock.query = { near: "1", embedding: "0", threshold: "0.8" };
     getPolicy.mockResolvedValue({
-      defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
+      defaults: {
+        near_enabled: false,
+        embedding_enabled: false,
+        threshold: 0.9,
+      },
       bounds: BOUNDS,
     });
     listGroups.mockResolvedValue({
@@ -1598,7 +1732,11 @@ describe("DuplicateQueue — filters in the URL", () => {
   // only the empty queue ever showed it.
   it("flipping to Decided on an empty queue survives its own mirror write", async () => {
     getPolicy.mockResolvedValue({
-      defaults: { near_enabled: false, embedding_enabled: false, threshold: 0.9 },
+      defaults: {
+        near_enabled: false,
+        embedding_enabled: false,
+        threshold: 0.9,
+      },
       bounds: BOUNDS,
     });
     listGroups.mockImplementation(async (args) =>
@@ -1608,14 +1746,22 @@ describe("DuplicateQueue — filters in the URL", () => {
             total: 1,
             offset: 0,
             limit: 20,
-            scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+            scan: {
+              status: "complete",
+              scanned_pictures: 1,
+              total_pictures: 1,
+            },
           }
         : {
             groups: [],
             total: 0,
             offset: 0,
             limit: 20,
-            scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+            scan: {
+              status: "complete",
+              scanned_pictures: 1,
+              total_pictures: 1,
+            },
           },
     );
     getCounts.mockResolvedValue({
@@ -1788,7 +1934,7 @@ describe("DuplicateQueue — the render window", () => {
 
     const list = wrapper.find(".qlist");
     // ~row 15 at the estimate pitch (happy-dom never refines the measure).
-    list.element.scrollTop = 15 * 140;
+    list.element.scrollTop = 15 * PITCH;
     await list.trigger("scroll");
     await wrapper.vm.$nextTick();
     const after = wrapper.vm.windowedGroups.map((e) => e.index);
@@ -1811,7 +1957,7 @@ describe("DuplicateQueue — the render window", () => {
       const spacers = wrapper
         .findAll(".qspacer")
         .reduce((px, s) => px + parseFloat(s.element.style.height || "0"), 0);
-      return spacers / 140 + wrapper.vm.windowedGroups.length;
+      return spacers / PITCH + wrapper.vm.windowedGroups.length;
     };
     expect(trackRows()).toBe(200);
 
@@ -1823,7 +1969,7 @@ describe("DuplicateQueue — the render window", () => {
       scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
     });
     const list = wrapper.find(".qlist");
-    list.element.scrollTop = 15 * 140;
+    list.element.scrollTop = 15 * PITCH;
     await list.trigger("scroll");
     await flushPromises();
     await wrapper.vm.$nextTick();
@@ -1853,7 +1999,7 @@ describe("DuplicateQueue — the render window", () => {
     });
 
     const list = wrapper.find(".qlist");
-    list.element.scrollTop = 70 * 140;
+    list.element.scrollTop = 70 * PITCH;
     await list.trigger("scroll");
     for (let i = 0; i < 6; i += 1) {
       await flushPromises();
@@ -1866,7 +2012,11 @@ describe("DuplicateQueue — the render window", () => {
   });
 
   it("every mounted row may decode thumbnails", async () => {
-    const { wrapper } = await mountQueue([group("g1"), group("g2"), group("g3")]);
+    const { wrapper } = await mountQueue([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+    ]);
     for (const entry of wrapper.vm.windowedGroups) {
       expect(entry.loadThumbnails).toBe(true);
     }

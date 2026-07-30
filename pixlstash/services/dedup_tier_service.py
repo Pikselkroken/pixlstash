@@ -281,6 +281,26 @@ def tier_strength(tier: Optional[str]) -> int:
     return TIER_STRENGTH.get(str(tier or ""), 0)
 
 
+class DedupVerdictKind(str, Enum):
+    """The two verdicts a decided group can carry.
+
+    The closed vocabulary the decided page is filtered by. There is no deletion
+    verdict in 1.9, and there is deliberately no "reopened" member: reopening
+    stamps :attr:`~pixlstash.db_models.dedup.DedupVerdict.reopened_at` and
+    returns the group to the open queue, so it stops being a decided row at all.
+    """
+
+    STACKED = VERDICT_STACKED
+    KEEP_SEPARATE = VERDICT_KEEP_SEPARATE
+
+
+VERDICT_ORDER: tuple[DedupVerdictKind, ...] = (
+    DedupVerdictKind.STACKED,
+    DedupVerdictKind.KEEP_SEPARATE,
+)
+"""The verdicts in the order the decided page's filter lists them."""
+
+
 class ScopeType(str, Enum):
     """Where a scan or a count is scoped to.
 
@@ -1777,6 +1797,67 @@ def _live_groups_filter():
     )
 
 
+def _scope_groups_filter(scope: DedupScope):
+    """Narrow a ``dedupgroup`` query to the groups touching a scope's pictures.
+
+    ``None`` when the scope is the whole vault, so the caller adds no clause at
+    all rather than an always-true one.
+    """
+    predicate = scope.picture_predicate()
+    if predicate is None:
+        return None
+    return DedupGroup.id.in_(
+        select(DedupGroupMember.group_id)
+        .join(Picture, Picture.id == DedupGroupMember.picture_id)
+        .where(Picture.deleted.is_(False), predicate)
+    )
+
+
+def _live_verdict_join_clause():
+    """The join that attaches a decided group's LIVE verdict row.
+
+    ``reopened_at IS NULL`` is what makes it live: a reopened verdict is history,
+    and joining it would resurrect a decision the user already cleared.
+    ``signature`` is unique on ``dedupverdict``, so this cannot fan a group out
+    into several rows.
+    """
+    return (DedupVerdict.signature == DedupGroup.signature) & (
+        DedupVerdict.reopened_at.is_(None)
+    )
+
+
+def count_decided_by_verdict_in_session(
+    session: Session,
+    scope: Optional[DedupScope] = None,
+) -> dict[str, int]:
+    """Decided group count per verdict, for the decided page's filter.
+
+    Deliberately ignores the verdict filter itself (and the tier gate, which the
+    decided page ignores wholesale), so the menu can show what turning a verdict
+    back on would add before the user turns it on — the same contract as
+    :func:`count_by_tier_in_session`.
+
+    The counts can sum to less than the decided page's ``total``: a resolved
+    group whose live verdict row is missing is a stale edge state that still
+    lists (the unfiltered page keeps it, so its "clear decision" way back
+    survives) but belongs to no verdict.
+    """
+    scope = scope or DedupScope()
+    query = (
+        select(DedupVerdict.verdict, func.count(func.distinct(DedupGroup.id)))
+        .select_from(DedupGroup)
+        .join(DedupVerdict, _live_verdict_join_clause())
+        .where(DedupGroup.resolved.is_(True))
+    )
+    scope_filter = _scope_groups_filter(scope)
+    if scope_filter is not None:
+        query = query.where(scope_filter)
+    counts = {verdict.value: 0 for verdict in VERDICT_ORDER}
+    for verdict, count in session.exec(query.group_by(DedupVerdict.verdict)).all():
+        counts[str(verdict)] = int(count)
+    return counts
+
+
 def count_unresolved_in_session(
     session: Session,
     policy: Optional[TierPolicy] = None,
@@ -1852,6 +1933,7 @@ def page_queue_in_session(
     limit: int = DEFAULT_PAGE_SIZE,
     cursor: Optional[str] = None,
     decided: bool = False,
+    verdicts: Optional[Iterable[str]] = None,
 ) -> tuple[list[dict[str, Any]], int, Optional[str]]:
     """One page of the queue, confidence descending. Never loads the whole list.
 
@@ -1885,12 +1967,18 @@ def page_queue_in_session(
         cursor: Opaque keyset position from a previous page's ``next_cursor``.
         decided: ``False`` (default) pages the open queue; ``True`` pages the
             decided listing, newest decision first.
+        verdicts: **Decided page only.** Restrict the listing to these live
+            verdicts (:class:`DedupVerdictKind` values). ``None`` or empty is
+            every verdict, which is the whole decided page. Ignored when
+            *decided* is false — the open queue's rows carry no verdict by
+            definition, and the route rejects the combination before it gets
+            here.
 
     Returns:
-        ``(groups, total, next_cursor)``. *total* is the complete unresolved
-        count in scope, so the client can size its scrollbar without a second
-        request. *next_cursor* is ``None`` once the page is not full, which is
-        end-of-found.
+        ``(groups, total, next_cursor)``. *total* is the complete count in
+        scope **under the same filter as the page**, so the client can size its
+        scrollbar without a second request. *next_cursor* is ``None`` once the
+        page is not full, which is end-of-found.
 
     Raises:
         DedupCursorError: *cursor* is not a cursor this server minted.
@@ -1899,6 +1987,13 @@ def page_queue_in_session(
     scope = scope or DedupScope()
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     offset = max(0, int(offset))
+    # Only the decided page carries verdicts, so a filter is meaningless on the
+    # open queue and is dropped here rather than silently emptying it.
+    wanted = sorted({str(v) for v in (verdicts or [])}) if decided else []
+    # Every verdict selected is no filter at all: the unfiltered page also keeps
+    # the verdict-less tail, which an IN clause would drop.
+    if len(wanted) >= len(VERDICT_ORDER):
+        wanted = []
 
     # The DECIDED page deliberately ignores the tier gate and the threshold:
     # a decision was made under whatever policy was live at the time, and a
@@ -1912,12 +2007,12 @@ def page_queue_in_session(
         # or reopened (a stale edge state) sorts into a deterministic tail
         # (SQLite puts NULLs last under DESC) rather than being hidden.
         # ``signature`` is unique on dedupverdict, so the join cannot fan out.
-        query = query.join(
-            DedupVerdict,
-            (DedupVerdict.signature == DedupGroup.signature)
-            & (DedupVerdict.reopened_at.is_(None)),
-            isouter=True,
-        )
+        query = query.join(DedupVerdict, _live_verdict_join_clause(), isouter=True)
+        if wanted:
+            # The IN clause turns the outer join inner for this page: a row with
+            # no live verdict matches no verdict the user asked for. It is still
+            # reachable with the filter off, which is where the way back lives.
+            query = query.where(DedupVerdict.verdict.in_(wanted))
     else:
         # The open queue lists only groups that still pose a decision — same
         # live-membership rule as the counts, so the badge and the list agree.
@@ -1958,9 +2053,16 @@ def page_queue_in_session(
         query = query.offset(offset)
     rows = session.exec(query).all()
     if decided:
-        count_query = select(func.count(func.distinct(DedupGroup.id))).where(
-            DedupGroup.resolved.is_(True)
+        count_query = select(func.count(func.distinct(DedupGroup.id))).select_from(
+            DedupGroup
         )
+        # The total must be counted under the SAME filter as the page, or the
+        # scrollbar is sized for rows the client will never be served.
+        if wanted:
+            count_query = count_query.join(
+                DedupVerdict, _live_verdict_join_clause()
+            ).where(DedupVerdict.verdict.in_(wanted))
+        count_query = count_query.where(DedupGroup.resolved.is_(True))
         if predicate is not None:
             count_query = count_query.where(
                 DedupGroup.id.in_(
@@ -2246,6 +2348,7 @@ def _queue_response_in_session(
     limit: int,
     cursor: Optional[str] = None,
     decided: bool = False,
+    verdicts: Optional[Iterable[str]] = None,
 ) -> dict[str, Any]:
     """The whole ``GET /dedup/groups`` payload, on one session.
 
@@ -2253,8 +2356,9 @@ def _queue_response_in_session(
     is captioned with come from the same read, and so the route never touches
     ``vault.db`` (§10.1).
     """
+    wanted = list(verdicts or [])
     groups, total, next_cursor = page_queue_in_session(
-        session, policy, scope, offset, limit, cursor, decided
+        session, policy, scope, offset, limit, cursor, decided, wanted
     )
     return {
         "groups": groups,
@@ -2265,6 +2369,13 @@ def _queue_response_in_session(
         "next_cursor": next_cursor,
         "policy": policy.as_dict(),
         "scope": scope.as_dict(),
+        # The decided page's own filter counts, read from the same session as
+        # the page so the menu's rows and the list can never disagree. Empty on
+        # the open queue, whose rows carry no verdict.
+        "by_verdict": (
+            count_decided_by_verdict_in_session(session, scope) if decided else {}
+        ),
+        "verdicts": sorted({str(v) for v in wanted}) if decided else [],
         "scan": scan_progress_in_session(session, scope),
     }
 
@@ -2277,6 +2388,7 @@ def queue_response(
     limit: int = DEFAULT_PAGE_SIZE,
     cursor: Optional[str] = None,
     decided: bool = False,
+    verdicts: Optional[Iterable[str]] = None,
 ) -> dict[str, Any]:
     """Read-only vault wrapper producing the full queue-page response."""
     return vault.db.run_immediate_read_task(
@@ -2287,6 +2399,7 @@ def queue_response(
         limit,
         cursor,
         decided,
+        list(verdicts or []),
     )
 
 
@@ -2358,11 +2471,13 @@ __all__ = [
     "TIER_ORDER",
     "TIER_STRENGTH",
     "VERDICT_KEEP_SEPARATE",
+    "VERDICT_ORDER",
     "VERDICT_STACKED",
     "CandidateMember",
     "DedupCursorError",
     "DedupScope",
     "DedupTier",
+    "DedupVerdictKind",
     "DetectedGroup",
     "NearBucket",
     "ScopeType",
@@ -2372,6 +2487,7 @@ __all__ = [
     "build_group_evidence",
     "build_near_buckets",
     "count_by_tier_in_session",
+    "count_decided_by_verdict_in_session",
     "count_unresolved",
     "count_unresolved_in_session",
     "counts_response",

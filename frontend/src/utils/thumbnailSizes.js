@@ -15,35 +15,49 @@
 // `stripHeight` is the third consumer of the same ladder: the duplicate
 // queue's candidate strip, where the pictures sit in a row beside the group's
 // facts rather than in a grid of their own. Its numbers are a third scale
-// again, and a much smaller one, because a triage row is read a screenful at a
-// time — Medium is the height the queue shipped with, so the default level
-// leaves the queue looking exactly as it did.
+// again, and a smaller one, because a triage row is read a screenful at a
+// time. The whole scale was raised 75% (owner call, 2026-07-30): every level
+// drew its copies too small to judge a duplicate by, which is the one thing
+// the strip exists for. The ratios between the levels are unchanged, so the
+// control still steps the way it did.
 export const THUMBNAIL_SIZE_STEPS = [
-  { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150, stripHeight: 64 },
+  { key: "tiny", label: "Tiny", columns: 12, rowHeight: 150, stripHeight: 112 },
   {
     key: "very_small",
     label: "Very Small",
     columns: 10,
     rowHeight: 180,
-    stripHeight: 80,
+    stripHeight: 140,
   },
-  { key: "small", label: "Small", columns: 8, rowHeight: 210, stripHeight: 96 },
+  {
+    key: "small",
+    label: "Small",
+    columns: 8,
+    rowHeight: 210,
+    stripHeight: 168,
+  },
   {
     key: "medium",
     label: "Medium",
     columns: 6,
     rowHeight: 245,
-    stripHeight: 112,
+    stripHeight: 196,
   },
-  { key: "large", label: "Large", columns: 5, rowHeight: 285, stripHeight: 144 },
+  {
+    key: "large",
+    label: "Large",
+    columns: 5,
+    rowHeight: 285,
+    stripHeight: 252,
+  },
   {
     key: "very_large",
     label: "Very Large",
     columns: 4,
     rowHeight: 330,
-    stripHeight: 184,
+    stripHeight: 322,
   },
-  { key: "huge", label: "Huge", columns: 3, rowHeight: 375, stripHeight: 232 },
+  { key: "huge", label: "Huge", columns: 3, rowHeight: 375, stripHeight: 406 },
 ];
 
 export const DEFAULT_THUMBNAIL_SIZE_LEVEL = 3; // Medium
