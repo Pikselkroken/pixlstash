@@ -871,7 +871,25 @@ def _apply_characters(session: Session, picture_id: int, assignments) -> None:
         session.add(face)
 
 
-def _apply_stack(session: Session, picture: Picture, stack) -> None:
+def _apply_stack(
+    session: Session,
+    picture: Picture,
+    stack,
+    vacated_stack_ids: Optional[set[int]] = None,
+) -> None:
+    """Restore one picture's stack pointer, recreating the stack row if needed.
+
+    Args:
+        session: Pre-opened DB session; the caller commits.
+        picture: The picture whose pointer is being restored.
+        stack: The recorded facet value, ``{"id", "name", "position"}``.
+        vacated_stack_ids: Collector for the ids of stacks this restore moves
+            pictures OFF of. Whether such a stack ends up empty cannot be
+            decided here — this runs per picture, and a later picture of the
+            same restore may still land on the stack — so the restore checks
+            the collected ids once every state is applied
+            (:func:`_delete_emptied_stacks`).
+    """
     if not isinstance(stack, dict):
         return
     stack_id = stack.get("id")
@@ -882,10 +900,71 @@ def _apply_stack(session: Session, picture: Picture, stack) -> None:
             # row under its original id so the restored pointer stays valid.
             session.add(PictureStack(id=stack_id, name=stack.get("name")))
             session.flush()
+    if (
+        vacated_stack_ids is not None
+        and picture.stack_id is not None
+        and picture.stack_id != stack_id
+    ):
+        vacated_stack_ids.add(int(picture.stack_id))
     picture.stack_id = stack_id
     position = stack.get("position")
     picture.stack_position = int(position) if position is not None else None
     session.add(picture)
+
+
+def _delete_emptied_stacks(session: Session, stack_ids: set[int]) -> None:
+    """Delete ``PictureStack`` rows a restore has just left with no members.
+
+    The symmetric counterpart of the recreate branch in :func:`_apply_stack`:
+    undoing a dissolve recreates the stack row, so undoing a stack *creation*
+    (members restored to ``stack_id=None`` or to another stack) must delete the
+    row it empties — otherwise every undone stacking leaves an orphaned empty
+    ``PictureStack`` behind (issue #643, CSO finding C3 in the dedup sign-off).
+
+    Only stacks with **zero** remaining members are deleted. A picture outside
+    the restored operations that still points at the stack keeps it alive:
+    over-deletion would break a pointer the restore never touched, which is a
+    worse bug than the row leak this cleanup exists to fix.
+
+    Args:
+        session: The restore's session; the caller commits.
+        stack_ids: Ids of stacks some picture was moved off of by the restore.
+    """
+    if not stack_ids:
+        return
+    # Make the in-session stack_id writes visible to the membership query below.
+    session.flush()
+    for stack_id in sorted(stack_ids):
+        stack = session.get(PictureStack, stack_id)
+        if stack is None:
+            # Already gone — e.g. the restore replayed a dissolve, whose forward
+            # path deleted the row itself. Nothing to clean up; logged so the
+            # skip is visible rather than silent.
+            logger.debug(
+                "operation_log: stack %d was vacated by this restore but its "
+                "row is already gone; nothing to delete",
+                stack_id,
+            )
+            continue
+        survivor = session.exec(
+            select(Picture.id).where(Picture.stack_id == stack_id).limit(1)
+        ).first()
+        if survivor is not None:
+            logger.debug(
+                "operation_log: stack %d still has members (e.g. picture %d) "
+                "after the restore; keeping its row",
+                stack_id,
+                survivor,
+            )
+            continue
+        logger.info(
+            "operation_log: deleting stack %d (name=%r) — the restore moved its "
+            "last member off it, and an empty stack row would otherwise be left "
+            "orphaned",
+            stack_id,
+            stack.name,
+        )
+        session.delete(stack)
 
 
 def _apply_deleted(session: Session, picture: Picture, lifecycle) -> None:
@@ -987,6 +1066,7 @@ def apply_state_in_session(
     *,
     registry: Optional[InteractiveRescoreRegistry] = None,
     origin_client_id: Optional[str] = None,
+    vacated_stack_ids: Optional[set[int]] = None,
 ) -> list[int]:
     """Write a recorded metadata state back onto its pictures.
 
@@ -1014,6 +1094,10 @@ def apply_state_in_session(
             instead of waiting for the whole backfill to drain.
         origin_client_id: The tab that asked for the undo/redo, stamped onto that
             refresh. Passed in explicitly (§15) — never read from a contextvar.
+        vacated_stack_ids: Optional collector, forwarded to :func:`_apply_stack`,
+            of the stacks this state moves pictures off of. The caller decides
+            after ALL states are applied whether those stacks ended up empty and
+            deletes the emptied rows (:func:`_delete_emptied_stacks`).
 
     Returns:
         The picture ids actually written.
@@ -1079,7 +1163,12 @@ def apply_state_in_session(
                         _apply_characters(session, picture_id, value)
                 elif facet == FACET_STACK:
                     if value is not None:
-                        _apply_stack(session, picture, value)
+                        _apply_stack(
+                            session,
+                            picture,
+                            value,
+                            vacated_stack_ids=vacated_stack_ids,
+                        )
                 elif facet == FACET_DELETED:
                     if value is not None:
                         _apply_deleted(session, picture, value)
@@ -1245,6 +1334,12 @@ def _restore(
     also decided something outside the picture facets can reopen that decision in
     the same transaction. A hook that raises aborts the restore.
 
+    Stacks the restore empties are then deleted (:func:`_delete_emptied_stacks`),
+    the mirror of :func:`_apply_stack` recreating a dissolved stack's row. The
+    decision is deliberately made HERE, after every operation's state (and every
+    hook) has been applied: emptiness is a property of the whole restore, not of
+    any single picture's pointer write.
+
     Returns:
         ``(touched_ids, facets, lifecycle)`` where *lifecycle* is
         ``{"scrapheaped": [...], "restored": [...]}`` — the pictures this
@@ -1256,6 +1351,7 @@ def _restore(
     facets: set[str] = set()
     scrapheaped: set[int] = set()
     restored: set[int] = set()
+    vacated_stack_ids: set[int] = set()
     for operation in operations:
         state = _loads(
             operation.before_state if to_before else operation.after_state, {}
@@ -1267,6 +1363,7 @@ def _restore(
                 action,
                 registry=registry,
                 origin_client_id=origin_client_id,
+                vacated_stack_ids=vacated_stack_ids,
             )
         )
         for picture_facets in state.values():
@@ -1277,6 +1374,7 @@ def _restore(
     _run_post_restore_hooks(
         session, operations, RESTORE_UNDO if to_before else RESTORE_REDO
     )
+    _delete_emptied_stacks(session, vacated_stack_ids)
     lifecycle = {
         "scrapheaped": sorted(scrapheaped),
         "restored": sorted(restored),

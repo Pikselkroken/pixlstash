@@ -41,6 +41,7 @@ from pixlstash.db_models import (
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureStack,
     Tag,
     TagPrediction,
     is_tag_sentinel,
@@ -122,6 +123,22 @@ def _lifecycle(server, picture_id):
         if picture is None:
             return None
         return (bool(picture.deleted), picture.deleted_at)
+
+    return server.vault.db.run_task(_read)
+
+
+def _stack_state(server, stack_id, picture_ids):
+    """``(row_exists, {picture_id: stack_id})`` for the orphan-row assertions."""
+
+    def _read(session):
+        row = session.get(PictureStack, stack_id)
+        pointers = {
+            int(pic.id): pic.stack_id
+            for pic in session.exec(
+                select(Picture).where(Picture.id.in_(picture_ids))
+            ).all()
+        }
+        return (row is not None, pointers)
 
     return server.vault.db.run_task(_read)
 
@@ -536,6 +553,97 @@ def test_stacking_is_recorded_and_undone():
         # Redo re-points the pictures at the same stack row.
         assert client.post(f"{API}/operations/redo").status_code == 200
         assert server.vault.db.run_task(stack_ids) == stacked
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_of_stack_creation_deletes_the_emptied_stack_row():
+    """Issue #643 (CSO finding C3): undoing a stack creation must not leave an
+    orphaned empty PictureStack row behind — the mirror of undo-of-dissolve
+    recreating the row."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(2)]
+        resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
+        assert resp.status_code == 200, resp.text
+        stack_id = int(resp.json()["id"])
+
+        row_exists, pointers = _stack_state(server, stack_id, ids)
+        assert row_exists
+        assert all(pointer == stack_id for pointer in pointers.values())
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+
+        row_exists, pointers = _stack_state(server, stack_id, ids)
+        assert all(pointer is None for pointer in pointers.values())
+        assert not row_exists, "undo left an orphaned empty PictureStack row"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_keeps_a_stack_an_outside_picture_still_points_at():
+    """A stack with members the restored operations never touched survives the
+    cleanup: over-deletion would break a live pointer, which is worse than the
+    row leak the cleanup fixes."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(2)]
+        resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
+        assert resp.status_code == 200, resp.text
+        stack_id = int(resp.json()["id"])
+
+        # A third picture joins the stack via the (unrecorded) add-members
+        # endpoint, so it is outside the operation about to be undone.
+        outsider = _upload(client)
+        resp = client.post(
+            f"{API}/stacks/{stack_id}/members", json={"picture_ids": [outsider]}
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert client.post(f"{API}/operations/undo").status_code == 200
+
+        row_exists, pointers = _stack_state(server, stack_id, ids + [outsider])
+        assert all(pointers[pid] is None for pid in ids)
+        assert pointers[outsider] == stack_id
+        assert row_exists, "cleanup deleted a stack that still had a member"
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_of_a_dissolve_recreates_the_row_and_redo_deletes_it_again():
+    """The pre-existing dissolve-undo behaviour (row recreation) still holds,
+    and its redo now removes the recreated row again — matching the forward
+    dissolve, which deletes the row itself."""
+    temp_dir, client, server = _setup()
+    try:
+        ids = [_upload(client) for _ in range(2)]
+        resp = client.post(f"{API}/stacks", json={"picture_ids": ids})
+        assert resp.status_code == 200, resp.text
+        stack_id = int(resp.json()["id"])
+
+        # Removing one member leaves <= 1 behind: the dissolve branch unstacks
+        # the survivor too and deletes the stack row.
+        resp = client.request(
+            "DELETE",
+            f"{API}/stacks/{stack_id}/members",
+            json={"picture_ids": [ids[0]]},
+        )
+        assert resp.status_code == 200, resp.text
+        row_exists, pointers = _stack_state(server, stack_id, ids)
+        assert not row_exists
+        assert all(pointer is None for pointer in pointers.values())
+
+        # Undo recreates the row under its original id and restores both members.
+        assert client.post(f"{API}/operations/undo").status_code == 200
+        row_exists, pointers = _stack_state(server, stack_id, ids)
+        assert row_exists, "undo of a dissolve no longer recreates the stack row"
+        assert all(pointer == stack_id for pointer in pointers.values())
+
+        # Redo replays the dissolve: members off, and the emptied row goes too.
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        row_exists, pointers = _stack_state(server, stack_id, ids)
+        assert all(pointer is None for pointer in pointers.values())
+        assert not row_exists, "redo of a dissolve left the recreated row behind"
     finally:
         _teardown(temp_dir, server)
 
