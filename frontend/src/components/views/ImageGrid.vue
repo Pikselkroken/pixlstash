@@ -6321,7 +6321,18 @@ watch(
     () => props.similarityCharacter,
     () => props.stackThreshold,
   ],
-  () => {
+  (next, prev) => {
+    // Dropping the armed searches has to happen HERE, before the refetch below,
+    // and not in a watcher of its own: `fetchAllGridImages` picks its fetchMode
+    // synchronously, so a later watcher would clear the search only after this
+    // fetch had already re-run it. See `dropSearchesForViewChange`.
+    //
+    // Only on an actual view change. This watcher also fires for sort, search
+    // text and filter changes, none of which are a reason to throw a search
+    // away; indices 0 and 1 are selectedCharacter and selectedSet.
+    if (next[0] !== prev?.[0] || next[1] !== prev?.[1]) {
+      dropSearchesForViewChange(next[0], next[1]);
+    }
     if (scrollWrapper.value) scrollWrapper.value.scrollTop = 0;
     _resetGridState();
     updateSelectedGroupName();
@@ -8024,31 +8035,43 @@ watch(
     }
   },
 );
-watch(
-  [() => props.selectedCharacter, () => props.selectedSet],
-  ([character, set]) => {
-    if (reverseImageSearchPictureIds.value?.length) {
-      reverseImageSearchPictureIds.value = [];
-    }
-    if (faceLikenessSearchFaceId.value !== null) {
-      faceLikenessSearchFaceId.value = null;
-    }
-    // The character search goes too. It is library-wide, so a view change cannot
-    // invalidate its *results*, but leaving it up meant navigating somewhere
-    // else and still being shown a grid of suggestions for a person, with a bulk
-    // Assign button armed, which reads as the new view's contents. Navigation is
-    // the ordinary way out of a mode; making it the exit here as well costs one
-    // re-arm and removes a standing bulk write from every view the user visits.
-    //
-    // Compared against the armed-from view rather than fired on any change:
-    // opening the sidebar's person menu can itself select that person, and that
-    // selection lands around the same click that arms the search.
-    if (!faceSearchCharacter.value) return;
-    const armed = faceSearchArmedView.value;
-    if (armed && armed.character === character && armed.set === set) return;
-    clearCharacterFaceSearch();
-  },
-);
+/**
+ * Drop every non-text search mode because the user navigated somewhere else.
+ *
+ * **Called from the view-change watcher BEFORE it refetches, never from a
+ * watcher of its own.** `fetchAllGridImages` reads the search-mode refs
+ * synchronously (there is no `await` before it picks its `fetchMode`), and Vue
+ * runs pre-flush watchers in creation order, so a separate clearing watcher
+ * declared after the fetching one always loses: the fetch captures the search
+ * that is still armed and repopulates the grid with it, then the clear runs and
+ * unmounts the pill. The result is a grid that keeps showing the old search
+ * with no bar to explain or dismiss it, and a view that never changes.
+ *
+ * @param {string|number|null} character - the newly selected character.
+ * @param {string|number|null} set - the newly selected set.
+ */
+function dropSearchesForViewChange(character, set) {
+  if (reverseImageSearchPictureIds.value?.length) {
+    reverseImageSearchPictureIds.value = [];
+  }
+  if (faceLikenessSearchFaceId.value !== null) {
+    faceLikenessSearchFaceId.value = null;
+  }
+  // The character search goes too. It is library-wide, so a view change cannot
+  // invalidate its *results*, but leaving it up meant navigating somewhere else
+  // and still being shown a grid of suggestions for a person, with a bulk
+  // Assign button armed, which reads as the new view's contents. Navigation is
+  // the ordinary way out of a mode; making it the exit here as well costs one
+  // re-arm and removes a standing bulk write from every view the user visits.
+  //
+  // Compared against the armed-from view rather than fired on any change:
+  // opening the sidebar's person menu can itself select that person, and that
+  // selection lands around the same click that arms the search.
+  if (!faceSearchCharacter.value) return;
+  const armed = faceSearchArmedView.value;
+  if (armed && armed.character === character && armed.set === set) return;
+  clearCharacterFaceSearch();
+}
 
 function handleEmptyStateReset() {
   gridReady.value = false;
