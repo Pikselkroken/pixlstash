@@ -234,21 +234,25 @@ def test_585_thumbnail_task_suppresses_corrupt_image(tmp_path):
     with Vault(image_root=str(tmp_path)) as vault:
         pic_id = _seed_picture(vault, corrupt_path)
 
-        # The finder selects it (thumbnail_width is NULL) and builds a task.
+        # The finder selects it (thumbnail_width is NULL) and builds a task,
+        # and the "Upgrading thumbnails" progress count sees it as remaining.
         finder = MissingThumbnailFinder(vault.db)
         task = finder.find_task()
         assert task is not None
         assert task.params["picture_ids"] == [pic_id]
+        assert vault.db.run_task(vault._count_missing_thumbnails) == 1
 
         # The task fails to decode the source: no columns are written...
         result = task._run_task()
         assert result == {"changed_count": 0}
 
         # ...but the picture is now suppressed, so after the claim is released
-        # the finder no longer re-selects it — the old endless-retry loop.
+        # the finder no longer re-selects it — the old endless-retry loop —
+        # and the progress count reaches 0 so the bar can complete.
         assert vault.db.unprocessable_images.is_suppressed(pic_id)
         finder.on_task_complete(task, None)
         assert finder.find_task() is None
+        assert vault.db.run_task(vault._count_missing_thumbnails) == 0
 
 
 def test_585_quality_metadata_backfill_marks_instead_of_raising(tmp_path):
