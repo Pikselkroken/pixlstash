@@ -55,10 +55,7 @@ import {
   movePicturesToReferenceFolder,
 } from "../../api/folders";
 import { setPicturesProject } from "../../api/pictures";
-import {
-  getSharedResourceIds,
-  revokeTokensByResource,
-} from "../../api/users";
+import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
@@ -73,7 +70,20 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useVersionCheck } from "../../composables/useVersionCheck";
 import { useSidebarExpansion } from "../../composables/useSidebarExpansion";
+import { useRoute } from "vue-router";
 import { useDedupStore, scopeKey } from "../../stores/useDedupStore";
+import { useSelectionStore } from "../../stores/useSelectionStore";
+import { useSortStore } from "../../stores/useSortStore";
+import { useProjectStore } from "../../stores/useProjectStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
+import { useGridStore } from "../../stores/useGridStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+  useViewStore,
+} from "../../stores/useViewStore";
 
 // Publishes id → name maps for the ImageGrid breadcrumb. The sidebar is the
 // authoritative name source (it fetches these lists); see useEntityNamesStore.
@@ -98,45 +108,36 @@ const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const dedupStore = useDedupStore();
 
+// Store-direct (Phase 3): the sidebar reads the selection, sort, project and
+// preference state it displays straight from the stores and writes changes
+// back itself, instead of mirroring all of it through App.vue.
+const selectionStore = useSelectionStore();
+const sortStore = useSortStore();
+const projectStore = useProjectStore();
+const userPrefsStore = useUserPrefsStore();
+const gridStore = useGridStore();
+const filterStore = useFilterStore();
+const viewStore = useViewStore();
+const route = useRoute();
+
+// A folder filter and the Duplicates destination each suppress parts of the
+// entity lists, so both are derived once here.
+const hasFolderFilter = computed(
+  () => selectionStore.selectedFolderFilter != null,
+);
+// Duplicates is addressed by route name, not by a selection sentinel: it shows
+// no pictures, so there is no selection to express.
+const isDuplicatesView = computed(() => route.name === "duplicates");
+
 const props = defineProps({
-  docked: { type: Boolean, default: false },
-  selectedCharacter: { type: [String, Number, null], default: null },
-  allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
-  scrapheapPicturesId: { type: String, required: true },
-  // The Duplicates destination is addressed by route, not by a selection
-  // sentinel, so its active state arrives as its own flag.
-  isDuplicatesView: { type: Boolean, default: false },
-  selectedSet: { type: [Number, null], default: null },
-  selectedSetIds: { type: Array, default: () => [] },
-  selectedCharacterIds: { type: Array, default: () => [] },
-  searchQuery: { type: String, default: "" },
-  selectedSort: { type: String, default: "" },
-  selectedDescending: { type: Boolean, default: false },
-  selectedSimilarityCharacter: { type: [String, Number, null], default: null },
   backendUrl: { type: String, required: true },
-  publicUrl: { type: String, default: null },
-  embedWatermark: { type: Boolean, default: false },
-  sidebarThumbnailSize: { type: Number, default: 48 },
-  sidebarWidth: { type: Number, default: 240 },
-  dateFormat: { type: String, default: "locale" },
-  themeMode: { type: String, default: "light" },
-  hasFolderFilter: { type: Boolean, default: false },
-  activeFolderKey: { type: String, default: null },
-  externalProjectViewMode: { type: String, default: null },
-  externalSelectedProjectId: { type: Number, default: null },
-  checkForUpdates: { type: Boolean, default: null },
   installType: { type: String, default: "pip" },
   dockerVariant: { type: String, default: "gpu" },
-  showKeyboardHint: { type: Boolean, default: true },
-  thumbnailMode: { type: String, default: "square" },
 });
 
 const emit = defineEmits([
   "select-duplicates",
   "select-character",
-  "update:selected-sort",
-  "update:search-query",
   "select-set",
   "import-finished",
   "set-error",
@@ -145,29 +146,12 @@ const emit = defineEmits([
   "faces-assigned-to-character",
   "images-moved",
   "search-images",
-  "update:similarity-character",
-  "update:similarity-options",
-  "update:sidebar-thumbnail-size",
-  "update:sidebar-width",
-  "update:date-format",
-  "update:theme-mode",
-  "update:thumbnail-mode",
   "empty-scrapheap",
   "suggest-pictures-for-character",
-  "update:sort-options",
-  "update:hidden-tags",
-  "update:apply-tag-filter",
-  "update:comfyui-configured",
-  "update:public-url",
-  "update:embed-watermark",
   "open-import-dialog",
-  "update:project-view-mode",
-  "update:selected-project-id",
   "view-project",
   "update:check-for-updates",
-  "update:show-keyboard-hint",
   "select-folder",
-  "update:folder-scanning",
 ]);
 
 // "New version available" alert. Disabled on the desktop shell, where the title
@@ -183,7 +167,7 @@ const {
   dismissUpdateAlert,
 } = useVersionCheck(
   () => props.installType,
-  () => props.checkForUpdates,
+  () => userPrefsStore.checkForUpdates,
   !isDesktop,
 );
 
@@ -241,9 +225,9 @@ const sortOptions = ref([]);
 // --- Character & Sidebar State ---
 const characters = ref([]);
 const categoryCounts = ref({
-  [props.allPicturesId]: 0,
-  [props.unassignedPicturesId]: 0,
-  [props.scrapheapPicturesId]: 0,
+  [ALL_PICTURES_ID]: 0,
+  [UNASSIGNED_PICTURES_ID]: 0,
+  [SCRAPHEAP_PICTURES_ID]: 0,
 });
 // Counts keyed by project id (number) or UNASSIGNED_PROJECT_KEY (unassigned in project mode)
 const UNASSIGNED_PROJECT_KEY = "UNASSIGNED";
@@ -588,7 +572,7 @@ async function referenceFolderDeleted() {
   selectedFolderKey.value = null;
   selectedFolderReferenceId.value = null;
   emit("select-folder", null);
-  emit("update:folder-scanning", false);
+  sidebarStore.folderScanning = false;
   await fetchReferenceFolders();
 }
 
@@ -614,7 +598,7 @@ async function importFolderSaved() {
         importFolderId: newFolder.id,
         label: newFolder.label || newFolder.folder,
       });
-      emit("update:folder-scanning", Boolean(newFolder.last_checked == null));
+      sidebarStore.folderScanning = Boolean(newFolder.last_checked == null);
       return;
     }
   }
@@ -629,7 +613,7 @@ async function importFolderSaved() {
     selectedFolderKey.value = null;
     selectedFolderReferenceId.value = null;
     emit("select-folder", null);
-    emit("update:folder-scanning", false);
+    sidebarStore.folderScanning = false;
     return;
   }
   emit("select-folder", {
@@ -649,7 +633,7 @@ async function importFolderDeleted() {
     selectedFolderKey.value = null;
     selectedFolderReferenceId.value = null;
     emit("select-folder", null);
-    emit("update:folder-scanning", false);
+    sidebarStore.folderScanning = false;
   }
   await fetchImportFolders();
 }
@@ -695,7 +679,7 @@ const selectedFolderScanning = computed(() => {
 });
 
 watch(selectedFolderScanning, (val) => {
-  emit("update:folder-scanning", val);
+  sidebarStore.folderScanning = val;
 });
 
 const collapsedProjectBtnTitle = computed(() => {
@@ -840,7 +824,7 @@ function handleFolderNodeSelect(key, payload) {
   }
   emit("select-folder", payload);
   // Emit immediately on selection so ImageGrid updates before next poll tick.
-  emit("update:folder-scanning", selectedFolderScanning.value);
+  sidebarStore.folderScanning = selectedFolderScanning.value;
 }
 
 async function handleFolderNodeToggle(path) {
@@ -1139,7 +1123,11 @@ function createSet() {
 }
 
 function toggleProjectMenu() {
-  if (!projectMenuOpen.value && props.docked && collapsedProjectBtnRef.value) {
+  if (
+    !projectMenuOpen.value &&
+    sidebarStore.effectiveDocked &&
+    collapsedProjectBtnRef.value
+  ) {
     const rect = collapsedProjectBtnRef.value.getBoundingClientRect();
     collapsedProjectMenuPos.value = _flyoutPos(rect);
     if (
@@ -1303,13 +1291,14 @@ const sortedCharacters = computed(() => {
 
 const selectedCharacterObj = computed(() => {
   if (
-    props.selectedCharacter &&
-    props.selectedCharacter !== props.allPicturesId &&
-    props.selectedCharacter !== props.unassignedPicturesId &&
-    props.selectedCharacter !== props.scrapheapPicturesId
+    selectionStore.selectedCharacter &&
+    selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID &&
+    selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
   ) {
     const char =
-      characters.value.find((c) => c.id === props.selectedCharacter) || null;
+      characters.value.find((c) => c.id === selectionStore.selectedCharacter) ||
+      null;
     if (char && typeof char.name === "string" && char.name.length > 0) {
       return {
         ...char,
@@ -1323,9 +1312,10 @@ const selectedCharacterObj = computed(() => {
 
 const selectedSetObj = computed(() => {
   const primarySetId =
-    Array.isArray(props.selectedSetIds) && props.selectedSetIds.length
-      ? props.selectedSetIds[0]
-      : props.selectedSet;
+    Array.isArray(selectionStore.selectedSetIds) &&
+    selectionStore.selectedSetIds.length
+      ? selectionStore.selectedSetIds[0]
+      : selectionStore.selectedSet;
   if (!primarySetId) return null;
   return pictureSets.value.find((pset) => pset.id === primarySetId) || null;
 });
@@ -1333,7 +1323,10 @@ const selectedSetObj = computed(() => {
 const selectedSetIdSet = computed(
   () =>
     new Set(
-      (Array.isArray(props.selectedSetIds) ? props.selectedSetIds : [])
+      (Array.isArray(selectionStore.selectedSetIds)
+        ? selectionStore.selectedSetIds
+        : []
+      )
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0),
     ),
@@ -1344,8 +1337,8 @@ const hasSingleSelectedSet = computed(() => selectedSetIdSet.value.size === 1);
 const selectedCharacterIdSet = computed(
   () =>
     new Set(
-      (Array.isArray(props.selectedCharacterIds)
-        ? props.selectedCharacterIds
+      (Array.isArray(selectionStore.selectedCharacterIds)
+        ? selectionStore.selectedCharacterIds
         : []
       )
         .map((id) => Number(id))
@@ -1448,24 +1441,31 @@ const similarityCharacterOptions = computed(() => {
 watch(
   similarityCharacterOptions,
   (options) => {
-    emit("update:similarity-options", options);
+    sortStore.setSimilarityCharacterOptions(options);
   },
   { immediate: true },
 );
 
 const similarityCharacterModel = computed({
-  get: () => props.selectedSimilarityCharacter,
-  set: (value) => emit("update:similarity-character", value ?? null),
+  get: () => sortStore.selectedSimilarityCharacter,
+  // Changing the reference person changes what the similarity sort means, so
+  // the grid has to repaint; and on a narrow window the choice is made, so the
+  // auto-hidden sidebar gets out of the way.
+  set: (value) => {
+    sortStore.selectedSimilarityCharacter = value ?? null;
+    gridStore.refreshGridVersion();
+    if (sidebarStore.sidebarForcedHidden) sidebarStore.hideAutoSidebar();
+  },
 });
 
 const sidebarThumbnailSizeModel = computed({
-  get: () => props.sidebarThumbnailSize ?? 48,
+  get: () => userPrefsStore.sidebarThumbnailSize ?? 48,
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
     const clamped = Math.min(64, Math.max(16, parsed));
     const snapped = Math.round(clamped / 4) * 4;
-    emit("update:sidebar-thumbnail-size", snapped);
+    userPrefsStore.setSidebarThumbnailSize(snapped);
   },
 });
 
@@ -1476,7 +1476,8 @@ const _dockRowH = computed(() => sidebarThumbnailSizeModel.value + 4);
 const _DOCK_DIV = 3; // divider height (1px + 2px margins)
 const _addBtn = computed(() => (isReadOnly.value ? 0 : 1)); // extra [+] row when editable
 const setsCollapsed = computed(() => {
-  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
+    return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
   const setCount = visibleSets.value.length;
@@ -1488,7 +1489,8 @@ const setsCollapsed = computed(() => {
   return fixedH + charH + setDividerH + allSetsH > dockedScrollHeight.value;
 });
 const charsCollapsed = computed(() => {
-  if (!props.docked || sidebarPrimaryTab.value === "folders") return false;
+  if (!sidebarStore.effectiveDocked || sidebarPrimaryTab.value === "folders")
+    return false;
   if (!setsCollapsed.value) return false;
   const h = _dockRowH.value;
   const charCount = visibleCharacters.value.length;
@@ -1508,18 +1510,18 @@ const sidebarFolderChildIconSize = computed(() =>
 );
 
 const dateFormatModel = computed({
-  get: () => props.dateFormat ?? "locale",
-  set: (value) => emit("update:date-format", value ?? "locale"),
+  get: () => userPrefsStore.dateFormat ?? "locale",
+  set: (value) => userPrefsStore.setDateFormat(value ?? "locale"),
 });
 
 const themeModeModel = computed({
-  get: () => props.themeMode ?? "light",
-  set: (value) => emit("update:theme-mode", value ?? "light"),
+  get: () => userPrefsStore.themeMode ?? "light",
+  set: (value) => userPrefsStore.setThemeMode(value ?? "light"),
 });
 
 const showKeyboardHintModel = computed({
-  get: () => props.showKeyboardHint ?? true,
-  set: (value) => emit("update:show-keyboard-hint", value ?? true),
+  get: () => userPrefsStore.showKeyboardHint ?? true,
+  set: (value) => (userPrefsStore.showKeyboardHint = value ?? true),
 });
 
 const sidebarThumbnailSizeLarge = computed(
@@ -1544,11 +1546,11 @@ const clampSidebarWidth = (v) =>
 
 // Persisted width; the setter emits up to the store/backend.
 const sidebarWidthModel = computed({
-  get: () => props.sidebarWidth ?? 240,
+  get: () => userPrefsStore.sidebarWidth ?? 240,
   set: (value) => {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return;
-    emit("update:sidebar-width", clampSidebarWidth(parsed));
+    userPrefsStore.setSidebarWidth(clampSidebarWidth(parsed));
   },
 });
 
@@ -1560,7 +1562,7 @@ const sidebarDragWidth = ref(null);
 // drop them. Uses the live drag width while resizing, the saved width otherwise.
 const sidebarIsNarrow = computed(
   () =>
-    !props.docked &&
+    !sidebarStore.effectiveDocked &&
     (sidebarDragWidth.value ?? sidebarWidthModel.value ?? 240) < 150,
 );
 
@@ -1571,7 +1573,7 @@ const sidebarThumbStyle = computed(() => {
   };
   // Apply the resized width only when expanded; docked width is driven by the
   // thumbnail size in CSS, so leave it to the stylesheet there.
-  if (!props.docked) {
+  if (!sidebarStore.effectiveDocked) {
     const w = sidebarDragWidth.value ?? sidebarWidthModel.value;
     style.width = `${w}px`;
   }
@@ -1601,7 +1603,7 @@ function onSidebarResizeEnd() {
 }
 
 function onSidebarResizeStart(e) {
-  if (props.docked) return;
+  if (sidebarStore.effectiveDocked) return;
   e.preventDefault();
   const rect = sidebarRootRef.value?.getBoundingClientRect();
   _resizeStartWidth = rect ? rect.width : sidebarWidthModel.value;
@@ -1614,7 +1616,7 @@ function onSidebarResizeStart(e) {
 }
 
 function onSidebarResizeKey(e) {
-  if (props.docked) return;
+  if (sidebarStore.effectiveDocked) return;
   const step = e.shiftKey ? 24 : 8;
   if (e.key === "ArrowLeft") {
     sidebarWidthModel.value = sidebarWidthModel.value - step;
@@ -1625,14 +1627,22 @@ function onSidebarResizeKey(e) {
   }
 }
 
-const reactiveSelectedDescending = ref(props.selectedDescending);
+const reactiveSelectedDescending = ref(sortStore.selectedDescending);
 
 watch(
-  () => props.selectedDescending,
+  () => sortStore.selectedDescending,
   (newValue) => {
     reactiveSelectedDescending.value = newValue;
   },
 );
+
+// Changing the sort from the sidebar also closes an auto-hidden sidebar: on a
+// narrow window the user has just made their choice and wants to see the grid.
+function applySort(sort, descending) {
+  sortStore.selectedSort = sort;
+  sortStore.selectedDescending = descending;
+  if (sidebarStore.sidebarForcedHidden) sidebarStore.hideAutoSidebar();
+}
 
 const descendingModel = computed({
   get: () => {
@@ -1640,17 +1650,14 @@ const descendingModel = computed({
   },
   set: (value) => {
     reactiveSelectedDescending.value = value;
-    emit("update:selected-sort", { sort: sortModel.value, descending: value });
+    applySort(sortModel.value, value);
   },
 });
 
 const sortModel = computed({
-  get: () => props.selectedSort,
+  get: () => sortStore.selectedSort,
   set: (value) =>
-    emit("update:selected-sort", {
-      sort: value != null ? String(value) : "",
-      descending: descendingModel.value,
-    }),
+    applySort(value != null ? String(value) : "", descendingModel.value),
 });
 
 // --- Character Editor Dialog Functions ---
@@ -1688,13 +1695,13 @@ function openSettingsDialog(tab = "") {
 function selectCharacter(id, label = null, event = null) {
   clearCountNew(id);
   const isSpecial =
-    id === props.allPicturesId ||
-    id === props.unassignedPicturesId ||
-    id === props.scrapheapPicturesId;
+    id === ALL_PICTURES_ID ||
+    id === UNASSIGNED_PICTURES_ID ||
+    id === SCRAPHEAP_PICTURES_ID;
   const isMultiToggle = !isSpecial && Boolean(event?.ctrlKey || event?.metaKey);
 
   if (!isMultiToggle) {
-    if (id === props.allPicturesId) {
+    if (id === ALL_PICTURES_ID) {
       allPicturesLastMode.value = projectViewMode.value;
       allPicturesLastProjectId.value = selectedProjectId.value;
     }
@@ -1705,7 +1712,7 @@ function selectCharacter(id, label = null, event = null) {
     // Compute the full project context so App.vue can apply everything
     // atomically without relying on any pre-existing store state.
     let projectContext;
-    if (id === props.allPicturesId) {
+    if (id === ALL_PICTURES_ID) {
       // "All Pictures" keeps whatever project scope was active when clicked.
       projectContext = {
         mode: projectViewMode.value,
@@ -1771,7 +1778,7 @@ function selectCharacter(id, label = null, event = null) {
   const nextIds = Array.from(currentIds).sort((a, b) => a - b);
   if (!nextIds.length) {
     emit("select-character", {
-      id: props.allPicturesId,
+      id: ALL_PICTURES_ID,
       label: null,
       ids: [],
       projectIds: {},
@@ -1780,7 +1787,7 @@ function selectCharacter(id, label = null, event = null) {
   }
 
   // Keep the primary view unchanged on ctrl-click
-  const primaryId = props.selectedCharacter ?? nextIds[0];
+  const primaryId = selectionStore.selectedCharacter ?? nextIds[0];
   const multiProjectIds = {};
   for (const cid of nextIds) {
     const c = characters.value.find((ch) => ch.id === cid);
@@ -1856,14 +1863,14 @@ function selectSet(setId, label = null, event = null) {
 }
 
 async function deleteCharacter() {
-  if (!props.selectedCharacter) return;
+  if (!selectionStore.selectedCharacter) return;
   if (!window.confirm("Delete this character?")) return;
   try {
-    await apiDeleteCharacter(props.selectedCharacter);
+    await apiDeleteCharacter(selectionStore.selectedCharacter);
 
     // Remove the deleted character from the characters array
     characters.value = characters.value.filter(
-      (char) => char.id !== props.selectedCharacter,
+      (char) => char.id !== selectionStore.selectedCharacter,
     );
 
     await fetchCharacters(); // Refresh sidebar
@@ -1981,7 +1988,7 @@ async function deleteImportFolderById(id) {
       selectedFolderKey.value = null;
       selectedFolderReferenceId.value = null;
       emit("select-folder", null);
-      emit("update:folder-scanning", false);
+      sidebarStore.folderScanning = false;
     }
     await fetchImportFolders();
   } catch (e) {
@@ -1997,10 +2004,22 @@ async function deleteImportFolderById(id) {
 
 /** Context-menu target types that can be scoped for a duplicate scan. */
 const DEDUP_SCOPE_TYPES = {
-  character: { scope: "character", icon: "mdi-account-box-outline", noun: "for" },
+  character: {
+    scope: "character",
+    icon: "mdi-account-box-outline",
+    noun: "for",
+  },
   set: { scope: "set", icon: "mdi-folder-multiple-image", noun: "in this set" },
-  project: { scope: "project", icon: "mdi-briefcase-outline", noun: "in this project" },
-  folder: { scope: "folder", icon: "mdi-folder-outline", noun: "in this folder" },
+  project: {
+    scope: "project",
+    icon: "mdi-briefcase-outline",
+    noun: "in this project",
+  },
+  folder: {
+    scope: "folder",
+    icon: "mdi-folder-outline",
+    noun: "in this folder",
+  },
 };
 
 /**
@@ -2191,7 +2210,7 @@ function closeSidebarCtxMenu() {
 // The sidebar row already owns this count, so we read it here rather than reach
 // into the grid's `scrapheapEmptyDisabled`.
 const scrapheapIsEmpty = computed(
-  () => !categoryCounts.value[props.scrapheapPicturesId],
+  () => !categoryCounts.value[SCRAPHEAP_PICTURES_ID],
 );
 
 // Empty Scrapheap from the sidebar context menu. Navigate into the scrapheap
@@ -2200,7 +2219,7 @@ const scrapheapIsEmpty = computed(
 function emptyScrapheapFromCtx() {
   if (scrapheapIsEmpty.value) return;
   closeSidebarCtxMenu();
-  selectCharacter(props.scrapheapPicturesId, "Scrapheap");
+  selectCharacter(SCRAPHEAP_PICTURES_ID, "Scrapheap");
   emit("empty-scrapheap");
 }
 
@@ -2408,7 +2427,7 @@ function dragLeaveSetItem() {
 
 function isCountSelected(id) {
   if (!id) return false;
-  return props.selectedCharacter === id;
+  return selectionStore.selectedCharacter === id;
 }
 
 /**
@@ -2420,12 +2439,12 @@ function isCountSelected(id) {
  * guards travel together.
  */
 const selectionOwnsHighlight = computed(
-  () => !props.hasFolderFilter && !props.isDuplicatesView,
+  () => !hasFolderFilter.value && !isDuplicatesView.value,
 );
 
 const isAllPicturesRowActive = computed(() => {
   if (!selectionOwnsHighlight.value) return false;
-  if (props.selectedCharacter !== props.allPicturesId) return false;
+  if (selectionStore.selectedCharacter !== ALL_PICTURES_ID) return false;
   if (selectedSetIdSet.value.size > 0) return false;
   return true;
 });
@@ -2469,10 +2488,10 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const data = await getCharacterSummary(props.allPicturesId, undefined, {
+    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined, {
       baseUrl: props.backendUrl,
     });
-    setCategoryCount(props.allPicturesId, data.image_count, shouldFlash);
+    setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
@@ -2488,21 +2507,19 @@ async function fetchSidebarData() {
           }
         : undefined;
     const data = await getCharacterSummary(
-      props.unassignedPicturesId,
+      UNASSIGNED_PICTURES_ID,
       unassignedParams,
       { baseUrl: props.backendUrl },
     );
-    setCategoryCount(props.unassignedPicturesId, data.image_count, shouldFlash);
+    setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const data = await getCharacterSummary(
-      props.scrapheapPicturesId,
-      undefined,
-      { baseUrl: props.backendUrl },
-    );
-    setCategoryCount(props.scrapheapPicturesId, data.image_count, shouldFlash);
+    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined, {
+      baseUrl: props.backendUrl,
+    });
+    setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
@@ -2633,11 +2650,11 @@ async function fetchSortOptions() {
         ? sortOptions.value[0].value
         : null;
     }
-    emit("update:sort-options", sortOptions.value);
+    sortStore.setSortOptions(sortOptions.value);
   } catch (e) {
     console.error("Error fetching sort options:", e);
     sortOptions.value = [];
-    emit("update:sort-options", []);
+    sortStore.setSortOptions([]);
   }
 }
 
@@ -3196,15 +3213,15 @@ onMounted(() => {
     // _initializing suppresses the watchers so this one-time restore does NOT
     // emit navigation events back to App.vue.
     if (
-      props.externalProjectViewMode != null ||
-      props.externalSelectedProjectId != null
+      projectStore.projectViewMode != null ||
+      projectStore.selectedProjectId != null
     ) {
       _initializing = true;
-      if (props.externalProjectViewMode != null)
-        projectViewMode.value = props.externalProjectViewMode;
-      if (props.externalSelectedProjectId != null) {
-        lastUsedProjectId.value = props.externalSelectedProjectId;
-        selectedProjectId.value = props.externalSelectedProjectId;
+      if (projectStore.projectViewMode != null)
+        projectViewMode.value = projectStore.projectViewMode;
+      if (projectStore.selectedProjectId != null) {
+        lastUsedProjectId.value = projectStore.selectedProjectId;
+        selectedProjectId.value = projectStore.selectedProjectId;
       }
       nextTick(() => {
         _initializing = false;
@@ -3379,7 +3396,7 @@ watch(
 );
 
 watch(
-  [() => sortedCharacters.value, () => props.selectedSort],
+  [() => sortedCharacters.value, () => sortStore.selectedSort],
   ([chars, selectedSort]) => {
     const hasCharacters = Array.isArray(chars) && chars.length > 0;
     if (!hasCharacters && selectedSort === SIMILARITY_SORT_KEY) {
@@ -3398,7 +3415,7 @@ watch(
 );
 
 watch(
-  () => props.selectedCharacter,
+  () => selectionStore.selectedCharacter,
   (nextId) => {
     clearCountNew(nextId);
   },
@@ -3440,7 +3457,7 @@ watch(selectedProjectId, (v) => {
 // this handles every subsequent route change. (Switching the Projects tab does
 // NOT change the prop, so the stateless browse-scope is preserved.)
 watch(
-  () => props.externalSelectedProjectId,
+  () => projectStore.selectedProjectId,
   (v) => {
     if (_initializing) return;
     const next = v ?? null;
@@ -3453,7 +3470,7 @@ watch(
 // the matching key via the activeFolderKey prop so we can switch to the
 // folders tab and emit the correct filter payload.
 watch(
-  () => props.activeFolderKey,
+  () => viewStore.activeFolderKey,
   async (newKey, oldKey) => {
     if (!newKey) {
       // Route left a folder view — clear the sidebar's folder highlight.
@@ -3470,7 +3487,7 @@ watch(
     await fetchImportFolders();
 
     // Guard: user may have navigated away while fetches were in flight.
-    if (props.activeFolderKey !== newKey) return;
+    if (viewStore.activeFolderKey !== newKey) return;
 
     if (newKey.startsWith("rf-")) {
       const id = parseInt(newKey.slice(3), 10);
@@ -3724,9 +3741,9 @@ defineExpose({
   <ImageImporter
     ref="imageImporterRef"
     :backend-url="props.backendUrl"
-    :selected-character-id="props.selectedCharacter"
-    :all-pictures-id="props.allPicturesId"
-    :unassigned-pictures-id="props.unassignedPicturesId"
+    :selected-character-id="selectionStore.selectedCharacter"
+    :all-pictures-id="ALL_PICTURES_ID"
+    :unassigned-pictures-id="UNASSIGNED_PICTURES_ID"
     @import-finished="handleImportFinished"
   />
   <CharacterEditor
@@ -3761,17 +3778,19 @@ defineExpose({
     v-model:sidebar-thumbnail-size="sidebarThumbnailSizeModel"
     v-model:date-format="dateFormatModel"
     v-model:theme-mode="themeModeModel"
-    :checkForUpdates="props.checkForUpdates"
+    :checkForUpdates="userPrefsStore.checkForUpdates"
     v-model:show-keyboard-hint="showKeyboardHintModel"
-    :thumbnail-mode="props.thumbnailMode"
-    @update:thumbnail-mode="(value) => emit('update:thumbnail-mode', value)"
+    :thumbnail-mode="gridStore.thumbnailMode"
+    @update:thumbnail-mode="(value) => gridStore.setThumbnailMode(value)"
     :initial-tab="settingsDialogInitialTab"
-    @update:hidden-tags="(value) => emit('update:hidden-tags', value)"
-    @update:apply-tag-filter="(value) => emit('update:apply-tag-filter', value)"
-    @update:comfyui-configured="
-      (value) => emit('update:comfyui-configured', value)
+    @update:hidden-tags="(value) => userPrefsStore.setHiddenTags(value)"
+    @update:apply-tag-filter="
+      (value) => userPrefsStore.setApplyTagFilter(value)
     "
-    @update:public-url="(value) => emit('update:public-url', value)"
+    @update:comfyui-configured="
+      (value) => (filterStore.comfyuiConfigured = value)
+    "
+    @update:public-url="(value) => (userPrefsStore.publicUrl = value)"
     @update:check-for-updates="
       (value) => emit('update:check-for-updates', value)
     "
@@ -3926,14 +3945,14 @@ defineExpose({
     ref="sidebarRootRef"
     class="sidebar"
     :class="{
-      'sidebar-docked': props.docked,
+      'sidebar-docked': sidebarStore.effectiveDocked,
       'sidebar--narrow': sidebarIsNarrow,
     }"
     :style="sidebarThumbStyle"
   >
     <!-- Drag the right edge to resize the expanded sidebar (hidden when docked). -->
     <div
-      v-if="!props.docked"
+      v-if="!sidebarStore.effectiveDocked"
       class="sidebar-resize-handle"
       role="separator"
       aria-orientation="vertical"
@@ -3966,7 +3985,7 @@ defineExpose({
             class="sidebar-brand-logo"
           />
         </a>
-        <div v-if="!props.docked" class="sidebar-brand-text">
+        <div v-if="!sidebarStore.effectiveDocked" class="sidebar-brand-text">
           <WordmarkLogo class="sidebar-brand-title" />
           <div
             v-if="updateAvailable && !updateDismissed"
@@ -3995,7 +4014,7 @@ defineExpose({
       </div>
     </div>
     <div
-      v-if="props.docked"
+      v-if="sidebarStore.effectiveDocked"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
       @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
@@ -4021,7 +4040,7 @@ defineExpose({
       </div>
       <Teleport to="body">
         <div
-          v-if="projectMenuOpen && props.docked"
+          v-if="projectMenuOpen && sidebarStore.effectiveDocked"
           ref="collapsedProjectMenuRef"
           class="sidebar-collapsed-project-menu"
           :style="{
@@ -4040,7 +4059,7 @@ defineExpose({
             @mouseenter="scheduleCloseProjectSubMenu"
             @click="
               selectLibraryTab('global');
-              selectCharacter(props.allPicturesId, 'All Pictures');
+              selectCharacter(ALL_PICTURES_ID, 'All Pictures');
               projectMenuOpen = false;
             "
           >
@@ -4091,7 +4110,11 @@ defineExpose({
       <!-- Flyout submenu -->
       <Teleport to="body">
         <div
-          v-if="projectMenuSection && projectMenuOpen && props.docked"
+          v-if="
+            projectMenuSection &&
+            projectMenuOpen &&
+            sidebarStore.effectiveDocked
+          "
           ref="collapsedProjectSubMenuRef"
           class="sidebar-collapsed-project-submenu"
           :style="{
@@ -4122,8 +4145,8 @@ defineExpose({
               class="sidebar-project-menu-item"
               :class="{
                 active:
-                  props.externalProjectViewMode === 'project' &&
-                  props.externalSelectedProjectId === p.id,
+                  projectStore.projectViewMode === 'project' &&
+                  projectStore.selectedProjectId === p.id,
               }"
               @click="
                 selectLibraryTab('project');
@@ -4164,7 +4187,7 @@ defineExpose({
                 active:
                   sidebarPrimaryTab === 'folders' &&
                   selectedFolderKey === 'rf-' + rf.id &&
-                  !props.isDuplicatesView,
+                  !isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4196,7 +4219,7 @@ defineExpose({
                 active:
                   sidebarPrimaryTab === 'folders' &&
                   selectedFolderKey === 'if-' + imf.id &&
-                  !props.isDuplicatesView,
+                  !isDuplicatesView,
               }"
               @click="
                 selectFoldersTab();
@@ -4265,7 +4288,7 @@ defineExpose({
       ref="dockedScrollRef"
       @contextmenu.self.prevent="openSidebarCtxMenu('empty', null, $event)"
     >
-      <template v-if="props.docked">
+      <template v-if="sidebarStore.effectiveDocked">
         <!-- Catch-all: any right-click that reaches the list (blank gaps, the
              margins beside the centered rows, the spacer) opens the view menu.
              Item rows below use `.stop` on their own context menus so they never
@@ -4287,7 +4310,7 @@ defineExpose({
                 { active: isAllPicturesRowActive },
               ]"
               title="All Pictures"
-              @click="selectCharacter(props.allPicturesId, 'All Pictures')"
+              @click="selectCharacter(ALL_PICTURES_ID, 'All Pictures')"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('all-pictures', null, $event)
               "
@@ -4315,7 +4338,7 @@ defineExpose({
                 'sidebar-collapsed-row',
                 {
                   active:
-                    props.selectedCharacter === char.id &&
+                    selectionStore.selectedCharacter === char.id &&
                     selectionOwnsHighlight,
                 },
               ]"
@@ -4325,7 +4348,7 @@ defineExpose({
                   'sidebar-collapsed-item',
                   {
                     active:
-                      props.selectedCharacter === char.id &&
+                      selectionStore.selectedCharacter === char.id &&
                       selectionOwnsHighlight,
                   },
                 ]"
@@ -4466,7 +4489,7 @@ defineExpose({
                     'sidebar-collapsed-flyout-item',
                     {
                       active:
-                        props.selectedCharacter === char.id &&
+                        selectionStore.selectedCharacter === char.id &&
                         selectionOwnsHighlight,
                     },
                   ]"
@@ -4792,13 +4815,10 @@ defineExpose({
                reports pending work. -->
           <div
             v-if="!isReadOnly"
-            :class="['sidebar-collapsed-row', { active: props.isDuplicatesView }]"
+            :class="['sidebar-collapsed-row', { active: isDuplicatesView }]"
           >
             <div
-              :class="[
-                'sidebar-collapsed-item',
-                { active: props.isDuplicatesView },
-              ]"
+              :class="['sidebar-collapsed-item', { active: isDuplicatesView }]"
               title="Duplicates"
               @click="emit('select-duplicates', {})"
             >
@@ -4821,7 +4841,7 @@ defineExpose({
               'sidebar-collapsed-row',
               {
                 active:
-                  props.selectedCharacter === props.scrapheapPicturesId &&
+                  selectionStore.selectedCharacter === SCRAPHEAP_PICTURES_ID &&
                   selectionOwnsHighlight,
               },
             ]"
@@ -4832,12 +4852,12 @@ defineExpose({
                 'sidebar-collapsed-item--scrapheap',
                 {
                   active:
-                    props.selectedCharacter === props.scrapheapPicturesId &&
-                    selectionOwnsHighlight,
+                    selectionStore.selectedCharacter ===
+                      SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                 },
               ]"
               title="Scrapheap"
-              @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+              @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
               @contextmenu.prevent.stop="
                 openSidebarCtxMenu('scrapheap', null, $event)
               "
@@ -5203,9 +5223,7 @@ defineExpose({
                   'sidebar-list-item',
                   { active: isAllPicturesRowActive },
                 ]"
-                @click="
-                  selectCharacter(props.allPicturesId, allPicturesRowLabel)
-                "
+                @click="selectCharacter(ALL_PICTURES_ID, allPicturesRowLabel)"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('all-pictures', null, $event)
                 "
@@ -5217,7 +5235,7 @@ defineExpose({
                   allPicturesRowLabel
                 }}</span>
                 <span class="sidebar-list-count">{{
-                  categoryCounts[props.allPicturesId] ?? ""
+                  categoryCounts[ALL_PICTURES_ID] ?? ""
                 }}</span>
               </div>
             </div>
@@ -5228,10 +5246,7 @@ defineExpose({
                  unstacked stay a filter. -->
             <div v-if="!isReadOnly" class="sidebar-all-pictures-row">
               <div
-                :class="[
-                  'sidebar-list-item',
-                  { active: props.isDuplicatesView },
-                ]"
+                :class="['sidebar-list-item', { active: isDuplicatesView }]"
                 @click="emit('select-duplicates', {})"
               >
                 <span class="sidebar-list-icon sidebar-list-icon--toplevel"
@@ -5264,11 +5279,11 @@ defineExpose({
                   'sidebar-list-item',
                   {
                     active:
-                      props.selectedCharacter === props.scrapheapPicturesId &&
-                      selectionOwnsHighlight,
+                      selectionStore.selectedCharacter ===
+                        SCRAPHEAP_PICTURES_ID && selectionOwnsHighlight,
                   },
                 ]"
-                @click="selectCharacter(props.scrapheapPicturesId, 'Scrapheap')"
+                @click="selectCharacter(SCRAPHEAP_PICTURES_ID, 'Scrapheap')"
                 @contextmenu.prevent="
                   openSidebarCtxMenu('scrapheap', null, $event)
                 "
@@ -5278,7 +5293,7 @@ defineExpose({
                 >
                 <span class="sidebar-list-label">Scrapheap</span>
                 <span class="sidebar-list-count">{{
-                  categoryCounts[props.scrapheapPicturesId] || ""
+                  categoryCounts[SCRAPHEAP_PICTURES_ID] || ""
                 }}</span>
               </div>
             </div>
@@ -5308,7 +5323,7 @@ defineExpose({
                     v-if="selectedCharacterIdSet.size > 1"
                     class="clear-selection-inline"
                     @click.stop="
-                      selectCharacter(props.allPicturesId, 'All Pictures')
+                      selectCharacter(ALL_PICTURES_ID, 'All Pictures')
                     "
                     title="Clear character selection"
                   >
@@ -5328,10 +5343,11 @@ defineExpose({
                   <v-icon
                     v-if="
                       !isReadOnly &&
-                      props.selectedCharacter &&
-                      props.selectedCharacter !== props.allPicturesId &&
-                      props.selectedCharacter !== props.unassignedPicturesId &&
-                      props.selectedCharacter !== props.scrapheapPicturesId
+                      selectionStore.selectedCharacter &&
+                      selectionStore.selectedCharacter !== ALL_PICTURES_ID &&
+                      selectionStore.selectedCharacter !==
+                        UNASSIGNED_PICTURES_ID &&
+                      selectionStore.selectedCharacter !== SCRAPHEAP_PICTURES_ID
                     "
                     class="delete-character-inline"
                     color="white"
@@ -5662,9 +5678,9 @@ defineExpose({
                     'sidebar-project-tree-row',
                     {
                       active:
-                        props.externalProjectViewMode === 'project' &&
-                        props.externalSelectedProjectId === p.id &&
-                        props.selectedCharacter === props.allPicturesId &&
+                        projectStore.projectViewMode === 'project' &&
+                        projectStore.selectedProjectId === p.id &&
+                        selectionStore.selectedCharacter === ALL_PICTURES_ID &&
                         selectedSetIdSet.size === 0 &&
                         selectionOwnsHighlight,
                       droppable: dragOverProjectId === p.id,
@@ -6245,9 +6261,7 @@ defineExpose({
         <button
           class="sidebar-ctx-item sidebar-ctx-item--danger"
           :disabled="isReadOnly || scrapheapIsEmpty"
-          :title="
-            scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined
-          "
+          :title="scrapheapIsEmpty ? 'Scrapheap is already empty' : undefined"
           :aria-disabled="isReadOnly || scrapheapIsEmpty"
           @click="emptyScrapheapFromCtx()"
         >
@@ -6276,19 +6290,19 @@ defineExpose({
           @click="findDuplicatesIn('character', sidebarCtxCharacter)"
         >
           <v-icon size="15" class="sidebar-ctx-icon">{{
-            duplicateCountFor('character', sidebarCtxCharacter) === 0
+            duplicateCountFor("character", sidebarCtxCharacter) === 0
               ? "mdi-check"
               : "mdi-content-duplicate"
           }}</v-icon>
           <span class="sidebar-ctx-label">{{
-            duplicateCountFor('character', sidebarCtxCharacter) === 0
+            duplicateCountFor("character", sidebarCtxCharacter) === 0
               ? "No duplicates for this person"
               : "Find duplicates for this person"
           }}</span>
           <span
             v-if="duplicateCountFor('character', sidebarCtxCharacter)"
             class="sidebar-ctx-count"
-            >{{ duplicateCountFor('character', sidebarCtxCharacter) }}</span
+            >{{ duplicateCountFor("character", sidebarCtxCharacter) }}</span
           >
         </button>
         <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
@@ -6369,19 +6383,19 @@ defineExpose({
           @click="findDuplicatesIn('set', sidebarCtxSet)"
         >
           <v-icon size="15" class="sidebar-ctx-icon">{{
-            duplicateCountFor('set', sidebarCtxSet) === 0
+            duplicateCountFor("set", sidebarCtxSet) === 0
               ? "mdi-check"
               : "mdi-content-duplicate"
           }}</v-icon>
           <span class="sidebar-ctx-label">{{
-            duplicateCountFor('set', sidebarCtxSet) === 0
+            duplicateCountFor("set", sidebarCtxSet) === 0
               ? "No duplicates in this set"
               : "Find duplicates in this set"
           }}</span>
           <span
             v-if="duplicateCountFor('set', sidebarCtxSet)"
             class="sidebar-ctx-count"
-            >{{ duplicateCountFor('set', sidebarCtxSet) }}</span
+            >{{ duplicateCountFor("set", sidebarCtxSet) }}</span
           >
         </button>
         <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
@@ -6591,19 +6605,19 @@ defineExpose({
           @click="findDuplicatesIn('project', sidebarCtxProject)"
         >
           <v-icon size="15" class="sidebar-ctx-icon">{{
-            duplicateCountFor('project', sidebarCtxProject) === 0
+            duplicateCountFor("project", sidebarCtxProject) === 0
               ? "mdi-check"
               : "mdi-content-duplicate"
           }}</v-icon>
           <span class="sidebar-ctx-label">{{
-            duplicateCountFor('project', sidebarCtxProject) === 0
+            duplicateCountFor("project", sidebarCtxProject) === 0
               ? "No duplicates in this project"
               : "Find duplicates in this project"
           }}</span>
           <span
             v-if="duplicateCountFor('project', sidebarCtxProject)"
             class="sidebar-ctx-count"
-            >{{ duplicateCountFor('project', sidebarCtxProject) }}</span
+            >{{ duplicateCountFor("project", sidebarCtxProject) }}</span
           >
         </button>
         <div v-if="!isReadOnly" class="sidebar-ctx-divider"></div>
@@ -6686,22 +6700,25 @@ defineExpose({
           @click="findDuplicatesIn('folder', sidebarCtxFolder)"
         >
           <v-icon size="15" class="sidebar-ctx-icon">{{
-            duplicateCountFor('folder', sidebarCtxFolder) === 0
+            duplicateCountFor("folder", sidebarCtxFolder) === 0
               ? "mdi-check"
               : "mdi-content-duplicate"
           }}</v-icon>
           <span class="sidebar-ctx-label">{{
-            duplicateCountFor('folder', sidebarCtxFolder) === 0
+            duplicateCountFor("folder", sidebarCtxFolder) === 0
               ? "No duplicates in this folder"
               : "Find duplicates in this folder"
           }}</span>
           <span
             v-if="duplicateCountFor('folder', sidebarCtxFolder)"
             class="sidebar-ctx-count"
-            >{{ duplicateCountFor('folder', sidebarCtxFolder) }}</span
+            >{{ duplicateCountFor("folder", sidebarCtxFolder) }}</span
           >
         </button>
-        <div v-if="!isReadOnly && !sidebarCtxFolderScopePath" class="sidebar-ctx-divider"></div>
+        <div
+          v-if="!isReadOnly && !sidebarCtxFolderScopePath"
+          class="sidebar-ctx-divider"
+        ></div>
         <button
           v-if="!inDocker && !sidebarCtxFolderScopePath"
           class="sidebar-ctx-item"
@@ -6863,10 +6880,10 @@ defineExpose({
     :resource-type="shareDialogPending?.resourceType"
     :resource-id="shareDialogPending?.resourceId"
     :resource-label="shareDialogPending?.label"
-    :embed-watermark="props.embedWatermark"
+    :embed-watermark="userPrefsStore.embedWatermark"
     :backend-url="props.backendUrl"
-    :public-url="props.publicUrl"
-    @update:embed-watermark="emit('update:embed-watermark', $event)"
+    :public-url="userPrefsStore.publicUrl"
+    @update:embed-watermark="userPrefsStore.embedWatermark = $event"
   />
 
   <!-- ── Revoke all shares confirm dialog ──────────────────────── -->

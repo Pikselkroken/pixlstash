@@ -1,6 +1,4 @@
-import { onMounted, onUnmounted, watch } from "vue";
-import { useRoute } from "vue-router";
-import { useViewStore } from "../stores/useViewStore";
+import { onMounted, onUnmounted } from "vue";
 import { useGridStore } from "../stores/useGridStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 
@@ -24,8 +22,6 @@ const STATS_HIDE_BREAKPOINT = 1280;
  *   in, measured for the column ceiling.
  */
 export function useViewportLayout({ mainAreaRef }) {
-  const route = useRoute();
-  const viewStore = useViewStore();
   const gridStore = useGridStore();
   const sidebarStore = useSidebarStore();
 
@@ -71,16 +67,6 @@ export function useViewportLayout({ mainAreaRef }) {
       sidebarStore.hideAutoSidebar();
     }
   }
-
-  // Route -> stores: install the app's single route watcher (immediately on
-  // mount for deep-linking, then on every navigation). The parsing and the
-  // writes live in useViewStore; App.vue keeps only the route PUSHING above.
-  viewStore.startRouteSync(route, { watch });
-
-  // A navigation retires the live undo receipt (owner decision, 2026-07-29):
-  // the pill narrates something that happened on the view being left, and a
-  // receipt carried into the next view reads as a fresh event there. Ctrl+Z
-  // keeps working everywhere regardless — the receipt is narration, not the
 
   onMounted(() => window.addEventListener("resize", updateIsMobile));
   onUnmounted(() => window.removeEventListener("resize", updateIsMobile));

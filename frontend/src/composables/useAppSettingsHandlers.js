@@ -2,7 +2,6 @@ import { nextTick } from "vue";
 import { patchUserConfig } from "../api/config";
 import { useGridStore } from "../stores/useGridStore";
 import { useSortStore } from "../stores/useSortStore";
-import { useProjectStore } from "../stores/useProjectStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
 
@@ -33,17 +32,10 @@ export function useAppSettingsHandlers({
 }) {
   const gridStore = useGridStore();
   const sortStore = useSortStore();
-  const projectStore = useProjectStore();
   const sidebarStore = useSidebarStore();
   const userPrefsStore = useUserPrefsStore();
 
-  function handleUpdateProjectViewMode(mode) {
-    projectStore.projectViewMode = mode;
-  }
 
-  function handleUpdateSelectedProjectId(id) {
-    projectStore.selectedProjectId = id;
-  }
 
   // Explicit "view this project" entry click → navigate. useViewStore (watching
   // the route) sets projectViewMode/selectedProjectId from the URL, which scopes
@@ -59,9 +51,6 @@ export function useAppSettingsHandlers({
     onNavigated?.();
   }
 
-  function handleUpdateSortOptions(options) {
-    sortStore.sortOptions = Array.isArray(options) ? options : [];
-  }
 
   function handleStackStatsUpdate(payload) {
     const expanded = Number(payload?.expanded ?? 0);
@@ -72,46 +61,11 @@ export function useAppSettingsHandlers({
     gridStore.totalStackCount = Number.isFinite(total) ? Math.max(0, total) : 0;
   }
 
-  function handleUpdateSimilarityCharacter(val) {
-    sortStore.selectedSimilarityCharacter = val;
-    gridStore.refreshGridVersion();
-    onNavigated?.();
-  }
 
-  function handleUpdateSimilarityOptions(options) {
-    sortStore.similarityCharacterOptions = Array.isArray(options)
-      ? options
-      : [];
-  }
 
-  function handleUpdateHiddenTags(tags) {
-    const nextTags = Array.isArray(tags) ? tags : [];
-    if (
-      userPrefsStore.hiddenTags.length === nextTags.length &&
-      userPrefsStore.hiddenTags.every((tag, index) => tag === nextTags[index])
-    ) {
-      return;
-    }
-    userPrefsStore.hiddenTags = nextTags;
-  }
 
-  function handleUpdateApplyTagFilter(value) {
-    const nextValue = Boolean(value);
-    if (userPrefsStore.applyTagFilter === nextValue) return;
-    userPrefsStore.applyTagFilter = nextValue;
-  }
 
-  function handleUpdateDateFormat(value) {
-    if (value == null) return;
-    const nextValue = String(value);
-    if (nextValue === userPrefsStore.dateFormat) return;
-    userPrefsStore.dateFormat = nextValue;
-  }
 
-  function handleUpdateThemeMode(value) {
-    if (value == null) return;
-    userPrefsStore.themeMode = String(value);
-  }
 
   async function handleUpdateCheckForUpdates(value) {
     userPrefsStore.checkForUpdates = value;
@@ -122,11 +76,6 @@ export function useAppSettingsHandlers({
     }
   }
 
-  function handleUpdateSidebarThumbnailSize(value) {
-    const nextValue = Number(value);
-    if (!Number.isFinite(nextValue)) return;
-    userPrefsStore.sidebarThumbnailSize = nextValue;
-  }
 
   // The sidebar's Scrapheap context menu asks to empty the heap. The sidebar has
   // already switched the view to the scrapheap; defer to the next tick so the grid
@@ -160,41 +109,15 @@ export function useAppSettingsHandlers({
     nextTick(() => statsSidebarRef.value?.focusTasksTab?.());
   }
 
-  function handleUpdateThumbnailMode(value) {
-    if (value !== "square" && value !== "justified") return;
-    if (value === gridStore.thumbnailMode) return;
-    // Apply immediately with no regeneration: both modes render from the same
-    // stored bitmap (justified shows it whole; square crops it to the stored
-    // rectangle), so the grid re-lays-out at once. The persist watch saves it,
-    // and the radiogroup's aria-checked change is what a screen reader announces.
-    gridStore.thumbnailMode = value;
-  }
 
-  function handleUpdateSidebarWidth(value) {
-    const nextValue = Number(value);
-    if (!Number.isFinite(nextValue)) return;
-    userPrefsStore.sidebarWidth = nextValue;
-  }
 
   return {
-    handleUpdateProjectViewMode,
-    handleUpdateSelectedProjectId,
     handleViewProject,
     handleUpdateSelectedSort,
-    handleUpdateSortOptions,
     handleStackStatsUpdate,
-    handleUpdateSimilarityCharacter,
-    handleUpdateSimilarityOptions,
-    handleUpdateHiddenTags,
-    handleUpdateApplyTagFilter,
-    handleUpdateDateFormat,
-    handleUpdateThemeMode,
     handleUpdateCheckForUpdates,
-    handleUpdateSidebarThumbnailSize,
     handleEmptyScrapheapFromSidebar,
     handleSuggestPicturesForCharacter,
     focusTasksTabPanel,
-    handleUpdateThumbnailMode,
-    handleUpdateSidebarWidth,
   };
 }

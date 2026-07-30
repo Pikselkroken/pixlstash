@@ -1099,6 +1099,7 @@ import {
 import { useRoute, useRouter } from "vue-router";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
@@ -1248,6 +1249,7 @@ const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const searchStore = useSearchStore();
 const gridStore = useGridStore();
+const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 
 const emit = defineEmits([
@@ -1278,7 +1280,6 @@ const emit = defineEmits([
 const props = defineProps({
   backendUrl: String,
   activeCategoryLabel: { type: String, default: "Category" },
-  folderScanning: { type: Boolean, default: false },
 });
 
 // ============================================================
@@ -6295,7 +6296,7 @@ const emptyStateDelayPassed = ref(false);
 let emptyStateDelayTimer = null;
 
 const showEmptyState = computed(() => {
-  if (props.folderScanning) return false;
+  if (sidebarStore.folderScanning) return false;
   return (
     gridReady.value &&
     !imagesLoading.value &&
@@ -6306,7 +6307,9 @@ const showEmptyState = computed(() => {
 
 const showFolderScanningState = computed(() => {
   return (
-    props.folderScanning && gridReady.value && filteredGridCount.value === 0
+    sidebarStore.folderScanning &&
+    gridReady.value &&
+    filteredGridCount.value === 0
   );
 });
 
@@ -6373,7 +6376,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     emptyStateDelayTimer = null;
   }
 
-  if (loading || count > 0 || props.folderScanning) {
+  if (loading || count > 0 || sidebarStore.folderScanning) {
     emptyStateDelayPassed.value = false;
     return;
   }
@@ -6383,7 +6386,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
     if (
       !imagesLoading.value &&
       filteredGridCount.value === 0 &&
-      !props.folderScanning
+      !sidebarStore.folderScanning
     ) {
       emptyStateDelayPassed.value = true;
     }
@@ -6393,7 +6396,7 @@ watch([imagesLoading, filteredGridCount], ([loading, count]) => {
 // When scanning ends the grid will reload; reset the delay so the
 // empty state only shows after images have had a chance to arrive.
 watch(
-  () => props.folderScanning,
+  () => sidebarStore.folderScanning,
   (scanning) => {
     if (!scanning) {
       if (emptyStateDelayTimer) {
