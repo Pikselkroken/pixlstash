@@ -1,13 +1,6 @@
 <template>
-  <div
-    ref="railRef"
-    class="overlay-rail"
-    :class="{ hidden: hidden }"
-  >
-    <div
-      class="filmstrip-viewport"
-      @wheel.prevent.stop="onFilmstripWheel"
-    >
+  <div ref="railRef" class="overlay-rail" :class="{ hidden: hidden }">
+    <div class="filmstrip-viewport" @wheel.prevent.stop="onFilmstripWheel">
       <transition-group
         name="filmstrip-slide"
         tag="div"
@@ -26,12 +19,9 @@
           @click.stop="emit('select', item.index)"
           :title="item.description || 'Image'"
         >
-          <div
-            class="filmstrip-thumb-tile"
-            :style="item.stackTileStyle"
-          >
+          <div class="filmstrip-thumb-tile" :style="item.stackTileStyle">
             <img
-              v-if="item.thumbSrc"
+              v-if="item.thumbSrc && !isThumbBroken(item)"
               :class="[
                 'filmstrip-thumb-image',
                 { 'filmstrip-thumb-image-active': item.isActive },
@@ -40,6 +30,7 @@
               :alt="item.description || 'Thumbnail'"
               loading="lazy"
               draggable="false"
+              @error="onThumbError(item)"
             />
             <div
               v-else
@@ -48,25 +39,25 @@
                 { 'filmstrip-thumb-image-active': item.isActive },
               ]"
             >
-              <v-icon size="22">
-                {{ item.isVideo ? "mdi-video" : "mdi-image" }}
+              <v-icon :size="isThumbBroken(item) ? 28 : 22">
+                {{
+                  isThumbBroken(item)
+                    ? "mdi-image-broken-variant"
+                    : item.isVideo
+                      ? "mdi-video"
+                      : "mdi-image"
+                }}
               </v-icon>
             </div>
           </div>
           <div
-            v-if="
-              item.stackBadgeVisible &&
-              item.thumbSrc &&
-              item.isStackLead
-            "
+            v-if="item.stackBadgeVisible && item.thumbSrc && item.isStackLead"
             class="filmstrip-badge filmstrip-badge--top-left"
             :title="item.stackBadgeTitle"
             @click.stop="emit('toggle-expand', item)"
             @mouseenter.stop="emit('prefetch', item)"
           >
-            <v-icon size="14" :style="item.stackIconStyle"
-              >mdi-layers</v-icon
-            >
+            <v-icon size="14" :style="item.stackIconStyle">mdi-layers</v-icon>
           </div>
           <div
             v-if="item.problemBadgeVisible"
@@ -78,9 +69,7 @@
             ]"
             :title="item.problemTitle"
           >
-            <v-icon size="14" color="error"
-              >mdi-emoticon-sad-outline</v-icon
-            >
+            <v-icon size="14" color="error">mdi-emoticon-sad-outline</v-icon>
           </div>
         </button>
       </transition-group>
@@ -89,13 +78,29 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { reactive, ref } from "vue";
 
 defineProps({
   items: { type: Array, default: () => [] },
   canvasStyle: { type: Object, default: () => ({}) },
   hidden: { type: Boolean, default: false },
 });
+
+// Thumbs whose <img> fired @error (e.g. an undecodable source, #585): show a
+// centered broken-image icon instead of the browser's alt-text rendering.
+const failedThumbKeys = reactive(new Set());
+
+function thumbKey(item) {
+  return item.id ?? `idx-${item.index}`;
+}
+
+function onThumbError(item) {
+  failedThumbKeys.add(thumbKey(item));
+}
+
+function isThumbBroken(item) {
+  return failedThumbKeys.has(thumbKey(item));
+}
 
 const emit = defineEmits(["select", "toggle-expand", "prefetch", "navigate"]);
 
