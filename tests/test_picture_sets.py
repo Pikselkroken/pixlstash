@@ -493,8 +493,7 @@ def test_set_view_represents_a_stack_by_its_in_set_member():
 
         def read_positions(session):
             return {
-                pid: session.get(Picture, pid).stack_position
-                for pid in (pic_a, pic_b)
+                pid: session.get(Picture, pid).stack_position for pid in (pic_a, pic_b)
             }
 
         positions = server.vault.db.run_task(read_positions)
