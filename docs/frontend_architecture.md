@@ -1195,9 +1195,14 @@ Three rules from the design are load-bearing and are easy to break by accident:
   exclusion so the server never has to skip it, `coverIdFor` keeps the cover off
   it, and `toggleExcluded` returns `"locked"` rather than `false` so the queue can
   narrate the one refusal that unlocking, not re-including, is the fix for. A
-  group with fewer than two stackable candidates disables **Stack** with a reason
-  and keeps **Keep separate**. Nothing is hidden from the listing: the frozen
-  candidate is still a member of the group and still worth a decision.
+  group that keeps two or more stackable candidates is served whole, frozen
+  members included and marked.
+- **A group with fewer than two stackable candidates never arrives.** The server
+  withholds it (owner call, 2026-07-30) and withholds it from the counts too, so
+  the row's `noLegalStack` branch (Stack disabled with a reason, Keep separate
+  still live) is the **stale-page** case: the lock landed after this page loaded.
+  It is deliberately kept rather than deleted, because that page is exactly when
+  the user is about to press Enter on a group the server will refuse.
 - **A partial stack is a success.** When the lock lands after the page loaded, the
   server stacks the rest and reports `skipped`; the store carries it up as
   `gesture_skipped` (aggregated across a bulk gesture) and a bulk run does **not**

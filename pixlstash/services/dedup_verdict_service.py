@@ -112,9 +112,11 @@ from pixlstash.services.dedup_tier_service import (
     DedupScope,
     DedupTier,
     prune_stale_groups_in_session,
+    stackable_groups_filter,
 )
 from pixlstash.services.set_lock_service import (
     LOCKED_STATUS_CODE,
+    build_locked_set_lookup,
     enforce_stack_membership_not_locked,
     partition_stackable_members,
 )
@@ -578,6 +580,15 @@ def _dry_run_summary_in_session(
     ).all():
         members_by_group[int(group_id)].append(int(picture_id))
 
+    # Frozen members are dropped from every figure below: the real run skips
+    # them, so counting them would make the consent dialog promise pictures that
+    # will not move and covers that will not gain anything.
+    all_ids = [pid for ids in members_by_group.values() for pid in ids]
+    lock_lookup = build_locked_set_lookup(session, all_ids)
+    members_by_group = {
+        group_id: [pid for pid in ids if not lock_lookup.sets_for(pid)]
+        for group_id, ids in members_by_group.items()
+    }
     all_ids = [pid for ids in members_by_group.values() for pid in ids]
     scores = dict(
         session.exec(
@@ -599,7 +610,12 @@ def _dry_run_summary_in_session(
         summary["pictures"] += len(member_ids)
         cover_id = int(group.cover_picture_id or (member_ids[0] if member_ids else 0))
         if cover_id not in member_ids:
-            continue
+            # A frozen preselection is moved by the verdict rather than failing
+            # it, so the preview has to move it too or the group silently drops
+            # out of the "covers gaining metadata" row.
+            if not member_ids:
+                continue
+            cover_id = member_ids[0]
         others = [pid for pid in member_ids if pid != cover_id]
         gains_tags = any(
             tags_by_picture[pid] - tags_by_picture[cover_id] for pid in others
@@ -1411,7 +1427,13 @@ def bulk_auto_stack_in_session(
     """
     scope = scope or DedupScope()
     query = select(DedupGroup).where(
-        DedupGroup.resolved.is_(False), DedupGroup.tier == TIER_EXACT
+        DedupGroup.resolved.is_(False),
+        DedupGroup.tier == TIER_EXACT,
+        # The same lock rule the queue and the badge apply. Without it the run
+        # would pick up groups the user was never shown, refuse each one with a
+        # 423 and report a pile of `blocked` failures for work it should never
+        # have planned.
+        stackable_groups_filter(),
     )
     predicate = scope.picture_predicate()
     if predicate is not None:
@@ -1428,11 +1450,13 @@ def bulk_auto_stack_in_session(
     groups = session.exec(query).all()
 
     if dry_run:
-        picture_total = 0
-        for group in groups:
-            picture_total += int(group.member_count or 0)
+        summary = _dry_run_summary_in_session(session, groups)
+        # `member_count` is the group's stored total and counts frozen members the
+        # run will skip. The summary already excludes them, so the top-level
+        # figure is taken from there rather than recomputed and disagreeing.
+        picture_total = int(summary["pictures"])
         return {
-            "dry_run_summary": _dry_run_summary_in_session(session, groups),
+            "dry_run_summary": summary,
             "batch_id": batch_id,
             "dry_run": True,
             "groups": len(groups),

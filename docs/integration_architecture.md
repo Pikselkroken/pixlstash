@@ -93,13 +93,22 @@ Shapes and rules the frontend depends on:
 - **A candidate also carries `stackable` and `blocked_by_sets`.** `stackable:
   false` means a locked picture set freezes it, so it can be neither stacked nor
   metadata-unioned, and `blocked_by_sets` is `[{id, name}]` for the tooltip.
-  **Nothing is filtered out of the listing**: a frozen candidate is still a real
-  member of the group, hiding it would make the row disagree with the scan, and
-  the user can still validly Keep separate. Render it as excluded-by-the-server
-  (the same treatment as a user exclusion, with a lock rather than an X) and act
-  on the `stackable` ones only. `cover_picture_id` is already moved onto a
-  stackable member when one exists. A group with fewer than two stackable
-  candidates has **no legal stack** and must offer Keep separate only.
+  Render it as excluded-by-the-server (the same treatment as a user exclusion,
+  with a lock rather than an X) and act on the `stackable` ones only.
+  `cover_picture_id` is already moved onto a stackable member.
+- **A group with fewer than two stackable members is withheld entirely** (owner
+  call, 2026-07-30). It poses no stackable decision, so it is not served, not
+  counted in `total`, not counted by `POST /dedup/counts` (`unresolved_groups`
+  and `by_tier`), and not planned into `POST /dedup/auto-stack` or its dry run.
+  One rule, every surface, so the badge can never disagree with the list. The
+  filter is **SQL inside the group predicate**, not a post-filter on the page:
+  dropping rows after the `LIMIT` would shrink pages and desynchronise the
+  cursor. Groups that keep two or more stackable members are still served whole,
+  frozen members included and marked. Nothing is deleted: the group row survives
+  and unlocking the set brings it straight back with no rescan.
+- **A withheld group's signature stays valid.** A client holding a page from
+  before the lock landed can still POST it, and that is the path the partial
+  success and the `423` below exist for.
 - **A why-pill is `{ text, against }`.** `against: true` is counter-evidence and
   renders as the red x; the client orders counter-evidence first, because a
   collapsed row only has room for two pills and the warning is the half that

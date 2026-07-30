@@ -2120,15 +2120,38 @@ and the frozen ones. Both ends of the path use it, which is what stops the queue
 from offering a Stack the verdict would refuse:
 
 - **`GET /dedup/groups`** marks each candidate `stackable` and `blocked_by_sets`,
-  and moves `cover_picture_id` onto a stackable member. It **filters nothing**: a
-  frozen candidate is still a real member of the group, and Keep separate is still
-  a valid decision about it. The page resolves `locked_sets_for_pictures` once for
-  every candidate on the page and passes it into each group's partition, so a page
-  costs three queries rather than three per group.
+  and moves `cover_picture_id` onto a stackable member. The page builds one
+  `LockedSetLookup` for every candidate on the page and passes it into each
+  group's partition, so a page costs three queries rather than three per group.
+  The lookup **carries its own coverage and raises** when asked about an id
+  outside its pool: a bare dict cannot tell "not frozen" from "never looked up",
+  and in a lock helper that difference is a silent admission.
+- **A group with fewer than two stackable members is withheld** (owner call,
+  2026-07-30) by `_live_groups_filter`'s third `HAVING`, so the queue, the badge
+  (`count_unresolved_in_session`) and the tier split (`count_by_tier_in_session`)
+  all apply one identical rule and cannot disagree. `stackable_groups_filter` is
+  the weaker sibling used by bulk auto-stack, which must still see
+  already-collapsed groups for its dry run. Both are built on
+  `locked_picture_id_subquery`, the single SQL definition of "frozen" shared with
+  the write guards.
+  **It has to be SQL.** A post-filter after the `LIMIT` would shrink pages and
+  desynchronise the keyset cursor (§22.7), which is the hazard
+  `locked_picture_id_subquery`'s own docstring was written for. Nothing is
+  deleted: the group row survives and unlocking returns it with no rescan, and
+  its signature stays POSTable by a stale client, which is what the partial
+  success below is for.
 - **`POST /dedup/verdicts/stack`** stacks the survivors, records the frozen ones as
   `excluded_picture_ids`, and reports them in `skipped`. Fewer than two survivors
   is a 423 whose detail names `picture_ids` as well as `sets`. Skips log at
   WARNING, mirroring `drop_locked_set_ids`.
+- **`POST /dedup/auto-stack`** filters its own candidate query with
+  `stackable_groups_filter`, so it never plans a group it would only refuse, and
+  its **dry run counts only the members the run will actually move**. Counting
+  `member_count` there made the consent dialog promise pictures that stay put;
+  the top-level `pictures` figure is now read back off `dry_run_summary` rather
+  than recomputed, so the two cannot disagree. A frozen cover preselection is
+  moved in the preview exactly as the run moves it, or the group would silently
+  drop out of the "covers gaining metadata" row.
 
 Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
 routes still refuse whole-request: they act on exactly the pictures the user

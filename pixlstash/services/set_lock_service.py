@@ -450,8 +450,48 @@ class StackablePartition:
         return []
 
 
+@dataclass(frozen=True)
+class LockedSetLookup:
+    """A :func:`locked_sets_for_pictures` result that knows which ids it covers.
+
+    Built once for a whole page and reused per group, so a queue page costs three
+    queries instead of three per group.
+
+    **It carries its coverage on purpose.** The bare dict cannot distinguish "this
+    picture is not frozen" from "this picture was never looked up", and both read
+    as a falsy lookup. In a lock helper that difference is the whole point: the
+    first is safe, the second silently admits a frozen picture. Asking for an id
+    outside :attr:`covered` is a programming error and raises, rather than
+    quietly answering "not frozen".
+    """
+
+    covered: frozenset
+    sets_by_picture: dict
+
+    def sets_for(self, picture_id: int) -> list[dict]:
+        """The locked sets freezing *picture_id*, or ``[]`` when it is not frozen.
+
+        Raises:
+            KeyError: *picture_id* is outside this lookup's pool, so the answer
+                would be a guess.
+        """
+        pid = int(picture_id)
+        if pid not in self.covered:
+            raise KeyError(
+                f"picture {pid} is outside this LockedSetLookup's pool; "
+                "build the lookup over every id you intend to ask about"
+            )
+        return [dict(entry) for entry in self.sets_by_picture.get(pid, [])]
+
+
+def build_locked_set_lookup(session: Session, picture_ids) -> LockedSetLookup:
+    """Resolve the locked-set membership of a whole pool of pictures at once."""
+    ids = frozenset(int(pid) for pid in picture_ids if pid is not None)
+    return LockedSetLookup(ids, locked_sets_for_pictures(session, sorted(ids)))
+
+
 def partition_stackable_members(
-    session: Session, picture_ids, locked_sets: Optional[dict] = None
+    session: Session, picture_ids, lookup: Optional[LockedSetLookup] = None
 ) -> StackablePartition:
     """Split a duplicate group's candidates into the stackable ones and the frozen.
 
@@ -475,15 +515,19 @@ def partition_stackable_members(
         session: Pre-opened DB session.
         picture_ids: A group's candidate ids, in the order the caller holds them.
             Duplicates are collapsed and ``None`` dropped.
-        locked_sets: Optional pre-computed :func:`locked_sets_for_pictures` result
-            covering *picture_ids*. A queue page builds one for every candidate on
-            the page and passes it in for each group, so a page costs three
-            queries rather than three per group.
+        lookup: Optional pre-built :class:`LockedSetLookup` covering
+            *picture_ids*. Built fresh from *session* when omitted. It raises if
+            asked about an id it does not cover, so a caller that batches the
+            lookup too narrowly fails loudly instead of stacking a frozen picture.
 
     Returns:
         A :class:`StackablePartition`. A group with fewer than two distinct
         candidates is returned whole and unblocked: the stack floor is the
         caller's error to raise, not this function's.
+
+    Raises:
+        KeyError: *lookup* was supplied and does not cover every id in
+            *picture_ids*.
     """
     ordered: list[int] = []
     seen: set[int] = set()
@@ -497,15 +541,11 @@ def partition_stackable_members(
     if len(ordered) < 2:
         return StackablePartition(list(ordered), [])
 
-    frozen = (
-        locked_sets
-        if locked_sets is not None
-        else locked_sets_for_pictures(session, ordered)
-    )
+    frozen = lookup if lookup is not None else build_locked_set_lookup(session, ordered)
     blocked = [
-        BlockedMember(pid, [dict(entry) for entry in frozen[pid]])
-        for pid in ordered
-        if frozen.get(pid)
+        BlockedMember(pid, sets)
+        for pid, sets in ((pid, frozen.sets_for(pid)) for pid in ordered)
+        if sets
     ]
     if not blocked:
         return StackablePartition(list(ordered), [])
