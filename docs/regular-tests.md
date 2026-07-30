@@ -8,7 +8,10 @@ suite is pytest — those are not duplicated here.
 - **Location:** `frontend/e2e/specs/*.spec.js`
 - **Run:** from `frontend/` → `npm run test:e2e` (UI mode: `npm run test:e2e:ui`).
   The harness builds the SPA and boots a throwaway backend against the committed
-  `test-data/` fixture (see `frontend/e2e/README.md`).
+  `test-data/` fixture (see `frontend/e2e/README.md`). Both the throwaway work
+  directory and the port are derived from the checkout path, so two working
+  copies of the repo can run the suite at the same time without colliding; set
+  `PIXLSTASH_E2E_PORT` to pin the port.
 - **Conventions:** owner session minted in `global-setup.js`; assert
   "at least one" / relative deltas rather than exact counts so fixture pruning
   doesn't break tests; pictures identified by thumbnail `src`
@@ -228,9 +231,31 @@ notes in the spec. Un-`fixme` each as its behaviour is settled.
 
 ---
 
+## Preferences round-trip — `preferences-persist.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| a compact-mode change is PATCHed and survives a reload | The whole path a preference travels: control → store → the `useAppConfig` watcher's PATCH to `/users/me/config` → read back on the next load. Asserts the request body carried the new value rather than trusting the store, so a broken persistence watcher cannot pass | ✅ |
+
+## Keyboard shortcuts dialog — `shortcuts-dialog.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| opens on F1 and lists the grid shortcuts | F1 reaches the global handler and `ShortcutsDialog` renders its table. The dialog is static markup with no unit coverage, so this is its only pin | ✅ |
+
+---
+
 ## Coverage gaps / testing debt (risk-based)
 
 Tracked so they aren't forgotten — weighted by blast radius:
+
+- **`dedup.spec.js` — "C opens Compare on the focused group" is flaky.** Fails
+  in roughly one full-suite run in three and passes every time in isolation or
+  when the file is run alone. The dedup specs deliberately share one mutable
+  backend and run in order, each starting from the state the last left, so the
+  likely cause is a preceding case's verdict not having settled before this one
+  reads the queue — a missing wait rather than a product defect. It aborts the
+  rest of the file when it goes, which is what makes a red run look worse than
+  it is. Retry masking would hide it; the fix is an explicit wait on the queue
+  state the test depends on.
 
 - **Snapshots rollback & selective restore (v1.5) — HIGH RISK, partially
   automated.** `snapshots.spec.js` now asserts the restore-point list renders
