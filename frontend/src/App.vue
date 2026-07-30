@@ -10,11 +10,7 @@ import {
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
-import {
-  API_BASE_URL,
-  isReadOnly,
-  sessionContext,
-} from "./utils/apiClient";
+import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useSortStore } from "./stores/useSortStore";
@@ -28,9 +24,7 @@ import { useSearchStore } from "./stores/useSearchStore";
 import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
-import { useLockedSetsStore } from "./stores/useLockedSetsStore";
 import { useOperationStore } from "./stores/useOperationStore";
-import { useDedupStore } from "./stores/useDedupStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -44,6 +38,9 @@ import { useGlobalKeydown } from "./composables/useGlobalKeydown";
 import { useWindowFileImport } from "./composables/useWindowFileImport";
 import { useAppSettingsHandlers } from "./composables/useAppSettingsHandlers";
 import { useUpdatesSocket } from "./composables/useUpdatesSocket";
+import { useSidebarRefresh } from "./composables/useSidebarRefresh";
+import { useViewportLayout } from "./composables/useViewportLayout";
+import { useAppEntityActions } from "./composables/useAppEntityActions";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -73,9 +70,7 @@ const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
-const lockedSetsStore = useLockedSetsStore();
 const operationStore = useOperationStore();
-const dedupStore = useDedupStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 const viewStore = useViewStore();
@@ -141,6 +136,18 @@ const {
   onNavigated: () => closeSidebarIfMobile(),
 });
 
+const {
+  refreshSidebar,
+  refreshSidebarDebounced,
+  refreshSidebarPicturesDebounced,
+} = useSidebarRefresh({ sidebarRef });
+
+const {
+  updateIsMobile,
+  updateMaxColumns,
+  closeSidebarIfMobile,
+} = useViewportLayout({ mainAreaRef });
+
 // The live-updates channel. App.vue owns its lifecycle - it connects on
 // mount and disconnects on unmount - but the socket, its filter handshake and
 // the realtime-sync wiring live in the composable.
@@ -156,6 +163,20 @@ const {
   refreshSidebar: (options) => refreshSidebar(options),
   refreshSidebarPicturesDebounced: (flash) =>
     refreshSidebarPicturesDebounced(flash),
+});
+
+const {
+  handleImagesAssignedToCharacter,
+  handleImagesMoved,
+  handleFacesAssignedToCharacter,
+  refreshExportCount,
+  confirmExportZip,
+  handleClearSearch,
+  handleResetToAll,
+} = useAppEntityActions({
+  gridContainer,
+  refreshSidebar,
+  onNavigated: () => closeSidebarIfMobile(),
 });
 
 useGlobalKeydown({ gridContainer, sidebarRef, shortcutsDialogOpen });
@@ -195,21 +216,9 @@ const { fetchConfig } = useAppConfig({
   },
 });
 
-// --- Layout constants ---
-const MIN_THUMBNAIL_SIZE = 96;
-const MAX_THUMBNAIL_SIZE = 384;
-const MIN_COLUMNS = 2;
-const MAX_COLUMNS = 14;
-const SIDEBAR_HIDE_BREAKPOINT = 790;
-const STATS_HIDE_BREAKPOINT = 1280;
-const SIDEBAR_REFRESH_DEBOUNCE_MS = 150;
-const SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS = 800;
 // --- Non-reactive internals ---
 let mainAreaResizeObserver = null;
 let columnsMenuCloseTimeout = null;
-let sidebarRefreshDebounceTimeout = null;
-let sidebarRefreshPicturesDebounceTimeout = null;
-let sidebarRefreshPicturesFlash = false;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
@@ -258,51 +267,6 @@ function onRestoreConfirmed() {
   refreshSidebar();
 }
 
-function refreshSidebar(options = {}) {
-  sidebarRef.value?.refreshSidebar(options);
-  // The locked-sets store shares the sidebar's refresh triggers (manual emits,
-  // characters_changed, and pictures_changed via the debounced pictures path,
-  // which also fires on a lock/unlock PATCH's CHANGED_PICTURES event). The store
-  // coalesces overlapping fetches, so calling it here on every refresh is cheap.
-  lockedSetsStore.fetch();
-  // The duplicates badge rides the same triggers: an import, a stack or a
-  // verdict all move the count, and every one of them already causes a sidebar
-  // refresh. The per-scope cache goes with it, since a context menu opened
-  // afterwards must not quote a pre-change number.
-  if (!isReadOnly.value) {
-    dedupStore.invalidateScopeCounts();
-    dedupStore.refreshCounts();
-  }
-}
-
-function refreshSidebarDebounced() {
-  if (sidebarRefreshDebounceTimeout) {
-    clearTimeout(sidebarRefreshDebounceTimeout);
-  }
-  sidebarRefreshDebounceTimeout = setTimeout(() => {
-    sidebarRefreshDebounceTimeout = null;
-    refreshSidebar();
-  }, SIDEBAR_REFRESH_DEBOUNCE_MS);
-}
-
-function refreshSidebarPicturesDebounced(flash) {
-  if (flash) sidebarRefreshPicturesFlash = true;
-  if (sidebarRefreshPicturesDebounceTimeout) {
-    clearTimeout(sidebarRefreshPicturesDebounceTimeout);
-  }
-  sidebarRefreshPicturesDebounceTimeout = setTimeout(() => {
-    sidebarRefreshPicturesDebounceTimeout = null;
-    const doFlash = sidebarRefreshPicturesFlash;
-    sidebarRefreshPicturesFlash = false;
-    refreshSidebar(doFlash ? { flashCounts: true } : {});
-  }, SIDEBAR_REFRESH_PICTURES_DEBOUNCE_MS);
-}
-
-/**
- * Open the settings dialog. `tab` deep-links to a nav entry (e.g. "scrapheap"
- * from the scrapheap header's "change" link); omitted callers land on Appearance.
- * @param {string} [tab]
- */
 function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
@@ -341,57 +305,6 @@ async function handleLocalImport({ files, projectId } = {}) {
   sidebarRef.value?.startLocalImport?.(files, projectId ?? null);
 }
 
-function updateSidebarBreakpoints() {
-  if (typeof window !== "undefined") {
-    sidebarStore.sidebarForcedHidden =
-      window.innerWidth < SIDEBAR_HIDE_BREAKPOINT;
-    sidebarStore.statsForcedHidden = window.innerWidth < STATS_HIDE_BREAKPOINT;
-  }
-}
-
-function updateIsMobile() {
-  updateSidebarBreakpoints();
-  updateMaxColumns();
-}
-
-function updateMaxColumns() {
-  // Maintain the responsive column bounds. gridStore.columns is derived from
-  // the size level and clamps itself to these bounds, so there is nothing to
-  // write back here — updating the bounds re-evaluates the derived count.
-  const width = mainAreaRef.value?.clientWidth ?? window.innerWidth ?? 0;
-  if (!width) {
-    gridStore.minColumns = MIN_COLUMNS;
-    gridStore.maxColumns = MAX_COLUMNS;
-    return;
-  }
-  const availableWidth = Math.max(0, width - 8);
-  const computedMin = Math.max(
-    1,
-    Math.ceil(availableWidth / MAX_THUMBNAIL_SIZE),
-  );
-  const computedMax = Math.max(
-    computedMin,
-    Math.floor(availableWidth / MIN_THUMBNAIL_SIZE),
-  );
-  gridStore.minColumns = Math.max(MIN_COLUMNS, computedMin);
-  gridStore.maxColumns = Math.min(MAX_COLUMNS, computedMax);
-}
-
-function closeSidebarIfMobile() {
-  if (sidebarStore.sidebarForcedHidden) {
-    sidebarStore.hideAutoSidebar();
-  }
-}
-
-// Route -> stores: install the app's single route watcher (immediately on
-// mount for deep-linking, then on every navigation). The parsing and the
-// writes live in useViewStore; App.vue keeps only the route PUSHING above.
-viewStore.startRouteSync(route, { watch });
-
-// A navigation retires the live undo receipt (owner decision, 2026-07-29):
-// the pill narrates something that happened on the view being left, and a
-// receipt carried into the next view reads as a fresh event there. Ctrl+Z
-// keeps working everywhere regardless — the receipt is narration, not the
 // undo affordance itself.
 watch(
   () => route.fullPath,
@@ -410,110 +323,6 @@ function resolveThemeName(mode) {
   return mode === "dark" ? "pixlStashDark" : "pixlStashLight";
 }
 
-async function handleImagesAssignedToCharacter({ characterId, imageIds }) {
-  const current = selectionStore.selectedCharacter;
-  // Unassigned view: assigned pictures leave the unassigned bucket — drop their
-  // tiles from the grid immediately.
-  if (current === UNASSIGNED_PICTURES_ID && !selectionStore.selectedSet) {
-    if (
-      gridContainer.value &&
-      typeof gridContainer.value.removeImagesById === "function"
-    ) {
-      gridContainer.value.removeImagesById(imageIds);
-    }
-    return;
-  }
-  // Viewing a specific character: reassigning pictures (and their whole stack)
-  // to a DIFFERENT character moves them out of this view. Refetch so they
-  // disappear right away instead of lingering until the view changes — a plain
-  // removeImagesById can't catch every stack member (a collapsed drag only
-  // carries the leader id).
-  const isSpecificCharacterView =
-    current != null &&
-    !selectionStore.selectedSet &&
-    String(current) !== String(ALL_PICTURES_ID) &&
-    String(current) !== String(UNASSIGNED_PICTURES_ID) &&
-    String(current) !== String(SCRAPHEAP_PICTURES_ID);
-  if (isSpecificCharacterView && String(current) !== String(characterId)) {
-    gridStore.refreshGridVersion();
-  }
-}
-
-function handleImagesMoved({ imageIds, kind, refresh }) {
-  if (kind === "reference-folder" || refresh) {
-    wsStore.clearSortChangedExternalIds();
-    gridStore.refreshGridVersion();
-    refreshSidebar();
-    return;
-  }
-  if (
-    selectionStore.selectedCharacter !== UNASSIGNED_PICTURES_ID ||
-    selectionStore.selectedSet
-  ) {
-    return;
-  }
-  if (
-    gridContainer.value &&
-    typeof gridContainer.value.removeImagesById === "function"
-  ) {
-    gridContainer.value.removeImagesById(imageIds);
-  }
-}
-
-function handleFacesAssignedToCharacter() {
-  if (
-    gridContainer.value &&
-    typeof gridContainer.value.clearFaceSelection === "function"
-  ) {
-    gridContainer.value.clearFaceSelection();
-  }
-}
-
-function refreshExportCount() {
-  const counts = gridContainer.value?.getExportCount?.();
-  if (!counts) return;
-  exportStore.exportSelectedCount = Number(counts.selectedCount) || 0;
-  exportStore.exportTotalCount = Number(counts.totalCount) || 0;
-}
-
-function confirmExportZip() {
-  gridContainer.value?.exportCurrentViewToZip({
-    exportType: exportStore.exportType,
-    captionMode: exportStore.exportCaptionMode,
-    tagFormat: exportStore.exportTagFormat,
-    includeCharacterName: exportStore.exportIncludeCharacterName,
-    useOriginalFileNames: exportStore.exportUseOriginalFileNames,
-    resolution: exportStore.exportResolution,
-    bboxMode: exportStore.exportBboxMode,
-  });
-  exportStore.exportMenuOpen = false;
-}
-
-// --- Review tags overlay ---
-// Visibility lives in the store so the grid toolbar can open it directly.
-
-function handleClearSearch() {
-  searchStore.searchQuery = "";
-  searchStore.searchInput = "";
-  searchStore.isSearchHistoryOpen = false;
-  gridStore.refreshGridVersion();
-}
-
-function handleResetToAll() {
-  selectionStore.selectedCharacter = ALL_PICTURES_ID;
-  selectionStore.selectedSet = null;
-  selectionStore.selectedSetIds = [];
-  selectionStore.lastSelectedCharacterLabel = "All Pictures";
-  sortStore.selectedSort = "DATE";
-  sortStore.selectedDescending = true;
-  sortStore.selectedSimilarityCharacter = null;
-  searchStore.searchQuery = "";
-  filterStore.resetFilters();
-  gridStore.refreshGridVersion();
-  closeSidebarIfMobile();
-}
-
-// --- Watchers ---
 watch(
   () => searchStore.searchQuery,
   (newVal, oldVal) => {
@@ -677,14 +486,6 @@ onBeforeUnmount(() => {
   if (columnsMenuCloseTimeout) {
     clearTimeout(columnsMenuCloseTimeout);
     columnsMenuCloseTimeout = null;
-  }
-  if (sidebarRefreshDebounceTimeout) {
-    clearTimeout(sidebarRefreshDebounceTimeout);
-    sidebarRefreshDebounceTimeout = null;
-  }
-  if (sidebarRefreshPicturesDebounceTimeout) {
-    clearTimeout(sidebarRefreshPicturesDebounceTimeout);
-    sidebarRefreshPicturesDebounceTimeout = null;
   }
 });
 
