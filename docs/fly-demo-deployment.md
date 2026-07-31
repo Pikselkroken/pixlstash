@@ -150,7 +150,17 @@ To refresh the demo with a new database or new images:
 1. Replace the contents of `demo-data/images/` with the updated `vault.db` and picture files.
 2. Rebuild and redeploy using the steps above.
 
-Because the data is baked into the image, there is no migration step — the new `vault.db` is already fully processed.
+The images and derived data are baked into the image, so there is no reprocessing step: the new `vault.db` already carries its thumbnails, embeddings and scores.
+
+**Migrations still run.** The server applies Alembic migrations to `vault.db` at every start-up, so a baked database is upgraded inside the container on first boot regardless of what the image contains. That matters for the demo share token: `0086_reissue_api_tokens` deletes every `usertoken` row, so a token minted into a `vault.db` that has not yet had `0086` applied is deleted the moment the container starts, and the demo link is dead on arrival.
+
+Build the demo image from a `vault.db` that is **already at or past `0086`**, and mint the share token after that. To check which revision a database is stamped at:
+
+```bash
+sqlite3 demo-data/images/vault.db "SELECT version_num FROM alembic_version;"
+```
+
+If it reports a revision below `0086_reissue_api_tokens`, start the server against that database once so the migrations run, then mint the share token and rebuild.
 
 ## Troubleshooting
 

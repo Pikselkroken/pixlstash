@@ -590,7 +590,38 @@ These get skipped and that is exactly why a UI looks cheap.
   `on-surface` (11.1 – 12.1:1), which is what the dark theme already did. This is the
   same "`on-<x>` on a tint" trap as `on-<status>` (§4); it will keep recurring, so check
   it every time an `on-*` token appears next to an `rgba(...)` fill.
-- **Disabled:** drop to ~38% opacity of the token, never a different grey.
+- **Disabled:** drop to `--opacity-disabled` (0.38) of the token, never a
+  different grey. The fade is legal here and only here: WCAG 1.4.3 exempts an
+  inactive control, so a disabled label may sit below the contrast floor.
+- **Pending (busy):** a control that is working is disabled, but it is *not* the
+  disabled state. "Not allowed" may fade out of the reading order; "working" is
+  the only thing telling the user their click landed, so it has to stay legible.
+  **A pending control does not dim.** Group opacity composites the whole control
+  toward its surface and drags a filled variant's white label down with the fill:
+  on the light `accent` fill the label measures 4.75:1 at full opacity, 3.97:1 at
+  0.9, 2.70:1 at 0.7 and 1.67:1 at the disabled 0.38. The white-label rule (§4)
+  only survives above ~0.97, so no perceptible dim is legal and there is no
+  `--opacity-busy` token. Four things carry the state instead: the leading icon
+  swaps to the shared spinner idiom (`mdi-loading` + `mdi-spin`, the one
+  `NewReviewDialog`, `TagHealthBoard` and the overlay panels already use), the
+  cursor becomes `progress` (busy, but the rest of the surface is still live,
+  unlike disabled's `not-allowed`), the control is natively `disabled` so a
+  second click cannot fire, and it carries `aria-busy="true"`.
+  **The label does not change.** "Save" stays "Save" and never becomes
+  "Saving...". The label is the accessible name and is often the
+  `aria-keyshortcuts` target, so mutating it mid-flight renames the control under
+  a screen reader, and a longer word resizes the button and reflows the action
+  row. The spinner already says "working", so `AppButton` has no loading-text
+  prop. (`TbTagPanel`'s hand-rolled "Applying..." predates the primitive: drift
+  to converge, not precedent.) No live region on the button either, because the
+  outcome is announced by the notice surface and a second announcer would
+  double-speak, the same reason `OverlayActionReceipt` has none.
+  **The spinner keeps spinning under `prefers-reduced-motion`.** The global reset
+  in `design-tokens.css` would freeze it into a static broken ring that reads as a
+  rendering fault, and a spinner is a status readout rather than decoration, which
+  is the exception `ActionReceipt`'s countdown hairline already takes (§10).
+  Restore it with a scoped override on `::before`, where `@mdi/font` puts the
+  animation. Never by weakening the global reset.
 - **Scrollbars:** a scroll region inside a `dark-surface` panel styles its own bar,
   because the global `.is-desktop` treatment in `style.css` keys off `on-surface`
   (the light-chrome pair) and does not apply in a plain browser at all. The pattern

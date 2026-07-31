@@ -23,10 +23,13 @@ from sqlalchemy import (
 from pixlstash.db_models import (
     DeletedFileLog,
     Face,
+    GuestScore,
+    GuestSession,
     Picture,
     PictureProjectMember,
     PictureSetMember,
     Tag,
+    UserToken,
 )
 from pixlstash.db_models.picture_likeness import (
     PictureLikenessFrontier,
@@ -67,9 +70,11 @@ class FullRestoreMixin:
         3. Scan snapshot Picture rows; collect missing-file IDs.
         4. Dispose the live engine, copy the snapshot over the live DB, and
            re-open it.
-        5. Delete rows whose files are missing.
-        6. NULL-reset derived columns so the WorkPlanner regenerates them.
-        7. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
+        5. Clear every API token (see ``_clear_api_tokens``) — a restore always
+           leaves the vault with no tokens, whatever the snapshot held.
+        6. Delete rows whose files are missing.
+        7. NULL-reset derived columns so the WorkPlanner regenerates them.
+        8. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
 
         Args:
             snapshot_id: ID of the snapshot to restore.
@@ -179,7 +184,7 @@ class FullRestoreMixin:
         allow_without_safety: bool,
         abs_snapshot: str,
     ) -> "RestoreReport":
-        """The body of full restore steps 1-7 (separated so the lifecycle
+        """The body of full restore steps 1-8 (separated so the lifecycle
         wrapper in ``_restore_full_inner`` stays narrow)."""
         db = self._vault.db
 
@@ -677,6 +682,12 @@ class FullRestoreMixin:
         # missing-file detection, embedding generation, ...) until restart.
         try:
             db.run_control_task(_do_swap)
+            # Clear API tokens before anything else touches the swapped-in DB,
+            # so no later failure in the cleanup below can leave a restored
+            # token row in place.  ``run_control_task`` has returned, so the
+            # swap has finished and released ``exclusive_engine_access``; this
+            # writer task opens its session on the re-created engine.
+            db.run_task(self._clear_api_tokens, priority=0)
             db.run_task(_post_restore_cleanup, priority=0)
         finally:
             if planner is not None:
@@ -699,6 +710,46 @@ class FullRestoreMixin:
             report.missing_files_count,
         )
         return report
+
+    @staticmethod
+    def _clear_api_tokens(session: Session) -> None:
+        """Delete every API token row from the swapped-in database.
+
+        A restore always leaves the vault with no API tokens, whatever the
+        snapshot happened to hold.  The rule belongs to the restore path and is
+        applied **unconditionally**: it never compares the snapshot's Alembic
+        revision, because this project squashes migrations, so a revision
+        identifier is not a durable statement about what a snapshot contains.
+        A snapshot taken by the current release is cleared exactly like an old
+        one.  Tokens are created again from Settings after a restore, and share
+        links re-shared with their new values.
+
+        ``guest_score`` and ``guest_session`` are cleared first, child before
+        parent.  Both reference a token by id, and SQLite reuses the lowest
+        free integer primary key, so a row left behind would come to describe
+        whichever token is created next.
+
+        Runs as an ordinary writer task, submitted only after
+        ``run_control_task(_do_swap)`` has returned — the swap has therefore
+        completed and released ``exclusive_engine_access``, and this session is
+        opened on the re-created engine.  Nothing here runs while the engine
+        lock is held.
+
+        Args:
+            session: Live writer session on the swapped-in database.
+        """
+        cleared: dict[str, int] = {}
+        for model in (GuestScore, GuestSession, UserToken):
+            cleared[model.__name__] = session.execute(sa_delete(model)).rowcount
+        session.commit()
+        logger.info(
+            "RestoreService: cleared API tokens after restore (%d token(s), "
+            "%d guest session(s), %d guest score(s)); tokens must be created "
+            "again from Settings and share links re-shared.",
+            cleared["UserToken"],
+            cleared["GuestSession"],
+            cleared["GuestScore"],
+        )
 
     def _find_missing_file_ids(
         self, abs_snapshot: str, vault_root: str

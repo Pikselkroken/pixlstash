@@ -6,6 +6,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.server import Server
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.quality import Quality
 from pixlstash.db_models.picture_likeness import PictureLikeness, PictureLikenessQueue
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from sqlalchemy import func
@@ -220,14 +221,32 @@ def test_write_blob_updates_skips_hard_deleted_pictures():
             server.vault._work_planner.stop()
 
             def _seed(session):
+                # Seed pictures that look fully processed to the background
+                # pipeline. The Server runs live finders, and a picture with
+                # pending quality work gets a sentinel Quality written for its
+                # unloadable file — and update_quality resets size_bin_index
+                # as part of that, racing (and clobbering) the very column this
+                # test asserts on. Pre-filling metadata, Quality, and likeness
+                # columns keeps every finder idle so only write_blob_updates
+                # touches the rows.
                 rows = [
-                    Picture(file_path=f"lk_{i}.jpg", filename=f"lk_{i}.jpg")
+                    Picture(
+                        file_path=f"lk_{i}.jpg",
+                        filename=f"lk_{i}.jpg",
+                        format="jpg",
+                        width=64,
+                        height=64,
+                        likeness_parameters=b"\x00\x00\x00\x00",
+                        size_bin_index=1,
+                    )
                     for i in range(3)
                 ]
                 session.add_all(rows)
                 session.commit()
                 for r in rows:
                     session.refresh(r)
+                    session.add(Quality(picture_id=r.id, sharpness=1.0))
+                session.commit()
                 return [r.id for r in rows]
 
             ids = server.vault.db.run_task(_seed)

@@ -72,6 +72,7 @@
         variant="primary"
         icon-left="check"
         :disabled="!isValid"
+        :loading="saving"
         @click="save"
       >
         Save
@@ -107,6 +108,7 @@ import {
   getReferencePictures,
 } from "../../api/characters";
 import { listPicturesByIds } from "../../api/pictures";
+import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -237,16 +239,21 @@ watch(
   { immediate: true },
 );
 
-function save() {
+async function submitCharacter() {
   if (!isValid.value) {
     console.error("Character data is not valid. Cannot save.");
     return;
   }
 
-  saveCharacter({
+  await saveCharacter({
     ...localCharacter.value,
   });
 }
+
+// One create at a time (#647). The button wears `saving`, and `save` refuses a
+// re-entrant call, which is what covers the two keyboard doors into this form:
+// Enter on the name field and the Ctrl+Enter listener below.
+const { pending: saving, run: save } = useSubmitGuard(submitCharacter);
 
 // Keyboard shortcuts
 function handleKeydown(event) {
