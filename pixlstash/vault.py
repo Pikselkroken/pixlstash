@@ -111,6 +111,14 @@ class Vault:
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
+        # The server's AuthService, attached by ``Server.__init__`` once it has
+        # been constructed (it takes ``self.db``, so it cannot exist yet here).
+        # The restore path needs it: a full restore replaces the database file,
+        # which invalidates every piece of authentication state held in memory
+        # (see AuthService.reset_after_restore and §18.5). Stays ``None`` for a
+        # Vault built without a Server — tests, the CLI tools — and the restore
+        # path treats that as "nothing to reset".
+        self.auth_service = None
 
         self._engine: InferenceEngine | None = None
         self._force_cpu = force_cpu

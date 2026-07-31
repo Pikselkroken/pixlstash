@@ -261,6 +261,7 @@ jobs:
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
+          tests/test_token_identity.py
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py

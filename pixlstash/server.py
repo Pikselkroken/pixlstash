@@ -403,6 +403,11 @@ class Server(
             self._server_config_path,
             logger,
         )
+        # A full restore swaps the database file underneath the running server,
+        # which invalidates the token cache and every in-memory session. Give
+        # the restore path a way to reach the auth service so it can clear them
+        # (issue #666, §18.5).
+        self.vault.auth_service = self.auth
         self._user = self.auth.ensure_user()
         # Headless installs (Docker): claim the still-unclaimed owner account
         # from PIXLSTASH_INITIAL_USERNAME/PIXLSTASH_INITIAL_PASSWORD, because
