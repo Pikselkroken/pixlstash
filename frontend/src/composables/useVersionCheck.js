@@ -108,7 +108,7 @@ export function useVersionCheck(installType, checkForUpdates, enabled = true) {
         if (remote && isRemoteNewer(appVersion, remote)) {
           const dismissed = localStorage.getItem(VERSION_CHECK_DISMISSED_KEY);
           latestVersion.value = remote;
-          latestVersionUrl.value = `${UPDATE_PAGE_URL}/?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(type ?? "pip")}`;
+          latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(type ?? "pip")}`;
           latestSecurityLevel.value = data?.security ?? null;
           updateDismissed.value = dismissed === remote;
         }
