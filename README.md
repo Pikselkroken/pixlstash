@@ -37,7 +37,7 @@ PixlStash is a tool for working with images rather than just storing them, thoug
     <img src="website/assets/install-banner.svg" alt="Install PixlStash" width="320"/>
   </a>
   &nbsp;
-  <a href="https://demo.pixlstash.dev?token=MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE">
+  <a href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs">
     <img src="website/assets/demo-banner.svg" alt="Try the Demo" width="320"/>
   </a>
 </p>

@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 import shutil
 import tempfile
@@ -30,7 +31,12 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.server import Server
+from pixlstash.db_models.user_token import UserToken
 from pixlstash.services import scrapheap_service
+from pixlstash.utils.snapshot_compression import (
+    compress_snapshot,
+    materialize_snapshot,
+)
 
 
 @pytest.fixture(scope="module")
@@ -3228,3 +3234,210 @@ def test_restore_does_not_resurrect_a_picture_whose_ledger_row_survived_a_collis
         "picture A's content was genuinely destroyed; restore must never "
         "resurrect it and bind it to whatever now occupies that path"
     )
+
+
+# ---------------------------------------------------------------------------
+# A restore always leaves the vault with no API tokens
+# ---------------------------------------------------------------------------
+
+# The revision immediately before the one that clears API tokens, used to build
+# a snapshot that looks like it came from an earlier release. The restore path
+# clears tokens on its own regardless of the stamp; these tests pin that it
+# holds for a snapshot on either side of that revision.
+_REVISION_BEFORE_TOKEN_RESET = "0085_recompute_smart_score_restored_builtin_anchors"
+
+
+def _rewrite_snapshot(server, cp, mutate) -> None:
+    """Materialize a snapshot, apply *mutate* to it, and compress it back.
+
+    Snapshots are stored as zstd archives, so producing one that looks like it
+    came from an earlier release means decompressing, editing, and recompressing
+    over the original path.
+    """
+    abs_path = os.path.join(server.vault.image_root, cp.relative_path)
+    tmp_dir = tempfile.mkdtemp(prefix="pixlstash_test_snap_")
+    tmp_sqlite = os.path.join(tmp_dir, "snap.sqlite")
+    try:
+        materialize_snapshot(abs_path, tmp_sqlite)
+        with closing(sqlite3.connect(tmp_sqlite)) as conn:
+            mutate(conn)
+            conn.commit()
+        compress_snapshot(tmp_sqlite, abs_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _snapshot_token_count(server, cp) -> int:
+    """Return how many usertoken rows the snapshot archive holds."""
+    abs_path = os.path.join(server.vault.image_root, cp.relative_path)
+    tmp_dir = tempfile.mkdtemp(prefix="pixlstash_test_snap_")
+    tmp_sqlite = os.path.join(tmp_dir, "snap.sqlite")
+    try:
+        materialize_snapshot(abs_path, tmp_sqlite)
+        with closing(sqlite3.connect(tmp_sqlite)) as conn:
+            return conn.execute("SELECT COUNT(*) FROM usertoken").fetchone()[0]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _live_token_count(server) -> int:
+    return server.vault.db.run_immediate_read_task(
+        lambda s: len(s.exec(select(UserToken)).all())
+    )
+
+
+def _add_tokens_stamped_before_the_reset(conn) -> None:
+    """Put token rows in a snapshot and stamp it at the earlier revision."""
+    conn.execute("DELETE FROM usertoken")
+    # The owner row the server creates on start-up is already in the snapshot;
+    # hang the tokens off it rather than building one with every NOT NULL
+    # settings column this table carries.
+    user_id = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()[0]
+    for token_id, scope in ((1, "ALL"), (2, "READ")):
+        conn.execute(
+            "INSERT INTO usertoken "
+            "(id, user_id, token_hash, token_prefix, scope, created_at, "
+            " include_attachments, watermark) "
+            "VALUES (?, ?, ?, ?, ?, '2026-01-01 00:00:00', 0, 1)",
+            (token_id, user_id, f"hash-{token_id}", f"prefix{token_id}", scope),
+        )
+    conn.execute("DELETE FROM alembic_version")
+    conn.execute(
+        "INSERT INTO alembic_version (version_num) VALUES (?)",
+        (_REVISION_BEFORE_TOKEN_RESET,),
+    )
+
+
+def _add_guest_rows(conn) -> None:
+    """Attach a guest session and a guest score to the snapshot's tokens.
+
+    Both tables reference a token by id, so they have to go with the tokens
+    rather than survive them.
+    """
+    picture_id = conn.execute("SELECT id FROM picture ORDER BY id LIMIT 1").fetchone()[
+        0
+    ]
+    conn.execute(
+        "INSERT INTO guest_session "
+        "(session_id, token_id, created_at, last_active_at, cookie_token) "
+        "VALUES ('sess-1', 2, '2026-01-01 00:00:00', '2026-01-01 00:00:00', NULL)"
+    )
+    conn.execute(
+        "INSERT INTO guest_score "
+        "(session_id, token_id, picture_id, score, scored_at) "
+        "VALUES ('sess-1', 2, ?, 4, '2026-01-01 00:00:00')",
+        (picture_id,),
+    )
+
+
+def _live_guest_row_counts(server) -> tuple[int, int]:
+    """Return ``(guest_session_count, guest_score_count)`` in the live DB."""
+
+    def _count(session):
+        sessions = session.execute(text("SELECT COUNT(*) FROM guest_session")).scalar()
+        scores = session.execute(text("SELECT COUNT(*) FROM guest_score")).scalar()
+        return sessions, scores
+
+    return server.vault.db.run_immediate_read_task(_count)
+
+
+def _stamp_snapshot_at_head(conn) -> None:
+    """Stamp the snapshot at the current head so no migration runs on restore.
+
+    The head is read from the migration graph rather than written as a literal.
+    A hardcoded identifier would make the test assert against one particular
+    migration chain, which is the assumption the restore path itself refuses to
+    make.
+    """
+    from pixlstash.services.restore.schema_upgrade import _alembic_head_revisions
+
+    (head,) = sorted(_alembic_head_revisions())
+    conn.execute("DELETE FROM alembic_version")
+    conn.execute("INSERT INTO alembic_version (version_num) VALUES (?)", (head,))
+
+
+def test_restoring_an_older_snapshot_leaves_no_api_tokens(server):
+    """A snapshot from before the token reset restores with its tokens cleared.
+
+    Tokens issued under the earlier rules cannot come back through a restore.
+    """
+    _create_file(server, "token_snapshot.jpg")
+    pic = _add_picture(server, filename="token_snapshot.jpg", description="before")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    _rewrite_snapshot(server, cp, _add_tokens_stamped_before_the_reset)
+    # The snapshot really does carry tokens, so a clean result after the
+    # restore cannot be an artefact of there being nothing to carry.
+    assert _snapshot_token_count(server, cp) == 2
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    assert _live_token_count(server) == 0, (
+        "tokens from a snapshot predating the reset must not come back"
+    )
+    # The rest of the restore still works.
+    assert _get_picture(server, pic.id) is not None
+
+
+def test_restoring_a_current_snapshot_also_leaves_no_api_tokens(server):
+    """A snapshot stamped at head restores with its tokens cleared too.
+
+    The clearing is a property of the restore path, not a side effect of a
+    schema upgrade, so it does not depend on where the snapshot's revision sits
+    relative to the migration that clears tokens. This snapshot is stamped at
+    head, so no migration runs during the restore and the restore path is the
+    only thing that can clear the rows.
+    """
+    _create_file(server, "token_snapshot_current.jpg")
+    pic = _add_picture(server, filename="token_snapshot_current.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _add_tokens_at_head(conn):
+        _add_tokens_stamped_before_the_reset(conn)
+        _stamp_snapshot_at_head(conn)
+
+    _rewrite_snapshot(server, cp, _add_tokens_at_head)
+    assert _snapshot_token_count(server, cp) == 2
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    assert _live_token_count(server) == 0, (
+        "a restore always leaves the vault with no API tokens, including for a "
+        "snapshot taken by the current release"
+    )
+    # Over-blocking is its own regression: the picture data still restores.
+    assert _get_picture(server, pic.id) is not None
+
+
+def test_restoring_a_snapshot_clears_guest_sessions_and_scores(server):
+    """Guest sessions and scores go with the tokens they reference.
+
+    Both tables key on a token id, and SQLite reuses the lowest free integer
+    primary key, so a row left behind would come to describe whichever token is
+    created next.
+    """
+    _create_file(server, "token_snapshot_guests.jpg")
+    pic = _add_picture(server, filename="token_snapshot_guests.jpg", description="keep")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _add_tokens_and_guests(conn):
+        _add_tokens_stamped_before_the_reset(conn)
+        _add_guest_rows(conn)
+        _stamp_snapshot_at_head(conn)
+
+    _rewrite_snapshot(server, cp, _add_tokens_and_guests)
+    assert _snapshot_token_count(server, cp) == 2
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    assert _live_token_count(server) == 0
+    assert _live_guest_row_counts(server) == (0, 0), (
+        "guest sessions and scores must not outlive the tokens they reference"
+    )
+    # The restore is otherwise unharmed.
+    restored = _get_picture(server, pic.id)
+    assert restored is not None
+    assert restored.description == "keep"

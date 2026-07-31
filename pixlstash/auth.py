@@ -6,6 +6,7 @@ import secrets
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -231,6 +232,36 @@ def is_loopback_ip(ip: str) -> bool:
         return ip == _TESTCLIENT_HOST
 
 
+def is_unscoped_owner_token(token: UserToken) -> bool:
+    """Return True when *token* grants full, unrestricted owner access.
+
+    An owner credential is ``ALL`` scope with **no** resource restriction. A
+    ``READ`` token and any resource-restricted token are narrower and must not
+    be treated as the owner.
+
+    This is the single spelling of that rule. It matches what
+    :meth:`AuthService.require_unscoped_owner` derives from ``request.state``
+    and what the request middleware applies to a matched token, so the
+    WebSocket handshake and the login endpoint cannot drift from it.
+    """
+    return token.scope == "ALL" and token.resource_type is None
+
+
+def is_token_expired(token: UserToken, now: Optional[datetime] = None) -> bool:
+    """Return True when *token* has passed its ``expires_at`` timestamp.
+
+    A token with no ``expires_at`` never expires. *now* defaults to the current
+    UTC time; ``expires_at`` is stored naive-UTC.
+
+    The comparison is inclusive: a token whose ``expires_at`` is exactly *now*
+    has expired. The two checks this replaced disagreed on that boundary, and
+    the stricter reading is the one that matches the field's meaning.
+    """
+    if token.expires_at is None:
+        return False
+    return token.expires_at <= (now if now is not None else datetime.utcnow())
+
+
 @dataclass
 class TokenScope:
     """Scope restriction carried on request.state for token-authenticated requests."""
@@ -268,6 +299,16 @@ class AuthService:
         self._server_config_path = server_config_path
         self._logger = logger
         self.active_session_ids: dict[str, int] = {}
+        # Which token minted which session, in both directions, so a session can
+        # be ended in O(1) when its token is removed (see _register_session /
+        # _drop_sessions_for_tokens). Sessions from a password login or the
+        # seeded desktop session have no token and appear in neither map.
+        # Guarded by _session_lock. That lock and _token_cache_lock are always
+        # taken separately, one after the other, never nested, so there is no
+        # lock ordering to get wrong.
+        self._sessions_by_token_id: dict[int, set[str]] = {}
+        self._token_id_by_session: dict[str, int] = {}
+        self._session_lock = threading.Lock()
         # The pre-authenticated Electron desktop owner session, if seeded (see
         # seed_desktop_session). It grants full owner access and is therefore
         # pinned to local connections only: the desktop window reaches the
@@ -284,6 +325,11 @@ class AuthService:
         self._token_cache: dict[str, tuple[UserToken, float]] = {}
         self._TOKEN_CACHE_TTL = 300.0  # seconds
         self._token_cache_lock = threading.Lock()
+        # Generation counter, bumped by every _flush_token_cache(). A lookup
+        # that began before a token was removed must not install its now-stale
+        # result afterwards; it samples this before reading and re-checks it
+        # before writing. Guarded by _token_cache_lock.
+        self._token_cache_epoch: int = 0
         # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
         # Entries expire after _GUEST_SESSION_INACTIVE_TTL (30 days) and are pruned lazily
         # in record_guest_activity().  When the cache reaches _guest_max_tracked_sessions
@@ -346,6 +392,98 @@ class AuthService:
             for sid in expired:
                 del self._guest_sessions[sid]
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
+
+    def _register_session(
+        self, session_id: str, user_id: int, token_id: Optional[int] = None
+    ) -> None:
+        """Record an authenticated session and the token that created it.
+
+        Passing *token_id* links the session to that token so
+        :meth:`_drop_sessions_for_tokens` can end it if the token is later
+        removed, keeping a session's lifetime within its credential's. A
+        password login and the seeded desktop session pass ``None`` and are
+        unaffected by token removal.
+        """
+        with self._session_lock:
+            self.active_session_ids[session_id] = user_id
+            if token_id is not None:
+                self._sessions_by_token_id.setdefault(token_id, set()).add(session_id)
+                self._token_id_by_session[session_id] = token_id
+
+    def _forget_session(self, session_id: str) -> None:
+        """Forget a single session and its token link (used by logout)."""
+        with self._session_lock:
+            self.active_session_ids.pop(session_id, None)
+            token_id = self._token_id_by_session.pop(session_id, None)
+            if token_id is not None:
+                sessions = self._sessions_by_token_id.get(token_id)
+                if sessions is not None:
+                    sessions.discard(session_id)
+                    if not sessions:
+                        del self._sessions_by_token_id[token_id]
+
+    def _drop_sessions_for_tokens(self, token_ids: Iterable[int]) -> int:
+        """End every session created from one of *token_ids*.
+
+        Sessions created by any other credential are left untouched. Returns
+        the number of sessions ended.
+        """
+        dropped = 0
+        with self._session_lock:
+            for token_id in token_ids:
+                for session_id in self._sessions_by_token_id.pop(token_id, set()):
+                    self._token_id_by_session.pop(session_id, None)
+                    if self.active_session_ids.pop(session_id, None) is not None:
+                        dropped += 1
+        return dropped
+
+    def _confirm_session_token_still_exists(
+        self, session_id: str, token_id: int
+    ) -> None:
+        """Undo a just-registered session if its token was removed mid-login.
+
+        A session stays within the lifetime of the token that created it.
+        Verifying a token takes a bcrypt call per candidate row plus a database
+        round trip, so a removal can land between the read that matched the
+        token and :meth:`_register_session`, which is before this session
+        exists for that removal's sweep to find.
+
+        Re-reading the row *after* registering settles that ordering rather
+        than narrowing it, because the database task queue serialises the two
+        reads against the removal's delete:
+
+        * If the session is registered before the removal's sweep, the sweep
+          finds and ends it.
+        * Otherwise the sweep ran first, which means its delete had already
+          committed, so this re-read cannot see the row and ends the session
+          here.
+
+        There is no third ordering, so exactly one of the two always fires.
+        """
+        still_exists = self._db.run_task(
+            lambda session, tid=token_id: session.get(UserToken, tid) is not None,
+            priority=DBPriority.IMMEDIATE,
+        )
+        if still_exists:
+            return
+        self._forget_session(session_id)
+        self._logger.warning(
+            "Discarded a session for token id %s: the token was removed while "
+            "the sign-in was in progress.",
+            token_id,
+        )
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    def _clear_all_sessions(self) -> None:
+        """End every active session, including the seeded desktop session.
+
+        Used by the credential-changing paths (password change, password
+        removal), where no existing session should survive.
+        """
+        with self._session_lock:
+            self.active_session_ids = {}
+            self._sessions_by_token_id = {}
+            self._token_id_by_session = {}
 
     def ensure_secure_when_required(self, request: Request):
         if not self._server_config.get("require_ssl", False):
@@ -573,7 +711,7 @@ class AuthService:
                 "Could not seed desktop session: failed to ensure an owner user."
             )
             return None
-        self.active_session_ids[token] = user.id
+        self._register_session(token, user.id)
         self._desktop_session_token = token
         self._logger.info(
             "Seeded a pre-authenticated desktop session for the local owner."
@@ -750,7 +888,7 @@ class AuthService:
         self.user = user
         self.password_hash = None
         self.username = None
-        self.active_session_ids = {}
+        self._clear_all_sessions()
         removed_any = False
         if "PASSWORD_HASH" in self._server_config:
             del self._server_config["PASSWORD_HASH"]
@@ -787,6 +925,15 @@ class AuthService:
 
         Results are cached for _TOKEN_CACHE_TTL seconds to avoid a bcrypt call
         on every request (bcrypt is intentionally slow ~200 ms).
+
+        The database read is the authority and every removal path commits
+        before calling :meth:`_flush_token_cache`, so a lookup that starts
+        after a removal sees it. The one ordering that would slip through is a
+        lookup that read the row *before* the delete committed and installed it
+        in the cache *after* the flush, which the cache fast path would then
+        serve for the rest of the TTL without consulting the database. The
+        epoch is sampled before the read and re-checked before the write to
+        rule that out.
         """
         if not token_value:
             return None
@@ -795,15 +942,15 @@ class AuthService:
         digest = hashlib.sha256(token_value.encode()).hexdigest()
         now_mono = time.monotonic()
         with self._token_cache_lock:
+            # Sampled before the database read below, so any removal that
+            # lands from here on moves the epoch and blocks the write.
+            epoch_at_start = self._token_cache_epoch
             cached = self._token_cache.get(digest)
             if cached is not None:
                 token_obj, expires_mono = cached
                 if now_mono < expires_mono:
                     # Validate token hasn't been expired server-side either.
-                    if (
-                        token_obj.expires_at is None
-                        or token_obj.expires_at > datetime.utcnow()
-                    ):
+                    if not is_token_expired(token_obj):
                         return token_obj
                 # Cache entry stale — remove and fall through to verification.
                 self._token_cache.pop(digest, None)
@@ -830,7 +977,7 @@ class AuthService:
         )
         now = datetime.utcnow()
         for token in tokens:
-            if token.expires_at is not None and token.expires_at < now:
+            if is_token_expired(token, now):
                 continue
             if bcrypt.verify(token_value, token.token_hash):
 
@@ -844,17 +991,47 @@ class AuthService:
                 self._db.run_task(
                     update_last_used, token.id, priority=DBPriority.IMMEDIATE
                 )
-                # Populate cache so subsequent requests skip bcrypt.
+                # Populate cache so subsequent requests skip bcrypt, but only
+                # if no token was removed while this lookup was reading and
+                # verifying. The row this lookup saw as live may be gone by
+                # now, and caching it would keep it working for the rest of
+                # the TTL, which is exactly what the removal paths' flush
+                # exists to prevent.
                 with self._token_cache_lock:
-                    self._token_cache[digest] = (
-                        token,
-                        now_mono + self._TOKEN_CACHE_TTL,
-                    )
-                    # Evict entries beyond a reasonable cap to bound memory use.
-                    if len(self._token_cache) > 1000:
-                        self._token_cache.pop(next(iter(self._token_cache)))
+                    if self._token_cache_epoch == epoch_at_start:
+                        self._token_cache[digest] = (
+                            token,
+                            now_mono + self._TOKEN_CACHE_TTL,
+                        )
+                        # Evict entries beyond a reasonable cap to bound memory use.
+                        if len(self._token_cache) > 1000:
+                            self._token_cache.pop(next(iter(self._token_cache)))
+                    else:
+                        self._logger.info(
+                            "Not caching token id=%s: a token was removed while "
+                            "this lookup ran. The next request re-reads the "
+                            "database.",
+                            token.id,
+                        )
                 return token
         return None
+
+    def _flush_token_cache(self) -> None:
+        """Drop every cached verification and invalidate in-flight lookups.
+
+        The single invalidation chokepoint. Every path that removes or changes
+        a token calls this *after* its change has committed, so the next
+        request re-reads the database and sees it.
+
+        Bumping the epoch under the same lock is what makes that sound: a
+        lookup already in flight sampled the epoch before its read and will
+        refuse to install its result now that the epoch has moved. Clearing
+        without bumping would leave that lookup free to write the row it read
+        moments ago straight back into the cache.
+        """
+        with self._token_cache_lock:
+            self._token_cache.clear()
+            self._token_cache_epoch += 1
 
     def _user_id_from_bearer(self, request: Request) -> Optional[int]:
         """Validate a Bearer token from the Authorization header and return the user id."""
@@ -993,8 +1170,9 @@ class AuthService:
         if matched is not None:
             user = self.get_user()
             if user is not None:
-                is_owner = matched.scope == "ALL" and matched.resource_type is None
-                return WebSocketAuth(user_id=user.id, is_owner=is_owner)
+                return WebSocketAuth(
+                    user_id=user.id, is_owner=is_unscoped_owner_token(matched)
+                )
         return None
 
     def is_websocket_origin_allowed(
@@ -1093,7 +1271,7 @@ class AuthService:
         self.user = updated_user
         self.password_hash = updated_user.password_hash
         self.username = updated_user.username
-        self.active_session_ids = {}
+        self._clear_all_sessions()
         return {"status": "success"}
 
     def get_auth_info(self, request: Request) -> dict:
@@ -1307,10 +1485,19 @@ class AuthService:
         self._db.run_task(
             remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
         )
+        # End any session this token created, so access does not outlive the
+        # credential. Taken before (never inside) the token-cache lock, so the
+        # two locks are only ever held one at a time.
+        dropped = self._drop_sessions_for_tokens((token_id,))
+        if dropped:
+            self._logger.info(
+                "Ended %d session(s) created by removed token id %s.",
+                dropped,
+                token_id,
+            )
         # Clear the token cache — we can't map token_id back to the digest key,
         # so flush all entries to ensure the deleted token is not reused.
-        with self._token_cache_lock:
-            self._token_cache.clear()
+        self._flush_token_cache()
         return {"status": "success", "deleted_id": token_id}
 
     def update_token(self, request: Request, token_id: int, watermark: bool):
@@ -1337,8 +1524,7 @@ class AuthService:
             _update, user_id, token_id, watermark, priority=DBPriority.IMMEDIATE
         )
         # Flush the token cache so the updated watermark setting takes effect immediately.
-        with self._token_cache_lock:
-            self._token_cache.clear()
+        self._flush_token_cache()
         return {"status": "success", "id": token.id, "watermark": token.watermark}
 
     def revoke_tokens_for_resource(
@@ -1357,7 +1543,7 @@ class AuthService:
                 status_code=403, detail="Scoped tokens cannot revoke tokens"
             )
 
-        def _revoke(session: Session, user_id: int, rt: str, rid: int) -> int:
+        def _revoke(session: Session, user_id: int, rt: str, rid: int) -> list[int]:
             tokens = session.exec(
                 select(UserToken).where(
                     UserToken.user_id == user_id,
@@ -1365,18 +1551,27 @@ class AuthService:
                     UserToken.resource_id == rid,
                 )
             ).all()
-            count = len(tokens)
+            token_ids = [t.id for t in tokens if t.id is not None]
             for t in tokens:
                 session.delete(t)
             session.commit()
-            return count
+            return token_ids
 
-        deleted = self._db.run_task(
+        deleted_ids = self._db.run_task(
             _revoke, user_id, resource_type, resource_id, priority=DBPriority.IMMEDIATE
         )
-        with self._token_cache_lock:
-            self._token_cache.clear()
-        return {"status": "success", "deleted_count": deleted}
+        # End any session these tokens created (see delete_token). Sessions from
+        # other credentials are untouched. Taken outside the token-cache lock.
+        dropped = self._drop_sessions_for_tokens(deleted_ids)
+        if dropped:
+            self._logger.info(
+                "Ended %d session(s) created by tokens revoked for %s %s.",
+                dropped,
+                resource_type,
+                resource_id,
+            )
+        self._flush_token_cache()
+        return {"status": "success", "deleted_count": len(deleted_ids)}
 
     def get_shared_resource_ids(self, request: Request, resource_type: str):
         """Return the set of resource_ids for which the user has active READ tokens."""
@@ -1489,6 +1684,7 @@ class AuthService:
                 detail="Password authentication is disabled on this server.",
             )
 
+        session_token_id: Optional[int] = None
         if request.token:
             user = self.get_user()
             if not user:
@@ -1507,8 +1703,30 @@ class AuthService:
                 if bcrypt.verify(request.token, token.token_hash):
                     matched_token = token
                     break
-            if matched_token is None:
+            # Signing in requires a credential with full, unscoped owner
+            # authority: an unexpired ALL-scope token with no resource
+            # restriction. This is the rule require_unscoped_owner and the
+            # request middleware apply (is_unscoped_owner_token /
+            # is_token_expired). A narrower or expired token is refused with
+            # the same status and body as an unrecognised one, so the response
+            # does not tell the two apart.
+            if (
+                matched_token is None
+                or is_token_expired(matched_token)
+                or not is_unscoped_owner_token(matched_token)
+            ):
+                if matched_token is not None:
+                    self._logger.warning(
+                        "Refused a session for token id %s: logging in requires "
+                        "an unexpired, unrestricted owner token (scope=%s, "
+                        "resource_type=%s, expires_at=%s).",
+                        matched_token.id,
+                        matched_token.scope,
+                        matched_token.resource_type,
+                        matched_token.expires_at,
+                    )
                 raise HTTPException(status_code=401, detail="Invalid token")
+            session_token_id = matched_token.id
 
             def update_token_last_used(session: Session, token_id: int):
                 db_token = session.get(UserToken, token_id)
@@ -1587,7 +1805,9 @@ class AuthService:
         session_id = str(uuid.uuid4())
         if not user or user.id is None:
             raise HTTPException(status_code=500, detail="User not found")
-        self.active_session_ids[session_id] = user.id
+        self._register_session(session_id, user.id, token_id=session_token_id)
+        if session_token_id is not None:
+            self._confirm_session_token_still_exists(session_id, session_token_id)
 
         cookie_samesite = self._server_config.get("cookie_samesite", "Lax")
         cookie_secure = self._server_config.get("cookie_secure", False)
@@ -1638,8 +1858,8 @@ class AuthService:
 
     def logout(self, response: Response, request: Request):
         session_id = request.cookies.get("session_id")
-        if session_id in self.active_session_ids:
-            self.active_session_ids.pop(session_id, None)
+        if session_id:
+            self._forget_session(session_id)
         response.delete_cookie("session_id", path="/")
         return {"message": "Logged out successfully."}
 
