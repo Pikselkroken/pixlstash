@@ -52,8 +52,8 @@ jobs:
           # immutable provenance handle. Nothing consumes either tag directly —
           # signing jobs pin the digest.
           tags: |
-            ghcr.io/${{ github.repository_owner }}/certum-signer:latest
-            ghcr.io/${{ github.repository_owner }}/certum-signer:${{ github.sha }}
+            ghcr.io/pikselkroken/certum-signer:latest
+            ghcr.io/pikselkroken/certum-signer:${{ github.sha }}
 
       - name: Report image digest
         env:
@@ -63,7 +63,7 @@ jobs:
             echo "### certum-signer image published"
             echo ""
             echo '```'
-            echo "ghcr.io/${{ github.repository_owner }}/certum-signer@${DIGEST}"
+            echo "ghcr.io/pikselkroken/certum-signer@${DIGEST}"
             echo '```'
             echo ""
             echo "To roll this out, update the digest in electron.yml,"
