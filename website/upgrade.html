@@ -307,21 +307,20 @@
 
       <a class="whatsnew-banner" href="whatsnew.html">
         <div>
-          <span class="whatsnew-kicker">New in 1.5</span>
+          <span class="whatsnew-kicker">New in 1.8</span>
           <h2 class="whatsnew-title">
             Explore what changed before you upgrade
           </h2>
           <p class="whatsnew-copy">
-            See automatic snapshots, full and selective restore, breadcrumb
-            navigation, drag characters &amp; sets between projects, and the new
-            snapshot API in one focused walkthrough with screenshots.
+            Try the new justified grid layout, background imports, Scrapheap delete and auto-empty, the
+            Agreement chart.
           </p>
           <span class="whatsnew-cta">Open the What's New page →</span>
         </div>
         <div class="whatsnew-media">
           <img
-            src="assets/ScreenshotSnapshots.jpg"
-            alt="PixlStash 1.5: snapshots and easy restore"
+            src="assets/ScreenshotsJustified.jpg"
+            alt="PixlStash 1.8: the justified grid layout"
           />
         </div>
       </a>
@@ -663,8 +662,20 @@
         .then(function (releases) {
           if (!releases.length) return;
 
+          // Only ever promote stable releases. Pre-releases (rc/alpha/beta/dev)
+          // and drafts are flagged on the API, and the tag shape is checked too
+          // in case a pre-release was published without the flag set.
+          var stable = releases.filter(function (rel) {
+            return (
+              !rel.prerelease &&
+              !rel.draft &&
+              /^v?\d+\.\d+\.\d+$/.test(rel.tag_name)
+            );
+          });
+          if (!stable.length) return;
+
           // Update header with latest release version + date.
-          var latest = releases[0];
+          var latest = stable[0];
           var latestVersion = latest.tag_name.replace(/^v/, "");
           var date = latest.published_at
             ? new Date(latest.published_at).toLocaleDateString("en-GB", {
@@ -684,9 +695,8 @@
           if (!userVersionStr) return;
 
           // Keep only final releases (x.y.z) strictly newer than the user's.
-          var newer = releases.filter(function (rel) {
-            var v = rel.tag_name.replace(/^v/, "");
-            return /^\d+\.\d+\.\d+$/.test(v) && isNewer(userVersionStr, v);
+          var newer = stable.filter(function (rel) {
+            return isNewer(userVersionStr, rel.tag_name.replace(/^v/, ""));
           });
           if (!newer.length) return;
 
