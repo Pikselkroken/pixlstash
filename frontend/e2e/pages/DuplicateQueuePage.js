@@ -39,14 +39,42 @@ export class DuplicateQueuePage {
     this.sidebarDot = this.sidebarRow.locator('.sidebar-dedup-dot')
   }
 
-  /** Open the queue by route and wait for a group (or the done state). */
+  /** Open the queue by route and wait for it to settle. */
   async goto() {
     await this.page.goto('/duplicates')
     await expect(this.root).toBeVisible()
-    await this.page
-      .locator('.grow, .qdone')
-      .first()
-      .waitFor({ state: 'visible' })
+    await this.waitForSettled()
+  }
+
+  /**
+   * Wait until the queue has stopped changing under the test.
+   *
+   * `.grow, .qdone` is NOT a readiness signal on its own, and treating it as
+   * one is the race behind the intermittent "C opens Compare" failure. Opening
+   * the queue *queues a scan* (`openQueue`), so the first page can legitimately
+   * come back empty and paint "Queue clear" before the scan has committed its
+   * groups; the store's 2s count poll then reloads while the list is empty and
+   * the rows appear a moment later. A key pressed on that empty frame is
+   * silently dropped, because the key model acts on `store.focusedGroup` and
+   * there is none.
+   *
+   * So a focused row means ready, and an empty queue only counts as ready once
+   * it has stayed empty across the poll that would have refilled it.
+   */
+  async waitForSettled({ timeout = 20_000 } = {}) {
+    await expect
+      .poll(
+        async () => {
+          if ((await this.focusedRow.count()) > 0) return 'ready'
+          if ((await this.doneState.count()) === 0) return 'loading'
+          // Longer than the store's 2s refill poll, so a queue that is only
+          // momentarily empty resolves as 'ready' on this same tick.
+          await this.page.waitForTimeout(2_500)
+          return (await this.focusedRow.count()) > 0 ? 'ready' : 'empty'
+        },
+        { timeout, intervals: Array(40).fill(250) },
+      )
+      .not.toBe('loading')
   }
 
   /**
