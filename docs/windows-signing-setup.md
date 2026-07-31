@@ -111,6 +111,12 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
 
 ## Operations
 
+- **Every release tag now needs two manual approvals.** Pushing a `v*` tag is
+  no longer fire-and-forget: **Build Electron Desktop App** and **Build
+  Windows Installer** each pause at their sign job until the `windows-signing`
+  environment's required reviewer approves the deployment (Actions → the run →
+  "Review deployments"). Nothing signed attaches until both are approved; the
+  builds themselves run first, so the prompts appear once each build finishes.
 - **Bumping the signer image** (new SimplySign or jsign version): edit the
   Dockerfile args + sha256 pins (Certum publishes no checksums, so re-verify
   the new SimplySign hash from a second network vantage before merging) →
