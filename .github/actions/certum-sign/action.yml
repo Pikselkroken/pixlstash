@@ -257,10 +257,27 @@ runs:
           # signing with the wrong cert in a multi-cert account).
           if [ -n "${CERTUM_CERT_FINGERPRINT:-}" ]; then
             osslsigncode extract-signature -in "$f" -out "$RUNNER_TEMP/sig.der" >/dev/null
-            actual="$(openssl pkcs7 -inform DER -in "$RUNNER_TEMP/sig.der" -print_certs 2>/dev/null \
-              | openssl x509 -noout -fingerprint -sha256 2>/dev/null \
+            # The PKCS#7 cert bag is NOT leaf-first (Certum puts the CA chain
+            # ahead of the signer, so naively reading the first cert pins the
+            # intermediate). Split the bag and identify the leaf structurally:
+            # the one certificate whose subject is no cert's issuer.
+            rm -rf "$RUNNER_TEMP/p7certs"; mkdir -p "$RUNNER_TEMP/p7certs"
+            openssl pkcs7 -inform DER -in "$RUNNER_TEMP/sig.der" -print_certs 2>/dev/null \
+              | awk -v d="$RUNNER_TEMP/p7certs" '/BEGIN CERTIFICATE/{n++; keep=1} keep{print > (d"/cert"n".pem")} /END CERTIFICATE/{keep=0}'
+            issuers="$(for c in "$RUNNER_TEMP/p7certs"/cert*.pem; do openssl x509 -noout -issuer -in "$c"; done | sed 's/^issuer=//' | sort -u)"
+            leaf=""; leaf_count=0
+            for c in "$RUNNER_TEMP/p7certs"/cert*.pem; do
+              subj="$(openssl x509 -noout -subject -in "$c" | sed 's/^subject=//')"
+              printf '%s\n' "$issuers" | grep -qxF "$subj" && continue
+              leaf="$c"; leaf_count=$((leaf_count + 1))
+            done
+            [ "$leaf_count" = 1 ] || { echo "::error title=Cannot identify signer::expected exactly 1 leaf certificate in the signature, found $leaf_count for $f"; exit 1; }
+            actual="$(openssl x509 -noout -fingerprint -sha256 -in "$leaf" \
               | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
-            expected="$(printf '%s' "$CERTUM_CERT_FINGERPRINT" | sed 's/://g' | tr '[:upper:]' '[:lower:]')"
+            # Same normalization as `actual`, tolerating a pasted openssl
+            # output line ("sha256 Fingerprint=AA:BB:..."): drop any prefix up
+            # to '=', then colons and case.
+            expected="$(printf '%s' "$CERTUM_CERT_FINGERPRINT" | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
             [ "$actual" = "$expected" ] || { echo "::error title=Wrong signing certificate::leaf fingerprint $actual != expected $expected for $f"; exit 1; }
             echo "leaf certificate fingerprint matches"
           fi
