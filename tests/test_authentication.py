@@ -420,11 +420,11 @@ def test_a_token_removed_mid_login_leaves_no_usable_session(server, monkeypatch)
             assert "session_id" not in response.cookies
             assert racer.get(f"{API_PREFIX}/protected").status_code == 401
 
-    # No session is left pointing at a token id that no removal path could
-    # reach again. (The owner's own password session is still live and is
-    # correctly not linked to any token.)
-    assert token_id not in server.auth._sessions_by_token_id
-    assert token_id not in server.auth._token_id_by_session.values()
+    # No session is left pointing at a token that no removal path could reach
+    # again. (The owner's own password session is still live and is correctly
+    # not linked to any token.)
+    assert server.auth._sessions_by_token_public_id == {}
+    assert server.auth._token_public_id_by_session == {}
 
 
 # --- A removed token stops authenticating straight away ---------------------

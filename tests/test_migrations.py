@@ -660,6 +660,215 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
         assert after["pictures"] == before["pictures"] == 1
 
 
+# ---------------------------------------------------------------------------
+# 0090 — usertoken.public_id
+# ---------------------------------------------------------------------------
+
+_REVISION_BEFORE_PUBLIC_ID = "0089_add_dedupverdict_reopen_batch_id"
+# The three indexes the table already carried. They are asserted after the
+# migration because dropping and re-creating the table (the ``AUTOINCREMENT``
+# route that was rejected in favour of this additive column) would have taken
+# them with it silently — losing ``ix_usertoken_token_prefix`` in particular
+# would deoptimise the token lookup path rather than fail visibly.
+_PRE_EXISTING_TOKEN_INDEXES = {
+    "ix_usertoken_user_id",
+    "ix_usertoken_token_hash",
+    "ix_usertoken_token_prefix",
+}
+
+
+def _usertoken_shape(db_path):
+    """Return the rows, indexes and foreign keys of ``usertoken``."""
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        return {
+            "rows": conn.execute(
+                "SELECT id, token_hash, public_id FROM usertoken ORDER BY id"
+            ).fetchall(),
+            "indexes": {
+                row[1]: bool(row[2])
+                for row in conn.execute("PRAGMA index_list(usertoken)")
+            },
+            "foreign_keys": conn.execute(
+                "PRAGMA foreign_key_list(usertoken)"
+            ).fetchall(),
+            "guest_session": conn.execute(
+                "SELECT session_id, token_id FROM guest_session"
+            ).fetchall(),
+            "guest_score": conn.execute(
+                "SELECT id, token_id FROM guest_score"
+            ).fetchall(),
+        }
+
+
+def test_0090_backfills_public_id_without_disturbing_existing_tokens():
+    """Existing tokens gain a distinct ``public_id`` and change in no other way.
+
+    The column exists so a reference that outlives a token row cannot come to
+    name a *different* token: SQLite hands out the lowest free integer primary
+    key, so a deleted token's id is reissued to the next one created. The
+    migration is additive precisely so that fixing that costs nothing else —
+    the ids, the hashes, the foreign key and all three pre-existing indexes are
+    asserted here to pin that no table rebuild happened.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        stepped = _run_alembic(
+            ["upgrade", _REVISION_BEFORE_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+        )
+        assert stepped.returncode == 0, (
+            f"upgrade to {_REVISION_BEFORE_PUBLIC_ID} failed:\n"
+            f"stdout: {stepped.stdout}\nstderr: {stepped.stderr}"
+        )
+        _seed_pre_reset_rows(db_path)
+        # A second and third token, so "every row gets its own id" has
+        # something to say.
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            for token_id in (2, 5):
+                _insert_minimal_row(
+                    conn,
+                    "usertoken",
+                    id=token_id,
+                    user_id=1,
+                    token_hash=f"hash-{token_id}",
+                    token_prefix=f"prefix{token_id}",
+                    scope="ALL",
+                    created_at="2026-01-01 00:00:00",
+                )
+            conn.commit()
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"alembic upgrade head failed:\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        shape = _usertoken_shape(db_path)
+
+        # Ids and hashes are untouched — this is an added column, not a rebuild.
+        assert [(row[0], row[1]) for row in shape["rows"]] == [
+            (1, "hash-1"),
+            (2, "hash-2"),
+            (5, "hash-5"),
+        ]
+
+        public_ids = [row[2] for row in shape["rows"]]
+        assert all(pid for pid in public_ids), (
+            f"every existing token must be backfilled, got {public_ids}"
+        )
+        assert len(set(public_ids)) == len(public_ids), (
+            f"each token must get its own public id, got {public_ids}"
+        )
+        assert all(len(pid) == 32 for pid in public_ids), (
+            "the backfill must produce the same 32-hex-character shape as the "
+            f"application's new_token_public_id, got {public_ids}"
+        )
+
+        # The unique index exists and is unique...
+        assert shape["indexes"].get("ix_usertoken_public_id") is True
+        # ...and the three pre-existing indexes plus the foreign key survived.
+        assert _PRE_EXISTING_TOKEN_INDEXES <= set(shape["indexes"])
+        assert shape["foreign_keys"] == [
+            (0, 0, "user", "user_id", "id", "NO ACTION", "CASCADE", "NONE")
+        ]
+
+        # The guest rows still resolve against their token.
+        assert shape["guest_session"] == [("sess-1", 1)]
+        assert shape["guest_score"] == [(1, 1)]
+
+
+def test_0090_public_id_uniqueness_is_enforced():
+    """Two tokens cannot share a public id — the index is a real constraint."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"alembic upgrade head failed:\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            _insert_minimal_row(conn, "user", id=1)
+            for token_id in (1, 2):
+                _insert_minimal_row(
+                    conn,
+                    "usertoken",
+                    id=token_id,
+                    user_id=1,
+                    token_hash=f"hash-{token_id}",
+                    scope="ALL",
+                    created_at="2026-01-01 00:00:00",
+                    public_id=f"pub-{token_id}",
+                )
+            conn.commit()
+            try:
+                conn.execute("UPDATE usertoken SET public_id = 'pub-1' WHERE id = 2")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise AssertionError(
+                    "usertoken.public_id must be unique; the duplicate was accepted"
+                )
+
+
+def test_0090_replay_does_not_reissue_existing_public_ids():
+    """Re-running the migration leaves every existing public id alone.
+
+    The stamp-back recovery route for a pre-splice development database
+    (``test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085``)
+    replays every revision from 0086 forward over a database that has already
+    run them. If the backfill were unconditional it would hand every token a
+    *new* identity on that replay, which is exactly the "an identifier came to
+    mean something else" failure the column exists to prevent — and it would
+    orphan every session the running server had linked to those tokens.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        assert (
+            _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR).returncode == 0
+        )
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            _insert_minimal_row(conn, "user", id=1)
+            _insert_minimal_row(
+                conn,
+                "usertoken",
+                id=1,
+                user_id=1,
+                token_hash="hash-1",
+                scope="ALL",
+                created_at="2026-01-01 00:00:00",
+                public_id="a" * 32,
+            )
+            conn.commit()
+        before = _usertoken_shape(db_path)["rows"]
+        assert before == [(1, "hash-1", "a" * 32)]
+
+        # Stamp back rather than downgrade: a downgrade drops the column, so it
+        # could not show whether the backfill respects an existing value. This
+        # is the same recovery route the pre-splice test documents.
+        stamped = _run_alembic(
+            ["stamp", _REVISION_BEFORE_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+        )
+        assert stamped.returncode == 0, (
+            f"stamp back failed:\nstdout: {stamped.stdout}\nstderr: {stamped.stderr}"
+        )
+        replayed = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert replayed.returncode == 0, (
+            "re-running 0090 over an already-migrated database must be a no-op, "
+            f"not an error:\nstdout: {replayed.stdout}\nstderr: {replayed.stderr}"
+        )
+        assert _usertoken_shape(db_path)["rows"] == before, (
+            "a replay must not reissue public ids to tokens that already have one"
+        )
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 

@@ -306,8 +306,17 @@ class AuthService:
         # Guarded by _session_lock. That lock and _token_cache_lock are always
         # taken separately, one after the other, never nested, so there is no
         # lock ordering to get wrong.
-        self._sessions_by_token_id: dict[int, set[str]] = {}
-        self._token_id_by_session: dict[str, int] = {}
+        #
+        # Keyed on ``UserToken.public_id``, never on the integer primary key.
+        # A session outlives the request that created it, and the integer id is
+        # a plain SQLite rowid alias: delete the token and the next one created
+        # is handed the same id, at which point these maps would name a token
+        # they were never built from. Revoking the right token would then not
+        # end its session, and revoking an unrelated one would end the wrong
+        # session — fail-open. ``public_id`` is random and never reissued, so a
+        # stale key resolves to the same token or to nothing (issue #666).
+        self._sessions_by_token_public_id: dict[str, set[str]] = {}
+        self._token_public_id_by_session: dict[str, str] = {}
         self._session_lock = threading.Lock()
         # The pre-authenticated Electron desktop owner session, if seeded (see
         # seed_desktop_session). It grants full owner access and is therefore
@@ -395,51 +404,60 @@ class AuthService:
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
     def _register_session(
-        self, session_id: str, user_id: int, token_id: Optional[int] = None
+        self, session_id: str, user_id: int, token_public_id: Optional[str] = None
     ) -> None:
         """Record an authenticated session and the token that created it.
 
-        Passing *token_id* links the session to that token so
+        Passing *token_public_id* links the session to that token so
         :meth:`_drop_sessions_for_tokens` can end it if the token is later
         removed, keeping a session's lifetime within its credential's. A
         password login and the seeded desktop session pass ``None`` and are
         unaffected by token removal.
+
+        The link is made on ``UserToken.public_id`` rather than on the integer
+        primary key, because the key has to stay meaningful for as long as the
+        session does and a deleted row's integer id is handed to the next token
+        created (issue #666).
         """
         with self._session_lock:
             self.active_session_ids[session_id] = user_id
-            if token_id is not None:
-                self._sessions_by_token_id.setdefault(token_id, set()).add(session_id)
-                self._token_id_by_session[session_id] = token_id
+            if token_public_id is not None:
+                self._sessions_by_token_public_id.setdefault(
+                    token_public_id, set()
+                ).add(session_id)
+                self._token_public_id_by_session[session_id] = token_public_id
 
     def _forget_session(self, session_id: str) -> None:
         """Forget a single session and its token link (used by logout)."""
         with self._session_lock:
             self.active_session_ids.pop(session_id, None)
-            token_id = self._token_id_by_session.pop(session_id, None)
-            if token_id is not None:
-                sessions = self._sessions_by_token_id.get(token_id)
+            token_public_id = self._token_public_id_by_session.pop(session_id, None)
+            if token_public_id is not None:
+                sessions = self._sessions_by_token_public_id.get(token_public_id)
                 if sessions is not None:
                     sessions.discard(session_id)
                     if not sessions:
-                        del self._sessions_by_token_id[token_id]
+                        del self._sessions_by_token_public_id[token_public_id]
 
-    def _drop_sessions_for_tokens(self, token_ids: Iterable[int]) -> int:
-        """End every session created from one of *token_ids*.
+    def _drop_sessions_for_tokens(self, token_public_ids: Iterable[str]) -> int:
+        """End every session created from one of *token_public_ids*.
 
         Sessions created by any other credential are left untouched. Returns
         the number of sessions ended.
         """
         dropped = 0
         with self._session_lock:
-            for token_id in token_ids:
-                for session_id in self._sessions_by_token_id.pop(token_id, set()):
-                    self._token_id_by_session.pop(session_id, None)
+            for token_public_id in token_public_ids:
+                for session_id in self._sessions_by_token_public_id.pop(
+                    token_public_id, set()
+                ):
+                    self._token_public_id_by_session.pop(session_id, None)
                     if self.active_session_ids.pop(session_id, None) is not None:
                         dropped += 1
         return dropped
 
     def _confirm_session_token_still_exists(
-        self, session_id: str, token_id: int
+        self, session_id: str, token_public_id: str
     ) -> None:
         """Undo a just-registered session if its token was removed mid-login.
 
@@ -470,18 +488,28 @@ class AuthService:
         therefore safe if this read is ever moved off ``run_task``. What it does
         depend on is the sweep running *after* the delete has committed, and on
         registration and sweep sharing ``_session_lock``. Do not reorder either.
+
+        The re-read matches on ``public_id``, so "the same token" means the same
+        token and not merely the same rowid: an integer id can be reissued to a
+        replacement token between the match and this read, which would let a
+        removed credential's session survive by answering to its successor.
         """
         still_exists = self._db.run_task(
-            lambda session, tid=token_id: session.get(UserToken, tid) is not None,
+            lambda session, pid=token_public_id: (
+                session.exec(
+                    select(UserToken).where(UserToken.public_id == pid)
+                ).first()
+                is not None
+            ),
             priority=DBPriority.IMMEDIATE,
         )
         if still_exists:
             return
         self._forget_session(session_id)
         self._logger.warning(
-            "Discarded a session for token id %s: the token was removed while "
+            "Discarded a session for token %s: the token was removed while "
             "the sign-in was in progress.",
-            token_id,
+            token_public_id,
         )
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -493,8 +521,65 @@ class AuthService:
         """
         with self._session_lock:
             self.active_session_ids = {}
-            self._sessions_by_token_id = {}
-            self._token_id_by_session = {}
+            self._sessions_by_token_public_id = {}
+            self._token_public_id_by_session = {}
+
+    def reset_after_restore(self) -> None:
+        """Drop every piece of in-memory authentication state after a restore.
+
+        A full restore replaces the whole database file. Everything this
+        service holds in memory was derived from the *previous* file and now
+        describes rows that either no longer exist or belong to someone else:
+
+        * the token cache would keep authenticating verified tokens for the
+          rest of its TTL, including tokens absent from the restored database;
+        * ``active_session_ids`` and the session maps would keep authenticating
+          sessions established before the swap, against an owner account the
+          restore may have replaced;
+        * the in-memory guest-session counters would keep describing
+          ``guest_session`` rows the swap rolled back;
+        * ``user`` / ``username`` / ``password_hash`` are a cache of the owner
+          row, and a restore can roll the account back to different
+          credentials, so they are re-read from the restored database.
+
+        Requiring a fresh sign-in is the correct outcome, not a cost: restore
+        is owner-only, and the identities the surviving state names have moved.
+
+        The desktop shell's pre-authenticated session is re-seeded afterwards.
+        It is not a stored credential — the shell mints it per launch and the
+        server only registers it — so re-registering it against the restored
+        owner is the honest equivalent of the sign-in every other client has to
+        redo, and it does not leave the local window stranded until a restart.
+
+        **This is not made redundant by ``UserToken.public_id``.** A restored
+        snapshot brings back its *own* ``public_id`` values, so a public id this
+        process still remembers can be absent from the restored database, or —
+        for a snapshot taken from this same vault — present and pointing at a
+        token row whose other columns have since changed. Never-reused ids stop
+        an id from silently naming a *different* token; they cannot make
+        in-memory state that outlived a whole-file swap correct. Both halves of
+        issue #666 are needed.
+
+        Clearing itself touches only in-memory dictionaries. The two database
+        reads that follow it (``ensure_user`` and, when the desktop shell is
+        running, ``seed_desktop_session``) go through the ordinary writer queue,
+        which is why this must be called from the restore path only *after*
+        ``run_control_task(_do_swap)`` has returned — the swap has released
+        ``exclusive_engine_access()`` by then and the engine has been
+        re-created. Calling it from inside the swap would deadlock the request
+        path (see ``services/restore/full_restore.py``).
+        """
+        self._flush_token_cache()
+        self._clear_all_sessions()
+        with self._guest_sessions_lock:
+            self._guest_sessions = {}
+        self._desktop_session_token = None
+        self._logger.info(
+            "Cleared the token cache and every session after a database "
+            "restore; clients must sign in again."
+        )
+        self.ensure_user()
+        self.seed_desktop_session()
 
     def ensure_secure_when_required(self, request: Request):
         if not self._server_config.get("require_ssl", False):
@@ -1546,27 +1631,37 @@ class AuthService:
             token = session.get(UserToken, token_id)
             if token is None or token.user_id != user_id:
                 raise HTTPException(status_code=404, detail="Token not found")
+            # Read the public id out before the delete: it is the key the
+            # session maps are built on, and after the commit the row is gone.
+            public_id = token.public_id
             session.delete(token)
             session.commit()
-            return True
+            return public_id
 
-        self._db.run_task(
+        removed_public_id = self._db.run_task(
             remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
         )
         # End any session this token created, so access does not outlive the
         # credential. Taken before (never inside) the token-cache lock, so the
         # two locks are only ever held one at a time.
-        dropped = self._drop_sessions_for_tokens((token_id,))
+        dropped = (
+            self._drop_sessions_for_tokens((removed_public_id,))
+            if removed_public_id is not None
+            else 0
+        )
         if dropped:
             self._logger.info(
-                "Ended %d session(s) created by removed token id %s.",
+                "Ended %d session(s) created by removed token %s.",
                 dropped,
-                token_id,
+                removed_public_id,
             )
-        # Clear the token cache — we can't map token_id back to the digest key,
-        # so flush all entries to ensure the deleted token is not reused. The
-        # delete has already committed above (run_task is synchronous), so every
-        # subsequent lookup re-reads the database and 401s.
+        # Clear the token cache. The cache is keyed on a digest of the raw
+        # token *value*, and nothing maps a token row back to that digest —
+        # ``public_id`` does not supply it either, so precise eviction would
+        # need a second index maintained at insert time (see §16.5). Flushing
+        # everything is coarse but correct. The delete has already committed
+        # above (run_task is synchronous), so every subsequent lookup re-reads
+        # the database and 401s.
         self._flush_token_cache()
         return {"status": "success", "deleted_id": token_id}
 
@@ -1613,7 +1708,9 @@ class AuthService:
                 status_code=403, detail="Scoped tokens cannot revoke tokens"
             )
 
-        def _revoke(session: Session, user_id: int, rt: str, rid: int) -> list[int]:
+        def _revoke(
+            session: Session, user_id: int, rt: str, rid: int
+        ) -> tuple[int, list[str]]:
             tokens = session.exec(
                 select(UserToken).where(
                     UserToken.user_id == user_id,
@@ -1621,18 +1718,20 @@ class AuthService:
                     UserToken.resource_id == rid,
                 )
             ).all()
-            token_ids = [t.id for t in tokens if t.id is not None]
+            # Public ids, collected before the delete — they key the session
+            # maps, and the rows are gone once this commits.
+            public_ids = [t.public_id for t in tokens if t.public_id is not None]
             for t in tokens:
                 session.delete(t)
             session.commit()
-            return token_ids
+            return len(tokens), public_ids
 
-        deleted_ids = self._db.run_task(
+        deleted_count, deleted_public_ids = self._db.run_task(
             _revoke, user_id, resource_type, resource_id, priority=DBPriority.IMMEDIATE
         )
         # End any session these tokens created (see delete_token). Sessions from
         # other credentials are untouched. Taken outside the token-cache lock.
-        dropped = self._drop_sessions_for_tokens(deleted_ids)
+        dropped = self._drop_sessions_for_tokens(deleted_public_ids)
         if dropped:
             self._logger.info(
                 "Ended %d session(s) created by tokens revoked for %s %s.",
@@ -1641,7 +1740,7 @@ class AuthService:
                 resource_id,
             )
         self._flush_token_cache()
-        return {"status": "success", "deleted_count": len(deleted_ids)}
+        return {"status": "success", "deleted_count": deleted_count}
 
     def get_shared_resource_ids(self, request: Request, resource_type: str):
         """Return the set of resource_ids for which the user has active READ tokens."""
@@ -1754,7 +1853,7 @@ class AuthService:
                 detail="Password authentication is disabled on this server.",
             )
 
-        session_token_id: Optional[int] = None
+        session_token_public_id: Optional[str] = None
         if request.token:
             user = self.get_user()
             if not user:
@@ -1796,7 +1895,22 @@ class AuthService:
                         matched_token.expires_at,
                     )
                 raise HTTPException(status_code=401, detail="Invalid token")
-            session_token_id = matched_token.id
+            if matched_token.public_id is None:
+                # Every row is given a public_id by the model's default factory
+                # and every pre-existing row was backfilled by migration 0090,
+                # so this is only reachable on a database that never ran it. The
+                # session-to-token link is what keeps a session's lifetime
+                # inside its credential's, and it cannot be made on an integer
+                # id that is reissued after deletion — so refuse the sign-in
+                # rather than issue a session that revocation cannot reach.
+                self._logger.error(
+                    "Refused a session for token id %s: the token has no "
+                    "public_id, so its session could not be revoked with it. "
+                    "The database is behind migration 0090.",
+                    matched_token.id,
+                )
+                raise HTTPException(status_code=401, detail="Invalid token")
+            session_token_public_id = matched_token.public_id
 
             def update_token_last_used(session: Session, token_id: int):
                 db_token = session.get(UserToken, token_id)
@@ -1875,9 +1989,13 @@ class AuthService:
         session_id = str(uuid.uuid4())
         if not user or user.id is None:
             raise HTTPException(status_code=500, detail="User not found")
-        self._register_session(session_id, user.id, token_id=session_token_id)
-        if session_token_id is not None:
-            self._confirm_session_token_still_exists(session_id, session_token_id)
+        self._register_session(
+            session_id, user.id, token_public_id=session_token_public_id
+        )
+        if session_token_public_id is not None:
+            self._confirm_session_token_still_exists(
+                session_id, session_token_public_id
+            )
 
         cookie_samesite = self._server_config.get("cookie_samesite", "Lax")
         cookie_secure = self._server_config.get("cookie_secure", False)
