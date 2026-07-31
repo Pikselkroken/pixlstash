@@ -9,12 +9,6 @@ name: Windows Signing Smoke Test
 # Full setup: docs/windows-signing-setup.md.
 
 on:
-  # TEMPORARY: registers this never-run workflow so workflow_dispatch works
-  # pre-merge (GitHub 404s dispatches for unregistered workflows). The paths
-  # filter keeps it from firing on unrelated branch pushes. Revert before merge.
-  push:
-    branches: [ci/certum-windows-signing]
-    paths: [".github/workflows/windows-signing-test.yml"]
   workflow_dispatch:
     inputs:
       debug-screenshots:

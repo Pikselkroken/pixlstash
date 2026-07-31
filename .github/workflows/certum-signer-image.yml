@@ -10,11 +10,7 @@ name: Build Certum Signer Image
 
 on:
   push:
-    # TEMPORARY: ci/certum-windows-signing is listed only to register this
-    # never-run workflow so it fires for the pre-merge bootstrap (GitHub
-    # returns 404 for workflow_dispatch on unregistered workflows).
-    # Revert this commit before merge.
-    branches: [main, ci/certum-windows-signing]
+    branches: [main]
     paths:
       - ".github/docker/certum-signer/**"
       - ".github/workflows/certum-signer-image.yml"
