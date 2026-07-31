@@ -1,3 +1,10 @@
+# [1.8.1] [Security:Critical]
+
+Updating clears every API token as a precaution, so you will need to create replacements from Settings. Any script or integration that signs in with a token stops working until you do, and **existing share links stop working and have to be shared again** with their new values. Your public URL and ComfyUI URL are cleared along with them and need entering again, so replacement share links point where you expect. This is deliberate and applies to every library: a token created before this release cannot be distinguished from one that should not exist, so all of them are reissued rather than some. Password sign-in and the desktop app are unaffected, but **if you have turned password sign-in off on this server, turn it back on before updating** — with no tokens left there would be no other way in.
+
+- Fixed: how API tokens are accepted when signing in. Revoking a token now also ends any session created from it. Please update. We will publish the details once people have had a chance to do so.
+- Restoring a snapshot now also clears your API tokens, whichever snapshot you restore. Create replacements from Settings afterwards and share your links again with their new values.
+
 # [1.8.0] [Security:Moderate]
 
 Smart Scores are recomputed for your whole library the first time you open 1.8.0, so the grid may re-order compared to 1.7. Part of that is a fix: the built-in reference points that score a library with few ratings of its own had stopped loading, so if you have rated only a handful of pictures your scores should be better than before. This is expected, not a bug: the scoring weights are rebalanced so the top of the 1-5 range is reachable again and your best pictures can score like it. Your originals and snapshots are untouched, and the recompute runs in the background in small batches without re-running any AI models, so it stays out of your way.

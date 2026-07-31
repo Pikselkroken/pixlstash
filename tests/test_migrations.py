@@ -318,3 +318,161 @@ def test_alembic_0075_leaves_existing_ground_truth_null():
             assert row[2].startswith("1970-01-01")
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 0086: API tokens, guest rows and stored addresses are cleared
+# ---------------------------------------------------------------------------
+
+_REVISION_BEFORE_TOKEN_RESET = "0085_recompute_smart_score_restored_builtin_anchors"
+
+
+def _insert_minimal_row(conn, table, **overrides):
+    """Insert one row into *table*, filling every NOT NULL column it declares.
+
+    Driven off ``PRAGMA table_info`` rather than a hand-written column list, so
+    it does not go stale the next time a NOT NULL column is added.
+    """
+    columns, values = [], []
+    for _cid, name, col_type, notnull, default, pk in conn.execute(
+        f"PRAGMA table_info({table})"
+    ):
+        if name in overrides:
+            columns.append(name)
+            values.append(overrides[name])
+        elif notnull and not pk and default is None:
+            columns.append(name)
+            values.append(0 if "INT" in col_type.upper() else "")
+    placeholders = ", ".join("?" for _ in values)
+    conn.execute(
+        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", values
+    )
+
+
+def _seed_pre_reset_rows(db_path):
+    """Populate a 0085 database with tokens, guest rows and stored addresses."""
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        row = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            _insert_minimal_row(conn, "user", id=1)
+            row = (1,)
+        conn.execute(
+            "UPDATE user SET public_url = ?, comfyui_url = ? WHERE id = ?",
+            ("https://example.invalid", "http://example.invalid:8188", row[0]),
+        )
+        _insert_minimal_row(
+            conn,
+            "usertoken",
+            id=1,
+            user_id=row[0],
+            token_hash="hash-1",
+            token_prefix="prefix1",
+            scope="ALL",
+            created_at="2026-01-01 00:00:00",
+        )
+        _insert_minimal_row(conn, "picture", id=1, file_path="seed.jpg")
+        conn.execute(
+            "INSERT INTO guest_session "
+            "(session_id, token_id, created_at, last_active_at, cookie_token) "
+            "VALUES ('sess-1', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'ck-1')"
+        )
+        conn.execute(
+            "INSERT INTO guest_score "
+            "(id, session_id, token_id, picture_id, score, scored_at) "
+            "VALUES (1, 'sess-1', 1, 1, 4, '2026-01-01 00:00:00')"
+        )
+        conn.commit()
+
+
+def _counts_and_addresses(db_path):
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        return {
+            "usertoken": conn.execute("SELECT COUNT(*) FROM usertoken").fetchone()[0],
+            "guest_session": conn.execute(
+                "SELECT COUNT(*) FROM guest_session"
+            ).fetchone()[0],
+            "guest_score": conn.execute("SELECT COUNT(*) FROM guest_score").fetchone()[
+                0
+            ],
+            "addresses": conn.execute(
+                "SELECT public_url, comfyui_url FROM user ORDER BY id LIMIT 1"
+            ).fetchone(),
+            "pictures": conn.execute("SELECT COUNT(*) FROM picture").fetchone()[0],
+        }
+
+
+def test_token_reset_clears_tokens_guest_rows_and_stored_addresses():
+    """Upgrading past 0086 empties the token and guest tables and the addresses.
+
+    The guest rows are the point of the child-first order: their foreign keys
+    declare a cascade, but it does not run on the migration's connection, and a
+    reused integer primary key would otherwise re-attach them to whichever
+    token is created next.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        stepped = _run_alembic(
+            ["upgrade", _REVISION_BEFORE_TOKEN_RESET], db_url, _MIGRATIONS_DIR
+        )
+        assert stepped.returncode == 0, (
+            f"upgrade to {_REVISION_BEFORE_TOKEN_RESET} failed:\n"
+            f"stdout: {stepped.stdout}\nstderr: {stepped.stderr}"
+        )
+        _seed_pre_reset_rows(db_path)
+
+        before = _counts_and_addresses(db_path)
+        assert before["usertoken"] == 1
+        assert before["guest_session"] == 1
+        assert before["guest_score"] == 1
+        assert before["addresses"] == (
+            "https://example.invalid",
+            "http://example.invalid:8188",
+        )
+
+        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert result.returncode == 0, (
+            f"alembic upgrade head failed:\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        after = _counts_and_addresses(db_path)
+        assert after["usertoken"] == 0, "tokens must be cleared"
+        assert after["guest_session"] == 0, "guest sessions must be cleared"
+        assert after["guest_score"] == 0, "guest scores must be cleared"
+        assert after["addresses"] == (None, None), "stored addresses must be cleared"
+        # Nothing beyond those is touched.
+        assert after["pictures"] == before["pictures"] == 1
+
+
+def test_token_reset_runs_on_already_empty_tables():
+    """The clear is a no-op on a database with nothing to clear.
+
+    Covers both the empty-table case and re-running the step after a
+    downgrade, which is the only way the migration executes twice.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        first = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert first.returncode == 0, (
+            f"first upgrade failed:\nstdout: {first.stdout}\nstderr: {first.stderr}"
+        )
+        down = _run_alembic(
+            ["downgrade", _REVISION_BEFORE_TOKEN_RESET], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, (
+            f"downgrade failed:\nstdout: {down.stdout}\nstderr: {down.stderr}"
+        )
+        second = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert second.returncode == 0, (
+            f"re-upgrade failed:\nstdout: {second.stdout}\nstderr: {second.stderr}"
+        )
+
+        after = _counts_and_addresses(db_path)
+        assert after["usertoken"] == 0
+        assert after["guest_session"] == 0
+        assert after["guest_score"] == 0
