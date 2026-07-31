@@ -109,6 +109,14 @@
      the edge and the scrim is the supporting cue. */
   --scrim-drawer: rgba(var(--v-theme-scrim), 0.28);
 
+  /* STATE OPACITY — one value, and only one state may legally fade. Disabled
+     controls are exempt from WCAG 1.4.3; nothing else is. There is deliberately
+     NO `--opacity-busy`: group opacity drags a filled variant's white label down
+     with the fill (4.75:1 at full opacity, 3.97 at 0.9, 2.70 at 0.7, 1.67 at 0.38
+     on the light `accent`), so a pending control does not dim. It reads busy
+     through the spinner, `cursor: progress` and `aria-busy`. visual-language.md §11. */
+  --opacity-disabled: 0.38;
+
   /* ---------------------------------------------------------------------------
      COMPONENT DIMENSIONS — fixed component sizes (badges, action bars) that were
      drifting as raw one-offs. Count pills use `primary`/`on-primary` (contrast-

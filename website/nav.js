@@ -63,7 +63,7 @@
         </div>
         <div class="nav-actions">
           <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light / dark theme">${moon}${sun}</button>
-          <a class="demo-btn" href="https://demo.pixlstash.dev?token=MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE" target="_blank" rel="noopener noreferrer">Try demo</a>
+          <a class="demo-btn" href="https://demo.pixlstash.dev?token=o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs" target="_blank" rel="noopener noreferrer">Try demo</a>
           <a class="download-btn" href="install.html">Install now</a>
         </div>`;
 

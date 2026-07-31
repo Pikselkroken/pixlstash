@@ -22,7 +22,7 @@ _SCALAR_ASSETS_SRC = os.path.join(
 # requests out of the box. This token is intentionally public (read-only, demo
 # data); the demo server must list the docs origin in its ``cors_origins``.
 _DEMO_SERVER_URL = "https://demo.pixlstash.dev"
-_DEMO_READONLY_TOKEN = "MWPcUXbn2pRCt-RKYsRsDnkaC6EANar794qXaLwlQwE"
+_DEMO_READONLY_TOKEN = "o75qQ-w0fy_FraPb2sdxcGOVTBoKFmmZwStycljomSs"
 
 
 def _build_server_config(config_path: str, image_root: str) -> None:

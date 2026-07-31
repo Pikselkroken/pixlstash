@@ -689,7 +689,8 @@ User: id, username, password_hash, plus full settings block
        smart_score_penalised_tags, tagger_settings (JSON),
        keep_models_in_memory, max_vram_gb, watermark_image (BLOB), …)
 
-UserToken: id, user_id, token_hash, scope (ALL|READ),
+UserToken: id, public_id (opaque, unique, never reused — §12.2),
+           user_id, token_hash, scope (ALL|READ),
            resource_type, resource_id, expires_at,
            include_attachments, include_description
 
@@ -982,13 +983,46 @@ Selected milestones:
 
 | 0085 | `smart_score` NULL-reset after restoring the built-in anchors |
 
-| 0086 | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
+| 0086_reissue_api_tokens | Clears every `usertoken` row, then `guest_score` and `guest_session` (child first — both reference a token id, and SQLite reuses the lowest free integer primary key), and NULLs `user.public_url` / `user.comfyui_url` so replacement tokens and generated pictures are not sent to a stale address. Shipped in v1.8.1 alongside the sign-in fix in §16: neither the login rule nor the session-to-token link can reach a token row that already exists, so the rows are reissued instead. Data-only |
+
+| 0086_add_operation_log | Append-only `operation` table — the operation log / undo-redo substrate (§21), carrying `batch_id` from day one |
 
 | 0087 | `characterprojectmember` / `picturesetprojectmember` join tables — many-to-many characters and picture sets across projects (#125). Additive: the scalar `project_id` FKs stay and stay populated as the primary project, and the migration backfills one join row per existing assignment |
 
 | 0088 | `dedupgroup` / `dedupgroupmember` / `dedupverdict` / `dedupscan` — the tiered Duplicates queue cache, verdict memory and scan progress (§22.6). Additive, and deliberately no `NULL` reset: tier 1 reuses the existing `pixel_sha` column and the runtime `MissingPixelShaFinder` backfills rows where it is `NULL` (§22.1) |
 
-Current head: `0088_add_dedup_tier_tables`.
+| 0089 | `dedupverdict.reopen_batch_id` — the undo-of-clear correlation key (§22.6). Additive and schema-only; NULL on every existing row is correct |
+
+| 0090 | `usertoken.public_id` — a stable, never-reused identity for a token (#666, see §12.2). Additive: add the column, backfill every row with `lower(hex(randomblob(16)))`, then add the unique index. Existing tokens keep their integer ids, hashes, foreign key and all three pre-existing indexes |
+
+Current head: `0090_add_usertoken_public_id`.
+
+### 12.1 Two revisions numbered 0086, and why the chain was spliced
+
+`0086_reissue_api_tokens` (v1.8.1, from `main`) and `0086_add_operation_log` (1.9 only) were written against `0085` on separate branches, so merging v1.8.1 into the 1.9 line left the chain with **two heads**. It was resolved by re-pointing `0086_add_operation_log.down_revision` at `0086_reissue_api_tokens`, giving the single chain `0085 → 0086_reissue_api_tokens → 0086_add_operation_log → 0087 → 0088 → 0089`.
+
+The splice went that way round because **`0086_reissue_api_tokens` has already run on released v1.8.1 databases**, which are stamped with exactly that identifier. Changing its id or its parent would strand them. `0086_add_operation_log` is unreleased 1.9-only work, so it is the safe side to move. This is the `main`-branch rule in [CLAUDE.md](../CLAUDE.md) applied to a merge: the revision that shipped is immovable.
+
+**Consequence for existing 1.9 development databases.** Alembic only walks *forward* from a database's current revision. A vault that already took the pre-merge path (`0085 → 0086_add_operation_log → … → 0089`) is downstream of the splice, so `alembic upgrade head` is a no-op for it and **it never runs the token clear** — it keeps whatever tokens it had, including any minted through the escalation §16 closes. There is no second reissue migration for this by design (adding one would clear tokens again on every up-to-date install, including v1.8.1 users who have already made replacements). The fix is operational, for dev vaults only:
+
+```
+alembic stamp 0085_recompute_smart_score_restored_builtin_anchors
+alembic upgrade head
+```
+
+Replaying `0086_add_operation_log` through `0090` is safe because all of them are guarded (they inspect existing tables / columns / indexes before creating anything, and 0090's backfill is `WHERE public_id IS NULL`), so the second pass is a no-op. `tests/test_migrations.py::test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085` is the check on that claim, `::test_0090_replay_does_not_reissue_existing_public_ids` is the check for 0090 specifically, and `::test_the_migration_chain_has_exactly_one_head` pins the splice itself.
+
+### 12.2 `usertoken.public_id` — why the token table was *not* rebuilt (0090, #666)
+
+`usertoken.id` is declared `id: int = Field(default=None, primary_key=True)`, which SQLite emits as a plain `INTEGER PRIMARY KEY` — a rowid alias with no `AUTOINCREMENT`. SQLite hands out the lowest free value, so **a deleted token's id is reissued to the next token created**: with tokens 1–5 present, deleting all five and creating one more yields id 1 again. Anything holding that id then names a *different* token than the one it was given, silently. That is fail-open, and it is what 0090 closes.
+
+The fix is an additive column, `public_id`: 128 bits of randomness as lowercase hex (`new_token_public_id` in `db_models/user_token.py`), unique, generated per row and never reissued. A stale reference to it resolves to the same token or to nothing — never to a different one.
+
+**`AUTOINCREMENT` was considered and rejected.** It makes ids monotonic only *within one database file*: its high-water mark lives in `sqlite_sequence`, which is inside the database and is therefore replaced wholesale by a full restore, so a restored older snapshot would go on to reissue ids that in-memory state still remembers — the case §18.5 is actually about. It also cannot be added in place, so it would have meant a create/copy/drop/rename rebuild of `usertoken`, re-declaring the `user_id` foreign key and re-creating `ix_usertoken_user_id`, `ix_usertoken_token_hash` and `ix_usertoken_token_prefix` (a dropped table takes its indexes with it silently; losing the prefix index would deoptimise the token lookup path rather than fail visibly). The additive column avoids all of it, and `tests/test_migrations.py::test_0090_backfills_public_id_without_disturbing_existing_tokens` asserts the foreign key and all three indexes are still there afterwards.
+
+**Why three statements rather than one.** SQLite rejects `ALTER TABLE … ADD COLUMN … UNIQUE` outright ("Cannot add a UNIQUE column"), and it rejects a NOT NULL column whose default is a non-constant expression. So the migration adds the column plain, backfills it in one set-based `UPDATE … SET public_id = lower(hex(randomblob(16))) WHERE public_id IS NULL`, and creates the unique index last. No Python loop, no application logic in the migration. The column stays **nullable** because making it NOT NULL afterwards would again require a rebuild; uniqueness carries the guarantee, and every row the application writes gets a value from the model's default factory. `_do_login` refuses to mint a session for a token with a NULL `public_id` (only reachable on a database that never ran 0090) rather than link the session to a reusable integer.
+
+**Scope.** `public_id` is used by the in-memory session-to-token maps in `AuthService` (§16.5) — the place where a reference outlives the row and the fail-open case lives. `guest_session.token_id` and `guest_score.token_id` deliberately stay on the integer foreign key: their cascade handles the ordinary case, `0086_reissue_api_tokens` and the restore path clear both tables outright, and widening the change to them is extra surface for no additional guarantee today. The REST API also keeps exposing the integer id (`GET`/`DELETE /users/me/token/{id}`); it is a short-lived handle within one request, not a stored reference.
 
 ---
 
@@ -1159,6 +1193,24 @@ Prefix:   /assets/, /share/, /docs/
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
+**Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id and nothing else: a session carries no scope, so every request it authenticates resolves as a full, unscoped owner (`token_scope` stays `None`, and `require_unscoped_owner` passes). Three rules govern that, all enforced in `auth.py`:
+
+1. **Only an owner credential can be exchanged for a session.** `POST /login` with a `token` issues a cookie only for an *unexpired* `ALL`-scope token with **no** `resource_type`. A `READ` token, a resource-restricted token, and an expired token are each refused. The rule has one spelling, the module-level `is_unscoped_owner_token` / `is_token_expired` predicates, shared with the WebSocket handshake (`authenticate_websocket`) and matching what `require_unscoped_owner` derives from `request.state`. A refused exchange returns the same `401 {"detail": "Invalid token"}` as an unrecognised token, so the response does not distinguish the two cases; the reason is logged server-side.
+2. **Removing a token ends the sessions it created.** This is the enforced rule, and it is narrower than "a session never outlives its token" — see the gaps below. `_register_session` records the minting token id in `_sessions_by_token_id` / `_token_id_by_session` (both directions, so lookup and cleanup are O(1)), and every path that removes a token calls `_drop_sessions_for_tokens` with the removed ids before flushing the token cache. That covers `delete_token` and `revoke_tokens_for_resource`. Sessions from a password login and the seeded desktop session carry no token id and are deliberately untouched by token removal; the credential-changing paths (`change_password`, `remove_password_hash`) call `_clear_all_sessions`, which ends everything. `update_token` only toggles `watermark` and does not withdraw access, so it flushes the token cache but keeps sessions. `_session_lock` and `_token_cache_lock` are always taken separately, never nested.
+
+   Matching a token costs a bcrypt call per candidate row plus a database round trip, so a removal can land *between* the read that matched the token and `_register_session`, which is before the sweep has a session to find. `_confirm_session_token_still_exists` re-reads the row immediately after registering and discards the session if it is gone. This settles the ordering rather than narrowing it. `_session_lock` totally orders the registration against the sweep, so there are exactly two cases and no third: either the sweep sees the registration and ends the session, or the sweep ran first — and the sweep only runs after `run_task(remove_token)` has returned, so the delete had already committed before the registration, hence before the re-read starts, and the re-read cannot see the row.
+
+   Note which premise that rests on, because it is **not** queue serialisation. It needs only "a read that starts after a commit observes it", which holds on the writer queue and equally for a WAL read on the read path — the same property §16.4 leans on. The re-read currently uses `run_task`, but it would stay correct if moved to `run_immediate_read_task`. What it does depend on is the sweep running *after* the delete has committed, and on registration and sweep sharing `_session_lock`. Neither may be reordered.
+
+3. **A removed token stops authenticating on the next request.** Verified tokens are cached for `_TOKEN_CACHE_TTL` (300s) so bcrypt does not run per request, and the cache fast path re-checks only `expires_at`, never the database. `_flush_token_cache()` is the single invalidation chokepoint: it clears the cache **and** bumps `_token_cache_epoch`, both under `_token_cache_lock`, and all three mutation paths (`delete_token`, `update_token`, `revoke_tokens_for_resource`) call it after their change has committed. The bump is what makes the clear sound. A lookup already in flight has read its row and spent ~200ms in `bcrypt.verify` holding no lock, so a bare clear would let it write that row straight back afterwards. `_token_from_value` therefore samples the epoch **before** its database read and installs its result only if the epoch has not moved; otherwise it returns the token for the request that already matched it and logs that it declined to cache. Sampling after the read would reintroduce the gap.
+
+**What this does *not* guarantee.** Two ways a session can still outlive its token, both known and neither addressed here:
+
+- **Expiry.** A session created from an owner token that later reaches its `expires_at` persists until logout, a credential change, or restart. Sessions have no independent expiry, and nothing re-checks the token's expiry once the cookie is issued.
+- **Snapshot restore.** Restore replaces `usertoken` rows wholesale rather than going through `delete_token`, so it neither drops the sessions of the tokens it removes nor prevents a restored row from resurrecting a token id.
+
+Both are follow-up work. Do not read rule 2 as covering them.
+
 ### 16.1 Endpoint scope enforcement — declare your route in the registry (SHIPPED)
 
 **Every endpoint that returns or mutates per-object / per-resource data is authorized by the centralised authz gate before the handler runs.** Object authorization is no longer per-handler opt-in: as of the backend authz refactor an endpoint is safe *by omission* — forgetting to think about authorization yields a denied request and a red build, never a leak. This is what finally closes the BOLA-by-omission class that recurred through v1.5.1 (`GET /pictures/{id}/character_likeness`, R2 in `docs/reviews/v1.5.1-security-signoff.md`, and its siblings).
@@ -1288,6 +1340,24 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
 **Restore fence.** `run_immediate_read_task` takes the read side of `_EngineRWLock`, which the restore DB-file swap fences with `exclusive_engine_access` (§18.4). Auth reads are therefore *more* strongly fenced than before, not less: during a swap they block until the new engine is in place rather than racing a disposed engine. The lock is not re-entrant, so an auth read must never be issued from inside another `run_immediate_read_task` callback — a writer waiting between the two acquisitions would deadlock. None of the current call paths nest (the authz gate's membership reads and `AuthService`'s reads are siblings, never enclosing).
 
+### 16.5 In-memory auth state: what it holds, and how it is keyed (#666)
+
+`AuthService` keeps four pieces of process-local state, all derived from the database and none of it persisted:
+
+| State | Purpose |
+|---|---|
+| `_token_cache` (5 min TTL) + `_token_cache_epoch` | Skips `bcrypt.verify` on repeat requests; invalidated only via `_flush_token_cache` (§16.4) |
+| `active_session_ids` | `session_id` cookie → owner user id |
+| `_sessions_by_token_public_id` / `_token_public_id_by_session` | Which token minted which session, both directions, so `_drop_sessions_for_tokens` can end a session in O(1) when its token is revoked |
+| `_guest_sessions` | `session_id` → last-active, for the active-guest counter |
+| `user` / `username` / `password_hash` | Cached copy of the single owner row |
+
+**The session maps are keyed on `UserToken.public_id`, never on the integer primary key.** A session outlives the request that created it, and `usertoken.id` is reissued to the next token created after a deletion (§12.2). Keyed on the integer, a surviving session would come to name a token it was never built from: revoking the correct token would not end the session, and revoking an unrelated one would end the wrong session — fail-open. `delete_token` and `revoke_tokens_for_resource` therefore read each row's `public_id` *before* the delete commits and sweep on that; `_confirm_session_token_still_exists` re-reads by `public_id` for the same reason. `tests/test_token_identity.py::test_revoking_a_token_ends_its_own_sessions_and_no_others` asserts both directions.
+
+**All of it is dropped after a full restore**, via `AuthService.reset_after_restore()` — see §18.5. Keying on a never-reused id and resetting after a restore are independent fixes; neither replaces the other.
+
+**Known follow-up.** `delete_token`/`update_token`/`revoke_tokens_for_resource` still flush the *entire* token cache rather than evicting one entry, because the cache is keyed on a digest of the raw token value and nothing maps a token back to that digest. `public_id` does not supply the digest either, so precise eviction needs a second index maintained at insert time (`public_id → {digest}`) rather than falling out of this change. Left as-is: the flush is correct, just coarse.
+
 ---
 
 ## 17. Data Flow Pipeline
@@ -1381,9 +1451,38 @@ Whether such a legacy file needs upgrading is decided by **schema currency, not 
 | `compare_hashes(snapshot_id, picture_ids)` | Returns per-picture hash equality so the UI can show which pictures changed. |
 | `preview_full(snapshot_id)` | Dry-run diff. Classifies every picture across the whole vault via `metadata_hash` (revert / recreate / delete / missing-file / unchanged) and lists **only the changed** resources (capped at 200), so the preview spends its budget on what actually changes rather than the first 200 rows. Scans only id/path/hash columns — the retained embeddings are never loaded for the full set. |
 
-Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPlanner`, **decompresses** the archive to a scratch file and alembic-upgrades it (`_upgrade_snapshot_schema` → `materialize_snapshot`), disposes the current SQLAlchemy engine, swaps the upgraded snapshot over the live DB path, re-creates the engine, drops `Picture` rows whose files are missing, and resumes the planner. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. Derived columns (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are **no longer** NULL-reset — snapshots now carry these blobs, so the swapped-in DB is already populated and the WorkPlanner has nothing to regenerate (only genuinely-NULL rows get picked up). The snapshot index itself is re-inserted after the swap so newer snapshots aren't hidden by restoring an older one. A non-blocking `_restore_lock` rejects concurrent restores with `RestoreInProgressError`.
+Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPlanner`, **decompresses** the archive to a scratch file and alembic-upgrades it (`_upgrade_snapshot_schema` → `materialize_snapshot`), disposes the current SQLAlchemy engine, swaps the upgraded snapshot over the live DB path, re-creates the engine, clears API tokens, resets the in-memory auth state, drops `Picture` rows whose files are missing, and resumes the planner. `RESTORE_STARTED` / `RESTORE_COMPLETED` events are broadcast. Derived columns (`smart_score`, `text_score`, `text_embedding`, `image_embedding`) are **no longer** NULL-reset — snapshots now carry these blobs, so the swapped-in DB is already populated and the WorkPlanner has nothing to regenerate (only genuinely-NULL rows get picked up). The snapshot index itself is re-inserted after the swap so newer snapshots aren't hidden by restoring an older one. A non-blocking `_restore_lock` rejects concurrent restores with `RestoreInProgressError`.
 
-### 18.5 API Endpoints (snapshots tag)
+### 18.5 A restore always leaves the vault with no API tokens
+
+`full_restore.py::_clear_api_tokens` deletes every row from `usertoken`, and from `guest_score` then `guest_session` (child before parent — both reference a token id, and SQLite reuses the lowest free integer primary key, so a row left behind would come to describe whichever token is created next). **A full restore therefore always ends with no API tokens in the vault, whatever the snapshot held. Tokens have to be created again from Settings afterwards, and share links re-shared with their new values.**
+
+Two properties are deliberate:
+
+- **Unconditional.** The clear never compares the snapshot's `alembic_version` against anything. This project squashes migrations, so a revision identifier is not a durable statement about what a snapshot contains, and a snapshot taken by the current release is cleared exactly like an old one. Relying on a particular migration still being in the chain would make the rule quietly dependent on migration history; making it a property of the restore path does not.
+- **Where it runs.** It is submitted as an ordinary writer task *after* `run_control_task(_do_swap)` has returned — the swap has therefore finished and released `exclusive_engine_access()`, and the task's session is opened on the re-created engine. No database work is done while the engine lock is held. It is submitted **before** `_post_restore_cleanup` so no later failure in the cleanup can leave a restored token row in place.
+
+Per-resource restore (`resource_restore.py`) needs no equivalent: it never reads or writes `usertoken` / `guest_session` / `guest_score`, and it never replaces the live DB file. `_collect_rows_for_upsert` and `_collect_candidate_parents` are limited to `Picture`, `Face`, `Tag`, `PictureSetMember`, `PictureProjectMember`, `Character`, `PictureSet` and `Project`, so there is no path by which it can reinstate a token.
+
+### 18.5.1 A restore also clears every piece of in-memory auth state (#666)
+
+Clearing `usertoken` in the swapped-in database is only half of it. `AuthService` keeps process-local state derived from the *previous* file (§16.5) that the swap does not touch, so without a reset:
+
+- the **token cache** keeps validating verified tokens for the rest of its 5-minute TTL, including tokens absent from the restored database — and it is consulted *before* the database, so `_clear_api_tokens` does not reach it;
+- `active_session_ids` and the session maps keep authenticating sessions established before the swap, against an owner account the restore may have replaced;
+- the cached `user` / `username` / `password_hash` describe the pre-restore owner row.
+
+`full_restore.py::_reset_auth_state` calls `AuthService.reset_after_restore()`, which flushes the token cache (through `_flush_token_cache`, so the revocation epoch is bumped), clears every session and both session maps, empties `_guest_sessions`, re-reads the owner row, and re-seeds the desktop shell's per-launch session. **Every client signs in again after a full restore.** That is the correct outcome, not a cost: restore is owner-only, and the identities the surviving state named have moved.
+
+- **Where it runs.** After `run_control_task(_do_swap)` has returned — so the swap has released `exclusive_engine_access()` and the engine has been re-created — and after `db.run_task(_clear_api_tokens)`, so the swapped-in database already holds no token rows and a request landing in the gap cannot re-populate the cache from one. The clearing itself is pure in-memory work, but `reset_after_restore` then re-reads the owner row through the ordinary writer queue, which is exactly why it **must not** be called from inside the swap: taking the writer queue while the engine lock is held would hang the request path.
+- **Failures are logged, not raised.** The restore has already succeeded by this point; aborting here would leave the caller believing the swap did not happen.
+- **The vault reaches the auth service via `Vault.auth_service`**, attached by `Server.__init__` (`AuthService` takes `vault.db`, so it cannot exist when the `Vault` is built). A `Vault` constructed without a `Server` — tests, CLI tools — leaves it `None`, and the restore path treats that as "no in-memory state to invalidate".
+
+**`public_id` does not make this redundant.** A restored snapshot brings back its *own* `public_id` values, so an id this process still remembers can be absent from the restored database, or belong to a row whose other columns have since changed. Never-reused ids stop an id from silently naming a *different* token; they cannot make in-memory state that outlived a whole-file swap correct. (This is equally why `AUTOINCREMENT` would not have fixed it — `sqlite_sequence` lives inside the database file and is restored along with it; see §12.2.) Both halves of #666 are needed.
+
+**Per-resource restore needs no reset, for the same reason it needs no token clear:** it never replaces the database file and never touches `usertoken` / `guest_session` / `guest_score` / `user`, so nothing held in memory becomes stale. `tests/test_token_identity.py::test_per_resource_restore_leaves_the_authentication_state_alone` pins that it does not gratuitously sign everyone out.
+
+### 18.6 API Endpoints (snapshots tag)
 
 | Method | Path | Description |
 |---|---|---|
@@ -1400,7 +1499,7 @@ Full restore takes an `OPPORTUNISTIC` safety snapshot first, pauses the `WorkPla
 
 All snapshot routes require `auth.require_unscoped_owner` — scoped tokens are rejected.
 
-### 18.6 Permanent-deletion ledger (`deleted_file_log`)
+### 18.7 Permanent-deletion ledger (`deleted_file_log`)
 
 `deleted_file_log` (`db_models/deleted_file_log.py`) is not a block-list that hides files forever — it is the record *restore* consults so it never resurrects content the user permanently deleted. A row keys on `path_sha` (SHA-256 of the picture's vault/absolute path — never cleartext) plus an optional `pixel_sha`, and carries a `file_removed` flag:
 

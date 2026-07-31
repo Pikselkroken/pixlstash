@@ -23,10 +23,13 @@ from sqlalchemy import (
 from pixlstash.db_models import (
     DeletedFileLog,
     Face,
+    GuestScore,
+    GuestSession,
     Picture,
     PictureProjectMember,
     PictureSetMember,
     Tag,
+    UserToken,
 )
 from pixlstash.db_models.picture_likeness import (
     PictureLikenessFrontier,
@@ -67,9 +70,13 @@ class FullRestoreMixin:
         3. Scan snapshot Picture rows; collect missing-file IDs.
         4. Dispose the live engine, copy the snapshot over the live DB, and
            re-open it.
-        5. Delete rows whose files are missing.
-        6. NULL-reset derived columns so the WorkPlanner regenerates them.
-        7. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
+        5. Clear every API token (see ``_clear_api_tokens``) — a restore always
+           leaves the vault with no tokens, whatever the snapshot held.
+        6. Reset the in-memory authentication state the swap invalidated (see
+           ``_reset_auth_state``); clients sign in again afterwards.
+        7. Delete rows whose files are missing.
+        8. NULL-reset derived columns so the WorkPlanner regenerates them.
+        9. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
 
         Args:
             snapshot_id: ID of the snapshot to restore.
@@ -179,7 +186,7 @@ class FullRestoreMixin:
         allow_without_safety: bool,
         abs_snapshot: str,
     ) -> "RestoreReport":
-        """The body of full restore steps 1-7 (separated so the lifecycle
+        """The body of full restore steps 1-9 (separated so the lifecycle
         wrapper in ``_restore_full_inner`` stays narrow)."""
         db = self._vault.db
 
@@ -677,6 +684,17 @@ class FullRestoreMixin:
         # missing-file detection, embedding generation, ...) until restart.
         try:
             db.run_control_task(_do_swap)
+            # Clear API tokens before anything else touches the swapped-in DB,
+            # so no later failure in the cleanup below can leave a restored
+            # token row in place.  ``run_control_task`` has returned, so the
+            # swap has finished and released ``exclusive_engine_access``; this
+            # writer task opens its session on the re-created engine.
+            db.run_task(self._clear_api_tokens, priority=0)
+            # Then drop the in-memory authentication state the swap invalidated.
+            # Ordered after the token clear on purpose: once the swapped-in
+            # database holds no token rows, a request arriving in the gap cannot
+            # re-populate the cache with a restored token.
+            self._reset_auth_state()
             db.run_task(_post_restore_cleanup, priority=0)
         finally:
             if planner is not None:
@@ -699,6 +717,94 @@ class FullRestoreMixin:
             report.missing_files_count,
         )
         return report
+
+    def _reset_auth_state(self) -> None:
+        """Drop the in-memory authentication state the DB swap invalidated.
+
+        Clearing ``usertoken`` in the swapped-in database is only half of it.
+        ``AuthService`` keeps process-local state derived from the *previous*
+        file — a token cache with its own TTL, ``active_session_ids``, the
+        session-to-token maps, and a cached copy of the owner row — none of
+        which the swap touches. Left alone, a session established before the
+        restore keeps authenticating against a database that no longer contains
+        the credential it was issued for, and a cached token keeps validating
+        for the rest of its TTL. That is fail-open, and it is the reason issue
+        #666 exists.
+
+        **Where it runs, and why that is safe.** After
+        ``run_control_task(_do_swap)`` has returned, so the swap has finished
+        and released ``exclusive_engine_access()`` and the engine has been
+        re-created; and after ``_clear_api_tokens``, so the swapped-in database
+        already holds no token rows and a request landing in the gap cannot
+        re-populate the cache from one. ``reset_after_restore`` re-reads the
+        owner row through the ordinary writer queue, which is exactly why it
+        must not be called from inside the swap — doing so would take the
+        writer queue while the engine lock is held and hang the request path.
+
+        Failure is logged, not raised: the restore itself has already
+        succeeded by this point, and aborting it here would leave the caller
+        believing the swap did not happen.
+        """
+        auth_service = getattr(self._vault, "auth_service", None)
+        if auth_service is None:
+            # A Vault built without a Server (tests, CLI tools) has no auth
+            # service, and therefore no in-memory auth state to invalidate.
+            logger.debug(
+                "RestoreService: no auth service attached to the vault; "
+                "no in-memory authentication state to reset."
+            )
+            return
+        try:
+            auth_service.reset_after_restore()
+        except Exception as exc:
+            logger.error(
+                "RestoreService: failed to reset in-memory authentication "
+                "state after the restore. Sessions and cached tokens from "
+                "before the swap may still authenticate until the server is "
+                "restarted: %s",
+                exc,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _clear_api_tokens(session: Session) -> None:
+        """Delete every API token row from the swapped-in database.
+
+        A restore always leaves the vault with no API tokens, whatever the
+        snapshot happened to hold.  The rule belongs to the restore path and is
+        applied **unconditionally**: it never compares the snapshot's Alembic
+        revision, because this project squashes migrations, so a revision
+        identifier is not a durable statement about what a snapshot contains.
+        A snapshot taken by the current release is cleared exactly like an old
+        one.  Tokens are created again from Settings after a restore, and share
+        links re-shared with their new values.
+
+        ``guest_score`` and ``guest_session`` are cleared first, child before
+        parent.  Both reference a token by id, and SQLite reuses the lowest
+        free integer primary key, so a row left behind would come to describe
+        whichever token is created next.
+
+        Runs as an ordinary writer task, submitted only after
+        ``run_control_task(_do_swap)`` has returned — the swap has therefore
+        completed and released ``exclusive_engine_access``, and this session is
+        opened on the re-created engine.  Nothing here runs while the engine
+        lock is held.
+
+        Args:
+            session: Live writer session on the swapped-in database.
+        """
+        cleared: dict[str, int] = {}
+        for model in (GuestScore, GuestSession, UserToken):
+            cleared[model.__name__] = session.execute(sa_delete(model)).rowcount
+        session.commit()
+        logger.info(
+            "RestoreService: cleared API tokens after restore (%d token(s), "
+            "%d guest session(s), %d guest score(s)); tokens must be created "
+            "again from Settings and share links re-shared.",
+            cleared["UserToken"],
+            cleared["GuestSession"],
+            cleared["GuestScore"],
+        )
 
     def _find_missing_file_ids(
         self, abs_snapshot: str, vault_root: str

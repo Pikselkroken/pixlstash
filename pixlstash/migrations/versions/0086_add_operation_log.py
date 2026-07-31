@@ -16,8 +16,16 @@ is reset. Table creation is conditional on the table being absent, because the
 0001 baseline runs ``SQLModel.metadata.create_all()`` and therefore already
 creates it on a fresh database.
 
+Re-pointed onto ``0086_reissue_api_tokens`` when v1.8.1 was merged into the 1.9
+line. Both migrations were written against ``0085`` on separate branches, which
+left the chain with two heads. ``0086_reissue_api_tokens`` shipped in v1.8.1 and
+released databases are stamped with exactly that id, so it must keep its
+identifier and its parent; this migration is 1.9-only and unreleased, so moving
+it is the safe side to change. A database already stamped here simply continues
+forward.
+
 Revision ID: 0086_add_operation_log
-Revises: 0085_recompute_smart_score_restored_builtin_anchors
+Revises: 0086_reissue_api_tokens
 Create Date: 2026-07-28 00:00:00.000000
 
 """
@@ -29,7 +37,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0086_add_operation_log"
-down_revision: Union[str, None] = "0085_recompute_smart_score_restored_builtin_anchors"
+down_revision: Union[str, None] = "0086_reissue_api_tokens"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

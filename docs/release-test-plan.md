@@ -135,7 +135,8 @@ from the Electron desktop installer, covered in section 3).
 | Check | Windows |
 |-------|---------|
 | Download the `.exe` from the release page; wizard completes as a normal user with no error dialog | |
-| If SmartScreen appears: **More info** → **Run anyway** proceeds normally | |
+| Right-click the `.exe` → Properties → Digital Signatures: a valid SHA-256 Certum signature with timestamp (signed releases; a `-unsigned.exe` has no signature tab) | |
+| SmartScreen: on a signed build it should show the publisher name if it appears at all (reputation accrues over time); on a `-unsigned` build **More info** → **Run anyway** proceeds normally | |
 | Start Menu → **PixlStash Server** — console opens with startup logs; login page loads; import one `.jpg` | |
 | Close the console — no `pixlstash`/`python` processes remain in Task Manager | |
 
@@ -183,7 +184,7 @@ all** — Metal is bundled in the runtime.
 | Check | Windows | Linux | macOS |
 |-------|---------|-------|-------|
 | Install: Windows NSIS `.exe` / Linux AppImage (and `.deb`) / macOS `.dmg` or `.zip` — completes without error | | | |
-| Windows: slow-extraction messaging is visible during install (no silent multi-minute hang); SmartScreen **More info → Run anyway** path works | | n/a | n/a |
+| Windows: slow-extraction messaging is visible during install (no silent multi-minute hang); installer `.exe` carries a valid Certum digital signature (Properties → Digital Signatures; `-unsigned` builds instead need the SmartScreen **More info → Run anyway** path) | | n/a | n/a |
 | First-run wizard appears: pick a library folder and a compute choice; both are honoured after the app starts | | | |
 | App boots to the grid; importing one `.jpg` works end-to-end | | | |
 

@@ -1,22 +1,24 @@
 <template>
   <button
+    ref="rootEl"
     type="button"
     :class="[
       'app-btn',
       `app-btn--${variant}`,
       `app-btn--${size}`,
-      { 'app-btn--icon-only': iconOnly },
+      { 'app-btn--icon-only': iconOnly, 'app-btn--loading': loading },
     ]"
-    :disabled="disabled"
+    :disabled="disabled || loading"
+    :aria-busy="loading ? 'true' : undefined"
     :title="title"
     :aria-keyshortcuts="keyShortcut"
   >
     <v-icon
-      v-if="iconLeft"
+      v-if="loading || iconLeft"
       :size="size === 'sm' ? 16 : 18"
-      class="app-btn__icon"
+      :class="['app-btn__icon', { 'mdi-spin': loading }]"
     >
-      mdi-{{ iconLeft }}
+      {{ loading ? "mdi-loading" : `mdi-${iconLeft}` }}
     </v-icon>
     <span v-if="!iconOnly" class="app-btn__label"><slot /></span>
     <kbd v-if="keyHint" class="app-btn__key" aria-hidden="true">{{
@@ -26,7 +28,7 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 const props = defineProps({
@@ -37,6 +39,12 @@ const props = defineProps({
   iconLeft: { type: String, default: "" },
   iconOnly: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  // Pending / in-flight. NOT the same thing as `disabled`: "working", not "not
+  // allowed" (visual-language.md §11). Forces the button disabled so a second
+  // click cannot fire (issue #647), swaps the leading icon for the shared
+  // spinner, and leaves the label alone. There is deliberately no loading-text
+  // prop: the label is the accessible name and must not change mid-flight.
+  loading: { type: Boolean, default: false },
   title: { type: String, default: "" },
   // The visible shortcut affordance from the dialog keyboard contract:
   // "enter" wears ↵ and "esc" wears Esc; any other single key (e.g. "s" on
@@ -61,6 +69,25 @@ const keyShortcut = computed(() =>
       : props.keyHint
         ? props.keyHint.toUpperCase()
         : undefined,
+);
+
+const rootEl = ref(null);
+let refocusWhenDone = false;
+
+// A natively-disabled button cannot hold focus, so the browser drops focus to
+// <body>, stranding a keyboard user who would have to tab all the way back to
+// where they were once the request settles.
+watch(
+  () => props.loading,
+  (isLoading) => {
+    if (isLoading) {
+      refocusWhenDone = rootEl.value === document.activeElement;
+      return;
+    }
+    if (!refocusWhenDone) return;
+    refocusWhenDone = false;
+    nextTick(() => rootEl.value?.focus());
+  },
 );
 </script>
 
@@ -110,8 +137,22 @@ const keyShortcut = computed(() =>
 }
 
 .app-btn:disabled {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
+}
+
+/* PENDING is not DISABLED. A disabled control is "not allowed" and may legally
+   fade (WCAG 1.4.3 exempts it); a pending one is the only thing telling the user
+   their click landed, so its label has to stay legible. Group opacity cannot do
+   that on a filled variant: the whole button composites toward the surface, so
+   white on the light `accent` fill measures 4.75:1 at full opacity, 3.97:1 at
+   0.9, 2.70:1 at 0.7 and 1.67:1 at the disabled 0.38. The white-label rule
+   (visual-language.md §4) only survives above ~0.97, i.e. there is no dim that is
+   both perceptible and legal. So pending does not dim. `progress`, not
+   `not-allowed`: the button is busy, the rest of the surface is still live. */
+.app-btn--loading:disabled {
+  opacity: 1;
+  cursor: progress;
 }
 
 /* Primary — amber accent, the key action. */
@@ -177,5 +218,20 @@ const keyShortcut = computed(() =>
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
   opacity: 0.55;
+}
+
+/* The spinner keeps spinning under reduced motion. It is a status readout, not
+   decoration — the same exception ActionReceipt's countdown hairline takes
+   (visual-language.md §10). The global reset in design-tokens.css zeroes
+   animation-duration and iteration-count on `*` and `*::before`, which freezes
+   this into a static broken ring that reads as a rendering fault. @mdi/font puts
+   the animation on `::before`, so that is what is restored; specificity beats the
+   universal reset even though both are !important. A 16px rotating glyph is not
+   a vestibular trigger. */
+@media (prefers-reduced-motion: reduce) {
+  .app-btn--loading .app-btn__icon.mdi-spin::before {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 </style>

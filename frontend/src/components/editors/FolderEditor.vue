@@ -644,6 +644,7 @@ import {
   // Aliased: this component wraps it in its own debounced detectSidecars().
   detectSidecars as fetchSidecarConvention,
 } from "../../api/folders";
+import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { copyText } from "../../utils/clipboard";
 import {
   buildDockerRestartCommand,
@@ -713,7 +714,6 @@ const syncSectionOpen = ref(false);
 const detectInfo = ref("");
 const localAllowDelete = ref(false);
 const saveError = ref("");
-const saveLoading = ref(false);
 const deleteLoading = ref(false);
 const confirmingDelete = ref(false);
 const pathInputRef = ref(null);
@@ -1173,9 +1173,8 @@ function suffixForSubmit(value, def) {
   return trimmed;
 }
 
-async function save() {
+async function submitFolder() {
   if (!isValid.value) return;
-  saveLoading.value = true;
   saveError.value = "";
   try {
     let savedResponse = null;
@@ -1241,10 +1240,13 @@ async function save() {
   } catch (error) {
     saveError.value =
       error?.response?.data?.detail || `Failed to save ${props.type} folder.`;
-  } finally {
-    saveLoading.value = false;
   }
 }
+
+// The button already wore `saveLoading`, but six fields in this dialog submit on
+// Enter and none of them are disabled mid-flight, so key auto-repeat could still
+// add the same folder twice (#647). Guarding the handler closes that door too.
+const { pending: saveLoading, run: save } = useSubmitGuard(submitFolder);
 
 async function doDelete() {
   const editingFolder = activeFolder.value;
@@ -1602,5 +1604,35 @@ async function copyToClipboard(value, successMessage) {
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
   transition: filter 0.2s;
+}
+
+/* Pending is not disabled (visual-language.md §11): the shared AppButton keeps
+   its label legible while busy, but Save/Remove/Confirm Remove here are stock
+   Vuetify v-btn, whose own `--loading` styling sets `.v-btn__content { opacity: 0
+   }` — blanking the label entirely instead of just dimming it. Restore it so
+   these three match the pending contract the rest of #647's forms carry. */
+.btn-save :deep(.v-btn--loading .v-btn__content),
+.btn-save :deep(.v-btn--loading .v-btn__prepend),
+.btn-save :deep(.v-btn--loading .v-btn__append),
+.editor-delete-btn :deep(.v-btn--loading .v-btn__content),
+.editor-delete-btn :deep(.v-btn--loading .v-btn__prepend),
+.editor-delete-btn :deep(.v-btn--loading .v-btn__append) {
+  opacity: 1;
+}
+
+/* The spinner keeps spinning under reduced motion, the same fix AppButton takes
+   for its own mdi-spin icon: the global reset in design-tokens.css zeroes every
+   element's animation, which would freeze Vuetify's indeterminate spinner into a
+   static ring that reads as a rendering fault rather than "working". */
+@media (prefers-reduced-motion: reduce) {
+  .btn-save :deep(.v-progress-circular--indeterminate > svg),
+  .btn-save
+    :deep(.v-progress-circular--indeterminate .v-progress-circular__overlay),
+  .editor-delete-btn :deep(.v-progress-circular--indeterminate > svg),
+  .editor-delete-btn
+    :deep(.v-progress-circular--indeterminate .v-progress-circular__overlay) {
+    animation-duration: 1.4s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 </style>
