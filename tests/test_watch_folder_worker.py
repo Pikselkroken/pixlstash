@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import threading
 import time
 
 from fastapi.testclient import TestClient
@@ -363,12 +364,22 @@ def test_watch_folder_waits_for_a_file_to_finish_being_written():
     ``test_watch_folder_imports_copied_files_with_old_mtime_after_initial_scan``
     (3 pictures for 2 files).
 
-    Rather than racing the planner (which backs off to 10s when idle), the file
-    is left incomplete *before* the folder is registered, so the very first scan
-    is guaranteed to see it still growing. It is short by only its last few
-    bytes, which keeps it decodable — that is precisely the case the duplicate
-    check cannot catch, because a truncated file that fails to decode is already
-    handled as a transient failure and retried.
+    The file is left incomplete *before* the folder is registered, so the very
+    first scan sees it unfinished, and a background thread keeps bumping its
+    mtime until the test is ready to finish the copy. That churn is what makes
+    this deterministic: the finder sees a stat signature that never repeats, so
+    it cannot claim the file however often it scans. An earlier version left the
+    file short but *static* and relied on writing the last bytes before the next
+    scan, a race a contended runner loses (it failed on a Windows shard with 2
+    pictures).
+
+    The file is short by only its last few bytes, which keeps it decodable.
+    That is precisely the case the duplicate check cannot catch, because a
+    truncated file that fails to decode is already handled as a transient
+    failure and retried.
+
+    The finder's own quiet-window rule is pinned separately, without a server,
+    by ``test_claim_if_settled_requires_a_wall_clock_quiet_window``.
     """
     from pixlstash.db_models.import_folder import ImportFolder
     from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -404,73 +415,150 @@ def test_watch_folder_waits_for_a_file_to_finish_being_written():
             out.flush()
             os.fsync(out.fileno())
 
-        with Server(server_config_path) as server:
-            with TestClient(server.api) as client:
-                response = client.post(
-                    f"{API_PREFIX}/login",
-                    json={"username": "testuser", "password": "testpassword"},
-                )
-                assert response.status_code == 200
+        stop_touching = threading.Event()
+        touch_errors: list[OSError] = []
+        stamp_base = time.time() - (24 * 60 * 60)
 
-                create_folder = client.post(
-                    f"{API_PREFIX}/import-folders",
-                    json={
-                        "folder": watch_dir,
-                        "delete_after_import": False,
-                    },
-                )
-                assert create_folder.status_code == 200
+        def keep_the_copy_in_flight():
+            """Bump the file's mtime until the test finishes the copy.
 
-                # ``last_checked`` only advances once a scan has completed, so
-                # this proves the finder has already looked at the partial file.
-                def read_folder(session):
-                    return session.exec(select(ImportFolder)).first()
+            The finder claims a path only once its ``(size, mtime, ctime)``
+            signature has held still, so a moving mtime stands in for a copy
+            that is still dribbling bytes in. Each bump is a distinct integer
+            timestamp, so this works regardless of the filesystem's timestamp
+            granularity.
+            """
+            bump = 0
+            while not stop_touching.is_set():
+                bump += 1
+                try:
+                    os.utime(dst, (stamp_base + bump, stamp_base + bump))
+                except OSError as exc:
+                    touch_errors.append(exc)
+                    return
+                stop_touching.wait(0.05)
 
-                scanned = False
-                start = time.monotonic()
-                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
-                    folder_row = server.vault.db.run_task(read_folder)
-                    if folder_row is not None and (folder_row.last_checked or 0) > 0:
-                        scanned = True
-                        break
-                    time.sleep(0.1)
-                assert scanned, "Finder never completed a scan of the partial file"
+        toucher = threading.Thread(target=keep_the_copy_in_flight, daemon=True)
+        toucher.start()
+        try:
+            with Server(server_config_path) as server:
+                with TestClient(server.api) as client:
+                    response = client.post(
+                        f"{API_PREFIX}/login",
+                        json={"username": "testuser", "password": "testpassword"},
+                    )
+                    assert response.status_code == 200
 
-                # Finish the copy, then mimic a file manager restoring the source
-                # mtime (which bumps ctime and re-exposes the file to the finder).
-                with open(dst, "ab") as out:
-                    out.write(payload[-4:])
-                    out.flush()
-                    os.fsync(out.fileno())
-                old_ts = time.time() - (7 * 24 * 60 * 60)
-                os.utime(dst, (old_ts, old_ts))
+                    create_folder = client.post(
+                        f"{API_PREFIX}/import-folders",
+                        json={
+                            "folder": watch_dir,
+                            "delete_after_import": False,
+                        },
+                    )
+                    assert create_folder.status_code == 200
 
-                start = time.monotonic()
-                pictures = []
-                while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                    # ``last_checked`` only advances once a scan has completed,
+                    # so this proves the finder has already looked at the
+                    # partial file.
+                    def read_folder(session):
+                        return session.exec(select(ImportFolder)).first()
+
+                    scanned = False
+                    start = time.monotonic()
+                    while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                        folder_row = server.vault.db.run_task(read_folder)
+                        if (
+                            folder_row is not None
+                            and (folder_row.last_checked or 0) > 0
+                        ):
+                            scanned = True
+                            break
+                        time.sleep(0.1)
+                    assert scanned, "Finder never completed a scan of the partial file"
+                    assert not touch_errors, (
+                        f"Could not keep the copy in flight: {touch_errors[0]!r}"
+                    )
+
+                    # Finish the copy, then mimic a file manager restoring the
+                    # source mtime (which bumps ctime and re-exposes the file to
+                    # the finder).
+                    stop_touching.set()
+                    toucher.join(timeout=10)
+                    assert not toucher.is_alive(), "Touch thread failed to stop"
+                    with open(dst, "ab") as out:
+                        out.write(payload[-4:])
+                        out.flush()
+                        os.fsync(out.fileno())
+                    old_ts = time.time() - (7 * 24 * 60 * 60)
+                    os.utime(dst, (old_ts, old_ts))
+
+                    start = time.monotonic()
+                    pictures = []
+                    while time.monotonic() - start < _IMPORT_WAIT_SECONDS:
+                        pictures = server.vault.db.run_task(
+                            lambda session: Picture.find(session)
+                        )
+                        if len(pictures) >= 1:
+                            break
+                        time.sleep(0.25)
+
+                    # Give a second, erroneous import a chance to land before
+                    # asserting there is only one picture.
+                    time.sleep(3.0)
                     pictures = server.vault.db.run_task(
                         lambda session: Picture.find(session)
                     )
-                    if len(pictures) >= 1:
-                        break
-                    time.sleep(0.25)
 
-                # Give a second, erroneous import a chance to land before
-                # asserting there is only one picture.
-                time.sleep(3.0)
-                pictures = server.vault.db.run_task(
-                    lambda session: Picture.find(session)
-                )
+                    assert len(pictures) == 1, (
+                        "Expected exactly one picture for one watched file; a "
+                        "half-written import would add a duplicate (got "
+                        f"{len(pictures)})"
+                    )
+                    settled_sha = ImageUtils.calculate_hash_from_file_path(dst)
+                    assert pictures[0].pixel_sha == settled_sha, (
+                        "Imported picture must carry the hash of the settled "
+                        "file, not of the bytes written so far"
+                    )
+                    assert pictures[0].size_bytes == os.path.getsize(dst), (
+                        "Imported picture must record the settled file size"
+                    )
+        finally:
+            stop_touching.set()
+            toucher.join(timeout=10)
 
-                assert len(pictures) == 1, (
-                    "Expected exactly one picture for one watched file; a "
-                    f"half-written import would add a duplicate (got {len(pictures)})"
-                )
-                settled_sha = ImageUtils.calculate_hash_from_file_path(dst)
-                assert pictures[0].pixel_sha == settled_sha, (
-                    "Imported picture must carry the hash of the settled file, "
-                    "not of the bytes written so far"
-                )
-                assert pictures[0].size_bytes == os.path.getsize(dst), (
-                    "Imported picture must record the settled file size"
-                )
+
+def test_claim_if_settled_requires_a_wall_clock_quiet_window():
+    """A signature that merely repeats across two scans is not settled yet.
+
+    The planner polls as often as ``WorkPlanner.MIN_INTERVAL_S`` (50ms), so
+    "unchanged since the previous scan" can mean "unchanged for 50ms", which a
+    copy that pauses mid-write clears easily. The file is then hashed
+    half-written, and imported a *second* time once it really finishes, because
+    the settled bytes hash differently and the duplicate check misses them. The
+    claim therefore has to be gated on wall-clock quiet, not on scan count.
+    """
+    from pixlstash.tasks.missing_watch_folder_import_finder import (
+        MissingWatchFolderImportFinder,
+    )
+
+    finder = MissingWatchFolderImportFinder(database=None)
+    settle = MissingWatchFolderImportFinder.SETTLE_SECONDS
+    path = os.path.normcase(os.path.abspath("watch/in-flight.png"))
+    partial = (1024, 100.0, 100.0)
+    complete = (2048, 101.0, 100.0)
+
+    # First sighting never claims, and neither does a fast follow-up scan.
+    assert finder._claim_if_settled(path, partial, 0.0) is False
+    assert finder._claim_if_settled(path, partial, 0.05) is False
+    assert finder._claim_if_settled(path, partial, settle - 0.01) is False
+
+    # The write resumes: the quiet window restarts from this observation.
+    assert finder._claim_if_settled(path, complete, settle) is False
+    assert finder._claim_if_settled(path, complete, 2 * settle - 0.01) is False
+
+    # Quiet for the full window: now it is safe to hand over.
+    assert finder._claim_if_settled(path, complete, 2 * settle) is True
+
+    # Claimed once. Later scans of the same bytes must not offer it again.
+    assert finder._claim_if_settled(path, complete, 2 * settle + 60.0) is False

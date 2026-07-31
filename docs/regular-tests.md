@@ -8,7 +8,17 @@ suite is pytest — those are not duplicated here.
 - **Location:** `frontend/e2e/specs/*.spec.js`
 - **Run:** from `frontend/` → `npm run test:e2e` (UI mode: `npm run test:e2e:ui`).
   The harness builds the SPA and boots a throwaway backend against the committed
-  `test-data/` fixture (see `frontend/e2e/README.md`).
+  `test-data/` fixture (see `frontend/e2e/README.md`). Both the throwaway work
+  directory and the port are derived from the checkout path, so two working
+  copies of the repo can run the suite at the same time without colliding; set
+  `PIXLSTASH_E2E_PORT` to pin the port.
+- **Keyboard surfaces: wait for focus, not just for paint.** The duplicate
+  queue's keys act on the *focused* row, and the queue sets its focus index only
+  once a load resolves — so a key pressed after the rows appear but before one
+  is focused does nothing at all. `DuplicateQueuePage.goto()` waits for
+  `.grow--focus` for exactly this reason. The window is narrow on a quiet
+  machine and wide on a loaded runner, so the symptom was a spec that looked
+  flaky locally and failed every attempt in CI.
 - **Conventions:** owner session minted in `global-setup.js`; assert
   "at least one" / relative deltas rather than exact counts so fixture pruning
   doesn't break tests; pictures identified by thumbnail `src`
@@ -225,6 +235,18 @@ BUG-RS-1** — each encodes a behaviour that does not yet match the implementati
 (single-suspect queue emptying, Skip tally, keyboard focus, queue completion/
 archive) and needs QA+dev reconciliation; see the per-test `FIXME (not BUG-RS-1)`
 notes in the spec. Un-`fixme` each as its behaviour is settled.
+
+---
+
+## Preferences round-trip — `preferences-persist.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| a compact-mode change is PATCHed and survives a reload | The whole path a preference travels: control → store → the `useAppConfig` watcher's PATCH to `/users/me/config` → read back on the next load. Asserts the request body carried the new value rather than trusting the store, so a broken persistence watcher cannot pass | ✅ |
+
+## Keyboard shortcuts dialog — `shortcuts-dialog.spec.js`
+| Test | Covers | Status |
+| --- | --- | --- |
+| opens on F1 and lists the grid shortcuts | F1 reaches the global handler and `ShortcutsDialog` renders its table. The dialog is static markup with no unit coverage, so this is its only pin | ✅ |
 
 ---
 

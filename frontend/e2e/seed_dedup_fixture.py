@@ -50,14 +50,18 @@ import os
 import shutil
 import sqlite3
 import sys
-import tempfile
 
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DATA = Path(os.environ.get("PIXLSTASH_E2E_DATA") or (REPO_ROOT / "test-data"))
-# Mirrors serve_e2e_backend.WORK_DIR exactly; the two must not drift.
-WORK_DIR = Path(tempfile.gettempdir()) / f"pixlstash-e2e-{SRC_DATA.name}"
+# Import the launcher's work directory rather than recomputing it. This used to
+# be a copy with a "must not drift" comment above it, and it drifted the moment
+# the launcher's path gained a per-checkout suffix: the seed wrote to one vault
+# while the server served another, and the queue simply came up empty.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from serve_e2e_backend import WORK_DIR  # noqa: E402
+
 IMAGE_ROOT = WORK_DIR / "images"
 DB_PATH = IMAGE_ROOT / "vault.db"
 
