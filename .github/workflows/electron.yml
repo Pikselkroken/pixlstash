@@ -119,9 +119,9 @@ jobs:
             release_files: ""
           # macOS (Apple Silicon, Metal). Builds UNSIGNED until the Apple Developer ID
           # signing secrets are added to the repo (see "Build Electron installers"
-          # below and docs/macos-signing-setup.md): unsigned artifacts get a
-          # "-unsigned" suffix and Gatekeeper quarantines them. Once the signing
-          # secrets are set the build signs + notarises and drops the suffix.
+          # below): unsigned artifacts get a "-unsigned" suffix and Gatekeeper
+          # quarantines them. Once the signing secrets are set the build signs +
+          # notarises and drops the suffix.
           - runner: macos-14
             os: mac
             arch: arm64
@@ -175,8 +175,8 @@ jobs:
         # signed (and notarised, if the APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/
         # APPLE_TEAM_ID secrets are also set) and ships under its clean name. When the
         # cert secret is absent the build still runs but is UNSIGNED and labelled with
-        # a "-unsigned" suffix. Windows/Linux are unaffected and always unsigned here.
-        # Full setup: docs/macos-signing-setup.md.
+        # a "-unsigned" suffix. Linux is unaffected and always unsigned; the Windows
+        # exe is signed afterwards by the sign-windows-desktop job, not here.
         #
         # The Apple secrets are scoped to the macOS runner only (the ternary yields
         # an empty string elsewhere) so the certificate never lands on the Windows or
@@ -223,11 +223,11 @@ jobs:
             esac
             export CSC_IDENTITY_AUTO_DISCOVERY=true
             if [ -z "${APPLE_ID:-}" ] && [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -z "${APPLE_TEAM_ID:-}" ]; then
-              echo "::warning title=macOS signed but not notarised::Signing certificate is present but no notarisation credentials are set. The app will be signed but NOT notarised, so Gatekeeper still blocks it on download. Add APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID to finish the chain (docs/macos-signing-setup.md)."
+              echo "::warning title=macOS signed but not notarised::Signing certificate is present but no notarisation credentials are set. The app will be signed but NOT notarised, so Gatekeeper still blocks it on download. Add APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID to finish the chain."
             fi
             npm run dist -- --publish never
           else
-            echo "::warning title=Unsigned macOS build::No Apple signing certificate (APPLE_CSC_LINK secret) found. Building UNSIGNED and labelling the artifact '-unsigned'. Gatekeeper will quarantine it until the signing secrets are added (docs/macos-signing-setup.md)."
+            echo "::warning title=Unsigned macOS build::No Apple signing certificate (APPLE_CSC_LINK secret) found. Building UNSIGNED and labelling the artifact '-unsigned'. Gatekeeper will quarantine it until the APPLE_CSC_LINK / APPLE_CSC_KEY_PASSWORD secrets are added."
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             npm run dist -- --publish never --config.mac.artifactName='${productName}-desktop-${version}-${os}-${arch}-unsigned.${ext}'
           fi
