@@ -6,6 +6,8 @@ import {
   verticalNeighborIndex,
   JUSTIFIED_ROW_GAP,
 } from "./useJustifiedLayout.js";
+import { useGridStore } from "../stores/useGridStore";
+import { useSearchStore } from "../stores/useSearchStore";
 
 /**
  * Manages keyboard navigation and keyboard-driven actions for the image grid.
@@ -56,6 +58,8 @@ export function useGridKeyboardNav(
     setScore,
   },
 ) {
+  const searchStore = useSearchStore();
+  const gridStore = useGridStore();
   // ── Scrapheap ghosts ────────────────────────────────────────────────────
   // A ghosted tile is on screen but inert: it is already in the Scrapheap and
   // is only being held there while its undo is one click away.
@@ -84,7 +88,9 @@ export function useGridKeyboardNav(
 
   /** Drop ghosted ids from a selection about to be committed. */
   function withoutGhosts(indexedIds) {
-    return indexedIds.filter(({ index }) => !isGhosted(index)).map(({ id }) => id);
+    return indexedIds
+      .filter(({ index }) => !isGhosted(index))
+      .map(({ id }) => id);
   }
 
   /** `[start, end]` of `allGridImages` as selectable ids, ghosts skipped. */
@@ -108,7 +114,7 @@ export function useGridKeyboardNav(
     if (scrollWrapper.value) {
       let newScrollTop = scrollWrapper.value.scrollTop;
       const total = allGridImages.value.length;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const totalRows = Math.ceil(total / cols);
       // Justified rows don't follow cols × rowHeight; use the packed model's
       // exact pixel height so End/PageDown reach the true bottom.
@@ -148,7 +154,11 @@ export function useGridKeyboardNav(
       if (!(element instanceof HTMLElement)) return false;
       if (element.isContentEditable) return true;
       const tagName = element.tagName;
-      if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT") {
+      if (
+        tagName === "INPUT" ||
+        tagName === "TEXTAREA" ||
+        tagName === "SELECT"
+      ) {
         return true;
       }
       if (element.getAttribute("role") === "textbox") return true;
@@ -182,7 +192,7 @@ export function useGridKeyboardNav(
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
         // No images selected — ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (props.searchQuery && props.searchQuery.trim()) {
+      } else if (searchStore.searchQuery && searchStore.searchQuery.trim()) {
         // No selection active — ESC also clears search
         clearSearchQuery();
       } else {
@@ -197,7 +207,7 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       let newIdx = cursorIdx.value;
       // Which way the scan runs when the landing cell turns out to be a ghost.
       const travel =
@@ -249,7 +259,8 @@ export function useGridKeyboardNav(
             lastSelectedImageId != null
               ? allGridImages.value.findIndex(
                   (item) =>
-                    getPictureId(item?.id) === getPictureId(lastSelectedImageId),
+                    getPictureId(item?.id) ===
+                    getPictureId(lastSelectedImageId),
                 )
               : newIdx;
           const start = Math.min(anchorIndex, newIdx);
@@ -272,7 +283,7 @@ export function useGridKeyboardNav(
       event.preventDefault();
       const total = allGridImages.value.length;
       if (total === 0) return;
-      const cols = Math.max(1, props.columns || 1);
+      const cols = Math.max(1, gridStore.columns || 1);
       const packedLayout = activeJustifiedLayout();
       let newIdx;
       if (packedLayout) {

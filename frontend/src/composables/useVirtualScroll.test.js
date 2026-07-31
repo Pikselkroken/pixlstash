@@ -1,6 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, reactive, computed, nextTick } from "vue";
+import { setActivePinia, createPinia } from "pinia";
+import { useGridStore } from "../stores/useGridStore.js";
 import { useVirtualScroll } from "./useVirtualScroll.js";
+
+// The composable reads the grid geometry (columns, size level, thumbnail mode
+// and size, compact mode) from the grid store.
+beforeEach(() => {
+  setActivePinia(createPinia());
+});
 
 // Justified mode packs its rows from the aspect ratios of the images that have
 // actually arrived, so `justifiedLayout` is null before the first batch and
@@ -23,13 +31,14 @@ function makeHarness() {
     clientWidth: CONTAINER_W,
     getBoundingClientRect: () => ({ width: CONTAINER_W }),
   });
-  const props = reactive({
-    columns: 6,
-    thumbnailSize: 256,
-    compactMode: false,
-    thumbnailMode: "justified",
-    sizeLevel: 3,
-  });
+  // Grid geometry lives in the store. Size level 3 is the 6-column step, which
+  // is the geometry these layout cases are written against.
+  const gridStore = useGridStore();
+  gridStore.sizeLevel = 3;
+  gridStore.thumbnailSize = 256;
+  gridStore.compactMode = false;
+  gridStore.thumbnailMode = "justified";
+  const props = reactive({});
   // The image list starts empty, exactly as it is when ImageGrid mounts.
   const aspectRatios = ref([]);
   const allGridImagesLength = computed(() => aspectRatios.value.length);

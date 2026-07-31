@@ -1338,9 +1338,7 @@ async function fetchConfig() {
       cfg.similarity_character ?? cfg.selected_similarity_character;
     sortStore.selectedSimilarityCharacter =
       similarityValue ?? sortStore.selectedSimilarityCharacter ?? null;
-    const newHiddenTags = Array.isArray(cfg.hidden_tags)
-      ? cfg.hidden_tags
-      : [];
+    const newHiddenTags = Array.isArray(cfg.hidden_tags) ? cfg.hidden_tags : [];
     if (
       userPrefsStore.hiddenTags.length !== newHiddenTags.length ||
       userPrefsStore.hiddenTags.some((tag, i) => tag !== newHiddenTags[i])
@@ -1388,9 +1386,7 @@ async function fetchConfig() {
       theme_mode: userPrefsStore.themeMode,
       similarity_character: sortStore.selectedSimilarityCharacter,
       stack_strictness:
-        cfg.stack_strictness != null
-          ? Number(cfg.stack_strictness)
-          : null,
+        cfg.stack_strictness != null ? Number(cfg.stack_strictness) : null,
       hidden_tags: userPrefsStore.hiddenTags,
       apply_tag_filter: userPrefsStore.applyTagFilter,
     };
@@ -2264,53 +2260,9 @@ defineExpose({
               <ImageGrid
                 v-else
                 ref="gridContainer"
-                :thumbnailSize="gridStore.thumbnailSize"
-                :sidebarVisible="sidebarStore.sidebarVisible"
                 :backendUrl="BACKEND_URL"
-                :selectedCharacter="selectionStore.selectedCharacter"
-                :selectedCharacterIds="selectionStore.selectedCharacterIds"
-                :characterMultiMode="selectionStore.characterMultiMode"
-                :selectedSet="selectionStore.selectedSet"
-                :selectedSetIds="selectionStore.selectedSetIds"
-                :setMultiMode="selectionStore.setMultiMode"
-                :searchQuery="searchStore.searchQuery"
                 :activeCategoryLabel="activeCategoryLabel"
-                :isAllPicturesActive="selectionStore.isAllPicturesActive"
-                :selectedSort="sortStore.selectedSort"
-                :selectedDescending="sortStore.selectedDescending"
-                :similarityCharacter="sortStore.selectedSimilarityCharacter"
-                :stackThreshold="sortStore.stackThreshold"
-                :showStars="gridStore.showStars"
-                :gridVersion="gridStore.gridVersion"
-                :wsUpdateKey="gridStore.wsUpdateKey"
-                :wsTagUpdate="wsStore.wsTagUpdate"
-                :wsDescriptionUpdate="wsStore.wsDescriptionUpdate"
-                :wsSmartScoreUpdate="wsStore.wsSmartScoreUpdate"
-                :wsDetectionUpdate="wsStore.wsDetectionUpdate"
-                :wsPluginProgress="wsStore.wsPluginProgress"
-                :showFaceBboxes="gridStore.showFaceBboxes"
-                :showDetections="gridStore.showDetections"
-                :showProblemIcon="gridStore.showProblemIcon"
-                :penalisedTagWeights="userPrefsStore.penalisedTagWeights"
-                :showStacks="gridStore.showStacks"
-                :compactMode="gridStore.compactMode"
-                :themeMode="userPrefsStore.themeMode"
-                :dateFormat="userPrefsStore.dateFormat"
-                :allPicturesId="ALL_PICTURES_ID"
-                :unassignedPicturesId="UNASSIGNED_PICTURES_ID"
-                :scrapheapPicturesId="SCRAPHEAP_PICTURES_ID"
-                :projectViewMode="projectStore.projectViewMode"
-                :selectedProjectId="projectStore.selectedProjectId"
-                :characterProjectIds="projectStore.characterProjectIds"
-                :setProjectIds="projectStore.setProjectIds"
-                :setDifferenceBaseId="selectionStore.setDifferenceBaseId"
-                :selectedSetNames="selectionStore.selectedSetNames"
-                :publicUrl="userPrefsStore.publicUrl"
-                :embedWatermark="userPrefsStore.embedWatermark"
                 :folderScanning="folderScanning"
-                :columns="gridStore.columns"
-                :sizeLevel="gridStore.sizeLevel"
-                :thumbnailMode="gridStore.thumbnailMode"
                 @clear-search="handleClearSearch"
                 @search-all="handleSearchAllPictures"
                 @update:selected-sort="handleUpdateSelectedSort"
@@ -2326,25 +2278,8 @@ defineExpose({
                         (selectionStore.selectedSetIds = []));
                   }
                 "
-                @update:character-multi-mode="
-                  (v) => {
-                    selectionStore.setCharacterMultiMode(v);
-                  }
-                "
-                @update:set-multi-mode="
-                  (v) => {
-                    selectionStore.setSetMultiMode(v);
-                  }
-                "
-                @update:set-difference-base-id="
-                  (v) => {
-                    selectionStore.setSetDifferenceBaseId(v);
-                  }
-                "
                 @import-started="wsStore.isUploadInProgress = true"
                 @import-ended="wsStore.isUploadInProgress = false"
-                :pendingExternalImportCount="wsStore.pendingExternalImportCount"
-                :sortChangedExternalCount="wsStore.sortChangedExternalCount"
                 @load-pending-imports="loadPendingExternalImports"
                 @load-sort-changed="loadSortChangedExternal"
                 @flag-sort-changed="onFlagSortChanged"

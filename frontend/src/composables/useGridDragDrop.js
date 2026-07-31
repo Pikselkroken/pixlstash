@@ -5,6 +5,8 @@ import {
   isVideo,
 } from "../utils/media.js";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { useSelectionStore } from "../stores/useSelectionStore";
+import { useProjectStore } from "../stores/useProjectStore";
 
 /**
  * Manages all drag-and-drop interactions in the image grid:
@@ -36,6 +38,8 @@ export function useGridDragDrop(
   },
   props,
 ) {
+  const selectionStore = useSelectionStore();
+  const projectStore = useProjectStore();
   // Drag/drop failures are reported through the notice surface rather than a
   // blocking native alert() (docs/design/notice-surface.md §1). Called during
   // the host component's setup, so Pinia is active.
@@ -191,10 +195,10 @@ export function useGridDragDrop(
     if (imageImporterRef.value && files.length) {
       imageImporterRef.value.startImport(files, {
         backendUrl: props.backendUrl,
-        selectedCharacterId: props.selectedCharacter,
+        selectedCharacterId: selectionStore.selectedCharacter,
         allPicturesId: "ALL",
         unassignedPicturesId: "UNASSIGNED",
-        projectId: props.selectedProjectId ?? null,
+        projectId: projectStore.selectedProjectId ?? null,
       });
     }
   }
@@ -209,9 +213,7 @@ export function useGridDragDrop(
     );
     const height = Math.max(
       1,
-      Math.round(
-        rect?.height || element.clientHeight || element.height || 90,
-      ),
+      Math.round(rect?.height || element.clientHeight || element.height || 90),
     );
     const computed =
       typeof window !== "undefined" && element instanceof Element
