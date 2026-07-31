@@ -247,6 +247,13 @@ jobs:
           token: ${{ secrets.RELEASE_BOT_TOKEN }}
           files: ${{ matrix.release_files }}
           prerelease: ${{ needs.build-wheel.outputs.is_prerelease == 'true' }}
+          # The release notes ("which download do I want?"), set here because
+          # this step always runs on a tag — the linux and mac legs both attach,
+          # whatever the Windows signing state is. The other attach steps
+          # deliberately omit body_path: the action resolves the body as
+          # `new || existing`, so they preserve these notes instead of clearing
+          # them, and two of them have no checkout to read the file from.
+          body_path: .github/release-assets.md
 
   # Windows Authenticode signing (Certum SimplySign). The cloud key is only
   # reachable through Certum's SimplySign Desktop GUI, so signing runs on Linux
