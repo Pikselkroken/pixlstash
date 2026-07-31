@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref } from "vue";
+import { setActivePinia, createPinia } from "pinia";
+import { useGridStore } from "../stores/useGridStore.js";
+import { useSearchStore } from "../stores/useSearchStore.js";
 
 // The composable imports the singleton apiClient for isReadOnly; mock it so no
 // real axios instance is constructed and read-only is deterministic.
@@ -64,7 +67,14 @@ function makeNav({
     setScore: vi.fn(),
   };
 
-  const props = { columns: 3, searchQuery };
+  // The composable takes the column count from the grid store; size level 6
+  // ("huge") is the 3-column step these navigation cases are written against.
+  useGridStore().sizeLevel = 6;
+  // It also reads the text query from the search STORE now (App.vue slim-down,
+  // #661), not from a prop, so the helper's `searchQuery` has to be seeded
+  // there or the Esc-clears-search cases would exercise an empty query.
+  useSearchStore().searchQuery = searchQuery;
+  const props = {};
   const emit = vi.fn();
   const { handleKeyDown } = useGridKeyboardNav(deps, props, emit, callbacks);
   return {
@@ -83,6 +93,8 @@ function keyEvent(overrides) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The composable reads the grid's column count from the store.
+  setActivePinia(createPinia());
 });
 
 describe("useGridKeyboardNav — review-overlay guard (F1)", () => {
@@ -195,14 +207,7 @@ describe("useGridKeyboardNav — justified vertical navigation", () => {
     handleKeyDown(keyEvent({ key: "PageDown", shiftKey: true }));
     // Row 2's nearest-center item from center 50 is idx 5 (center 50).
     expect(deps.cursorIdx.value).toBe(5);
-    expect(deps.selectedImageIds.value).toEqual([
-      "a",
-      "b",
-      "c",
-      "d",
-      "e",
-      "f",
-    ]);
+    expect(deps.selectedImageIds.value).toEqual(["a", "b", "c", "d", "e", "f"]);
   });
 
   it("square mode keeps the uniform index ± columns arithmetic", () => {

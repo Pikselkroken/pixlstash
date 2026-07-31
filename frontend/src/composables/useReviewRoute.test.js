@@ -98,7 +98,16 @@ describe("parseReviewQuery", () => {
   });
 
   it("opens on the board for every non-id value", () => {
-    for (const raw of ["", "board", "true", "nonsense", "0", "-3", "1.5", null]) {
+    for (const raw of [
+      "",
+      "board",
+      "true",
+      "nonsense",
+      "0",
+      "-3",
+      "1.5",
+      null,
+    ]) {
       const parsed = parseReviewQuery({ review: raw });
       expect(parsed.open, `review=${raw}`).toBe(true);
       expect(parsed.reviewId, `review=${raw}`).toBe(null);
@@ -126,8 +135,8 @@ describe("parseReviewQuery", () => {
 
   it("accepts UNASSIGNED for the character dimension", () => {
     expect(
-      parseReviewQuery({ review: "board", review_character: "UNASSIGNED" }).scope
-        .characterId,
+      parseReviewQuery({ review: "board", review_character: "UNASSIGNED" })
+        .scope.characterId,
     ).toBe("UNASSIGNED");
   });
 
@@ -158,9 +167,9 @@ describe("buildReviewQuery", () => {
   });
 
   it("encodes the board", () => {
-    expect(buildReviewQuery({}, { open: true, view: { type: "board" } })).toEqual(
-      { review: REVIEW_BOARD },
-    );
+    expect(
+      buildReviewQuery({}, { open: true, view: { type: "board" } }),
+    ).toEqual({ review: REVIEW_BOARD });
   });
 
   it("encodes a session and an archived receipt by id", () => {
@@ -462,6 +471,8 @@ describe("useReviewRoute — back and forward", () => {
 // --- store integration: load() consumes pendingRestoreViewId -----------------
 
 vi.mock("../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
   isReadOnly: { value: false },
 }));
@@ -470,9 +481,8 @@ describe("useReviewSessionsStore.load — URL restore", () => {
   it("resolves, then clears, pendingRestoreViewId", async () => {
     const { setActivePinia, createPinia } = await import("pinia");
     const { apiClient } = await import("../utils/apiClient");
-    const { useReviewSessionsStore } = await import(
-      "../stores/useReviewSessionsStore"
-    );
+    const { useReviewSessionsStore } =
+      await import("../stores/useReviewSessionsStore");
     setActivePinia(createPinia());
     apiClient.get.mockImplementation((url, opts) => {
       if (url === "/reviews" && opts?.params?.status === "OPEN") {
@@ -492,9 +502,8 @@ describe("useReviewSessionsStore.load — URL restore", () => {
   it("falls back to the board for an unknown id", async () => {
     const { setActivePinia, createPinia } = await import("pinia");
     const { apiClient } = await import("../utils/apiClient");
-    const { useReviewSessionsStore } = await import(
-      "../stores/useReviewSessionsStore"
-    );
+    const { useReviewSessionsStore } =
+      await import("../stores/useReviewSessionsStore");
     setActivePinia(createPinia());
     apiClient.get.mockResolvedValue({ data: [] });
     apiClient.post.mockResolvedValue({ data: {} });

@@ -32,6 +32,8 @@ const getMock = vi.fn(async (url) => {
 });
 
 vi.mock("../../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
   appendShareToken: (u) => u,
   isReadOnly: { value: false },

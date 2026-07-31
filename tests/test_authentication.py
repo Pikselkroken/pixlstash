@@ -49,8 +49,9 @@ def reset_auth(server):
     server.auth.username = None
     server.auth.user = None
     server.auth.active_session_ids = {}
-    with server.auth._token_cache_lock:
-        server.auth._token_cache.clear()
+    # Go through the flush helper so the revocation epoch is bumped too — a
+    # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
+    server.auth._flush_token_cache()
 
     # Re-create the User row so the rest of the server behaves as on first
     # startup (no password set yet).

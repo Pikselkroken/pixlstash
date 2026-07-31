@@ -204,6 +204,7 @@ jobs:
           tests/test_anomaly_region_scope.py
           tests/test_architecture_guardrails.py
           tests/test_async_import_staging.py
+          tests/test_auth_read_path.py
           tests/test_authentication.py
           tests/test_authz_gate_step3.py
           tests/test_authz_gate_step4.py
@@ -218,6 +219,7 @@ jobs:
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
+          tests/test_database_engine_config.py
           tests/test_dedup_sweep_api.py
           tests/test_dedup_sweep_service.py
           tests/test_dedup_tier_service.py
@@ -262,6 +264,7 @@ jobs:
           tests/test_stack_state_filter.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
+          tests/test_thumbnail_cache_headers.py
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py

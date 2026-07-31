@@ -22,10 +22,10 @@
 // Undo is OWNER_ONLY on the server, so a share/read-only session never calls
 // these endpoints and never renders the control.
 
-import { computed, ref } from "vue";
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
-import { isReadOnly } from "../utils/apiClient";
+import { isReadOnly, onSessionReset } from "../utils/apiClient";
 import {
   getUndoState,
   listOperations,
@@ -940,6 +940,11 @@ export const useOperationStore = defineStore("operation", () => {
     loaded.value = false;
     highWaterMark = null;
   }
+
+  // The undo stack is the previous credential's history — it goes with the rest
+  // of the session state, through the one chokepoint in apiClient.
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
 
   return {
     // state

@@ -1017,6 +1017,26 @@ Current head: `0088_add_dedup_tier_tables`.
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
+#### Engine and connection settings
+
+The engine is built once in `VaultDatabase.__init__` (`database.py`) and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py`). **Both must stay identical** — they share the `SQLITE_BUSY_TIMEOUT_S` constant and the `init_database` connect listener, so a setting added in one place applies to both. A restore that left the rebuilt engine better configured than the startup engine was a real bug (#651).
+
+| Setting | Value | Where | Why |
+|---|---|---|---|
+| Pool | `QueuePool size=5, max_overflow=10, pool_timeout=30` | SQLAlchemy default (not overridden) | Up to **15** concurrent connections, shared by the Starlette threadpool (handlers are plain `def`), the WorkPlanner finders, the TaskRunner workers and the writer thread. |
+| `connect_args={"timeout": …}` | `SQLITE_BUSY_TIMEOUT_S = 30` | `create_engine` | sqlite3 turns this into `PRAGMA busy_timeout`. Its 5 s default is shorter than a background task's write transaction, so readers hit "database is locked" instead of waiting. |
+| `journal_mode` | `WAL` | `init_database` | Readers do not block the single writer. |
+| `synchronous` | `NORMAL` | `init_database` | Safe with WAL; avoids an fsync per commit. |
+| `foreign_keys` | `ON` | `init_database` | SQLite defaults FK enforcement off. Relied on by e.g. `review_service`. |
+| `cache_size` | `SQLITE_CACHE_SIZE_KIB = -16384` (16 MiB) | `init_database` | SQLite's 2 MiB default holds almost nothing of a multi-GB vault, so the hot finder queries evict the pages the API endpoints need. **Per connection**: a single index scan fills it, so worst case is ~15 × 16 MiB of resident page cache. |
+
+Deliberately **not** set:
+
+- **`mmap_size`** — SQLite's memory-mapped I/O turns an I/O error into a `SIGBUS` that kills the process rather than a catchable `SQLITE_IOERR`, and is documented as unsafe on filesystems without coherent `mmap`. `image_root` is user-chosen and is frequently a NAS mount. The restore path also `os.replace()`s the live DB file underneath the engine, which is exactly the hazard mapped pages do not tolerate.
+- **`temp_store=MEMORY`** — measured on a 905 MB dev vault it was 24–29 % *slower* for a large temp b-tree (Linux keeps the unlinked temp file in page cache anyway, so `MEMORY` only adds allocator overhead) and made no measurable difference at the sizes PixlStash endpoints actually produce. `cache_size` does **not** bound an in-memory temp database, so it also removes the only ceiling on a runaway sort.
+
+Settings are asserted against real pooled connections in `tests/test_database_engine_config.py`.
+
 ### Vector storage
 
 - Embeddings (`image_embedding`, `text_embedding`, `Face.features`) are stored as `BLOB` columns.
@@ -1245,6 +1265,30 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 - Therefore a reverse proxy MUST be added to `trusted_proxies` **and** MUST be configured to **strip inbound `X-Forwarded-For`** so a client cannot spoof a local IP. Startup emits a warning for the risky config (`host=0.0.0.0` with `trusted_proxies` empty, and separately whenever `allow_remote_host_ops=true`) — see `startup_checks.py`.
 
 **Loopback-tier same-host-proxy assumption (CSO Condition 2, 2026-07-21).** The `LOOPBACK_OWNER_ONLY` red line assumes there is **no same-host reverse proxy forwarding to the backend over loopback**. A hardened deployment that binds the backend to `127.0.0.1` behind a same-host nginx is the edge case: the proxy's connection to the backend *originates from loopback*, so a proxied remote client would arrive with a loopback peer IP and satisfy even the loopback tier — silently defeating the red line. An operator running that topology **MUST** set `trusted_proxies` (to the proxy's address) so the gate resolves the real client IP from `X-Forwarded-For` instead of the loopback hop; the proxy must still strip inbound `X-Forwarded-For`. The startup warning is intentionally scoped to `host=0.0.0.0` and does **not** fire on this same-host case, because it is indistinguishable at config-load time from the ordinary pure-loopback desktop deployment (backend on `127.0.0.1`, no proxy) — firing there would be a false positive on the most common, safe configuration. This assumption is therefore documented as an operator responsibility rather than enforced by a runtime check.
+
+### 16.4 How authentication reaches the database (issue #651)
+
+**Authentication reads run on the read path, never the serialised writer queue.** `VaultDatabase` has a single writer thread (§13); `run_task` enqueues onto it and `run_immediate_read_task` bypasses it entirely (opening its own `Session` under the `_EngineRWLock` read side). `DBPriority.IMMEDIATE` only wins queue *ordering* — the worker loop still runs the in-flight task's session to completion before it dequeues anything — so every authenticated request used to inherit the full duration of whatever background batch happened to be committing (amplified by the `metadata_hash` after-flush hook, which issues several queries per dirty picture inside the write transaction). The four auth reads therefore use `run_immediate_read_task`:
+
+| Read | `auth.py` |
+|---|---|
+| Owner user lookup | `get_user` |
+| Owner user by id | `get_user_for_request` |
+| Token candidate fetch (prefix-indexed) | `_token_from_value` → `fetch_candidates` |
+| Guest-session cookie → `GuestSession` row | `auth_middleware` → `_lookup_by_token` |
+
+**Writes stay on the writer queue.** Everything that mutates auth state — `ensure_user`, credential claims, `create_token`, `delete_token`, `update_token`, `revoke_tokens_for_resource` — still goes through `run_task` and is still awaited synchronously. The one exception is `last_used_at` (below).
+
+**Revocation is still immediate, and does not depend on the queue.** The property to preserve is *revoke → next request 401*. It rests on two things, neither of which is queue serialisation:
+
+1. **Commit before flush.** Every revocation path runs its `run_task` delete to completion (synchronously) and only then calls `AuthService._flush_token_cache()`. Because SQLite runs in WAL mode, a read that starts after that commit necessarily observes it — so the next lookup's candidate fetch, on the read path, cannot see a revoked row.
+2. **A revocation epoch guards the cache write.** `_token_cache` short-circuits `bcrypt.verify` for 5 minutes, and its write has *always* happened outside the writer queue. So a lookup that read the token row just before the delete committed could install that stale row just after the flush, keeping a revoked token alive for the full TTL. `_flush_token_cache` bumps `_token_cache_epoch` under `_token_cache_lock`; `_token_from_value` samples the epoch before it reads and declines to cache if it moved. The in-flight request itself still succeeds (it began before the revocation — refusing it would be over-blocking), but nothing is cached, so the next request re-reads the database and 401s.
+
+`_flush_token_cache` is the **only** supported way to invalidate the token cache. Do not clear `_token_cache` directly: that skips the epoch bump and silently reopens the window above.
+
+**`last_used_at` is fire-and-forget (accepted risk, bounded).** `_record_token_last_used` submits the refresh with `submit_task(..., priority=DBPriority.LOW)` and logs failures from a done-callback, instead of blocking the request on the writer queue. This is safe **only** because `last_used_at` is display-only: it is surfaced by `list_tokens` and the Settings account panel and is read by no authentication or authorization code path. It carries neither revocation state (that is the row's existence) nor expiry state (that is `expires_at`), both of which are re-read from the database on every cache miss. **If `last_used_at` ever becomes an input to an access decision — idle-timeout expiry, anomaly detection, anything — this must move back onto a synchronous, ordered write first.**
+
+**Restore fence.** `run_immediate_read_task` takes the read side of `_EngineRWLock`, which the restore DB-file swap fences with `exclusive_engine_access` (§18.4). Auth reads are therefore *more* strongly fenced than before, not less: during a swap they block until the new engine is in place rather than racing a disposed engine. The lock is not re-entrant, so an auth read must never be issued from inside another `run_immediate_read_task` callback — a writer waiting between the two acquisitions would deadlock. None of the current call paths nest (the authz gate's membership reads and `AuthService`'s reads are siblings, never enclosing).
 
 ---
 

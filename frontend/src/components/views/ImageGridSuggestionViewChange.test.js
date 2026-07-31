@@ -17,6 +17,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
+import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { ref, computed } from "vue";
 
 // One seam for every network call: all `src/api/*` modules go through this
@@ -39,6 +40,9 @@ vi.mock("../../utils/apiClient", () => {
       delete: (...args) => apiDelete(...args),
     },
     activateShareToken: vi.fn(),
+    // Added upstream (#661): components subscribe to session resets, and a
+    // mock without it throws on import rather than at the call site.
+    onSessionReset: () => () => {},
     appendShareToken: (url) => url,
     checkLoginStatus: vi.fn(),
     checkSession: vi.fn(),
@@ -177,7 +181,9 @@ describe("the person suggestion search is dropped by a view change", () => {
 
     apiGet.mockClear();
     apiPost.mockClear();
-    await wrapper.setProps({ selectedCharacter: 42 });
+    // The view lives in the selection store now (#661), so changing a prop
+    // would fire nothing and every assertion below would pass vacuously.
+    useSelectionStore().selectedCharacter = 42;
     await wrapper.vm.$nextTick();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -200,14 +206,16 @@ describe("the person suggestion search is dropped by a view change", () => {
     // Opening the sidebar's person menu can itself select the person, so the
     // watcher compares against the view the search was armed from. Without
     // that, arming would immediately cancel itself.
-    const wrapper = mountGrid({ selectedCharacter: 9 });
+    const wrapper = mountGrid();
     await wrapper.vm.$nextTick();
+    // The menu click selects the person, THEN arms the search, so the armed
+    // view snapshot is (9, null) and the watcher that fires for that very
+    // selection change must recognise it and keep the search.
+    useSelectionStore().selectedCharacter = 9;
     await armSuggestion(wrapper);
     apiPost.mockClear();
-
-    // Re-notify with the same view: nothing changed, so nothing is dropped.
-    await wrapper.setProps({ selectedCharacter: 9 });
     await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(wrapper.vm.searchResultsActive).toBe(true);
     wrapper.unmount();

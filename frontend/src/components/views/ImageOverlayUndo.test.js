@@ -23,6 +23,8 @@ const getMock = vi.fn(async (url) => {
 vi.mock("../../utils/apiClient", async () => {
   const { ref } = await import("vue");
   return {
+    onSessionReset: () => () => {},
+    sessionContext: { value: null },
     apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
     appendShareToken: (u) => u,
     isReadOnly: ref(false),

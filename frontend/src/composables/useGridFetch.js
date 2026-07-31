@@ -12,7 +12,7 @@ import {
 } from "../api/pictures";
 import { getCharacterSummary } from "../api/characters";
 import { getProjectSummary } from "../api/projects";
-import { listPictureSets } from "../api/pictureSets";
+import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
 import { cutFaceSuggestions } from "../utils/faceSuggestionCut.js";
 import {
@@ -22,8 +22,17 @@ import {
 } from "../utils/media.js";
 import { debounce } from "lodash-es";
 import { useFilterStore } from "../stores/useFilterStore";
+import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
+import { useSortStore } from "../stores/useSortStore";
+import { useProjectStore } from "../stores/useProjectStore";
+import { useSearchStore } from "../stores/useSearchStore";
+import {
+  ALL_PICTURES_ID,
+  SCRAPHEAP_PICTURES_ID,
+  UNASSIGNED_PICTURES_ID,
+} from "../stores/useViewStore";
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 
@@ -31,7 +40,8 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
  * Manages grid image fetching: fetch state, URL query building, and the
  * debounced fetch trigger.
  *
- * The filter facets of the query come from the stores directly (Phase 3);
+ * The filter facets of the query and the grid geometry come from the stores
+ * directly (Phase 3);
  * `props` still supplies the selection/sort/project fields that have not been
  * migrated yet.
  *
@@ -93,7 +103,11 @@ export function useGridFetch(
     onGridFetchDone,
   },
 ) {
+  const sortStore = useSortStore();
+  const projectStore = useProjectStore();
+  const searchStore = useSearchStore();
   const filterStore = useFilterStore();
+  const gridStore = useGridStore();
   const selectionStore = useSelectionStore();
   const userPrefsStore = useUserPrefsStore();
 
@@ -136,46 +150,47 @@ export function useGridFetch(
   }
 
   function getActiveSortKey() {
-    if (typeof props.selectedSort !== "string") return "";
-    return props.selectedSort.trim().toUpperCase();
+    if (typeof sortStore.selectedSort !== "string") return "";
+    return sortStore.selectedSort.trim().toUpperCase();
   }
 
   function buildGridFetchKey() {
-    const selectedSetIds = Array.isArray(props.selectedSetIds)
-      ? props.selectedSetIds
+    const selectedSetIds = Array.isArray(selectionStore.selectedSetIds)
+      ? selectionStore.selectedSetIds
           .map((id) => Number(id))
           .filter((id) => Number.isFinite(id) && id > 0)
           .sort((a, b) => a - b)
       : [];
     const selectedCharacterIds = normalizedSelectedCharacterIds.value;
     return JSON.stringify({
-      selectedCharacter: props.selectedCharacter ?? null,
+      selectedCharacter: selectionStore.selectedCharacter ?? null,
       selectedCharacterIds,
       isMultiCharacterView: selectedCharacterIds.length > 1,
       characterMultiMode:
         selectedCharacterIds.length > 1
-          ? (props.characterMultiMode ?? "union")
+          ? (selectionStore.characterMultiMode ?? "union")
           : null,
-      selectedSet: props.selectedSet ?? null,
+      selectedSet: selectionStore.selectedSet ?? null,
       selectedSetIds,
       isSetOverlapView: selectedSetIds.length > 1,
       setMultiMode:
         selectedSetIds.length > 1
-          ? (props.setMultiMode ?? "intersection")
+          ? (selectionStore.setMultiMode ?? "intersection")
           : null,
       setDifferenceBaseId:
-        selectedSetIds.length > 1 && props.setMultiMode === "difference"
-          ? (props.setDifferenceBaseId ?? null)
+        selectedSetIds.length > 1 &&
+        selectionStore.setMultiMode === "difference"
+          ? (selectionStore.setDifferenceBaseId ?? null)
           : null,
-      projectViewMode: props.projectViewMode ?? "global",
-      selectedProjectId: props.selectedProjectId ?? null,
-      searchQuery: props.searchQuery ?? "",
-      selectedSort: props.selectedSort ?? "",
-      selectedDescending: props.selectedDescending ?? null,
-      stackThreshold: props.stackThreshold ?? null,
+      projectViewMode: projectStore.projectViewMode ?? "global",
+      selectedProjectId: projectStore.selectedProjectId ?? null,
+      searchQuery: searchStore.searchQuery ?? "",
+      selectedSort: sortStore.selectedSort ?? "",
+      selectedDescending: sortStore.selectedDescending ?? null,
+      stackThreshold: sortStore.stackThreshold ?? null,
       mediaTypeFilter: filterStore.mediaTypeFilter ?? "all",
       impossibleSources: filterStore.impossibleSources ?? [],
-      similarityCharacter: props.similarityCharacter ?? null,
+      similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
@@ -205,18 +220,24 @@ export function useGridFetch(
         for (const setId of normalizedSelectedSetIds.value) {
           params.append("set_ids", String(setId));
         }
-        params.append("set_mode", props.setMultiMode ?? "intersection");
+        params.append(
+          "set_mode",
+          selectionStore.setMultiMode ?? "intersection",
+        );
         if (
-          props.setMultiMode === "difference" &&
-          props.setDifferenceBaseId != null
+          selectionStore.setMultiMode === "difference" &&
+          selectionStore.setDifferenceBaseId != null
         ) {
-          params.append("base_set_id", String(props.setDifferenceBaseId));
+          params.append(
+            "base_set_id",
+            String(selectionStore.setDifferenceBaseId),
+          );
         }
-        if (props.projectViewMode === "project") {
+        if (projectStore.projectViewMode === "project") {
           // Derive effective project_id from per-set data; skip when sets span multiple projects.
           const pidSet = new Set(
             normalizedSelectedSetIds.value.map(
-              (id) => props.setProjectIds?.[id] ?? null,
+              (id) => projectStore.setProjectIds?.[id] ?? null,
             ),
           );
           if (pidSet.size === 1) {
@@ -226,11 +247,11 @@ export function useGridFetch(
         }
       } else if (primarySelectedSetId.value != null) {
         params.append("set_id", String(primarySelectedSetId.value));
-        if (props.projectViewMode === "project") {
+        if (projectStore.projectViewMode === "project") {
           params.append(
             "project_id",
-            props.selectedProjectId != null
-              ? props.selectedProjectId
+            projectStore.selectedProjectId != null
+              ? projectStore.selectedProjectId
               : "UNASSIGNED",
           );
         }
@@ -239,13 +260,16 @@ export function useGridFetch(
       for (const charId of normalizedSelectedCharacterIds.value) {
         params.append("character_ids", String(charId));
       }
-      params.append("character_mode", props.characterMultiMode ?? "union");
-      if (props.projectViewMode === "project") {
+      params.append(
+        "character_mode",
+        selectionStore.characterMultiMode ?? "union",
+      );
+      if (projectStore.projectViewMode === "project") {
         // Derive effective project_id from per-character data; if all chars share
         // the same project use it, if they span multiple projects skip the filter.
         const pidSet = new Set(
           normalizedSelectedCharacterIds.value.map(
-            (id) => props.characterProjectIds?.[id] ?? null,
+            (id) => projectStore.characterProjectIds?.[id] ?? null,
           ),
         );
         if (pidSet.size === 1) {
@@ -254,45 +278,45 @@ export function useGridFetch(
         }
       }
     } else if (
-      props.selectedCharacter !== undefined &&
-      props.selectedCharacter !== null &&
-      props.selectedCharacter !== "" &&
-      props.selectedCharacter !== props.allPicturesId
+      selectionStore.selectedCharacter !== undefined &&
+      selectionStore.selectedCharacter !== null &&
+      selectionStore.selectedCharacter !== "" &&
+      selectionStore.selectedCharacter !== ALL_PICTURES_ID
     ) {
-      if (props.selectedCharacter === String(props.scrapheapPicturesId)) {
+      if (selectionStore.selectedCharacter === String(SCRAPHEAP_PICTURES_ID)) {
         params.append("only_deleted", "true");
       } else {
-        params.append("character_id", props.selectedCharacter);
-        if (props.projectViewMode === "project") {
+        params.append("character_id", selectionStore.selectedCharacter);
+        if (projectStore.projectViewMode === "project") {
           params.append(
             "project_id",
-            props.selectedProjectId != null
-              ? props.selectedProjectId
+            projectStore.selectedProjectId != null
+              ? projectStore.selectedProjectId
               : "UNASSIGNED",
           );
         }
       }
     } else if (
-      props.selectedCharacter === props.allPicturesId &&
+      selectionStore.selectedCharacter === ALL_PICTURES_ID &&
       filterStore.unassignedOnlyFilter
     ) {
-      params.append("character_id", props.unassignedPicturesId);
-      if (props.projectViewMode === "project") {
+      params.append("character_id", UNASSIGNED_PICTURES_ID);
+      if (projectStore.projectViewMode === "project") {
         params.append(
           "project_id",
-          props.selectedProjectId != null
-            ? props.selectedProjectId
+          projectStore.selectedProjectId != null
+            ? projectStore.selectedProjectId
             : "UNASSIGNED",
         );
       }
     } else if (
-      props.selectedCharacter === props.allPicturesId &&
-      props.projectViewMode === "project"
+      selectionStore.selectedCharacter === ALL_PICTURES_ID &&
+      projectStore.projectViewMode === "project"
     ) {
       params.append(
         "project_id",
-        props.selectedProjectId != null
-          ? props.selectedProjectId
+        projectStore.selectedProjectId != null
+          ? projectStore.selectedProjectId
           : "UNASSIGNED",
       );
     }
@@ -314,26 +338,29 @@ export function useGridFetch(
     const params = new URLSearchParams();
     _appendSelectionParams(params);
     if (
-      props.selectedSort === "CHARACTER_LIKENESS" &&
-      props.similarityCharacter
+      sortStore.selectedSort === "CHARACTER_LIKENESS" &&
+      sortStore.selectedSimilarityCharacter
     ) {
-      params.append("reference_character_id", props.similarityCharacter);
+      params.append(
+        "reference_character_id",
+        sortStore.selectedSimilarityCharacter,
+      );
     }
-    if (props.searchQuery && props.searchQuery.trim()) {
-      params.append("query", props.searchQuery.trim());
+    if (searchStore.searchQuery && searchStore.searchQuery.trim()) {
+      params.append("query", searchStore.searchQuery.trim());
     } else {
-      if (props.selectedSort && props.selectedSort.trim()) {
-        params.append("sort", props.selectedSort.trim());
+      if (sortStore.selectedSort && sortStore.selectedSort.trim()) {
+        params.append("sort", sortStore.selectedSort.trim());
       }
-      if (typeof props.selectedDescending === "boolean") {
+      if (typeof sortStore.selectedDescending === "boolean") {
         params.append(
           "descending",
-          props.selectedDescending ? "true" : "false",
+          sortStore.selectedDescending ? "true" : "false",
         );
       } else {
         console.warn(
           "[ImageGrid.vue] selectedDescending is not boolean, skipping param. Type:",
-          typeof props.selectedDescending,
+          typeof sortStore.selectedDescending,
         );
       }
     }
@@ -534,9 +561,9 @@ export function useGridFetch(
         loadId,
         fetchKey,
         force,
-        selectedSort: props.selectedSort ?? null,
-        selectedCharacter: props.selectedCharacter ?? null,
-        selectedSet: props.selectedSet ?? null,
+        selectedSort: sortStore.selectedSort ?? null,
+        selectedCharacter: selectionStore.selectedCharacter ?? null,
+        selectedSet: selectionStore.selectedSet ?? null,
         visibleStart: visibleStart.value,
         visibleEnd: visibleEnd.value,
       });
@@ -553,8 +580,9 @@ export function useGridFetch(
     try {
       let images = [];
 
-      const _hasSearch = !!props.searchQuery?.trim();
-      const _isLikenessSort = props.selectedSort === LIKENESS_GROUPS_SORT_KEY;
+      const _hasSearch = !!searchStore.searchQuery?.trim();
+      const _isLikenessSort =
+        sortStore.selectedSort === LIKENESS_GROUPS_SORT_KEY;
       const _hasReverseImageSearch =
         !_hasSearch && !!reverseImageSearchPictureIds?.value?.length;
       const _hasCharacterFaceSearch =
@@ -569,7 +597,7 @@ export function useGridFetch(
 
       if (_isLikenessSort) {
         fetchMode = "likeness-groups";
-        const threshold = getStackThreshold(props.stackThreshold);
+        const threshold = getStackThreshold(sortStore.stackThreshold);
         const likenessGroupParams = buildLikenessGroupQueryParams();
         const data = await getLikenessGroups(threshold, likenessGroupParams, {
           baseUrl: props.backendUrl,
@@ -702,7 +730,7 @@ export function useGridFetch(
         fetchMode = "text-search";
         // Use /pictures/search endpoint for text search
         const params = buildPictureIdsQueryParams();
-        images = await searchPictures(props.searchQuery.trim(), {
+        images = await searchPictures(searchStore.searchQuery.trim(), {
           query: params,
           baseUrl: props.backendUrl,
         });
@@ -729,7 +757,7 @@ export function useGridFetch(
         //   3. First batch (visible area) + last batch (END cells) in parallel
         //   4. Background stream fills the middle at BG_BATCH rows per request
         const _charIds = normalizedSelectedCharacterIds.value;
-        const _selChar = props.selectedCharacter;
+        const _selChar = selectionStore.selectedCharacter;
         if (isSortedFetch && options?.showProgress === true) {
           completeSmartScoreProgress(loadId, 0, true);
         }
@@ -742,12 +770,12 @@ export function useGridFetch(
         // than rowHeight?.value, which may still hold the initial thumbnailSize
         // estimate when this runs (DOM measurement via updateRowHeightFromGrid
         // happens asynchronously and may not have fired yet).
-        const _fbCols = props.columns || 1;
+        const _fbCols = gridStore.columns || 1;
         const _fbViewH = scrollWrapper.value?.clientHeight || 0;
         const _fbViewW = scrollWrapper.value?.clientWidth || 0;
         const _fbCellH =
           _fbViewW > 0
-            ? Math.round(_fbViewW / _fbCols) + (props.compactMode ? 0 : 24)
+            ? Math.round(_fbViewW / _fbCols) + (gridStore.compactMode ? 0 : 24)
             : rowHeight?.value > 0
               ? rowHeight.value
               : 200;
@@ -761,16 +789,17 @@ export function useGridFetch(
         // is not always count-neutral: CHARACTER_LIKENESS joins through Face and
         // changes the row set, so the count must run over the same query as the
         // stream or the placeholder grid ends up larger than the stream can fill.
-        const _sort = props.selectedSort?.trim();
+        const _sort = sortStore.selectedSort?.trim();
         const _desc =
-          typeof props.selectedDescending === "boolean"
-            ? props.selectedDescending
+          typeof sortStore.selectedDescending === "boolean"
+            ? sortStore.selectedDescending
             : true;
         // For CHARACTER_LIKENESS the backend also needs reference_character_id in
         // both the stream and count URLs — the reference determines the row set.
         const _refCharSuffix =
-          _sort === "CHARACTER_LIKENESS" && props.similarityCharacter
-            ? `&reference_character_id=${encodeURIComponent(props.similarityCharacter)}`
+          _sort === "CHARACTER_LIKENESS" &&
+          sortStore.selectedSimilarityCharacter
+            ? `&reference_character_id=${encodeURIComponent(sortStore.selectedSimilarityCharacter)}`
             : "";
         const _sortSuffix = _sort
           ? `&sort=${encodeURIComponent(_sort)}&descending=${_desc}${_refCharSuffix}`
@@ -783,17 +812,23 @@ export function useGridFetch(
             for (const setId of normalizedSelectedSetIds.value) {
               _charP.append("set_ids", String(setId));
             }
-            _charP.set("set_mode", props.setMultiMode ?? "intersection");
+            _charP.set(
+              "set_mode",
+              selectionStore.setMultiMode ?? "intersection",
+            );
             if (
-              props.setMultiMode === "difference" &&
-              props.setDifferenceBaseId != null
+              selectionStore.setMultiMode === "difference" &&
+              selectionStore.setDifferenceBaseId != null
             ) {
-              _charP.set("base_set_id", String(props.setDifferenceBaseId));
+              _charP.set(
+                "base_set_id",
+                String(selectionStore.setDifferenceBaseId),
+              );
             }
-            if (props.projectViewMode === "project") {
+            if (projectStore.projectViewMode === "project") {
               const _pidSet = new Set(
                 normalizedSelectedSetIds.value.map(
-                  (id) => props.setProjectIds?.[id] ?? null,
+                  (id) => projectStore.setProjectIds?.[id] ?? null,
                 ),
               );
               if (_pidSet.size === 1) {
@@ -806,22 +841,27 @@ export function useGridFetch(
             }
           } else if (primarySelectedSetId.value != null) {
             _charP.set("set_id", String(primarySelectedSetId.value));
-            if (props.projectViewMode === "project") {
+            if (projectStore.projectViewMode === "project") {
               _charP.set(
                 "project_id",
-                props.selectedProjectId != null
-                  ? String(props.selectedProjectId)
+                projectStore.selectedProjectId != null
+                  ? String(projectStore.selectedProjectId)
                   : "UNASSIGNED",
               );
             }
           }
         } else if (_charIds.length > 1) {
           for (const id of _charIds) _charP.append("character_ids", String(id));
-          _charP.set("character_mode", props.characterMultiMode ?? "union");
+          _charP.set(
+            "character_mode",
+            selectionStore.characterMultiMode ?? "union",
+          );
           // Only apply project filter when all selected characters share the same project.
-          if (props.projectViewMode === "project") {
+          if (projectStore.projectViewMode === "project") {
             const _pidSet = new Set(
-              _charIds.map((id) => props.characterProjectIds?.[id] ?? null),
+              _charIds.map(
+                (id) => projectStore.characterProjectIds?.[id] ?? null,
+              ),
             );
             if (_pidSet.size === 1) {
               const _pid = [..._pidSet][0];
@@ -831,40 +871,40 @@ export function useGridFetch(
               );
             }
           }
-        } else if (_selChar === String(props.scrapheapPicturesId)) {
+        } else if (_selChar === String(SCRAPHEAP_PICTURES_ID)) {
           _charP.set("only_deleted", "true");
         } else if (
           _selChar != null &&
           _selChar !== "" &&
-          _selChar !== props.allPicturesId
+          _selChar !== ALL_PICTURES_ID
         ) {
           _charP.set("character_id", String(_selChar));
-          if (props.projectViewMode === "project") {
+          if (projectStore.projectViewMode === "project") {
             _charP.set(
               "project_id",
-              props.selectedProjectId != null
-                ? String(props.selectedProjectId)
+              projectStore.selectedProjectId != null
+                ? String(projectStore.selectedProjectId)
                 : "UNASSIGNED",
             );
           }
         } else if (
-          _selChar === props.allPicturesId &&
+          _selChar === ALL_PICTURES_ID &&
           filterStore.unassignedOnlyFilter
         ) {
-          _charP.set("character_id", String(props.unassignedPicturesId));
-          if (props.projectViewMode === "project") {
+          _charP.set("character_id", String(UNASSIGNED_PICTURES_ID));
+          if (projectStore.projectViewMode === "project") {
             _charP.set(
               "project_id",
-              props.selectedProjectId != null
-                ? String(props.selectedProjectId)
+              projectStore.selectedProjectId != null
+                ? String(projectStore.selectedProjectId)
                 : "UNASSIGNED",
             );
           }
-        } else if (props.projectViewMode === "project") {
+        } else if (projectStore.projectViewMode === "project") {
           _charP.set(
             "project_id",
-            props.selectedProjectId != null
-              ? String(props.selectedProjectId)
+            projectStore.selectedProjectId != null
+              ? String(projectStore.selectedProjectId)
               : "UNASSIGNED",
           );
         }
@@ -997,7 +1037,7 @@ export function useGridFetch(
 
         // 2. Pre-build placeholder grid — scroll area immediately reflects full size.
         const placeholderStartedAt = getNowMs();
-        const cols = props.columns || 1;
+        const cols = gridStore.columns || 1;
         // Compute window count from actual viewport capacity so visibleEnd covers
         // all initially visible items even when the viewport shows more than VIEW_WINDOW.
         // Derive cell height from clientWidth/cols (square thumbnails) rather than
@@ -1007,12 +1047,12 @@ export function useGridFetch(
         const _fastViewH = scrollWrapper.value?.clientHeight || 0;
         const _effectiveRowHeight0 =
           _fastViewW > 0
-            ? Math.round(_fastViewW / cols) + (props.compactMode ? 0 : 24)
+            ? Math.round(_fastViewW / cols) + (gridStore.compactMode ? 0 : 24)
             : rowHeight?.value > 0
               ? rowHeight.value
               : Math.round(
-                  Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-                    (props.compactMode ? 0 : 24),
+                  Math.min(384, Math.max(128, gridStore.thumbnailSize || 128)) +
+                    (gridStore.compactMode ? 0 : 24),
                 );
         const _viewportItemCount0 =
           _fastViewH > 0 && _effectiveRowHeight0 > 0
@@ -1290,7 +1330,7 @@ export function useGridFetch(
       if (isSetOverlapView.value) {
         totalCurrentCategoryCount.value = newImages.length;
       }
-      const cols = props.columns || 1;
+      const cols = gridStore.columns || 1;
       // Compute window count from actual viewport capacity so visibleEnd covers
       // all initially visible items even when the viewport shows more than VIEW_WINDOW.
       // Derive cell height from clientWidth/cols (square thumbnails) rather than
@@ -1300,12 +1340,12 @@ export function useGridFetch(
       const _slowViewH = scrollWrapper.value?.clientHeight || 0;
       const _effectiveRowHeight1 =
         _slowViewW > 0
-          ? Math.round(_slowViewW / cols) + (props.compactMode ? 0 : 24)
+          ? Math.round(_slowViewW / cols) + (gridStore.compactMode ? 0 : 24)
           : rowHeight?.value > 0
             ? rowHeight.value
             : Math.round(
-                Math.min(384, Math.max(128, props.thumbnailSize || 128)) +
-                  (props.compactMode ? 0 : 24),
+                Math.min(384, Math.max(128, gridStore.thumbnailSize || 128)) +
+                  (gridStore.compactMode ? 0 : 24),
               );
       const _viewportItemCount1 =
         _slowViewH > 0 && _effectiveRowHeight1 > 0
@@ -1402,7 +1442,7 @@ export function useGridFetch(
   async function fetchAllPicturesCount() {
     try {
       const data = await getCharacterSummary(
-        props.allPicturesId,
+        ALL_PICTURES_ID,
         userPrefsStore.applyTagFilter ? { apply_tag_filter: true } : undefined,
         { baseUrl: props.backendUrl },
       );
@@ -1415,9 +1455,9 @@ export function useGridFetch(
       // The scoped count comes from one of two summary resources; the ladder
       // below picks which one and under what id, then a single call runs it.
       let summaryKind = "character";
-      let summaryId = props.allPicturesId;
+      let summaryId = ALL_PICTURES_ID;
       let summaryProjectId = null;
-      const selectedCharacter = String(props.selectedCharacter ?? "");
+      const selectedCharacter = String(selectionStore.selectedCharacter ?? "");
       if (isSetOverlapView.value) {
         totalCurrentCategoryCount.value =
           Number(allGridImages.value.length) || 0;
@@ -1429,7 +1469,13 @@ export function useGridFetch(
         selectedSetId !== undefined &&
         String(selectedSetId) !== ""
       ) {
-        const setList = await listPictureSets({ baseUrl: props.backendUrl });
+        // One shared, in-flight-de-duplicated read of the set list: this is the
+        // same request the sidebar makes on the same triggers, and the count
+        // shown here must be the fresh one, so it forces a revalidation rather
+        // than reading whatever happens to be cached.
+        const setList = await useEntityListsStore().refresh("sets", {
+          baseUrl: props.backendUrl,
+        });
         const selectedSetNumericId = Number(selectedSetId);
         const selectedSet = Array.isArray(setList)
           ? setList.find((item) => {
@@ -1446,21 +1492,21 @@ export function useGridFetch(
           Number(selectedSet?.picture_count) || 0;
         return;
       }
-      const inProjectView = props.projectViewMode === "project";
+      const inProjectView = projectStore.projectViewMode === "project";
       const activeProjectId =
-        props.selectedProjectId != null
-          ? props.selectedProjectId
+        projectStore.selectedProjectId != null
+          ? projectStore.selectedProjectId
           : "UNASSIGNED";
-      if (selectedCharacter === String(props.allPicturesId)) {
+      if (selectedCharacter === String(ALL_PICTURES_ID)) {
         if (inProjectView) {
           summaryKind = "project";
           summaryId = activeProjectId;
         }
-      } else if (selectedCharacter === String(props.unassignedPicturesId)) {
-        summaryId = props.unassignedPicturesId;
+      } else if (selectedCharacter === String(UNASSIGNED_PICTURES_ID)) {
+        summaryId = UNASSIGNED_PICTURES_ID;
         if (inProjectView) summaryProjectId = activeProjectId;
-      } else if (selectedCharacter === String(props.scrapheapPicturesId)) {
-        summaryId = props.scrapheapPicturesId;
+      } else if (selectedCharacter === String(SCRAPHEAP_PICTURES_ID)) {
+        summaryId = SCRAPHEAP_PICTURES_ID;
       } else if (selectedCharacter && !hasSetSelection.value) {
         summaryId = selectedCharacter;
         if (inProjectView) summaryProjectId = activeProjectId;

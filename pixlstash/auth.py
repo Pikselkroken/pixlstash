@@ -284,6 +284,11 @@ class AuthService:
         self._token_cache: dict[str, tuple[UserToken, float]] = {}
         self._TOKEN_CACHE_TTL = 300.0  # seconds
         self._token_cache_lock = threading.Lock()
+        # Revocation generation counter, bumped by every _flush_token_cache().
+        # A lookup that started before a revocation must not be allowed to
+        # install its (now stale) result into the cache afterwards — see
+        # _token_from_value. Guarded by _token_cache_lock.
+        self._token_cache_epoch: int = 0
         # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
         # Entries expire after _GUEST_SESSION_INACTIVE_TTL (30 days) and are pruned lazily
         # in record_guest_activity().  When the cache reaches _guest_max_tracked_sessions
@@ -483,9 +488,16 @@ class AuthService:
             )
 
     def get_user(self) -> Optional[User]:
-        return self._db.run_task(
-            lambda session: session.exec(select(User)).first(),
-            priority=DBPriority.IMMEDIATE,
+        """Return the (single) owner user row, or None if the account row is absent.
+
+        Runs on the **read** path (``run_immediate_read_task``), not the
+        serialised writer queue. ``DBPriority.IMMEDIATE`` only reordered the
+        queue; the writer still finished the in-flight task's session first, so
+        every authenticated request paid the tail of whatever background batch
+        was committing (issue #651). See ``docs/backend_architecture.md`` §16.
+        """
+        return self._db.run_immediate_read_task(
+            lambda session: session.exec(select(User)).first()
         )
 
     def ensure_user(self) -> User:
@@ -787,6 +799,14 @@ class AuthService:
 
         Results are cached for _TOKEN_CACHE_TTL seconds to avoid a bcrypt call
         on every request (bcrypt is intentionally slow ~200 ms).
+
+        Revocation safety: the DB candidate fetch is the authority and runs on
+        the read path, so it always observes an already-committed revocation
+        (every revoke path commits *before* calling :meth:`_flush_token_cache`).
+        The only way a revoked token could survive is a lookup that read the row
+        before the delete committed and then installed it in the cache *after*
+        the flush — a 5-minute window. The epoch check around the cache write
+        below closes that.
         """
         if not token_value:
             return None
@@ -795,6 +815,7 @@ class AuthService:
         digest = hashlib.sha256(token_value.encode()).hexdigest()
         now_mono = time.monotonic()
         with self._token_cache_lock:
+            epoch_at_start = self._token_cache_epoch
             cached = self._token_cache.get(digest)
             if cached is not None:
                 token_obj, expires_mono = cached
@@ -825,36 +846,113 @@ class AuthService:
                 )
             ).all()
 
-        tokens = self._db.run_task(
-            fetch_candidates, user.id, prefix, priority=DBPriority.IMMEDIATE
-        )
+        # Read path, not the writer queue — see get_user (issue #651).
+        tokens = self._db.run_immediate_read_task(fetch_candidates, user.id, prefix)
         now = datetime.utcnow()
         for token in tokens:
             if token.expires_at is not None and token.expires_at < now:
                 continue
             if bcrypt.verify(token_value, token.token_hash):
-
-                def update_last_used(session: Session, token_id: int):
-                    db_token = session.get(UserToken, token_id)
-                    if db_token is not None:
-                        db_token.last_used_at = datetime.utcnow()
-                        session.add(db_token)
-                        session.commit()
-
-                self._db.run_task(
-                    update_last_used, token.id, priority=DBPriority.IMMEDIATE
-                )
-                # Populate cache so subsequent requests skip bcrypt.
+                self._record_token_last_used(token.id)
+                # Populate cache so subsequent requests skip bcrypt — but only
+                # if no revocation landed while we were reading/verifying. A
+                # token this lookup saw as live may have been deleted in the
+                # meantime; caching it then would keep a revoked token working
+                # for up to _TOKEN_CACHE_TTL, defeating the synchronous flush
+                # that delete_token/update_token/revoke_tokens_for_resource do.
                 with self._token_cache_lock:
-                    self._token_cache[digest] = (
-                        token,
-                        now_mono + self._TOKEN_CACHE_TTL,
-                    )
-                    # Evict entries beyond a reasonable cap to bound memory use.
-                    if len(self._token_cache) > 1000:
-                        self._token_cache.pop(next(iter(self._token_cache)))
+                    if self._token_cache_epoch == epoch_at_start:
+                        self._token_cache[digest] = (
+                            token,
+                            now_mono + self._TOKEN_CACHE_TTL,
+                        )
+                        # Evict entries beyond a reasonable cap to bound memory use.
+                        if len(self._token_cache) > 1000:
+                            self._token_cache.pop(next(iter(self._token_cache)))
+                    else:
+                        self._logger.info(
+                            "Not caching token id=%s: a token revocation raced "
+                            "this lookup. The next request re-reads the database.",
+                            token.id,
+                        )
                 return token
         return None
+
+    def _flush_token_cache(self) -> None:
+        """Drop every cached token verification and invalidate in-flight lookups.
+
+        Called by every revocation/mutation path (``delete_token``,
+        ``update_token``, ``revoke_tokens_for_resource``) *after* the change has
+        committed, so the next request re-reads the database and sees it.
+
+        Bumping ``_token_cache_epoch`` under the same lock also invalidates any
+        lookup already in flight: ``_token_from_value`` samples the epoch before
+        it reads and refuses to install its result if the epoch moved. Without
+        that, a lookup that read the token row just before the delete committed
+        could re-populate the cache just after the flush and keep a revoked
+        token authenticating for the full cache TTL.
+        """
+        with self._token_cache_lock:
+            self._token_cache.clear()
+            self._token_cache_epoch += 1
+
+    def _record_token_last_used(self, token_id: int) -> None:
+        """Queue a token's ``last_used_at`` refresh off the request's critical path.
+
+        ``last_used_at`` is a display-only hygiene signal (shown by
+        :meth:`list_tokens` and the Settings account panel); **nothing in the
+        authentication or authorization path reads it**, and it carries neither
+        revocation nor expiry state — those live in the row's existence and in
+        ``expires_at``, both of which are re-read from the database on every
+        cache miss. So it is deliberately fire-and-forget: the request no longer
+        waits for the serialised writer queue to reach it (issue #651). The cost
+        is bounded freshness on the timestamp, and a failed write is logged
+        rather than swallowed.
+
+        Args:
+            token_id: Primary key of the ``UserToken`` that just authenticated.
+        """
+
+        def update_last_used(session: Session, tid: int):
+            db_token = session.get(UserToken, tid)
+            if db_token is not None:
+                db_token.last_used_at = datetime.utcnow()
+                session.add(db_token)
+                session.commit()
+
+        future = self._db.submit_task(
+            update_last_used, token_id, priority=DBPriority.LOW
+        )
+        future.add_done_callback(
+            lambda done: self._log_last_used_result(token_id, done)
+        )
+
+    def _log_last_used_result(self, token_id: int, future) -> None:
+        """Log a failed background ``last_used_at`` refresh (never raises).
+
+        Runs as a ``Future`` done-callback on the DB writer thread, so it must
+        not propagate: an exception here would be swallowed by the executor with
+        no trace, which is exactly what this callback exists to prevent.
+        """
+        try:
+            exc = future.exception()
+        except Exception as callback_exc:
+            self._logger.warning(
+                "Could not determine the outcome of the last_used_at refresh "
+                "for token id=%s: %s. Authentication is unaffected; the "
+                "timestamp shown in Settings may be stale.",
+                token_id,
+                callback_exc,
+            )
+            return
+        if exc is not None:
+            self._logger.warning(
+                "Background last_used_at refresh failed for token id=%s: %s. "
+                "Authentication is unaffected (last_used_at is display-only), "
+                "but the timestamp shown in Settings may be stale.",
+                token_id,
+                exc,
+            )
 
     def _user_id_from_bearer(self, request: Request) -> Optional[int]:
         """Validate a Bearer token from the Authorization header and return the user id."""
@@ -1032,9 +1130,9 @@ class AuthService:
 
     def get_user_for_request(self, request: Request) -> User:
         user_id = self.require_user_id(request)
-        user = self._db.run_task(
-            lambda session: session.get(User, user_id),
-            priority=DBPriority.IMMEDIATE,
+        # Read path, not the writer queue — see get_user (issue #651).
+        user = self._db.run_immediate_read_task(
+            lambda session: session.get(User, user_id)
         )
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
@@ -1308,9 +1406,10 @@ class AuthService:
             remove_token, user_id, token_id, priority=DBPriority.IMMEDIATE
         )
         # Clear the token cache — we can't map token_id back to the digest key,
-        # so flush all entries to ensure the deleted token is not reused.
-        with self._token_cache_lock:
-            self._token_cache.clear()
+        # so flush all entries to ensure the deleted token is not reused. The
+        # delete has already committed above (run_task is synchronous), so every
+        # subsequent lookup re-reads the database and 401s.
+        self._flush_token_cache()
         return {"status": "success", "deleted_id": token_id}
 
     def update_token(self, request: Request, token_id: int, watermark: bool):
@@ -1337,8 +1436,7 @@ class AuthService:
             _update, user_id, token_id, watermark, priority=DBPriority.IMMEDIATE
         )
         # Flush the token cache so the updated watermark setting takes effect immediately.
-        with self._token_cache_lock:
-            self._token_cache.clear()
+        self._flush_token_cache()
         return {"status": "success", "id": token.id, "watermark": token.watermark}
 
     def revoke_tokens_for_resource(
@@ -1374,8 +1472,7 @@ class AuthService:
         deleted = self._db.run_task(
             _revoke, user_id, resource_type, resource_id, priority=DBPriority.IMMEDIATE
         )
-        with self._token_cache_lock:
-            self._token_cache.clear()
+        self._flush_token_cache()
         return {"status": "success", "deleted_count": deleted}
 
     def get_shared_resource_ids(self, request: Request, resource_type: str):
@@ -1769,9 +1866,16 @@ class AuthService:
                                         )
                                     ).first()
 
-                                gs = self._db.run_task(
-                                    _lookup_by_token, priority=DBPriority.IMMEDIATE
-                                )
+                                # Read path, not the writer queue (issue #651).
+                                # Unlike token auth this lookup is never cached:
+                                # every request re-reads GuestSession by
+                                # cookie_token, so a deleted/rotated row stops
+                                # resolving on the very next request with no
+                                # invalidation step to get wrong. The guest
+                                # session's own tracking (record_guest_activity,
+                                # the 30-day expiry and the eviction cap) is
+                                # in-memory and untouched by this change.
+                                gs = self._db.run_immediate_read_task(_lookup_by_token)
                                 if gs is not None:
                                     request.state.guest_session_id = gs.session_id
                                     self.record_guest_activity(gs.session_id)

@@ -82,6 +82,11 @@ export const useSidebarStore = defineStore("sidebar", () => {
     sidebarForcedHidden.value ? false : sidebarPinned.value,
   );
   // Width used by the layout — forced to full on mobile.
+  // True while a reference/import folder is being scanned. The sidebar sets it
+  // (it owns the folder lists); the grid reads it, so its empty state can say
+  // "still scanning" instead of "nothing here".
+  const folderScanning = ref(false);
+
   const effectiveDocked = computed(() =>
     sidebarForcedHidden.value ? false : sidebarDocked.value,
   );
@@ -130,6 +135,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     sidebarPinned,
     autoRevealed,
     effectiveDocked,
+    folderScanning,
     sidebarVisible,
     sidebarOverlay,
     statsOpen,

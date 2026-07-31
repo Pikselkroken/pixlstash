@@ -436,6 +436,19 @@ Browser-native `<img>` tags **cannot** use the axios interceptor, so the integra
 | `POST /api/v1/pictures/thumbnails` | Batch thumbnail metadata (JSON). |
 | `GET /api/v1/pictures/{id}.{ext}` | Original file (optionally watermarked). |
 
+### Generated thumbnails: the URL is stable, so the *response* carries the freshness contract
+
+`GET /characters/{id}/thumbnail` and `GET /picture_sets/{id}/thumbnail` serve a **generated** image from a server-side cache file whose bytes change under an unchanged URL (the face crop is rebuilt when a better picture wins, the set collage when its top members change). Two facts make this a trap:
+
+- Starlette's `FileResponse` sets an `ETag` but **answers no conditional request** — its only conditional logic is `If-Range` (verified against starlette 1.3.1).
+- With no `Cache-Control` at all, browsers fall back to **heuristic** caching, so a regenerated thumbnail can stay stale for an unbounded window with no revalidation.
+
+The client used to paper over this with a per-request `?cb=<Date.now()>`, which guaranteed freshness by re-downloading every character thumbnail on every sidebar refresh — against a route whose picture lookup is already expensive (issue #651).
+
+**Contract (both routes, via `pixlstash/utils/http_cache.py`):** the response carries `Cache-Control: private, no-cache` plus a weak `ETag`, and a matching `If-None-Match` is answered with a bodyless `304` that repeats the `ETag` and the policy. So the browser revalidates every time but transfers bytes only when they actually changed. **The frontend must therefore NOT cache-bust these URLs** — `SideBar.fetchCharacterThumbnail` calls `getCharacterThumbnail(id)` with no `cacheBuster`, and re-adding one would restore the download-per-refresh cost the header exists to remove.
+
+Note the contrast with `/pictures/thumbnails/{id}.webp`, which is *content-addressed* (`?v=WxH` changes when the bitmap is regenerated) and may therefore be cached for a while: `private, max-age=3600, must-revalidate`. Stable-URL generated images get `no-cache`; version-tokened ones get a max-age.
+
 ### Watermarking
 
 The decision to watermark is made server-side per request based on `User.embed_watermark` and the token's scope. The frontend does **not** need to know whether a given URL will be watermarked, but it must regenerate URLs (cache-bust) when watermark settings change.

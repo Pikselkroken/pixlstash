@@ -4,7 +4,6 @@ import sys
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
@@ -49,6 +48,7 @@ from pixlstash.picture_scoring import (
     find_pictures_by_smart_score,
     get_smart_score_penalised_tags_from_request,
 )
+from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.path_utils import resolve_path_within
@@ -914,7 +914,7 @@ def create_router(server) -> APIRouter:
                     and meta.get("picture_ids") == top_ids
                     and meta.get("hidden_key") == hidden_key
                 ):
-                    return FileResponse(cache_path, media_type="image/png")
+                    return conditional_file_response(request, cache_path)
             except Exception as exc:
                 logger.debug("Failed to read picture set thumbnail cache: %s", exc)
 
@@ -1063,7 +1063,7 @@ def create_router(server) -> APIRouter:
                     )
             except Exception as exc:
                 logger.debug("Failed to write picture set thumbnail metadata: %s", exc)
-            return FileResponse(cache_path, media_type="image/png")
+            return conditional_file_response(request, cache_path)
         except Exception:
             from io import BytesIO
 

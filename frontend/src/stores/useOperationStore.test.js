@@ -5,6 +5,8 @@ import { setActivePinia, createPinia } from "pinia";
 // backend only through `api/operations`. Both are mocked so no HTTP happens and
 // every branch (read-only, 409, batch coalescing) can be driven directly.
 vi.mock("../utils/apiClient", () => ({
+  onSessionReset: () => () => {},
+  sessionContext: { value: null },
   apiClient: { get: vi.fn(), post: vi.fn() },
   isReadOnly: { value: false },
   // useWsStore mirrors its client id into the client's module scope on setup.

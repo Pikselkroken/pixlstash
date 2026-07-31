@@ -49,17 +49,23 @@ export class DuplicateQueuePage {
   /**
    * Wait until the queue has stopped changing under the test.
    *
-   * `.grow, .qdone` is NOT a readiness signal on its own, and treating it as
-   * one is the race behind the intermittent "C opens Compare" failure. Opening
-   * the queue *queues a scan* (`openQueue`), so the first page can legitimately
-   * come back empty and paint "Queue clear" before the scan has committed its
-   * groups; the store's 2s count poll then reloads while the list is empty and
-   * the rows appear a moment later. A key pressed on that empty frame is
-   * silently dropped, because the key model acts on `store.focusedGroup` and
-   * there is none.
+   * `.grow, .qdone` is NOT a readiness signal on its own, and every key below
+   * acts on `store.focusedGroup`, so a press that lands before there is one
+   * does nothing at all. Two separate windows produce that state, and this
+   * waits out both:
    *
-   * So a focused row means ready, and an empty queue only counts as ready once
-   * it has stayed empty across the poll that would have refilled it.
+   *   * **Rows painted, focus not yet set.** The queue sets its focus index
+   *     when a load resolves. The window is narrow on a quiet machine and wide
+   *     on a loaded CI runner, which is the shape of a test that passes locally
+   *     and fails in CI. Waiting for `.grow--focus` rather than `.grow` closes
+   *     it.
+   *   * **A legitimately empty first page.** Opening the queue *queues a scan*
+   *     (`openQueue`), so the first page can come back with nothing and paint
+   *     "Queue clear" before the scan has committed its groups; the store's 2s
+   *     count poll then reloads while the list is empty and the rows appear a
+   *     moment later. Returning as soon as `.qdone` is visible walks straight
+   *     into this one, so an empty queue only counts as ready once it has
+   *     stayed empty across the poll that would have refilled it.
    */
   async waitForSettled({ timeout = 20_000 } = {}) {
     await expect
