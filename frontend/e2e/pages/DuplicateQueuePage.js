@@ -39,7 +39,16 @@ export class DuplicateQueuePage {
     this.sidebarDot = this.sidebarRow.locator('.sidebar-dedup-dot')
   }
 
-  /** Open the queue by route and wait for a group (or the done state). */
+  /**
+   * Open the queue by route and wait for a group (or the done state).
+   *
+   * Waits for the row to be FOCUSED, not merely present. The queue sets its
+   * focus index when a load resolves, so there is a window where rows are
+   * painted and nothing is focused yet — and every key below acts on the
+   * focused group, so a press landing in that window does nothing at all. That
+   * window is narrow on a quiet machine and wide on a loaded CI runner, which
+   * is exactly the shape of a test that passes locally and fails in CI.
+   */
   async goto() {
     await this.page.goto('/duplicates')
     await expect(this.root).toBeVisible()
@@ -47,6 +56,8 @@ export class DuplicateQueuePage {
       .locator('.grow, .qdone')
       .first()
       .waitFor({ state: 'visible' })
+    if (await this.doneState.isVisible()) return
+    await expect(this.focusedRow).toHaveCount(1)
   }
 
   /**

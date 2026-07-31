@@ -35,7 +35,59 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
     }
   }
 
+  // Guarded setters. Each of these preferences drives a watcher (persisting to
+  // the server, and for a few of them repainting the grid), so writing an
+  // invalid value or rewriting the same one is not free - it costs a PATCH and
+  // sometimes a refetch. The guards used to sit in App.vue's handlers; they
+  // belong with the state so every writer gets them.
+  function setHiddenTags(tags) {
+    const next = Array.isArray(tags) ? tags : [];
+    if (
+      hiddenTags.value.length === next.length &&
+      hiddenTags.value.every((tag, i) => tag === next[i])
+    ) {
+      return;
+    }
+    hiddenTags.value = next;
+  }
+
+  function setApplyTagFilter(value) {
+    const next = Boolean(value);
+    if (applyTagFilter.value === next) return;
+    applyTagFilter.value = next;
+  }
+
+  function setDateFormat(value) {
+    if (value == null) return;
+    const next = String(value);
+    if (next === dateFormat.value) return;
+    dateFormat.value = next;
+  }
+
+  function setThemeMode(value) {
+    if (value == null) return;
+    themeMode.value = String(value);
+  }
+
+  function setSidebarThumbnailSize(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    sidebarThumbnailSize.value = next;
+  }
+
+  function setSidebarWidth(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    sidebarWidth.value = next;
+  }
+
   return {
+    setHiddenTags,
+    setApplyTagFilter,
+    setDateFormat,
+    setThemeMode,
+    setSidebarThumbnailSize,
+    setSidebarWidth,
     dateFormat,
     themeMode,
     showKeyboardHint,
