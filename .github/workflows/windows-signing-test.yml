@@ -1,0 +1,74 @@
+name: Windows Signing Smoke Test
+
+# Manually-dispatched validation of the Certum SimplySign signing pipeline:
+# signs the throwaway hello.exe baked into the signer image (compiled from
+# .github/docker/certum-signer/hello.c) and verifies the signature. Run it
+# after configuring the windows-signing environment secrets, and after any
+# signer image bump, BEFORE the next release tag relies on signing. Never
+# touches a release. Costs exactly 1 of Certum's 5000 signatures/month.
+# Full setup: docs/windows-signing-setup.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug-screenshots:
+        description: "Capture X screenshots on login failure (may show the user id, never the OTP)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    environment: windows-signing
+    container:
+      # UPDATE THIS DIGEST from the "Build Certum Signer Image" workflow's step
+      # summary after its first run (see docs/windows-signing-setup.md §rollout).
+      image: ghcr.io/pikselkroken/certum-signer@sha256:00a9d37f35d787cb584014cb95e964326018e0c92a59d1b687129c36295febb6 # built by run 30620372480 from 6bb21307
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Stage throwaway exe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p signing
+          cp /opt/test/hello.exe "signing/pixlstash-signing-smoke-$(date +%Y%m%d-%H%M).exe"
+
+      - name: Sign and verify
+        uses: ./.github/actions/certum-sign
+        env:
+          CERTUM_USER_ID: ${{ secrets.CERTUM_USER_ID }}
+          CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+          CERTUM_CERT_FINGERPRINT: ${{ secrets.CERTUM_CERT_FINGERPRINT }}
+        with:
+          files: "signing/*.exe"
+          debug-screenshots: ${{ inputs.debug-screenshots && 'true' || 'false' }}
+
+      - name: Upload signed test exe
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-smoke-test
+          path: signing/*.exe
+          retention-days: 3
+
+      - name: Upload signing diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signing-smoke-test-diagnostics
+          path: |
+            ${{ runner.temp }}/simplysign-redacted.log
+            ${{ runner.temp }}/*.png
+          retention-days: 3
+          if-no-files-found: ignore

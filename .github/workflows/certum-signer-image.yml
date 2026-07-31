@@ -1,0 +1,68 @@
+name: Build Certum Signer Image
+
+# Builds and pushes the headless SimplySign signing container
+# (ghcr.io/pikselkroken/certum-signer) used by the Windows release signing
+# jobs. Consumers pin the image BY DIGEST (printed in this workflow's step
+# summary), so pushing here never changes release behaviour by itself: an
+# image bump only takes effect through an explicit digest edit in
+# electron.yml / windows-installer.yml / windows-signing-test.yml, followed
+# by a "Windows Signing Smoke Test" run. See docs/windows-signing-setup.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/docker/certum-signer/**"
+      - ".github/workflows/certum-signer-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-signer-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .github/docker/certum-signer
+          push: true
+          # `latest` is a convenience pointer only; the commit-sha tag is the
+          # immutable provenance handle. Nothing consumes either tag directly —
+          # signing jobs pin the digest.
+          tags: |
+            ghcr.io/pikselkroken/certum-signer:latest
+            ghcr.io/pikselkroken/certum-signer:${{ github.sha }}
+
+      - name: Report image digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### certum-signer image published"
+            echo ""
+            echo '```'
+            echo "ghcr.io/pikselkroken/certum-signer@${DIGEST}"
+            echo '```'
+            echo ""
+            echo "To roll this out, update the digest in electron.yml,"
+            echo "windows-installer.yml and windows-signing-test.yml, then run"
+            echo "the Windows Signing Smoke Test before the next release tag."
+          } >> "$GITHUB_STEP_SUMMARY"
