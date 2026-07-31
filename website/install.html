@@ -147,6 +147,38 @@
         margin-top: 10px;
       }
 
+      /* .step-note carries margin: 0, so consecutive notes would run together. */
+      .step-note + .step-note {
+        margin-top: 10px;
+      }
+
+      /* The two SmartScreen states side by side: what you see first, and what
+         you see after clicking More info. Wraps to a single column when there
+         is not room for two. */
+      .smartscreen-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-top: 10px;
+      }
+
+      .smartscreen-steps figure {
+        flex: 1 1 300px;
+        max-width: 420px;
+        margin: 0;
+      }
+
+      .smartscreen-steps .smartscreen-img {
+        margin-top: 0;
+        max-width: 100%;
+      }
+
+      .smartscreen-steps figcaption {
+        font-size: 0.83rem;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+
       @media (max-width: 700px) {
         .tab-bar {
           gap: 4px;
@@ -387,22 +419,46 @@
               <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
               <p class="step-note">
                 The installer is digitally signed, but SmartScreen only stops
-                warning once a signature has been seen on enough downloads — so
+                warning once a signature has been seen on enough downloads, so
                 for a while it may still show a red
                 <em>"Windows protected your PC"</em> dialog. Click
-                <strong>More info</strong> and check the publisher: it should
-                read
+                <strong>More info</strong> and check the publisher: on version
+                1.8.2 and later it should read
                 <strong>Open Source Developer Gaute Lindkvist</strong>. If it
                 does, the download is genuine and you can click
-                <strong>Run anyway</strong>. If it says
-                <em>Unknown publisher</em> or any other name, stop — you did not
-                get that file from us.
+                <strong>Run anyway</strong>.
               </p>
-              <img
-                class="smartscreen-img"
-                src="assets/SmartScreen.png"
-                alt="Windows SmartScreen dialog with More info expanded, showing the publisher as Open Source Developer Gaute Lindkvist"
-              />
+              <p class="step-note">
+                Version 1.8.1 and earlier were never signed, so they will say
+                <em>Unknown publisher</em>. That is expected for those older
+                downloads and does not mean they were tampered with, only that
+                signing was not set up yet. If a 1.8.2 or later installer shows
+                any name other than the one above, stop and download it again
+                from this page.
+              </p>
+              <div class="smartscreen-steps">
+                <figure>
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen.png"
+                    alt="The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link"
+                  />
+                  <figcaption>
+                    What you see first: click <strong>More info</strong>.
+                  </figcaption>
+                </figure>
+                <figure>
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreenSigned.png"
+                    alt="The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button"
+                  />
+                  <figcaption>
+                    After expanding: check the publisher, then
+                    <strong>Run anyway</strong>.
+                  </figcaption>
+                </figure>
+              </div>
             </div>
           </div>
         </div>
@@ -458,22 +514,46 @@
               <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
               <p class="step-note">
                 The installer is digitally signed, but SmartScreen only stops
-                warning once a signature has been seen on enough downloads — so
+                warning once a signature has been seen on enough downloads, so
                 for a while it may still show a red
                 <em>"Windows protected your PC"</em> dialog. Click
-                <strong>More info</strong> and check the publisher: it should
-                read
+                <strong>More info</strong> and check the publisher: on version
+                1.8.2 and later it should read
                 <strong>Open Source Developer Gaute Lindkvist</strong>. If it
                 does, the download is genuine and you can click
-                <strong>Run anyway</strong>. If it says
-                <em>Unknown publisher</em> or any other name, stop — you did not
-                get that file from us.
+                <strong>Run anyway</strong>.
               </p>
-              <img
-                class="smartscreen-img"
-                src="assets/SmartScreen.png"
-                alt="Windows SmartScreen dialog with More info expanded, showing the publisher as Open Source Developer Gaute Lindkvist"
-              />
+              <p class="step-note">
+                Version 1.8.1 and earlier were never signed, so they will say
+                <em>Unknown publisher</em>. That is expected for those older
+                downloads and does not mean they were tampered with, only that
+                signing was not set up yet. If a 1.8.2 or later installer shows
+                any name other than the one above, stop and download it again
+                from this page.
+              </p>
+              <div class="smartscreen-steps">
+                <figure>
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen.png"
+                    alt="The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link"
+                  />
+                  <figcaption>
+                    What you see first: click <strong>More info</strong>.
+                  </figcaption>
+                </figure>
+                <figure>
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreenSigned.png"
+                    alt="The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button"
+                  />
+                  <figcaption>
+                    After expanding: check the publisher, then
+                    <strong>Run anyway</strong>.
+                  </figcaption>
+                </figure>
+              </div>
             </div>
           </div>
         </div>
