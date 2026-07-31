@@ -474,3 +474,39 @@ def test_watch_folder_waits_for_a_file_to_finish_being_written():
                 assert pictures[0].size_bytes == os.path.getsize(dst), (
                     "Imported picture must record the settled file size"
                 )
+
+
+def test_claim_if_settled_requires_a_wall_clock_quiet_window():
+    """A signature that merely repeats across two scans is not settled yet.
+
+    The planner polls as often as ``WorkPlanner.MIN_INTERVAL_S`` (50ms), so
+    "unchanged since the previous scan" can mean "unchanged for 50ms", which a
+    copy that pauses mid-write clears easily. The file is then hashed
+    half-written, and imported a *second* time once it really finishes, because
+    the settled bytes hash differently and the duplicate check misses them. The
+    claim therefore has to be gated on wall-clock quiet, not on scan count.
+    """
+    from pixlstash.tasks.missing_watch_folder_import_finder import (
+        MissingWatchFolderImportFinder,
+    )
+
+    finder = MissingWatchFolderImportFinder(database=None)
+    settle = MissingWatchFolderImportFinder.SETTLE_SECONDS
+    path = os.path.normcase(os.path.abspath("watch/in-flight.png"))
+    partial = (1024, 100.0, 100.0)
+    complete = (2048, 101.0, 100.0)
+
+    # First sighting never claims, and neither does a fast follow-up scan.
+    assert finder._claim_if_settled(path, partial, 0.0) is False
+    assert finder._claim_if_settled(path, partial, 0.05) is False
+    assert finder._claim_if_settled(path, partial, settle - 0.01) is False
+
+    # The write resumes: the quiet window restarts from this observation.
+    assert finder._claim_if_settled(path, complete, settle) is False
+    assert finder._claim_if_settled(path, complete, 2 * settle - 0.01) is False
+
+    # Quiet for the full window: now it is safe to hand over.
+    assert finder._claim_if_settled(path, complete, 2 * settle) is True
+
+    # Claimed once. Later scans of the same bytes must not offer it again.
+    assert finder._claim_if_settled(path, complete, 2 * settle + 60.0) is False
