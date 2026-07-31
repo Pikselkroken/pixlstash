@@ -99,6 +99,15 @@ jobs:
   # GITHUB_TOKEN: releases created by GITHUB_TOKEN do not emit a
   # `release: published` event, which release-version.yml depends on.
   sign-windows-server:
+    # SimplySign allows ONE session per account, so the desktop and server
+    # sign jobs must never run at once (a tag push starts both workflows
+    # together; the second login displaces the first and its PKCS#11 token
+    # never activates). This group is shared by BOTH workflows: keep the name
+    # identical in electron.yml and windows-installer.yml. Never cancel — a
+    # queued sign job must wait, not be dropped, or a release ships unsigned.
+    concurrency:
+      group: certum-simplysign-session
+      cancel-in-progress: false
     needs: build-installer
     if: startsWith(github.ref, 'refs/tags/v') && vars.WINDOWS_SIGNING_ENABLED == 'true'
     runs-on: ubuntu-latest

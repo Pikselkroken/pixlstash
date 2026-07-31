@@ -117,6 +117,14 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
   environment's required reviewer approves the deployment (Actions → the run →
   "Review deployments"). Nothing signed attaches until both are approved; the
   builds themselves run first, so the prompts appear once each build finishes.
+- **One SimplySign session at a time.** Certum allows a single active session
+  per account, so `sign-windows-desktop` and `sign-windows-server` share the
+  `certum-simplysign-session` concurrency group (`cancel-in-progress: false`)
+  and run one after the other. A tag push starts both workflows in parallel;
+  without the shared group the second login displaces the first and its
+  PKCS#11 token never activates ("token not active after 3 login attempts").
+  Keep the group name identical in both workflows, and give any future signing
+  job the same group.
 - **Bumping the signer image** (new SimplySign or jsign version): edit the
   Dockerfile args + sha256 pins (Certum publishes no checksums, so re-verify
   the new SimplySign hash from a second network vantage before merging) →
