@@ -64,7 +64,11 @@ import {
   clampSizeLevel,
   stripHeightForSizeLevel,
 } from "../utils/thumbnailSizes";
-import { suggestedCoverId, candidateId } from "../utils/dedup";
+import {
+  suggestedCoverId,
+  candidateId,
+  lockedCandidateIds,
+} from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
 
@@ -502,8 +506,34 @@ export const useDedupStore = defineStore("dedup", () => {
   function coverIdFor(group) {
     if (!group) return null;
     const chosen = coverChoices.value[group.signature];
-    if (chosen !== undefined) return chosen;
-    return suggestedCoverId(group);
+    const locked = lockedCandidateIds(group);
+    if (chosen !== undefined && !locked.includes(chosen)) return chosen;
+    // A locked-out candidate cannot lead a stack it is not in. The server would
+    // move the cover for us and report where it landed, but doing it here keeps
+    // the row's "Cover" label truthful before Stack is ever pressed.
+    if (!locked.length) return suggestedCoverId(group);
+    const stackable = (group.candidates ?? []).filter(
+      (candidate) => !locked.includes(candidateId(candidate)),
+    );
+    if (!stackable.length) return suggestedCoverId(group);
+    return suggestedCoverId({ ...group, candidates: stackable });
+  }
+
+  /**
+   * The ids this group cannot stack, whatever the user asked for: the user's own
+   * exclusions plus every candidate a locked set freezes.
+   *
+   * This is what the request sends as `excluded_picture_ids`, so the server never
+   * has to refuse a member the queue already knew was frozen.
+   *
+   * @param {Object} group
+   * @returns {Array<number>}
+   */
+  function effectiveExcludedFor(group) {
+    if (!group) return [];
+    const merged = new Set(excludedFor(group.signature));
+    for (const id of lockedCandidateIds(group)) merged.add(id);
+    return [...merged];
   }
 
   /**
@@ -522,9 +552,7 @@ export const useDedupStore = defineStore("dedup", () => {
    */
   function stackSizeFor(group) {
     if (!group) return 0;
-    return (
-      (group.candidates?.length ?? 0) - excludedFor(group.signature).length
-    );
+    return (group.candidates?.length ?? 0) - effectiveExcludedFor(group).length;
   }
 
   /**
@@ -555,12 +583,18 @@ export const useDedupStore = defineStore("dedup", () => {
    *
    * @param {Object} group
    * @param {number} pictureId
-   * @returns {boolean} whether the toggle was applied. False means it was
-   *   refused by the floor, which the caller narrates: a one-key action that
-   *   silently does nothing is a key the user stops trusting.
+   * @returns {boolean|string} `true` when the toggle was applied, `false` when
+   *   the floor refused it, and `"locked"` when the candidate is the server's
+   *   exclusion rather than the user's. Each refusal is narrated by the caller:
+   *   a one-key action that silently does nothing is a key the user stops
+   *   trusting, and the two refusals need different sentences.
    */
   function toggleExcluded(group, pictureId) {
     if (!group) return false;
+    // A locked-out candidate is the server's exclusion, not the user's, so `X`
+    // cannot walk it back. Refused here rather than optimistically re-included
+    // and then dropped again by the request the row would go on to send.
+    if (lockedCandidateIds(group).includes(pictureId)) return "locked";
     const current = excludedFor(group.signature);
     const isOut = current.includes(pictureId);
     if (!isOut && stackSizeFor(group) <= MIN_STACK_MEMBERS) return false;
@@ -1557,20 +1591,26 @@ export const useDedupStore = defineStore("dedup", () => {
       // id, so the operation log coalesces the verdicts into one undo step.
       const gestureId = batchId || newOperationBatchId();
       let last = null;
+      const gestureSkipped = [];
       for (const target of targets) {
         last = await stackOne(target, { batchId: gestureId });
         // Stop on the first failure rather than half-applying silently; the
-        // failed group and the rest stay selected and in the queue.
+        // failed group and the rest stay selected and in the queue. A PARTIAL
+        // success is not a failure: the group was decided, so the run carries
+        // on and the skips are reported once for the whole gesture.
         if (!last) return null;
+        gestureSkipped.push(...(last.skipped ?? []));
       }
       clearSelection();
       // One receipt per GESTURE, not per group: the batch is one undo step.
       if (last?.batch_id) narrateVerdictOperation();
-      return last;
+      return { ...last, gesture_skipped: gestureSkipped };
     }
     const result = await stackOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
-    return result;
+    return result
+      ? { ...result, gesture_skipped: result.skipped ?? [] }
+      : result;
   }
 
   async function stackOne(group, { batchId } = {}) {
@@ -1579,7 +1619,11 @@ export const useDedupStore = defineStore("dedup", () => {
     try {
       const result = await stackGroup(group.signature, {
         coverPictureId: coverIdFor(group),
-        excludedPictureIds: excludedFor(group.signature),
+        // Locked candidates ride along with the user's own exclusions: the
+        // server would skip them anyway and report them in `skipped`, and
+        // sending them would make every frozen group a partial success rather
+        // than the clean stack the queue already knows it is.
+        excludedPictureIds: effectiveExcludedFor(group),
         batchId,
       });
       stackedCount.value += 1;
@@ -1976,6 +2020,7 @@ export const useDedupStore = defineStore("dedup", () => {
     exclusions,
     coverIdFor,
     excludedFor,
+    effectiveExcludedFor,
     stackSizeFor,
     isAtStackFloor,
     setCover,

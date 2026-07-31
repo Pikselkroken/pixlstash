@@ -130,6 +130,7 @@ describe("ImageOverlay mounted detection refresh", () => {
     },
     OverlayMetadataPanel: true,
     AddToEntityControl: true,
+    CharacterEditor: true,
     StarRatingOverlay: true,
     PluginParametersUI: true,
     ComfyUiRunner: true,

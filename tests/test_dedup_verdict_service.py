@@ -22,6 +22,7 @@ import os
 import tempfile
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
@@ -32,6 +33,7 @@ from pixlstash.db_models import (
     PictureStack,
 )
 from pixlstash.db_models.dedup import (
+    DedupGroup,
     VERDICT_KEEP_SEPARATE,
     VERDICT_STACKED,
     DedupVerdict,
@@ -42,6 +44,7 @@ from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
 from pixlstash.services import dedup_verdict_service as verdicts
 from pixlstash.services import operation_log_service
+from pixlstash.services import set_lock_service as set_locks
 from pixlstash.services.dedup_tier_service import TierPolicy
 from pixlstash.services.dedup_verdict_service import DedupVerdictError
 
@@ -99,6 +102,24 @@ def _one_signature(server) -> str:
     page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
     assert page, "expected at least one unresolved group"
     return page[0]["signature"]
+
+
+def _only_signature(server) -> str:
+    """The one group's signature, read straight from the table.
+
+    ``_one_signature`` goes through the queue page, which withholds a group with
+    fewer than two stackable members. A withheld group is still a real row with a
+    real signature, and a client holding a stale page can still POST it, so the
+    refusal paths below have to be reachable in a test without the queue's help.
+    """
+    rows = _run(
+        server,
+        lambda session: [
+            str(sig) for sig in session.exec(select(DedupGroup.signature)).all()
+        ],
+    )
+    assert len(rows) == 1, f"expected exactly one group, got {rows}"
+    return rows[0]
 
 
 def _picture(server, picture_id: int) -> Picture:
@@ -380,7 +401,7 @@ def test_the_union_is_refused_on_a_locked_set_rather_than_half_applied(server):
         _run(
             server,
             verdicts.apply_stack_verdict_in_session,
-            _one_signature(server),
+            _only_signature(server),
             None,
             [],
             None,
@@ -967,16 +988,16 @@ def _seed_three_exact_groups(server):
     )
 
 
-def test_a_locked_group_mid_run_does_not_abort_the_bulk_run(server):
-    """Regression for the CSO's B2.
+def test_a_locked_group_is_never_planned_into_a_bulk_run(server):
+    """The run no longer plans work it would only refuse.
 
-    The locked-set guards raise ``HTTPException(423)``, not
-    ``DedupVerdictError``. Catching only the latter meant a locked group in the
-    middle of a bulk run propagated out **after** earlier groups had already
-    committed — a partially applied bulk mutation whose server-minted batch id
-    the caller never received, i.e. work that happened with no undo handle in the
-    response. The run must instead skip the group, report it, and still return
-    the batch id.
+    Was the CSO's B2 fixture, when a locked group reached the loop and 423'd out
+    of it. Since the queue withholds a group with fewer than two stackable
+    members (owner call, 2026-07-30), auto-stack applies the same filter and the
+    group never enters the run at all. The B2 invariant itself - an
+    ``HTTPException`` mid-run must not abort - is pinned directly by
+    :func:`test_an_http_exception_mid_run_does_not_abort_the_bulk_run`, which does
+    not depend on a lock to raise one.
     """
     ids = _seed_three_exact_groups(server)
     _lock_picture_in_a_set(server, ids[2])  # a member of the middle group
@@ -984,28 +1005,66 @@ def test_a_locked_group_mid_run_does_not_abort_the_bulk_run(server):
 
     report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
 
-    # The run completed rather than raising.
+    assert report["batch_id"]
+    assert report["groups"] == 2
+    assert report["blocked"] == 0, "the group was filtered out, not refused"
+    assert report["failed"] == 0
+    assert report["failures"] == []
+
+    # The locked group is untouched, and it is withheld from the queue too, so
+    # the badge and the run agree about what is left to do.
+    assert _picture(server, ids[2]).stack_id is None
+    assert _picture(server, ids[3]).stack_id is None
+    assert _picture(server, ids[0]).stack_id is not None
+    assert _picture(server, ids[4]).stack_id is not None
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+
+def test_an_http_exception_mid_run_does_not_abort_the_bulk_run(server, monkeypatch):
+    """Regression for the CSO's B2, pinned on the mechanism rather than a lock.
+
+    The locked-set guards raise ``HTTPException(423)``, not
+    ``DedupVerdictError``. Catching only the latter meant a refusal in the middle
+    of a bulk run propagated out **after** earlier groups had already committed:
+    a partially applied bulk mutation whose server-minted batch id the caller
+    never received, i.e. work that happened with no undo handle in the response.
+
+    The refusal is injected here so the test keeps pinning that ``except`` clause
+    however the lock filters change upstream.
+    """
+    ids = _seed_three_exact_groups(server)
+    _scan(server)
+
+    real = verdicts.apply_stack_verdict_in_session
+    seen: list[str] = []
+
+    def refuse_the_second(session, signature, *args, **kwargs):
+        seen.append(signature)
+        if len(seen) == 2:
+            raise HTTPException(
+                status_code=423,
+                detail={"code": "set_locked", "action": "stack duplicates together"},
+            )
+        return real(session, signature, *args, **kwargs)
+
+    monkeypatch.setattr(verdicts, "apply_stack_verdict_in_session", refuse_the_second)
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+
+    # The run completed rather than raising, and handed back its undo handle.
     assert report["batch_id"]
     assert report["dry_run"] is False
     assert report["groups"] == 2
     assert report["blocked"] == 1
     assert report["failed"] == 0
-
-    # Every group is accounted for under exactly one outcome.
     assert {r["outcome"] for r in report["results"]} == {verdicts.BULK_REASON_APPLIED}
     assert len(report["failures"]) == 1
     failure = report["failures"][0]
     assert failure["outcome"] == verdicts.BULK_REASON_BLOCKED
     assert failure["status_code"] == 423
     assert failure["error"]["code"] == "set_locked"
-
-    # The locked group is untouched; the other two are stacked.
-    assert _picture(server, ids[2]).stack_id is None
-    assert _picture(server, ids[3]).stack_id is None
-    assert _picture(server, ids[0]).stack_id is not None
-    assert _picture(server, ids[4]).stack_id is not None
-    # ...and the locked group is still in the queue, awaiting its own decision.
-    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    # Every group was considered; the refused one committed nothing.
+    assert len(seen) == 3
+    assert sum(1 for pid in ids if _picture(server, pid).stack_id is not None) == 4
 
 
 def test_the_returned_batch_id_reverses_exactly_the_applied_groups(server):
@@ -1272,7 +1331,7 @@ def test_a_locked_co_member_of_a_folded_stack_is_refused(server):
         _run(
             server,
             verdicts.apply_stack_verdict_in_session,
-            _one_signature(server),
+            _only_signature(server),
             ids[0],
             [],
             None,
@@ -1284,6 +1343,440 @@ def test_a_locked_co_member_of_a_folded_stack_is_refused(server):
     assert _picture(server, ids[1]).stack_id == original_stack
     assert _picture(server, ids[2]).stack_id == original_stack
     assert _operations(server) == []
+
+
+# ── partial success across a locked-set boundary ──────────────────────────────
+#
+# A locked set freezes its membership and a stack reconciles to the union of its
+# members' sets, so a group straddling a locked-set boundary has no legal
+# whole-group stack. The dedup queue answers that with partial success (stack the
+# side that can be stacked, report the rest) rather than the whole-group refusal
+# the manual /stacks routes still use, because a triage queue that dead-ends on
+# one frozen member costs the user the decision about all the others.
+
+
+def _set_member_ids(server, set_id: int) -> set[int]:
+    return _run(
+        server,
+        lambda session: {
+            int(pid)
+            for pid in session.exec(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.set_id == set_id
+                )
+            ).all()
+        },
+    )
+
+
+def _lock_set(server, name: str, picture_ids) -> int:
+    """Create a locked set holding *picture_ids* and return its id."""
+
+    def create(session):
+        picture_set = PictureSet(name=name, locked=True)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        for picture_id in picture_ids:
+            session.add(
+                PictureSetMember(set_id=int(picture_set.id), picture_id=int(picture_id))
+            )
+        session.commit()
+        return int(picture_set.id)
+
+    return _run(server, create)
+
+
+def test_a_group_straddling_a_locked_set_stacks_the_unlocked_side(server):
+    """The two loose members stack; the frozen one is skipped, not fatal."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[2]])
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+
+    assert result.picture_ids == [ids[0], ids[1]]
+    assert result.skipped == [
+        {
+            "picture_id": ids[2],
+            "reason": "set_locked",
+            "sets": [{"id": set_id, "name": "Evaluation Set"}],
+        }
+    ]
+    # Recorded as an exclusion, so a rescan does not read the group as undecided.
+    assert result.excluded_picture_ids == [ids[2]]
+    stack_id = _picture(server, ids[0]).stack_id
+    assert stack_id is not None
+    assert _picture(server, ids[1]).stack_id == stack_id
+    # The frozen member is untouched, and the locked set did not gain a member.
+    assert _picture(server, ids[2]).stack_id is None
+    assert _set_member_ids(server, set_id) == {ids[2]}
+
+
+def test_a_group_wholly_inside_one_locked_set_cannot_stack(server):
+    """Two gates, and the dedup path has to satisfy the tighter one.
+
+    ``enforce_stack_membership_not_locked`` alone would allow this: the set
+    already contains every resulting member, so it gains no row. But the stack
+    verdict also runs the metadata union, which writes tags and lifts scores and
+    therefore refuses *any* frozen member. So the honest answer for a wholly
+    frozen group is "no legal stack", and the partition has to say so up front
+    rather than letting the union refuse halfway through.
+    """
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "All Frozen", ids)
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _only_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    assert excinfo.value.detail["code"] == "set_locked"
+    assert excinfo.value.detail["picture_ids"] == sorted(ids)
+    # Refused up front: no stack row, no partial union, no verdict.
+    assert all(_picture(server, pid).stack_id is None for pid in ids)
+    assert _set_member_ids(server, set_id) == set(ids)
+    assert _operations(server) == []
+
+
+def test_a_pair_split_by_a_locked_set_is_refused_and_names_the_pictures(server):
+    """Nothing legal is left, so there is no partial success to report.
+
+    The 423 carries `picture_ids` as well as `sets`: without it the client can
+    name the set but cannot mark the thumbnail it belongs to.
+    """
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[1]])
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _only_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    detail = excinfo.value.detail
+    assert detail["code"] == "set_locked"
+    assert detail["sets"] == [{"id": set_id, "name": "Evaluation Set"}]
+    assert detail["picture_ids"] == [ids[1]]
+    # Nothing was written, and no verdict was recorded.
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
+    assert _operations(server) == []
+
+
+def test_members_in_two_different_locked_sets_cannot_stack(server):
+    """Each set would gain the other's member, so no pair is legal."""
+    from fastapi import HTTPException
+
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    left = _lock_set(server, "Left", [ids[0]])
+    right = _lock_set(server, "Right", [ids[1]])
+    _scan(server)
+
+    with pytest.raises(HTTPException) as excinfo:
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _only_signature(server),
+            ids[0],
+            [],
+            None,
+        )
+
+    assert excinfo.value.status_code == 423
+    assert [s["id"] for s in excinfo.value.detail["sets"]] == sorted([left, right])
+    assert _set_member_ids(server, left) == {ids[0]}
+    assert _set_member_ids(server, right) == {ids[1]}
+
+
+def test_the_cover_moves_off_a_skipped_member(server):
+    """A cover that turns out to be frozen does not sink the whole verdict.
+
+    The client normally moves the cover before Stack is ever pressed; this is the
+    stale-client path, where the set was locked after the page was loaded.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Evaluation Set", [ids[0]])
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+
+    assert result.cover_picture_id in (ids[1], ids[2])
+    assert sorted(result.picture_ids) == sorted([ids[1], ids[2]])
+    assert [entry["picture_id"] for entry in result.skipped] == [ids[0]]
+    # The chosen cover really did lead the stack.
+    cover = _picture(server, result.cover_picture_id)
+    assert cover.stack_position == 0
+
+
+def test_the_queue_marks_a_locked_member_as_unstackable(server):
+    """The listing hides nothing: the frozen member is still a row, marked."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Evaluation Set", [ids[2]])
+    _scan(server)
+
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    group = page[0]
+    by_id = {c["picture_id"]: c for c in group["candidates"]}
+
+    assert sorted(by_id) == sorted(ids), "no member is filtered out of the listing"
+    assert by_id[ids[0]]["stackable"] is True
+    assert by_id[ids[0]]["blocked_by_sets"] == []
+    assert by_id[ids[2]]["stackable"] is False
+    assert by_id[ids[2]]["blocked_by_sets"] == [
+        {"id": set_id, "name": "Evaluation Set"}
+    ]
+    # The preselected cover is one the user can actually stack.
+    assert group["cover_picture_id"] in (ids[0], ids[1])
+
+
+def test_a_wholly_frozen_group_is_withheld_from_the_queue(server):
+    """No stackable decision is left in it, so the queue does not offer it.
+
+    Superseded the earlier "listed but every member marked" expectation when the
+    owner asked for the group to be withheld outright (2026-07-30). The group row
+    survives, so unlocking the set brings it straight back.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "All Frozen", ids)
+    _scan(server)
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert page == []
+    assert total == 0
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+
+# ── adversarial probes (independent review of 613a08b3) ──────────────────────
+#
+# Written by the security reviewer, not by the author of the partition, per the
+# CLAUDE.md rule that a security fix is not certified by whoever wrote it. Each
+# one is a shape the author's own tests did not cover.
+
+
+def test_probe_frozen_only_via_stack_sibling_is_not_laundered_into_the_stack(server):
+    """The divergence case: a group member frozen ONLY through a stack sibling.
+
+    The partition asks locked_sets_for_pictures (input-keyed, rolled up to the
+    stack); the union's own gate asks _locked_sets_by_picture over the expansion.
+    If those two ever disagree, THIS is the shape that finds it: pic B is not
+    itself in the locked set, its stack sibling C is, and C is not in the group.
+    Three members so the partition has a legal 2-picture stack to fall back to,
+    which is exactly when it would be tempted to admit B.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # A, clean
+            {"pixel_sha": "aaa", "size_bytes": 100},  # B, stacked with C
+            {"pixel_sha": "aaa", "size_bytes": 100},  # D, clean
+            {"pixel_sha": "zzz", "size_bytes": 900},  # C, the locked one
+        ],
+    )
+
+    def pre(session):
+        stack = PictureStack(name="sibling")
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, pid in enumerate([ids[1], ids[3]]):
+            pic = session.get(Picture, pid)
+            pic.stack_id = int(stack.id)
+            pic.stack_position = position
+            session.add(pic)
+        s = PictureSet(name="Frozen", locked=True)
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        session.add(PictureSetMember(set_id=int(s.id), picture_id=ids[3]))
+        session.commit()
+        return int(stack.id), int(s.id)
+
+    original_stack, set_id = _run(server, pre)
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+
+    # B must be skipped: stacking it would drag C into the new stack.
+    assert [e["picture_id"] for e in result.skipped] == [ids[1]], result.skipped
+    assert sorted(result.picture_ids) == sorted([ids[0], ids[2]])
+    # C never moved and the locked set never grew.
+    assert _picture(server, ids[3]).stack_id == original_stack
+    assert _picture(server, ids[1]).stack_id == original_stack
+    assert _set_member_ids(server, set_id) == {ids[3]}
+
+
+def test_probe_repeated_stack_cannot_launder_a_skipped_member(server):
+    """A second verdict on the same signature must not pick up the skipped one."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Frozen", [ids[2]])
+    _scan(server)
+    signature = _one_signature(server)
+
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, ids[0], [], None)
+    # Replay the same verdict, this time naming the FROZEN picture as the cover.
+    # It succeeds as another partial success (the cover is moved), which is the
+    # documented behaviour; what matters is that the replay cannot be used to
+    # walk the frozen member in through the cover argument.
+    again = _run(
+        server, verdicts.apply_stack_verdict_in_session, signature, ids[2], [], None
+    )
+    assert [e["picture_id"] for e in again.skipped] == [ids[2]]
+    assert again.cover_picture_id != ids[2]
+    assert ids[2] not in again.picture_ids
+    assert _picture(server, ids[2]).stack_id is None
+    assert _set_member_ids(server, set_id) == {ids[2]}
+
+
+def test_probe_reopen_cannot_reparent_the_skipped_member(server):
+    """Undoing a partial stack must not drag the frozen member into anything.
+
+    The skipped ids are recorded as `excluded_picture_ids` on the verdict, and a
+    reopen dissolves the verdict's stack from the recorded pre-verdict state. If
+    the skipped member had leaked into the undo snapshot, this is where it would
+    surface as a write to a frozen picture.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Frozen", [ids[2]])
+    _scan(server)
+    signature = _one_signature(server)
+
+    _run(server, verdicts.apply_stack_verdict_in_session, signature, ids[0], [], None)
+    _run(
+        server,
+        verdicts.reopen_verdict_in_session,
+        signature,
+        None,
+        None,
+        "external",
+        None,
+    )
+
+    assert _picture(server, ids[2]).stack_id is None
+    assert _set_member_ids(server, set_id) == {ids[2]}
+
+
+def test_probe_bulk_auto_stack_never_grows_a_locked_set(server):
+    """The most far-reaching mutation still cannot touch a locked set."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 200},
+            {"pixel_sha": "bbb", "size_bytes": 200},
+        ],
+    )
+    set_id = _lock_set(server, "Frozen", [ids[2], ids[3]])
+    _scan(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+
+    assert _set_member_ids(server, set_id) == {ids[2], ids[3]}
+    assert _picture(server, ids[2]).stack_id is None
+    assert _picture(server, ids[3]).stack_id is None
+    # And the run reported what it held back rather than claiming a clean sweep.
+    skipped = [s for r in report["results"] for s in r.get("skipped", [])]
+    assert [s["picture_id"] for s in skipped] == [ids[2]], report
 
 
 # ── clearing a decision (the Decided page's "Clear decision") ─────────────────
@@ -1616,3 +2109,211 @@ def test_a_clear_may_not_reuse_the_verdicts_own_batch_id(server):
     )
     with pytest.raises(DedupVerdictError, match="own batch"):
         _run(server, verdicts.reopen_verdict_in_session, signature, gesture)
+
+
+# ── withholding a group with no stackable decision left ───────────────────────
+#
+# Owner call, 2026-07-30: a group left with fewer than two stackable members is
+# withheld from the queue entirely rather than shown with Stack disabled. The
+# rule has to be SQL inside the group filter, not a post-filter on the page, or
+# the page shrinks under its own LIMIT and the badge disagrees with the list.
+
+
+def test_a_group_with_one_stackable_member_is_withheld_from_the_queue(server):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[1]])
+    _scan(server)
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert page == []
+    # `total` is the count the same filter produces, so the header cannot claim
+    # a group the list does not show.
+    assert total == 0
+
+
+def test_the_badge_and_the_tier_split_withhold_it_too(server):
+    """One rule, three surfaces. A count that disagrees with the list is the bug."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            # A second, wholly unfrozen group that must survive the filter.
+            {"pixel_sha": "bbb", "size_bytes": 200},
+            {"pixel_sha": "bbb", "size_bytes": 200},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[1]])
+    _scan(server)
+
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+    by_tier = _run(server, tiers.count_by_tier_in_session, None, None)
+    assert by_tier["exact"] == 1
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert len(page) == 1
+    assert total == 1
+    assert sorted(c["picture_id"] for c in page[0]["candidates"]) == [ids[2], ids[3]]
+
+
+def test_a_group_keeping_two_stackable_members_is_still_offered(server):
+    """Over-block regression: the filter must not swallow a decidable group."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[2]])
+    _scan(server)
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 10)
+    assert total == 1
+    assert len(page[0]["candidates"]) == 3, "the frozen member is still listed"
+    assert sum(1 for c in page[0]["candidates"] if c["stackable"]) == 2
+
+
+def test_unlocking_the_set_returns_the_withheld_group(server):
+    """The withholding is a live predicate, not a decision baked in at scan time."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    set_id = _lock_set(server, "Frozen", [ids[1]])
+    _scan(server)
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+
+    def unlock(session):
+        picture_set = session.get(PictureSet, set_id)
+        picture_set.locked = False
+        session.add(picture_set)
+        session.commit()
+
+    _run(server, unlock)
+    # No rescan: the group row never changed, only the lock did.
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+
+
+def test_the_page_stays_full_when_a_withheld_group_sits_inside_it(server):
+    """The filter runs in SQL, so LIMIT counts only groups that survive it.
+
+    A post-filter applied after the LIMIT would serve a short page here and the
+    cursor would skip work; this pins that it does not.
+    """
+    specs = []
+    for i in range(5):
+        specs.extend(
+            [
+                {"pixel_sha": f"g{i}", "size_bytes": 100 + i},
+                {"pixel_sha": f"g{i}", "size_bytes": 100 + i},
+            ]
+        )
+    ids = _seed(server, specs)
+    # Freeze one member of the second and fourth groups: both become undecidable.
+    _lock_set(server, "Frozen", [ids[3], ids[7]])
+    _scan(server)
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session, None, None, 0, 3)
+    assert total == 3, "two of the five groups are withheld"
+    assert len(page) == 3, "the page is filled from the groups that survive"
+
+
+# ── the dry run counts what the run will actually do ──────────────────────────
+
+
+def test_the_dry_run_excludes_frozen_members_from_its_counts(server):
+    """The consent dialog must not promise pictures the run will skip."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[2]])
+    _scan(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert report["groups"] == 1
+    assert report["pictures"] == 2, "the frozen member is not promised"
+    assert report["dry_run_summary"]["pictures"] == 2
+    # The top-level figure and the summary come from one computation.
+    assert report["pictures"] == report["dry_run_summary"]["pictures"]
+
+
+def test_the_dry_run_omits_a_group_with_no_stackable_decision(server):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[1]])
+    _scan(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert report["groups"] == 0
+    assert report["pictures"] == 0
+
+
+def test_the_dry_run_still_counts_a_cover_that_gains_from_an_unfrozen_twin(server):
+    """Over-block regression on the summary: a moved cover still counts."""
+    ids = _seed(
+        server,
+        [
+            # The stored preselection is the frozen one, so the preview has to
+            # move the cover exactly as the real run does.
+            {"pixel_sha": "aaa", "size_bytes": 100, "smart_score": 4.9},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100, "tags": ["sunset"]},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[0]])
+    _scan(server)
+
+    summary = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)[
+        "dry_run_summary"
+    ]
+    assert summary["pictures"] == 2
+    assert summary["covers_gaining_tags"] == 1
+
+
+# ── the batched lock lookup refuses to guess ──────────────────────────────────
+
+
+def test_the_lock_lookup_raises_rather_than_calling_an_unknown_id_unfrozen(server):
+    """A partial batch must fail loudly, not silently admit a frozen picture."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _lock_set(server, "Frozen", [ids[1]])
+
+    def probe(session):
+        # Built over the FIRST picture only, then asked about the second.
+        lookup = set_locks.build_locked_set_lookup(session, [ids[0]])
+        with pytest.raises(KeyError):
+            lookup.sets_for(ids[1])
+        with pytest.raises(KeyError):
+            set_locks.partition_stackable_members(session, ids, lookup=lookup)
+        # Built over both, it answers correctly.
+        full = set_locks.build_locked_set_lookup(session, ids)
+        partition = set_locks.partition_stackable_members(session, ids, lookup=full)
+        assert partition.blocked_ids == [ids[1]]
+
+    _run(server, probe)

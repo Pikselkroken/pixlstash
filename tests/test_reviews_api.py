@@ -1272,7 +1272,17 @@ def test_scoped_token_cannot_read_review_suggestions():
         headers = {"Authorization": f"Bearer {token}"}
         scoped_resp = bearer.get(f"{API}/reviews/{rid}/suggestions", headers=headers)
         assert scoped_resp.status_code == 403, scoped_resp.text
-        assert scoped_resp.json()["detail"] == "Not available to this token"
+        # The denial now comes from the AuthzGate, not from the handler: the
+        # route is declared OWNER_ONLY in ROUTE_POLICIES, so the gate runs
+        # require_unscoped_owner as a router dependency and the handler's own
+        # inline check never executes for a scoped token. Asserting the gate's
+        # message is what keeps this test honest about WHICH layer is holding
+        # the line, which is the thing that would silently rot if the
+        # declaration were ever dropped.
+        assert (
+            scoped_resp.json()["detail"]
+            == "Owner-level (full, unscoped) access required"
+        )
 
         # Owner side: the queue is served in full. These are exactly the fields
         # the gate exists to withhold — the twin's id and the neighbourhood ids.

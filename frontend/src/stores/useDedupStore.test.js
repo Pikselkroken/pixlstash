@@ -2117,3 +2117,124 @@ describe("useDedupStore — Ctrl+A", () => {
     expect(listGroups).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── locked-set candidates ─────────────────────────────────────────────────────
+//
+// A candidate the server marks `stackable: false` is frozen by a locked picture
+// set: it can be in neither the stack nor the metadata union, so the queue keeps
+// it out of the request rather than letting the user press Stack into a refusal.
+
+describe("locked-set candidates", () => {
+  /** A group whose candidate at `index` is frozen by a locked set. */
+  function withLocked(signature, n, index, setName = "Evaluation Set") {
+    const g = group(signature, n);
+    g.candidates = g.candidates.map((c, i) =>
+      i === index
+        ? {
+            ...c,
+            stackable: false,
+            blocked_by_sets: [{ id: 91, name: setName }],
+          }
+        : { ...c, stackable: true, blocked_by_sets: [] },
+    );
+    return g;
+  }
+
+  async function openWith(groups) {
+    servePage(groups);
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadFirstPage();
+    return store;
+  }
+
+  it("counts only the stackable candidates in the stack size", async () => {
+    const g = withLocked("g1", 3, 2);
+    const store = await openWith([g]);
+    expect(store.stackSizeFor(g)).toBe(2);
+  });
+
+  it("sends the locked ids as exclusions so the server never has to skip them", async () => {
+    const g = withLocked("g1", 3, 2);
+    const store = await openWith([g]);
+    stackGroup.mockResolvedValue({
+      signature: "g1",
+      batch_id: "srv-1",
+      skipped: [],
+    });
+
+    await store.stack(g);
+
+    const [, options] = stackGroup.mock.calls[0];
+    expect(options.excludedPictureIds).toEqual([idsOf(g)[2]]);
+  });
+
+  it("keeps the cover off a locked candidate", async () => {
+    const g = withLocked("g1", 3, 0);
+    const store = await openWith([g]);
+    // Even an explicit user choice cannot leave the cover on a picture that is
+    // not going into the stack.
+    store.setCover("g1", idsOf(g)[0]);
+    expect(store.coverIdFor(g)).not.toBe(idsOf(g)[0]);
+    expect(idsOf(g).slice(1)).toContain(store.coverIdFor(g));
+  });
+
+  it("refuses to re-include a locked candidate, and says which refusal it was", async () => {
+    const g = withLocked("g1", 3, 2);
+    const store = await openWith([g]);
+    // Distinct from the stack-floor refusal (false), because the two need
+    // different sentences: this one is only fixable by unlocking the set.
+    expect(store.toggleExcluded(g, idsOf(g)[2])).toBe("locked");
+    expect(store.excludedFor("g1")).toEqual([]);
+  });
+
+  it("still lets the user exclude an unfrozen candidate alongside a locked one", async () => {
+    const g = withLocked("g1", 4, 3);
+    const store = await openWith([g]);
+    expect(store.toggleExcluded(g, idsOf(g)[0])).toBe(true);
+    expect(store.effectiveExcludedFor(g).sort()).toEqual(
+      [idsOf(g)[0], idsOf(g)[3]].sort(),
+    );
+  });
+
+  it("reports a partial success without aborting a bulk run", async () => {
+    const a = withLocked("g1", 3, 2);
+    const b = group("g2", 2);
+    const store = await openWith([a, b]);
+    store.toggleSelected(0);
+    store.toggleSelected(1);
+    stackGroup
+      .mockResolvedValueOnce({
+        signature: "g1",
+        batch_id: "cli-1",
+        picture_ids: [100, 101],
+        skipped: [
+          {
+            picture_id: 102,
+            reason: "set_locked",
+            sets: [{ id: 91, name: "Evaluation Set" }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        signature: "g2",
+        batch_id: "cli-1",
+        picture_ids: [200, 201],
+        skipped: [],
+      });
+
+    const result = await store.stack(a);
+
+    // Both groups were decided: a partial success is a success.
+    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(result.gesture_skipped).toHaveLength(1);
+    expect(result.gesture_skipped[0].picture_id).toBe(102);
+  });
+
+  it("treats a backend that serves no stackable field as all-stackable", async () => {
+    const g = group("g1", 3);
+    const store = await openWith([g]);
+    expect(store.stackSizeFor(g)).toBe(3);
+    expect(store.effectiveExcludedFor(g)).toEqual([]);
+  });
+});

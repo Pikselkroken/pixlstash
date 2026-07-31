@@ -11,6 +11,7 @@ import {
 import { useNoticeStore } from "../stores/useNoticeStore";
 import {
   applyStackBackgroundAlpha,
+  applyStackBadgeTint,
   arraysEqualByString,
   getStackColor,
   getStackColorIndexFromId,
@@ -825,10 +826,11 @@ export function useStackOrdering(
     };
   }
 
-  function getStackBadgeIconStyle(img) {
-    const color = getStackCardColor(img);
-    if (!color) return {};
-    return { color };
+  // The badge glyph's tint, not the raw stack colour: see `applyStackBadgeTint`
+  // for why the field colour cannot be used at glyph scale. Null when the tile
+  // has no stack colour, which the badge renders as its untinted default.
+  function getStackBadgeTint(img) {
+    return applyStackBadgeTint(getStackCardColor(img));
   }
 
   function getStackBandStyle(img) {
@@ -1343,7 +1345,7 @@ export function useStackOrdering(
     // Stack visual
     getStackCardStyle,
     getStackCardColor,
-    getStackBadgeIconStyle,
+    getStackBadgeTint,
     getStackBandStyle,
     isStackExpandedForImage,
     // Stack expand / collapse

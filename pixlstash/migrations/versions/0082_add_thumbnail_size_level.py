@@ -85,18 +85,14 @@ def upgrade() -> None:
     # One-time data backfill: derive each user's unified size index from their
     # existing ``columns`` preference. NULL columns -> default.
     if "columns" in existing_user_cols:
-        rows = bind.execute(
-            sa.text("SELECT id, columns FROM user")
-        ).fetchall()
+        rows = bind.execute(sa.text("SELECT id, columns FROM user")).fetchall()
         for row_id, columns in rows:
             if columns is None:
                 size_index = _DEFAULT_SIZE
             else:
                 size_index = _columns_to_size_index(int(columns))
             bind.execute(
-                sa.text(
-                    "UPDATE user SET thumbnail_size_level = :size WHERE id = :id"
-                ),
+                sa.text("UPDATE user SET thumbnail_size_level = :size WHERE id = :id"),
                 {"size": size_index, "id": row_id},
             )
     else:

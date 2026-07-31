@@ -342,6 +342,8 @@ Echoing the preview's `total_count` was considered and rejected as the primary c
 
 `exclude_character_id` drops pictures that already contain a face assigned to that character. Paired with `source_character_id` it is what makes the result set the *un-assigned* candidates, so a caller can put its length on a button without over-promising — the assignment endpoint would skip those rows anyway and report them as `already_assigned_ids`. It is subtracted from the fetched candidates rather than intersected into `filter_candidate_ids`, because `None` there means "unrestricted" and has no set to subtract from.
 
+**`include_reference_scores` adds `reference_likeness`** to every match: the winning face's similarity to each query embedding, in query order, from which `likeness` is the `combine`. It exists because the combine is lossy in the one direction the UI needs: with `combine=max` a candidate that resembles one reference perfectly outranks one that resembles all of them well, and `likeness` cannot tell those apart. Keeping the un-combined row is what lets a caller ask *how many* references a match satisfies, and it costs no extra work: `_score_best_faces` already has the whole `(F, Q)` similarity matrix and simply carries the winning row out with the score. Off by default (it is Q floats per row over up to 500 rows), rounded to 4 decimals, and consumed by the frontend's reference-agreement slider, which cuts client-side precisely so the knob costs no round trip.
+
 Each match reports the **`face_id` that produced its score**, so a caller assigning the results does not repeat the comparison. Scoring combines across queries **per face** and only then takes the max over a picture's faces: the reverse order lets different faces satisfy different queries, which makes `combine=min` mean something other than its documented "must match all query images", and leaves no single face to name as the winner. For a single query embedding the two orders are identical. The comparison is one matmul over every candidate face rather than a per-picture Python loop, and **faces whose embedding width differs from the query's are skipped with a warning** — a vault that has been through a `FaceModelRefreshTask` holds two widths, and a cosine between them is not a similarity.
 
 Authorization is unchanged: the route is already declared `SCOPED_LIST` in `authz/registry.py` and scope-filters its ids through `fetch_scope_allowed_picture_ids`, which still holds for the character source (`tests/test_likeness_and_face_search.py::test_face_search_by_character_still_scope_filters_for_a_share_token` asserts both directions). Note the route is in `READ_SAFE_POST_PATHS`, so share tokens do reach it.
@@ -2233,8 +2235,8 @@ extraction task consumes). A group spanning several characters is left alone and
 logged.
 
 The union writes tags and scores, which are curation state, so it calls
-`enforce_pictures_not_locked` first: a locked-set member makes the whole verdict a
-423 rather than a half-applied union.
+`enforce_pictures_not_locked` first: a locked-set member makes the union a 423
+rather than a half-applied write.
 
 **Guard ordering is load-bearing.** `_stack_members` calls
 `enforce_stack_membership_not_locked` **before** it folds any other stack in, and
@@ -2243,6 +2245,61 @@ co-member dragged in by the fold is caught even though
 `apply_metadata_union_in_session` only checks the group's own members. Moving the
 lock check after the fold would open that hole. Pinned by
 `test_a_locked_co_member_of_a_folded_stack_is_refused`.
+
+#### Locked members are partitioned out, not fatal (2026-07-30)
+
+**Two lock gates sit on this path, and they do not agree.**
+`enforce_stack_membership_not_locked` refuses only when a locked set would *gain*
+a member, so on its own it would allow a group already sitting wholly inside one
+locked set. `enforce_pictures_not_locked`, reached through the union, refuses
+**any** frozen member, gain or no gain, because tags and scores are label data.
+The union's rule is the tighter one, so it is the rule the whole dedup stack path
+has to obey: **a frozen picture cannot be in a dedup stack at all.**
+
+`set_lock_service.partition_stackable_members` is that rule, written once. It
+splits a group's candidates into the unfrozen ones (a legal stack, and one that no
+longer touches any locked set, so the membership guard is then satisfied for free)
+and the frozen ones. Both ends of the path use it, which is what stops the queue
+from offering a Stack the verdict would refuse:
+
+- **`GET /dedup/groups`** marks each candidate `stackable` and `blocked_by_sets`,
+  and moves `cover_picture_id` onto a stackable member. The page builds one
+  `LockedSetLookup` for every candidate on the page and passes it into each
+  group's partition, so a page costs three queries rather than three per group.
+  The lookup **carries its own coverage and raises** when asked about an id
+  outside its pool: a bare dict cannot tell "not frozen" from "never looked up",
+  and in a lock helper that difference is a silent admission.
+- **A group with fewer than two stackable members is withheld** (owner call,
+  2026-07-30) by `_live_groups_filter`'s third `HAVING`, so the queue, the badge
+  (`count_unresolved_in_session`) and the tier split (`count_by_tier_in_session`)
+  all apply one identical rule and cannot disagree. `stackable_groups_filter` is
+  the weaker sibling used by bulk auto-stack, which must still see
+  already-collapsed groups for its dry run. Both are built on
+  `locked_picture_id_subquery`, the single SQL definition of "frozen" shared with
+  the write guards.
+  **It has to be SQL.** A post-filter after the `LIMIT` would shrink pages and
+  desynchronise the keyset cursor (§22.7), which is the hazard
+  `locked_picture_id_subquery`'s own docstring was written for. Nothing is
+  deleted: the group row survives and unlocking returns it with no rescan, and
+  its signature stays POSTable by a stale client, which is what the partial
+  success below is for.
+- **`POST /dedup/verdicts/stack`** stacks the survivors, records the frozen ones as
+  `excluded_picture_ids`, and reports them in `skipped`. Fewer than two survivors
+  is a 423 whose detail names `picture_ids` as well as `sets`. Skips log at
+  WARNING, mirroring `drop_locked_set_ids`.
+- **`POST /dedup/auto-stack`** filters its own candidate query with
+  `stackable_groups_filter`, so it never plans a group it would only refuse, and
+  its **dry run counts only the members the run will actually move**. Counting
+  `member_count` there made the consent dialog promise pictures that stay put;
+  the top-level `pictures` figure is now read back off `dry_run_summary` rather
+  than recomputed, so the two cannot disagree. A frozen cover preselection is
+  moved in the preview exactly as the run moves it, or the group would silently
+  drop out of the "covers gaining metadata" row.
+
+Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
+routes still refuse whole-request: they act on exactly the pictures the user
+named, so there is no remainder to fall back on, whereas a triage queue that
+dead-ends on one frozen member costs the user the decision about all the others.
 
 #### Accepted risk A1 — the union widens live share tokens
 

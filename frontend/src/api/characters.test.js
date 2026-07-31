@@ -39,19 +39,41 @@ describe("api/characters", () => {
     });
   });
 
-  it("createCharacter POSTs the body", async () => {
-    apiClient.post.mockResolvedValue({ data: { id: 2 } });
+  // CONTRACT. Both routes declare `response_model=CharacterMutationResponse`
+  // (pixlstash/routes/characters.py: POST ~1240, PATCH ~589) and return
+  // {"status": "success", "character": ...}, so the record is NESTED. These
+  // mocks mirror that envelope on purpose: a flat {id} mock here is what let
+  // the create-and-assign flow ship broken, because every caller read `.id` off
+  // the envelope and got undefined. If the backend ever flattens this, these
+  // tests must fail before a user flow does.
+  const CREATE_ENVELOPE = {
+    status: "success",
+    character: { id: 2, name: "Ada", project_id: null },
+  };
+
+  it("createCharacter POSTs the body and returns the mutation envelope", async () => {
+    apiClient.post.mockResolvedValue({ data: CREATE_ENVELOPE });
     const result = await createCharacter({ name: "Ada" });
     expect(apiClient.post).toHaveBeenCalledWith("/characters", { name: "Ada" });
-    expect(result).toEqual({ id: 2 });
+    expect(result).toEqual(CREATE_ENVELOPE);
+    // The id lives under .character, never at the top level.
+    expect(result.character.id).toBe(2);
+    expect(result.id).toBeUndefined();
   });
 
-  it("patchCharacter addresses the character by id", async () => {
-    apiClient.patch.mockResolvedValue({ data: {} });
-    await patchCharacter(2, { name: "Ada L." });
+  it("patchCharacter addresses the character by id and shares that envelope", async () => {
+    const patchEnvelope = {
+      status: "success",
+      character: { id: 2, name: "Ada L." },
+    };
+    apiClient.patch.mockResolvedValue({ data: patchEnvelope });
+    const result = await patchCharacter(2, { name: "Ada L." });
     expect(apiClient.patch).toHaveBeenCalledWith("/characters/2", {
       name: "Ada L.",
     });
+    expect(result).toEqual(patchEnvelope);
+    expect(result.character.id).toBe(2);
+    expect(result.id).toBeUndefined();
   });
 
   it("deleteCharacter DELETEs /characters/:id and returns the body", async () => {

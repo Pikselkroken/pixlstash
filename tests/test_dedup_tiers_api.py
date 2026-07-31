@@ -1078,7 +1078,19 @@ def test_the_auto_stack_dry_run_carries_the_consent_aggregates():
 
 
 def test_a_partially_blocked_auto_stack_returns_its_batch_id():
-    """R2 at the HTTP boundary: a 423 mid-run must not swallow the undo handle."""
+    """R2 at the HTTP boundary, restated for the withholding filter.
+
+    The original fixture reached the run with a locked group in it and asserted
+    the 423 was reported rather than raised. Since a group with fewer than two
+    stackable members is withheld from the queue, the counts AND the auto-stack
+    plan (owner call, 2026-07-30), that group no longer enters the run: the right
+    HTTP-boundary assertion is now that the run applies the decidable group,
+    reports no failure, and still hands back its undo handle. The
+    "an HTTPException mid-run does not abort" invariant itself is pinned at the
+    service level by
+    ``test_dedup_verdict_service.test_an_http_exception_mid_run_does_not_abort_the_bulk_run``,
+    which injects the refusal instead of relying on a lock to produce one.
+    """
     temp_dir, client, server, ids, _token, _set_id = _env()
     try:
 
@@ -1114,8 +1126,8 @@ def test_a_partially_blocked_auto_stack_returns_its_batch_id():
         body = response.json()
         assert body["batch_id"]
         assert body["groups"] == 1
-        assert body["blocked"] == 1
-        assert body["failures"][0]["status_code"] == 423
+        assert body["blocked"] == 0, "the locked group was filtered out, not refused"
+        assert body["failures"] == []
         # The unlocked group was applied, the locked one was not.
         assert (
             _run(server, lambda session: session.get(Picture, ids[0]).stack_id)

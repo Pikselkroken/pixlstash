@@ -76,6 +76,7 @@ def register_routes(router, server):
         comfyui_models = []
         comfyui_loras = []
         tags_filter = []
+        stack_state = None
         if request.query_params:
             query_params = dict(request.query_params)
             query = query_params.pop("query", query)
@@ -103,6 +104,7 @@ def register_routes(router, server):
             comfyui_loras = _predicate_filter.comfyui_loras_filter or []
             tags_filter = _predicate_filter.tags_filter or []
             tags_rejected_filter = _predicate_filter.tags_rejected_filter or []
+            stack_state = _predicate_filter.stack_state
         min_score = int(min_score_raw) if min_score_raw is not None else None
         if not query:
             raise HTTPException(
@@ -395,6 +397,7 @@ def register_routes(router, server):
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,
                 tags_rejected_filter=tags_rejected_filter or None,
+                stack_state=stack_state,
             )
 
             log_semantic_results("base", results)
@@ -427,6 +430,7 @@ def register_routes(router, server):
                 comfyui_loras_filter=comfyui_loras or None,
                 tags_filter=tags_filter or None,
                 tags_rejected_filter=tags_rejected_filter or None,
+                stack_state=stack_state,
             )
             sorted_results = [(pic, score_map.get(pic.id, 0.0)) for pic in sorted_pics]
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)

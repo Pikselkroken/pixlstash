@@ -12,7 +12,10 @@ import {
   normalizePluginProgressMessage,
   getStackColorIndexFromId,
   applyStackBackgroundAlpha,
+  applyStackBadgeTint,
+  getStackColor,
 } from './utils.js'
+import { composite, contrastRatio } from './contrastAudit.js'
 
 describe('toggleScore', () => {
   it('returns target when current differs', () => {
@@ -254,5 +257,84 @@ describe('applyStackBackgroundAlpha', () => {
   it('adds alpha to rgb()', () => {
     const result = applyStackBackgroundAlpha('rgb(0, 128, 255)')
     expect(result).toContain('0.6')
+  })
+})
+
+/**
+ * `hsl(H S% L%)` → `{r,g,b}`, so the tint can be measured with the same
+ * contrast helpers the token audit uses. Only handles the space-separated
+ * syntax applyStackBadgeTint emits.
+ */
+function hslToRgb(color) {
+  const [h, s, l] = /^hsl\((\d+) (\d+)% (\d+)%\)$/.exec(color).slice(1).map(Number)
+  const sat = s / 100
+  const light = l / 100
+  const a = sat * Math.min(light, 1 - light)
+  const f = (n) => {
+    const k = (n + h / 30) % 12
+    return (light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255
+  }
+  return { r: f(0), g: f(8), b: f(4) }
+}
+
+describe('applyStackBadgeTint', () => {
+  it('keeps the hue and normalises saturation and lightness', () => {
+    // The hue is the identity; everything else is field styling that does not
+    // survive at 14px on a scrim.
+    expect(applyStackBadgeTint('hsl(220 60% 48%)')).toBe('hsl(220 70% 72%)')
+  })
+
+  it('gives one stack one tint regardless of where its cover lands', () => {
+    // getStackColor swings lightness and saturation on grid parity. As a field
+    // that is invisible; as a glyph it would be the identity channel changing
+    // for a reason the user cannot act on.
+    const tints = [
+      getStackColor(0, 0, 0),
+      getStackColor(0, 1, 0),
+      getStackColor(0, 0, 1),
+      getStackColor(0, 1, 1),
+    ].map(applyStackBadgeTint)
+    expect(new Set(tints).size).toBe(1)
+  })
+
+  it('accepts the comma and deg spellings a server colour may arrive in', () => {
+    expect(applyStackBadgeTint('hsl(145, 60%, 48%)')).toBe('hsl(145 70% 72%)')
+    expect(applyStackBadgeTint('hsla(145deg 60% 48% / 0.6)')).toBe(
+      'hsl(145 70% 72%)',
+    )
+  })
+
+  it('returns null for anything it cannot read as a hue', () => {
+    // The badge falls back to its known-legible glyph rather than painting an
+    // unverified colour onto a photo.
+    expect(applyStackBadgeTint('#3b82f6')).toBeNull()
+    expect(applyStackBadgeTint('rgb(59, 130, 246)')).toBeNull()
+    expect(applyStackBadgeTint('rebeccapurple')).toBeNull()
+    expect(applyStackBadgeTint('')).toBeNull()
+    expect(applyStackBadgeTint(null)).toBeNull()
+    expect(applyStackBadgeTint(undefined)).toBeNull()
+  })
+
+  it('clears 3:1 on --scrim-photo-strong for every hue in the palette', () => {
+    // This is the arithmetic the whole spec rests on, so it is asserted rather
+    // than eyeballed (the same reasoning as contrastAudit.test.js). Worst case
+    // is a WHITE photo under the chip, because a dark photo only helps a light
+    // glyph. Floor is WCAG 1.4.11 non-text, 3:1: the glyph is a graphic, and
+    // the count beside it carries the meaning in text.
+    const chip = composite('#000000', '#ffffff', 0.78)
+    for (let index = 0; index < 8; index += 1) {
+      const tint = applyStackBadgeTint(getStackColor(index))
+      expect(contrastRatio(hslToRgb(tint), chip)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('would NOT clear 3:1 on the ordinary photo scrim', () => {
+    // Pins the pairing: the tint is only legible because
+    // `.sbadge--tinted` deepens the chip to --scrim-photo-strong. Anyone who
+    // drops that rule to "simplify" fails here instead of shipping an
+    // indicator that vanishes on bright photos.
+    const chip = composite('#000000', '#ffffff', 0.55)
+    const worst = applyStackBadgeTint(getStackColor(7)) // hue 258, the darkest
+    expect(contrastRatio(hslToRgb(worst), chip)).toBeLessThan(3)
   })
 })

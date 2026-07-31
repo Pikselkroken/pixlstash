@@ -37,10 +37,17 @@ export async function listCharacters({ baseUrl = "", params } = {}) {
 
 /**
  * Create a character.
+ *
+ * NOTE the shape: the route answers with `CharacterMutationResponse`, so the
+ * body is the ENVELOPE `{status, character}` and the created record (with its
+ * server-assigned id) is nested under `.character`. Callers that need the id
+ * must unwrap; reading `.id` off the envelope silently yields undefined.
+ *
  * @param {Object} body - the character's fields (name, notes, ...).
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
- * @returns {Promise<Object>} the created character (the response body).
+ * @returns {Promise<{status: string, character: Object|null}>} the response
+ *   body: the mutation envelope, NOT the bare character.
  */
 export async function createCharacter(body, { baseUrl = "" } = {}) {
   const res = await apiClient.post(charactersUrl("", baseUrl), body);
@@ -49,11 +56,16 @@ export async function createCharacter(body, { baseUrl = "" } = {}) {
 
 /**
  * Patch a character.
+ *
+ * Shares `CharacterMutationResponse` with the create route above, so this body
+ * is the same `{status, character}` envelope and the record is nested.
+ *
  * @param {number|string} id
  * @param {Object} body - only the keys to change.
  * @param {Object} [options]
  * @param {string} [options.baseUrl=""]
- * @returns {Promise<Object>} the updated character (the response body).
+ * @returns {Promise<{status: string, character: Object|null}>} the response
+ *   body: the mutation envelope, NOT the bare character.
  */
 export async function patchCharacter(id, body, { baseUrl = "" } = {}) {
   const res = await apiClient.patch(charactersUrl(`/${id}`, baseUrl), body);

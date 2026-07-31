@@ -39,25 +39,48 @@ export class DuplicateQueuePage {
     this.sidebarDot = this.sidebarRow.locator('.sidebar-dedup-dot')
   }
 
-  /**
-   * Open the queue by route and wait for a group (or the done state).
-   *
-   * Waits for the row to be FOCUSED, not merely present. The queue sets its
-   * focus index when a load resolves, so there is a window where rows are
-   * painted and nothing is focused yet — and every key below acts on the
-   * focused group, so a press landing in that window does nothing at all. That
-   * window is narrow on a quiet machine and wide on a loaded CI runner, which
-   * is exactly the shape of a test that passes locally and fails in CI.
-   */
+  /** Open the queue by route and wait for it to settle. */
   async goto() {
     await this.page.goto('/duplicates')
     await expect(this.root).toBeVisible()
-    await this.page
-      .locator('.grow, .qdone')
-      .first()
-      .waitFor({ state: 'visible' })
-    if (await this.doneState.isVisible()) return
-    await expect(this.focusedRow).toHaveCount(1)
+    await this.waitForSettled()
+  }
+
+  /**
+   * Wait until the queue has stopped changing under the test.
+   *
+   * `.grow, .qdone` is NOT a readiness signal on its own, and every key below
+   * acts on `store.focusedGroup`, so a press that lands before there is one
+   * does nothing at all. Two separate windows produce that state, and this
+   * waits out both:
+   *
+   *   * **Rows painted, focus not yet set.** The queue sets its focus index
+   *     when a load resolves. The window is narrow on a quiet machine and wide
+   *     on a loaded CI runner, which is the shape of a test that passes locally
+   *     and fails in CI. Waiting for `.grow--focus` rather than `.grow` closes
+   *     it.
+   *   * **A legitimately empty first page.** Opening the queue *queues a scan*
+   *     (`openQueue`), so the first page can come back with nothing and paint
+   *     "Queue clear" before the scan has committed its groups; the store's 2s
+   *     count poll then reloads while the list is empty and the rows appear a
+   *     moment later. Returning as soon as `.qdone` is visible walks straight
+   *     into this one, so an empty queue only counts as ready once it has
+   *     stayed empty across the poll that would have refilled it.
+   */
+  async waitForSettled({ timeout = 20_000 } = {}) {
+    await expect
+      .poll(
+        async () => {
+          if ((await this.focusedRow.count()) > 0) return 'ready'
+          if ((await this.doneState.count()) === 0) return 'loading'
+          // Longer than the store's 2s refill poll, so a queue that is only
+          // momentarily empty resolves as 'ready' on this same tick.
+          await this.page.waitForTimeout(2_500)
+          return (await this.focusedRow.count()) > 0 ? 'ready' : 'empty'
+        },
+        { timeout, intervals: Array(40).fill(250) },
+      )
+      .not.toBe('loading')
   }
 
   /**

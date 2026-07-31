@@ -90,7 +90,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional
 
 import numpy as np
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture
@@ -113,6 +113,11 @@ from pixlstash.db_models.quality import Quality
 from pixlstash.db_models.tag import Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service
+from pixlstash.services.set_lock_service import (
+    build_locked_set_lookup,
+    locked_picture_id_subquery,
+    partition_stackable_members,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -1769,10 +1774,43 @@ def _decided_keyset_predicate(cursor: str):
     )
 
 
+def _unfrozen(value):
+    """*value* for a member no locked set freezes, ``NULL`` for a frozen one.
+
+    Wrapped in ``COUNT`` / ``COUNT(DISTINCT …)``, which skip NULLs, this counts
+    only the members that could actually take part in a stack.
+    :func:`~pixlstash.services.set_lock_service.locked_picture_id_subquery` is the
+    single SQL definition of "frozen" shared with the write guards, so the read
+    filters cannot drift away from what a verdict will actually do.
+    """
+    return case((Picture.id.notin_(locked_picture_id_subquery()), value), else_=None)
+
+
+def stackable_groups_filter():
+    """Groups with at least two live members that a locked set does not freeze.
+
+    A frozen picture can join neither the stack nor the metadata union, so a
+    group left with fewer than two stackable members has no stackable decision in
+    it. Every surface that offers stacking filters on this: the queue page, the
+    two counts (through :func:`_live_groups_filter`) and the bulk auto-stack run.
+
+    Deliberately weaker than :func:`_live_groups_filter`: it says nothing about
+    stack units, because auto-stack reports already-collapsed groups in its dry
+    run and must still see them.
+    """
+    return DedupGroup.id.in_(
+        select(DedupGroupMember.group_id)
+        .join(Picture, Picture.id == DedupGroupMember.picture_id)
+        .where(Picture.deleted.is_(False))
+        .group_by(DedupGroupMember.group_id)
+        .having(func.count(_unfrozen(DedupGroupMember.picture_id)) >= 2)
+    )
+
+
 def _live_groups_filter():
     """Only groups that still POSE a decision.
 
-    Two conditions, one HAVING clause over the live (non-scrapheaped) members:
+    Three conditions, one HAVING clause over the live (non-scrapheaped) members:
 
     * **Two or more of them.** A soft-delete thins its groups the moment it
       lands, but :func:`prune_stale_groups_in_session` only runs on the next
@@ -1785,6 +1823,23 @@ def _live_groups_filter():
       "unresolved" here and was re-offered forever. Re-offering the answered
       is how the count stops being trusted. A group where a stack would still
       FOLD something in (two stacks, or a stack plus a loner) keeps counting.
+    * **Two or more stack units among the members a locked set does NOT
+      freeze.** A frozen picture can join neither the stack nor the metadata
+      union, so a group left with fewer than two stackable members poses no
+      stackable decision at all and is withheld (owner call, 2026-07-30).
+
+    The third condition strictly implies the first two; all three are kept
+    because they state three different rules and a future edit to one should not
+    silently drop another.
+
+    **The lock rule has to be SQL, not a post-filter.** The queue is paged, so
+    dropping rows after the ``LIMIT`` would shrink pages and desynchronise the
+    cursor, and the badge would disagree with the list. Expressing it here is
+    what makes ``count_unresolved_in_session``, ``count_by_tier_in_session`` and
+    ``page_queue_in_session`` apply one identical rule: they all go through this
+    filter. :func:`~pixlstash.services.set_lock_service.locked_picture_id_subquery`
+    is the shared definition of "frozen", so the read filter and the write guards
+    cannot drift.
     """
     stack_unit = func.coalesce(Picture.stack_id, 0 - Picture.id)
     return DedupGroup.id.in_(
@@ -1794,6 +1849,7 @@ def _live_groups_filter():
         .group_by(DedupGroupMember.group_id)
         .having(func.count(DedupGroupMember.picture_id) >= 2)
         .having(func.count(func.distinct(stack_unit)) >= 2)
+        .having(func.count(func.distinct(_unfrozen(stack_unit))) >= 2)
     )
 
 
@@ -2119,9 +2175,13 @@ def page_queue_in_session(
     ids_by_group: dict[int, list[int]] = defaultdict(list)
     for group_id, picture_id, _position in member_rows:
         ids_by_group[int(group_id)].append(int(picture_id))
-    candidates = load_candidates(
-        session, [pid for ids in ids_by_group.values() for pid in ids]
-    )
+    all_member_ids = [pid for ids in ids_by_group.values() for pid in ids]
+    candidates = load_candidates(session, all_member_ids)
+    # Resolved once for the whole page rather than once per group: the lookup is
+    # stack-expanded and costs three queries, which would be three per group. It
+    # carries its own coverage, so a group whose members are not all in the pool
+    # raises rather than being reported as unfrozen.
+    lock_lookup = build_locked_set_lookup(session, all_member_ids)
 
     payload: list[dict[str, Any]] = []
     for row in rows:
@@ -2144,6 +2204,19 @@ def page_queue_in_session(
             if row.cover_picture_id is not None
             else (members[0].id if members else None)
         )
+        # Nothing is filtered out of the listing: a locked-set member is still a
+        # real member of the group, and hiding it would make the row disagree
+        # with the scan and quietly withdraw the Keep-separate decision the user
+        # can still make. It is marked instead, and the cover moves onto the side
+        # that can actually be stacked so the client's default is a legal one.
+        partition = partition_stackable_members(
+            session, [member.id for member in members], lookup=lock_lookup
+        )
+        stackable_ids = set(partition.stackable)
+        if cover_id not in stackable_ids and len(stackable_ids) >= 2:
+            cover_id = select_cover(
+                [member for member in members if member.id in stackable_ids]
+            )
         verdict = verdict_by_signature.get(row.signature)
         payload.append(
             {
@@ -2157,9 +2230,13 @@ def page_queue_in_session(
                 "verdict": verdict.verdict if verdict else None,
                 "decided_at": verdict.decided_at if verdict else None,
                 "candidates": [
-                    member.as_dict(
-                        why=build_candidate_evidence(member, members, cover_id)
-                    )
+                    {
+                        **member.as_dict(
+                            why=build_candidate_evidence(member, members, cover_id)
+                        ),
+                        "stackable": member.id in stackable_ids,
+                        "blocked_by_sets": partition.sets_for(member.id),
+                    }
                     for member in members
                 ],
             }

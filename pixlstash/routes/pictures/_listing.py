@@ -262,6 +262,15 @@ class PictureListFilters:
         face_filter: str | None = Query(
             None, description="with_face | without_face", examples=["with_face"]
         ),
+        stack_state: str | None = Query(
+            None,
+            description=(
+                "stacked | unstacked | unresolved. Omit for every picture. "
+                "'unresolved' means the picture is in a duplicate group that "
+                "carries no verdict yet."
+            ),
+            examples=["stacked"],
+        ),
         shared_only: bool = Query(
             False, description="Only pictures shared with the current user."
         ),
@@ -415,6 +424,15 @@ def select_pictures_for_listing(
             face_filter_param = request.query_params.get("face_filter")
             if face_filter_param in ("with_face", "without_face"):
                 query_params["face_filter"] = face_filter_param
+            stack_state_param = request.query_params.get("stack_state")
+            if stack_state_param in ("stacked", "unstacked", "unresolved"):
+                query_params["stack_state"] = stack_state_param
+            else:
+                # An unrecognised value must not survive into ``query_params``: it
+                # would be splatted into ``Picture.find(**query_params)``, where the
+                # ``hasattr`` fallthrough drops any key that is not a column and the
+                # filter silently does nothing.
+                query_params.pop("stack_state", None)
             impossible_sources_param = request.query_params.getlist(
                 "impossible_tag_source"
             )
@@ -479,6 +497,7 @@ def select_pictures_for_listing(
     project_id_raw = query_params.pop("project_id", None)
     file_path_prefix = query_params.pop("file_path_prefix", None) or None
     face_filter = query_params.pop("face_filter", None)
+    stack_state = query_params.pop("stack_state", None)
     impossible_sources = query_params.pop("impossible_sources", None)
     shared_only = bool(query_params.pop("shared_only", False))
     query_params.pop(
@@ -638,6 +657,7 @@ def select_pictures_for_listing(
         comfyui_models_filter_value: list[str] | None = None,
         comfyui_loras_filter_value: list[str] | None = None,
         face_filter_value: str | None = None,
+        stack_state_value: str | None = None,
         impossible_sources_value: list[str] | None = None,
     ):
         if deleted_only:
@@ -682,6 +702,7 @@ def select_pictures_for_listing(
                 and not comfyui_models_filter_value
                 and not comfyui_loras_filter_value
                 and not face_filter_value
+                and not stack_state_value
                 and not impossible_sources_value
             ):
                 return None
@@ -730,6 +751,7 @@ def select_pictures_for_listing(
             comfyui_models_filter=comfyui_models_filter_value,
             comfyui_loras_filter=comfyui_loras_filter_value,
             face_filter=face_filter_value,
+            stack_state=stack_state_value,
             impossible_sources=impossible_sources_value,
             apply_deleted_filter=False,
         ).apply(query)
@@ -769,6 +791,7 @@ def select_pictures_for_listing(
             comfyui_models_filter_value=query_params.get("comfyui_models_filter"),
             comfyui_loras_filter_value=query_params.get("comfyui_loras_filter"),
             face_filter_value=face_filter,
+            stack_state_value=stack_state,
             impossible_sources_value=impossible_sources,
         )
         if set_filter_ids:
@@ -873,6 +896,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 tags_filter=query_params.get("tags_filter") or None,
                 tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
@@ -917,6 +941,7 @@ def select_pictures_for_listing(
             or None,
             hidden_tags_filter=hidden_tags,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             picture_ids=(
                 [int(i) for i in query_params["id"] if str(i).isdigit()]
@@ -941,6 +966,7 @@ def select_pictures_for_listing(
                 smart_score_bucket=smart_score_bucket,
                 resolution_bucket=resolution_bucket,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
@@ -962,6 +988,7 @@ def select_pictures_for_listing(
             smart_score_bucket=smart_score_bucket,
             resolution_bucket=resolution_bucket,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
@@ -1220,6 +1247,7 @@ def select_pictures_for_listing(
                 resolution_bucket=resolution_bucket,
                 file_path_prefix=file_path_prefix,
                 face_filter=face_filter,
+                stack_state=stack_state,
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 **query_params,
@@ -1239,6 +1267,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             file_path_prefix=file_path_prefix,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,

@@ -318,7 +318,9 @@ def flatten_deep_license_trees(python_dir: Path) -> None:
                 "because its paths exceeded the Windows path-length limit.\n"
             )
             for p in files:
-                out.write(f"\n{'=' * 70}\n{p.relative_to(subtree.parent)}\n{'=' * 70}\n")
+                out.write(
+                    f"\n{'=' * 70}\n{p.relative_to(subtree.parent)}\n{'=' * 70}\n"
+                )
                 out.write(p.read_text(encoding="utf-8", errors="replace"))
         shutil.rmtree(subtree)
         log(

@@ -25,7 +25,6 @@ from sqlmodel import select
 
 from pixlstash.db_models import (
     Character,
-    Face,
     Picture,
     PictureProjectMember,
     PictureSetMember,
@@ -658,56 +657,6 @@ def _assign_outputs_to_stack_top(
     server.vault.db.run_task(update_stack)
 
 
-def _copy_face_assignments(
-    server,
-    source_picture_id: int | None,
-    target_picture_ids: list[int],
-) -> None:
-    if not source_picture_id or not target_picture_ids:
-        return
-
-    def copy_task(session):
-        source_faces = session.exec(
-            select(Face).where(Face.picture_id == source_picture_id)
-        ).all()
-        if not source_faces:
-            return 0
-        target_ids = [pid for pid in target_picture_ids if pid is not None]
-        if not target_ids:
-            return 0
-        existing_targets = session.exec(
-            select(Face.picture_id).where(Face.picture_id.in_(target_ids))
-        ).all()
-        skip_ids = set(existing_targets)
-        new_faces = []
-        for target_id in target_ids:
-            if target_id in skip_ids:
-                continue
-            for face in source_faces:
-                new_faces.append(
-                    Face(
-                        picture_id=target_id,
-                        frame_index=face.frame_index,
-                        face_index=face.face_index,
-                        character_id=face.character_id,
-                        bbox=face.bbox,
-                    )
-                )
-        if new_faces:
-            session.add_all(new_faces)
-            session.commit()
-        return len(new_faces)
-
-    copied = server.vault.db.run_task(copy_task)
-    if copied:
-        logger.info(
-            "Copied %s face assignments to %s picture(s) from %s",
-            copied,
-            len(target_picture_ids),
-            source_picture_id,
-        )
-
-
 def _copy_set_and_project_assignments(
     server,
     source_picture_id: int | None,
@@ -900,7 +849,6 @@ def _process_comfyui_outputs(
     stack_id: int | None,
     source_picture_id: int | None,
     view_context: dict | None = None,
-    is_i2i: bool = False,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
@@ -970,16 +918,20 @@ def _process_comfyui_outputs(
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:
-            # Association strategy is decoupled from physical stack placement:
-            # whether outputs join a stack (stack_id) and whether they are I2I
-            # (is_i2i) are independent. I2I always copies faces directly even
-            # when stacking is disabled; T2I always defers to similarity.
-            if is_i2i:
-                # I2I: copy face records directly (positions are structurally similar)
-                _copy_face_assignments(server, source_picture_id, new_ids)
-            else:
-                # T2I: let face extraction run and schedule similarity-based assignment
-                _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
+            # Both I2I and T2I defer to the same mechanism: mark the output with
+            # its source, let face extraction find the output's REAL faces, and
+            # let SourceFaceLikenessTask inherit a character only where the two
+            # faces actually match at >= 0.7.
+            #
+            # I2I used to copy the source's face rows outright, on the reasoning
+            # that "positions are structurally similar". They are not reliably:
+            # a bbox is pixel coordinates, and an I2I output at a different
+            # resolution puts the source's numbers over a different region
+            # entirely (on a much larger canvas they collapse into the top-left
+            # corner and capture nothing). It also asserted the person is in the
+            # output without looking at the output, which for a regenerated face
+            # is a guess. Deferring costs one extraction pass and is correct.
+            _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
             _copy_set_and_project_assignments(server, source_picture_id, new_ids)
         if new_ids and view_context:
             _assign_pictures_to_view_context(

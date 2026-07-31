@@ -34,6 +34,7 @@
     @comfyui-run="handleComfyuiRun"
     @run-plugin="handlePluginRunRequest"
     @request-context-menu="handleOverlayContextMenuRequest"
+    @character-created="emit('refresh-sidebar')"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -131,6 +132,7 @@
       @added-to-set="handleOverlayAddedToSet"
       @add-to-character="handleAddToCharacter"
       @remove-from-character="handleRemoveFromCharacter"
+      @create-character="handleCreateCharacterFromMenu"
       @set-project="handleSetProjectForSelected"
       @remove-from-stack="removeSelectedFromStack"
       @dissolve-stacks="dissolveSelectedStacks"
@@ -176,6 +178,19 @@
       @segment="openOverlaySegmentDialog"
       @delete-selected="handleOverlayDelete"
       @remove-from-group="handleOverlayScrapheapRestore"
+    />
+
+    <!-- ── New person from the context menu (#645) ─────────────
+         Grid-local instance of the person editor so the create-and-assign
+         flow's state (the captured selection) stays owned by the grid.
+         SideBar keeps its own instance for its own entry points. -->
+    <CharacterEditor
+      :open="createPersonOpen"
+      :character="createPersonCharacter"
+      :backend-url="props.backendUrl"
+      :projects="createPersonProjects"
+      @close="handleCreatePersonClose"
+      @saved="handleCreatePersonSaved"
     />
 
     <!-- ── Revoke picture shares confirm dialog ───────────────── -->
@@ -858,17 +873,31 @@
                 >Cover</span
               >
               <!-- Top-right badge column — the shared home for corner
-                   indicators (stars above, stack count below, right-aligned,
-                   2px gap). The stars are hover-only; the stack count is
+                   indicators (stack count in the corner, hover-only stars
+                   below it, right-aligned, 2px gap). The stack count is
                    PERMANENT — how many pictures a tile stands for is a fact
                    about the tile, and hiding it until hover is what made
                    stacks invisible while browsing. The hover behaviour
                    therefore lives on the container's other children, not the
-                   container. -->
+                   container.
+
+                   The permanent badge leads the column deliberately: below the
+                   stars its rest position was set by a strip that is
+                   `opacity: 0` but still in flow, so it hung a row off the
+                   corner and moved whenever the star size or `showStars`
+                   changed. Leading, it never moves; only what appears beneath
+                   it does. -->
               <div
                 v-if="isThumbnailReady(img.id) && img.thumbnail"
                 class="thumbnail-top-right-badges"
               >
+                <StackBadge
+                  v-if="shouldShowStackBadge(img)"
+                  :count="getStackBadgeCount(img)"
+                  :tint="getStackBadgeTint(img)"
+                  @activate="toggleStackExpand(img)"
+                  @mouseenter.stop="prefetchStackMembers(img)"
+                />
                 <StarRatingOverlay
                   v-if="gridStore.showStars"
                   :score="
@@ -879,12 +908,6 @@
                   :icon-size="badgeIconSizes.star"
                   :compact="true"
                   @set-score="setScore(img, $event)"
-                />
-                <StackBadge
-                  v-if="shouldShowStackBadge(img)"
-                  :count="getStackBadgeCount(img)"
-                  @activate="toggleStackExpand(img)"
-                  @mouseenter.stop="prefetchStackMembers(img)"
                 />
               </div>
             </div>
@@ -917,50 +940,6 @@
         ></div>
       </div>
     </div>
-
-    <!-- Search Result Bar -->
-    <SearchResultBar
-      v-if="
-        (searchStore.searchQuery && searchStore.searchQuery.length > 0) ||
-        reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId ||
-        faceSearchCharacter
-      "
-      :images-loading="imagesLoading"
-      :count="allGridImages.length"
-      :category-label="props.activeCategoryLabel"
-      :is-all-pictures-active="
-        reverseImageSearchPictureIds.length ||
-        faceLikenessSearchFaceId ||
-        faceSearchCharacter
-          ? true
-          : selectionStore.isAllPicturesActive
-      "
-      :status-text="
-        faceSearchCharacter
-          ? faceSearchMatches.length === 1
-            ? `1 possible picture of ${faceSearchCharacter.name}`
-            : `${faceSearchMatches.length} possible pictures of ${faceSearchCharacter.name}`
-          : faceLikenessSearchFaceId
-            ? `Similar faces: ${allGridImages.length} results`
-            : reverseImageSearchPictureIds.length > 1
-              ? `Multi-image search: ${allGridImages.length} results`
-              : reverseImageSearchPictureIds.length
-                ? `Reverse image search: ${allGridImages.length} results`
-                : null
-      "
-      :threshold="faceSearchCharacter ? faceSearchThreshold : null"
-      :threshold-min="FACE_SEARCH_FETCH_FLOOR"
-      :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
-      :assign-target="faceSearchCharacter?.name ?? null"
-      :assign-count="faceSearchAssignIds.length"
-      :assign-from-selection="faceSearchAssignFromSelection"
-      :assign-busy="faceSearchAssignBusy"
-      @update:threshold="handleFaceSearchThreshold"
-      @assign="handleAssignFaceSearchResults"
-      @search-all="emit('search-all')"
-      @clear="clearSearchQuery"
-    />
 
     <!-- Guest scoring consent banner -->
     <v-snackbar
@@ -1023,51 +1002,93 @@
       </template>
     </v-snackbar>
 
-    <SelectionBar
-      ref="selectionBarRef"
-      :selected-count="selectedImageIds.length"
-      :selected-expanded-count="selectedExpandedCount"
-      :selected-face-count="selectedFaceIds.length"
-      :selected-group-name="selectedGroupName"
-      :selected-sort="sortStore.selectedSort"
-      :visible="showSelectionBar"
-      :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
-      :backend-url="props.backendUrl"
-      :selected-image-ids="selectedImageIds"
-      :selected-media-support="selectedMediaSupport"
-      :comfyui-client-id="comfyuiClientId"
-      :comfyui-configured="filterStore.comfyuiConfigured"
-      :show-remove-from-stack="showRemoveFromStack"
-      :selected-multiple-stack-ids="selectedMultipleStackIds"
-      :grouping-lock-reason="partialStackGroupingReason"
-      :available-plugins="availablePlugins"
-      :tagger-plugins="taggerPlugins"
-      :captioner-plugins="captionerPlugins"
-      :all-grid-images="allGridImages"
-      :selected-character="String(selectionStore.selectedCharacter)"
-      :selected-set="String(selectionStore.selectedSet)"
-      :impossible-sources="filterStore.impossibleSources"
-      :clearing-impossible="clearingImpossibleTags"
-      @clear-impossible-tags="handleClearImpossibleTags"
-      @clear-selection="clearSelection"
-      @added-to-set="handleOverlayAddedToSet"
-      @remove-from-group="removeFromGroup"
-      @delete-selected="deleteSelected"
-      @set-project="handleSetProjectForSelected"
-      @add-to-character="handleAddToCharacter"
-      @remove-from-character="handleRemoveFromCharacter"
-      @create-stack="createStackFromSelection"
-      @remove-from-stack="removeSelectedFromStack"
-      @dissolve-stacks="dissolveSelectedStacks"
-      @create-stacks-from-groups="createStacksFromSelectedGroups"
-      @run-plugin="handlePluginRunRequest"
-      @comfyui-run="handleComfyuiRun"
-      @tags-applied="debouncedFetchAllGridImages({ force: true })"
-      @auto-tag="handleAutoTag"
-      @generate-description="handleGenerateDescription"
-      @reverse-image-search="handleReverseImageSearch"
-      @selection-menu-open="toolbarSelectionMenuOpen = $event"
-    />
+    <!-- The grid's ONE bottom-edge surface (merged-grid-action-pill.md). Before
+         the merge the search bar and the selection pill were independent mounts
+         that could both be up at once, and only the pill registered a bottom
+         anchor — so notice cards landed on top of the search bar. -->
+    <GridActionPill
+      :search-active="searchResultsActive"
+      :selection-active="showSelectionBar"
+      @focus-escaped="restoreGridFocus"
+    >
+      <template #search>
+        <SearchResultBar
+          :images-loading="imagesLoading"
+          :status-count="searchStatus.count"
+          :status-label="searchStatus.label"
+          :is-all-pictures-active="
+            reverseImageSearchPictureIds.length ||
+            faceLikenessSearchFaceId ||
+            faceSearchCharacter
+              ? true
+              : selectionStore.isAllPicturesActive
+          "
+          :threshold="faceSearchCharacter ? faceSearchThreshold : null"
+          :threshold-min="FACE_SEARCH_FETCH_FLOOR"
+          :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
+          :min-refs="faceSearchMinRefs"
+          :reference-count="faceSearchRefCount"
+          :assign-target="faceSearchCharacter?.name ?? null"
+          :assign-count="faceSearchAssignIds.length"
+          :assign-from-selection="faceSearchAssignFromSelection"
+          :assign-busy="faceSearchAssignBusy"
+          :owns-escape="!showSelectionBar"
+          @update:min-refs="handleFaceSearchMinRefs"
+          @update:threshold="handleFaceSearchThreshold"
+          @assign="handleAssignFaceSearchResults"
+          @search-all="emit('search-all')"
+          @clear="clearSearchQuery"
+        />
+      </template>
+
+      <template #selection>
+        <SelectionBar
+          ref="selectionBarRef"
+          :selected-count="selectedImageIds.length"
+          :selected-expanded-count="selectedExpandedCount"
+          :selected-face-count="selectedFaceIds.length"
+          :selected-group-name="selectedGroupName"
+          :selected-sort="sortStore.selectedSort"
+          :owns-escape="true"
+          :scrapheap-pictures-id="String(SCRAPHEAP_PICTURES_ID)"
+          :backend-url="props.backendUrl"
+          :selected-image-ids="selectedImageIds"
+          :selected-media-support="selectedMediaSupport"
+          :comfyui-client-id="comfyuiClientId"
+          :comfyui-configured="filterStore.comfyuiConfigured"
+          :show-remove-from-stack="showRemoveFromStack"
+          :selected-multiple-stack-ids="selectedMultipleStackIds"
+          :grouping-lock-reason="partialStackGroupingReason"
+          :available-plugins="availablePlugins"
+          :tagger-plugins="taggerPlugins"
+          :captioner-plugins="captionerPlugins"
+          :all-grid-images="allGridImages"
+          :selected-character="String(selectionStore.selectedCharacter)"
+          :selected-set="String(selectionStore.selectedSet)"
+          :impossible-sources="filterStore.impossibleSources"
+          :clearing-impossible="clearingImpossibleTags"
+          @clear-impossible-tags="handleClearImpossibleTags"
+          @clear-selection="clearSelection"
+          @added-to-set="handleOverlayAddedToSet"
+          @remove-from-group="removeFromGroup"
+          @delete-selected="deleteSelected"
+          @set-project="handleSetProjectForSelected"
+          @add-to-character="handleAddToCharacter"
+          @remove-from-character="handleRemoveFromCharacter"
+          @create-stack="createStackFromSelection"
+          @remove-from-stack="removeSelectedFromStack"
+          @dissolve-stacks="dissolveSelectedStacks"
+          @create-stacks-from-groups="createStacksFromSelectedGroups"
+          @run-plugin="handlePluginRunRequest"
+          @comfyui-run="handleComfyuiRun"
+          @tags-applied="debouncedFetchAllGridImages({ force: true })"
+          @auto-tag="handleAutoTag"
+          @generate-description="handleGenerateDescription"
+          @reverse-image-search="handleReverseImageSearch"
+          @selection-menu-open="toolbarSelectionMenuOpen = $event"
+        />
+      </template>
+    </GridActionPill>
     <!-- The action receipt shares the selection pill's slot and lifts clear of
          it when both are up. Owner-only, like the toolbar control.
 
@@ -1121,6 +1142,10 @@ import { useScopedNotice } from "../../composables/useScopedNotice";
 import { buildPurgeBadge } from "../../utils/retention.js";
 import { buildLockedDeleteMessage } from "../../utils/lockedDelete.js";
 import {
+  cutFaceSuggestions,
+  referenceFaceCount,
+} from "../../utils/faceSuggestionCut.js";
+import {
   squareCropParams,
   squareCropImgStyle,
   squareCropBboxRect,
@@ -1138,6 +1163,7 @@ import ImageOverlay from "./ImageOverlay.vue";
 import EmptyScrapHeap from "../widgets/EmptyScrapHeap.vue";
 import Toolbar from "../panels/Toolbar.vue";
 import SelectionBar from "../panels/SelectionBar.vue";
+import GridActionPill from "../panels/GridActionPill.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import ImageGridContextMenu from "../widgets/ImageGridContextMenu.vue";
 import SearchResultBar from "../widgets/SearchResultBar.vue";
@@ -1175,10 +1201,18 @@ import { addPictureTag, removePictureTag } from "../../api/tags";
 import { getStack, removeStackMembers } from "../../api/stacks";
 import {
   getCharacter,
+  listCharacters,
   addCharacterFaces,
+  addCharacterFacesByFaceId,
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
 } from "../../api/characters";
+import { listProjects } from "../../api/projects";
+import {
+  chooseCharacterAssignment,
+  nextFreeCharacterName,
+} from "../../utils/characterCreateFlow.js";
+import CharacterEditor from "../editors/CharacterEditor.vue";
 import {
   getPictureSet,
   addPictureToSet,
@@ -1413,9 +1447,17 @@ const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
 const FACE_SEARCH_FETCH_FLOOR = 0.5;
 const FACE_SEARCH_MAX_THRESHOLD = 0.95;
 const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
-// { characterId, matches: [{picture_id, likeness, face_id}], rowsById } — the
-// whole ranked list plus its picture rows, so re-cutting it is free.
+// How many of the person's reference faces must clear that cut. Defaults to 1,
+// which is the behaviour the backend's `combine=max` gives on its own, so the
+// knob starts where the search has always been and only ever tightens.
+const faceSearchMinRefs = ref(1);
+// { characterId, matches: [{picture_id, likeness, face_id, reference_likeness}],
+// rowsById }: the whole ranked list plus its picture rows, so re-cutting it on
+// either knob is free.
 const faceSearchRanked = ref(null);
+// The view the search was armed from. A view change drops the search (below),
+// and this is what keeps the arming click itself from counting as one.
+const faceSearchArmedView = ref(null);
 const faceSearchAssignBusy = ref(false);
 const sharedPictureIds = ref(new Set());
 const revokeSharesDialogOpen = ref(false);
@@ -3352,6 +3394,131 @@ function handleAddToCharacter(payload) {
   emit("refresh-sidebar");
 }
 
+// ── Create a person from the context menu (#645) ─────────────────────────────
+// The Person flyout's "New person…" / Create "query" rows land here (via the
+// menu's delegate pattern). The selection is captured at flow start
+// (pendingCreatePersonAssign) so it survives the dialog; on save the captured
+// selection is assigned to the new person, on cancel nothing is created or
+// assigned and the grid selection is untouched.
+const createPersonOpen = ref(false);
+const createPersonCharacter = ref(null);
+const createPersonProjects = ref([]);
+let pendingCreatePersonAssign = null;
+
+async function handleCreateCharacterFromMenu(query) {
+  pendingCreatePersonAssign = chooseCharacterAssignment({
+    pictureIds: selectedImageIds.value.slice(),
+    faceEntries: selectedFaceIds.value.slice(),
+  });
+  const typed = typeof query === "string" ? query.trim() : "";
+  const apiOpts = { baseUrl: props.backendUrl };
+  // Projects feed the dialog's project select; the character list is only
+  // needed to derive the next free default name when nothing was typed.
+  const [projects, characters] = await Promise.all([
+    listProjects(apiOpts).catch((e) => {
+      console.warn("Couldn't list projects for the person editor", e);
+      return [];
+    }),
+    typed
+      ? Promise.resolve([])
+      : listCharacters(apiOpts).catch((e) => {
+          console.warn(
+            "Couldn't list characters to derive a default person name",
+            e,
+          );
+          return [];
+        }),
+  ]);
+  createPersonProjects.value = Array.isArray(projects) ? projects : [];
+  createPersonCharacter.value = {
+    id: null,
+    name: typed || nextFreeCharacterName(characters),
+    description: "",
+    extra_metadata: "",
+    // Same pre-fill as SideBar.createCharacter: the active project when the
+    // sidebar is in project view, otherwise none.
+    project_id:
+      projectStore.projectViewMode === "project"
+        ? projectStore.selectedProjectId
+        : null,
+  };
+  createPersonOpen.value = true;
+}
+
+function handleCreatePersonClose() {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  pendingCreatePersonAssign = null;
+}
+
+async function handleCreatePersonSaved(savedCharacter) {
+  createPersonOpen.value = false;
+  createPersonCharacter.value = null;
+  const pending = pendingCreatePersonAssign;
+  pendingCreatePersonAssign = null;
+  const characterId = savedCharacter?.id;
+  const name = savedCharacter?.name || "person";
+  if (characterId == null) {
+    // The editor reported success without a usable record; the person may
+    // exist server-side, but there is nothing to assign to. Surface it rather
+    // than failing silently, and refresh so the sidebar shows the truth.
+    // Defensive only: CharacterEditor unwraps `CharacterMutationResponse` and
+    // does not emit `saved` at all unless the record has an id, so this must
+    // never fire in normal operation. If it does, the payload shape is wrong.
+    console.error(
+      "create-person: `saved` payload carried no character id, so the " +
+        "selection was not assigned. Expected the unwrapped record " +
+        "{id, name, ...}; if this looks like {status, character} the " +
+        "CharacterMutationResponse unwrap in CharacterEditor has regressed.",
+      {
+        payloadKeys:
+          savedCharacter && typeof savedCharacter === "object"
+            ? Object.keys(savedCharacter)
+            : typeof savedCharacter,
+        savedCharacter,
+      },
+    );
+    noticeStore.error(
+      `Created ${name}, but the selection couldn't be assigned. Assign it from the Person menu.`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+    return;
+  }
+  if (!pending || pending.mode === "none") {
+    noticeStore.success(`Created ${name}.`, { key: "create-person-assign" });
+    emit("refresh-sidebar");
+    return;
+  }
+  try {
+    if (pending.mode === "faces") {
+      await addCharacterFacesByFaceId(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    } else {
+      await addCharacterFaces(characterId, pending.ids, {
+        baseUrl: props.backendUrl,
+      });
+    }
+    const n = pending.ids.length;
+    const unit = pending.mode === "faces" ? "face" : "picture";
+    noticeStore.success(
+      `Created ${name}, assigned ${n} ${unit}${n === 1 ? "" : "s"}.`,
+      { key: "create-person-assign" },
+    );
+    // Standard post-assign bookkeeping: prunes the Unassigned view when
+    // relevant and emits refresh-sidebar (characters, sets, sort options).
+    handleAddToCharacter({ characterId, pictureIds: pending.pictureIds });
+  } catch (e) {
+    console.error("Failed to assign the selection to the new person", e);
+    noticeStore.error(
+      `Created ${name}, but couldn't assign the selection. ${errorDetail(e)}`,
+      { key: "create-person-assign" },
+    );
+    emit("refresh-sidebar");
+  }
+}
+
 function handleRemoveFromCharacter(payload) {
   const pictureIds = Array.isArray(payload?.pictureIds)
     ? payload.pictureIds
@@ -3868,6 +4035,73 @@ const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {
   return selectedImageIds.value.length > 0 || selectedFaceIds.value.length > 0;
 });
+
+// ── The grid action pill's search half ──────────────────────────────────────
+const searchResultsActive = computed(
+  () =>
+    Boolean(searchStore.searchQuery && searchStore.searchQuery.length > 0) ||
+    reverseImageSearchPictureIds.value.length > 0 ||
+    Boolean(faceLikenessSearchFaceId.value) ||
+    Boolean(faceSearchCharacter.value),
+);
+
+/**
+ * The status sentence, split into the numeral and the rest so the pill can give
+ * the count its own weight without regex-splitting a string that may contain
+ * the user's query.
+ *
+ * The scope is folded into the sentence rather than standing beside it as a
+ * separate "Searched X only" note, and the QUERY is named: nothing else on
+ * screen says what was searched once the toolbar popover closes, which made
+ * recall the only way back to it.
+ */
+const searchStatus = computed(() => {
+  const total = allGridImages.value.length;
+
+  if (faceSearchCharacter.value) {
+    // Just "N matches". The person is named twice over already, on the Assign
+    // button and by the sidebar row the search was armed from, and this label
+    // sat in front of the two sliders and a bulk-write button in a pill that
+    // has to fit them all without wrapping.
+    const n = faceSearchMatches.value.length;
+    return { count: n, label: n === 1 ? "match" : "matches" };
+  }
+  if (faceLikenessSearchFaceId.value) {
+    return { count: total, label: "similar faces" };
+  }
+  if (reverseImageSearchPictureIds.value.length > 1) {
+    return {
+      count: total,
+      label: `matches for ${reverseImageSearchPictureIds.value.length} pictures`,
+    };
+  }
+  if (reverseImageSearchPictureIds.value.length) {
+    return { count: total, label: "matches for this picture" };
+  }
+
+  const query = (searchStore.searchQuery || "").trim();
+  const scope = selectionStore.isAllPicturesActive
+    ? ""
+    : ` in ${props.activeCategoryLabel}`;
+  const forQuery = query ? ` for "${query}"` : "";
+  if (total === 0) {
+    return { count: null, label: `No matches${forQuery}${scope}` };
+  }
+  return { count: total, label: `matches${forQuery}${scope}` };
+});
+
+/**
+ * Focus rescue. GridActionPill raises this when the half holding focus is about
+ * to unmount and there is no sibling half to take it: without somewhere to go,
+ * focus falls to <body> and a keyboard user drops out of the tab order (WCAG
+ * 2.4.3). The scroll wrapper is the grid's own focus home.
+ */
+function restoreGridFocus() {
+  const el = scrollWrapper.value;
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.setAttribute("tabindex", "-1");
+  el.focus({ preventScroll: true });
+}
 // Grouping (project/set/character) membership is stack-atomic: it can only be
 // changed for a WHOLE stack at once — a collapsed stack tile (which represents
 // the whole stack) or every member of an expanded stack selected. Changing a
@@ -4993,6 +5227,7 @@ const {
     faceLikenessSearchFaceId,
     faceSearchCharacter,
     faceSearchThreshold,
+    faceSearchMinRefs,
     faceSearchRanked,
   },
   props,
@@ -5029,6 +5264,7 @@ const {
   mapGridImages,
   getStackCardStyle,
   getStackBandStyle,
+  getStackBadgeTint,
   isStackExpandedForImage,
   rebuildGridImagesFromLastFetch,
   refreshExpandedStacksAfterFetch,
@@ -5198,6 +5434,7 @@ const { onGlobalKeyPress, handleKeyDown } = useGridKeyboardNav(
     overlayOpen,
     reviewOverlayOpen,
     showSelectionBar,
+    searchResultsActive,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -5475,7 +5712,18 @@ watch(
     () => sortStore.selectedSimilarityCharacter,
     () => sortStore.stackThreshold,
   ],
-  () => {
+  (next, prev) => {
+    // Dropping the armed searches has to happen HERE, before the refetch below,
+    // and not in a watcher of its own: `fetchAllGridImages` picks its fetchMode
+    // synchronously, so a later watcher would clear the search only after this
+    // fetch had already re-run it. See `dropSearchesForViewChange`.
+    //
+    // Only on an actual view change. This watcher also fires for sort, search
+    // text and filter changes, none of which are a reason to throw a search
+    // away; indices 0 and 1 are selectedCharacter and selectedSet.
+    if (next[0] !== prev?.[0] || next[1] !== prev?.[1]) {
+      dropSearchesForViewChange(next[0], next[1]);
+    }
     if (scrollWrapper.value) scrollWrapper.value.scrollTop = 0;
     _resetGridState();
     updateSelectedGroupName();
@@ -6978,11 +7226,13 @@ function resetFaceAndImageSearches() {
   clearCharacterFaceSearch();
 }
 
-/** Forget the character search and its cached ranked list. */
+/** Forget the character search, its cached ranked list and both its knobs. */
 function clearCharacterFaceSearch() {
   faceSearchCharacter.value = null;
   faceSearchRanked.value = null;
   faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
+  faceSearchArmedView.value = null;
 }
 
 function clearSearchQuery() {
@@ -7033,6 +7283,25 @@ function handleFaceSearchThreshold(value) {
   debouncedFaceSearchRecut();
 }
 
+/**
+ * Move the reference-agreement floor: how many of the person's reference faces
+ * must clear the strength cut.
+ *
+ * Same shape as the threshold above, and for the same reason: it re-cuts the
+ * cached ranked list, so it costs no network call and must not stutter the grid.
+ * Clamped against the reference count because that count only arrives with the
+ * ranked list, so a stale higher value would otherwise empty the results.
+ *
+ * @param {number} value - references that must agree, 1..N.
+ */
+function handleFaceSearchMinRefs(value) {
+  const next = Math.round(Number(value));
+  if (!Number.isFinite(next)) return;
+  const ceiling = Math.max(1, faceSearchRefCount.value || 1);
+  faceSearchMinRefs.value = Math.min(ceiling, Math.max(1, next));
+  debouncedFaceSearchRecut();
+}
+
 const debouncedFaceSearchRecut = debounce(() => {
   if (!faceSearchCharacter.value) return;
   fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
@@ -7050,7 +7319,16 @@ function handleSuggestPicturesForCharacter(character) {
   faceLikenessSearchFaceId.value = null;
   faceSearchRanked.value = null;
   faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
+  faceSearchMinRefs.value = 1;
   faceSearchCharacter.value = { id, name: character.name ?? "this person" };
+  // Snapshot the view this was armed from. Opening the person's context menu can
+  // itself select that person, so "the view changed" has to mean "changed from
+  // where the search started", not "a selection watcher fired". Otherwise the
+  // clear below cancels the search the click just asked for.
+  faceSearchArmedView.value = {
+    character: selectionStore.selectedCharacter,
+    set: selectionStore.selectedSet,
+  };
   emit("clear-search", "");
   // The clear-search emit bumps gridVersion, but that watcher throttles itself
   // to one refresh per 1200ms — and this search is the direct result of a click,
@@ -7061,15 +7339,30 @@ function handleSuggestPicturesForCharacter(character) {
   });
 }
 
-// Every match above the cut. Computed from the cached ranked list rather than
-// from `allGridImages`, so the count in the bar tracks the slider immediately
-// while the grid rebuild debounces behind it.
+// Every match surviving both knobs. Computed from the cached ranked list rather
+// than from `allGridImages`, so the count in the bar tracks the sliders
+// immediately while the grid rebuild debounces behind it. Shares its cut with
+// the rebuild (`utils/faceSuggestionCut.js`) so the two cannot drift.
 const faceSearchMatches = computed(() => {
   const cached = faceSearchRanked.value;
   if (!cached || !faceSearchCharacter.value) return [];
   if (cached.characterId !== faceSearchCharacter.value.id) return [];
-  const cut = faceSearchThreshold.value ?? 0;
-  return cached.matches.filter((m) => (m.likeness ?? 0) >= cut);
+  return cutFaceSuggestions(
+    cached.matches,
+    faceSearchThreshold.value ?? 0,
+    faceSearchMinRefs.value,
+  );
+});
+
+// How many reference faces the query carried. 0 when the ranked list is not in
+// yet or the server did not send the per-reference rows. The agreement slider
+// then has nothing to offer and the panel drops it rather than show a control
+// whose only position is its minimum.
+const faceSearchRefCount = computed(() => {
+  const cached = faceSearchRanked.value;
+  if (!cached || !faceSearchCharacter.value) return 0;
+  if (cached.characterId !== faceSearchCharacter.value.id) return 0;
+  return referenceFaceCount(cached.matches);
 });
 
 // Selection wins over the threshold: a button that ignored an explicit
@@ -7135,22 +7428,43 @@ watch(
     }
   },
 );
-watch(
-  [() => selectionStore.selectedCharacter, () => selectionStore.selectedSet],
-  () => {
-    if (reverseImageSearchPictureIds.value?.length) {
-      reverseImageSearchPictureIds.value = [];
-    }
-    if (faceLikenessSearchFaceId.value !== null) {
-      faceLikenessSearchFaceId.value = null;
-    }
-    // The character search is NOT cleared here. It is launched from the sidebar's
-    // person menu, and opening that menu can also select the person — clearing on
-    // a selection change would cancel the search the click just asked for. It is
-    // library-wide by construction, so a view change cannot invalidate it; the
-    // Clear search button and the other search modes are its exits.
-  },
-);
+/**
+ * Drop every non-text search mode because the user navigated somewhere else.
+ *
+ * **Called from the view-change watcher BEFORE it refetches, never from a
+ * watcher of its own.** `fetchAllGridImages` reads the search-mode refs
+ * synchronously (there is no `await` before it picks its `fetchMode`), and Vue
+ * runs pre-flush watchers in creation order, so a separate clearing watcher
+ * declared after the fetching one always loses: the fetch captures the search
+ * that is still armed and repopulates the grid with it, then the clear runs and
+ * unmounts the pill. The result is a grid that keeps showing the old search
+ * with no bar to explain or dismiss it, and a view that never changes.
+ *
+ * @param {string|number|null} character - the newly selected character.
+ * @param {string|number|null} set - the newly selected set.
+ */
+function dropSearchesForViewChange(character, set) {
+  if (reverseImageSearchPictureIds.value?.length) {
+    reverseImageSearchPictureIds.value = [];
+  }
+  if (faceLikenessSearchFaceId.value !== null) {
+    faceLikenessSearchFaceId.value = null;
+  }
+  // The character search goes too. It is library-wide, so a view change cannot
+  // invalidate its *results*, but leaving it up meant navigating somewhere else
+  // and still being shown a grid of suggestions for a person, with a bulk
+  // Assign button armed, which reads as the new view's contents. Navigation is
+  // the ordinary way out of a mode; making it the exit here as well costs one
+  // re-arm and removes a standing bulk write from every view the user visits.
+  //
+  // Compared against the armed-from view rather than fired on any change:
+  // opening the sidebar's person menu can itself select that person, and that
+  // selection lands around the same click that arms the search.
+  if (!faceSearchCharacter.value) return;
+  const armed = faceSearchArmedView.value;
+  if (armed && armed.character === character && armed.set === set) return;
+  clearCharacterFaceSearch();
+}
 
 function handleEmptyStateReset() {
   gridReady.value = false;

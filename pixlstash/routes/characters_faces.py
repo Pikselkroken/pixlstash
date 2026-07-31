@@ -28,6 +28,7 @@ from pixlstash.picture_scoring import (
     compute_character_likeness_for_faces,
     select_reference_faces_for_character,
 )
+from pixlstash.pixl_logging import get_logger
 from pixlstash.services import operation_log_service
 from pixlstash.services.project_membership_service import (
     character_project_ids,
@@ -35,6 +36,8 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+
+logger = get_logger(__name__)
 
 
 class CharacterFaceAssignmentResponse(BaseModel):
@@ -178,6 +181,46 @@ def create_router(server) -> APIRouter:
                         # as zero area; 0 IS the answer, not an error.
                         return 0
 
+                def pick_best_face(faces, comparison_faces):
+                    """Select the face to assign from one picture's real faces.
+
+                    With a comparison set, rank by likeness to it (area breaks
+                    ties); without one, or when no face has features, fall back
+                    to the largest face. This is the long-standing selection
+                    rule, shared by the reference-faces path and the bootstrap
+                    path below.
+                    """
+                    if comparison_faces:
+                        faces_with_features = [f for f in faces if f.features]
+                        if faces_with_features:
+                            likeness_map = compute_character_likeness_for_faces(
+                                comparison_faces, faces_with_features
+                            )
+                            return max(
+                                faces_with_features,
+                                key=lambda f: (
+                                    likeness_map.get(f.id, 0.0),
+                                    face_area(f),
+                                ),
+                            )
+                    return max(faces, key=face_area)
+
+                def record_face(best_face):
+                    if best_face.character_id == character_id:
+                        existing_faces.append(best_face)
+                    else:
+                        faces_to_assign.append(best_face)
+
+                # Bootstrap heuristic for a character with no reference faces
+                # yet (a freshly created person, issue #645): assign the
+                # unambiguous single-face pictures first, then use those faces
+                # as the comparison set for the multi-face pictures, so group
+                # shots pick the same identity instead of whoever happens to
+                # have the largest face. With reference faces present both
+                # lists stay empty and the loop behaves exactly as before.
+                bootstrap_refs = []
+                deferred_multi_face = []
+
                 for pic_id in picture_ids:
                     faces = Face.find(session, picture_id=pic_id)
                     if not faces:
@@ -195,28 +238,38 @@ def create_router(server) -> APIRouter:
                                 session.add(pic)
                         continue
 
-                    if reference_faces:
-                        faces_with_features = [f for f in faces if f.features]
-                        if faces_with_features:
-                            likeness_map = compute_character_likeness_for_faces(
-                                reference_faces, faces_with_features
-                            )
-                            best_face = max(
-                                faces_with_features,
-                                key=lambda f: (
-                                    likeness_map.get(f.id, 0.0),
-                                    face_area(f),
-                                ),
-                            )
-                        else:
-                            best_face = max(faces, key=face_area)
-                    else:
-                        best_face = max(faces, key=face_area)
+                    if not reference_faces and len(faces) > 1:
+                        deferred_multi_face.append((pic_id, faces))
+                        continue
 
-                    if best_face.character_id == character_id:
-                        existing_faces.append(best_face)
+                    best_face = pick_best_face(faces, reference_faces)
+                    record_face(best_face)
+                    if not reference_faces and best_face.features:
+                        bootstrap_refs.append(best_face)
+
+                if deferred_multi_face:
+                    deferred_pic_ids = [pic_id for pic_id, _ in deferred_multi_face]
+                    if bootstrap_refs:
+                        logger.info(
+                            "Bootstrapping face selection for character %s: "
+                            "%d single-face picture(s) form the comparison set "
+                            "for %d multi-face picture(s) %s",
+                            character_id,
+                            len(bootstrap_refs),
+                            len(deferred_multi_face),
+                            deferred_pic_ids,
+                        )
                     else:
-                        faces_to_assign.append(best_face)
+                        logger.info(
+                            "No reference faces and no single-face pictures to "
+                            "bootstrap from for character %s; using largest-face "
+                            "fallback for %d multi-face picture(s) %s",
+                            character_id,
+                            len(deferred_multi_face),
+                            deferred_pic_ids,
+                        )
+                    for pic_id, faces in deferred_multi_face:
+                        record_face(pick_best_face(faces, bootstrap_refs))
             if face_ids:
                 for face_id in face_ids:
                     face = session.get(Face, face_id)

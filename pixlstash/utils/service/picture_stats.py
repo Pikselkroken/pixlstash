@@ -59,6 +59,7 @@ class PictureStatsParams:
     tags_filter: list[str]
     rejected_tags: list[str]
     face_filter: str | None
+    stack_state: str | None
     confidence_tag: str | None
     confidence_above: list[str]
     confidence_below: list[str]
@@ -219,6 +220,7 @@ def _build_filtered_picture_subquery(session: Session, params: PictureStatsParam
         tags_confidence_above_filter=params.confidence_above or None,
         tags_confidence_below_filter=params.confidence_below or None,
         face_filter=params.face_filter,
+        stack_state=params.stack_state,
         apply_deleted_filter=False,
     ).apply(pic_q)
 

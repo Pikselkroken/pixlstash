@@ -2,6 +2,7 @@ import tempfile
 import os
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select, func
 
@@ -589,6 +590,108 @@ def test_face_search_names_the_best_matching_face():
                 "the wrong face of a two-face picture was named as the match"
             )
             assert by_id[ids["near"]]["face_id"] == face_ids["near"]
+
+
+def test_face_search_reference_scores_expose_per_reference_agreement():
+    """`include_reference_scores` returns the winning face's similarity to EVERY
+    reference, which is the only thing that can answer "how many of this
+    person's reference faces agree?".
+
+    `likeness` alone cannot: it is the `combine` (max, for a character query),
+    so a candidate that resembles exactly one reference perfectly outranks one
+    that resembles all of them well. The two references here are deliberately
+    orthogonal, which makes that difference arithmetic rather than a judgement
+    about a face model.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            keys = ["ref_x", "ref_y", "only_x", "both"]
+            images = [
+                ("file", (f"{key}.png", random_images[i], "image/png"))
+                for i, key in enumerate(keys)
+            ]
+            import_status = upload_pictures_and_wait(client, images)
+            assert import_status["status"] == "completed"
+            ids = dict(zip(keys, [r["picture_id"] for r in import_status["results"]]))
+
+            resp = client.post(f"{API_PREFIX}/characters", json={"name": "Bea"})
+            assert resp.status_code == 200, resp.text
+            bea_id = resp.json()["character"]["id"]
+
+            # Two references pointing 90° apart: the same person shot in two
+            # conditions the model does not reconcile.
+            _add_face_with_features(
+                server, ids["ref_x"], bea_id, _vector_features([1, 0, 0, 0, 0, 0, 0, 0])
+            )
+            _add_face_with_features(
+                server, ids["ref_y"], bea_id, _vector_features([0, 1, 0, 0, 0, 0, 0, 0])
+            )
+            # Matches one reference perfectly and the other not at all.
+            _add_face_with_features(
+                server,
+                ids["only_x"],
+                None,
+                _vector_features([1, 0, 0, 0, 0, 0, 0, 0]),
+            )
+            # Matches both, less well than `only_x` matches its one: cos 45° to
+            # each, so max() ranks it BELOW the single-reference match.
+            half = float(np.sqrt(0.5))
+            _add_face_with_features(
+                server,
+                ids["both"],
+                None,
+                _vector_features([half, half, 0, 0, 0, 0, 0, 0]),
+            )
+
+            # Off by default: no existing consumer pays for the extra floats.
+            data = _face_search(
+                client,
+                source_character_id=bea_id,
+                exclude_character_id=bea_id,
+                top_n=500,
+                threshold=0.5,
+            )
+            assert all(row.get("reference_likeness") is None for row in data), data
+
+            data = _face_search(
+                client,
+                source_character_id=bea_id,
+                exclude_character_id=bea_id,
+                top_n=500,
+                threshold=0.5,
+                include_reference_scores=True,
+            )
+            by_id = {row["picture_id"]: row for row in data}
+            assert ids["only_x"] in by_id, data
+            assert ids["both"] in by_id, data
+
+            for row in data:
+                refs = row["reference_likeness"]
+                assert len(refs) == 2, row
+                # `likeness` is the combine of the row; for a character query
+                # that is max, so the two must agree.
+                assert row["likeness"] == pytest.approx(max(refs), abs=1e-4), row
+
+            # The single-reference match scores HIGHER overall...
+            assert by_id[ids["only_x"]]["likeness"] > by_id[ids["both"]]["likeness"]
+
+            # ...yet only one of its references agrees at a 0.70 cut, while the
+            # weaker overall match satisfies both. That inversion is exactly
+            # what the agreement filter exists to express.
+            def _agreeing(picture_key, cut):
+                return sum(
+                    1 for v in by_id[ids[picture_key]]["reference_likeness"] if v >= cut
+                )
+
+            assert _agreeing("only_x", 0.70) == 1
+            assert _agreeing("both", 0.70) == 2
 
 
 def test_face_search_rejects_more_than_one_source_id():

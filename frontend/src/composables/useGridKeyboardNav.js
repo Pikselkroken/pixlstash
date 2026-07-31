@@ -34,6 +34,7 @@ export function useGridKeyboardNav(
     overlayOpen,
     reviewOverlayOpen,
     showSelectionBar,
+    searchResultsActive,
     selectedImageIds,
     lastSelectedImageId,
     cursorIdx,
@@ -192,8 +193,19 @@ export function useGridKeyboardNav(
       } else if (isMultiCharacterView.value || isSetOverlapView.value) {
         // No images selected — ESC closes the union/intersect/overlap bar
         emit("clear-multi-selection");
-      } else if (searchStore.searchQuery && searchStore.searchQuery.trim()) {
-        // No selection active — ESC also clears search
+      } else if (
+        searchResultsActive?.value ||
+        (searchStore.searchQuery && searchStore.searchQuery.trim())
+      ) {
+        // No selection active — ESC also clears search. The query now comes
+        // from `searchStore` rather than a prop (App.vue slim-down, #661).
+        // `searchResultsActive` covers the modes that have no query string
+        // behind them (reverse image, similar faces, a person face search):
+        // `clearSearchQuery` has always reset all of them, but the gate here
+        // only ever asked about the text query, so Esc silently did nothing in
+        // those modes. The pill puts an Esc keycap on the button that clears
+        // them, so the key now has to actually reach it
+        // (merged-grid-action-pill.md §6.1).
         clearSearchQuery();
       } else {
         selectedImageIds.value = [];

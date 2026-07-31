@@ -3,11 +3,13 @@
 Owner: lead designer. Behaviour changes (what a control does, when a message appears,
 what Esc does) go past the UI/UX expert; the values below are the design system's.
 
-**Status: specification. Nothing here is implemented.** `frontend/src/stores/useNoticeStore.js`
-is a headless scaffold whose own header says the visible host "is deliberately NOT built
-here… pushing a notice is a harmless no-op on screen." This document is the design for
-that host. It also names four store-shape changes the host needs before it can be
-adopted (§9) and the drift it uncovered on the way (§10).
+**Status: SHIPPED.** `frontend/src/components/widgets/NoticeHost.vue` implements this
+design and is mounted as the last child of the app viewport in `App.vue`. The status
+line previously said "specification, nothing here is implemented", which was true when
+`useNoticeStore.js` was still a headless scaffold and stale thereafter; pushing a notice
+now renders. §9's store-shape changes and §10's drift list stay as written, and should be
+read as the record of what the host needed rather than as outstanding work. Verify against
+`NoticeHost.vue` before quoting this document as the current state.
 
 Sources of truth this is built on: `docs/design/visual-language.md`,
 `docs/design/design-tokens.css`, the themes in `frontend/src/main.js`. Every colour is

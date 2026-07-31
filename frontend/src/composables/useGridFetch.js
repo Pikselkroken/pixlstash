@@ -14,6 +14,7 @@ import { getCharacterSummary } from "../api/characters";
 import { getProjectSummary } from "../api/projects";
 import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
+import { cutFaceSuggestions } from "../utils/faceSuggestionCut.js";
 import {
   getPictureId,
   PIL_IMAGE_EXTENSIONS,
@@ -81,6 +82,7 @@ export function useGridFetch(
     faceLikenessSearchFaceId,
     faceSearchCharacter,
     faceSearchThreshold,
+    faceSearchMinRefs,
     faceSearchRanked,
   },
   props,
@@ -199,12 +201,15 @@ export function useGridFetch(
       reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
       faceLikenessSearchFaceId: faceLikenessSearchFaceId?.value ?? null,
       faceSearchCharacterId: faceSearchCharacter?.value?.id ?? null,
-      // The threshold belongs in the key: moving the slider changes which
+      // Both suggestion knobs belong in the key: moving either changes which
       // pictures the grid shows, so a fetch that early-returns as a no-op would
       // leave the grid disagreeing with the count in the bar. The rebuild costs
       // no network call — the ranked list and its rows are both cached.
       faceSearchThreshold: faceSearchCharacter?.value
         ? (faceSearchThreshold?.value ?? null)
+        : null,
+      faceSearchMinRefs: faceSearchCharacter?.value
+        ? (faceSearchMinRefs?.value ?? null)
         : null,
     });
   }
@@ -620,11 +625,15 @@ export function useGridFetch(
       } else if (_hasCharacterFaceSearch) {
         fetchMode = "character-face-search";
         // "Suggest more pictures of <person>" (#636): query with the character's
-        // reference faces, and let the threshold slider re-cut the SAME ranked
-        // list. The ranked refs and their picture rows are both cached against
-        // the character id, so dragging the slider costs no round trip — which
-        // is the difference between a slider that feels live and one that
-        // stutters. Only a change of character (or an explicit force) refetches.
+        // reference faces, and let BOTH suggestion sliders re-cut the SAME
+        // ranked list. The ranked refs and their picture rows are both cached
+        // against the character id, so dragging either costs no round trip,
+        // which is the difference between a slider that feels live and one that
+        // stutters. That is also why the reference-agreement knob is served by
+        // `reference_likeness` on each match rather than by re-querying with a
+        // different combine mode: a server-side k-of-n would put a round trip
+        // under a drag. Only a change of character (or an explicit force)
+        // refetches.
         const character = faceSearchCharacter.value;
         const cached = faceSearchRanked?.value;
         let ranked =
@@ -664,10 +673,12 @@ export function useGridFetch(
             };
           }
         }
-        const cut = faceSearchThreshold?.value ?? 0;
         const rowsById = faceSearchRanked?.value?.rowsById ?? {};
-        images = ranked
-          .filter((r) => (r.likeness ?? 0) >= cut)
+        images = cutFaceSuggestions(
+          ranked,
+          faceSearchThreshold?.value ?? 0,
+          faceSearchMinRefs?.value ?? 1,
+        )
           .map((r) => rowsById[r.picture_id])
           .filter(Boolean);
       } else if (_hasFaceLikenessSearch) {

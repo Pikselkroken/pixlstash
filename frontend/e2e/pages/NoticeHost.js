@@ -35,7 +35,13 @@ export class NoticeHost {
     this.dismissButtons = page.locator('.notice-dismiss')
     this.actionButtons = page.locator('.notice-action')
     // Bottom-edge chrome the stack has to stay clear of (spec §2.2 / §2.4).
-    this.selectionPill = page.locator('.floating-selection-bar')
+    // `.grid-action-pill`, not the old `.floating-selection-bar`: the search bar
+    // and the selection pill were merged into one bottom-edge surface, and it is
+    // GridActionPill that now owns the anchor and feeds `--floating-bottom-h`.
+    // Still selection-driven for these specs (`visible` is
+    // `searchActive || selectionActive`, and no search runs here), so the
+    // appears-on-select / hides-on-clear assertions still mean what they did.
+    this.selectionPill = page.locator('.grid-action-pill')
     this.breadcrumb = page.locator('.grid-breadcrumb')
   }
 

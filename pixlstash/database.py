@@ -8,6 +8,7 @@ import os
 import struct
 import threading
 import queue
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from concurrent.futures import Future
@@ -20,6 +21,7 @@ from sqlalchemy import (
     select as sa_select,
 )
 from sqlmodel import create_engine, Session
+from fastapi import HTTPException
 from rapidfuzz.distance import Levenshtein
 
 import numpy as np
@@ -852,12 +854,30 @@ class VaultDatabase:
     @staticmethod
     def result_or_throw(future: Future):
         """
-        Helper to get result from a Future or throw its exception. Logs full stack trace.
-        """
-        import traceback
+        Helper to get result from a Future or throw its exception.
 
+        A task that raises a 4xx ``HTTPException`` has not failed: the services
+        use it as the way to refuse a request the caller is allowed to make (a
+        locked set, a name conflict, an out-of-scope token), and FastAPI turns it
+        into that exact response. Logging those at ERROR with a stack trace makes
+        every ordinary refusal look like a server fault and buries the real
+        faults in them, so they are logged as one INFO line instead. Everything
+        else - including a 5xx ``HTTPException`` - keeps the ERROR and the trace.
+        """
         try:
             return future.result()
+        except HTTPException as exc:
+            if not 400 <= exc.status_code < 500:
+                raise
+            caller = inspect.currentframe().f_back
+            logger.info(
+                "Database task refused with %d: %s at %s:%d",
+                exc.status_code,
+                exc.detail,
+                caller.f_code.co_filename,
+                caller.f_lineno,
+            )
+            raise
         except Exception:
             frame = inspect.currentframe()
             caller = frame.f_back
