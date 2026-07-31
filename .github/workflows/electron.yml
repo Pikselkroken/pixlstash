@@ -265,7 +265,7 @@ jobs:
     container:
       # UPDATE THIS DIGEST from the "Build Certum Signer Image" workflow's step
       # summary after an image change (docs/windows-signing-setup.md §rollout).
-      image: ghcr.io/pikselkroken/certum-signer@sha256:0000000000000000000000000000000000000000000000000000000000000000 # PLACEHOLDER-set-after-first-image-build
+      image: ghcr.io/pikselkroken/certum-signer@sha256:00a9d37f35d787cb584014cb95e964326018e0c92a59d1b687129c36295febb6 # built by run 30620372480 from 6bb21307
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
