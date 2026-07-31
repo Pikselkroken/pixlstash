@@ -1,11 +1,13 @@
 import logging
 import tempfile
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete
 
+from pixlstash import auth as auth_module
 from pixlstash.db_models import User, UserToken
 from pixlstash.server import Server
 
@@ -48,9 +50,12 @@ def reset_auth(server):
     server.auth.password_hash = None
     server.auth.username = None
     server.auth.user = None
-    server.auth.active_session_ids = {}
-    with server.auth._token_cache_lock:
-        server.auth._token_cache.clear()
+    server.auth._clear_all_sessions()
+    server.auth._flush_token_cache()
+    # The login lockout counter is process-wide, so a test that exercises
+    # rejected logins would otherwise lock out the tests that follow it.
+    server.auth._failed_login_attempts = 0
+    server.auth._login_lockout_until = 0.0
 
     # Re-create the User row so the rest of the server behaves as on first
     # startup (no password set yet).
@@ -169,6 +174,339 @@ def test_authentication_with_token_login(server):
         response = client3.post(f"{API_PREFIX}/login", json={"token": "bad-token"})
         assert response.status_code == 401
         assert response.json()["detail"] == "Invalid token"
+
+
+# --- Which credentials may be exchanged for a session -----------------------
+#
+# Signing in requires a credential with full, unscoped owner authority: an
+# unexpired ALL-scope token with no resource restriction. These tests pin both
+# directions: narrower and expired credentials are refused, and a genuine owner
+# token still works.
+
+
+def _claim_owner(client) -> None:
+    """Claim the empty owner account so token endpoints become reachable."""
+    response = client.post(
+        f"{API_PREFIX}/login",
+        json={"username": "testuser", "password": "testpassword"},
+    )
+    assert response.status_code == 200
+
+
+def _create_token(client, **payload) -> dict:
+    """Create a token via the owner API and return the response body."""
+    response = client.post(f"{API_PREFIX}/users/me/token", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _assert_login_refused(server, token: str) -> None:
+    """A /login with *token* is refused, and hands out no working session."""
+    with TestClient(server.api) as client:
+        response = client.post(f"{API_PREFIX}/login", json={"token": token})
+        assert response.status_code == 401, response.text
+        # Same body as an unrecognised token, so the response does not
+        # distinguish "unknown token" from "not an owner token".
+        assert response.json()["detail"] == "Invalid token"
+        assert "session_id" not in response.cookies
+        assert client.get(f"{API_PREFIX}/protected").status_code == 401
+
+
+def test_a_token_is_expired_at_exactly_its_expiry_moment():
+    """The expiry comparison is inclusive, so the boundary itself is expired.
+
+    The two checks this rule replaced disagreed here, one accepting and one
+    rejecting an ``expires_at`` equal to the moment of the check. Pin the
+    stricter reading so the boundary cannot drift back.
+    """
+    moment = datetime(2026, 1, 1, 12, 0, 0)
+    at_expiry = SimpleNamespace(expires_at=moment)
+    assert auth_module.is_token_expired(at_expiry, moment) is True
+    assert (
+        auth_module.is_token_expired(at_expiry, moment - timedelta(microseconds=1))
+        is False
+    )
+    assert (
+        auth_module.is_token_expired(SimpleNamespace(expires_at=None), moment) is False
+    )
+
+
+def test_login_refuses_a_read_scoped_token(server):
+    """A READ token is narrower than a session and cannot be exchanged for one."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="read", scope="READ")
+    _assert_login_refused(server, created["token"])
+
+
+def test_login_refuses_a_resource_scoped_token(server):
+    """A token restricted to one resource cannot be exchanged for a session."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(
+            owner,
+            description="one set",
+            scope="READ",
+            resource_type="picture_set",
+            resource_id=1,
+        )
+    assert created["resource_type"] == "picture_set"
+    _assert_login_refused(server, created["token"])
+
+
+def test_login_refuses_an_expired_token(server):
+    """A token past its expiry cannot be exchanged for a session."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(
+            owner,
+            description="expired",
+            scope="ALL",
+            expires_at="2020-01-01T12:00:00",
+        )
+    _assert_login_refused(server, created["token"])
+
+
+def test_login_accepts_an_unscoped_owner_token(server):
+    """An unexpired, unrestricted owner token still logs in (no over-blocking)."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="owner", scope="ALL")
+
+    with TestClient(server.api) as client:
+        response = client.post(f"{API_PREFIX}/login", json={"token": created["token"]})
+        assert response.status_code == 200
+        assert response.json()["message"] == "Login successful."
+        assert client.get(f"{API_PREFIX}/protected").status_code == 200
+        # The session really is owner-level: an owner-only endpoint answers.
+        assert client.get(f"{API_PREFIX}/users/me/token").status_code == 200
+
+
+# --- A session does not outlive the token that created it -------------------
+
+
+def test_deleting_a_token_ends_the_session_it_created(server):
+    """Removing a token also ends any session that was created from it."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="owner", scope="ALL")
+
+        with TestClient(server.api) as client:
+            response = client.post(
+                f"{API_PREFIX}/login", json={"token": created["token"]}
+            )
+            assert response.status_code == 200
+            assert client.get(f"{API_PREFIX}/protected").status_code == 200
+
+            # Remove the token from a separate, password-authenticated session.
+            deleted = owner.delete(f"{API_PREFIX}/users/me/token/{created['token_id']}")
+            assert deleted.status_code == 200
+
+            # The next request on the already-issued session is refused.
+            assert client.get(f"{API_PREFIX}/protected").status_code == 401
+
+
+def test_deleting_a_token_leaves_unrelated_sessions_alone(server):
+    """Only the removed token's own sessions end; other sessions keep working."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        doomed = _create_token(owner, description="doomed", scope="ALL")
+        kept = _create_token(owner, description="kept", scope="ALL")
+
+        with (
+            TestClient(server.api) as doomed_client,
+            TestClient(server.api) as kept_client,
+        ):
+            assert (
+                doomed_client.post(
+                    f"{API_PREFIX}/login", json={"token": doomed["token"]}
+                ).status_code
+                == 200
+            )
+            assert (
+                kept_client.post(
+                    f"{API_PREFIX}/login", json={"token": kept["token"]}
+                ).status_code
+                == 200
+            )
+
+            deleted = owner.delete(f"{API_PREFIX}/users/me/token/{doomed['token_id']}")
+            assert deleted.status_code == 200
+
+            assert doomed_client.get(f"{API_PREFIX}/protected").status_code == 401
+            # The other token's session and the password session are untouched.
+            assert kept_client.get(f"{API_PREFIX}/protected").status_code == 200
+            assert owner.get(f"{API_PREFIX}/protected").status_code == 200
+
+
+def test_revoking_resource_tokens_leaves_unrelated_sessions_alone(server):
+    """Revoking a resource's share tokens does not end other sessions."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        _create_token(
+            owner,
+            description="shared set",
+            scope="READ",
+            resource_type="picture_set",
+            resource_id=7,
+        )
+        kept = _create_token(owner, description="kept", scope="ALL")
+
+        with TestClient(server.api) as kept_client:
+            assert (
+                kept_client.post(
+                    f"{API_PREFIX}/login", json={"token": kept["token"]}
+                ).status_code
+                == 200
+            )
+
+            revoked = owner.delete(
+                f"{API_PREFIX}/users/me/tokens/by-resource",
+                params={"resource_type": "picture_set", "resource_id": 7},
+            )
+            assert revoked.status_code == 200
+            assert revoked.json()["deleted_count"] == 1
+
+            assert kept_client.get(f"{API_PREFIX}/protected").status_code == 200
+            assert owner.get(f"{API_PREFIX}/protected").status_code == 200
+
+
+def test_a_token_removed_mid_login_leaves_no_usable_session(server, monkeypatch):
+    """A removal that lands inside the sign-in window still ends the session.
+
+    Matching a token costs a bcrypt call per candidate row plus a database
+    round trip, so a removal can land between the read that matched the token
+    and the moment the session is registered, which is before the removal's
+    sweep has a session to find. This test pins that interleaving exactly: the
+    removal is fired from inside the verification step, so it completes before
+    the login registers anything.
+    """
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="removed mid-login", scope="ALL")
+        token_id = created["token_id"]
+
+        real_verify = auth_module.bcrypt.verify
+        revoked_during_login = []
+
+        def verify_then_remove(secret, hashed):
+            matched = real_verify(secret, hashed)
+            # Fire once, on the match, so the removal lands after the token
+            # rows have been read and before the session is registered. The
+            # owner client authenticates with a password session cookie, so
+            # this call does not re-enter bcrypt verification.
+            if matched and not revoked_during_login:
+                revoked_during_login.append(token_id)
+                deleted = owner.delete(f"{API_PREFIX}/users/me/token/{token_id}")
+                assert deleted.status_code == 200
+            return matched
+
+        monkeypatch.setattr(auth_module.bcrypt, "verify", verify_then_remove)
+
+        with TestClient(server.api) as racer:
+            response = racer.post(
+                f"{API_PREFIX}/login", json={"token": created["token"]}
+            )
+            assert revoked_during_login, (
+                "the removal did not land inside the sign-in window, so this "
+                "test is not exercising what it claims to"
+            )
+            assert response.status_code == 401, response.text
+            assert response.json()["detail"] == "Invalid token"
+            assert "session_id" not in response.cookies
+            assert racer.get(f"{API_PREFIX}/protected").status_code == 401
+
+    # No session is left pointing at a token id that no removal path could
+    # reach again. (The owner's own password session is still live and is
+    # correctly not linked to any token.)
+    assert token_id not in server.auth._sessions_by_token_id
+    assert token_id not in server.auth._token_id_by_session.values()
+
+
+# --- A removed token stops authenticating straight away ---------------------
+#
+# Verified tokens are cached for five minutes so bcrypt does not run on every
+# request. Removal empties that cache, but a lookup already in flight has
+# already read the row and is about to write it back. These tests pin that a
+# removal which lands mid-lookup still takes effect on the next request.
+
+
+def _remove_token_during_verification(monkeypatch, owner, token_id):
+    """Make the next successful bcrypt match fire a removal of *token_id*.
+
+    Places the removal inside the lookup window: after the row has been read
+    and matched, before the result is cached.
+    """
+    real_verify = auth_module.bcrypt.verify
+    removed = []
+
+    def verify_then_remove(secret, hashed):
+        matched = real_verify(secret, hashed)
+        # The owner client authenticates with a password session cookie, so
+        # this call does not re-enter bcrypt verification.
+        if matched and not removed:
+            removed.append(token_id)
+            deleted = owner.delete(f"{API_PREFIX}/users/me/token/{token_id}")
+            assert deleted.status_code == 200
+        return matched
+
+    monkeypatch.setattr(auth_module.bcrypt, "verify", verify_then_remove)
+    return removed
+
+
+def test_a_token_removed_mid_lookup_stops_working_on_the_next_request(
+    server, monkeypatch
+):
+    """A removal landing inside a lookup is not undone by that lookup's caching."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="removed mid-lookup", scope="ALL")
+        headers = {"Authorization": f"Bearer {created['token']}"}
+
+        removed = _remove_token_during_verification(
+            monkeypatch, owner, created["token_id"]
+        )
+
+        with TestClient(server.api) as client:
+            # The request that races the removal may still be served; it had
+            # already matched the token before the removal committed.
+            client.get(f"{API_PREFIX}/protected", headers=headers)
+            assert removed, (
+                "the removal did not land inside the lookup window, so this "
+                "test is not exercising what it claims to"
+            )
+
+            # The next request must not be served from a cache entry written
+            # after the removal.
+            assert (
+                client.get(f"{API_PREFIX}/protected", headers=headers).status_code
+                == 401
+            )
+
+
+def test_a_token_removed_mid_lookup_cannot_mint_a_replacement(server, monkeypatch):
+    """A removed token cannot be used to create another one."""
+    with TestClient(server.api) as owner:
+        _claim_owner(owner)
+        created = _create_token(owner, description="removed mid-lookup", scope="ALL")
+        headers = {"Authorization": f"Bearer {created['token']}"}
+
+        removed = _remove_token_during_verification(
+            monkeypatch, owner, created["token_id"]
+        )
+
+        with TestClient(server.api) as client:
+            client.get(f"{API_PREFIX}/protected", headers=headers)
+            assert removed, "the removal did not land inside the lookup window"
+
+            minted = client.post(
+                f"{API_PREFIX}/users/me/token",
+                json={"description": "replacement"},
+                headers=headers,
+            )
+            assert minted.status_code == 401, minted.text
+            # And nothing was created.
+            assert len(owner.get(f"{API_PREFIX}/users/me/token").json()) == 0
 
 
 # --- Seamless desktop (Electron) loopback session ---------------------------
