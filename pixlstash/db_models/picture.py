@@ -468,6 +468,7 @@ class Picture(SQLModel, table=True):
         comfyui_loras_filter: Optional[List[str]] = None,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
+        stack_state: Optional[str] = None,
     ) -> List["Picture"]:
         """
         Hybrid semantic search: combines fuzzy tag search (levenshtein SQL function) and embedding similarity (cosine_similarity SQL function).
@@ -615,6 +616,7 @@ class Picture(SQLModel, table=True):
             comfyui_loras_filter=comfyui_loras_filter,
             tags_filter=tags_filter,
             tags_rejected_filter=tags_rejected_filter,
+            stack_state=stack_state,
             only_deleted=only_deleted,
             include_deleted=include_deleted,
             include_unimported=include_unimported,
@@ -712,6 +714,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         min_score: Optional[int] = None,
         max_score: Optional[int] = None,
@@ -810,6 +813,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             file_path_prefix=file_path_prefix,
             only_deleted=only_deleted,
@@ -1087,6 +1091,7 @@ class Picture(SQLModel, table=True):
         tags_confidence_below_filter: Optional[List[str]] = None,
         hidden_tags_filter: Optional[List[str]] = None,
         face_filter: Optional[str] = None,
+        stack_state: Optional[str] = None,
         impossible_sources: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
@@ -1140,6 +1145,7 @@ class Picture(SQLModel, table=True):
             tags_confidence_above_filter=tags_confidence_above_filter,
             tags_confidence_below_filter=tags_confidence_below_filter,
             face_filter=face_filter,
+            stack_state=stack_state,
             impossible_sources=impossible_sources,
             apply_deleted_filter=False,
         ).apply(query)
