@@ -190,6 +190,9 @@ export function useGridFetch(
       stackThreshold: sortStore.stackThreshold ?? null,
       mediaTypeFilter: filterStore.mediaTypeFilter ?? "all",
       impossibleSources: filterStore.impossibleSources ?? [],
+      // Changes which pictures the grid shows, so an unforced fetch must not
+      // early-return as a no-op against the previous state's key.
+      stackStateFilter: filterStore.stackStateFilter ?? "all",
       similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
@@ -975,6 +978,16 @@ export function useGridFetch(
         (filterStore.impossibleSources || []).forEach((s) =>
           _filterP.append("impossible_tag_source", s),
         );
+        // Filter params: stack state. "all" is the absence of the filter, so it
+        // is expressed by omission rather than by a sentinel the backend would
+        // have to know a second spelling for. This is the default grid path;
+        // the search and likeness-group builders carry the same param, and
+        // leaving it out here was why moving the Stacks segments did nothing.
+        if (
+          filterStore.stackStateFilter &&
+          filterStore.stackStateFilter !== "all"
+        )
+          _filterP.set("stack_state", String(filterStore.stackStateFilter));
         // Filter params: shared only
         if (filterStore.sharedOnlyFilter) _filterP.set("shared_only", "true");
         // Filter params: hidden-tag filter

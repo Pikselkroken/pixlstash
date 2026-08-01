@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, reactive } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useSortStore } from "../stores/useSortStore.js";
+import { useFilterStore } from "../stores/useFilterStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { getPictureCount, streamPictures } from "../api/pictures";
 
@@ -162,5 +163,41 @@ describe("useGridFetch streaming path", () => {
     // trimmed length.
     expect(refs.visibleEnd.value).toBe(3);
     expect(refs.lastFetchedGridImages.value).toHaveLength(3);
+  });
+
+  // The Stacks segments moved the store and the grid refetched, but the default
+  // grid path built its own param set and left stack_state out of it, so the
+  // same rows came back and the control looked dead. Assert the param on both
+  // the stream and the count: they must run over the same row set.
+  it("sends stack_state on the stream and count requests when the Stacks filter is set", async () => {
+    const pics = [{ id: 31 }, { id: 32 }];
+    getPictureCount.mockResolvedValue({ count: pics.length });
+    streamPictures.mockResolvedValue({ pictures: pics });
+
+    const { grid } = makeHarness();
+    useFilterStore().stackStateFilter = "unresolved";
+
+    await grid.fetchAllGridImages({ force: true });
+
+    expect(streamPictures).toHaveBeenCalled();
+    expect(streamPictures.mock.calls[0][0]).toContain("stack_state=unresolved");
+    expect(getPictureCount).toHaveBeenCalled();
+    expect(getPictureCount.mock.calls[0][0]).toContain(
+      "stack_state=unresolved",
+    );
+  });
+
+  // "all" is the absence of the filter, not a value the backend knows.
+  it("omits stack_state when the Stacks filter is on Any", async () => {
+    getPictureCount.mockResolvedValue({ count: 1 });
+    streamPictures.mockResolvedValue({ pictures: [{ id: 41 }] });
+
+    const { grid } = makeHarness();
+    useFilterStore().stackStateFilter = "all";
+
+    await grid.fetchAllGridImages({ force: true });
+
+    expect(streamPictures.mock.calls[0][0]).not.toContain("stack_state");
+    expect(getPictureCount.mock.calls[0][0]).not.toContain("stack_state");
   });
 });
