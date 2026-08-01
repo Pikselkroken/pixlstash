@@ -2,7 +2,10 @@
 
 Status: approved by the owner. Phase 0 and Phase 1 (backend) are implemented;
 Phase 2 (frontend) is partly done — the queue row's unit model and deck have
-landed, expansion, Compare and the Mixed stacks page have not.
+landed, and so has Compare (one card per unit, the `Contains` row, D4's
+expansion band below the strip, member promotion with its consequence, and a
+zoom over pictures). The queue ROW's own expansion and the Mixed stacks page
+have not.
 Owner decisions and the reconciled `ui-ux-expert` / `lead-designer` proposals.
 Implementation spec: where these disagree with a subagent's report, this file wins.
 

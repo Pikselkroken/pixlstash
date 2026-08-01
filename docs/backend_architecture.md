@@ -888,6 +888,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
 | [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
+| [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?" — `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps — live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match — delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
 | [services/dedup_sweep_service.py](../pixlstash/services/dedup_sweep_service.py) | **Vault-wide near-duplicate sweep planner (read-only).** Promotes the client-side, selection-scoped "Stack groups" grid maneuver into a library-wide service. Streams the `PictureLikeness` edge table in keyset-paginated pages and folds each edge into a **union-find forest** (peak memory: two ints per picture, versus the `GET /pictures/likeness-groups` endpoint's full adjacency dict), accumulating each component's min/max likeness on its root so the weakest link of a transitive chain is known in one pass. A `SweepPolicy` parameter object (candidate threshold, the higher auto-resolve threshold, smart-score margin, group-size ceiling, cross-stack disposition, listing cap) splits every group into `auto_collapse` and `needs_review`, and every review group carries machine-readable reason codes.<br><br>**Non-destructive by construction:** every outcome is additive (`create_stack` / `add_to_stack` / `merge_stacks`), the module opens no write task, and a dry run mutates no row. Groups spanning several existing stacks — which the shipped client silently skips — are a first-class `merge_stacks` proposal naming the target stack and the stacks folded into it. Keeper selection reuses the shipped stack order (score → smart score → recency → id); the one deliberate divergence from `routes/stacks.py::_stack_order_key` is that it reads the **stored** `Picture.smart_score` (a vault-wide sweep cannot afford a live batch recompute), and a picture with no stored smart score is reported as an ambiguous keeper rather than ranked at zero |
 | [services/snapshot_service.py](../pixlstash/services/snapshot_service.py) | Snapshot creation (SQLite `VACUUM INTO` + JSON manifest + `Snapshot` row), listing, and GFS-style retention pruning (see §18) |
@@ -1827,6 +1828,34 @@ The value is gated by `WsBroadcasterMixin.CHANGE_KINDS` (`pixlstash/ws/broadcast
 
 No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
 
+### 21.1.1 Import sees the Scrapheap, and offers a restore rather than a second copy
+
+**The bug.** `routes/pictures/_helpers.py::_create_picture_imports` matched incoming content with `Picture.find(session, pixel_shas=shas, include_unimported=True)`, and `Picture.find` defaults `include_deleted=False`. **A scrapheaped picture was therefore invisible to import dedup**: re-importing a file whose picture sits in the Scrapheap created a brand-new second row while the original was still there. The bulk "Keep cover only" action turns that from a rare annoyance into a predictable one — it moves hundreds of pictures to the Scrapheap in one gesture, and those are by definition copies of files that still exist wherever the user imports from, so the next import silently undoes the cleanup, roughly doubles the bytes on disk, and refills the duplicate queue.
+
+**The fix: match, then offer.** Both import paths now resolve content hashes through [`services/import_dedup_service.py`](../pixlstash/services/import_dedup_service.py) (§10), which sees soft-deleted rows *for that query only* — `Picture.find`'s default is untouched, so nothing else gains deleted rows. A scrapheaped match is **not imported again** (that is the doubling) and **not silently restored** either (the user scrapheapped it on purpose). It is reported as a third outcome and the caller is offered the restore.
+
+**The offer reuses the shipped restore route.** `scrapheaped_picture_ids` on the import status feeds straight into `POST /pictures/scrapheap/restore`, which already clears `deleted_at`, re-folds stack positions (`normalize_stack_positions`) and records an undoable `pictures.scrapheap.restore` operation (§21.1). **There is deliberately no second restore path**, and no new route: nothing to declare in `authz/registry.py`, and the coverage matrix arithmetic is unchanged.
+
+**Disjoint buckets that sum to the total — never a subtraction.** Following `preview_scrapheap_delete`'s discipline (§5), every file lands in exactly one bucket and each is counted where it happens:
+
+| Path | Buckets | Sums to |
+|---|---|---|
+| `POST /pictures/import` (one-shot) | `imported_count` + `duplicate_count` + `scrapheaped_count` | uploaded files |
+| Staging → `PictureImportTask` | `imported_count` + `duplicate_count` + `scrapheaped_count` + `failed_count` + `cancelled_count` | staged files |
+
+Both paths log an `error` if the arithmetic does not close, rather than shipping a summary the user reads as fact. `cancelled_count` and the "staged entry with no `file_path` is a failure" rule exist only because those files previously fell into *no* bucket. The counts are per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one scrapheaped picture name its id once and the restore offer cannot overstate how many rows come back.
+
+**Edge cases, settled deliberately** (pinned in `tests/test_import_scrapheap_match.py`):
+
+- **A live row and a scrapheaped row share a hash** (the old bug already made such pairs): live wins, so it reports as an ordinary duplicate. The content genuinely IS in the library.
+- **Permanently purged and ledgered**: delete-forever removes the `picture` row, so there is nothing to match and nothing to resurrect — a deliberate re-import is a genuinely NEW picture. `deleted_file_log` is not consulted; it guards *snapshot restore* (§18.7), not the owner re-importing a file they still have.
+- **Past its retention deadline**: still offered. The offer is not a promise — the sweep may destroy the row before the user clicks, and `restore_scrapheap`'s `restored_count` is what the UI reports ("Restored 1 of 2"), so a swept match is never claimed as restored.
+- **A stack member**: no special path. The shipped restore re-folds it into the stack ordering.
+- **Frozen by a locked set**: detection does not consult locks. A lock governs label edits and destruction, not whether content exists; hiding the match would put the re-imported copy back on disk, which is the exact doubling this closes. Restore keeps the shipped endpoint's behaviour, unchanged.
+- **Sidecar captions**: a `.txt` sidecar accompanying a scrapheaped match is NOT applied. The picture is not being imported and the user has not chosen to restore it, so editing its tags would act behind their back.
+
+**Frontend.** `fetchStagingStatus` surfaces the bucket, and `ImageImporter.vue` pushes one sticky notice ("N files are already in your Scrapheap, so they were not imported again") whose single action calls `restoreScrapheap`. The completion headline is built from the buckets it names, so "All files were duplicates" can no longer be printed over a run whose files were scrapheap matches.
+
 ### 21.2 Tag-review decisions: confirm and reject are undoable
 
 `POST /pictures/{id}/tag_predictions/{tag}/confirm` and `.../reject` used to write the human-label ledger and record **nothing**, so removing a tag chip in the lightbox raised no receipt and `Ctrl+Z` could not reach it. They are now wrapped in `run_recorded_metadata_task` like every other metadata mutation.
@@ -2168,6 +2197,30 @@ the user stacked by hand stayed "unresolved" and was re-offered forever
 (found in the wild as 21 zombie groups, 2026-07-29). A group where a stack
 would still fold something in — two stacks, or a stack plus a loner — keeps
 counting.
+
+**Filtering at read time, rather than pruning on the soft-delete, is deliberate:
+it is what lets a restore put the group straight back.** The `dedupgroup` row
+survives its members going to the Scrapheap, so `POST /pictures/scrapheap/restore`
+(or an undo of the move) returns the group to the queue with no rescan — pinned
+by `test_a_restored_member_brings_its_group_back_without_a_rescan` and its API
+sibling. A periodic sweep that deleted those rows on a timer would break exactly
+that, which is why there isn't one: the surviving rows are invisible to every
+read and the next verdict or scan clears them. The reads that apply the rule are
+the four in `dedup_tier_service` (`count_unresolved_in_session`,
+`count_by_tier_in_session`, `page_queue_in_session`, `bulk_auto_stack_in_session`)
+**and** the grid's `stack_state="unresolved"` filter in
+`utils/query/predicate_filter.py`, which was the one that leaked: it keyed on
+`DedupGroup.resolved` alone, so a scrapheaped partner kept marking its survivor
+as unresolved long after the group had left the queue and the badge.
+
+**Every group is reported over its LIVE members.** `page_queue_in_session` serves
+`member_count` as the number of candidates it actually returns (the stored
+`dedupgroup.member_count` still counts scrapheaped members until the next prune),
+`load_stack_facts` excludes them from a deck's depth and promotes the next live
+leader, and an **open-queue** group whose candidate load comes back with fewer
+than two live members is dropped from the page rather than served thin. The
+**decided** page keeps such a row: the verdict already happened and "clear this
+decision" is the only route back to it.
 
 **Scope ids are normalised and validated at construction** (`DedupScope.__post_init__`),
 not at query time. Project / set / character ids must parse as integers. A

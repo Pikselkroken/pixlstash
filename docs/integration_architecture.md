@@ -456,6 +456,13 @@ The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/com
    - `updated` with known fields that are **invisible** to the current sort/filter → **ignored** (e.g. a background `smart_score` recompute under a date sort) to avoid a per-card `/metadata` + thumbnail **refetch storm** for values that aren't even displayed.
 4. **Unrecognised shape** (e.g. a bulk sort/filter-defining change) → a rare, **logged** full-reload fallback.
 
+**The grid is not the only destination.** `useUpdatesSocket` routes each `pictures_changed` frame to every store that holds a snapshot of a server read, and each destination owns its own decision — the grid's table above is *not* shared. The other subscriber is the **Duplicates queue** (`useDedupStore.applyPictureEvent`), whose rows are groups rather than cards:
+
+- `removed` **with ids** → **surgical**. The named pictures are taken out of every loaded group (candidates, the group's `member_count`, and each deck's depth/`matched_picture_ids`/leader), then any group left spanning fewer than two stack units is removed — the client-side twin of `live_groups_filter`'s HAVING clauses. A full `loadFirstPage` is deliberately *not* used: the queue is windowed and keyset-paged, so rebuilding it throws a triage in progress back to row 1.
+- `removed` **with no ids**, and `restored` → **not applied to the list**. A returning group lands at a position in the confidence ordering the client cannot compute (there is no per-signature read), and the queue has never been a live insert surface — a scan's new groups arrive by paging too. The badge, which refreshes on `useSidebarRefresh`'s own `pictures_changed` path, carries the change and the row returns with the next page. The one exception is an **empty window**: "nothing left to review" while the badge says otherwise is a lie, and there is nothing on screen to disturb, so the first page is reloaded.
+- **Origin is not consulted.** Unlike the grid, this store never applies a scrapheap move optimistically (no queue action deletes a picture), so its own tab's echo is as new to it as another tab's.
+- The **decided page** keeps its thinned rows and only loses their dead tiles, matching the server: the verdict already happened and "clear this decision" is the only route back to it.
+
 **ComfyUI classification:** the **in-app** runner is **UI-initiated but async** — there is no optimistic client-side copy to suppress, because the generation completes server-side after the request returns. `routes/comfyui.py` therefore emits a **single** `picture_imported` with `source: "ui"` and **no origin echo** (`origin_client_id` omitted), so **every** owner tab — including the initiating one — performs a slick in-place insert via `handleForeignUi` rather than the originator suppressing its own echo. It does **not** fire a second `pictures_changed`/`CHANGED_PICTURES` broadcast; the field-scoped `Missing*Finder` events (smart_score/quality) emit their own targeted events later. Externally-run ComfyUI lands via the watch/reference finders, which stay `source: "external"`, origin `null` → the "New pictures" pill.
 
 ---
@@ -498,11 +505,35 @@ The decision to watermark is made server-side per request based on `User.embed_w
 
 - **Endpoint**: `POST /api/v1/pictures/import` (multipart/form-data).
 - **Content**: image files or `.zip` archives (extracted server-side).
-- **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips duplicates.
+- **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips content it already has — **including content sitting in the Scrapheap**. See below.
 - **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/status?task_id=…` for completion percentage.
 - **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives a progress dialog) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
 
 **Contract**: the SPA sets `isUploadInProgress` for the duration of its own upload so that incoming `picture_imported` events don't double-count.
+
+### 10.1 Three outcomes, not two: the Scrapheap bucket
+
+A file whose `pixel_sha` matches a **soft-deleted** picture is neither imported nor an ordinary duplicate.
+Importing it again would put a second copy of every scrapheaped picture back on disk (a bulk "Keep cover only"
+cleanup makes that a predictable way to undo the cleanup and double the bytes); restoring it automatically would
+be the opposite surprise, because the user scrapheapped it deliberately. So the server reports it and the SPA
+**offers** the restore.
+
+Both status endpoints carry it, and the buckets are disjoint and sum to the total (never derived by subtraction,
+so no summary line can overstate what happened):
+
+| Endpoint | Fields |
+|---|---|
+| `GET /pictures/import/status?task_id=…` | `imported_count`, `duplicate_count`, `scrapheaped_count`, `scrapheaped_picture_ids[]`; per-file `results[].status` is `success` / `duplicate` / `scrapheaped` |
+| `GET /pictures/import/staging/{id}/status` | the same three plus `failed_count` and `cancelled_count` |
+
+`scrapheaped_count` is per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one
+scrapheaped picture name its id once. The SPA feeds those ids straight to the **shipped**
+`POST /pictures/scrapheap/restore` (there is deliberately no second restore route, and therefore no new
+`AccessPolicy` declaration): `ImageImporter.vue` raises one sticky notice whose action restores them and reports
+`restored_count` honestly, since retention can sweep a match away between the import and the click. The restore
+broadcasts `CHANGED_PICTURES` with `change_kind: "restored"` (§8), which the grid already consumes.
+
 
 ---
 

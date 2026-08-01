@@ -528,6 +528,8 @@ Import source selection dialog. Sources: local file picker, Google Photos (OAuth
 #### `ImageImporter.vue` (783 lines)
 Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPicturesId`, `unassignedPicturesId`. Emits: `import-started`, `import-finished`, `import-cancelled`, `import-error`. Handles chunked multipart upload with progress tracking.
 
+**The Scrapheap restore offer.** A staged file whose content matches a soft-deleted picture is reported by the backend in its own bucket (`scrapheaped_count` / `scrapheaped_picture_ids`, integration §10.1): it is not imported again and not restored behind the user's back. On completion the component pushes ONE sticky `useNoticeStore` notice whose single action calls `restoreScrapheap` from `api/pictures.js` — the shipped route, not a second restore path — and reports `restored_count` honestly, because retention can sweep a match away between the import and the click. The completion headline is built from the buckets it names, so a run of scrapheap matches can no longer print "All files were duplicates".
+
 ---
 
 ### Shared / Primitive Components
@@ -623,7 +625,13 @@ Load-bearing behaviours, each of which is a deliberate decision rather than an i
 - **It closes on submit and hands progress to `ComfyUiRunner`**, rather than hosting its own bar. Abort is global (`POST /comfyui/abort` clears the entire ComfyUI queue), so a modal-local control next to it would be a mislabel. A submit *failure* is treated as a form error: the dialog stays open with every input intact and the message in a `role="alert"`.
 - **Scope is disclosed, not silently applied.** The action always targets the right-clicked picture; with a wider selection live the dialog says so and offers a one-click route to the shipped batch path (`open-comfyui-panel`).
 - **Three seed modes in recipe mode, two in template mode.** Random draws fresh. **Incremented** (recipe mode only — templates have no original to increment from) applies a signed delta (default +1, session-sticky) to the original seed read from the recipe response (`seed`, falling back to the first `seed_inputs` value) and shows the resulting value live; it submits as `seed_mode: "fixed"` with the computed seed, so the API surface is unchanged. **Fixed** defaults to the original seed and carries a small warning-toned "same as original" note until edited, because replaying the identical seed re-creates the identical image, which the importer dedupes into silence — flagged, not forbidden. A sticky `incremented` preference falls back to random where it cannot be honoured.
-- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); candidate cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid. The **zoom** (per the design-system update, 2026-07-29; continuous-wheel rework, 2026-07-30) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion. **The wheel means ZOOM for the whole gesture** (owner requirement): wheel UP over a candidate's picture opens the zoom at fit and the same motion keeps magnifying — a continuous scale from the fit floor to 8× actual pixels (`utils/zoomMath.js`; wheel deltas normalized across pixel/line/page wheel modes via the shared `normalizeWheelDelta`, and the percentage readout via the shared `formatZoomPercent` — the zoom family's core, see §6), **anchored at the cursor** (binding: the image point under the pointer stays stationary through every scale change, edge-clamped; the thumbnail→surface jump has no meaningful cursor geometry, so the open lands at fit and anchors from the first in-tick). Wheeling out **three full accumulated notches of deliberate resistance** (`ZOOM_EXIT_RESISTANCE`, raised 2026-07-30 from one notch, which exited too easily) while already AT the fit floor closes the zoom back to Compare — the accumulation is the hysteresis (it only counts AT the floor, any zoom-in resets it, and a pause longer than `ZOOM_EXIT_GESTURE_GAP_MS` starts it over, so trackpad crumbs cannot blow through, stale part-gestures do not carry, and the boundary cannot flap because reopening takes a wheel over a thumbnail). **Fit and 100% are snap stops** on the continuum (the header buttons and P, centre-anchored), the live percentage renders in the top bar (100% = actual pixels — it is what makes the same-magnification blink guarantee verifiable), a **drag pans** at every overflowing level (the wheel never scrolls anything, `overflow: hidden` + preventDefault), and a **flip keeps scale and pan** so the blink stays registered (the new image's own fit floor re-clamps on load). Click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels/zoomLevel`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
+- **Compare is fullscreen, image-first, with the design system's blink compare.** The dialog takes the grid's full space (`AppDialog fullscreen`); cards grow into the width and preview **down-scaled originals** (browser-decodable formats; RAW/video fall back to the server thumbnail) with the metadata compacted into the design system's two-column label-over-value grid.
+
+  **One card per UNIT, not per candidate** (`mixed-stacks-and-stack-units.md` D2/D4), because a verdict moves units and a strip drawn per candidate compares things no verdict can move apart. Four consequences, each load-bearing:
+  - **A deck's numbers are its LEADER's, labelled `Leader`, never an aggregate.** The metric columns answer "which file is better"; a mean megapixel count answers nothing, and an aggregate would silently break the per-column best-value highlight, which compares individual FILES. The leader is *frequently not a group candidate*, so the dialog fetches its row on open: `listStackMembers(stackId, {limit: 1})`, one member per such deck, on a surface the user opened deliberately. Until it lands every metric cell shows the en dash rather than a confident zero.
+  - **A group-level `Contains` row** (`5 pictures · 42 MB` / `1 picture`) states what a card stands for, because the File column shows only the leader's size and would otherwise be read as the deck's footprint. It follows the same all-or-none discipline as Location and Smart score (every card or none), since the meta grid is what the picture above it gives its leftover height to. The footprint appears only once the **whole** member list is held; the payload carries no total and summing one page would state a stack's size from a fraction of it.
+  - **Expansion is a full-width band BELOW `.dc-strip`, never inside a card** (a card that grew would take the pictures out of register, which is the one thing the surface exists to hold), **at most one open at a time**, opened from the `Contains` value and fetched lazily. It is `StackExpansionStrip`'s **first mount anywhere**: it now takes its size from a `thumbHeight` prop (height fixed, width auto, which is EXIF-rotation correctness rather than a preference, since stored dimensions ignore rotation) and hides its Unstack action behind `showUnstack`, because Compare has no unstack pathway to honour. **Promoting a member to cover survives here** (it was withdrawn from the queue row) as a two-step whose confirmation names the consequence: it re-covers that stack across the library, not just in this group.
+  - **The zoom flips PICTURES, not units**: unit 1's leader, unit 1's remaining known members in stack order, unit 2's leader, and so on, growing to the whole stack once an expansion has fetched it. Eyeballing a stack sibling at 100% is the strongest disclosure available when a group named only one member of a stack. The zoom keys the current picture by **id, not index**, so a sequence that grows underneath it cannot slide onto a different picture; the *cover* gesture inside the zoom stays unit-level for the same reason the row's did. The **zoom** (per the design-system update, 2026-07-29; continuous-wheel rework, 2026-07-30) is a full-screen blink compare teleported above the modal: one candidate at a time flipped in place (←/→ wrap, 1–9 jump) so differences read as motion. **The wheel means ZOOM for the whole gesture** (owner requirement): wheel UP over a candidate's picture opens the zoom at fit and the same motion keeps magnifying — a continuous scale from the fit floor to 8× actual pixels (`utils/zoomMath.js`; wheel deltas normalized across pixel/line/page wheel modes via the shared `normalizeWheelDelta`, and the percentage readout via the shared `formatZoomPercent` — the zoom family's core, see §6), **anchored at the cursor** (binding: the image point under the pointer stays stationary through every scale change, edge-clamped; the thumbnail→surface jump has no meaningful cursor geometry, so the open lands at fit and anchors from the first in-tick). Wheeling out **three full accumulated notches of deliberate resistance** (`ZOOM_EXIT_RESISTANCE`, raised 2026-07-30 from one notch, which exited too easily) while already AT the fit floor closes the zoom back to Compare — the accumulation is the hysteresis (it only counts AT the floor, any zoom-in resets it, and a pause longer than `ZOOM_EXIT_GESTURE_GAP_MS` starts it over, so trackpad crumbs cannot blow through, stale part-gestures do not carry, and the boundary cannot flap because reopening takes a wheel over a thumbnail). **Fit and 100% are snap stops** on the continuum (the header buttons and P, centre-anchored), the live percentage renders in the top bar (100% = actual pixels — it is what makes the same-magnification blink guarantee verifiable), a **drag pans** at every overflowing level (the wheel never scrolls anything, `overflow: hidden` + preventDefault), and a **flip keeps scale and pan** so the blink stays registered (the new image's own fit floor re-clamps on load). Click picks the cover, right-click excludes, Enter/S stack and K keeps separate from inside (amendment #3's verdict key scheme). The zoom's *state* lives in the dialog (exposed as `isZoomOpen/openZoom/closeZoom/flipZoom/zoomTo/toggleZoomPixels/zoomLevel`) but its *keys* live in the queue's one keyboard model, which Escape-peels one layer at a time: zoom → Compare → queue. In the zoom, digits flip — they never silently re-pick the cover.
 - **First adopter of the dialog keyboard contract** (see "App* design-system layer"): Escape dismisses, plain Enter accepts via `AppDialog`'s `accept`, and the footer buttons wear the ↵ / Esc badges. The prompt textarea and seed field stop propagation of ordinary typing so grid shortcuts stay quiet, but deliberately let Escape and Enter through to the dialog — and handle Ctrl/Meta+Enter themselves, since the root-level shortcut cannot hear a stopped event.
 
 **Recipe mode is a consent surface** (review finding R3, CWE-829). The replayed graph is file metadata: whoever made the image authored it, and it runs on the owner's ComfyUI bounded only by their installed node packs. The confirm step's reading order *is* the argument — what came from outside, what could not be checked, what it would run, I accept, run:
@@ -1211,7 +1219,9 @@ Three rules from the design are load-bearing and are easy to break by accident:
   - **Cover, exclusion and Compare are unit-level.** A cover choice on a deck
     resolves to its **leader**; `X` takes a whole deck out (per-picture
     exclusion was a silent no-op, because the rest of the stack dragged the
-    picture straight back in); `Compare all N` counts units.
+    picture straight back in); `Compare all N` counts units, and
+    `DedupCompareDialog` renders one card per unit for the same reason (see the
+    Compare bullet below).
   - **The preselected cover is the deck**, not the server's smart-score pick,
     whenever a group holds one (deepest wins a tie). Otherwise the default
     verdict silently re-curates a stack the user already made. This lives in
@@ -1222,9 +1232,12 @@ Three rules from the design are load-bearing and are easy to break by accident:
     `Add 1 to stack` → `Add 1` in CSS both ways, via a `@container grow` query
     on the row — the toolbar's fold pattern, no measurement. The size never
     leaves the header.
-  - **The deck's accessible name is the whole disclosure**: `a stack of 4
-    pictures, 1 of them matched`. There is no visual substitute — the corner has
-    no budget for a second numeral and expansion (D4) has not landed.
+  - **In the queue row the deck's accessible name is the whole disclosure**:
+    `a stack of 4 pictures, 1 of them matched`. There is no visual substitute
+    there: the corner has no budget for a second numeral, and the row's own
+    expansion (D4's queue half) has not landed. Compare carries the visible
+    disclosure today: a `Contains` row, the expansion band, and a zoom that
+    reaches the stack's other members.
 - **A stack needs two UNITS.** `useDedupStore.toggleExcluded` refuses an `X`
   that would leave a single included unit and returns `false`, so a two-unit
   group accepts no exclusion at all and the Stack button the row is still
@@ -1303,7 +1316,28 @@ post-restore hook reopens the verdict and returns the group to the unresolved
 queue, but the undo's own WebSocket echo is own-origin and suppressed like any
 other, and only the counts refresh via the sidebar path — without the
 subscription the badge said N+1 over a list of N. Scoped to dedup op types so
-an unrelated undo never yanks a triage back to the top. **Filter persistence:**
+an unrelated undo never yanks a triage back to the top.
+
+**A scrapheap move elsewhere** is the mirror case and has its own path, in the
+store rather than the view (it must work whichever route is mounted):
+`useUpdatesSocket` hands every `pictures_changed` frame to
+`useDedupStore.applyPictureEvent`, which for a `removed` event with ids rewrites
+the loaded rows *surgically* — the deleted candidates go, the group's
+`member_count` follows, each deck's depth / `matched_picture_ids` / leader
+follow, and any group left spanning fewer than two units is removed through the
+existing `removeGroup` (so the focus, the selection, the per-group choices and
+the offset are all handled). `loadFirstPage` is deliberately not used: the queue
+is windowed and keyset-paged, and rebuilding it would throw a triage in progress
+back to row 1. A `restored` event (and an untargetable id-less `removed`) does
+**not** insert: the group returns at a position in the confidence ordering the
+client cannot compute and there is no per-signature read, so the badge carries
+it and the row returns with the next page — unless the window is empty, where
+"nothing left to review" would be a lie and there is nothing to disturb, so the
+first page is reloaded. Origin is not consulted, unlike the grid: nothing in
+this store applies a scrapheap move optimistically. The decided page keeps its
+thinned rows and only loses their dead tiles, matching the server.
+
+**Filter persistence:**
 the tier gate and threshold are remembered in `localStorage`
 (`pixlstash:dedupFilters`, written on every deliberate change and on queue
 open) and restored in `openQueue` between `loadPolicy()` and the URL filters,
