@@ -4,6 +4,13 @@ Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as
 
 - Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
 
+# [1.8.2]
+
+- Signed Windows installers and nothing else. If you already installed or you're not on Windows, this is not the release for you.
+- If a Windows SmartScreen warning has been putting you off trying PixlStash, the warning will still be there for a while, but now
+  it will at least tell you the installer was built by "Open Source Developer Gaute Lindkvist" and not just "Unknown publisher".
+- Once more people have downloaded and installed PixlStash, the Windows SmartScreen warning should eventually go away.
+
 # [1.8.1] [Security:Critical]
 
 Updating clears every API token as a precaution, so you will need to create replacements from Settings. Any script or integration that signs in with a token stops working until you do, and **existing share links stop working and have to be shared again** with their new values. Your public URL and ComfyUI URL are cleared along with them and need entering again, so replacement share links point where you expect. This is deliberate and applies to every library: a token created before this release cannot be distinguished from one that should not exist, so all of them are reissued rather than some. Password sign-in and the desktop app are unaffected, but **if you have turned password sign-in off on this server, turn it back on before updating** — with no tokens left there would be no other way in.
