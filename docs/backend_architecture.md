@@ -2504,6 +2504,109 @@ Catching only `DedupVerdictError` meant a locked group mid-run propagated out
 after earlier groups had already committed — a partially applied mutation whose
 server-minted batch id the caller never saw.
 
+### 22.11 Mixed stacks — cohesion scoring, `Keep`, split and unstack (D5/B5)
+
+`pixlstash/services/mixed_stack_service.py`, `pixlstash/db_models/mixed_stack.py`,
+migration `0091_add_mixed_stack_cohesion_and_dismissal`. The design is
+`docs/design/mixed-stacks-and-stack-units.md` D5 (product) and B5 (backend
+contract); where the two disagree, the design file wins.
+
+A **mixed stack** is a live stack whose members do not form ONE connected
+cluster at the queue's similarity threshold.
+
+- **The measurement is tier 2's, not a second one.** The 64-bit dHash in
+  `picture.perceptual_hash`, the SWAR popcount in
+  `dedup_tier_service._popcount64`, the same
+  `max_hamming = int((1 - threshold) * PHASH_BITS)` cut `near_pairs_in_bucket`
+  uses, and the same shipped union-find (`dedup_sweep_service._LikenessForest`)
+  that `groups_from_pairs` folds near pairs with. A second notion of "similar"
+  on the same surface would be a bug generator.
+- **Connected components, never the worst pair.** A legitimate burst chains
+  A~B~C, so its ends can be far apart while every step is tight; condemning it
+  on the worst pair would flag exactly the stacks a user most deliberately
+  made. The forest only knows nodes an edge named, so members with *no* edge
+  are added back as singleton components — those are precisely the **stranded**
+  members, and dropping them would make "one cluster plus one stranger" look
+  cohesive.
+- **Threshold-driven, never a constant.** The list is bound to the queue's own
+  slider: measured on the owner's library, **26** live stacks are not one
+  cluster at 0.90 and **9** at 0.65. `GET /dedup/mixed-stacks` carries the same
+  `ge=MIN_THRESHOLD` / `le=MAX_THRESHOLD` bound every other dedup route does.
+- **Ranked by how little holds a stack together**: stranded members descending,
+  component count descending, weakest edge ascending. A stack with no edge at
+  all sorts *first* (`-1.0`) — that is the extreme of the same scale, not
+  missing information.
+- **`suggested_action` names the outcome.** `split` needs both a stranger and a
+  strict **majority** cluster to keep; otherwise `unstack`, which is D5's "no
+  majority cluster" case.
+- **A member with no usable `perceptual_hash` is reported separately**
+  (`unhashed_picture_ids`). It can carry no edge, so it would otherwise be
+  indistinguishable from a genuine stranger; "not yet comparable" is a
+  different fact from "does not belong".
+
+**The cache is the threshold-independent half.** `stackcohesion` stores the
+within-stack near-pair edge list — every pair at or below
+`MAX_CACHED_HAMMING = int((1 - MIN_THRESHOLD) * 64) = 22`, which is the widest
+distance that can be an edge at *any* admissible threshold. Folding components
+out of a cached edge list is microseconds, so a threshold change costs nothing.
+
+**Two fingerprints, deliberately not one.** `content_fingerprint` (the cache
+key) digests the stack's `(member id, perceptual hash)` pairs — every input the
+edges are derived from. `membership_fingerprint` (the `Keep` key) digests the
+member ids alone, because D5 is explicit that *adding a member* is what
+re-raises a kept stack. Keying the cache on membership alone was the bug this
+split closes: a hash can move without membership moving (the embedding worker
+filling a `NULL`, a reference-folder file replaced under an unchanged picture
+row), and the cache would then keep serving edges derived from hashes that no
+longer exist — freezing a member as "stranded" forever, which is precisely the
+false positive the flag must never produce. Both fingerprints also make their
+tables safe against SQLite rowid recycling: a new stack reusing a deleted
+stack's id has different contents, hence a different fingerprint, hence no hit.
+
+Because the staleness test needs the hashes, the reads happen on every path;
+what the cache buys is the O(n²) comparison, which is the part that grows with
+stack size. That is stated in `_edges_for_stacks` rather than implied.
+
+`MissingStackCohesionFinder` / `StackCohesionTask` (`TaskType.STACK_COHESION`,
+registered with the `WorkPlanner`) are the **only writers** of that table, so a
+GET can never turn into a writer; the finder `depends_on` `IMAGE_EMBEDDING`,
+because running ahead of the worker that writes `perceptual_hash` would cache an
+edge list in which every member looks stranded. The list endpoint recomputes any
+stack whose cache row is missing or stale **inline and batched** (two queries for
+the whole page, the same anti-N+1 rule `load_stack_facts` follows), so an
+un-warmed cache costs one request's arithmetic, never a wrong answer. A whole
+160-stack library recomputes in ~0.04 s.
+
+**The `Keep` dismissal** (`mixedstackdismissal`) is keyed on stack id **plus**
+the same membership fingerprint, so adding a member later produces a fingerprint
+no row matches and the stack is raised again — the user approved *those*
+pictures, not the stack forever. Rows are unique per `(stack_id, fingerprint)`
+and kept per fingerprint rather than overwritten, so undoing a membership change
+restores a dismissal the user already made instead of asking twice. `DELETE` on
+the same path clears *every* fingerprint: a Keep the user has explicitly
+retracted must not come back on its own. Both tables carry an
+`ON DELETE CASCADE` FK to `picturestack`, so neither outlives the stack it
+describes.
+
+**Split and unstack are each one operation.** They share `_apply_removal`, which
+snapshots `expand_picture_ids_to_stacks(..., include_deleted=True)` before,
+mutates, `normalize_stack_positions`, `delete_emptied_stacks`, snapshots after,
+and records one row (`dedup.split_stack` / `dedup.unstack`) under one batch id —
+so a single `Ctrl+Z` restores every picture's `stack_id` *and* `stack_position`,
+and `_apply_stack`'s recreate branch brings a dissolved `PictureStack` back under
+its original id. No post-restore hook is needed: unlike a verdict, there is no
+decision state living outside the picture rows. **A split that would leave a
+stack of one dissolves it instead** — the same rule
+`DELETE /stacks/{stack_id}/members` already applies, since a one-picture stack is
+a state the grid cannot render honestly — and the response says
+`stack_dissolved` rather than letting the client infer it. Both emit the standard
+`pictures_changed` announcement, and both read `actor`/`source`/
+`origin_client_id` from `request_context` in the handler (§21 origin discipline).
+
+All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
+(§16.1); the rationale and the both-direction test coverage are in
+`docs/reviews/authz-coverage-matrix.md`.
+
 ---
 
 *Last updated: 2026-07-30. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*

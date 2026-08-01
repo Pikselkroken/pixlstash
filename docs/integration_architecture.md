@@ -1021,6 +1021,37 @@ or graft its rows into an existing one.
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
+| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids` — the `stranded_picture_ids` the row showed — so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
+| `POST /dedup/mixed-stacks/{stack_id}/unstack` | Dissolves a mixed stack entirely. Records one undoable `dedup.unstack` operation; `batch_id` is always present. |
+
+### Mixed stacks (design D5/B5)
+
+`GET /dedup/mixed-stacks?threshold=&offset=&limit=&include_kept=` lists live
+stacks whose members do not form one connected cluster at *that* threshold —
+**pass the queue's own slider value; the list is threshold-relative and the same
+stack is mixed at 0.90 and cohesive at 0.65.** Rows are ranked
+least-held-together first (stranded members desc, component count desc, weakest
+edge asc) and carry `component_count`, `component_sizes`, `components`,
+`largest_component_size`, `stranded_picture_ids`, `weakest_edge` (`null` when no
+pair is close enough to be an edge at all), `unhashed_picture_ids` (members whose
+`perceptual_hash` has not arrived — report as *not yet comparable*, never as a
+mistake), `suggested_action` (`split` / `unstack`), `membership_fingerprint`,
+`kept`, `leader_picture_id` and `leader_thumbnail_version`. The envelope adds
+`total`, `kept_total`, `live_stack_count` and `next_offset` (plain offset paging;
+this list is tens of rows, not thousands).
+
+`POST` / `DELETE /dedup/mixed-stacks/{stack_id}/keep` set and clear the durable
+**Keep** dismissal. It is keyed on stack id **plus** `membership_fingerprint`, so
+adding a member later re-raises the stack; `POST` is idempotent
+(`created: false` when it was already kept) and `DELETE` clears every
+fingerprint (`removed: N`). Keep changes no picture, so it is **not** an undoable
+operation and returns no `batch_id` — `DELETE` is the way back, not `Ctrl+Z`.
+
+Both actions return `{stack_id, split_picture_ids, remaining_picture_ids,
+stack_dissolved, batch_id}`. **`stack_dissolved` is reported, not inferred**: a
+split that would leave a stack of one frees the last member too and drops the
+stack row, so a client must read the flag rather than assume the remainder still
+exists. All five routes are OWNER_ONLY.
 
 **Undoing a verdict also returns its group to the queue.** `POST
 /operations/undo` and `POST /operations/batches/{batch_id}/undo` restore the

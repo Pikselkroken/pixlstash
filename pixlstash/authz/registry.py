@@ -557,6 +557,55 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "for READ tokens"
         ),
     ),
+    # ── dedup.py (v1.9 Mixed stacks, design D5/B5) ──────────────────────────
+    # The same two reasons as the rest of this surface. The list is a
+    # vault-wide aggregate over every live stack, and the three actions mutate
+    # stack membership on pictures named only by a stack id.
+    ("GET", "/api/v1/dedup/mixed-stacks"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Enumerates every live stack in the vault that is not one cluster, "
+            "with its member picture ids. Cohesion is a fact about the whole "
+            "stack, so the list cannot be narrowed to a share token's scope "
+            "without either leaking that out-of-scope members exist or "
+            "reporting a component count measured over a subset — a wrong "
+            "number rather than a narrower one, the same reasoning that makes "
+            "GET /dedup/stacks/{stack_id}/members owner-only"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/split"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Removes pictures from a stack anywhere in the vault, identified "
+            "only by a stack id; stacks are set-membership-atomic, so this "
+            "changes what collections effectively contain. POST is also "
+            "blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/unstack"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Dissolves a stack anywhere in the vault, freeing every member. "
+            "Same reasoning as the split, at the whole-stack scale. POST is "
+            "also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/keep"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Writes a durable dismissal against a stack anywhere in the vault. "
+            "Changes no picture, but it is owner state on an owner-only "
+            "surface and a scoped token has no listing to suppress. POST is "
+            "also blocked for READ tokens"
+        ),
+    ),
+    ("DELETE", "/api/v1/dedup/mixed-stacks/{stack_id}/keep"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Clears the dismissal above; owner-only for the same reason. "
+            "DELETE is also blocked for READ tokens"
+        ),
+    ),
     # ── characters.py ───────────────────────────────────────────────────────
     ("GET", "/api/v1/characters"): _LIST_AWARE,
     ("GET", "/api/v1/characters/{id}"): RoutePolicy(_CHAR, id_param="id"),

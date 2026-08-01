@@ -53,7 +53,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service, dedup_tier_service
-from pixlstash.services import dedup_verdict_service, operation_log_service
+from pixlstash.services import dedup_verdict_service, mixed_stack_service
+from pixlstash.services import operation_log_service
+from pixlstash.services.mixed_stack_service import (
+    DEFAULT_PAGE_SIZE as MIXED_STACK_PAGE_SIZE,
+    MAX_PAGE_SIZE as MAX_MIXED_STACK_PAGE_SIZE,
+    MixedStackError,
+)
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_PAGE_SIZE,
     DEFAULT_STACK_MEMBER_PAGE_SIZE,
@@ -1388,6 +1394,341 @@ class AutoStackResponse(BaseModel):
     failed: int = Field(default=0, description="Groups that could not be resolved.")
 
 
+# ── Mixed stacks (design D5 / B5) ────────────────────────────────────────────
+
+
+class MixedStackModel(BaseModel):
+    """One live stack whose members do not form a single connected cluster."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The stack. Example: `42`.",
+        examples=[42],
+    )
+    threshold: float = Field(
+        description=(
+            "The similarity the components were folded at. Echoed on every row "
+            "because the whole verdict is threshold-relative: this same stack "
+            "may be one clean cluster at `0.65`. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    member_count: int = Field(
+        description="Live members of the stack. Example: `12`.", examples=[12]
+    )
+    member_ids: list[int] = Field(
+        description=(
+            "Every live member, canonical stack order (leader first) - the same "
+            "order the deck and `GET /dedup/stacks/{stack_id}/members` use. "
+            "Example: `[7, 8, 9]`."
+        ),
+        examples=[[7, 8, 9]],
+    )
+    membership_fingerprint: str = Field(
+        description=(
+            "Digest of the sorted live member ids. This is the key a `Keep` "
+            "dismissal is stored against, so a client can tell whether a Keep "
+            "it just made still applies. Example: "
+            '`"6f1c9a2b4d8e70153c9a2b4d8e701534"`.'
+        ),
+        examples=["6f1c9a2b4d8e70153c9a2b4d8e701534"],
+    )
+    component_count: int = Field(
+        description=(
+            "Connected clusters at this threshold. Always at least `2` on this "
+            "list - `1` is a cohesive stack and is not listed. Example: `3`."
+        ),
+        examples=[3],
+    )
+    component_sizes: list[int] = Field(
+        description=(
+            "Size of each cluster, largest first. `[10, 2]` is a stack with one "
+            "big burst and a stray pair; `[1, 1]` is a two-picture stack whose "
+            "members match nothing at all. Example: `[10, 1, 1]`."
+        ),
+        examples=[[10, 1, 1]],
+    )
+    components: list[list[int]] = Field(
+        description=(
+            "The clusters themselves, largest first, each sorted by picture id, "
+            "so a client can show which members hang together rather than only "
+            "how many do. Example: `[[7, 8, 9], [11]]`."
+        ),
+        examples=[[[7, 8, 9], [11]]],
+    )
+    largest_component_size: int = Field(
+        description=(
+            "Size of the biggest cluster - the stack that would survive a "
+            "split. Example: `10`."
+        ),
+        examples=[10],
+    )
+    stranded_picture_ids: list[int] = Field(
+        description=(
+            "Members joined to nothing else in the stack (no edge at all at "
+            "this threshold). These are the pictures `POST /dedup/mixed-stacks/"
+            "{stack_id}/split` removes when the request omits `picture_ids`, "
+            "and the strong case the design marks on a tile. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    weakest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Lowest similarity among the edges that survive at this threshold - "
+            "the same weakest-link reading `confidence` carries on a duplicate "
+            "group. `null` when no pair is close enough to be an edge at all, "
+            "i.e. every member is stranded, which is the extreme of the same "
+            "scale rather than missing information. Example: `0.90625`."
+        ),
+        examples=[0.90625],
+    )
+    unhashed_picture_ids: list[int] = Field(
+        description=(
+            "Members with no usable `perceptual_hash` yet (the embedding worker "
+            "has not reached them, or the file could not be hashed). They can "
+            "carry no edge, so they appear stranded without being unlike "
+            "anything - report them as *not yet comparable*, never as a "
+            "mistake. Normally empty. Example: `[]`."
+        ),
+        examples=[[]],
+    )
+    suggested_action: str = Field(
+        description=(
+            "The outcome the primary button should name: `split` when a strict "
+            "majority cluster survives removing the stranded members, "
+            "`unstack` when there is no majority worth keeping. Example: "
+            '`"split"`.'
+        ),
+        examples=["split"],
+    )
+    kept: bool = Field(
+        description=(
+            "Whether a `Keep` dismissal covers this exact membership. Always "
+            "`false` unless the request asked for `include_kept=true`. Example: "
+            "`false`."
+        ),
+        examples=[False],
+    )
+    leader_picture_id: int = Field(
+        description=(
+            "The stack's leader (`stack_position` 0) - the picture the row's "
+            "thumbnail should show, matching the grid and the deck. Example: `7`."
+        ),
+        examples=[7],
+    )
+    leader_thumbnail_version: Optional[str] = Field(
+        default=None,
+        description=(
+            "Cache-buster for the leader's thumbnail, so the row renders from "
+            'this payload alone. Example: `"512x384"`.'
+        ),
+        examples=["512x384"],
+    )
+
+
+class MixedStacksResponse(BaseModel):
+    """One page of the Mixed stacks list."""
+
+    model_config = ConfigDict(extra="allow")
+
+    threshold: float = Field(
+        description=(
+            "The threshold this page was computed at, echoed so a client can "
+            "confirm the list matches its slider. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    total: int = Field(
+        description=(
+            "Mixed stacks matching this request, i.e. what `stacks` pages "
+            "through. Excludes kept stacks unless `include_kept=true`. "
+            "Example: `26`."
+        ),
+        examples=[26],
+    )
+    kept_total: int = Field(
+        description=(
+            "How many mixed stacks carry a `Keep` at their current membership. "
+            "Counted whether or not they are included, so a client can offer "
+            '"N kept" without a second request. Example: `4`.'
+        ),
+        examples=[4],
+    )
+    live_stack_count: int = Field(
+        description=(
+            "Live stacks with two or more members - the denominator behind "
+            '"26 of 209". Example: `209`.'
+        ),
+        examples=[209],
+    )
+    offset: int = Field(description="Rows skipped. Example: `0`.", examples=[0])
+    limit: int = Field(description="Rows per page. Example: `20`.", examples=[20])
+    next_offset: Optional[int] = Field(
+        default=None,
+        description=("Offset of the next page, or `null` at the end. Example: `20`."),
+        examples=[20],
+    )
+    stacks: list[MixedStackModel] = Field(
+        description=(
+            "The page, ranked least-held-together first: stranded members "
+            "descending, then component count descending, then weakest edge "
+            "ascending (a stack with no edge at all sorts first)."
+        )
+    )
+
+
+class MixedStackSplitRequestModel(BaseModel):
+    """Split the stranded member(s) off one mixed stack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "The members to split off. **Send the ids the row showed** "
+            "(`stranded_picture_ids`), so the split matches what the user was "
+            "looking at even if the stack changed since. Omit it and the server "
+            "recomputes the stranded set at `threshold` instead. Ids that are "
+            "not live members of this stack are ignored; if none of them are, "
+            "the request is a 400. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    threshold: float = Field(
+        default=DEFAULT_THRESHOLD,
+        ge=MIN_THRESHOLD,
+        le=MAX_THRESHOLD,
+        description=(
+            "Only read when `picture_ids` is omitted: the similarity at which "
+            "the stranded set is recomputed. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch to record under. Must be a client-namespaced "
+            "`cli-<4-76 chars of A-Z a-z 0-9 _ ->` id; omit it to have the "
+            "server mint an `srv-` one. Share one id across several calls to "
+            'make them reverse as a single `Ctrl+Z`. Example: `"cli-split-3"`.'
+        ),
+        examples=["cli-split-3"],
+    )
+
+
+class MixedStackUnstackRequestModel(BaseModel):
+    """Dissolve one mixed stack entirely."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch to record under. Must be a client-namespaced "
+            "`cli-…` id; omit it to have the server mint one. Example: "
+            '`"cli-unstack-9"`.'
+        ),
+        examples=["cli-unstack-9"],
+    )
+
+
+class MixedStackActionResponse(BaseModel):
+    """What a split or unstack did, for the receipt and the undo handle."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The stack that was acted on. Example: `42`.", examples=[42]
+    )
+    split_picture_ids: list[int] = Field(
+        description=(
+            "Pictures that left the stack and are now loose. For an unstack "
+            "this is every member. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    remaining_picture_ids: list[int] = Field(
+        description=(
+            "Pictures still in the stack afterwards. Empty when the stack was "
+            "dissolved. Example: `[7, 8, 9]`."
+        ),
+        examples=[[7, 8, 9]],
+    )
+    stack_dissolved: bool = Field(
+        description=(
+            "Whether the stack itself is gone. `true` for every unstack, and "
+            "for a split that would otherwise have left a stack of one - a "
+            "state the grid cannot render honestly, so the last member is freed "
+            "too rather than left in a one-picture stack (the same rule "
+            "`DELETE /stacks/{stack_id}/members` applies). Reported rather than "
+            "inferred. Example: `false`."
+        ),
+        examples=[False],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The `POST /operations/batches/{batch_id}/undo` handle. One split "
+            "or unstack is exactly one operation, so a single `Ctrl+Z` puts "
+            "every picture back in its original stack at its original position "
+            "and recreates a dissolved stack under its original id. Example: "
+            '`"srv-1a2b3c"`.'
+        ),
+        examples=["srv-1a2b3c"],
+    )
+
+
+class MixedStackKeepResponse(BaseModel):
+    """The state of the `Keep` dismissal on one stack."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(description="The stack. Example: `42`.", examples=[42])
+    dismissed: bool = Field(
+        description=(
+            "`true` after a `Keep`, `false` after clearing it. Example: `true`."
+        ),
+        examples=[True],
+    )
+    created: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this call created a new dismissal (`false` means it was "
+            "already kept at this exact membership - pressing Keep twice is "
+            "idempotent). Absent when clearing. Example: `true`."
+        ),
+        examples=[True],
+    )
+    removed: Optional[int] = Field(
+        default=None,
+        description=(
+            "Dismissals deleted by a clear, across every membership the stack "
+            "was ever kept at. Absent when keeping. Example: `1`."
+        ),
+        examples=[1],
+    )
+    membership_fingerprint: Optional[str] = Field(
+        default=None,
+        description=(
+            "The membership the Keep was recorded against. Adding a member "
+            "later changes this, no dismissal matches, and the stack returns to "
+            "the list. Absent when clearing. Example: "
+            '`"6f1c9a2b4d8e70153c9a2b4d8e701534"`.'
+        ),
+        examples=["6f1c9a2b4d8e70153c9a2b4d8e701534"],
+    )
+    member_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Members at the time of the Keep, for the audit trail. Absent when "
+            "clearing. Example: `12`."
+        ),
+        examples=[12],
+    )
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -1904,5 +2245,223 @@ def create_router(server) -> APIRouter:
             operation_batch_id=request_model.operation_batch_id,
         )
         return report.as_dict()
+
+    # ── Mixed stacks (design D5 / B5) ───────────────────────────────────────
+
+    @router.get(
+        "/dedup/mixed-stacks",
+        summary="Live stacks whose members do not all match",
+        description=(
+            "Lists **mixed stacks**: live stacks whose members do not form one "
+            "connected cluster at the given similarity threshold, measured with "
+            "the same 64-bit dHash Hamming distance and the same "
+            "connected-components test the near tier uses.\n\n"
+            "**Components, not the worst pair.** A legitimate burst chains "
+            "A~B~C, so its ends can be far apart while every step is tight; "
+            "condemning it on the worst pair would flag exactly the stacks a "
+            "user most deliberately made. What is reported instead is whether "
+            "the members hang together at all: how many clusters there are, how "
+            "big each one is, which members are joined to nothing "
+            "(`stranded_picture_ids`), and the weakest edge that survives.\n\n"
+            "**Bound to the threshold, never to a constant.** The same stack is "
+            "mixed at `0.90` and one clean cluster at `0.65`; pass the queue's "
+            "own slider value and the list follows it.\n\n"
+            "Ranked by how little holds each stack together - stranded members "
+            "descending, then component count descending, then weakest edge "
+            "ascending - so the clearest mistakes are first. Read-only: nothing "
+            "here splits, unstacks or marks anything."
+        ),
+        response_model=MixedStacksResponse,
+    )
+    def get_mixed_stacks(
+        threshold: float = Query(
+            default=DEFAULT_THRESHOLD,
+            ge=MIN_THRESHOLD,
+            le=MAX_THRESHOLD,
+            description=(
+                "Similarity at which members must connect. The queue's own "
+                "threshold - pass the slider value, do not hardcode it. "
+                "Example: `0.9`."
+            ),
+            examples=[0.9],
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+            description=(
+                "Rows to skip; follow the previous page's `next_offset`. Plain "
+                "offset paging is correct here (unlike the queue's keyset "
+                "cursor): this list is tens of rows, not thousands, and is not "
+                "being decided out from under the client. Example: `0`."
+            ),
+            examples=[0],
+        ),
+        limit: int = Query(
+            default=MIXED_STACK_PAGE_SIZE,
+            ge=1,
+            le=MAX_MIXED_STACK_PAGE_SIZE,
+            description=(
+                f"Rows per page, at most {MAX_MIXED_STACK_PAGE_SIZE}. Example: `20`."
+            ),
+            examples=[20],
+        ),
+        include_kept: bool = Query(
+            default=False,
+            description=(
+                "Include stacks the user pressed **Keep** on, each marked "
+                "`kept: true`. Off by default, because the point of Keep is "
+                "that the row leaves the list; `kept_total` is reported either "
+                "way. Example: `false`."
+            ),
+            examples=[False],
+        ),
+    ):
+        return mixed_stack_service.list_mixed_stacks(
+            server.vault, threshold, offset, limit, include_kept
+        )
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/split",
+        summary="Split the stranded member(s) off a mixed stack",
+        description=(
+            "Removes the pictures that match nothing else in the stack, leaving "
+            "the cluster that does hang together. The removed pictures become "
+            "loose; nothing is deleted and no file moves.\n\n"
+            "Recorded as **one** operation, so a single `Ctrl+Z` puts every "
+            "picture back in its original stack at its original position - the "
+            "same undo contract the dedup verdicts carry. The response's "
+            "`batch_id` is the `POST /operations/batches/{batch_id}/undo` "
+            "handle.\n\n"
+            "If the split would leave a stack of one, the last member is freed "
+            "too and the stack row goes; the response says so in "
+            "`stack_dissolved` rather than leaving the client to infer it."
+        ),
+        response_model=MixedStackActionResponse,
+        responses={
+            400: {
+                "description": (
+                    "The stack has no live members, the request named none of "
+                    "them, or `picture_ids` was omitted and no member is "
+                    "stranded at `threshold` - so there is nothing to split."
+                )
+            }
+        },
+    )
+    def post_mixed_stack_split(
+        request: Request,
+        stack_id: int,
+        payload: Optional[MixedStackSplitRequestModel] = Body(default=None),
+    ):
+        # §21 origin discipline: actor / source / origin_client_id are read from
+        # the request HERE, on the request's own task, and passed down
+        # explicitly - the contextvar is dead on the DB worker thread.
+        request_model = payload or MixedStackSplitRequestModel()
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
+        try:
+            return mixed_stack_service.split_stranded(
+                server.vault,
+                stack_id,
+                request_model.picture_ids,
+                request_model.threshold,
+                _batch_id(request_model.batch_id) or header_batch_id,
+                **context,
+            )
+        except MixedStackError as exc:
+            logger.info("[mixed-stacks] split of stack %s rejected: %s", stack_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/unstack",
+        summary="Dissolve a mixed stack",
+        description=(
+            "Frees every member of the stack and drops the stack itself. The "
+            "outcome for a stack with no majority cluster - where there is no "
+            "coherent group left once the strangers go.\n\n"
+            "Recorded as **one** operation, so a single `Ctrl+Z` restacks every "
+            "picture at its original position and recreates the stack under its "
+            "original id. Nothing is deleted and no file moves: a stack is a "
+            "grouping row plus a cover pointer."
+        ),
+        response_model=MixedStackActionResponse,
+        responses={
+            400: {"description": "The stack has no live members."},
+        },
+    )
+    def post_mixed_stack_unstack(
+        request: Request,
+        stack_id: int,
+        payload: Optional[MixedStackUnstackRequestModel] = Body(default=None),
+    ):
+        # §21 origin discipline, read in the handler - see post_mixed_stack_split.
+        request_model = payload or MixedStackUnstackRequestModel()
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
+        try:
+            return mixed_stack_service.unstack(
+                server.vault,
+                stack_id,
+                _batch_id(request_model.batch_id) or header_batch_id,
+                **context,
+            )
+        except MixedStackError as exc:
+            logger.info(
+                "[mixed-stacks] unstack of stack %s rejected: %s", stack_id, exc
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/keep",
+        summary="Keep a mixed stack as it is",
+        description=(
+            "Records that this stack is fine and should stop being listed. "
+            "Durable and server-side.\n\n"
+            "**Keyed on the stack's membership, not just its id.** The "
+            "dismissal stores the `membership_fingerprint` of the members that "
+            "were approved, so adding a member later produces a fingerprint no "
+            "dismissal matches and the stack returns to the list - the user "
+            "approved *these* pictures together, not the stack forever. "
+            "Removing that member again restores the dismissal rather than "
+            "asking twice.\n\n"
+            "Idempotent: pressing Keep on an unchanged stack returns "
+            "`created: false` and writes nothing. This changes no picture, so "
+            "it is not an undoable operation - `DELETE` the same path to clear "
+            "it."
+        ),
+        response_model=MixedStackKeepResponse,
+        responses={
+            400: {"description": "The stack has no live members."},
+        },
+    )
+    def post_mixed_stack_keep(request: Request, stack_id: int):
+        # Only `actor` is used - the dismissal changes no picture facet, so
+        # there is no WS announcement and no operation-log row to originate.
+        context = operation_log_service.request_context(request)
+        try:
+            return mixed_stack_service.dismiss_stack(
+                server.vault, stack_id, context.get("actor")
+            )
+        except MixedStackError as exc:
+            logger.info("[mixed-stacks] keep of stack %s rejected: %s", stack_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete(
+        "/dedup/mixed-stacks/{stack_id}/keep",
+        summary="Undo a Keep",
+        description=(
+            "Clears every `Keep` on this stack, whatever membership each was "
+            "made at, so the stack is listed again if it is still mixed. The "
+            "way back from a mis-pressed Keep.\n\n"
+            "Every fingerprint is cleared rather than only the current one: a "
+            "dismissal made at an older membership would otherwise re-hide the "
+            "stack the moment an unrelated membership change was undone, and a "
+            "Keep the user has explicitly retracted must not come back on its "
+            "own. Idempotent - clearing a stack that was never kept returns "
+            "`removed: 0`."
+        ),
+        response_model=MixedStackKeepResponse,
+    )
+    def delete_mixed_stack_keep(stack_id: int):
+        return mixed_stack_service.undismiss_stack(server.vault, stack_id)
 
     return router

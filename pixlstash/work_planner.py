@@ -64,6 +64,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
         from pixlstash.tasks.missing_pixel_sha_finder import MissingPixelShaFinder
         from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
+        from pixlstash.tasks.missing_stack_cohesion_finder import (
+            MissingStackCohesionFinder,
+        )
 
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -134,6 +137,9 @@ class WorkPlanner:
                 database=database,
             ),
             TaskType.DEDUP_SCAN: DedupScanFinder(
+                database=database,
+            ),
+            TaskType.STACK_COHESION: MissingStackCohesionFinder(
                 database=database,
             ),
         }
