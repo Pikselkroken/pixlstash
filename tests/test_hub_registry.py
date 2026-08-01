@@ -181,7 +181,7 @@ class TestAttachAndList:
         registry.attach(folder)
 
         users = hub.connection.execute("SELECT COUNT(*) FROM user").fetchone()[0]
-        tokens = hub.connection.execute("SELECT COUNT(*) FROM user_token").fetchone()[0]
+        tokens = hub.connection.execute("SELECT COUNT(*) FROM usertoken").fetchone()[0]
         assert (users, tokens) == (0, 0)
 
     def test_attach_does_not_write_to_the_foreign_vault(self, registry, tmp_path):

@@ -13,6 +13,7 @@ from pixlstash.hub.db import (
     check_file_mode,
     default_hub_path,
 )
+from pixlstash.hub.engine import HubEngine
 from pixlstash.hub.registry import (
     ActiveLibraryError,
     Library,
@@ -30,6 +31,7 @@ __all__ = [
     "ActiveLibraryError",
     "CURRENT_SCHEMA_VERSION",
     "HubDatabase",
+    "HubEngine",
     "HubPermissionError",
     "HubSchemaTooNewError",
     "Library",

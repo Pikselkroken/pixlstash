@@ -39,9 +39,21 @@ CURRENT_SCHEMA_VERSION = 1
 
 
 # Identity plus the per-user preference and machine/deployment columns that move
-# out of the vault's ``user`` table (multi-library plan §5). Column names match
-# the vault's ``User`` model exactly so the first-run migration is a copy, not a
-# mapping.
+# out of the vault's ``user`` table (multi-library plan §5).
+#
+# **The table name and column set match the vault's ``User`` SQLModel exactly.**
+# That is load-bearing, not cosmetic: :class:`pixlstash.hub.engine.HubEngine`
+# hands :class:`~pixlstash.auth.AuthService` SQLModel sessions bound to this
+# file, so identity moves to the hub by re-pointing one constructor argument
+# rather than by rewriting 23 call sites against a second data access style.
+# A column the model declares but this table lacks would fail every
+# ``SELECT user.*``.
+#
+# The five library-scoped columns at the end (similarity_character,
+# stack_strictness, smart_score_penalised_tags, hidden_tags, apply_tag_filter)
+# belong to the vault's ``library_settings`` table by §5 and are *not* read from
+# here. They exist only so the shared model maps cleanly, and they come out in a
+# later hub schema version once ``library_settings`` is the live source.
 _V1_USER = """
 CREATE TABLE IF NOT EXISTS user (
     id                          INTEGER PRIMARY KEY,
@@ -81,7 +93,15 @@ CREATE TABLE IF NOT EXISTS user (
     tagger_settings             TEXT,
     check_for_updates           INTEGER,
     embed_watermark             INTEGER,
-    watermark_image             BLOB
+    watermark_image             BLOB,
+
+    -- Library-scoped by §5; present only so the shared ``User`` model maps.
+    -- Never read from the hub; the vault's library_settings row owns them.
+    similarity_character        INTEGER,
+    stack_strictness            REAL,
+    smart_score_penalised_tags  TEXT,
+    hidden_tags                 TEXT,
+    apply_tag_filter            INTEGER
 )
 """
 
@@ -93,8 +113,11 @@ _V1_USER_USERNAME_INDEX = (
 # an owner/ALL-scope token, valid regardless of which library is active; a set
 # library_id means a resource-scoped share link, whose resource ids only mean
 # something inside that one library.
+#
+# Named ``usertoken``, not ``user_token``: SQLModel derives the table name from
+# the class, so this is what ``UserToken`` maps to (see the note on _V1_USER).
 _V1_USER_TOKEN = """
-CREATE TABLE IF NOT EXISTS user_token (
+CREATE TABLE IF NOT EXISTS usertoken (
     id                  INTEGER PRIMARY KEY,
     public_id           TEXT UNIQUE,
     user_id             INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
@@ -114,10 +137,10 @@ CREATE TABLE IF NOT EXISTS user_token (
 """
 
 _V1_USER_TOKEN_INDEXES = (
-    "CREATE INDEX IF NOT EXISTS ix_user_token_user_id ON user_token(user_id)",
-    "CREATE INDEX IF NOT EXISTS ix_user_token_library_id ON user_token(library_id)",
-    "CREATE INDEX IF NOT EXISTS ix_user_token_token_hash ON user_token(token_hash)",
-    "CREATE INDEX IF NOT EXISTS ix_user_token_token_prefix ON user_token(token_prefix)",
+    "CREATE INDEX IF NOT EXISTS ix_usertoken_user_id ON usertoken(user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_usertoken_library_id ON usertoken(library_id)",
+    "CREATE INDEX IF NOT EXISTS ix_usertoken_token_hash ON usertoken(token_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_usertoken_token_prefix ON usertoken(token_prefix)",
 )
 
 # The library registry. ``path`` is the resolved (symlinks followed) absolute
