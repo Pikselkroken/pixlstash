@@ -461,8 +461,10 @@ const MIN_ROW_CONTENT_PX = 89;
  * One string for both routes into the refusal (the row's right-click and the
  * key handler), because a rule stated two ways is a rule that drifts.
  */
+// "Tiles", not "pictures": one tile can be a whole existing stack, and the
+// floor counts tiles. A tile is what the user is looking at and what X acts on.
 const STACK_FLOOR_NOTICE =
-  "A stack needs at least two pictures, so this one has to stay in. Keep the group separate instead.";
+  "A stack needs at least two items in this row, so this one has to stay in. Keep the group separate instead.";
 
 /**
  * How long the lock chip stays flashed after a refused Stack.
@@ -973,8 +975,13 @@ async function onStack(group) {
   const size = store.stackSizeFor(group);
   const result = await store.stack(group);
   if (result) {
-    announcement.value = `Stacked ${size} pictures. The cover is kept and nothing is deleted.`;
-    reportPartialStack(result, result.picture_ids?.length ?? size);
+    // The SERVER'S count, never the client estimate: a group that folds in an
+    // existing stack moves every member of it, including the ones the group
+    // never named, so `stackSizeFor` under-reports by exactly the depth the
+    // row could not see.
+    const stacked = result.picture_ids?.length ?? size;
+    announcement.value = `Stacked ${stacked} pictures. The cover is kept and nothing is deleted.`;
+    reportPartialStack(result, stacked);
     return;
   }
   reportVerdictFailure("stack that group", store.error, group);

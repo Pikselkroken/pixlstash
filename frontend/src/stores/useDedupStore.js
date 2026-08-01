@@ -67,7 +67,10 @@ import {
 import {
   suggestedCoverId,
   candidateId,
-  lockedCandidateIds,
+  groupUnits,
+  unitForPictureId,
+  isUnitExcluded,
+  includedUnits,
 } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
@@ -498,33 +501,92 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
+   * A group's units: the things a stack verdict can move independently.
+   *
+   * Recomputed per call rather than cached, because the group objects are
+   * replaced wholesale by every refetch and a cache keyed on a stale object
+   * identity is how the row starts disagreeing with the request.
+   *
+   * @param {Object} group
+   * @returns {Array<Object>}
+   */
+  function unitsFor(group) {
+    return group ? groupUnits(group) : [];
+  }
+
+  /**
+   * The best cover among the units that would end up in the stack.
+   *
+   * **A deck wins over the server's smart-score pick.** Otherwise the default
+   * action silently re-curates a stack the user already made: the verdict folds
+   * the whole stack in, so a loose picture as cover demotes that stack's chosen
+   * leader without anyone asking. The deepest deck wins a tie between two,
+   * because merging into the larger stack re-curates the fewest pictures.
+   *
+   * @param {Object} group
+   * @param {Array<Object>} units
+   * @param {Array<number|string>} excluded - the user's exclusions in force.
+   * @returns {number|string|null}
+   */
+  function pickCoverForUnits(group, units, excluded) {
+    const live = includedUnits(units, excluded);
+    const decks = live.filter((unit) => unit.kind === "deck");
+    if (decks.length) {
+      return decks.reduce((best, unit) =>
+        unit.depth > best.depth ? unit : best,
+      ).coverPictureId;
+    }
+    const candidates = live.flatMap((unit) => unit.candidates);
+    if (!candidates.length) return suggestedCoverId(group);
+    // The server's preselection stands while it is still in the running; the
+    // local formula is the fallback that keeps the label truthful when it is
+    // not (`suggestedCoverId` would otherwise hand back an excluded picture).
+    const served = group?.cover_picture_id;
+    if (
+      served !== undefined &&
+      served !== null &&
+      candidates.some((candidate) => candidateId(candidate) === served)
+    ) {
+      return served;
+    }
+    return suggestedCoverId({ candidates });
+  }
+
+  /**
    * The cover picture id in force for a group: the user's override when they
-   * made one, otherwise the server's preselection.
+   * made one, otherwise the preselection.
+   *
+   * A choice is normalised to its UNIT's cover, so clicking anything that
+   * stands for a deck resolves to that stack's leader — the picture the tile
+   * actually shows, and the only one the server can lead the resulting stack
+   * with.
+   *
    * @param {Object} group
    * @returns {number|null}
    */
   function coverIdFor(group) {
     if (!group) return null;
+    const units = unitsFor(group);
     const chosen = coverChoices.value[group.signature];
-    const locked = lockedCandidateIds(group);
-    if (chosen !== undefined && !locked.includes(chosen)) return chosen;
-    // A locked-out candidate cannot lead a stack it is not in. The server would
-    // move the cover for us and report where it landed, but doing it here keeps
-    // the row's "Cover" label truthful before Stack is ever pressed.
-    if (!locked.length) return suggestedCoverId(group);
-    const stackable = (group.candidates ?? []).filter(
-      (candidate) => !locked.includes(candidateId(candidate)),
-    );
-    if (!stackable.length) return suggestedCoverId(group);
-    return suggestedCoverId({ ...group, candidates: stackable });
+    if (chosen !== undefined) {
+      const unit = unitForPictureId(units, chosen);
+      // A locked-out unit cannot lead a stack it is not in. The server would
+      // move the cover for us and report where it landed, but doing it here
+      // keeps the row's "Cover" label truthful before Stack is ever pressed.
+      if (unit?.stackable) return unit.coverPictureId;
+      if (!unit) return chosen;
+    }
+    return pickCoverForUnits(group, units, []);
   }
 
   /**
    * The ids this group cannot stack, whatever the user asked for: the user's own
-   * exclusions plus every candidate a locked set freezes.
+   * exclusions plus every picture in every unit a locked set freezes.
    *
    * This is what the request sends as `excluded_picture_ids`, so the server never
-   * has to refuse a member the queue already knew was frozen.
+   * has to refuse a member the queue already knew was frozen. It is unit-level
+   * because a locked set freezes a whole stack: one frozen member takes its
+   * deck's whole visible membership out with it.
    *
    * @param {Object} group
    * @returns {Array<number>}
@@ -532,8 +594,26 @@ export const useDedupStore = defineStore("dedup", () => {
   function effectiveExcludedFor(group) {
     if (!group) return [];
     const merged = new Set(excludedFor(group.signature));
-    for (const id of lockedCandidateIds(group)) merged.add(id);
+    for (const unit of unitsFor(group)) {
+      if (unit.stackable) continue;
+      for (const id of unit.pictureIds) merged.add(id);
+    }
     return [...merged];
+  }
+
+  /**
+   * How many UNITS the Stack button would collect.
+   *
+   * The floor and the button's own count are both this number, not a picture
+   * count: the server folds a stack as one thing, so two units is the smallest
+   * group with a decision left in it even when they are 4 and 6 pictures deep.
+   *
+   * @param {Object} group
+   * @returns {number}
+   */
+  function includedUnitCountFor(group) {
+    if (!group) return 0;
+    return includedUnits(unitsFor(group), excludedFor(group.signature)).length;
   }
 
   /**
@@ -546,7 +626,14 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * How many of a group's candidates the Stack button would collect.
+   * How many of a group's CANDIDATES the Stack button would collect.
+   *
+   * A picture count over the group's own members, which the announcements use.
+   * It is deliberately not the button's number (that is
+   * {@link includedUnitCountFor}) and it under-reports whenever a deck folds in
+   * a stack member the group never named — which is why the receipt prefers the
+   * server's returned `picture_ids` over this estimate.
+   *
    * @param {Object} group
    * @returns {number}
    */
@@ -565,49 +652,64 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * Include or exclude one candidate.
+   * Include or exclude the UNIT one picture belongs to.
+   *
+   * **The gesture is unit-level, not picture-level.** Excluding one member of an
+   * existing stack was a silent no-op: the backend's `_stack_members` folds in
+   * every member of any stack the group touches, so the rest of that stack
+   * dragged the excluded picture straight back in. A deck therefore goes out
+   * whole, and any of its pictures — matched member or leader — addresses it.
    *
    * Two invariants ride on this, both because `X` is a one-key action with no
    * confirmation:
    *
-   *   * **A stack needs two members.** The server refuses a one-member stack
-   *     outright, so an exclusion that would leave a single included candidate
-   *     is refused here rather than turned into a guaranteed 400 on a Stack the
+   *   * **A stack needs two units.** The server refuses a one-member stack
+   *     outright, so an exclusion that would leave a single included unit is
+   *     refused here rather than turned into a guaranteed 400 on a Stack the
    *     row still offers. The floor is {@link MIN_STACK_MEMBERS} *included*
-   *     candidates, not one: a group of two therefore accepts no exclusion at
-   *     all, and the way to reject one of its members is Keep separate.
+   *     units, not pictures: a group of two units therefore accepts no
+   *     exclusion at all, and the way to reject one of them is Keep separate.
    *   * Excluding the cover would leave the stack with no cover, and the server
-   *     rejects a cover that is not an included member. The cover moves to the
-   *     best remaining included candidate instead, using the same formula that
-   *     preselected it.
+   *     rejects a cover that is not in the resulting stack. The cover moves to
+   *     the best remaining included unit instead, by the same rule that
+   *     preselected it — so it lands on a surviving deck's leader rather than
+   *     re-curating that stack.
    *
    * @param {Object} group
-   * @param {number} pictureId
+   * @param {number} pictureId - any picture of the unit to toggle.
    * @returns {boolean|string} `true` when the toggle was applied, `false` when
-   *   the floor refused it, and `"locked"` when the candidate is the server's
+   *   the floor refused it, and `"locked"` when the unit is the server's
    *   exclusion rather than the user's. Each refusal is narrated by the caller:
    *   a one-key action that silently does nothing is a key the user stops
    *   trusting, and the two refusals need different sentences.
    */
   function toggleExcluded(group, pictureId) {
     if (!group) return false;
-    // A locked-out candidate is the server's exclusion, not the user's, so `X`
+    const units = unitsFor(group);
+    const unit = unitForPictureId(units, pictureId);
+    if (!unit) return false;
+    // A locked-out unit is the server's exclusion, not the user's, so `X`
     // cannot walk it back. Refused here rather than optimistically re-included
     // and then dropped again by the request the row would go on to send.
-    if (lockedCandidateIds(group).includes(pictureId)) return "locked";
+    if (!unit.stackable) return "locked";
     const current = excludedFor(group.signature);
-    const isOut = current.includes(pictureId);
-    if (!isOut && stackSizeFor(group) <= MIN_STACK_MEMBERS) return false;
-    const next = isOut
-      ? current.filter((id) => id !== pictureId)
-      : [...current, pictureId];
+    const isOut = isUnitExcluded(unit, current);
+    if (!isOut && includedUnits(units, current).length <= MIN_STACK_MEMBERS) {
+      return false;
+    }
+    const coverBefore = coverIdFor(group);
+    const ids = new Set(current);
+    for (const id of unit.pictureIds) {
+      if (isOut) ids.delete(id);
+      else ids.add(id);
+    }
+    const next = [...ids];
     exclusions.value = { ...exclusions.value, [group.signature]: next };
-    if (!isOut && coverIdFor(group) === pictureId) {
-      const remaining = (group.candidates ?? []).filter(
-        (c) => !next.includes(candidateId(c)),
-      );
-      const replacement = suggestedCoverId({ candidates: remaining });
-      if (replacement !== null) setCover(group.signature, replacement);
+    if (!isOut && unitForPictureId(units, coverBefore) === unit) {
+      const replacement = pickCoverForUnits(group, units, next);
+      if (replacement !== null && replacement !== undefined) {
+        setCover(group.signature, replacement);
+      }
     }
     return true;
   }
@@ -622,7 +724,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * @returns {boolean}
    */
   function isAtStackFloor(group) {
-    return Boolean(group) && stackSizeFor(group) <= MIN_STACK_MEMBERS;
+    return Boolean(group) && includedUnitCountFor(group) <= MIN_STACK_MEMBERS;
   }
 
   /**
@@ -2022,6 +2124,8 @@ export const useDedupStore = defineStore("dedup", () => {
     excludedFor,
     effectiveExcludedFor,
     stackSizeFor,
+    unitsFor,
+    includedUnitCountFor,
     isAtStackFloor,
     setCover,
     toggleExcluded,

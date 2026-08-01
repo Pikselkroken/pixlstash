@@ -16,6 +16,8 @@ import {
   autoStackExact,
   scopeBody,
   policyBody,
+  listStackMembers,
+  MAX_STACK_MEMBER_PAGE,
   GLOBAL_SCOPE,
 } from "./dedup";
 
@@ -336,6 +338,43 @@ describe("api/dedup — bulk auto-stack", () => {
       scope: { scope_type: "character", scope_id: "2" },
       dry_run: false,
       limit: 500,
+    });
+  });
+});
+
+describe("api/dedup — the deck expansion's lazy members", () => {
+  // The eager half (each stack's real member count and its leader) rides on the
+  // queue row; this is the only route that returns the members themselves, and
+  // it exists so a 40-member stack is not inlined behind a row with room for
+  // none.
+  it("reads one page of a stack's members by plain offset", async () => {
+    apiClient.get.mockResolvedValue({
+      data: { stack_id: 12, member_count: 4, next_offset: null, members: [] },
+    });
+    const result = await listStackMembers(12, { offset: 50 });
+    expect(apiClient.get).toHaveBeenCalledWith("/dedup/stacks/12/members", {
+      params: { offset: 50 },
+    });
+    expect(result.member_count).toBe(4);
+  });
+
+  // Omitting the limit leaves the server's own default in force rather than the
+  // client restating it.
+  it("sends no limit unless one was asked for", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    await listStackMembers(7);
+    expect(apiClient.get).toHaveBeenCalledWith("/dedup/stacks/7/members", {
+      params: { offset: 0 },
+    });
+  });
+
+  // The server caps the page; asking past the cap is a 422, so the client
+  // clamps rather than discovering it at runtime.
+  it("clamps an over-large page to the server's ceiling", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    await listStackMembers(7, { limit: 5000 });
+    expect(apiClient.get).toHaveBeenCalledWith("/dedup/stacks/7/members", {
+      params: { offset: 0, limit: MAX_STACK_MEMBER_PAGE },
     });
   });
 });

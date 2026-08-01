@@ -2238,3 +2238,213 @@ describe("locked-set candidates", () => {
     expect(store.effectiveExcludedFor(g)).toEqual([]);
   });
 });
+
+// --- Units: the queue's cover, exclusion and floor all move whole stacks -----
+//
+// `_stack_members` folds in every member of any stack the group touches, so the
+// picture-level gestures the queue used to offer could not be honoured:
+// excluding one member of an existing stack was a silent no-op, and choosing
+// one as cover silently re-covered that whole stack in the library.
+
+/**
+ * A group naming ONE member of a live 4-stack, plus two loose pictures.
+ *
+ * The stack's leader (501) is deliberately NOT a candidate: on a real library
+ * one stack-touching group in three is shaped exactly like this.
+ */
+function stackGroupFixture(over = {}) {
+  return {
+    signature: "sg",
+    tier: "near",
+    confidence: 0.9,
+    member_count: 3,
+    // The server's smart-score pick is a LOOSE picture, which is what makes the
+    // deck-wins rule visible: honouring it would re-curate stack 12.
+    cover_picture_id: 700,
+    why: [],
+    candidates: [
+      { picture_id: 503, stack_id: 12, width: 1000, height: 1000 },
+      { picture_id: 700, width: 6000, height: 4000 },
+      { picture_id: 701, width: 4000, height: 3000 },
+    ],
+    stacks: {
+      12: {
+        stack_id: 12,
+        member_count: 4,
+        leader_picture_id: 501,
+        leader_thumbnail_version: "1024x768",
+        matched_picture_ids: [503],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+    ...over,
+  };
+}
+
+describe("useDedupStore — the cover default with a deck present", () => {
+  // The whole point: the default verdict must not silently re-curate a stack
+  // the user already made. The server's own preselection (a loose picture here)
+  // loses to the deck.
+  it("preselects the deck's LEADER over the server's smart-score pick", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(g.cover_picture_id).toBe(700);
+    expect(store.coverIdFor(g)).toBe(501);
+  });
+
+  // With nothing stacked the rule is unchanged: the server's preselection wins.
+  it("leaves an all-loose group's preselection alone", async () => {
+    servePage([group("g1", 3, { cover_picture_id: 102 })], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(102);
+  });
+
+  // Merging into the larger stack re-curates the fewest pictures.
+  it("prefers the deeper deck when a group holds two", async () => {
+    servePage(
+      [
+        stackGroupFixture({
+          candidates: [
+            { picture_id: 503, stack_id: 12 },
+            { picture_id: 601, stack_id: 13 },
+          ],
+          stacks: {
+            12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+            13: { stack_id: 13, member_count: 9, leader_picture_id: 600 },
+          },
+        }),
+      ],
+      { total: 1 },
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(600);
+  });
+
+  // A click anywhere on the deck resolves to the leader, because that is the
+  // only picture the server can lead the resulting stack with.
+  it("normalises a choice on a matched member to its stack's leader", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 700);
+    expect(store.coverIdFor(g)).toBe(700);
+    store.setCover(g.signature, 503);
+    expect(store.coverIdFor(g)).toBe(501);
+  });
+
+  // A frozen deck cannot lead a stack it is not in, so the label stays truthful
+  // before Stack is ever pressed.
+  it("skips a frozen deck and falls back to the loose pictures", async () => {
+    const frozen = stackGroupFixture();
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(700);
+  });
+});
+
+describe("useDedupStore — exclusion is a whole-unit gesture", () => {
+  // Excluding one member of an existing stack was a silent no-op: the rest of
+  // its stack dragged it straight back in. The deck goes out entire instead.
+  it("takes every picture of a deck out at once", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.toggleExcluded(g, 503)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([503]);
+    expect(store.includedUnitCountFor(g)).toBe(2);
+    // And back in as one gesture.
+    expect(store.toggleExcluded(g, 503)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([]);
+  });
+
+  // The leader is usually not a group member, so it has to address the deck
+  // too — that is what the row emits when the deck's tile is right-clicked.
+  it("addresses a deck by its leader as well as by its members", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.toggleExcluded(g, 501)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([503]);
+  });
+
+  // The floor is two UNITS, not two pictures: the server folds a stack as one
+  // thing, so a deck and a loose picture is the smallest group with a decision
+  // left in it however deep the deck runs.
+  it("counts the floor in units", async () => {
+    const two = stackGroupFixture({
+      candidates: [{ picture_id: 503, stack_id: 12 }, { picture_id: 700 }],
+    });
+    servePage([two], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    // Five pictures in play, but only two units — so nothing may be excluded.
+    expect(store.stackSizeFor(g)).toBe(2);
+    expect(store.includedUnitCountFor(g)).toBe(2);
+    expect(store.isAtStackFloor(g)).toBe(true);
+    expect(store.toggleExcluded(g, 503)).toBe(false);
+    expect(store.toggleExcluded(g, 700)).toBe(false);
+    expect(store.excludedFor("sg")).toEqual([]);
+  });
+
+  // The cover moves to the surviving DECK, not to the best loose picture:
+  // otherwise excluding one stack quietly re-curates the other.
+  it("moves the cover onto the remaining deck when its unit goes out", async () => {
+    servePage(
+      [
+        stackGroupFixture({
+          candidates: [
+            { picture_id: 503, stack_id: 12 },
+            { picture_id: 601, stack_id: 13 },
+            { picture_id: 700, width: 6000, height: 4000 },
+          ],
+          stacks: {
+            12: { stack_id: 12, member_count: 9, leader_picture_id: 501 },
+            13: { stack_id: 13, member_count: 4, leader_picture_id: 600 },
+          },
+        }),
+      ],
+      { total: 1 },
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.coverIdFor(g)).toBe(501);
+    expect(store.toggleExcluded(g, 501)).toBe(true);
+    expect(store.coverIdFor(g)).toBe(600);
+  });
+
+  // A locked set freezes a WHOLE stack, including members the group never
+  // named, so the request must carry every visible member of that deck.
+  it("sends a frozen deck's whole visible membership as excluded", async () => {
+    const frozen = stackGroupFixture({
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+        { picture_id: 701 },
+      ],
+    });
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.effectiveExcludedFor(g).sort()).toEqual([503, 504]);
+    // And `X` cannot walk the server's own exclusion back.
+    expect(store.toggleExcluded(g, 503)).toBe("locked");
+    expect(store.toggleExcluded(g, 501)).toBe("locked");
+  });
+});

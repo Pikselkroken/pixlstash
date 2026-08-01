@@ -48,7 +48,12 @@
 //   6. **`autoStackExact` defaults to `dry_run: true`.** The dry run returns the
 //      counts the consent dialog shows and writes nothing; the real run returns
 //      the single `batch_id` that makes N stacks reverse with one undo.
-//   7. **Keep-separate records no operation.** It changes no reversible picture
+//   7. **A group's stack truth is eager, its members are lazy.** Each group
+//      carries a `stacks` block (real member count + leader per existing stack
+//      it touches), which is everything the queue needs to draw a deck;
+//      {@link listStackMembers} fetches the members themselves only when an
+//      expansion is opened.
+//   8. **Keep-separate records no operation.** It changes no reversible picture
 //      facet, so there is nothing for undo to restore and the backend
 //      deliberately writes no operation row. Callers must not wait for a receipt
 //      that will never arrive; the way back is {@link reopenGroup}.
@@ -222,6 +227,59 @@ export async function listGroups({
     // server does not know, so the filter would be silently dropped.
     paramsSerializer: { indexes: null },
   });
+  return res.data;
+}
+
+/**
+ * The most members one expansion page may ask for.
+ *
+ * The server's own ceiling (`MAX_STACK_MEMBER_PAGE_SIZE`), restated here so a
+ * caller sizing a page never has to guess and then take a 422.
+ */
+export const MAX_STACK_MEMBER_PAGE = 200;
+
+/**
+ * Read one page of an existing stack's members, leader first.
+ *
+ * The **lazy half** of the queue's stack contract: a queue row already carries
+ * each stack's real `member_count` and its leader in `groups[].stacks`, which
+ * is everything the deck needs to draw. The members themselves are fetched only
+ * when the user opens an expansion, because inlining them would put a
+ * 40-member stack's worth of tiles behind a row that has room for none.
+ *
+ * Paged with a plain `offset`, not the queue's keyset cursor: a stack's
+ * membership is not a live list being decided out from under the client, so the
+ * cursor buys nothing here. Follow `next_offset` and stop when it is null.
+ *
+ * Read-only. Nothing here reorders, promotes or unstacks anything.
+ *
+ * @param {number|string} stackId - the stack to expand.
+ * @param {Object} [options]
+ * @param {number} [options.offset=0] - members to skip, in canonical stack
+ *   order. Use the previous page's `next_offset`.
+ * @param {number} [options.limit] - members per page, at most
+ *   {@link MAX_STACK_MEMBER_PAGE}. Omitted means the server's default (50).
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body:
+ *   `{ stack_id, member_count, leader_picture_id, leader_thumbnail_version,
+ *   stackable, blocked_by_sets, offset, limit, next_offset, members }`. Each
+ *   member carries every field a queue candidate does, plus `position` (its
+ *   rank across the WHOLE stack, so it survives paging) and `is_leader`.
+ *   Answers 404 when no live member carries the id — the stack was dissolved
+ *   or scrapheaped — rather than an empty stack that appears to exist.
+ */
+export async function listStackMembers(
+  stackId,
+  { offset = 0, limit, baseUrl = "" } = {},
+) {
+  const params = { offset };
+  if (Number.isFinite(limit)) {
+    params.limit = Math.min(limit, MAX_STACK_MEMBER_PAGE);
+  }
+  const res = await apiClient.get(
+    dedupUrl(`/stacks/${stackId}/members`, baseUrl),
+    { params },
+  );
   return res.data;
 }
 

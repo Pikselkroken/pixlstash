@@ -204,6 +204,305 @@ export function lockedCandidateIds(group) {
     .filter((id) => id !== null);
 }
 
+// --- Units: what a stack verdict can actually move ---------------------------
+//
+// The queue used to render one tile per picture, but the backend folds whole
+// STACKS (`_stack_members` in `dedup_verdict_service.py`), so a row offering to
+// exclude one member of an existing stack, or to make one member the cover, was
+// offering a gesture the server cannot honour.
+//
+// A **unit** is the smallest thing a verdict moves independently:
+//
+//   * a **loose picture** — `stack_id IS NULL`, its own unit;
+//   * a **deck** — every candidate sharing one non-null `stack_id`, collapsed.
+//
+// A deck stands for the ENTIRE existing stack, not the members that happen to
+// be in the group: `stacks[id].member_count` is the stack's live depth and is
+// routinely larger than the number of matched candidates, so a group's true
+// picture total can exceed `candidates.length`. Its face is the stack's leader,
+// which is frequently NOT one of the matched members — that is the common case,
+// and it is deliberately the picture shown, because a cover choice on a deck
+// resolves to the leader.
+
+/**
+ * A candidate's stack id, normalised.
+ *
+ * @param {Object} candidate
+ * @returns {number|string|null} null when the picture is not stacked.
+ */
+export function candidateStackId(candidate) {
+  const raw = candidate?.stack_id ?? candidate?.stackId;
+  if (raw === null || raw === undefined || raw === "") return null;
+  return raw;
+}
+
+/**
+ * @typedef {Object} DedupUnit
+ * @property {"picture"|"deck"} kind
+ * @property {string} key - stable `v-for` key.
+ * @property {number|string|null} stackId
+ * @property {number|string|null} coverPictureId - the picture a cover choice on
+ *   this unit resolves to: a deck's stack leader, or the loose picture itself.
+ * @property {number} depth - how many pictures the unit stands for.
+ * @property {number} matchedCount - how many of them are in this group.
+ * @property {Array<Object>} candidates - the group candidates it collapses.
+ * @property {Array<number|string>} pictureIds - their ids.
+ * @property {boolean} stackable - false when a locked set freezes ANY member.
+ * @property {Array<Object>} blockedBySets
+ * @property {string} thumbnailVersion - the face's thumbnail cache-buster.
+ * @property {Object|null} face - the candidate the face is drawn from, when the
+ *   group carries it. Null for a deck whose leader is not a group member, which
+ *   is why the per-picture overlays are conditional on it.
+ */
+
+/**
+ * Build a loose picture's unit.
+ * @param {Object} candidate
+ * @returns {DedupUnit}
+ */
+function looseUnit(candidate) {
+  const id = candidateId(candidate);
+  return {
+    kind: "picture",
+    key: `p:${id}`,
+    stackId: null,
+    coverPictureId: id,
+    depth: 1,
+    matchedCount: 1,
+    candidates: [candidate],
+    pictureIds: [id],
+    stackable: candidateStackable(candidate),
+    blockedBySets: candidateBlockedBySets(candidate),
+    thumbnailVersion: String(candidate?.thumbnail_version ?? ""),
+    face: candidate,
+  };
+}
+
+/**
+ * Partition a group's candidates into units, in candidate order.
+ *
+ * A stack's first candidate holds the deck's place in the strip; the rest of
+ * that stack's candidates fold into it rather than taking a slot of their own.
+ *
+ * Degrades on a backend that serves no `stacks` block: candidates are still
+ * collapsed by `stack_id`, and a stack the payload cannot size falls back to
+ * the number of its members that are in the group. A unit that ends up standing
+ * for one picture is a `picture`, not a one-deep deck.
+ *
+ * @param {Object} group - a queue group.
+ * @returns {Array<DedupUnit>}
+ */
+export function groupUnits(group) {
+  const candidates = group?.candidates ?? [];
+  const stacks = group?.stacks ?? {};
+  const units = [];
+  const byStack = new Map();
+  for (const candidate of candidates) {
+    const stackId = candidateStackId(candidate);
+    if (stackId === null) {
+      units.push(looseUnit(candidate));
+      continue;
+    }
+    const key = String(stackId);
+    const existing = byStack.get(key);
+    if (existing) {
+      existing.candidates.push(candidate);
+      existing.pictureIds.push(candidateId(candidate));
+      continue;
+    }
+    const unit = {
+      kind: "deck",
+      key: `s:${key}`,
+      stackId,
+      coverPictureId: null,
+      depth: 0,
+      matchedCount: 0,
+      candidates: [candidate],
+      pictureIds: [candidateId(candidate)],
+      stackable: true,
+      blockedBySets: [],
+      thumbnailVersion: "",
+      face: null,
+    };
+    byStack.set(key, unit);
+    units.push(unit);
+  }
+  for (const [key, unit] of byStack)
+    finaliseDeck(unit, stacks[key], candidates);
+  return units;
+}
+
+/**
+ * Fill in a deck's depth, face and lock rollup from the group's `stacks` block.
+ *
+ * @param {DedupUnit} unit
+ * @param {Object} [entry] - the group's `stacks[stack_id]` entry, when served.
+ * @param {Array<Object>} candidates - the whole group, because a deck's leader
+ *   may sit anywhere in it (or nowhere at all).
+ */
+function finaliseDeck(unit, entry, candidates) {
+  unit.matchedCount = unit.pictureIds.length;
+  const served = Number(entry?.member_count);
+  unit.depth = Math.max(
+    Number.isFinite(served) ? served : 0,
+    unit.matchedCount,
+  );
+  const leaderId = entry?.leader_picture_id ?? unit.pictureIds[0] ?? null;
+  unit.coverPictureId = leaderId;
+  unit.face =
+    candidates.find((candidate) => candidateId(candidate) === leaderId) ?? null;
+  unit.thumbnailVersion = String(
+    entry?.leader_thumbnail_version ?? unit.face?.thumbnail_version ?? "",
+  );
+  // The entry IS the server's unit-level rollup (it already accounts for a
+  // locked sibling OUTSIDE the group). The per-candidate check is the belt:
+  // a payload that predates the rollup still blocks a deck whose visible
+  // member is frozen, rather than sending it into a guaranteed refusal.
+  unit.stackable =
+    entry?.stackable !== false && unit.candidates.every(candidateStackable);
+  const sets = Array.isArray(entry?.blocked_by_sets)
+    ? entry.blocked_by_sets
+    : [];
+  unit.blockedBySets = sets.length
+    ? sets
+    : unit.candidates.flatMap(candidateBlockedBySets);
+  // A stack has two or more members by definition; anything that sizes to one
+  // is a payload that could not describe a stack, and it renders as a picture.
+  if (unit.depth < 2) {
+    unit.kind = "picture";
+    unit.depth = 1;
+  }
+}
+
+/**
+ * The unit one picture id belongs to.
+ *
+ * A deck answers to any of its matched members AND to its leader, because the
+ * leader is what a cover choice on the deck resolves to and it is frequently
+ * not a group member at all.
+ *
+ * @param {Array<DedupUnit>} units
+ * @param {number|string} pictureId
+ * @returns {DedupUnit|null}
+ */
+export function unitForPictureId(units, pictureId) {
+  if (pictureId === null || pictureId === undefined) return null;
+  for (const unit of units ?? []) {
+    if (unit.pictureIds.includes(pictureId)) return unit;
+    if (unit.coverPictureId === pictureId) return unit;
+  }
+  return null;
+}
+
+/**
+ * Whether every picture a unit stands for is currently excluded.
+ *
+ * Exclusion is a whole-unit gesture, so a partially-excluded deck is a state
+ * the row never produces; reading it as "still in" is the safe direction.
+ *
+ * @param {DedupUnit} unit
+ * @param {Array<number|string>} excludedIds
+ * @returns {boolean}
+ */
+export function isUnitExcluded(unit, excludedIds) {
+  const ids = unit?.pictureIds ?? [];
+  if (!ids.length) return false;
+  return ids.every((id) => (excludedIds ?? []).includes(id));
+}
+
+/**
+ * The units a Stack verdict would actually collect.
+ * @param {Array<DedupUnit>} units
+ * @param {Array<number|string>} excludedIds
+ * @returns {Array<DedupUnit>}
+ */
+export function includedUnits(units, excludedIds) {
+  return (units ?? []).filter(
+    (unit) => unit.stackable && !isUnitExcluded(unit, excludedIds),
+  );
+}
+
+/**
+ * How a group is composed, for the row header: `Stack of 5 + 1 picture`.
+ *
+ * Decks lead, in strip order, then the loose pictures as one count — the shape
+ * the spec's examples take, and the one that stays readable when a group holds
+ * two stacks and three strays. A group with no deck keeps the plain `N
+ * pictures` the header has always shown.
+ *
+ * @param {Array<DedupUnit>} units
+ * @returns {string}
+ */
+export function unitCompositionLabel(units) {
+  const list = units ?? [];
+  const decks = list.filter((unit) => unit.kind === "deck");
+  const loose = list.length - decks.length;
+  if (!decks.length) return `${loose} ${loose === 1 ? "picture" : "pictures"}`;
+  const parts = decks.map((deck) => `stack of ${deck.depth}`);
+  if (loose) parts.push(`${loose} ${loose === 1 ? "picture" : "pictures"}`);
+  const sentence = parts.join(" + ");
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
+/**
+ * What the Stack button is about to do, at three widths.
+ *
+ * The outcome, not the gesture: the three shapes match the backend's own
+ * `SweepOutcome`, and the button is the last text a user working at speed reads
+ * before committing, because expansion is opt-in and they may never open one.
+ *
+ *   | all loose   | `Stack 3`             |
+ *   | deck + loose| `Add 1 to stack of 4` |
+ *   | deck + deck | `Merge 2 stacks`      |
+ *
+ * `degrades` says whether the three differ at all, so a label that cannot
+ * shorten is never given the classes that would hide it under width pressure.
+ *
+ * @param {Array<DedupUnit>} units - the INCLUDED units, exclusions applied.
+ * @returns {{full: string, mid: string, short: string, degrades: boolean}}
+ */
+export function stackVerdictLabel(units) {
+  const list = units ?? [];
+  const decks = list.filter((unit) => unit.kind === "deck");
+  const loose = list.length - decks.length;
+  const plain = `Stack ${list.length}`;
+  if (decks.length >= 2) {
+    const merge = `Merge ${decks.length} stacks`;
+    // Loose pictures fold in alongside the merge, and `Merge 2 stacks` would
+    // move three things while naming two. Rare (11 of 1,726 unresolved groups
+    // on a real library) but it is exactly the lie this labelling exists to
+    // stop, so it is named in full and sheds only under width pressure, where
+    // the header's composition still carries it.
+    if (loose > 0) {
+      return {
+        full: `${merge} + ${loose} ${loose === 1 ? "picture" : "pictures"}`,
+        mid: merge,
+        short: "Merge",
+        degrades: true,
+      };
+    }
+    return same(merge);
+  }
+  if (decks.length === 1 && loose > 0) {
+    return {
+      full: `Add ${loose} to stack of ${decks[0].depth}`,
+      mid: `Add ${loose} to stack`,
+      short: `Add ${loose}`,
+      degrades: true,
+    };
+  }
+  return same(plain);
+}
+
+/**
+ * A label with nothing to shed.
+ * @param {string} text
+ * @returns {{full: string, mid: string, short: string, degrades: boolean}}
+ */
+function same(text) {
+  return { full: text, mid: text, short: text, degrades: false };
+}
+
 /**
  * The largest value of one numeric field across a group's candidates.
  *

@@ -21,6 +21,13 @@ import {
   candidateBlockedBySets,
   lockedCandidateIds,
   RAW_COVER_BONUS,
+  groupUnits,
+  unitForPictureId,
+  isUnitExcluded,
+  includedUnits,
+  unitCompositionLabel,
+  stackVerdictLabel,
+  candidateStackId,
 } from "./dedup";
 
 const candidate = (over = {}) => ({
@@ -351,5 +358,286 @@ describe("verdict-refusal copy", () => {
     ).toBe("Stacked 5; 2 pictures stayed out (locked sets 'A, B').");
     expect(partialStackSentence([], 4)).toBe("");
     expect(partialStackSentence(undefined, 4)).toBe("");
+  });
+});
+
+// --- The unit model ---------------------------------------------------------
+//
+// A stack verdict moves whole STACKS, so the queue's smallest addressable thing
+// is a unit: a loose picture, or a whole existing stack collapsed into one deck.
+// The case that makes this load-bearing rather than tidy is the common one — a
+// group that names ONE member of a four-deep stack, where a client sizing the
+// deck from `candidates` draws a single picture and then silently moves four.
+
+/** A group naming one member of a 4-stack plus two loose pictures. */
+function mixedGroup() {
+  return {
+    signature: "mixed",
+    cover_picture_id: 700,
+    candidates: [
+      { picture_id: 503, stack_id: 12, thumbnail_version: "a" },
+      { picture_id: 700, thumbnail_version: "b" },
+      { picture_id: 701, thumbnail_version: "c" },
+    ],
+    stacks: {
+      12: {
+        stack_id: 12,
+        member_count: 4,
+        leader_picture_id: 501,
+        leader_thumbnail_version: "1024x768",
+        matched_picture_ids: [503],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+  };
+}
+
+describe("groupUnits — the partition", () => {
+  it("reads a candidate's stack id, or null when it has none", () => {
+    expect(candidateStackId({ stack_id: 12 })).toBe(12);
+    expect(candidateStackId({ stackId: 12 })).toBe(12);
+    expect(candidateStackId({ stack_id: null })).toBeNull();
+    expect(candidateStackId({})).toBeNull();
+    expect(candidateStackId(undefined)).toBeNull();
+  });
+
+  // THE case: the group names one member, the deck stands for all four, and
+  // the face is the LEADER, which is not the matched member.
+  it("sizes a deck from the stack's live depth, not from the group's members", () => {
+    const units = groupUnits(mixedGroup());
+    expect(units).toHaveLength(3);
+
+    const [deck, first, second] = units;
+    expect(deck.kind).toBe("deck");
+    expect(deck.stackId).toBe(12);
+    expect(deck.depth).toBe(4);
+    expect(deck.matchedCount).toBe(1);
+    // The face is the leader, which the group never names as a candidate.
+    expect(deck.coverPictureId).toBe(501);
+    expect(deck.face).toBeNull();
+    expect(deck.thumbnailVersion).toBe("1024x768");
+    // Only the matched member is a group candidate the verdict can address.
+    expect(deck.pictureIds).toEqual([503]);
+
+    expect(first.kind).toBe("picture");
+    expect(first.coverPictureId).toBe(700);
+    expect(second.coverPictureId).toBe(701);
+  });
+
+  it("collapses every candidate sharing a stack id into one unit, in place", () => {
+    const group = {
+      candidates: [
+        { picture_id: 1 },
+        { picture_id: 2, stack_id: 9 },
+        { picture_id: 3, stack_id: 9 },
+        { picture_id: 4 },
+      ],
+      stacks: { 9: { stack_id: 9, member_count: 3, leader_picture_id: 2 } },
+    };
+    const units = groupUnits(group);
+    // The stack's FIRST candidate holds its place in the strip; the second
+    // folds in rather than taking a slot of its own.
+    expect(units.map((u) => u.kind)).toEqual(["picture", "deck", "picture"]);
+    expect(units[1].pictureIds).toEqual([2, 3]);
+    expect(units[1].depth).toBe(3);
+    expect(units[1].matchedCount).toBe(2);
+    // The leader IS a candidate here, so the deck can draw its metadata.
+    expect(units[1].face).toEqual({ picture_id: 2, stack_id: 9 });
+  });
+
+  // An older backend serves no `stacks` block. Collapsing by stack_id still
+  // works; the depth degrades to what the group can see rather than to nothing.
+  it("degrades to the matched count when the payload cannot size the stack", () => {
+    const units = groupUnits({
+      candidates: [
+        { picture_id: 2, stack_id: 9 },
+        { picture_id: 3, stack_id: 9 },
+      ],
+    });
+    expect(units).toHaveLength(1);
+    expect(units[0].kind).toBe("deck");
+    expect(units[0].depth).toBe(2);
+    expect(units[0].coverPictureId).toBe(2);
+  });
+
+  // A "stack" the payload sizes at one picture is not a stack; drawing edge
+  // ticks and a count badge for it would be a lie about the library.
+  it("renders a one-deep stack as a plain picture", () => {
+    const units = groupUnits({
+      candidates: [{ picture_id: 2, stack_id: 9 }, { picture_id: 3 }],
+      stacks: { 9: { stack_id: 9, member_count: 1, leader_picture_id: 2 } },
+    });
+    expect(units[0].kind).toBe("picture");
+    expect(units[0].depth).toBe(1);
+  });
+
+  it("survives an empty or absent group", () => {
+    expect(groupUnits(null)).toEqual([]);
+    expect(groupUnits({})).toEqual([]);
+  });
+});
+
+describe("groupUnits — the lock rollup", () => {
+  // A locked set freezes a WHOLE stack, including members outside the group,
+  // so the deck's own `stackable` is the answer even when every visible
+  // candidate says it is free.
+  it("takes the served unit-level rollup over the candidates' own flags", () => {
+    const units = groupUnits({
+      candidates: [{ picture_id: 503, stack_id: 12, stackable: true }],
+      stacks: {
+        12: {
+          stack_id: 12,
+          member_count: 4,
+          leader_picture_id: 501,
+          stackable: false,
+          blocked_by_sets: [{ id: 7, name: "Portfolio" }],
+        },
+      },
+    });
+    expect(units[0].stackable).toBe(false);
+    expect(units[0].blockedBySets).toEqual([{ id: 7, name: "Portfolio" }]);
+  });
+
+  // The belt: a payload that predates the rollup still blocks a deck whose
+  // visible member is frozen, rather than sending it into a refusal.
+  it("still blocks a deck whose visible member is frozen", () => {
+    const units = groupUnits({
+      candidates: [
+        {
+          picture_id: 503,
+          stack_id: 12,
+          stackable: false,
+          blocked_by_sets: [{ id: 3, name: "Prints" }],
+        },
+      ],
+      stacks: { 12: { stack_id: 12, member_count: 4, leader_picture_id: 501 } },
+    });
+    expect(units[0].stackable).toBe(false);
+    expect(units[0].blockedBySets).toEqual([{ id: 3, name: "Prints" }]);
+  });
+});
+
+describe("unitForPictureId / isUnitExcluded / includedUnits", () => {
+  const units = groupUnits(mixedGroup());
+
+  // The leader is frequently not a group member, and it is what a cover choice
+  // resolves to, so the deck has to answer to it as well as to its members.
+  it("finds a deck by its matched member AND by its leader", () => {
+    expect(unitForPictureId(units, 503)).toBe(units[0]);
+    expect(unitForPictureId(units, 501)).toBe(units[0]);
+    expect(unitForPictureId(units, 700)).toBe(units[1]);
+    expect(unitForPictureId(units, 9999)).toBeNull();
+    expect(unitForPictureId(units, null)).toBeNull();
+  });
+
+  it("reads a unit as out only when every picture it stands for is out", () => {
+    expect(isUnitExcluded(units[0], [503])).toBe(true);
+    expect(isUnitExcluded(units[0], [700])).toBe(false);
+    expect(isUnitExcluded(units[1], [])).toBe(false);
+  });
+
+  it("counts included units, dropping the excluded and the frozen", () => {
+    expect(includedUnits(units, [])).toHaveLength(3);
+    expect(includedUnits(units, [503])).toHaveLength(2);
+    const frozen = groupUnits({
+      candidates: [{ picture_id: 1, stackable: false }, { picture_id: 2 }],
+    });
+    expect(includedUnits(frozen, [])).toHaveLength(1);
+  });
+});
+
+describe("unitCompositionLabel — what the header says", () => {
+  it("keeps the plain picture count when nothing is stacked", () => {
+    expect(
+      unitCompositionLabel(
+        groupUnits({
+          candidates: [{ picture_id: 1 }, { picture_id: 2 }, { picture_id: 3 }],
+        }),
+      ),
+    ).toBe("3 pictures");
+    expect(
+      unitCompositionLabel(
+        groupUnits({
+          candidates: [{ picture_id: 1 }],
+        }),
+      ),
+    ).toBe("1 picture");
+  });
+
+  it("names a deck and the strays beside it", () => {
+    const group = mixedGroup();
+    group.candidates = group.candidates.slice(0, 2);
+    expect(unitCompositionLabel(groupUnits(group))).toBe(
+      "Stack of 4 + 1 picture",
+    );
+    expect(unitCompositionLabel(groupUnits(mixedGroup()))).toBe(
+      "Stack of 4 + 2 pictures",
+    );
+  });
+
+  it("names two decks", () => {
+    const units = groupUnits({
+      candidates: [
+        { picture_id: 1, stack_id: 12 },
+        { picture_id: 2, stack_id: 13 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 5, leader_picture_id: 1 },
+        13: { stack_id: 13, member_count: 3, leader_picture_id: 2 },
+      },
+    });
+    expect(unitCompositionLabel(units)).toBe("Stack of 5 + stack of 3");
+  });
+});
+
+describe("stackVerdictLabel — the button names its outcome", () => {
+  const deck = (depth, id) => ({ kind: "deck", depth, coverPictureId: id });
+  const loose = () => ({ kind: "picture", depth: 1 });
+
+  it("says Stack N when every unit is a loose picture", () => {
+    const label = stackVerdictLabel([loose(), loose(), loose()]);
+    expect(label.full).toBe("Stack 3");
+    // Nothing to shed, so it must never be given the classes that hide it.
+    expect(label.degrades).toBe(false);
+    expect(label.short).toBe("Stack 3");
+  });
+
+  it("says Add N to stack of M for a deck beside loose pictures", () => {
+    const label = stackVerdictLabel([deck(4, 501), loose()]);
+    expect(label.full).toBe("Add 1 to stack of 4");
+    expect(label.mid).toBe("Add 1 to stack");
+    expect(label.short).toBe("Add 1");
+    expect(label.degrades).toBe(true);
+  });
+
+  it("says Merge N stacks for two decks", () => {
+    const label = stackVerdictLabel([deck(5, 1), deck(3, 2)]);
+    expect(label.full).toBe("Merge 2 stacks");
+    expect(label.degrades).toBe(false);
+  });
+
+  // 11 of 1,726 unresolved groups on a real library are two stacks WITH a loose
+  // picture alongside. "Merge 2 stacks" would move three things while naming
+  // two, which is the class of lie this labelling exists to remove — rarity is
+  // not a reason to tolerate it.
+  it("names the loose pictures that fold in alongside a merge", () => {
+    const label = stackVerdictLabel([deck(5, 1), deck(3, 2), loose()]);
+    expect(label.full).toBe("Merge 2 stacks + 1 picture");
+    expect(label.mid).toBe("Merge 2 stacks");
+    expect(label.short).toBe("Merge");
+    expect(label.degrades).toBe(true);
+  });
+
+  it("pluralises the loose pictures folded into a merge", () => {
+    const label = stackVerdictLabel([deck(5, 1), deck(3, 2), loose(), loose()]);
+    expect(label.full).toBe("Merge 2 stacks + 2 pictures");
+  });
+
+  // A group of one deck and nothing else poses no decision and is filtered out
+  // of the queue upstream; the label must still be a sentence rather than throw.
+  it("falls back to the plain count for a degenerate group", () => {
+    expect(stackVerdictLabel([deck(4, 1)]).full).toBe("Stack 1");
+    expect(stackVerdictLabel([]).full).toBe("Stack 0");
   });
 });

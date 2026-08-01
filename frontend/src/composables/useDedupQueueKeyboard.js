@@ -20,10 +20,12 @@
 //                         self-healing)
 //   K                     keep the focused group separate
 //   C                     open Compare on the focused group
-//   1 - 9                 point at that candidate and make it the cover
-//   X                     leave the candidate under the cursor out of the stack
+//   1 - 9                 point at that UNIT (a loose picture or a whole deck)
+//                         and make it the cover; on a deck that resolves to the
+//                         stack's leader
+//   X                     leave the UNIT under the cursor out of the stack
 //                         (refused, and said out loud, once only two are left:
-//                         a stack needs two members and the server refuses one)
+//                         a stack needs two units and the server refuses one)
 //   Ctrl+Z / Cmd+Z        undo, through the shared operation store
 //   Escape                close Compare, otherwise hand control back to the
 //                         queue (`onEscape`)
@@ -45,7 +47,7 @@
 //   * the key is an auto-repeat (a held `Enter` must not empty the queue),
 //   * a modifier other than the undo pair is down (that is a browser shortcut).
 
-import { candidateId } from "../utils/dedup";
+import { groupUnits } from "../utils/dedup";
 
 /** Keys that move the focus down one group. `j` is deliberately UNCLAIMED
  * (amendment #3): its old synonym role lost the letter to nothing, so the
@@ -209,14 +211,19 @@ export function createDedupKeyHandler({
       return true;
     }
     if (/^[1-9]$/.test(key)) {
-      // Claimed before the candidate is looked up, so `5` on a group of two is
+      // Claimed before the unit is looked up, so `5` on a group of two is
       // a no-op for the queue rather than an unclaimed key that falls through
       // to the app shell. Every other key this handler recognises behaves that
       // way; a digit that only sometimes did was the odd one out.
       claim(event);
-      const candidate = group.candidates?.[Number(key) - 1];
-      if (!candidate) return true;
-      store.setCover(group.signature, candidateId(candidate));
+      // Digits address UNITS, matching the strip: a deck occupies one slot and
+      // one index however many of its members the group named, so the number
+      // under a tile is the number that selects it.
+      const unit = groupUnits(group)[Number(key) - 1];
+      // A locked unit cannot lead a stack it is not in, exactly as a click on
+      // it does not set the cover.
+      if (!unit || !unit.stackable) return true;
+      store.setCover(group.signature, unit.coverPictureId);
       return true;
     }
     return false;

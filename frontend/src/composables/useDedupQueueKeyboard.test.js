@@ -591,3 +591,48 @@ describe("dedup keyboard — undo and the guards", () => {
     expect(store.keepSeparate).not.toHaveBeenCalled();
   });
 });
+
+describe("dedup keyboard — digits address units, not candidates", () => {
+  // A deck occupies one slot and one index however many of its members the
+  // group named, so the number under a tile is the number that selects it. A
+  // handler still indexing `candidates` would put `2` on the deck's second
+  // member — a tile that does not exist.
+  it("indexes the strip's units and resolves a deck to its leader", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+      },
+    };
+    // Two tiles, not three: the deck, then the loose picture.
+    handle(keyEvent("1"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 501);
+    handle(keyEvent("2"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 700);
+
+    // And nothing beyond the second tile, even though a third candidate exists.
+    store.setCover.mockClear();
+    const event = keyEvent("3");
+    handle(event);
+    expect(store.setCover).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  // A frozen unit cannot lead a stack it is not in, exactly as a click on it
+  // does not set the cover. Still claimed, so the key never falls through.
+  it("declines a frozen unit but keeps the key claimed", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [{ picture_id: 1, stackable: false }, { picture_id: 2 }],
+    };
+    const event = keyEvent("1");
+    handle(event);
+    expect(store.setCover).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+});

@@ -1029,7 +1029,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
 | `api/operations.js` | `/operations`: the append-only change log, `undo-state`, and undo / redo / per-operation undo / batch undo (all OWNER_ONLY — callers guard on `isReadOnly`) |
 | `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
-| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack |
+| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack, and a deck's lazy members (`/dedup/stacks/{id}/members`) |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
@@ -1187,23 +1187,66 @@ Three rules from the design are load-bearing and are easy to break by accident:
   `cancelEndChase()`. Known limitation: a `from_end`/anchored-tail server
   parameter would remove the offset-instability window entirely; the
   frontend is designed against the current contract instead.
-- **A stack needs two members.** `useDedupStore.toggleExcluded` refuses an `X`
-  that would leave a single included candidate and returns `false`, so a
-  two-candidate group accepts no exclusion at all and the Stack button the row is
-  still offering can never be a guaranteed 400. `DuplicateQueue` narrates the
-  refusal into the live region rather than letting a one-key action read as a
-  dead key, and a verdict that *is* refused by the server surfaces the server's
-  own `detail` instead of a generic sentence.
-- **A locked-set candidate is the server's exclusion, not the user's.** A
-  candidate served `stackable: false` is frozen by a locked picture set and can
-  join neither the stack nor the metadata union. The row marks it (dimmed, plus a
-  lock chip distinct from the user-exclusion `X`, tooltip and `aria-label` from
-  `buildLockReason`), `useDedupStore.effectiveExcludedFor` sends it as an
-  exclusion so the server never has to skip it, `coverIdFor` keeps the cover off
-  it, and `toggleExcluded` returns `"locked"` rather than `false` so the queue can
-  narrate the one refusal that unlocking, not re-including, is the fix for. A
-  group that keeps two or more stackable candidates is served whole, frozen
-  members included and marked.
+- **The UNIT, not the picture, is what the queue renders** (`docs/design/mixed-stacks-and-stack-units.md`
+  D2/D3). A stack verdict moves whole **stacks** — `_stack_members` folds in
+  every member of any stack the group touches — so the row's smallest
+  addressable thing is a unit: a **loose picture** (`stack_id IS NULL`) or a
+  **deck** (every candidate sharing one `stack_id`, collapsed into one tile).
+  `utils/dedup.js` owns the partition (`groupUnits`, `unitForPictureId`,
+  `isUnitExcluded`, `includedUnits`, `unitCompositionLabel`,
+  `stackVerdictLabel` — pure and unit-tested); the row, the store and
+  `useDedupQueueKeyboard` all read it, so the strip, the digit keys, the floor
+  and the request can never disagree.
+  - **A deck stands for the ENTIRE existing stack.** Its depth is
+    `groups[].stacks[id].member_count` (the stack's live count, routinely larger
+    than the group's own membership) and its face is `leader_picture_id`, which
+    is *frequently not a group candidate at all* — the common case, not an edge
+    one. Sizing a deck from `candidates` would draw a 4-deep stack as one
+    picture and then silently move four. Members are lazy: `listStackMembers`
+    (`GET /dedup/stacks/{id}/members`) fetches them only when an expansion opens.
+  - **The deck reuses the grid's vocabulary**: `StackEdgeTicks` behind the tile
+    (outside `.gthumb`, which clips) and `StackBadge` in the top-right column.
+    That column is an absolutely-positioned **sibling** of `.gthumb`, not a
+    child, because both are `<button>` — the `.dc-zoom` construction.
+  - **Cover, exclusion and Compare are unit-level.** A cover choice on a deck
+    resolves to its **leader**; `X` takes a whole deck out (per-picture
+    exclusion was a silent no-op, because the rest of the stack dragged the
+    picture straight back in); `Compare all N` counts units.
+  - **The preselected cover is the deck**, not the server's smart-score pick,
+    whenever a group holds one (deepest wins a tie). Otherwise the default
+    verdict silently re-curates a stack the user already made. This lives in
+    `useDedupStore.coverIdFor` / `pickCoverForUnits`, not in the row.
+  - **The button names its outcome** and the header the composition:
+    `Stack 3` / `Add 1 to stack of 4` / `Merge 2 stacks`, over
+    `Stack of 5 + 1 picture`. The button degrades `Add 1 to stack of 4` →
+    `Add 1 to stack` → `Add 1` in CSS both ways, via a `@container grow` query
+    on the row — the toolbar's fold pattern, no measurement. The size never
+    leaves the header.
+  - **The deck's accessible name is the whole disclosure**: `a stack of 4
+    pictures, 1 of them matched`. There is no visual substitute — the corner has
+    no budget for a second numeral and expansion (D4) has not landed.
+- **A stack needs two UNITS.** `useDedupStore.toggleExcluded` refuses an `X`
+  that would leave a single included unit and returns `false`, so a two-unit
+  group accepts no exclusion at all and the Stack button the row is still
+  offering can never be a guaranteed 400. The floor counts units, not pictures:
+  a deck and a loose picture is the smallest group with a decision left in it
+  however deep the deck runs. `DuplicateQueue` narrates the refusal into the
+  live region rather than letting a one-key action read as a dead key, and a
+  verdict that *is* refused by the server surfaces the server's own `detail`
+  instead of a generic sentence.
+- **A locked-set unit is the server's exclusion, not the user's.** A candidate
+  served `stackable: false` is frozen by a locked picture set and can join
+  neither the stack nor the metadata union; a **deck** carries the server's
+  unit-level rollup (`stacks[id].stackable`), which already accounts for a
+  frozen sibling *outside* the group, because a stack moves whole or not at all.
+  The row marks it (dimmed, plus a lock chip distinct from the user-exclusion
+  `X`, tooltip and `aria-label` from `buildLockReason`),
+  `useDedupStore.effectiveExcludedFor` sends **every picture of the frozen
+  unit** as an exclusion so the server never has to skip one, `coverIdFor` keeps
+  the cover off it, and `toggleExcluded` returns `"locked"` rather than `false`
+  so the queue can narrate the one refusal that unlocking, not re-including, is
+  the fix for. A group that keeps two or more stackable units is served whole,
+  frozen members included and marked.
 - **A group with fewer than two stackable candidates never arrives.** The server
   withholds it (owner call, 2026-07-30) and withholds it from the counts too, so
   the row's `noLegalStack` branch (Stack disabled with a reason, Keep separate

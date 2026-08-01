@@ -301,19 +301,20 @@ describe("DedupGroupRow — hover score overlays", () => {
     ],
   };
 
-  // Both overlays render inside the thumb (hover reveal is the grid's CSS
+  // Both overlays render inside the unit's box (hover reveal is the grid's CSS
   // recipe, which jsdom does not compute — the structure and null handling
-  // are the testable surface).
+  // are the testable surface). The stars sit in the top-right column, which is
+  // a SIBLING of the tile button so it can also host the deck badge.
   it("renders the grid's star overlay and a smart score chip per thumbnail", () => {
     const wrapper = mountRow({ group: scored });
-    const thumbs = wrapper.findAll(".gthumb");
+    const units = wrapper.findAll(".gunit");
 
-    const stars = thumbs[0].findComponent({ name: "StarRatingOverlay" });
+    const stars = units[0].findComponent({ name: "StarRatingOverlay" });
     expect(stars.exists()).toBe(true);
     expect(stars.props("score")).toBe(3);
     expect(stars.props("compact")).toBe(true);
 
-    const chip = thumbs[0].find(".gsmart");
+    const chip = units[0].find(".gsmart");
     expect(chip.text()).toContain("3.72");
     expect(chip.attributes("title")).toBe("Smart score 3.72");
     expect(chip.attributes("aria-hidden")).toBe("true");
@@ -360,11 +361,11 @@ describe("DedupGroupRow — hover score overlays", () => {
 
   it("keeps the excluded treatment with the overlays mounted", () => {
     const wrapper = mountRow({ group: scored, excludedIds: [2] });
-    const thumbs = wrapper.findAll(".gthumb");
-    expect(thumbs[1].classes()).toContain("gthumb--out");
-    expect(
-      thumbs[1].findComponent({ name: "StarRatingOverlay" }).exists(),
-    ).toBe(true);
+    const units = wrapper.findAll(".gunit");
+    expect(units[1].find(".gthumb").classes()).toContain("gthumb--out");
+    expect(units[1].findComponent({ name: "StarRatingOverlay" }).exists()).toBe(
+      true,
+    );
   });
 });
 
@@ -442,21 +443,21 @@ describe("DedupGroupRow — the thumbnail's badge corners and its fade", () => {
   // siblings of the image and not its descendants, so an opacity on the image
   // can never reach them.
   it("fades only the picture, leaving the chips that explain it at full strength", () => {
-    const thumbs = mountMixed().findAll(".gthumb");
-    const excluded = thumbs[0];
-    const locked = thumbs[1];
+    const units = mountMixed().findAll(".gunit");
+    const excluded = units[0];
+    const locked = units[1];
 
-    expect(excluded.classes()).toContain("gthumb--out");
-    expect(locked.classes()).toContain("gthumb--locked");
+    expect(excluded.find(".gthumb").classes()).toContain("gthumb--out");
+    expect(locked.find(".gthumb").classes()).toContain("gthumb--locked");
 
     // The explanatory marks are present and none of them is inside .gt.
-    for (const [thumb, selectors] of [
+    for (const [unit, selectors] of [
       [excluded, [".gx", ".gnum", ".gstars", ".gsmart"]],
       [locked, [".glock", ".gnum", ".gstars"]],
     ]) {
-      const image = thumb.find(".gt").element;
+      const image = unit.find(".gt").element;
       for (const selector of selectors) {
-        const chip = thumb.find(selector);
+        const chip = unit.find(selector);
         expect(chip.exists()).toBe(true);
         expect(image.contains(chip.element)).toBe(false);
       }
@@ -493,7 +494,9 @@ describe("DedupGroupRow — the size control", () => {
   // One number drives the row. Sizing the box in CSS and the placeholder in JS
   // from two copies of the height is how a row starts jumping as it decodes.
   it("lays the strip out from the height it is given", () => {
-    const style = mountRow({ thumbHeight: 184 }).find(".gstrip").attributes("style");
+    const style = mountRow({ thumbHeight: 184 })
+      .find(".gstrip")
+      .attributes("style");
     expect(style).toContain("--gthumb-h: 184px");
     // The panorama ceiling and the unknown-shape fallback scale with it.
     expect(style).toContain("--gthumb-max-w: 442px");
@@ -537,5 +540,325 @@ describe("DedupGroupRow — the size control", () => {
 
     const normal = mountRow({ group: contested, thumbHeight: 112 });
     expect(normal.findAll(".why-pill")).toHaveLength(2);
+  });
+});
+
+// --- The deck: one tile per unit, not per picture ----------------------------
+//
+// A stack verdict moves whole stacks, so the strip draws a stack as ONE tile
+// whose depth is the stack's real member count. The case that makes this
+// load-bearing is the common one: a group naming a single member of a
+// four-deep stack, where a tile sized from `candidates` shows one picture and
+// then silently moves four.
+
+/** A group naming one member of a 4-stack, plus two loose pictures. */
+function stackedGroup(over = {}) {
+  return {
+    signature: "sg",
+    tier: "near",
+    confidence: 0.94,
+    member_count: 3,
+    cover_picture_id: 700,
+    why: [],
+    candidates: [
+      { picture_id: 503, stack_id: 12, thumbnail_version: "x" },
+      { picture_id: 700, thumbnail_version: "y" },
+      { picture_id: 701, thumbnail_version: "z" },
+    ],
+    stacks: {
+      12: {
+        stack_id: 12,
+        member_count: 4,
+        leader_picture_id: 501,
+        leader_thumbnail_version: "1024x768",
+        matched_picture_ids: [503],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+    ...over,
+  };
+}
+
+describe("DedupGroupRow — the deck", () => {
+  it("draws one tile per unit, not one per candidate", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    expect(wrapper.findAll(".gunit")).toHaveLength(3);
+    expect(wrapper.findAll(".gthumb")).toHaveLength(3);
+  });
+
+  // The deck's face is the stack's LEADER, which this group never names as a
+  // candidate — a tile showing one picture while meaning another is exactly the
+  // mismatch the deck exists to remove.
+  it("faces a deck with its stack's leader, at the leader's own version", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    const src = wrapper.findAll(".gt")[0].attributes("src");
+    expect(src).toContain("/thumbnails/501.");
+    expect(src).toContain("v=1024x768");
+    // Not the matched member's picture, and not its cache-buster either.
+    expect(src).not.toContain("503");
+  });
+
+  // Reused from the grid, not reinvented: the ticks say "deck" before anything
+  // is read, and the badge carries the count.
+  it("wears the grid's edge ticks and count badge, sized from the live depth", () => {
+    const units = mountRow({ group: stackedGroup(), coverId: 501 }).findAll(
+      ".gunit",
+    );
+    const ticks = units[0].findComponent({ name: "StackEdgeTicks" });
+    expect(ticks.exists()).toBe(true);
+    expect(ticks.props("count")).toBe(4);
+
+    const badge = units[0].findComponent({ name: "StackBadge" });
+    expect(badge.exists()).toBe(true);
+    expect(badge.props("count")).toBe(4);
+    // A real stack, not a queue suggestion: the "?" treatment would say the
+    // opposite of what this tile means.
+    expect(badge.props("unresolved")).toBe(false);
+
+    // A loose picture gets neither.
+    expect(units[1].findComponent({ name: "StackEdgeTicks" }).exists()).toBe(
+      false,
+    );
+    expect(units[1].findComponent({ name: "StackBadge" }).exists()).toBe(false);
+  });
+
+  // StackBadge is a <button> and .gthumb is a <button>: nesting them is invalid
+  // markup that no browser resolves the way the markup reads. Same construction
+  // as .dc-zoom in the compare dialog.
+  it("hangs the badge column beside the tile, never inside it", () => {
+    const unit = mountRow({ group: stackedGroup(), coverId: 501 }).findAll(
+      ".gunit",
+    )[0];
+    const tile = unit.find(".gthumb").element;
+    const badge = unit.findComponent({ name: "StackBadge" }).element;
+    expect(tile.contains(badge)).toBe(false);
+    expect(unit.find(".gtr").element.contains(badge)).toBe(true);
+    // The permanent badge LEADS the column; a hover-only member follows.
+    expect(unit.find(".gtr").element.children[0]).toBe(badge);
+  });
+
+  // The badge is a control, so it must obey the row's roving tab stop like
+  // every other one: a screenful of decks must not add a screenful of tab stops.
+  it("keeps the badge out of the tab order on an unfocused row", () => {
+    const off = mountRow({ group: stackedGroup(), coverId: 501 });
+    expect(
+      off.findComponent({ name: "StackBadge" }).attributes("tabindex"),
+    ).toBe("-1");
+    const on = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+    });
+    expect(
+      on.findComponent({ name: "StackBadge" }).attributes("tabindex"),
+    ).toBe("0");
+  });
+
+  // A deck whose leader is not in the group has no per-picture metadata to
+  // show; labelling the leader's picture with a matched member's score would be
+  // the same mismatch in a corner chip.
+  it("shows no per-picture score on a deck it cannot source one for", () => {
+    const unit = mountRow({ group: stackedGroup(), coverId: 501 }).findAll(
+      ".gunit",
+    )[0];
+    expect(unit.find(".gsmart").exists()).toBe(false);
+    expect(unit.findComponent({ name: "StarRatingOverlay" }).exists()).toBe(
+      false,
+    );
+  });
+});
+
+describe("DedupGroupRow — cover and exclusion over units", () => {
+  // A cover choice on a deck resolves to the stack's leader, because that is
+  // the only picture the server can lead the resulting stack with.
+  it("emits the leader when a deck is picked as cover", async () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    await wrapper.findAll(".gthumb")[0].trigger("click");
+    expect(wrapper.emitted("set-cover")).toEqual([[501]]);
+  });
+
+  it("emits the leader when the deck's badge is pressed", async () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    await wrapper.findComponent({ name: "StackBadge" }).vm.$emit("activate");
+    expect(wrapper.emitted("set-cover")).toEqual([[501]]);
+  });
+
+  // Right-click addresses the UNIT; the store takes the whole deck out.
+  it("emits the leader when a deck is right-clicked", async () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    await wrapper.findAll(".gthumb")[0].trigger("contextmenu");
+    expect(wrapper.emitted("toggle-excluded")).toEqual([[501]]);
+  });
+
+  // The deck reads as the cover when the leader is, even though the leader is
+  // not one of the group's own candidates.
+  it("marks the deck as cover from its leader", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    const tiles = wrapper.findAll(".gthumb");
+    expect(tiles[0].classes()).toContain("gthumb--cover");
+    expect(tiles[0].attributes("aria-pressed")).toBe("true");
+    expect(tiles[1].classes()).not.toContain("gthumb--cover");
+  });
+
+  // Exclusion is whole-unit, so the deck's tile shows the excluded treatment
+  // once its member is out — a half-dimmed deck would be a state the gesture
+  // never produces.
+  it("reads a deck as out once every picture it stands for is out", () => {
+    const out = mountRow({
+      group: stackedGroup(),
+      coverId: 700,
+      excludedIds: [503],
+    });
+    expect(out.findAll(".gthumb")[0].classes()).toContain("gthumb--out");
+  });
+
+  // Compare counts units: the dialog opens over the things a verdict moves.
+  it("counts units in Compare all N", () => {
+    expect(
+      mountRow({ group: stackedGroup(), coverId: 501 })
+        .find(".gcompare")
+        .text(),
+    ).toContain("Compare all 3");
+  });
+
+  // A locked set freezes a whole stack, including members outside the group,
+  // so the deck's own rollup is what marks the tile.
+  it("locks a whole deck from the served rollup", () => {
+    const frozen = stackedGroup();
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    const wrapper = mountRow({ group: frozen, coverId: 700, focused: true });
+    const tile = wrapper.findAll(".gthumb")[0];
+    expect(tile.classes()).toContain("gthumb--locked");
+    expect(tile.find(".glock").exists()).toBe(true);
+    expect(tile.attributes("aria-label")).toContain("Portfolio");
+  });
+});
+
+describe("DedupGroupRow — the verdict button names its outcome", () => {
+  const labelOf = (wrapper) =>
+    wrapper
+      .find(".gbtn--stack")
+      .findAll("span")
+      .map((s) => s.text());
+
+  it("says Stack N when every unit is a loose picture", () => {
+    const wrapper = mountRow();
+    expect(labelOf(wrapper)).toEqual(["Stack 3"]);
+    // One form, so it must never wear the classes that hide it under width
+    // pressure — there would be nothing left in flow to replace it.
+    expect(wrapper.find(".gsl").exists()).toBe(false);
+  });
+
+  it("says Add N to stack of M for a deck beside loose pictures", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    expect(labelOf(wrapper)).toEqual([
+      "Add 2 to stack of 4",
+      "Add 2 to stack",
+      "Add 2",
+    ]);
+    // The degrade ladder: all three forms in the DOM, one picked by a container
+    // query, exactly as the toolbar's overflow folds.
+    expect(wrapper.find(".gsl--full").exists()).toBe(true);
+    expect(wrapper.find(".gsl--mid").exists()).toBe(true);
+    expect(wrapper.find(".gsl--short").exists()).toBe(true);
+  });
+
+  it("says Merge N stacks for two decks", () => {
+    const twoDecks = stackedGroup({
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 601, stack_id: 13 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 5, leader_picture_id: 501 },
+        13: { stack_id: 13, member_count: 3, leader_picture_id: 600 },
+      },
+    });
+    expect(labelOf(mountRow({ group: twoDecks, coverId: 501 }))).toEqual([
+      "Merge 2 stacks",
+    ]);
+  });
+
+  // The label names what the button will actually do, so an exclusion changes
+  // it: two loose pictures and a deck become "Add 1 to stack of 4".
+  it("follows the exclusions", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      excludedIds: [701],
+    });
+    expect(labelOf(wrapper)[0]).toBe("Add 1 to stack of 4");
+  });
+
+  // A bulk selection renames both verdicts, and that must outrank the outcome
+  // label: a bulk action must never look like a single one.
+  it("keeps the bulk rename ahead of the outcome label", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      selected: true,
+      selectionCount: 4,
+    });
+    expect(labelOf(wrapper)).toEqual(["Stack 4 groups"]);
+  });
+});
+
+describe("DedupGroupRow — the composition and the accessible names", () => {
+  it("states the composition in the header and the row's name", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501, index: 2 });
+    expect(wrapper.find(".gn").text()).toContain("Stack of 4 + 2 pictures");
+    expect(wrapper.attributes("aria-label")).toBe(
+      "Group 3, Stack of 4 + 2 pictures",
+    );
+  });
+
+  // THE disclosure. The tile shows one picture standing for four, and the row
+  // has no corner budget for a second numeral; this sentence is the only place
+  // a screen-reader user learns the depth and the overlap, and in this pass
+  // there is no visual substitute for it at all.
+  it("names a deck by its true size and how much of it matched", () => {
+    const labels = mountRow({ group: stackedGroup(), coverId: 501 })
+      .findAll(".gthumb")
+      .map((b) => b.attributes("aria-label"));
+    expect(labels).toEqual([
+      "Item 1 of 3, a stack of 4 pictures, 1 of them matched, cover",
+      "Picture 2 of 3",
+      "Picture 3 of 3",
+    ]);
+  });
+
+  // When the group names the whole stack there is no overlap to disclose, and
+  // a "4 of them matched" clause would be noise on every tile.
+  it("drops the matched clause when the group names the whole stack", () => {
+    const whole = stackedGroup({
+      candidates: [
+        { picture_id: 501, stack_id: 12 },
+        { picture_id: 502, stack_id: 12 },
+        { picture_id: 700 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 2, leader_picture_id: 501 },
+      },
+    });
+    const label = mountRow({ group: whole, coverId: 501 })
+      .find(".gthumb")
+      .attributes("aria-label");
+    expect(label).toBe("Item 1 of 2, a stack of 2 pictures, cover");
+  });
+
+  // The tooltip speaks about the unit the pointer is on, so a deck is never
+  // described as "this picture".
+  it("calls a deck a stack in its tooltip", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+    });
+    const tiles = wrapper.findAll(".gthumb");
+    expect(tiles[0].attributes("title")).toContain("this stack's cover");
+    expect(tiles[0].attributes("title")).toContain("leave this stack out");
+    expect(tiles[1].attributes("title")).toContain("leave this picture out");
   });
 });
