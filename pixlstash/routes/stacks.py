@@ -2,13 +2,14 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import case
 
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
-from pixlstash.services import operation_log_service
+from pixlstash.services import keep_cover_only_service, operation_log_service
+from pixlstash.services.keep_cover_only_service import KeepCoverOnlyError
 from pixlstash.services.set_lock_service import enforce_stack_membership_not_locked
 from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
@@ -52,6 +53,411 @@ class StackOrderResponse(BaseModel):
 
     stack_id: int
     picture_ids: list[int]
+
+
+class KeepCoverOnlyRequest(BaseModel):
+    """The selection a Keep-cover-only call acts on.
+
+    Send `stack_ids`, `picture_ids`, or both — they are unioned. At least one
+    must be non-empty. The **unit is the stack**: any picture named pulls in its
+    whole stack, so a partial selection inside a stack collapses the whole
+    stack. Loose (unstacked) pictures name no stack and are ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stack_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "Stacks to collapse, named directly. Prefer this when the client "
+            "already knows the stack ids — it is the exact unit the action "
+            "works on. Example: `[12, 19]`."
+        ),
+        examples=[[12, 19]],
+    )
+    picture_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "Pictures whose stacks should be collapsed — normally the grid "
+            "selection, which is usually just the visible stack leaders. Each "
+            "one resolves to its stack; soft-deleted pictures and loose "
+            "pictures contribute nothing. Example: `[101, 102, 250]`."
+        ),
+        examples=[[101, 102, 250]],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch id, so one user gesture that fans out into "
+            "several requests stays a single undo. Omit and the server mints "
+            "one (`srv-…`); the `X-Operation-Batch-Id` header is honoured too. "
+            "Example: `cli-8f2c1a90`."
+        ),
+        examples=["cli-8f2c1a90"],
+    )
+
+
+class KeepCoverOnlyStackRow(BaseModel):
+    """One stack in the dry run: what would happen to it, and why."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The stack this row describes. Example: `12`.", examples=[12]
+    )
+    cover_picture_id: int = Field(
+        description=(
+            "The stack's **current** leader, which is what would be kept. This "
+            "action never picks a new cover. Example: `101`."
+        ),
+        examples=[101],
+    )
+    member_count: int = Field(
+        description=(
+            "Live members of the stack, cover included. Soft-deleted members "
+            "are not counted — they are already in the Scrapheap. Example: `4`."
+        ),
+        examples=[4],
+    )
+    copy_picture_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The non-cover live members that would move to the Scrapheap. "
+            "**Empty on a skipped stack**, because a skipped stack moves "
+            "nothing at all. Example: `[102, 103, 104]`."
+        ),
+        examples=[[102, 103, 104]],
+    )
+    reference_folder_picture_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The subset of `copy_picture_ids` that live in a reference folder. "
+            "A **subset**, not a separate bucket: their rows move like any "
+            "other, but their files are user-managed and are never touched. "
+            "Example: `[104]`."
+        ),
+        examples=[[104]],
+    )
+    bytes_held_by_copies: int = Field(
+        description=(
+            "Bytes on disk held by `copy_picture_ids`. **Held, not freed** — a "
+            "soft delete frees nothing; see the response-level field of the "
+            "same name. Example: `7340032`."
+        ),
+        examples=[7340032],
+    )
+    cover_gains_tags: bool = Field(
+        description=(
+            "The metadata union would copy at least one tag from a copy onto "
+            "the cover. Example: `true`."
+        ),
+        examples=[True],
+    )
+    cover_gains_score: bool = Field(
+        description=(
+            "The metadata union would lift the cover's rating to the stack's "
+            "best. Example: `false`."
+        ),
+        examples=[False],
+    )
+    eligible: bool = Field(
+        description=(
+            "Whether this stack would actually collapse. Exactly the inverse "
+            "of `skip_reason` being set. Example: `true`."
+        ),
+        examples=[True],
+    )
+    skip_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Why this stack is skipped, or `null` when it is eligible. One of "
+            "`set_locked` (a live member is frozen by a locked picture set — "
+            "the **whole** stack is refused, never one member), "
+            "`character_only_on_copy` (a character link exists only on a "
+            "member that would leave, and the union will not guess across "
+            "several characters), or `single_member` (fewer than two live "
+            "members, so there is nothing to collapse). Example: `set_locked`."
+        ),
+        examples=["set_locked"],
+    )
+    locked_sets: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "`[{id, name}, …]` locked picture sets freezing this stack. "
+            "Non-empty only when `skip_reason` is `set_locked`, so the dialog "
+            "can name the set the user has to unlock. "
+            'Example: `[{"id": 3, "name": "Portfolio 2026"}]`.'
+        ),
+        examples=[[{"id": 3, "name": "Portfolio 2026"}]],
+    )
+    lost_characters: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "`[{id, name, picture_ids}, …]` naming each character whose only "
+            "link sits on a copy, and the copies carrying it. Non-empty only "
+            "when `skip_reason` is `character_only_on_copy`. "
+            'Example: `[{"id": 7, "name": "Ada", "picture_ids": [103]}]`.'
+        ),
+        examples=[[{"id": 7, "name": "Ada", "picture_ids": [103]}]],
+    )
+
+
+class KeepCoverOnlyPreviewResponse(BaseModel):
+    """The dry run: every figure the confirm dialog renders, from one read."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stacks_selected: int = Field(
+        description=(
+            "Stacks the selection resolved to. The four bucket counts below "
+            "are disjoint and sum to exactly this. Example: `20`."
+        ),
+        examples=[20],
+    )
+    stacks_eligible: int = Field(
+        description=(
+            "Stacks that would collapse — the figure the button acts on. Example: `17`."
+        ),
+        examples=[17],
+    )
+    stacks_skipped_locked: int = Field(
+        description=(
+            "Stacks refused whole because a live member is frozen by a locked "
+            "picture set. Example: `2`."
+        ),
+        examples=[2],
+    )
+    stacks_skipped_character_on_copy: int = Field(
+        description=(
+            "Stacks skipped because a character link sits only on a copy, "
+            "which collapsing would destroy. Example: `1`."
+        ),
+        examples=[1],
+    )
+    stacks_skipped_single_member: int = Field(
+        description=(
+            "Stacks with fewer than two live members — nothing to collapse. "
+            "Example: `0`."
+        ),
+        examples=[0],
+    )
+    pictures_moving: int = Field(
+        description=(
+            "The headline figure: pictures that would move to the Scrapheap. "
+            "Counted over the eligible stacks only, so it never includes a "
+            "skipped stack's members. Example: `414`."
+        ),
+        examples=[414],
+    )
+    picture_ids_moving: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The ids behind `pictures_moving`, so the grid can mark exactly "
+            "the cards that are about to go. Example: `[102, 103, 104]`."
+        ),
+        examples=[[102, 103, 104]],
+    )
+    covers_kept: int = Field(
+        description=(
+            "Covers that survive — one per eligible stack, by construction. "
+            "Example: `17`."
+        ),
+        examples=[17],
+    )
+    cover_picture_ids: list[int] = Field(
+        default_factory=list,
+        description="The kept covers, one per eligible stack. Example: `[101]`.",
+        examples=[[101]],
+    )
+    covers_gaining_tags: int = Field(
+        description=(
+            "Eligible stacks whose cover would gain at least one tag from a "
+            "copy. Example: `11`."
+        ),
+        examples=[11],
+    )
+    covers_gaining_score: int = Field(
+        description=(
+            "Eligible stacks whose cover's rating would be lifted to the "
+            "stack's best. Example: `3`."
+        ),
+        examples=[3],
+    )
+    covers_gaining_metadata: int = Field(
+        description=(
+            "Eligible stacks whose cover gains tags **or** score — the union "
+            "of the two counts above, and the row the dialog shows. Not their "
+            "sum: a cover can gain both. Example: `12`."
+        ),
+        examples=[12],
+    )
+    reference_folder_pictures_moving: int = Field(
+        description=(
+            "How many of `pictures_moving` live in a reference folder. A "
+            "**subset** of that count, reported separately because their files "
+            "are user-managed and are not touched. Example: `5`."
+        ),
+        examples=[5],
+    )
+    reference_folder_picture_ids_moving: list[int] = Field(
+        default_factory=list,
+        description="The ids behind the count above. Example: `[104]`.",
+        examples=[[104]],
+    )
+    bytes_held_by_copies: int = Field(
+        description=(
+            "Bytes on disk held by `picture_ids_moving`. **Deliberately not "
+            "named `bytes_freed`, and it must never be presented as freed or "
+            "reclaimed space.** A soft delete frees nothing: the files stay "
+            "until the Scrapheap is emptied, and with "
+            "`scrapheap_retention_days: null` it never empties on its own. "
+            "Render it as a sentence about what could later be reclaimed, "
+            "never as a figure. Example: `1234567890`."
+        ),
+        examples=[1234567890],
+    )
+    originals_deleted_from_disk: int = Field(
+        description=(
+            "Always `0`, stated out loud rather than left implied — this "
+            "action has no path to disk at all. Example: `0`."
+        ),
+        examples=[0],
+    )
+    scrapheap_retention_days: Optional[int] = Field(
+        default=None,
+        description=(
+            "The **live** `scrapheap_retention_days` setting, so the recovery "
+            "copy never hardcodes a window. `null` means **Never**: auto-purge "
+            "is off and the Scrapheap does not empty on its own — and `null` "
+            "is the default on a fresh install. Example: `30`."
+        ),
+        examples=[30],
+    )
+    unknown_stack_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Explicitly named `stack_ids` that resolve to no live stack. "
+            "Reported outside the bucket arithmetic, because they are not "
+            "stacks. Example: `[999]`."
+        ),
+        examples=[[999]],
+    )
+    stacks: list[KeepCoverOnlyStackRow] = Field(
+        default_factory=list,
+        description=(
+            "One row per selected stack — eligible and skipped alike — so the "
+            "dialog's rows and its headline come from the same read. Ordered "
+            "by stack id."
+        ),
+    )
+
+
+class KeepCoverOnlyResponse(BaseModel):
+    """What a Keep-cover-only call actually did."""
+
+    model_config = ConfigDict(extra="allow")
+
+    status: str = Field(
+        description="`success` when the call completed. Example: `success`.",
+        examples=["success"],
+    )
+    stacks_collapsed: int = Field(
+        description="Stacks that kept their cover and shed their copies. Example: `17`.",
+        examples=[17],
+    )
+    stack_ids_collapsed: list[int] = Field(
+        default_factory=list,
+        description="The ids behind `stacks_collapsed`. Example: `[12, 19]`.",
+        examples=[[12, 19]],
+    )
+    pictures_moved: int = Field(
+        description=(
+            "Pictures soft-deleted to the Scrapheap — the number the receipt "
+            "names. Example: `414`."
+        ),
+        examples=[414],
+    )
+    picture_ids_moved: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The ids behind `pictures_moved`. Each keeps its `stack_id`, so "
+            "restoring one returns it to its stack rather than leaving it "
+            "loose. Example: `[102, 103, 104]`."
+        ),
+        examples=[[102, 103, 104]],
+    )
+    cover_picture_ids: list[int] = Field(
+        default_factory=list,
+        description="The kept covers, one per collapsed stack. Example: `[101]`.",
+        examples=[[101]],
+    )
+    covers_gaining_metadata: int = Field(
+        description=(
+            "Covers that gained tags or score from a copy in this run. Example: `12`."
+        ),
+        examples=[12],
+    )
+    tags_added: int = Field(
+        description=(
+            "Tag rows written by the metadata union across every collapsed "
+            "stack, before anything was deleted. Example: `48`."
+        ),
+        examples=[48],
+    )
+    scores_lifted: int = Field(
+        description=(
+            "Pictures whose rating the union raised to the stack's best. Example: `3`."
+        ),
+        examples=[3],
+    )
+    reference_folder_pictures_moved: int = Field(
+        description=(
+            "How many of `pictures_moved` live in a reference folder. Their "
+            "rows moved; their files were not touched. Example: `5`."
+        ),
+        examples=[5],
+    )
+    originals_deleted_from_disk: int = Field(
+        description="Always `0`. Nothing was removed from disk. Example: `0`.",
+        examples=[0],
+    )
+    stacks_skipped_locked: list[KeepCoverOnlyStackRow] = Field(
+        default_factory=list,
+        description=(
+            "Stacks refused whole for a locked picture set, each naming the "
+            "sets, so the receipt's second sentence can say which."
+        ),
+    )
+    stacks_skipped_character_on_copy: list[KeepCoverOnlyStackRow] = Field(
+        default_factory=list,
+        description=(
+            "Stacks skipped because a character link sits only on a copy, each "
+            "naming the characters that would have been lost."
+        ),
+    )
+    stacks_skipped_single_member: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Stack ids with fewer than two live members — nothing to do. "
+            "Example: `[7]`."
+        ),
+        examples=[[7]],
+    )
+    unknown_stack_ids: list[int] = Field(
+        default_factory=list,
+        description="Named `stack_ids` that resolve to no live stack. Example: `[999]`.",
+        examples=[[999]],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The operation-log batch covering the whole call: pass it to "
+            "`POST /operations/batches/{batch_id}/undo` to put every stack "
+            "back at once. `null` when nothing was collapsed. "
+            "Example: `srv-4c1d77e2`."
+        ),
+        examples=["srv-4c1d77e2"],
+    )
 
 
 def create_router(server) -> APIRouter:
@@ -803,5 +1209,171 @@ def create_router(server) -> APIRouter:
             update_member_position, stack_id, picture_id, position
         )
         return {"stack_id": stack_id, "picture_ids": ordered_ids}
+
+    # ── Keep cover only (docs/design/keep-cover-only.md) ─────────────────────
+
+    def _selection(
+        payload: Optional[KeepCoverOnlyRequest],
+    ) -> tuple[list[int], list[int]]:
+        """Validate the request body down to two id lists, or 400."""
+        request_model = payload or KeepCoverOnlyRequest()
+        try:
+            stack_ids = keep_cover_only_service.coerce_selection_ids(
+                request_model.stack_ids, "stack_ids"
+            )
+            picture_ids = keep_cover_only_service.coerce_selection_ids(
+                request_model.picture_ids, "picture_ids"
+            )
+        except KeepCoverOnlyError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not stack_ids and not picture_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Send at least one of stack_ids or picture_ids",
+            )
+        return stack_ids, picture_ids
+
+    @router.post(
+        "/stacks/keep-cover-only/preview",
+        summary="Preview collapsing stacks to their covers",
+        description=(
+            "The **authoritative dry run** for `POST /stacks/keep-cover-only`, "
+            "and the confirm dialog's only source of truth. Every figure comes "
+            "from ONE read over the SAME selection through the same planner the "
+            "mutation uses, so the dialog's headline and its rows cannot "
+            "disagree — the failure the neighbouring auto-stack dialog shipped "
+            'when it reported "62 stacks to create" for work that would '
+            "create 3.\n\n"
+            "**The stack buckets are disjoint and sum to `stacks_selected`:**\n\n"
+            "```\n"
+            "stacks_selected = stacks_eligible\n"
+            "                + stacks_skipped_locked\n"
+            "                + stacks_skipped_character_on_copy\n"
+            "                + stacks_skipped_single_member\n"
+            "```\n\n"
+            "Each is counted directly; **none is derived by subtraction**, and "
+            "the server refuses to answer at all if the sum does not hold. "
+            "`unknown_stack_ids` sits outside the arithmetic because those are "
+            "not stacks.\n\n"
+            "**Why a stack is skipped.** `set_locked` — a live member is frozen "
+            "by a locked picture set, which refuses the **whole** stack: stack "
+            "membership reconciles to the union of its members' sets, so "
+            "removing one member is exactly the mutation the lock forbids, and "
+            "a partial collapse would be the worst outcome available. "
+            "`character_only_on_copy` — a character link sits only on a member "
+            "that would leave; the metadata union deliberately will not guess "
+            "across several characters, so collapsing would destroy the link. "
+            "`single_member` — fewer than two live members.\n\n"
+            "**Nothing here is freed.** `originals_deleted_from_disk` is always "
+            "`0`, and `bytes_held_by_copies` is bytes *held*: the files stay "
+            "until the Scrapheap is emptied, which with "
+            "`scrapheap_retention_days: null` (the default) never happens on "
+            "its own. Read the retention window from this response rather than "
+            "hardcoding one.\n\n"
+            "Read-only: this plans, writes nothing and deletes nothing."
+        ),
+        response_model=KeepCoverOnlyPreviewResponse,
+        responses={
+            400: {
+                "description": (
+                    "Neither `stack_ids` nor `picture_ids` was usable — absent, "
+                    "not a list of integers, or over the per-request id cap."
+                )
+            }
+        },
+    )
+    def preview_keep_cover_only(
+        request: Request,
+        payload: Optional[KeepCoverOnlyRequest] = Body(default=None),
+    ):
+        _ensure_secure_when_required(request)
+        stack_ids, picture_ids = _selection(payload)
+        try:
+            return keep_cover_only_service.preview(
+                server.vault,
+                stack_ids,
+                picture_ids,
+                keep_cover_only_service.read_retention_days(server),
+            )
+        except KeepCoverOnlyError as exc:
+            logger.error("[keep-cover-only] preview refused: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.post(
+        "/stacks/keep-cover-only",
+        summary="Collapse stacks to their covers",
+        description=(
+            "Each selected stack keeps its **current** cover; every other live "
+            "member is **soft-deleted to the Scrapheap**, where it can be "
+            "restored. Nothing is removed from disk — this is the same soft "
+            "delete the grid's `Delete` performs, not a second permanent path. "
+            "Call `POST /stacks/keep-cover-only/preview` first and show the "
+            "user what it reports.\n\n"
+            "**The metadata union runs first, unconditionally.** Before any "
+            "copy leaves, the cover gains the union of the stack's tags and is "
+            "lifted to the stack's best rating. This is not an optimisation to "
+            "skip: only the dedup queue's stack verdict ever unioned before, so "
+            "stacks made by hand in the grid never have been — measured on a "
+            "real library, two thirds of them carry tags on a copy the cover "
+            "lacks.\n\n"
+            "**Stacks are skipped, never partly collapsed.** A stack with a "
+            "member frozen by a locked picture set is refused whole; so is one "
+            "whose only link to a character sits on a copy. Siblings in the "
+            "same request still proceed, and each skip is returned with the "
+            "sets or characters that caused it. The buckets match the preview's "
+            "exactly.\n\n"
+            "**The stack survives and undo is a flag flip.** A soft-deleted "
+            "member keeps its `stack_id` and no stack row is dissolved, so "
+            "`POST /pictures/scrapheap/restore` returns a copy to its stack "
+            "rather than leaving it loose. The whole call is **one** operation "
+            "under **one** `batch_id`, so a single `Ctrl+Z` "
+            "(`POST /operations/undo`, or "
+            "`POST /operations/batches/{batch_id}/undo`) restores every stack "
+            "with its cover, positions and pre-union metadata intact.\n\n"
+            "No `confirm_token` and no type-to-confirm: those are reserved for "
+            "destroying an on-disk original, and spending them here would "
+            'flatten the distinction between "recoverable" and "gone".'
+        ),
+        response_model=KeepCoverOnlyResponse,
+        responses={
+            400: {
+                "description": (
+                    "Neither `stack_ids` nor `picture_ids` was usable — absent, "
+                    "not a list of integers, or over the per-request id cap."
+                )
+            },
+            423: {
+                "description": (
+                    "A locked picture set was detected over a stack the planner "
+                    "had already cleared. This is a defence-in-depth backstop, "
+                    "not the ordinary path: a locked stack is normally reported "
+                    "in `stacks_skipped_locked` while its siblings collapse. "
+                    "Nothing was written — the whole call is rolled back rather "
+                    "than risk a partial collapse."
+                )
+            },
+        },
+    )
+    def post_keep_cover_only(
+        request: Request,
+        payload: Optional[KeepCoverOnlyRequest] = Body(default=None),
+    ):
+        _ensure_secure_when_required(request)
+        stack_ids, picture_ids = _selection(payload)
+        # §21 origin discipline: actor / source / origin_client_id are read from
+        # the request HERE, on the request's own task, and passed down
+        # explicitly — the contextvar is dead on the DB worker thread.
+        context = operation_log_service.request_context(
+            request, fallback_batch_id=operation_log_service.new_batch_id()
+        )
+        header_batch_id = context.pop("batch_id", None)
+        body_batch_id = (payload.batch_id if payload else None) or None
+        return keep_cover_only_service.keep_cover_only(
+            server.vault,
+            stack_ids,
+            picture_ids,
+            body_batch_id or header_batch_id,
+            **context,
+        )
 
     return router

@@ -121,6 +121,12 @@ FACETS = (
 OP_SCRAPHEAP_MOVE = "pictures.scrapheap.move"
 OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
 
+# Keep cover only (docs/design/keep-cover-only.md): a stack keeps its cover and
+# every other live member is soft-deleted. Named `keep_cover_only`, never
+# `squash` — in git that word means "merge without losing content", so a
+# git-literate reader grepping it would assume this action loses nothing.
+OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
+
 # The tag-review decisions (§21.2). Named for the same reason the scrapheap pair
 # is: the frontend keys its icon/receipt affordances off the string.
 OP_TAGS_CONFIRM = "pictures.tags.confirm"
@@ -481,6 +487,27 @@ def scrapheap_restore_summary(before: dict, after: dict) -> Optional[str]:
     if not restored:
         return None
     return f"Restored {_pictures(len(restored))} from the Scrapheap"
+
+
+def keep_cover_only_summary(stack_count: int, moved_count: int) -> str:
+    """Build ``Kept the cover of 3 stacks · 7 pictures to the Scrapheap``.
+
+    A plain string, built from the collapse **plan** rather than from the diff
+    like :func:`scrapheap_move_summary` is. The plan is already the filtered
+    truth here — skipped stacks (a locked-set member, a character link that
+    lives only on a copy) are not in it — so both figures are counted directly
+    and neither is derived by subtracting one query's answer from another's.
+
+    The sentence names what you keep *and* what moves, mirroring the confirm
+    dialog's title/button pairing, and it deliberately claims no space was
+    freed, because a soft delete frees none.
+
+    Args:
+        stack_count: Stacks actually collapsed.
+        moved_count: Pictures actually soft-deleted to the Scrapheap.
+    """
+    stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
+    return f"Kept the cover of {stacks} · {_pictures(moved_count)} to the Scrapheap"
 
 
 def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict:

@@ -452,6 +452,32 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
+    # ── stacks.py: Keep cover only (docs/design/keep-cover-only.md) ─────────
+    ("POST", "/api/v1/stacks/keep-cover-only/preview"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Dry run over stacks named only by stack or picture id, which can "
+            "reach any stack in the vault. It returns per-stack membership, the "
+            "names of the locked picture sets freezing a stack and of the "
+            "characters a collapse would strand, plus a byte total — none of "
+            "which can be narrowed to a share token's scope without either "
+            "leaking that out-of-scope members exist or reporting counts "
+            "measured over a subset, which would be wrong numbers rather than "
+            "narrower ones (the same reasoning as GET /dedup/mixed-stacks). "
+            "POST is also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/stacks/keep-cover-only"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Soft-deletes stack members to the Scrapheap and writes the "
+            "metadata union (tags, score, pending character) onto their covers, "
+            "across pictures named only by a stack or picture id. Stacks are "
+            "set-membership-atomic, so this also changes what collections "
+            "effectively contain. Same reasoning as POST /dedup/verdicts/stack "
+            "and the mixed-stack mutations; POST is also blocked for READ tokens"
+        ),
+    ),
     # ── dedup.py (near-duplicate sweep, dry run) ────────────────────────────
     ("GET", "/api/v1/dedup/sweep/policy"): RoutePolicy(
         _OWNER,

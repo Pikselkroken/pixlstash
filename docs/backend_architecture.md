@@ -2660,8 +2660,92 @@ All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
 (§16.1); the rationale and the both-direction test coverage are in
 `docs/reviews/authz-coverage-matrix.md`.
 
+### 22.12 Keep cover only — collapsing a stack to its cover
+
+`pixlstash/services/keep_cover_only_service.py`, routes in
+`pixlstash/routes/stacks.py`. No new table and no migration: the whole feature
+is a soft delete plus the existing metadata union. The design is
+`docs/design/keep-cover-only.md`, and where this doc and that one disagree, the
+design file wins.
+
+The dedup surface is deliberately additive and says so repeatedly (*"No picture
+is ever deleted"*, `Files deleted: 0`), so a user can triage thousands of groups
+and reclaim nothing. This is the one destructive action in the flow: each
+selected stack keeps its **current** cover and every other live member is
+soft-deleted to the Scrapheap.
+
+- **Soft delete only, and the same one the grid's `Delete` uses.**
+  `scrapheap_service` opens by stating there is deliberately **no second
+  permanent-destruction path**; this is not it. Nothing is removed from disk, no
+  reference-folder original is touched, and there is no `confirm_token` and no
+  type-to-confirm — those are reserved for destroying an on-disk original, and
+  spending them here would flatten the "recoverable" / "gone" distinction the
+  whole Scrapheap design rests on.
+- **The metadata union is mandatory and unconditional.**
+  `apply_metadata_union_in_session` is called from exactly one other place, the
+  dedup stack verdict, so stacks made by hand in the grid have **never** been
+  unioned — measured on the owner's library, **110 of 160 stacks** have a copy
+  carrying tags the cover lacks. It runs on every eligible stack **before any
+  soft delete**, and is idempotent where it already ran. Do not optimise it away
+  on the grounds that the queue does it; the queue is not the only way stacks
+  get made.
+- **The stack is not dissolved and no member is detached.** A soft-deleted
+  picture keeps its `stack_id`, which is what makes undo a flag flip and makes
+  `POST /pictures/scrapheap/restore` (which already clears `deleted_at` and
+  calls `normalize_stack_positions`) return a copy to its stack rather than to
+  loose. No "stack of 1" is rendered, because the grid's badge gates on *live*
+  members.
+- **Three whole-stack skips, never a partial collapse.** `set_locked` — any live
+  member frozen by a locked picture set refuses the **whole** stack, because
+  stack membership reconciles to the union of its members' sets, so removing one
+  member is exactly the mutation the lock forbids; a partial collapse would be
+  the worst outcome available. `character_only_on_copy` — the union refuses to
+  guess across several characters, which is right when *stacking* (nothing is
+  lost) but here would **destroy** a link whose only carrier leaves; the single
+  unambiguous character is propagated onto the cover as `pending_character_id`
+  and is therefore not a skip. `single_member` — fewer than two live members.
+  Siblings in the same request still proceed, matching the shipped bulk
+  soft-delete's skip-and-report behaviour. A defence-in-depth
+  `enforce_pictures_not_locked` runs over the eligible members before any write,
+  so a planner/lock-helper disagreement fails the call closed rather than
+  soft-deleting a frozen picture.
+- **One planner, two endpoints.** `plan_in_session` is the single source of
+  truth: `POST /stacks/keep-cover-only/preview` renders it and
+  `POST /stacks/keep-cover-only` acts on it, so the dialog's figures and the
+  button's effect cannot come from different queries. **The stack buckets are
+  disjoint and sum to `stacks_selected`** (eligible + locked +
+  character-on-copy + single-member); each is counted by appending to its own
+  list, **none is derived by subtraction**, and `preview_in_session` raises
+  rather than reporting figures that do not add up. This is the direct lesson of
+  the auto-stack dialog, which reported "62 stacks to create" for work that
+  would create 3 (§22.9). `unknown_stack_ids` sits *outside* the arithmetic
+  because those are not stacks.
+- **Bytes are held, never freed.** The preview reports `bytes_held_by_copies` —
+  deliberately **not** `bytes_freed` — because a soft delete frees nothing:
+  files stay until the Scrapheap is emptied, and `DEFAULT_RETENTION_DAYS` is
+  `None`, so on a default install it never empties on its own. The live
+  `scrapheap_retention_days` is served **alongside** it (`null` == "never") so
+  the client never hardcodes a window, and `originals_deleted_from_disk` is
+  stated out loud as `0`.
+- **One call, one operation, one `Ctrl+Z`.** However many stacks a request
+  names, the whole thing is a single `stack.keep_cover_only` row under one
+  `batch_id` (§21). The undo snapshot is stack-expanded with
+  `include_deleted=True`, because `normalize_stack_positions` renumbers every
+  member including the already-scrapheaped ones. The op type is
+  `stack.keep_cover_only`; `squash` is kept out of identifiers because in git it
+  means *merge without losing content*, which is the opposite of what this does.
+- **Announcements.** `removed` over the moved copies and `updated` over the
+  covers that gained metadata (plus `CHANGED_TAGS`), each carrying
+  `origin_client_id` read from `request_context` in the handler (§21 origin
+  discipline).
+
+Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
+(§16.1); the rationale and the both-direction test coverage
+(`tests/test_keep_cover_only.py`) are in
+`docs/reviews/authz-coverage-matrix.md`.
+
 ---
 
-*Last updated: 2026-07-30. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+*Last updated: 2026-08-01. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

@@ -263,6 +263,83 @@ shipped surface does not provide; none is worked around silently):
    "groups left in the queue" row is fed from `POST /dedup/counts` -> `by_tier`.
    Noted so the two are known to be able to disagree across a race.
 
+### 2.2 The `Keep cover only` contract
+
+Two routes on the **stacks** surface, not the dedup one, because the action is
+about stacks however they were made — the queue is not the only way stacks get
+created. Design: `docs/design/keep-cover-only.md`; backend: §22.12 of
+`docs/backend_architecture.md`.
+
+| Route | Purpose | Response |
+|---|---|---|
+| `POST /stacks/keep-cover-only/preview` | the confirm dialog's only source of truth | `KeepCoverOnlyPreviewResponse` |
+| `POST /stacks/keep-cover-only` | collapse every eligible stack to its cover | `KeepCoverOnlyResponse` |
+
+Both take the same body: `{ stack_ids?: int[], picture_ids?: int[], batch_id?:
+string }`. At least one id list must be non-empty (400 otherwise); they are
+unioned, capped at 2000 ids each, and **the unit is the stack** — any picture
+named pulls in its whole stack, so a partial selection inside a stack collapses
+the whole stack. Loose pictures name no stack and are ignored.
+
+Shapes and rules the frontend depends on:
+
+- **Every figure in the dialog comes from the preview, and only from it.** The
+  headline and the button label must render from the *same computed value*, not
+  merely the same endpoint. While the preview is in flight or has failed, show
+  an en dash and disable the confirm — never a zero, never a stale number.
+- **The stack buckets are disjoint and sum to `stacks_selected`:**
+  `stacks_eligible + stacks_skipped_locked + stacks_skipped_character_on_copy +
+  stacks_skipped_single_member`. Do not derive one by subtracting the others;
+  the server counts each directly and refuses to answer if the sum breaks.
+  `unknown_stack_ids` is *outside* the arithmetic (those are not stacks).
+- **The headline is `pictures_moving`**, computed over the eligible stacks only,
+  so it never includes a skipped stack's members. `picture_ids_moving` is the id
+  list behind it, for marking cards.
+- **`covers_gaining_metadata` is a union, not a sum**, of
+  `covers_gaining_tags` and `covers_gaining_score` — a cover can gain both.
+- **`bytes_held_by_copies` is held, not freed.** Never render it as freed,
+  reclaimed or saved space, and never as a figure block — it is a *sentence*
+  about what could later be reclaimed. Nothing is freed until the Scrapheap is
+  emptied, and `scrapheap_retention_days: null` means **never** (the default on
+  a fresh install), so the retention copy must branch on this value rather than
+  hardcode "30 days". `originals_deleted_from_disk` is always `0` and should be
+  stated out loud, exactly as the sibling delete-forever dialog states its own
+  zero.
+- **`reference_folder_pictures_moving` is a SUBSET of `pictures_moving`,** not a
+  fourth bucket: those rows move like any other, but their files are
+  user-managed and are not touched.
+- **`stacks[]` carries one row per selected stack**, eligible and skipped alike,
+  each with `stack_id`, `cover_picture_id`, `member_count`,
+  `copy_picture_ids` (empty when skipped), `eligible`, `skip_reason`,
+  `locked_sets` and `lost_characters`. Rows and headline come from the same
+  read, which is the property the auto-stack dialog lacked when it reported "62
+  stacks to create" for work that would create 3.
+- **`skip_reason` is a closed vocabulary:** `set_locked` (a live member is
+  frozen by a locked picture set — the **whole** stack is refused, with
+  `locked_sets` naming what to unlock), `character_only_on_copy` (a character
+  link sits only on a copy, with `lost_characters` naming it), `single_member`.
+  Menu state follows the shipped `Delete` item: disabled with the lock reason
+  only when **every** selected stack is locked; otherwise enabled, with the
+  dialog reporting the skips.
+- **The mutation's response mirrors the preview** field-for-field where they
+  overlap (`stacks_collapsed` == `stacks_eligible`, `pictures_moved` ==
+  `pictures_moving`, and so on), plus `tags_added`, `scores_lifted` and
+  `batch_id`. The skipped lists come back as **rows**, not counts, so the
+  receipt's second sentence can name what was skipped.
+- **`batch_id` is the undo handle** for `POST /operations/batches/{batch_id}/undo`;
+  the whole call is one `stack.keep_cover_only` operation, so one `Ctrl+Z`
+  reverses every stack it collapsed. It is `null` when nothing was collapsed.
+- **No `confirm_token` and no type-to-confirm.** Those are reserved for
+  destroying an on-disk original. Cancel is focused by default and plain `Enter`
+  does not accept, deliberately inverting the app's dialog convention because
+  users arrive with `Enter` under their finger from the queue's verdict keys.
+
+**Punch-list for the frontend lane:** `stack.keep_cover_only` does not match any
+pattern in `DESTRUCTIVE_RULES` (`useOperationStore.js`), so the receipt will get
+the default duration rather than `DESTRUCTIVE_RECEIPT_MS`. Add a rule for it
+(the design expects the 8s window to be inherited automatically) and an entry in
+`OP_ICONS` for `mdi-layers-minus`, matching the menu item and the confirm button.
+
 ---
 
 
