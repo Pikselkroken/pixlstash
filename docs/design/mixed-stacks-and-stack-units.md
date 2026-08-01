@@ -243,6 +243,13 @@ The gate is deny-by-default and an undeclared route 403s and fails CI.
 
 ## Open
 
+* **`bulk_auto_stack`'s websocket announcement is still narrow.** It broadcasts
+  each result's `picture_ids` (the group's own members), so a folded stack's
+  siblings never get the update — its own comment admits this as a "rare,
+  exact-tier gap". D1 does not fix it and slightly widens its reach, since the
+  run now folds stacks more deliberately. Fixing it means returning the
+  stack-expanded ids from `bulk_auto_stack_in_session` and passing them through.
+  Deliberately deferred rather than smuggled into the D1 commit.
 * Whether users expand at all. If they never do, the header and button text carry
   the entire disclosure and the button's size suffix must not degrade. One
   afternoon of observation settles it; the measurements cannot.
