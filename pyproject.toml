@@ -105,6 +105,7 @@ dev = [
 
 [project.scripts]
 pixlstash-server = "pixlstash.app:main"
+pixlstash-libraries = "pixlstash.libraries:main"
 
 [build-system]
 requires = ["setuptools>=42", "wheel", "twine"]
