@@ -453,6 +453,32 @@
         <v-icon size="15">mdi-history</v-icon>
         Review decided groups
       </button>
+
+      <!-- The route to the stacks, offered only here: this is the end-of-task
+           surface, and the toolbar would put it in front of someone mid-triage.
+           Gated on the LIBRARY having a live stack with two or more members,
+           never on this session's tally, because a library can hold hundreds of
+           stacks that predate the feature.
+
+           It goes to the PLACE, not to the action: All Pictures with the
+           stacked filter applied, nothing selected, nothing about to happen. A
+           one-click path from a satisfying "Queue clear" screen into a confirm
+           for hundreds of deletions is how you get a bad afternoon. A real route
+           push, so it is reloadable and Back returns to the queue. -->
+      <button
+        v-if="hasLiveStacks"
+        type="button"
+        class="qdecided"
+        @click="onReviewStacks"
+      >
+        <v-icon size="15">mdi-layers-outline</v-icon>
+        Review your stacks
+      </button>
+      <p v-if="hasLiveStacks" class="qdone-hint">
+        {{ store.mixedLiveStackCount.toLocaleString() }}
+        {{ store.mixedLiveStackCount === 1 ? "stack holds" : "stacks hold" }}
+        more than one picture. Every copy is still in your library.
+      </p>
     </div>
 
     <DedupCompareDialog
@@ -1663,6 +1689,32 @@ function onToggleDecided() {
 }
 
 /**
+ * Does the LIBRARY hold a stack worth looking at?
+ *
+ * `mixedLiveStackCount` is the server's own count of live stacks with two or
+ * more members, and the store loads it on every queue open (the deck badges
+ * need the same read), so this is a standing fact about the vault rather than a
+ * tally of what this session decided. That distinction is the point: a user can
+ * arrive with hundreds of stacks built long before the duplicate queue existed,
+ * and gating the route on today's verdicts would hide it from exactly them.
+ */
+const hasLiveStacks = computed(() => store.mixedLiveStackCount > 0);
+
+/**
+ * Leave the queue for the stacks themselves.
+ *
+ * A real route push carrying `stack_state=stacked`, so the destination is
+ * reloadable and Back comes back here. It navigates to a PLACE and nothing
+ * more: the grid mounts fresh with an empty selection, no dialog opens, and no
+ * destructive action is armed. Keep it that way: the shortcut exists so the
+ * user can look at what they have, not so a satisfied click can turn into a
+ * confirm for hundreds of deletions.
+ */
+function onReviewStacks() {
+  router.push({ path: "/", query: { stack_state: "stacked" } });
+}
+
+/**
  * Flip to or from the Mixed stacks page.
  *
  * Unlike the Decided flip this reloads nothing: it is a page of the same
@@ -2495,6 +2547,14 @@ defineExpose({ windowedGroups, tierLabel });
   max-width: 52ch;
   font-size: var(--text-sm);
   line-height: var(--leading-body);
+}
+
+/* The one-line caption under the stacks route. Quieter than the summary above
+   it: it explains a control rather than reporting the outcome. Qualified by
+   `.qdone` so it outranks the `.qdone p` size above rather than losing to it. */
+.qdone .qdone-hint {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-background), 0.6);
 }
 
 .visually-hidden {

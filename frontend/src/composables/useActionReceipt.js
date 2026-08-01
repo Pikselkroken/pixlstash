@@ -71,6 +71,13 @@ export function useActionReceipt({ announce = true } = {}) {
   /**
    * The sentence. A multi-step undo says how far it went instead of naming only
    * the oldest step it reverted, which would understate what just happened.
+   *
+   * An action that deliberately left something alone gets a SECOND sentence
+   * here (`entry.note`), on the same pill rather than in a notice of its own:
+   * splitting one action across two surfaces is how the half that needed a
+   * decision gets dismissed with the half that did not. The note is dropped
+   * once the pill flips to "Undone", where it would describe work that has just
+   * been taken back.
    */
   const text = computed(() => {
     const entry = receipt.value;
@@ -79,7 +86,7 @@ export function useActionReceipt({ announce = true } = {}) {
       return `Undone ${entry.steps} steps: ${entry.summary}`;
     }
     if (undone.value) return `Undone: ${entry.summary}`;
-    return entry.summary;
+    return entry.note ? `${entry.summary}. ${entry.note}` : entry.summary;
   });
 
   /** The standard attribute for "this control has a keyboard shortcut". */

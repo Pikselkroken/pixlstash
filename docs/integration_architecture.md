@@ -334,11 +334,27 @@ Shapes and rules the frontend depends on:
   does not accept, deliberately inverting the app's dialog convention because
   users arrive with `Enter` under their finger from the queue's verdict keys.
 
-**Punch-list for the frontend lane:** `stack.keep_cover_only` does not match any
-pattern in `DESTRUCTIVE_RULES` (`useOperationStore.js`), so the receipt will get
-the default duration rather than `DESTRUCTIVE_RECEIPT_MS`. Add a rule for it
-(the design expects the 8s window to be inherited automatically) and an entry in
-`OP_ICONS` for `mdi-layers-minus`, matching the menu item and the confirm button.
+**The frontend consumer (shipped).** `api/stacks.js` owns both URLs
+(`previewKeepCoverOnly` / `keepCoverOnly`); the copy and the two selection
+computations are pure functions in `utils/keepCoverOnly.js`;
+`KeepCoverOnlyDialog.vue` renders the consent and `ImageGrid.vue` owns the
+preview, the run and the ghosting. Four points where the wiring is load-bearing:
+
+- **One computed, two renderings.** `picturesMoving` is `null` until the preview
+  lands and drives both the headline block and the confirm label, so the two
+  cannot describe different moments even in principle.
+- **The confirm acts on the stacks the preview described**, frozen when the
+  dialog opened (`keepCoverOnlyTargetStackIds`), never on the live selection
+  re-read at confirm time.
+- **The menu's stack count and its locked gate are client-side** and only decide
+  what is *offered* (`selectedKeepCoverOnlyStacks` /
+  `keepCoverOnlyLockReason`); the preview stays authoritative about what
+  actually happens.
+- **`stack.keep_cover_only` is registered** in `OP_ICONS` (`mdi-layers-minus`)
+  and in `DESTRUCTIVE_RULES`, so the receipt inherits the 8s window. The skipped
+  rows become the receipt's second sentence via
+  `useOperationStore.noteNextReceipt(opType, note)`: the same pill as the move,
+  never a competing notice.
 
 ---
 

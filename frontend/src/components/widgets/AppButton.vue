@@ -89,6 +89,20 @@ watch(
     nextTick(() => rootEl.value?.focus());
   },
 );
+
+/**
+ * Put the keyboard on this button.
+ *
+ * Exposed for the dialogs that have to place initial focus deliberately rather
+ * than let the browser pick. `KeepCoverOnlyDialog` focuses its Cancel on open,
+ * because the user arrives from the duplicate queue with Enter under their
+ * finger. Reaching through `$el` would work, but it hides that intent.
+ */
+function focus() {
+  rootEl.value?.focus();
+}
+
+defineExpose({ focus });
 </script>
 
 <style scoped>
@@ -182,9 +196,13 @@ watch(
   filter: brightness(1.08);
 }
 
-/* Danger — destructive. `on-error`, not a hardcoded #fff: white holds 4.86:1 on
-   the light `error` fill but only 3.68:1 on the brighter dark-theme one, so the
-   authored pair flips to the warm near-black there (4.68:1). */
+/* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author
+   `error: #b54538` with `on-error: #f7f1ea`, the warm near-white, at 4.83:1;
+   main.js says "(same value in both themes)" on that very line. The comment
+   here previously claimed the pair flipped to the warm near-black in dark,
+   which was never true of `error` (it is true of `warning`, whose fill IS
+   brighter in dark). Recorded because a stale contrast note is the kind of
+   thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));

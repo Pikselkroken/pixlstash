@@ -882,3 +882,55 @@ describe("useOperationStore — ghost tiles", () => {
     expect(store.collapsingPictureIds).toEqual([]);
   });
 });
+
+// A second sentence on the SAME pill, for what an action deliberately did not
+// do. Keep cover only skips a whole stack when a locked set or a character link
+// would lose data, and that belongs beside the move it reports: splitting one
+// action across a pill and a notice is how the half that needed a decision gets
+// dismissed along with the half that did not.
+describe("the receipt's second sentence", () => {
+  const KEEP_COVER = {
+    id: 2,
+    op_type: "stack.keep_cover_only",
+    summary: "Kept the cover of 3 stacks · 414 pictures to the Scrapheap",
+    target_count: 414,
+  };
+
+  it("appends the caller's note to the operation the note names", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt(
+      "stack.keep_cover_only",
+      "2 stacks skipped: held by a locked picture set.",
+    );
+    serve([op(KEEP_COVER), op()]);
+    await store.refresh();
+
+    expect(store.receipt.summary).toContain("414 pictures to the Scrapheap");
+    expect(store.receipt.note).toBe(
+      "2 stacks skipped: held by a locked picture set.",
+    );
+  });
+
+  // A note that outlived its action would eventually describe an unrelated one,
+  // and a wrong second sentence is worse than none.
+  it("never lands on an operation of a different type", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt("stack.keep_cover_only", "2 stacks skipped.");
+    serve([op({ id: 2 }), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
+
+    // …and it is consumed rather than carried forward to the next receipt.
+    serve([op(KEEP_COVER), op({ id: 2 }), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
+  });
+
+  it("treats a blank note as no note", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt("stack.keep_cover_only", "");
+    serve([op(KEEP_COVER), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
+  });
+});

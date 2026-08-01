@@ -1,8 +1,17 @@
 # Keep cover only: collapsing a stack to its cover
 
-Status: designed and approved by the owner, not implemented.
-Reconciled `ui-ux-expert` / `lead-designer` proposals. Where they disagreed, the
-resolution and its reasoning are recorded here; this file wins.
+Status: **shipped** (backend and frontend). Designed and approved by the owner,
+reconciled from the `ui-ux-expert` / `lead-designer` proposals. Where they
+disagreed, the resolution and its reasoning are recorded here; this file wins.
+
+Where it lives: `pixlstash/services/keep_cover_only_service.py` +
+`pixlstash/routes/stacks.py` on the backend; on the frontend
+`frontend/src/api/stacks.js` (the two URLs),
+`frontend/src/utils/keepCoverOnly.js` (the copy and the two selection
+computations, both pure), `frontend/src/components/widgets/KeepCoverOnlyDialog.vue`
+(the consent), the menu item in `ImageGridContextMenu.vue` /
+`SelectionMenu.vue`, and the preview / run / ghosting in `ImageGrid.vue`. The
+wire contract is `docs/integration_architecture.md` §2.2.
 
 Companion to `mixed-stacks-and-stack-units.md`, which owns the queue and the
 deck model. This document owns the one destructive action in the flow.
@@ -231,7 +240,7 @@ rather than importing a second copy.** Reported as a third, disjoint bucket
 alongside imported and duplicate: never automatic, because the user deliberately
 scrapheapped them. In progress separately.
 
-## New token
+## New token (shipped)
 
 `--rail-w: 3px`, the leading status rail. The tokens file already names two
 rendered lengths on the reasoning that they "cannot borrow from the spacing
@@ -240,17 +249,30 @@ surface picking 3px". Three components already carry a raw 3px rail.
 
 ## Cleanups this work should take
 
-1. `AppButton.vue`'s danger comment claims `on-error` "flips to the warm
+1. ~~`AppButton.vue`'s danger comment claims `on-error` "flips to the warm
    near-black" in dark. `main.js` has `"on-error": "#f7f1ea"` in **both** themes,
    one line even saying "(same value in both themes)". Fix the comment, not the
-   value: a stale contrast note gets "corrected" in the wrong direction.
+   value: a stale contrast note gets "corrected" in the wrong direction.~~
+   **Done** with this lane; the note now records what was wrong and why, so the
+   next reader does not re-derive it from the value.
 2. Two destructive-button looks: `AppButton variant="danger"` (solid fill) versus
    `DeleteForeverDialog`'s hand-rolled tinted `.btn-danger`. Converge on the
-   `App*` layer.
+   `App*` layer. **Deferred.** `KeepCoverOnlyDialog` is built on the `App*` layer
+   already, so it adds no drift; converging the other way changes how the
+   type-to-confirm dialog looks, which is a visible change to the app's most
+   destructive surface and goes past the UI/UX expert first.
 3. Four tinted consequence panels with four different alpha pairs. Converge on
-   one `.notice-panel` recipe with a hue modifier.
-4. `DeleteForeverDialog.vue:419` raw `opacity: 0.38` → `--opacity-disabled`.
-5. A fourth `<kbd>` recipe; converge on `AppButton`'s `key-hint`.
+   one `.notice-panel` recipe with a hue modifier. **Deferred**, same reason: the
+   new dialog's panel matches `DeleteForeverDialog`'s `.lock-note` exactly
+   (`info` at 0.08 fill / 0.5 border), so it is a fifth call site of an existing
+   recipe rather than a fifth recipe, but collapsing all four is a re-render of
+   three shipped surfaces.
+4. ~~`DeleteForeverDialog.vue:419` raw `opacity: 0.38` → `--opacity-disabled`.~~
+   **Done** with this lane. Identical value, no visual change.
+5. A fourth `<kbd>` recipe; converge on `AppButton`'s `key-hint`. **Deferred.**
+   `KeepCoverOnlyDialog` copies `DedupAutoStackDialog`'s `<kbd>` verbatim, which
+   is what "matching the sibling verbatim" asks for above; converging them is one
+   change across all the surfaces that carry keycaps, not a per-dialog decision.
 
 ## Acceptance criteria
 

@@ -117,6 +117,8 @@
       :comfyui-configured="filterStore.comfyuiConfigured"
       :show-remove-from-stack="showRemoveFromStack"
       :selected-multiple-stack-ids="selectedMultipleStackIds"
+      :keep-cover-only-stack-count="keepCoverOnlyStackCount"
+      :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
@@ -139,6 +141,7 @@
       @create-stack="createStackFromSelection"
       @create-stacks-from-groups="createStacksFromSelectedGroups"
       @remove-from-group="removeFromGroup"
+      @keep-cover-only="openKeepCoverOnly"
       @delete-selected="deleteSelected"
       @open-tag-panel="handleContextMenuOpenTagPanel"
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
@@ -299,6 +302,19 @@
       :busy="deleteForeverBusy"
       @confirm="confirmDeleteForever"
       @cancel="cancelDeleteForever"
+    />
+    <!-- The one consent for collapsing stacks to their covers. Deliberately NOT
+         a sibling of DeleteForeverDialog's ceremony: no confirm token and no
+         type-to-confirm, because this is the same recoverable soft delete the
+         grid's Delete performs. -->
+    <KeepCoverOnlyDialog
+      :open="keepCoverOnlyOpen"
+      :preview="keepCoverOnlyPreview"
+      :loading="keepCoverOnlyLoading"
+      :preview-failed="keepCoverOnlyPreviewFailed"
+      :busy="keepCoverOnlyBusy"
+      @close="closeKeepCoverOnly"
+      @confirm="runKeepCoverOnly"
     />
     <div
       v-if="isMultiCharacterView || isSetOverlapView"
@@ -1058,6 +1074,8 @@
           :comfyui-configured="filterStore.comfyuiConfigured"
           :show-remove-from-stack="showRemoveFromStack"
           :selected-multiple-stack-ids="selectedMultipleStackIds"
+          :keep-cover-only-stack-count="keepCoverOnlyStackCount"
+          :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
           :grouping-lock-reason="partialStackGroupingReason"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
@@ -1071,6 +1089,7 @@
           @clear-selection="clearSelection"
           @added-to-set="handleOverlayAddedToSet"
           @remove-from-group="removeFromGroup"
+          @keep-cover-only="openKeepCoverOnly"
           @delete-selected="deleteSelected"
           @set-project="handleSetProjectForSelected"
           @add-to-character="handleAddToCharacter"
@@ -1176,6 +1195,7 @@ import ProgressOverlay from "../widgets/ProgressOverlay.vue";
 import ShareDialog from "../io/ShareDialog.vue";
 import SnapshotsWithDeletedDialog from "../widgets/SnapshotsWithDeletedDialog.vue";
 import DeleteForeverDialog from "../widgets/DeleteForeverDialog.vue";
+import KeepCoverOnlyDialog from "../widgets/KeepCoverOnlyDialog.vue";
 import { appendShareToken, isReadOnly } from "../../utils/apiClient";
 import {
   getPictureMetadata,
@@ -1198,7 +1218,17 @@ import {
   downloadExport,
 } from "../../api/pictures";
 import { addPictureTag, removePictureTag } from "../../api/tags";
-import { getStack, removeStackMembers } from "../../api/stacks";
+import {
+  getStack,
+  keepCoverOnly,
+  previewKeepCoverOnly,
+  removeStackMembers,
+} from "../../api/stacks";
+import {
+  keepCoverOnlyLockReason as buildKeepCoverOnlyLockReason,
+  keepCoverOnlySkipNote,
+  selectedKeepCoverOnlyStacks,
+} from "../../utils/keepCoverOnly";
 import {
   getCharacter,
   listCharacters,
@@ -3767,6 +3797,123 @@ async function deleteSelected(idsOverride = null) {
   }
 }
 
+// ── Keep cover only ─────────────────────────────────────────────────────────
+// One preview over one selection, then one call. The dialog is the only consent
+// (no type-to-confirm: this is a recoverable soft delete, not the destruction of
+// an on-disk original). See docs/design/keep-cover-only.md.
+
+/** The dotted op type the backend records, so the receipt note can match it. */
+const KEEP_COVER_ONLY_OP_TYPE = "stack.keep_cover_only";
+
+const keepCoverOnlyOpen = ref(false);
+const keepCoverOnlyPreview = ref(null);
+const keepCoverOnlyLoading = ref(false);
+const keepCoverOnlyPreviewFailed = ref(false);
+const keepCoverOnlyBusy = ref(false);
+/**
+ * The stacks the open dialog is describing, frozen when it opened.
+ *
+ * The confirm must act on exactly what the preview reported. Reading the live
+ * selection again at confirm time would let a background refetch, or a stray
+ * click behind the scrim, move the target out from under the figures the user
+ * agreed to.
+ */
+const keepCoverOnlyTargetStackIds = ref([]);
+// Guards a preview that lands after its dialog was closed or reopened.
+let keepCoverOnlyRunToken = 0;
+
+async function openKeepCoverOnly() {
+  if (isReadOnly.value || keepCoverOnlyBusy.value) return;
+  const stackIds = keepCoverOnlyStacks.value
+    .map((stack) => Number(stack.id))
+    .filter((id) => Number.isFinite(id));
+  if (!stackIds.length) return;
+  keepCoverOnlyTargetStackIds.value = stackIds;
+  keepCoverOnlyPreview.value = null;
+  keepCoverOnlyPreviewFailed.value = false;
+  keepCoverOnlyLoading.value = true;
+  keepCoverOnlyOpen.value = true;
+  const token = ++keepCoverOnlyRunToken;
+  try {
+    const report = await previewKeepCoverOnly({
+      stackIds,
+      baseUrl: props.backendUrl,
+    });
+    if (token !== keepCoverOnlyRunToken) return;
+    keepCoverOnlyPreview.value = report;
+  } catch (err) {
+    if (token !== keepCoverOnlyRunToken) return;
+    // A failed preview is its own state in the dialog, never a screen of
+    // zeroes: "nobody could ask" and "there is nothing to collapse" must not
+    // look the same.
+    console.error(
+      `Keep cover only: the preview for stacks [${stackIds.join(", ")}] could not be read`,
+      err,
+    );
+    keepCoverOnlyPreviewFailed.value = true;
+  } finally {
+    if (token === keepCoverOnlyRunToken) keepCoverOnlyLoading.value = false;
+  }
+}
+
+function closeKeepCoverOnly() {
+  // Bumping the token orphans any preview still in flight, so it cannot write
+  // figures into a dialog the user has already dismissed.
+  keepCoverOnlyRunToken += 1;
+  keepCoverOnlyOpen.value = false;
+  keepCoverOnlyPreview.value = null;
+  keepCoverOnlyLoading.value = false;
+  keepCoverOnlyPreviewFailed.value = false;
+  keepCoverOnlyTargetStackIds.value = [];
+}
+
+async function runKeepCoverOnly() {
+  const stackIds = keepCoverOnlyTargetStackIds.value;
+  if (!stackIds.length || keepCoverOnlyBusy.value) return;
+  keepCoverOnlyBusy.value = true;
+  try {
+    const result = await keepCoverOnly({
+      stackIds,
+      baseUrl: props.backendUrl,
+    });
+    const movedIds = Array.isArray(result?.picture_ids_moved)
+      ? result.picture_ids_moved
+      : [];
+    // Same treatment as the grid's own delete: the tiles stay ghosted in place
+    // while undo is one click away, and the receipt's clock decides when the
+    // grid closes the gap. `markGhosted` declines in a read-only session, where
+    // there is no undo window at all.
+    if (movedIds.length && !operationStore.markGhosted(movedIds)) {
+      removeImagesById(movedIds);
+    }
+    selectedImageIds.value = [];
+    lastSelectedImageId.value = null;
+    // What the run deliberately left alone rides the SAME pill as what it did,
+    // as a second sentence, rather than a notice competing with it.
+    operationStore.noteNextReceipt(
+      KEEP_COVER_ONLY_OP_TYPE,
+      keepCoverOnlySkipNote(result),
+    );
+    // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
+    operationStore.refresh();
+    emit("refresh-sidebar");
+    keepCoverOnlyOpen.value = false;
+    keepCoverOnlyPreview.value = null;
+    keepCoverOnlyTargetStackIds.value = [];
+  } catch (err) {
+    console.error(
+      `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
+      err,
+    );
+    noticeStore.error(
+      `Couldn't collapse those stacks. ${errorDetail(err)}`,
+      { key: "keep-cover-only" },
+    );
+  } finally {
+    keepCoverOnlyBusy.value = false;
+  }
+}
+
 async function handleSetProjectForSelected(payload) {
   if (partialStackGroupingReason.value) {
     noticeStore.warning(partialStackGroupingReason.value, {
@@ -4174,6 +4321,32 @@ const selectionLockReason = computed(() => {
     `choose Unlock.`
   );
 });
+
+// ── Keep cover only ─────────────────────────────────────────────────────────
+// The action's unit is the STACK: a selection names stacks, each collapses to
+// its own cover, and loose pictures in a mixed selection are ignored. That is
+// only honest because the menu label counts stacks, which is what these two
+// computeds feed. See docs/design/keep-cover-only.md.
+
+// Both computations are pure and live in `utils/keepCoverOnly.js`, where they
+// are unit-tested without a mounted grid; the whole-stack locked refusal in
+// particular is a rule that has to hold, not a rule that has to render.
+const keepCoverOnlyStacks = computed(() =>
+  selectedKeepCoverOnlyStacks({
+    selectedIds: selectedImageIds.value,
+    images: allGridImages.value,
+  }),
+);
+
+const keepCoverOnlyStackCount = computed(() => keepCoverOnlyStacks.value.length);
+
+const keepCoverOnlyLockReason = computed(() =>
+  buildKeepCoverOnlyLockReason({
+    stacks: keepCoverOnlyStacks.value,
+    isLocked: (id) => lockedSetsStore.isLocked(id),
+    lockedSetNames: (id) => lockedSetsStore.lockedSetNames(id),
+  }),
+);
 
 const selectedExpandedCount = computed(() => {
   const selectedSet = new Set(

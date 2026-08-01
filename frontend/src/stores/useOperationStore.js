@@ -246,6 +246,22 @@ export const useOperationStore = defineStore("operation", () => {
   let receiptStartedAt = 0;
   let receiptPaused = false;
 
+  /**
+   * A second sentence the CALLER wants on the next receipt of one op type.
+   *
+   * The server's `summary` says what an operation did; some actions also have
+   * something to say about what they deliberately did NOT do: Keep cover only
+   * skips a whole stack when a locked set or a character link would lose data.
+   * That belongs on the same pill as the move: two surfaces for one action means
+   * the user reads the reassuring half and dismisses the half that needed a
+   * decision.
+   *
+   * Held as `{ opType, note }` and consumed by the FIRST receipt built, matching
+   * op type or not, so a note can never drift onto a later unrelated action. A
+   * mismatched receipt drops it instead of carrying it forward.
+   */
+  let pendingReceiptNote = null;
+
   // Highest operation id seen by a completed refresh. Used to tell a genuinely
   // new operation from a re-read of the same history — an id we have already
   // seen must never raise a second receipt.
@@ -374,6 +390,14 @@ export const useOperationStore = defineStore("operation", () => {
           operations.value.filter((op) => op?.batch_id === batchId).length - 1,
         )
       : 0;
+    // Consumed by the first receipt built after it was set, whether or not the
+    // op type matches: carrying it forward would eventually land it on an
+    // unrelated action, and a wrong second sentence is worse than none.
+    const note =
+      pendingReceiptNote && pendingReceiptNote.opType === opType
+        ? pendingReceiptNote.note
+        : "";
+    pendingReceiptNote = null;
     receiptKey += 1;
     return {
       key: receiptKey,
@@ -383,6 +407,9 @@ export const useOperationStore = defineStore("operation", () => {
       opType,
       icon: iconForOpType(opType),
       summary: summarizeOperation(operation),
+      // What the action deliberately left alone, as a second sentence on the
+      // same pill. Empty for everything that has nothing to add.
+      note,
       targetCount: Number(operation?.target_count) || 0,
       mergedCount: merged,
       steps,
@@ -393,6 +420,22 @@ export const useOperationStore = defineStore("operation", () => {
       undoable: operation?.undoable !== false,
       durationMs: destructive ? DESTRUCTIVE_RECEIPT_MS : RECEIPT_MS,
     };
+  }
+
+  /**
+   * Arm a second sentence for the next receipt of `opType`.
+   *
+   * Call it immediately BEFORE the `refresh()` that will narrate the action, so
+   * the note and the operation it describes arrive together. A blank note
+   * clears any armed one rather than queueing an empty sentence.
+   *
+   * @param {string} opType - the dotted op type the note belongs to.
+   * @param {string} note - the sentence, already worded for the user.
+   * @returns {void}
+   */
+  function noteNextReceipt(opType, note) {
+    const text = String(note ?? "").trim();
+    pendingReceiptNote = text ? { opType: String(opType ?? ""), note: text } : null;
   }
 
   /**
@@ -941,6 +984,7 @@ export const useOperationStore = defineStore("operation", () => {
     wsDebounceTimer = null;
     wsNarrate = false;
     queuedUndos = 0;
+    pendingReceiptNote = null;
     operations.value = [];
     canUndo.value = false;
     canRedo.value = false;
@@ -983,6 +1027,7 @@ export const useOperationStore = defineStore("operation", () => {
     undoBatchById,
     showReceipt,
     buildReceipt,
+    noteNextReceipt,
     dismissReceipt,
     pauseReceipt,
     resumeReceipt,

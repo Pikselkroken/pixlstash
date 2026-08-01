@@ -62,9 +62,14 @@ vi.mock("../../api/dedup", () => ({
 // mirror write into the URL feeds back into the component's own route sync.
 const routeMock = reactive({ name: "duplicates", query: {} });
 const routerReplace = vi.fn();
+const routerPush = vi.fn();
 vi.mock("vue-router", () => ({
   useRoute: () => routeMock,
-  useRouter: () => ({ replace: (...a) => routerReplace(...a) }),
+  useRouter: () => ({
+    replace: (...a) => routerReplace(...a),
+    // Only the queue-clear route to the stacks pushes; the URL mirror replaces.
+    push: (...a) => routerPush(...a),
+  }),
 }));
 
 vi.mock("../../api/pictures", () => ({
@@ -277,6 +282,7 @@ beforeEach(() => {
   routeMock.name = "duplicates";
   routeMock.query = {};
   routerReplace.mockReset();
+  routerPush.mockReset();
   __actionListeners.length = 0;
   __operationStoreMock.refresh.mockReset();
   __operationStoreMock.nextUndo = null;
@@ -2893,5 +2899,74 @@ describe("DuplicateQueue: the two-way shortcut", () => {
     expect(store.groups).toHaveLength(1);
     expect(store.showingMixed).toBe(true);
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+});
+
+// ── The route from the queue-clear screen to the stacks ────────────────────
+//
+// The end-of-task surface is the one place this is offered: the toolbar would
+// put it in front of someone mid-triage. Two properties are load-bearing and
+// are pinned here: the gate is a fact about the LIBRARY, not about this
+// session's tally, and the shortcut goes to a PLACE rather than to the action.
+describe("DuplicateQueue: the route to the stacks", () => {
+  /** Mount straight onto the queue-clear screen. */
+  async function mountCleared({ liveStackCount = 209 } = {}) {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([], { live_stack_count: liveStackCount }),
+    );
+    const { wrapper, store } = await mountQueue([]);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Queue clear");
+    return { wrapper, store };
+  }
+
+  /** The queue-clear screen's stacks button, or undefined when not offered. */
+  function stacksButton(wrapper) {
+    return wrapper
+      .findAll(".qdone button")
+      .find((b) => b.text().includes("Review your stacks"));
+  }
+
+  // The owner's library holds 160 stacks that predate the feature. Gating on
+  // this session's verdicts would hide the route from exactly that user.
+  it("is offered on a cleared queue that decided nothing this session", async () => {
+    const { wrapper, store } = await mountCleared();
+    expect(store.stackedCount).toBe(0);
+    expect(stacksButton(wrapper)).toBeTruthy();
+    expect(wrapper.text()).toContain("209 stacks hold");
+  });
+
+  it("is not offered when the library holds no multi-picture stack", async () => {
+    const { wrapper } = await mountCleared({ liveStackCount: 0 });
+    expect(stacksButton(wrapper)).toBeUndefined();
+  });
+
+  // A one-click path from a satisfying "Queue clear" screen into a confirm for
+  // hundreds of deletions is how you get a bad afternoon. It lands in All
+  // Pictures with the stacked filter applied and nothing else happening.
+  it("goes to the place, not to the action", async () => {
+    const { wrapper } = await mountCleared();
+    await stacksButton(wrapper).trigger("click");
+
+    expect(routerPush).toHaveBeenCalledTimes(1);
+    expect(routerPush).toHaveBeenCalledWith({
+      path: "/",
+      query: { stack_state: "stacked" },
+    });
+    // Nothing is selected and nothing is armed: the push carries no picture or
+    // stack ids at all, and no confirm was opened on the way out.
+    const [to] = routerPush.mock.calls[0];
+    expect(Object.keys(to.query)).toEqual(["stack_state"]);
+    expect(JSON.stringify(to)).not.toMatch(/picture|stack_id|ids/);
+    expect(wrapper.text()).not.toMatch(/Scrapheap/);
+  });
+
+  // A real route change, so it is reloadable and Back returns to the queue.
+  // The URL mirror uses replace() for its own writes; this must not.
+  it("pushes a real history entry rather than replacing the queue's", async () => {
+    const { wrapper } = await mountCleared();
+    routerReplace.mockReset();
+    await stacksButton(wrapper).trigger("click");
+    expect(routerReplace).not.toHaveBeenCalled();
   });
 });

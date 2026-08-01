@@ -416,7 +416,8 @@ function confirmDeleteUnprotected() {
 }
 
 .btn:disabled {
-  opacity: 0.38;
+  /* The named token, same value: it is the one state the system lets fade. */
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
