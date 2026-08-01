@@ -70,7 +70,27 @@
           :style="thumbBoxStyle(candidate)"
           aria-hidden="true"
         ></span>
-        <span v-if="focused" class="gnum">{{ i + 1 }}</span>
+        <!-- The top-left corner is a COLUMN, not a slot: the index and the lock
+             chip can both be present (a locked candidate in a focused row) and
+             used to be stacked on the same pixels. Same construction as
+             ImageGrid's .thumbnail-top-left-badges. The index leads because
+             `focused` is a row-level fact (every thumb in the strip shows its
+             index, or none does), so leading with it keeps the whole strip's
+             indices on one line, which is the only reason the index exists. -->
+        <div v-if="focused || isLockedOut(candidate)" class="gtl">
+          <span v-if="focused" class="gnum">{{ i + 1 }}</span>
+          <!-- The server's exclusion, not the user's, so it gets its own marker:
+               the two can appear in the same strip and must never be read as the
+               same walk-back-able state. Same chip as ReviewBinaryCard's
+               .rs-thumb-lock, so the app has one lock chip. -->
+          <span
+            v-if="isLockedOut(candidate)"
+            class="glock"
+            :class="{ 'glock--flash': flashIds.includes(idOf(candidate)) }"
+          >
+            <v-icon size="12">mdi-lock-outline</v-icon>
+          </span>
+        </div>
         <span
           v-if="
             idOf(candidate) === coverId &&
@@ -86,14 +106,23 @@
              (pointer-events stays off, see the CSS) — the thumbnail keeps
              owning click=cover, right-click=exclude, double-click=compare.
              aria-hidden: the same facts live in Compare's meta grid, which
-             is the queue's readable surface for them. -->
-        <span v-if="loadThumbnails" class="gstars" aria-hidden="true">
-          <StarRatingOverlay
-            :score="Number(candidate.score) || 0"
-            :icon-size="14"
-            :compact="true"
-          />
-        </span>
+             is the queue's readable surface for them.
+
+             The top-right corner is a column for the same reason as the
+             top-left, and stays one even though the stars are its only member
+             today. Grid rule for whoever adds the next one: a PERMANENT badge
+             leads, a hover-only one follows. A leading member that is only
+             `opacity: 0` is still in flow, so the column itself never moves;
+             only what sits beneath it does. -->
+        <div v-if="loadThumbnails" class="gtr">
+          <span class="gstars" aria-hidden="true">
+            <StarRatingOverlay
+              :score="Number(candidate.score) || 0"
+              :icon-size="14"
+              :compact="true"
+            />
+          </span>
+        </div>
         <span
           v-if="loadThumbnails && smartTextOf(candidate)"
           class="gsmart"
@@ -109,17 +138,6 @@
           size="20"
           >mdi-minus-circle-outline</v-icon
         >
-        <!-- The server's exclusion, not the user's, so it gets its own marker
-             and its own corner: the two can appear in the same strip and must
-             never be read as the same walk-back-able state. Same chip as
-             ReviewBinaryCard's .rs-thumb-lock, so the app has one lock chip. -->
-        <span
-          v-if="isLockedOut(candidate)"
-          class="glock"
-          :class="{ 'glock--flash': flashIds.includes(idOf(candidate)) }"
-        >
-          <v-icon size="12">mdi-lock-outline</v-icon>
-        </span>
       </button>
     </div>
 
@@ -793,9 +811,16 @@ function onDblClick(event) {
 }
 
 /* An excluded candidate stays visible and stays clickable: it is a choice the
-   user can walk back, not a deletion. */
-.gthumb--out {
-  opacity: 0.4;
+   user can walk back, not a deletion.
+
+   The fade lands on the IMAGE, never on the button. Everything else in the box
+   (the exclusion tick, the lock chip, the index, the rating) is what EXPLAINS
+   the state, and fading the explanation along with the photo is what made the
+   lock chip need a flash animation to be noticed at all. Same rule for the
+   server's lock below: only the picture dims. */
+.gthumb--out .gt,
+.gthumb--locked .gt {
+  opacity: var(--opacity-disabled);
 }
 
 .gt {
@@ -806,6 +831,9 @@ function onDblClick(event) {
      with the height so the widest allowed shape stays the same 2.4:1. */
   max-width: var(--gthumb-max-w);
   object-fit: cover;
+  /* Right-click toggles the exclusion in place, so the dim has to read as a
+     change rather than as a different picture appearing. */
+  transition: opacity var(--dur-1) var(--ease-standard);
 }
 
 /* The unknown-shape fallback: a 4:3 box at the strip's height. */
@@ -814,9 +842,35 @@ function onDblClick(event) {
   background: rgba(var(--v-theme-on-surface), 0.08);
 }
 
+/* The two top corners are badge COLUMNS, mirroring ImageGrid's
+   .thumbnail-top-left-badges / .thumbnail-top-right-badges. A corner that is a
+   single absolutely-positioned slot only works until it holds two things, which
+   is how the index came to be drawn underneath the lock chip. Display-only, like
+   every other overlay in this strip: the thumbnail owns the whole gesture
+   vocabulary and nothing here may take a press off it. */
+.gtl,
+.gtr {
+  position: absolute;
+  top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  pointer-events: none;
+}
+
+.gtl {
+  left: var(--space-2);
+  align-items: flex-start;
+}
+
+/* The stars' corner, so the column owns the inset they used to declare. */
+.gtr {
+  right: var(--space-2);
+  align-items: flex-end;
+}
+
 .gnum,
 .gcv {
-  position: absolute;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
@@ -826,14 +880,14 @@ function onDblClick(event) {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* In the top-left column; the column owns the inset. */
 .gnum {
-  top: var(--space-2);
-  left: var(--space-2);
   min-width: var(--badge-size);
   text-align: center;
 }
 
 .gcv {
+  position: absolute;
   bottom: var(--space-2);
   left: var(--space-2);
   text-transform: uppercase;
@@ -848,24 +902,21 @@ function onDblClick(event) {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
-/* A locked-out candidate is dimmed like a user exclusion, but it is NOT a
-   choice the user can walk back, so it does not take the pointer affordance.
-   Double-click still opens Compare: looking at it is always allowed. */
+/* A locked-out candidate is dimmed like a user exclusion (on the image, see
+   .gthumb--out above), but it is NOT a choice the user can walk back, so it does
+   not take the pointer affordance. Double-click still opens Compare: looking at
+   it is always allowed. */
 .gthumb--locked {
-  opacity: 0.4;
   cursor: not-allowed;
 }
 
 /* The server's exclusion marker. Same chip as ReviewBinaryCard's
    .rs-thumb-lock (one lock chip in the app), on the spacing scale rather than
-   that card's 3px one-off, and in the top-left corner because .gx owns the
+   that card's 3px one-off, and in the top-left column because .gx owns the
    middle and the two can appear in the same strip. Neutral at rest: the amber
    is spent only on a refused press, or a page of frozen rows becomes a
    warning field and the colour stops meaning anything. */
 .glock {
-  position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
   width: 18px;
   height: 18px;
   display: inline-flex;
@@ -909,31 +960,27 @@ function onDblClick(event) {
 }
 
 /* ── Hover-only score overlays ─────────────────────────────────────────────
-   The grid's exact reveal recipe (opacity on the overlay, 0.15s ease, shown
-   on the thumb's hover; the grid has no focus-triggered display and neither
-   does this — matched deliberately, hover means hover). Display-only:
-   pointer-events stays OFF at all times, unlike the grid where hover arms
-   the stars for clicking — here the thumbnail owns click=cover,
-   right-click=exclude and double-click=compare, and an interactive star
-   would swallow the cover click on the very pixels a hover invites. An
-   excluded thumb's 0.4 opacity dims these with everything else in it. */
+   The grid's exact reveal recipe (opacity on the overlay, shown on the thumb's
+   hover; the grid has no focus-triggered display and neither does this —
+   matched deliberately, hover means hover). Display-only: pointer-events stays
+   OFF at all times, unlike the grid where hover arms the stars for clicking —
+   here the thumbnail owns click=cover, right-click=exclude and
+   double-click=compare, and an interactive star would swallow the cover click
+   on the very pixels a hover invites. These keep full strength on an excluded
+   thumb: the fade is the picture's, not the box's.
+
+   The opacity lives on the OVERLAY, not on the .gtr column, so that one column
+   can hold both a hover-only member and a permanent one. */
 .gstars,
 .gsmart {
-  position: absolute;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-1) var(--ease-standard);
   pointer-events: none;
 }
 
 .gthumb:hover .gstars,
 .gthumb:hover .gsmart {
   opacity: 1;
-}
-
-/* Stars top-right: the grid's badge corner. */
-.gstars {
-  top: var(--space-2);
-  right: var(--space-2);
 }
 
 /* The smart score chip, bottom-right. The grid has NO thumbnail smart-score
@@ -943,6 +990,7 @@ function onDblClick(event) {
    --text-2xs on on-dark-surface), the sort menu's mdi-brain iconography and
    the metadata panel's two-decimal precision. */
 .gsmart {
+  position: absolute;
   bottom: var(--space-2);
   right: var(--space-2);
   display: inline-flex;
@@ -997,7 +1045,7 @@ function onDblClick(event) {
 }
 
 .gbtn:disabled {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 

@@ -4,6 +4,8 @@
 // neither of which is visible in a screenshot: only the focused row is a tab
 // stop, and the focused row says so in something other than CSS.
 
+import { readFileSync } from "node:fs";
+
 import { describe, it, expect, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
@@ -363,6 +365,127 @@ describe("DedupGroupRow — hover score overlays", () => {
     expect(
       thumbs[1].findComponent({ name: "StarRatingOverlay" }).exists(),
     ).toBe(true);
+  });
+});
+
+describe("DedupGroupRow — the thumbnail's badge corners and its fade", () => {
+  /** A pair where #1 is the user's exclusion and #2 is the server's lock. */
+  const mixed = {
+    ...group(2),
+    candidates: [
+      { picture_id: 1, score: 3, smart_score: 2.5 },
+      {
+        picture_id: 2,
+        score: 0,
+        stackable: false,
+        blocked_by_sets: [{ id: 7, name: "Portfolio" }],
+      },
+    ],
+  };
+
+  /** Focused (so the index renders) with #1 excluded and #2 locked. */
+  function mountMixed() {
+    return mountRow({ group: mixed, focused: true, excludedIds: [1] });
+  }
+
+  // jsdom computes no layout, so the corner geometry is pinned at the source
+  // like the verdict-label alignment above.
+  const styleSource = () => {
+    const source = readFileSync(
+      `${process.cwd()}/src/components/widgets/DedupGroupRow.vue`,
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    return source.slice(source.indexOf("<style"));
+  };
+  const blockOf = (marker) => {
+    const source = styleSource();
+    const start = source.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    return source.slice(start, source.indexOf("}", start));
+  };
+
+  // The bug: both chips were absolutely positioned at the same top-left inset,
+  // so a locked candidate in a focused row drew its index underneath the lock.
+  it("stacks the index and the lock in one top-left column instead of one slot", () => {
+    const locked = mountMixed().findAll(".gthumb")[1];
+    const column = locked.find(".gtl");
+    expect(column.exists()).toBe(true);
+
+    // Both chips live in that column, in reading order, and neither positions
+    // itself any more: the column owns the inset, so they cannot collide.
+    expect(column.find(".gnum").exists()).toBe(true);
+    expect(column.find(".glock").exists()).toBe(true);
+    expect(column.element.children).toHaveLength(2);
+    expect(column.element.children[0]).toBe(locked.find(".gnum").element);
+
+    const layout = blockOf(".gtl,");
+    expect(layout).toContain("flex-direction: column");
+    expect(layout).toContain("gap: var(--space-1)");
+    expect(blockOf(".gnum {")).not.toContain("top:");
+    expect(blockOf(".glock {")).not.toContain("top:");
+  });
+
+  // The top-right corner is a column for the same reason before it needs to be:
+  // the next badge added there must not restart the collision.
+  it("gives the top-right corner the same column", () => {
+    const column = mountMixed().find(".gtr");
+    expect(column.exists()).toBe(true);
+    expect(column.find(".gstars").exists()).toBe(true);
+    // The reveal opacity stays on the member, not the column, so one column can
+    // hold a hover-only badge and a permanent one at once.
+    expect(blockOf(".gstars,")).toContain("opacity: 0");
+    expect(blockOf(".gtl,")).not.toContain("opacity");
+  });
+
+  // The real fix: the fade used to sit on the BUTTON, so it dimmed the very
+  // chips that explain why the picture is dimmed. Structurally, the chips are
+  // siblings of the image and not its descendants, so an opacity on the image
+  // can never reach them.
+  it("fades only the picture, leaving the chips that explain it at full strength", () => {
+    const thumbs = mountMixed().findAll(".gthumb");
+    const excluded = thumbs[0];
+    const locked = thumbs[1];
+
+    expect(excluded.classes()).toContain("gthumb--out");
+    expect(locked.classes()).toContain("gthumb--locked");
+
+    // The explanatory marks are present and none of them is inside .gt.
+    for (const [thumb, selectors] of [
+      [excluded, [".gx", ".gnum", ".gstars", ".gsmart"]],
+      [locked, [".glock", ".gnum", ".gstars"]],
+    ]) {
+      const image = thumb.find(".gt").element;
+      for (const selector of selectors) {
+        const chip = thumb.find(selector);
+        expect(chip.exists()).toBe(true);
+        expect(image.contains(chip.element)).toBe(false);
+      }
+    }
+
+    // And the fade targets the image alone, at the disabled token.
+    const source = styleSource();
+    expect(source).not.toContain(".gthumb--out {");
+    expect(blockOf(".gthumb--out .gt,")).toContain(
+      "opacity: var(--opacity-disabled)",
+    );
+    expect(blockOf(".gthumb--locked {")).not.toContain("opacity");
+    // Toggling the exclusion in place has to read as a change. Newline-anchored:
+    // `.gthumb--locked .gt {` above ends in the same three characters.
+    expect(blockOf("\n.gt {")).toContain(
+      "transition: opacity var(--dur-1) var(--ease-standard)",
+    );
+  });
+
+  // Design-token drift: raw opacities and a raw 0.15s ease in a file that has
+  // tokens for both.
+  it("carries no raw opacity or duration in the strip", () => {
+    const source = styleSource();
+    expect(source).not.toContain("opacity: 0.4");
+    expect(source).not.toContain("opacity: 0.38");
+    expect(source).not.toContain("0.15s ease");
+    expect(blockOf(".gbtn:disabled")).toContain(
+      "opacity: var(--opacity-disabled)",
+    );
   });
 });
 
