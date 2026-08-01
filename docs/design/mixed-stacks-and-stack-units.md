@@ -1,6 +1,8 @@
 # Stack units in Duplicates, and Mixed stacks
 
-Status: approved by the owner, not yet implemented.
+Status: approved by the owner. Phase 0 and Phase 1 (backend) are implemented;
+Phase 2 (frontend) is partly done — the queue row's unit model and deck have
+landed, expansion, Compare and the Mixed stacks page have not.
 Owner decisions and the reconciled `ui-ux-expert` / `lead-designer` proposals.
 Implementation spec: where these disagree with a subagent's report, this file wins.
 
@@ -114,8 +116,17 @@ A **mixed stack** is a live stack whose members do not form one connected cluste
 at the current similarity threshold, using the same 64-bit dHash Hamming distance
 and connected-components test the near tier already uses.
 
-Measured: 26 of 209 (12.4%) at the default 0.90 threshold, 9 (4.3%) at the 0.65
-floor, 5 of those with a member joined to nothing else in the stack.
+Measured on the owner's library, and **point-in-time**: the live stack count moved
+from 209 to 160 during the day this was written, so quote the ratio with care.
+**26 mixed at the default 0.90 threshold and 9 at the 0.65 floor**, both
+reproduced independently by two implementations against the same database, and
+stable across that change in denominator.
+
+"Stranded" needs its definition stated with the number, because two readings give
+two answers. Degree zero (a member sharing an edge with nothing else in its
+stack, which is what the service implements as `stranded_picture_ids`) gives 8 at
+0.65. The narrower "a real cluster plus one lone singleton" gives 4. The 5 quoted
+in earlier drafts was that narrower reading on the pre-split library.
 
 * **Bind the list to the existing threshold slider**, not a constant. 0.90 → 26,
   0.65 → 9. The spectrum becomes drivable with a control already on the toolbar.
@@ -207,9 +218,17 @@ estimate.
 
 **B5 — cohesion scoring.** A finder in `pixlstash/tasks/` registered with the
 `WorkPlanner`, scoring stacks the way the other `Missing*Finder` classes do, so
-the flag stays current as stacks change. Computed, not stored per row; cache per
-stack keyed on membership + threshold. Cost is O(Σn²) over stacks, and stacks are
-small.
+the flag stays current as stacks change. Computed, not stored per row. Cost is
+O(Σn²) over stacks, and stacks are small.
+
+**Two fingerprints, not one.** An earlier draft said "cache keyed on membership",
+which is wrong: `perceptual_hash` changes without membership changing (the
+embedding worker filling a NULL, a replaced reference-folder file), and a
+membership-keyed cache would then pin a member as stranded forever — precisely
+the false positive this feature cannot afford. So the **cohesion cache** is keyed
+on member ids *and* their hashes, while the **`Keep` dismissal** stays keyed on
+member ids alone, because D5 is explicit that adding a member is what re-raises a
+kept stack. Each key is right for its own job.
 
 Every new data route declares its `AccessPolicy` in `pixlstash/authz/registry.py`.
 The gate is deny-by-default and an undeclared route 403s and fails CI.
