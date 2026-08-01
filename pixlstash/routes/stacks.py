@@ -10,7 +10,10 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture, PictureStack, SortMechanism
 from pixlstash.services import keep_cover_only_service, operation_log_service
 from pixlstash.services.keep_cover_only_service import KeepCoverOnlyError
-from pixlstash.services.set_lock_service import enforce_stack_membership_not_locked
+from pixlstash.services.set_lock_service import (
+    enforce_stack_detach_not_locked,
+    enforce_stack_membership_not_locked,
+)
 from pixlstash.services.stack_membership import reconcile_stack_membership
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.picture_scoring import (
@@ -19,6 +22,7 @@ from pixlstash.picture_scoring import (
     prepare_smart_score_inputs,
 )
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
+from pixlstash.utils.request_origin import require_client_batch_id
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
 from pixlstash.pixl_logging import get_logger
@@ -89,9 +93,11 @@ class KeepCoverOnlyRequest(BaseModel):
         default=None,
         description=(
             "Operation-log batch id, so one user gesture that fans out into "
-            "several requests stays a single undo. Omit and the server mints "
-            "one (`srv-…`); the `X-Operation-Batch-Id` header is honoured too. "
-            "Example: `cli-8f2c1a90`."
+            "several requests stays a single undo. Must be client-namespaced: "
+            "`cli-` followed by 4-76 characters of `A-Z a-z 0-9 _ -`, anything "
+            "else is a `400`. Omit it and the server mints one (`srv-…`); the "
+            "`X-Operation-Batch-Id` header is honoured too. Example: "
+            "`cli-8f2c1a90`."
         ),
         examples=["cli-8f2c1a90"],
     )
@@ -1066,8 +1072,27 @@ def create_router(server) -> APIRouter:
     @router.delete(
         "/stacks/{stack_id}/members",
         summary="Remove stack members",
-        description="Removes pictures from a stack and deletes the stack when one or fewer members remain.",
+        description=(
+            "Removes pictures from a stack and deletes the stack when one or "
+            "fewer members remain.\n\n"
+            "**A locked picture set refuses the whole stack** (`423`), never "
+            "just the frozen member. Stack membership reconciles to the union "
+            "of its members' sets, and a locked set freezes a stack's siblings "
+            "*through* the stack, so detaching any member severs a freeze the "
+            "lock is there to hold. The same rule governs "
+            "`POST /dedup/mixed-stacks/{stack_id}/split` and "
+            "`POST /dedup/mixed-stacks/{stack_id}/unstack`."
+        ),
         response_model=StackResponse,
+        responses={
+            423: {
+                "description": (
+                    "A live or scrapheaped member of this stack is frozen by a "
+                    "locked picture set. Nothing was written. The `detail` "
+                    "names the sets and the frozen picture ids."
+                )
+            }
+        },
     )
     def remove_stack_members(
         stack_id: int, payload: dict = Body(...), request: Request = None
@@ -1081,6 +1106,15 @@ def create_router(server) -> APIRouter:
             stack = session.get(PictureStack, stack_id)
             if stack is None:
                 raise HTTPException(status_code=404, detail="Stack not found")
+
+            # Refuse before any mutation if this stack is frozen. A locked set
+            # freezes a stack's siblings THROUGH the stack, so detaching a member
+            # severs that freeze and an operation the lock refused a moment ago
+            # (a soft delete, a tag edit) starts succeeding. Same helper, same
+            # whole-stack rule and same 423 as the two mixed-stack routes.
+            enforce_stack_detach_not_locked(
+                session, stack_id, "remove pictures from a locked stack"
+            )
 
             pictures = session.exec(
                 select(Picture).where(Picture.id.in_(picture_ids))
@@ -1223,6 +1257,9 @@ def create_router(server) -> APIRouter:
             picture_ids = keep_cover_only_service.coerce_selection_ids(
                 request_model.picture_ids, "picture_ids"
             )
+            # The cap is a per-REQUEST bound, so it is applied to the request:
+            # capping the two lists separately let one call carry twice it.
+            keep_cover_only_service.enforce_selection_budget(stack_ids, picture_ids)
         except KeepCoverOnlyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not stack_ids and not picture_ids:
@@ -1276,7 +1313,8 @@ def create_router(server) -> APIRouter:
             400: {
                 "description": (
                     "Neither `stack_ids` nor `picture_ids` was usable, absent, "
-                    "not a list of integers, or over the per-request id cap."
+                    "not a list of integers, over 2000 entries in one list, or over "
+                    "2000 ids across the two lists together."
                 )
             }
         },
@@ -1338,7 +1376,8 @@ def create_router(server) -> APIRouter:
             400: {
                 "description": (
                     "Neither `stack_ids` nor `picture_ids` was usable, absent, "
-                    "not a list of integers, or over the per-request id cap."
+                    "not a list of integers, over 2000 entries in one list, or over "
+                    "2000 ids across the two lists together."
                 )
             },
             423: {
@@ -1366,7 +1405,13 @@ def create_router(server) -> APIRouter:
             request, fallback_batch_id=operation_log_service.new_batch_id()
         )
         header_batch_id = context.pop("batch_id", None)
-        body_batch_id = (payload.batch_id if payload else None) or None
+        # Validated, never taken verbatim: an arbitrary string lets a client mint
+        # what reads as a server batch, or graft its rows into an existing batch
+        # so one Ctrl+Z reverses more than the user did. Same helper the dedup
+        # routes use, so the two cannot drift.
+        body_batch_id = require_client_batch_id(
+            (payload.batch_id if payload else None) or None
+        )
         return keep_cover_only_service.keep_cover_only(
             server.vault,
             stack_ids,

@@ -70,6 +70,10 @@ from pixlstash.services.dedup_tier_service import (
     _popcount64,
     load_stack_facts,
 )
+from pixlstash.services.set_lock_service import (
+    enforce_stack_detach_not_locked,
+    locked_sets_freezing_stacks,
+)
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
 from pixlstash.stacking import normalize_stack_positions
 
@@ -712,6 +716,14 @@ def list_mixed_stacks_in_session(
             ``kept: true``. Off by default: the point of Keep is that the row
             leaves the list.
 
+    Each row carries ``stackable`` / ``blocked_by_sets``, the same pair
+    ``GET /dedup/stacks/{stack_id}/members`` reports, rolled up over the whole
+    stack: ``stackable`` is false when **any** member is frozen by a locked
+    picture set, because a locked set refuses the whole stack rather than the
+    member (:func:`~pixlstash.services.set_lock_service.enforce_stack_detach_not_locked`).
+    Without it the row's primary button offered an action the server answers
+    ``423`` to, with nothing on the row explaining why.
+
     Returns:
         ``{threshold, total, kept_total, live_stack_count, offset, limit,
         next_offset, stacks: [...]}``.
@@ -736,6 +748,13 @@ def list_mixed_stacks_in_session(
 
     page = rows[offset : offset + limit]
     facts = load_stack_facts(session, [report.stack_id for report, _ in page])
+    # One lookup for the whole page, not one per row (that would be an N+1 over
+    # three queries). Keyed by STACK, and computed by the same helper the write
+    # guard uses over the same member rows (soft-deleted included), so a row can
+    # never promise an action the server then answers 423 to.
+    frozen_by_stack = locked_sets_freezing_stacks(
+        session, [report.stack_id for report, _ in page]
+    )
     stacks: list[dict[str, Any]] = []
     for report, is_kept in page:
         stack_facts = facts.get(report.stack_id)
@@ -747,6 +766,11 @@ def list_mixed_stacks_in_session(
         payload["leader_thumbnail_version"] = (
             stack_facts.leader_thumbnail_version if stack_facts else None
         )
+        # Whole-stack answer: one frozen member freezes the row, because split
+        # and unstack refuse the whole stack rather than skipping the member.
+        blocking = frozen_by_stack.get(report.stack_id, [])
+        payload["stackable"] = not blocking
+        payload["blocked_by_sets"] = [dict(entry) for entry in blocking]
         stacks.append(payload)
 
     next_offset = offset + limit
@@ -811,7 +835,17 @@ def _apply_removal(
     Restoring the scrapheaped picture would then produce a stack of one. They
     are already in the undo snapshot (``include_deleted=True``), so undo puts
     them back.
+
+    **A locked set refuses the whole stack**, before anything is read or written.
+    :func:`~pixlstash.services.set_lock_service.enforce_stack_detach_not_locked`
+    raises ``423`` if any member of the stack is frozen: a locked set freezes a
+    stack's siblings *through* the stack, so detaching them would sever the
+    freeze and let a previously-refused delete succeed. Same rule, same helper
+    and same status code as ``DELETE /stacks/{stack_id}/members``.
     """
+    enforce_stack_detach_not_locked(
+        session, stack_id, "remove pictures from a locked stack"
+    )
     facts = load_stack_facts(session, [stack_id]).get(stack_id)
     if facts is None:
         raise MixedStackError(f"stack {stack_id} has no live members")
@@ -922,33 +956,80 @@ def split_stranded_in_session(
         stack_id: The stack to split.
         picture_ids: The members to split off. Omit to use the stranded set the
             server computes at *threshold*, the same set the list showed. An
-            explicit list is validated against live membership and is what the
-            client should send, so the split matches the row the user was
-            looking at even if the stack changed since.
-        threshold: Only read when *picture_ids* is omitted.
+            explicit list is what the client should send, so the split matches
+            the row the user was looking at rather than a set recomputed behind
+            them; it must be a **subset of the stranded set** at *threshold*,
+            because this route splits stranded members off a mixed stack and
+            nothing else. ``DELETE /stacks/{stack_id}/members`` is the general
+            remove-from-stack primitive.
+        threshold: The similarity the stranded set is computed at. Read on every
+            request: when *picture_ids* is omitted it selects the targets, and
+            when it is supplied it bounds them.
         batch_id: Operation-log batch; minted server-side when absent.
         actor / source / origin_client_id: Origin discipline (§21), read from
             the request in the handler and passed down explicitly.
 
     Raises:
+        HTTPException: ``423`` when a locked picture set freezes any member of
+            the stack. Checked first, before the stranded set is computed, so a
+            frozen stack answers "locked" rather than "nothing to split".
         MixedStackError: The stack has no live members, the request names none
-            of them, or no member is stranded at *threshold*.
+            of them, no member is stranded at *threshold*, or *picture_ids*
+            names a member that is not stranded.
     """
     stack_id = int(stack_id)
+    # First, before any cohesion work: a locked stack is refused whole, and the
+    # answer must be 423 rather than a 400 about the stranded set.
+    enforce_stack_detach_not_locked(
+        session, stack_id, "split pictures out of a locked stack"
+    )
+    report = cohesion_for_stacks(session, [stack_id], threshold).get(stack_id)
+    if report is None:
+        raise MixedStackError(f"stack {stack_id} has no live members")
+    stranded = list(report.stranded_picture_ids)
     if picture_ids is None:
-        report = cohesion_for_stacks(session, [stack_id], threshold).get(stack_id)
-        if report is None:
-            raise MixedStackError(f"stack {stack_id} has no live members")
-        if not report.stranded_picture_ids:
+        if not stranded:
             raise MixedStackError(
                 f"no member of stack {stack_id} is stranded at threshold "
                 f"{threshold}; there is nothing to split off"
             )
-        targets = list(report.stranded_picture_ids)
+        targets = stranded
     else:
         targets = sorted({int(pid) for pid in picture_ids})
         if not targets:
             raise MixedStackError("picture_ids was empty; nothing to split off")
+        # This route splits STRANDED members off a MIXED stack, which is what it
+        # is named, documented and listed for. Taking an arbitrary id list made
+        # it an unconstrained remove-from-stack primitive that would happily
+        # break up a perfectly cohesive stack the Mixed stacks page would never
+        # show. Constraining the explicit list to the stranded set keeps the
+        # reason it exists (act on exactly the ids the row displayed, never a
+        # set recomputed behind the user's back) while removing the ability to
+        # act on anything the row did not display. A named id that is no longer
+        # stranded means the stack moved under the client, and the honest answer
+        # is to refuse and let it re-read the row.
+        #
+        # The bound is deliberately THRESHOLD-RELATIVE, and that is not a hole
+        # left open by accident. A caller passing a high threshold widens the
+        # stranded set (``max_hamming`` shrinks), so it can name more members.
+        # That is the same widening ``GET /dedup/mixed-stacks?threshold=…``
+        # would show it: at whatever threshold the caller passes, this splits
+        # exactly what that list reports as stranded, which is the contract D5
+        # asks for ("bind to the threshold, never a constant"). Tightening it to
+        # some fixed threshold would make the route disagree with its own list.
+        # The route is OWNER_ONLY and ``DELETE /stacks/{stack_id}/members``
+        # already gives the same principal an unrestricted remove, so nothing
+        # here is a privilege boundary; what the bound buys is that the route
+        # does what its name and its page say it does.
+        not_stranded = [pid for pid in targets if pid not in set(stranded)]
+        if not_stranded:
+            raise MixedStackError(
+                f"picture(s) {not_stranded} are not stranded in stack "
+                f"{stack_id} at threshold {threshold}; this route splits off "
+                "stranded members only, so re-read the row and send the ids it "
+                "reports in stranded_picture_ids (use DELETE /stacks/"
+                f"{stack_id}/members to remove an arbitrary member)"
+            )
     return _apply_removal(
         session,
         stack_id,
@@ -974,6 +1055,13 @@ def unstack_in_session(
 
     D5's outcome for a stack with no majority cluster. Every live member becomes
     loose and the ``PictureStack`` row goes; undo restores both.
+
+    Raises:
+        HTTPException: ``423`` when a locked picture set freezes any member (via
+            :func:`_apply_removal`). Dissolving a stack is the most complete form
+            of the detach a locked set forbids: it severs the through-stack
+            freeze for every member at once.
+        MixedStackError: The stack has no live members.
     """
     stack_id = int(stack_id)
     facts = load_stack_facts(session, [stack_id]).get(stack_id)

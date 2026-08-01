@@ -360,8 +360,31 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── pictures: owner-only surfaces ───────────────────────────────────────
     ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/pictures/import/status"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/pictures/import/staging/{staging_id}/status"): RoutePolicy(_ANY),
+    # Import status is NOT ANY_TOKEN: the completed payload carries per-object
+    # data (``results[].picture_id``, ``results[].file`` the vault-relative
+    # filename, and ``scrapheaped_picture_ids``) for pictures anywhere in the
+    # vault. ``ANY_TOKEN``'s contract is that a route returns no per-object
+    # resource data, so declaring it there handed a resource-scoped share token
+    # the ids and filenames of pictures its own thumbnail route refuses. Both
+    # routes serve the owner's own import UI (their POST siblings are already
+    # OWNER_ONLY, so nobody who cannot start an import has a task to poll), which
+    # makes OWNER_ONLY the correct tier and not a narrowing of any live caller.
+    ("GET", "/api/v1/pictures/import/status"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Import job status; the completed payload names imported/duplicate/"
+            "scrapheaped picture ids and vault filenames, so it is per-object "
+            "owner data, not a progress counter"
+        ),
+    ),
+    ("GET", "/api/v1/pictures/import/staging/{staging_id}/status"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Async staging import status; same per-object payload as "
+            "GET /pictures/import/status (scrapheaped_picture_ids), and its "
+            "open/files/commit siblings are already owner only"
+        ),
+    ),
     ("GET", "/api/v1/pictures/export/status"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/export/download/{task_id}"): RoutePolicy(_ANY),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(

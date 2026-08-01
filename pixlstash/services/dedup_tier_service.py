@@ -117,6 +117,7 @@ from pixlstash.services.set_lock_service import (
     StackablePartition,
     build_locked_set_lookup,
     locked_picture_id_subquery,
+    locked_sets_freezing_stacks,
     partition_stackable_members,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -2513,6 +2514,16 @@ def stack_members_in_session(
     the fields a queue candidate carries, so the strip reuses the row's tile
     unchanged.
 
+    The payload's own ``stackable`` / ``blocked_by_sets`` are the **unit-level**
+    answer and come from
+    :func:`~pixlstash.services.set_lock_service.locked_sets_freezing_stacks`, so
+    they are computed from the same member rows (soft-deleted included) as the
+    Mixed stacks row and as the guard the three detach routes raise ``423``
+    from. Each member's own ``stackable`` / ``blocked_by_sets`` stay the
+    per-picture answer, which is a different question with a legitimately
+    different answer: a scrapheaped locked-set member freezes its stack against
+    being broken up without freezing its live siblings' label data.
+
     Args:
         session: Pre-opened session.
         stack_id: The stack to expand.
@@ -2538,13 +2549,23 @@ def stack_members_in_session(
     candidates = load_candidates(session, page_ids)
     # The unit-level rollup is taken over the WHOLE stack, never over the page:
     # a deck's stackability is a fact about the stack, and reading it off page 1
-    # would report a different answer on page 2. The lookup is stack-expanded
-    # anyway (set_lock_service), so this is the same three queries either way.
+    # would report a different answer on page 2.
+    #
+    # It comes from ``locked_sets_freezing_stacks``, the same helper the Mixed
+    # stacks row uses and the same member rows ``enforce_stack_detach_not_locked``
+    # refuses on, INCLUDING the soft-deleted ones. Rolling it up from
+    # ``facts.member_ids`` (live only) instead made this endpoint the odd one
+    # out: a stack whose only locked-set member is scrapheaped was reported
+    # ``stackable: true`` here while the row said false and the writes answered
+    # 423. A read that promises an action the server refuses is worse than no
+    # prediction at all, so all three now read the same rows.
+    unit_blocking = locked_sets_freezing_stacks(session, [stack_id]).get(stack_id, [])
+    # Per-MEMBER values stay the per-picture answer, which is a different
+    # question and legitimately a different answer: a scrapheaped locked-set
+    # member projects no freeze onto its live siblings, so every member on this
+    # page can be ``stackable: true`` under a ``stackable: false`` unit. The
+    # frozen row is simply not on the page, because it is in the Scrapheap.
     lookup = build_locked_set_lookup(session, facts.member_ids)
-    unit_blocked: dict[int, str] = {}
-    for picture_id in facts.member_ids:
-        for entry in lookup.sets_for(picture_id):
-            unit_blocked[int(entry["id"])] = entry["name"]
 
     members: list[dict[str, Any]] = []
     for position, picture_id in enumerate(page_ids, start=offset):
@@ -2578,11 +2599,8 @@ def stack_members_in_session(
         "member_count": facts.member_count,
         "leader_picture_id": facts.leader_picture_id,
         "leader_thumbnail_version": facts.leader_thumbnail_version,
-        "stackable": not unit_blocked,
-        "blocked_by_sets": [
-            {"id": set_id, "name": name}
-            for set_id, name in sorted(unit_blocked.items())
-        ],
+        "stackable": not unit_blocking,
+        "blocked_by_sets": [dict(entry) for entry in unit_blocking],
         "offset": offset,
         "limit": limit,
         "next_offset": next_offset if next_offset < facts.member_count else None,

@@ -28,6 +28,10 @@ name             hex                         popcount vs ``_H_ZERO``
 ``_H_NEAR``      ``0000000000000001``        1   (edge at every threshold)
 ``_H_MID``       ``00000000000003ff``        10  (edge at 0.65 only)
 ``_H_FAR``       ``ffffffff00000000``        32  (edge at no threshold)
+``_H_OTHER``     ``00000000ffffffff``        32  (edge at no threshold, and
+                                             64 from ``_H_FAR``, so the two
+                                             strangers are strangers to each
+                                             other as well)
 ===============  ==========================  ===============================
 """
 
@@ -57,6 +61,7 @@ _H_ZERO = "0000000000000000"
 _H_NEAR = "0000000000000001"
 _H_MID = "00000000000003ff"
 _H_FAR = "ffffffff00000000"
+_H_OTHER = "00000000ffffffff"
 
 # The SPA catch-all answers unmatched GETs with 200, so a wrong URL could make a
 # positive assertion vacuous. See tests/authz_guard.py.
@@ -513,18 +518,69 @@ def test_split_removes_the_stranded_member_and_is_undoable_in_one_step():
 
 
 def test_split_honours_an_explicit_picture_id_list():
-    """The client sends the ids the row showed, so the split matches the row."""
+    """The client sends the ids the row showed, so the split matches the row.
+
+    A four-member stack with a tight pair and **two** mutual strangers: the row
+    reports both as stranded, the client names only one, and exactly that one
+    leaves. The explicit list narrows the server's own set, it never widens it.
+    """
     temp_dir, client, server, stacks, _token = _env()
     try:
-        stack_id, picture_ids = stacks["cohesive"]
+        stack_id, picture_ids = _make_stack(
+            server, [_H_ZERO, _H_NEAR, _H_FAR, _H_OTHER]
+        )
+        row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
+        assert row["stranded_picture_ids"] == sorted(picture_ids[2:])
+
         response = client.post(
-            _split_url(stack_id), json={"picture_ids": [picture_ids[1]]}
+            _split_url(stack_id), json={"picture_ids": [picture_ids[2]]}
         )
-        assert response.status_code == 200
-        assert response.json()["split_picture_ids"] == [picture_ids[1]]
+        assert response.status_code == 200, response.text
+        assert response.json()["split_picture_ids"] == [picture_ids[2]]
         assert response.json()["remaining_picture_ids"] == sorted(
-            [picture_ids[0], picture_ids[2]]
+            [picture_ids[0], picture_ids[1], picture_ids[3]]
         )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_split_refuses_a_member_that_is_not_stranded():
+    """This route splits STRANDED members off a MIXED stack, and only that.
+
+    Taking an arbitrary id list made it an unconstrained remove-from-stack
+    primitive: it would break the leader off a perfectly cohesive stack that
+    this page would never list, which is neither what the route is named nor
+    what its own description promises. `DELETE /stacks/{id}/members` is the
+    general primitive; this one is bounded by what the row displayed.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        # (1) A cohesive stack has no stranded member at all, so no id is legal.
+        cohesive_id, cohesive_pics = stacks["cohesive"]
+        before = _stack_state(server, cohesive_pics)
+        response = client.post(
+            _split_url(cohesive_id), json={"picture_ids": [cohesive_pics[0]]}
+        )
+        assert response.status_code == 400, response.text
+        assert "stranded" in response.json()["detail"]
+        assert _stack_state(server, cohesive_pics) == before
+
+        # (2) On a genuinely mixed stack, only the stranded member may be named:
+        # the majority cluster is not something this route may break up.
+        mixed_id, mixed_pics = stacks["mixed"]
+        before = _stack_state(server, mixed_pics)
+        response = client.post(
+            _split_url(mixed_id), json={"picture_ids": [mixed_pics[0]]}
+        )
+        assert response.status_code == 400, response.text
+        assert _stack_state(server, mixed_pics) == before
+
+        # ...and the stranded one still is (over-blocking is its own regression).
+        response = client.post(
+            _split_url(mixed_id), json={"picture_ids": [mixed_pics[2]]}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["split_picture_ids"] == [mixed_pics[2]]
     finally:
         _teardown(temp_dir, server)
 
@@ -779,3 +835,207 @@ def test_content_fingerprint_moves_when_a_hash_moves():
     assert mixed_stack_service.membership_fingerprint(
         ids
     ) == mixed_stack_service.membership_fingerprint(ids)
+
+
+# ── locked sets: the row says so, and both actions refuse the whole stack ─────
+
+
+def _set_member_ids(server, set_id) -> set[int]:
+    def read(session):
+        return {
+            int(pid)
+            for pid in session.exec(
+                select(PictureSetMember.picture_id).where(
+                    PictureSetMember.set_id == set_id
+                )
+            ).all()
+        }
+
+    return _run(server, read)
+
+
+def _lock_a_set_over(client, server, name: str, picture_id: int) -> int:
+    """Create a locked picture set whose only member is *picture_id*.
+
+    The membership row is written directly, and the docstring above is asserted
+    rather than assumed. ``POST /picture_sets/{id}/members/{picture_id}`` is
+    stack-atomic: it expands to every member of the picture's stack, so through
+    that route a set over a member of a 3-stack has three members and the
+    through-stack-only state these tests are named for never exists. A test
+    seeded that way passes against a guard narrowed to the named ids, which is
+    the exact regression it is supposed to catch.
+    """
+    set_id = client.post(f"{API}/picture_sets", json={"name": name}).json()[
+        "picture_set"
+    ]["id"]
+
+    def add_member_only(session):
+        session.add(PictureSetMember(set_id=set_id, picture_id=int(picture_id)))
+        session.commit()
+
+    _run(server, add_member_only)
+    assert (
+        client.patch(f"{API}/picture_sets/{set_id}", json={"locked": True}).status_code
+        == 200
+    )
+    assert _set_member_ids(server, set_id) == {int(picture_id)}
+    return set_id
+
+
+def test_a_locked_member_marks_the_row_and_refuses_split_and_unstack():
+    """The lock is reported on the row AND enforced on both actions.
+
+    Reported so the primary button can be disabled with a reason rather than
+    pressed into a 423; enforced because a locked set freezes a stack's
+    siblings *through* the stack, so detaching one severs the freeze.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        before = _stack_state(server, picture_ids)
+        # The frozen picture is the stack LEADER; the stranded member that split
+        # would move is not itself in the set, only frozen through the stack.
+        set_id = _lock_a_set_over(client, server, "Frozen", picture_ids[0])
+
+        row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
+        assert row["stackable"] is False, row
+        assert row["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}], row
+
+        for response in (
+            client.post(_split_url(stack_id), json={"threshold": 0.90}),
+            client.post(_split_url(stack_id), json={"picture_ids": [picture_ids[2]]}),
+            client.post(_unstack_url(stack_id), json={}),
+        ):
+            assert response.status_code == 423, response.text
+            detail = response.json()["detail"]
+            assert detail["code"] == "pictures_locked", detail
+            assert [entry["id"] for entry in detail["sets"]] == [set_id], detail
+
+        assert _stack_state(server, picture_ids) == before
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_an_unlocked_row_is_stackable_and_still_acts():
+    """Over-blocking regression: an untouched row carries the free values and
+    both actions still work."""
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
+        assert row["stackable"] is True, row
+        assert row["blocked_by_sets"] == [], row
+
+        assert (
+            client.post(_split_url(stack_id), json={"threshold": 0.90}).status_code
+            == 200
+        )
+
+        other_id, _other_pics = _make_stack(server, [_H_ZERO, _H_FAR])
+        assert client.post(_unstack_url(other_id), json={}).status_code == 200
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_scrapheaped_frozen_member_freezes_the_row_and_the_actions_alike():
+    """Both read surfaces and the server agree on the soft-deleted arm.
+
+    A stack whose only frozen member is soft-deleted is the case where they
+    drift, and it is genuinely reachable: the set is seeded row-by-row (see
+    ``_lock_a_set_over``) so no LIVE member is in it, and only every-member-row
+    reads (``set_lock_service._stack_member_ids``) find the freeze at all.
+    Filter ``deleted`` in that helper and every assertion below flips.
+
+    * ``GET /dedup/mixed-stacks`` says `stackable: false`;
+    * ``GET /dedup/stacks/{id}/members`` says the same, which it did NOT until
+      it stopped rolling the unit answer up from its live member ids;
+    * split and unstack both answer 423.
+
+    The live siblings are deliberately still unfrozen at the picture level: a
+    scrapheaped locked-set member projects no freeze onto them. The two rules
+    differ here on purpose, and ``_stack_member_ids`` carries the reasoning.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        set_id = _lock_a_set_over(client, server, "FrozenHeap", picture_ids[1])
+
+        # Scrapheap the frozen member directly: the API refuses (that is the
+        # lock working), and the state under test is a database written before
+        # the set was locked.
+        def scrapheap(session):
+            picture = session.get(Picture, picture_ids[1])
+            picture.deleted = True
+            session.add(picture)
+            session.commit()
+
+        _run(server, scrapheap)
+
+        row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
+        assert row["stackable"] is False, row
+        assert row["blocked_by_sets"] == [{"id": set_id, "name": "FrozenHeap"}], row
+        assert picture_ids[1] not in row["member_ids"], (
+            "the frozen member is soft-deleted, so it is not a live member: "
+            "this is exactly the id a live-members-only rollup would miss"
+        )
+
+        # The second read surface reports the same pair with the same meaning.
+        members = client.get(f"{API}/dedup/stacks/{stack_id}/members")
+        assert members.status_code == 200, members.text
+        body = members.json()
+        assert body["stackable"] is False, body
+        assert body["blocked_by_sets"] == [{"id": set_id, "name": "FrozenHeap"}], body
+        # ...while each LIVE member is individually unfrozen, which is the
+        # narrower per-picture question and the answer the picture-level guards
+        # give. A unit that is false over members that are all true is the
+        # scrapheaped case, not a bug.
+        assert [m["stackable"] for m in body["members"]] == [True] * len(
+            body["members"]
+        ), body
+        assert all(m["blocked_by_sets"] == [] for m in body["members"]), body
+
+        for response in (
+            client.post(_split_url(stack_id), json={"threshold": 0.90}),
+            client.post(_unstack_url(stack_id), json={}),
+        ):
+            assert response.status_code == 423, response.text
+            assert response.json()["detail"]["picture_ids"] == [picture_ids[1]]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_scrapheaped_member_of_an_unlocked_set_leaves_the_row_stackable():
+    """Over-blocking twin: a scrapheap entry alone freezes nothing.
+
+    Same shape as the test above with the lock left off, so a guard that read
+    "this stack has a scrapheaped member in some set" rather than "in a LOCKED
+    set" fails here. Both read surfaces stay `stackable: true` and unstack
+    still works.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        set_id = client.post(f"{API}/picture_sets", json={"name": "OpenHeap"}).json()[
+            "picture_set"
+        ]["id"]
+
+        def seed(session):
+            session.add(PictureSetMember(set_id=set_id, picture_id=int(picture_ids[1])))
+            picture = session.get(Picture, picture_ids[1])
+            picture.deleted = True
+            session.add(picture)
+            session.commit()
+
+        _run(server, seed)
+
+        row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
+        assert row["stackable"] is True, row
+        assert row["blocked_by_sets"] == [], row
+
+        body = client.get(f"{API}/dedup/stacks/{stack_id}/members").json()
+        assert body["stackable"] is True, body
+        assert body["blocked_by_sets"] == [], body
+
+        assert client.post(_unstack_url(stack_id), json={}).status_code == 200
+    finally:
+        _teardown(temp_dir, server)

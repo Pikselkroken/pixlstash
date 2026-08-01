@@ -521,3 +521,136 @@ def test_offer_reports_honestly_when_the_match_was_purged_meanwhile(owner_server
     assert r.json()["restored_count"] == 0, (
         "restoring a purged picture must report 0, not pretend it worked"
     )
+
+
+# ---------------------------------------------------------------------------
+# Authz: import status is owner data, not a progress counter
+#
+# Both status routes were declared ANY_TOKEN on the grounds that they return
+# "progress/stage/counts only". They do not: the completed payloads carry
+# `results[].picture_id`, `results[].file` (the vault-relative filename) and
+# `scrapheaped_picture_ids`, for pictures anywhere in the vault. A resource-
+# scoped READ token that is refused a picture's thumbnail was handed that same
+# picture's id and filename here. Both are now OWNER_ONLY at the gate.
+#
+# Both directions, on both entry points a share token has (the Authorization
+# header and the ?token= query parameter), because a gate that covered one is a
+# hole rather than a policy. The owner side is asserted on a REAL completed task
+# so this cannot pass by returning 404 to everyone.
+# ---------------------------------------------------------------------------
+
+
+def _scoped_read_token(client, srv, picture_id) -> str:
+    """A READ token scoped to a picture set holding exactly *picture_id*."""
+    r = client.post(f"{API}/picture_sets", json={"name": "shared-with-a-guest"})
+    assert r.status_code == 200, r.text
+    set_id = r.json()["picture_set"]["id"]
+
+    def add_member(session):
+        session.add(PictureSetMember(set_id=set_id, picture_id=picture_id))
+        session.commit()
+
+    srv.vault.db.run_task(add_member)
+    r = client.post(
+        f"{API}/users/me/token",
+        json={
+            "description": "share",
+            "scope": "READ",
+            "resource_type": "picture_set",
+            "resource_id": set_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+def test_import_status_is_owner_only_and_leaks_no_out_of_scope_ids(owner_server):
+    """Out-of-scope (scoped READ token) → 403; the owner still reads it → 200."""
+    srv, owner = owner_server
+    r = owner.post(
+        f"{API}/pictures/import",
+        files=[
+            ("file", ("shared.png", _png_bytes((9, 9, 9)), "image/png")),
+            ("file", ("private.png", _png_bytes((77, 88, 99)), "image/png")),
+        ],
+    )
+    assert r.status_code == 200, r.text
+    task_id = r.json()["task_id"]
+    status = _wait_for_import_task(owner, task_id)
+    assert status["status"] == "completed", status
+
+    shared_id, private_id = _picture_ids(srv)
+    token = _scoped_read_token(owner, srv, shared_id)
+    scoped = TestClient(srv.api, raise_server_exceptions=True)
+
+    # The scope is real: the token reaches its own picture and not the other.
+    assert (
+        scoped.get(
+            f"{API}/pictures/{shared_id}/metadata",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code
+        == 200
+    )
+    assert (
+        scoped.get(
+            f"{API}/pictures/{private_id}/metadata",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code
+        == 403
+    )
+
+    # ...so it must not read the import receipt naming that same picture, on
+    # either entry point a share token has.
+    status_url = f"{API}/pictures/import/status"
+    by_header = scoped.get(
+        status_url,
+        params={"task_id": task_id},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    by_query = scoped.get(status_url, params={"task_id": task_id, "token": token})
+    for r in (by_header, by_query):
+        assert r.status_code == 403, (
+            f"a scoped READ token must not read import status, got "
+            f"{r.status_code}: {r.text}"
+        )
+        assert str(private_id) not in r.text
+
+    # The owner is not over-blocked, and the payload really is per-object data.
+    r = owner.get(f"{API}/pictures/import/status", params={"task_id": task_id})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert {entry["picture_id"] for entry in body["results"]} == {
+        shared_id,
+        private_id,
+    }, body
+    assert all(entry.get("file") for entry in body["results"]), body
+
+
+def test_staging_status_is_owner_only_and_the_owner_still_polls_it(owner_server):
+    """Same contract on the async staging sibling, both directions."""
+    srv, owner = owner_server
+    staging_id = owner.post(f"{API}/pictures/import/staging", json={}).json()[
+        "staging_id"
+    ]
+    r = owner.post(
+        f"{API}/pictures/import/staging/{staging_id}/files",
+        files=[("file", ("a.png", _png_bytes((5, 6, 7)), "image/png"))],
+    )
+    assert r.status_code == 200, r.text
+    assert owner.post(f"{API}/pictures/import/staging/{staging_id}/commit").status_code
+    _wait_for_stage(owner, staging_id, target=("completed",))
+
+    picture_id = _picture_ids(srv)[0]
+    token = _scoped_read_token(owner, srv, picture_id)
+    scoped = TestClient(srv.api, raise_server_exceptions=True)
+    url = f"{API}/pictures/import/staging/{staging_id}/status"
+
+    r = scoped.get(url, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403, r.text
+    r = scoped.get(url, params={"token": token})
+    assert r.status_code == 403, r.text
+
+    # The owner is not over-blocked: the same poll the import UI runs still works.
+    r = owner.get(url)
+    assert r.status_code == 200, r.text
+    assert r.json()["stage"] == "completed", r.json()

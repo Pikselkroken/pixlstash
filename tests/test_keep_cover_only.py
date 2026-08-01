@@ -711,3 +711,111 @@ def test_the_owner_reaches_both_keep_cover_only_routes():
         assert _picture_rows(server, pics)[pics[1]][0] is True
     finally:
         _teardown(temp_dir, server)
+
+
+# ── the batch id is validated, not stored verbatim ───────────────────────────
+
+
+def test_a_forged_batch_id_cannot_graft_two_collapses_into_one_undo():
+    """`batch_id` is the undo handle, so an unvalidated one is an undo forgery.
+
+    Taken verbatim, a client could send `srv-…` so its rows read as a server
+    batch, or reuse one id across separate gestures so a single `Ctrl+Z`
+    reverses more than the user did. The dedup routes validated it; this one
+    did not, which is exactly the kind of second copy the shared helper in
+    `utils/request_origin.py` exists to prevent.
+    """
+    temp_dir, client, server = _env()
+    try:
+        first, _first_pics = _make_stack(server, [{}, {}])
+        second, _second_pics = _make_stack(server, [{}, {}])
+
+        for forged in (
+            "srv-deadbeefdeadbeefdeadbeefdeadbeef",  # the server's own namespace
+            "cli-" + "a" * 200,  # over the length cap
+            "x" * 1_000_000,  # unbounded
+            "cli-bad id",  # outside the charset
+            "cli-ab",  # under the minimum length
+        ):
+            response = client.post(
+                COLLAPSE_URL, json={"stack_ids": [first], "batch_id": forged}
+            )
+            assert response.status_code == 400, (forged[:32], response.text)
+            assert "batch_id" in response.json()["detail"]
+
+        # Nothing was collapsed by any of the refused calls.
+        assert (
+            client.post(PREVIEW_URL, json={"stack_ids": [first]}).json()[
+                "stacks_eligible"
+            ]
+            == 1
+        )
+
+        # A well-formed client id is still honoured, and deliberately sharing it
+        # across two calls is the legitimate use it exists for.
+        shared = "cli-one-gesture-01"
+        assert (
+            client.post(
+                COLLAPSE_URL, json={"stack_ids": [first], "batch_id": shared}
+            ).json()["batch_id"]
+            == shared
+        )
+        assert (
+            client.post(
+                COLLAPSE_URL, json={"stack_ids": [second], "batch_id": shared}
+            ).json()["batch_id"]
+            == shared
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── the selection cap bounds the REQUEST, not the de-duplicated set ──────────
+
+
+def test_the_selection_cap_bounds_the_request_not_the_deduplicated_set():
+    """Two ways the cap used to be no cap at all, and the shape that still works.
+
+    It was applied to the de-duplicated set, so a body of a million repeats of
+    one id passed; and it was applied per list, so `stack_ids` plus
+    `picture_ids` legitimately carried twice it in one request.
+    """
+    temp_dir, client, server = _env()
+    try:
+        stack_id, pics = _make_stack(server, [{}, {}])
+        cap = keep_cover_only_service.MAX_SELECTION_IDS
+
+        # (1) Repeats count. This de-duplicates to one id and used to return 200.
+        response = client.post(COLLAPSE_URL, json={"picture_ids": [pics[0]] * 200_000})
+        assert response.status_code == 400, response.status_code
+        assert "picture_ids" in response.json()["detail"]
+
+        # (2) The two lists share one budget.
+        response = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": list(range(1, cap + 1)),
+                "picture_ids": list(range(cap + 1, 2 * cap + 1)),
+            },
+        )
+        assert response.status_code == 400, response.status_code
+        assert "together" in response.json()["detail"]
+
+        # The preview shares the check, so the dialog cannot be used to sneak past.
+        assert (
+            client.post(PREVIEW_URL, json={"picture_ids": [pics[0]] * 200_000})
+        ).status_code == 400
+
+        # A selection right at the budget still works: over-blocking is its own
+        # regression, and the natural gesture here is a whole-library sweep.
+        response = client.post(
+            COLLAPSE_URL,
+            json={
+                "stack_ids": [stack_id],
+                "picture_ids": list(range(10_000, 10_000 + cap - 1)),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["stacks_collapsed"] == 1
+    finally:
+        _teardown(temp_dir, server)

@@ -44,7 +44,6 @@ outside it, which is the same reasoning that makes the tag-health board
 owner-only, and the verdict routes mutate stacks across arbitrary pictures.
 """
 
-import re
 from datetime import datetime
 from typing import Any, Optional
 
@@ -92,28 +91,17 @@ from pixlstash.services.dedup_sweep_service import (
     SweepPolicy,
     SweepVerdict,
 )
+from pixlstash.utils.request_origin import require_client_batch_id
 
 logger = get_logger(__name__)
 
-CLIENT_BATCH_ID_PREFIX = "cli-"
-MAX_BATCH_ID_LENGTH = 80
-CLIENT_BATCH_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{4,76}$")
-"""The shape a **client-supplied** operation batch id must have.
-
-Batch ids are namespaced so the log can tell who minted one: the server mints
-``srv-<uuid4hex>`` (:func:`operation_log_service.new_batch_id`) and a client may
-group its own gestures under ``cli-…``. Taken verbatim, a client could submit
-``srv-…`` and have its rows read as a server batch — and, worse, graft them into
-an existing batch so one Ctrl+Z reverses more than the user did.
-
-The pattern is duplicated here on purpose: the shared definition lands in
-``pixlstash/utils/request_origin.py`` with the ``X-Operation-Batch-Id`` header
-contract (branch ``feature/gesture-batch-id``), which is not on this branch.
-When that merges, both sites must import it from there instead. Note the
-difference in disposition: an unusable *header* is dropped and ignored, because a
-header is ambient; an unusable *body* field is a 400, because the client named it
-deliberately and silently ignoring it would mis-group its undo.
-"""
+# The client-supplied batch-id contract lives in
+# ``pixlstash/utils/request_origin.py``, alongside the ``X-Operation-Batch-Id``
+# header it shares a pattern with. This module used to carry its own copy while
+# that branch was unmerged; it has merged, so the copy is gone and there is
+# exactly one definition. Every route taking a body ``batch_id`` must call
+# ``require_client_batch_id``; a second copy is how ``POST
+# /stacks/keep-cover-only`` shipped storing the field verbatim.
 
 MAX_CURSOR_LENGTH = 128
 """Cap on the opaque queue cursor a client may send back.
@@ -954,13 +942,32 @@ class DedupStackMembersResponse(BaseModel):
     stackable: bool = Field(
         description=(
             "The unit-level rollup, computed over the **whole** stack rather "
-            "than this page, so page 2 can never report a different answer from "
-            "page 1."
-        )
+            "than this page, so page 2 can never report a different answer "
+            "from page 1. `false` means split, unstack and "
+            "`DELETE /stacks/{stack_id}/members` will all answer `423` and "
+            "write nothing, so offer the action disabled with "
+            "`blocked_by_sets` as the reason. Same pair, same meaning and the "
+            "same member rows as `GET /dedup/mixed-stacks`.\n\n"
+            "It is rolled up over **every** member row, scrapheaped ones "
+            "included, because that is what the server refuses on: a "
+            "scrapheaped picture that is itself in a locked set still freezes "
+            "its stack against being broken up. So this can be `false` while "
+            "every member on the page reports `stackable: true`; the frozen "
+            "row is in the Scrapheap and is not listed. The per-member flag "
+            "answers a narrower question (may *this picture* be put in a "
+            "dedup stack), and a scrapheaped locked member projects no freeze "
+            "onto its live siblings."
+        ),
+        examples=[True],
     )
     blocked_by_sets: list[LockedSetRefModel] = Field(
         default_factory=list,
-        description="Empty when `stackable`; otherwise the locked sets freezing the stack.",
+        description=(
+            "Empty exactly when `stackable` is `true`; otherwise the locked "
+            "sets freezing the stack, `[{id, name}]` sorted by set id, so the "
+            "refusal can be named before the action is offered."
+        ),
+        examples=[[]],
     )
     offset: int = Field(
         description="Echo of the requested offset.",
@@ -1533,6 +1540,29 @@ class MixedStackModel(BaseModel):
         ),
         examples=["512x384"],
     )
+    stackable: bool = Field(
+        default=True,
+        description=(
+            "Whether this stack can be split or unstacked at all. `false` when "
+            "**any** member is frozen by a locked picture set: a locked set "
+            "freezes a stack's siblings *through* the stack, so detaching one "
+            "would sever the freeze and both actions refuse the whole stack "
+            "with `423`. Disable the row's primary button on `false` and show "
+            "`blocked_by_sets` as the reason, rather than letting the user "
+            "press it and read an error. Same pair, same meaning as on "
+            "`GET /dedup/stacks/{stack_id}/members`. Example: `true`."
+        ),
+        examples=[True],
+    )
+    blocked_by_sets: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "The locked picture sets freezing this stack, `[{id, name}]` "
+            "sorted by set id, so the row can name them. Empty exactly when "
+            "`stackable` is `true`. Example: `[]`."
+        ),
+        examples=[[]],
+    )
 
 
 class MixedStacksResponse(BaseModel):
@@ -1750,25 +1780,12 @@ def create_router(server) -> APIRouter:
     def _batch_id(value: Optional[str]) -> Optional[str]:
         """Accept only a client-namespaced batch id, 400 on anything else.
 
-        The server mints ``srv-…`` for a verdict that arrives without one; a
-        client that wants several verdicts to reverse together supplies its own
-        ``cli-…``. Accepting an arbitrary string let a client mint what reads as
-        a server batch, or graft its rows into someone else's batch so one undo
-        reverses more than the user did.
+        Thin alias for the shared
+        :func:`~pixlstash.utils.request_origin.require_client_batch_id` so the
+        call sites in this module read the same as they did; the rule itself has
+        exactly one implementation.
         """
-        if value is None:
-            return None
-        text = str(value)
-        if len(text) > MAX_BATCH_ID_LENGTH or not CLIENT_BATCH_ID_RE.fullmatch(text):
-            logger.info("[dedup] rejected client batch_id %r", text[:120])
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"batch_id must match {CLIENT_BATCH_ID_PREFIX}<4-76 chars of "
-                    "A-Z a-z 0-9 _ ->; omit it to have the server mint one"
-                ),
-            )
-        return text
+        return require_client_batch_id(value)
 
     def _scope(model: Optional[ScopeRequestModel]) -> DedupScope:
         """Build the service scope from a request model, 400 on a bad one."""
@@ -2275,8 +2292,13 @@ def create_router(server) -> APIRouter:
             "own slider value and the list follows it.\n\n"
             "Ranked by how little holds each stack together - stranded members "
             "descending, then component count descending, then weakest edge "
-            "ascending - so the clearest mistakes are first. Read-only: nothing "
-            "here splits, unstacks or marks anything."
+            "ascending - so the clearest mistakes are first.\n\n"
+            "Each row carries `stackable` / `blocked_by_sets`, the same pair "
+            "`GET /dedup/stacks/{stack_id}/members` reports: `false` means a "
+            "locked picture set freezes a member, so split and unstack will "
+            "both answer `423` and the row's button should say so instead of "
+            "offering the action. Read-only: nothing here splits, unstacks or "
+            "marks anything."
         ),
         response_model=MixedStacksResponse,
     )
@@ -2341,17 +2363,35 @@ def create_router(server) -> APIRouter:
             "handle.\n\n"
             "If the split would leave a stack of one, the last member is freed "
             "too and the stack row goes; the response says so in "
-            "`stack_dissolved` rather than leaving the client to infer it."
+            "`stack_dissolved` rather than leaving the client to infer it.\n\n"
+            "**Stranded members only.** An explicit `picture_ids` must be a "
+            "subset of the stranded set at `threshold`. This is not a general "
+            "remove-from-stack primitive - `DELETE /stacks/{stack_id}/members` "
+            "is - and taking an arbitrary list here would let it break up a "
+            "cohesive stack this page would never list.\n\n"
+            "**A locked picture set refuses the whole stack** (`423`), never "
+            "just the frozen member: a locked set freezes a stack's siblings "
+            "*through* the stack, so detaching one severs a freeze the lock is "
+            "there to hold. Rows carry `stackable` and `blocked_by_sets` so "
+            "the button can say so before it is pressed."
         ),
         response_model=MixedStackActionResponse,
         responses={
             400: {
                 "description": (
                     "The stack has no live members, the request named none of "
-                    "them, or `picture_ids` was omitted and no member is "
-                    "stranded at `threshold` - so there is nothing to split."
+                    "them, `picture_ids` named a member that is not stranded "
+                    "at `threshold`, or `picture_ids` was omitted and no "
+                    "member is stranded - so there is nothing to split."
                 )
-            }
+            },
+            423: {
+                "description": (
+                    "A member of this stack is frozen by a locked picture set. "
+                    "Nothing was written; `detail` names the sets and the "
+                    "frozen picture ids."
+                )
+            },
         },
     )
     def post_mixed_stack_split(
@@ -2388,11 +2428,24 @@ def create_router(server) -> APIRouter:
             "Recorded as **one** operation, so a single `Ctrl+Z` restacks every "
             "picture at its original position and recreates the stack under its "
             "original id. Nothing is deleted and no file moves: a stack is a "
-            "grouping row plus a cover pointer."
+            "grouping row plus a cover pointer.\n\n"
+            "**A locked picture set refuses the stack** (`423`). Dissolving is "
+            "the most complete form of the detach a lock forbids: it severs "
+            "the through-stack freeze for every member at once, so a picture "
+            "the lock was protecting becomes deletable. Rows carry "
+            "`stackable` and `blocked_by_sets` so the button can say so before "
+            "it is pressed."
         ),
         response_model=MixedStackActionResponse,
         responses={
             400: {"description": "The stack has no live members."},
+            423: {
+                "description": (
+                    "A member of this stack is frozen by a locked picture set. "
+                    "Nothing was written; `detail` names the sets and the "
+                    "frozen picture ids."
+                )
+            },
         },
     )
     def post_mixed_stack_unstack(

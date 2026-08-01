@@ -100,7 +100,7 @@ MIN_STACK_MEMBERS = 2
 """A stack needs two live members before there is anything to collapse."""
 
 MAX_SELECTION_IDS = 2000
-"""Upper bound on ``picture_ids`` **and** on ``stack_ids`` per request.
+"""Upper bound on the ids one request may carry, **across both lists together**.
 
 Each id costs a bounded amount of DB work, but an unbounded list would serialise
 an arbitrary amount of it on the DB queue from one request (the reasoning behind
@@ -108,6 +108,17 @@ an arbitrary amount of it on the DB queue from one request (the reasoning behind
 gesture here is "select every stacked picture in the library and collapse it":
 the owner's 160 stacks hold 574 pictures, and forcing that into chunks would
 split one user gesture across several undo batches.
+
+**It bounds the request, not the result.** Two ways this cap used to be nothing
+of the kind, both of which a client could reach on purpose:
+
+* it was applied to the **de-duplicated** set, so a body of 2,000,000 repeats of
+  the same id passed. The cost being bounded is the cost of *parsing and
+  de-duplicating the body*, which happens first, so :func:`coerce_selection_ids`
+  now checks the raw length before the loop;
+* ``stack_ids`` and ``picture_ids`` were capped **separately**, so one request
+  legitimately carried 4,000. :func:`enforce_selection_budget` applies the cap to
+  their sum, which is what "per request" has to mean.
 """
 
 SKIP_LOCKED = "set_locked"
@@ -231,6 +242,15 @@ class KeepCoverOnlyPlan:
 def coerce_selection_ids(raw_ids, label: str) -> list[int]:
     """Validate and de-duplicate one id list from the request body.
 
+    **The length is checked on the raw list, before de-duplication.** Checking
+    the de-duplicated set instead bounds the *outcome* of the work rather than
+    the request: a body of two million repeats of one id de-duplicates to a
+    single id and was accepted outright. What this cannot un-do is Pydantic
+    having already materialised that list while binding the request model, which
+    is inherent to any modelled body and is bounded by the transport, not here;
+    what it does stop is the request being *honoured*, and the set build and DB
+    work behind it.
+
     Args:
         raw_ids: The raw JSON value; ``None`` and an absent field both mean "no
             ids of this kind", which is legal as long as the other kind has some.
@@ -239,12 +259,16 @@ def coerce_selection_ids(raw_ids, label: str) -> list[int]:
 
     Raises:
         KeepCoverOnlyError: The value is not a list, carries a non-integer, or
-            is longer than :data:`MAX_SELECTION_IDS`.
+            holds more than :data:`MAX_SELECTION_IDS` entries.
     """
     if raw_ids is None:
         return []
     if not isinstance(raw_ids, (list, tuple)):
         raise KeepCoverOnlyError(f"{label} must be a list of integers")
+    if len(raw_ids) > MAX_SELECTION_IDS:
+        raise KeepCoverOnlyError(
+            f"{label} exceeds the maximum of {MAX_SELECTION_IDS} ids per request"
+        )
     ids: set[int] = set()
     for raw in raw_ids:
         if isinstance(raw, bool):
@@ -253,11 +277,31 @@ def coerce_selection_ids(raw_ids, label: str) -> list[int]:
             ids.add(int(raw))
         except (TypeError, ValueError) as exc:
             raise KeepCoverOnlyError(f"{label} must contain valid integers") from exc
-    if len(ids) > MAX_SELECTION_IDS:
-        raise KeepCoverOnlyError(
-            f"{label} exceeds the maximum of {MAX_SELECTION_IDS} ids per request"
-        )
     return sorted(ids)
+
+
+def enforce_selection_budget(stack_ids, picture_ids) -> None:
+    """Raise when the two id lists together exceed :data:`MAX_SELECTION_IDS`.
+
+    The cap is documented and reasoned about as a **per-request** bound, so it
+    has to be applied to the request. Capping each list on its own let one call
+    carry ``MAX_SELECTION_IDS`` stacks *and* ``MAX_SELECTION_IDS`` pictures, i.e.
+    twice the work the number was chosen to permit, and the two are unioned into
+    one selection anyway (:func:`resolve_selection_in_session`).
+
+    Args:
+        stack_ids: The coerced stack-id list.
+        picture_ids: The coerced picture-id list.
+
+    Raises:
+        KeepCoverOnlyError: The combined count is over the cap.
+    """
+    total = len(stack_ids or []) + len(picture_ids or [])
+    if total > MAX_SELECTION_IDS:
+        raise KeepCoverOnlyError(
+            f"stack_ids and picture_ids together carry {total} ids, over the "
+            f"maximum of {MAX_SELECTION_IDS} per request"
+        )
 
 
 def resolve_selection_in_session(
@@ -970,6 +1014,7 @@ __all__ = [
     "SKIP_SINGLE_MEMBER",
     "StackPlan",
     "coerce_selection_ids",
+    "enforce_selection_budget",
     "keep_cover_only",
     "keep_cover_only_in_session",
     "plan_in_session",

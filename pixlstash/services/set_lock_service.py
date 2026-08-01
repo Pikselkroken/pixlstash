@@ -24,6 +24,13 @@ a collapsed-stack *leader* shown in the grid may not itself be the row that is a
 member of a locked set — a sibling is. Every picture-level check therefore runs on
 the **stack-expanded** id list, so a stacked sibling in a locked set blocks the
 whole operation.
+
+That expansion is also why the stack is guarded in **both** directions:
+:func:`enforce_stack_membership_not_locked` refuses a picture *joining* a stack a
+locked set touches, and :func:`enforce_stack_detach_not_locked` refuses one
+*leaving* it. Leaving is the direction that escalates: detaching a sibling
+severs a freeze that reached it through the stack, so an unguarded detach turns a
+hard ``423`` into a soft delete two calls later.
 """
 
 from dataclasses import dataclass
@@ -42,6 +49,13 @@ logger = get_logger(__name__)
 # 423 Locked — semantically exact for "the resource is frozen"; distinct from the
 # 403 (token scope) and 409 (name conflict) codes already used on these routes.
 LOCKED_STATUS_CODE = 423
+
+ID_CHUNK = 900
+"""Ids per ``IN (...)`` clause, under SQLite's 999-variable ceiling.
+
+Same value and same reason as ``dedup_tier_service.ID_CHUNK``; defined locally
+because that module imports this one, so borrowing the constant would make the
+dependency circular."""
 
 
 def _locked_sets_by_picture(
@@ -211,6 +225,14 @@ def locked_picture_id_subquery():
     mirroring :func:`~pixlstash.services.stack_membership.expand_picture_ids_to_stacks`
     (which drops deleted co-members while always keeping the input id itself), so
     this predicate neither over- nor under-blocks relative to the write guards.
+
+    That filter is why the *label* guards and the *detach* guard answer
+    differently for one state: a stack whose only locked-set member is
+    scrapheaped has no frozen live picture here (its siblings are editable and
+    deletable), yet :func:`enforce_stack_detach_not_locked` still refuses to
+    break the stack up. The two answer different questions, and
+    :func:`_stack_member_ids` carries the reasoning; do not "reconcile" them by
+    dropping this filter, which would freeze live pictures nothing has frozen.
 
     Returns:
         A SQLAlchemy ``Select`` of ``Picture.id``. Correlates to nothing, so it is
@@ -402,6 +424,162 @@ def enforce_stack_membership_not_locked(
             "picture_ids": gaining_pids,
         },
     )
+
+
+def _stack_member_ids(session: Session, stack_ids) -> dict[int, list[int]]:
+    """``{stack_id: [every member row id]}``, soft-deleted members included.
+
+    Deliberately unfiltered on ``deleted``: every route that detaches members
+    also detaches the stack's scrapheaped rows when the stack dissolves, so
+    "member of this stack" has to mean the same thing to the guard that refuses
+    the detach and to the read that predicts it.
+
+    **This is the one place the stack rule and the picture-level rule
+    deliberately differ, and it is load-bearing.** A picture that is itself a
+    member of a locked set is frozen whether or not it is in the Scrapheap, but
+    it projects no freeze onto its live stack siblings: both
+    :func:`expand_picture_ids_to_stacks` and the stack-derived arm of
+    :func:`locked_picture_id_subquery` drop deleted co-members, so the siblings'
+    label data stays editable. Filtering ``deleted`` here to "match" that would
+    make the stack detachable, and the dissolve would take the frozen row with
+    it (``mixed_stack_service._apply_removal`` detaches the scrapheaped rows
+    rather than leave a stack nothing can empty). Restore it afterwards and it
+    comes back loose, so the freeze it would have projected never returns: a
+    deferred lock escape rather than a live one, which is why the guard is
+    whole-stack and reads every row.
+
+    Tested by ``tests/test_picture_set_locking.py::
+    test_a_scrapheaped_locked_member_still_freezes_its_stack_against_detach``
+    (and its over-blocking twin), which is the regression this docstring
+    describes: adding ``Picture.deleted.is_(False)`` below flips all three
+    detach routes from 423 to 200.
+    """
+    ids = sorted({int(sid) for sid in stack_ids if sid is not None})
+    if not ids:
+        return {}
+    members: dict[int, list[int]] = {}
+    for start in range(0, len(ids), ID_CHUNK):
+        chunk = ids[start : start + ID_CHUNK]
+        for picture_id, stack_id in session.exec(
+            select(Picture.id, Picture.stack_id).where(Picture.stack_id.in_(chunk))
+        ).all():
+            members.setdefault(int(stack_id), []).append(int(picture_id))
+    return members
+
+
+def locked_sets_freezing_stacks(session: Session, stack_ids) -> dict[int, list[dict]]:
+    """``{stack_id: [{"id", "name"}, ...]}`` for each stack a locked set freezes.
+
+    The **read-side counterpart** to :func:`enforce_stack_detach_not_locked`,
+    and deliberately computed over the same rows: both take every member of the
+    stack (:func:`_stack_member_ids`, soft-deleted included) and ask
+    :func:`_locked_sets_by_picture` which of them a locked set holds. That
+    equivalence is the whole point of the function existing. A row that predicts
+    "you may unstack this" and a server that then answers ``423`` is worse than
+    no prediction at all, and the two would drift the moment they were computed
+    from different member sets (live-only here, all-rows there).
+
+    Answers per **stack**, not per picture, because the refusal is per stack:
+    one frozen member freezes every sibling, so there is no partial answer to
+    give. A stack no locked set touches is simply absent from the result.
+
+    **Every read surface that predicts a detach must come through here.** There
+    are two, ``GET /dedup/mixed-stacks`` and
+    ``GET /dedup/stacks/{stack_id}/members``, and they once disagreed: the
+    second rolled its unit-level ``stackable`` up from the live member ids it
+    already had, so a stack whose only locked-set member was scrapheaped read
+    ``true`` there, ``false`` on the row, and ``423`` from the server. Deriving
+    the answer from a member list a caller happens to hold is exactly how that
+    happens; call this instead.
+
+    Args:
+        session: Pre-opened DB session.
+        stack_ids: Candidate ``PictureStack`` ids.
+
+    Returns:
+        ``{stack_id: [{"id", "name"}, ...]}`` sorted by set id, for the frozen
+        stacks only. Empty when nothing is frozen.
+    """
+    members_by_stack = _stack_member_ids(session, stack_ids)
+    if not members_by_stack:
+        return {}
+    detail = _locked_sets_by_picture(
+        session, [pid for ids in members_by_stack.values() for pid in ids]
+    )
+    if not detail:
+        return {}
+    result: dict[int, list[dict]] = {}
+    for stack_id, member_ids in members_by_stack.items():
+        sets: dict[int, str] = {}
+        for picture_id in member_ids:
+            sets.update(dict(detail.get(picture_id, [])))
+        if sets:
+            result[stack_id] = [
+                {"id": set_id, "name": name} for set_id, name in sorted(sets.items())
+            ]
+    return result
+
+
+def enforce_stack_detach_not_locked(session: Session, stack_id, action: str) -> None:
+    """Raise ``423`` if any member may not be detached from *stack_id*.
+
+    The counterpart to :func:`enforce_stack_membership_not_locked`: that one
+    guards a picture **joining** a stack, this one guards a picture **leaving**
+    one. Both exist for the same reason, stacks are atomic for set membership,
+    but leaving is the dangerous direction and it was the unguarded one.
+
+    **A locked set freezes a stack's siblings THROUGH the stack.** Every
+    picture-level guard runs on the stack-expanded id list
+    (:func:`_locked_sets_by_picture`), so a member that is not itself in the
+    locked set is still frozen while it shares a stack with one that is. Detach
+    it and the freeze is simply gone: an operation that was refused ``423`` a
+    moment ago succeeds. Two calls (unstack, then delete) therefore turned a hard
+    freeze into a soft delete, which is a lock escape rather than a missing
+    guard.
+
+    **The whole stack is refused, never just the frozen member.** Removing any
+    member changes the membership a locked set reconciles to, and detaching the
+    *unfrozen* siblings is exactly the escape above, so there is no member of a
+    touched stack that may safely leave. This is the same rule
+    ``docs/design/keep-cover-only.md`` states ("Locked sets refuse the whole
+    stack") and that :func:`~pixlstash.services.keep_cover_only_service.keep_cover_only_in_session`
+    already enforces, applied to the three routes that detach members:
+    ``POST /dedup/mixed-stacks/{id}/split``, ``POST /dedup/mixed-stacks/{id}/unstack``
+    and ``DELETE /stacks/{id}/members``.
+
+    **Soft-deleted members count.** All three call sites detach the stack's
+    scrapheaped rows too when the stack dissolves, and a scrapheaped picture that
+    is itself a locked-set member is still frozen (the ``deleted`` filter in
+    :func:`locked_picture_id_subquery` applies only to the stack-derived arm).
+    Checking live members only would leave that row detachable, which is the same
+    escape one level down. See :func:`_stack_member_ids` for why that is a
+    deferred escape rather than an immediate one, and why the whole stack is
+    still refused: the live siblings of a scrapheaped frozen row are **not**
+    themselves frozen, so this refusal is deliberately stricter than the
+    picture-level guards on exactly that one state.
+
+    Args:
+        session: Pre-opened DB session.
+        stack_id: The stack whose members are about to be detached. ``None`` and
+            an unknown id are no-ops: there is no stack to freeze.
+        action: Short human-facing verb phrase, echoed in the error detail.
+
+    Raises:
+        HTTPException: ``423`` with ``detail`` =
+            ``{"code": "pictures_locked", "action", "sets": [{"id","name"}],
+            "picture_ids": [...]}``, via :func:`enforce_pictures_not_locked`.
+    """
+    if stack_id is None:
+        return
+    member_ids = _stack_member_ids(session, [stack_id]).get(int(stack_id))
+    if not member_ids:
+        return
+    # The raise itself stays in enforce_pictures_not_locked so the 423 body is
+    # byte-identical to every other lock refusal. What this function owns is
+    # WHICH ids are checked, and locked_sets_freezing_stacks answers the read
+    # side from the same _stack_member_ids call, so prediction and enforcement
+    # cannot disagree.
+    enforce_pictures_not_locked(session, member_ids, action)
 
 
 @dataclass(frozen=True)
