@@ -1454,7 +1454,7 @@ class AuthService:
         """The database holding guest sessions, which is the active vault."""
         return self.vault_db if self.vault_db is not None else self._db
 
-    def _active_library_uuid(self) -> Optional[str]:
+    def active_library_uuid(self) -> Optional[str]:
         """Return the library a token minted right now belongs to.
 
         Every token is stamped with exactly one library (multi-library plan §4):
@@ -1565,7 +1565,7 @@ class AuthService:
                 raise HTTPException(status_code=404, detail="User not found")
             token = UserToken(
                 user_id=user_id,
-                library_uuid=self._active_library_uuid(),
+                library_uuid=self.active_library_uuid(),
                 token_hash=token_hash,
                 token_prefix=token_prefix,
                 created_at=datetime.utcnow(),

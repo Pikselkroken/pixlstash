@@ -571,7 +571,10 @@ def select_pictures_for_listing(
                     ).all()
                 )
 
-            shared_ids = server.vault.db.run_task(
+            # Tokens live in the hub, so the "what has this owner shared"
+            # lookup runs there. Reading it from the vault would silently return
+            # nothing rather than failing, which is the worse shape.
+            shared_ids = server.hub_engine.run_task(
                 _fetch_shared_ids, auth_user_id, priority=DBPriority.IMMEDIATE
             )
             shared_id_set = set(shared_ids)

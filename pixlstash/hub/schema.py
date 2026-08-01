@@ -51,9 +51,15 @@ CURRENT_SCHEMA_VERSION = 1
 #
 # The five library-scoped columns at the end (similarity_character,
 # stack_strictness, smart_score_penalised_tags, hidden_tags, apply_tag_filter)
-# belong to the vault's ``library_settings`` table by §5 and are *not* read from
-# here. They exist only so the shared model maps cleanly, and they come out in a
-# later hub schema version once ``library_settings`` is the live source.
+# belong to the vault's ``library_settings`` table by §5.
+#
+# **Interim, 2026-08-01:** migration 0092 creates that row and seeds it, but
+# nothing reads it yet, so these columns are still the live source for both
+# reads and writes. That is deliberate and consistent (one home, no split
+# brain), not an oversight: the alternative during the move was preferences
+# written to one database and read from the other. Wiring ``library_settings``
+# and dropping these five columns is the follow-up, and until then a library's
+# tag filters and stack strictness are per-user rather than per-library.
 _V1_USER = """
 CREATE TABLE IF NOT EXISTS user (
     id                          INTEGER PRIMARY KEY,

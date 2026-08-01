@@ -103,7 +103,11 @@ def get_smart_score_penalised_tags_from_request(server, request):
     user_id = server.auth.get_user_id(request)
     if user_id is None:
         return DEFAULT_SMART_SCORE_PENALIZED_TAGS
-    user = server.vault.db.run_task(
+    # Read from the hub. NOTE: smart_score_penalised_tags is library-scoped by
+    # plan §5 and its home is the vault's library_settings row, which migration
+    # 0092 creates but nothing reads yet. Until that is wired, the hub's copy of
+    # the column is the single source, so reads and writes at least agree.
+    user = server.hub_engine.run_task(
         lambda session: session.get(User, user_id),
         priority=DBPriority.IMMEDIATE,
     )

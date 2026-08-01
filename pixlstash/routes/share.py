@@ -76,7 +76,7 @@ def create_router(server) -> APIRouter:
                 with Image.open(file_path) as pil_img:
                     if apply_wm:
                         wm_bytes = share_service.get_user_watermark_bytes(
-                            server.vault, matched_token.user_id
+                            server.hub_engine, matched_token.user_id
                         )
                         if wm_bytes:
                             pil_img = apply_watermark(pil_img, wm_bytes)

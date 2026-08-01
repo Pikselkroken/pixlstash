@@ -86,7 +86,8 @@ def register_routes(router, server):
             user_id = getattr(request.state, "auth_user_id", None)
             if not user_id:
                 return None
-            user = server.vault.db.run_immediate_read_task(
+            # The watermark is the owner's, not a library's, so it is in the hub.
+            user = server.hub_engine.run_immediate_read_task(
                 lambda session: session.get(User, user_id)
             )
             return get_watermark_bytes(

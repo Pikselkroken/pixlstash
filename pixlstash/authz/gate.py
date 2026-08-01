@@ -456,6 +456,11 @@ class AuthzGate:
         ladder lives in exactly one place. The object-scoped classes are handled
         by :meth:`_enforce_scoped_policy` (Step 4).
         """
+        # The library pin runs before every policy branch, so no access level
+        # can sidestep it and a route added without thinking about libraries is
+        # pinned by default.
+        self._enforce_library_pin(request, route_policy)
+
         policy = route_policy.policy
         if policy in (AccessPolicy.PUBLIC, AccessPolicy.ANY_TOKEN):
             return
@@ -609,6 +614,66 @@ class AuthzGate:
             )
         check = _MEMBERSHIP_BY_POLICY[route_policy.policy]
         check(self._server, request, obj_id)
+
+    def _enforce_library_pin(self, request: Request, route_policy: RoutePolicy) -> None:
+        """Refuse a token whose library is not the active one.
+
+        Every token belongs to exactly one library (multi-library plan §4).
+        Without this, switching library would silently change what an existing
+        token grants: a share link would start serving somebody else's pictures,
+        and an automation holding an ALL token would write into the wrong place.
+
+        Cookie sessions are deliberately exempt. A session says "I am the owner,
+        show me what is active", and following the switch is the entire point of
+        the feature; a token says "programmatic access to *this* library".
+
+        Fails closed in both directions that matter: a token with no stamp at all
+        is refused rather than treated as universal.
+        """
+        if route_policy.library_independent:
+            return
+
+        matched_token = getattr(request.state, "matched_token", None)
+        if matched_token is None:
+            # A cookie session, or an unauthenticated PUBLIC route.
+            return
+
+        active_uuid = self._auth.active_library_uuid()
+        if active_uuid is None:
+            # No registry (a Vault built without a Server, or a hub that has no
+            # libraries yet). Nothing to pin against, so nothing to enforce.
+            return
+
+        token_library = getattr(matched_token, "library_uuid", None)
+        if token_library == active_uuid:
+            return
+
+        # A resource-scoped share token learns nothing: 404 is what every other
+        # out-of-scope resource returns, so a link to a non-active library is
+        # indistinguishable from one that never existed.
+        if _is_resource_scoped(request):
+            logger.info(
+                "Refusing a resource-scoped token stamped for library %s while "
+                "%s is active",
+                token_library,
+                active_uuid,
+            )
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # An owner token holder owns both libraries, so name the problem.
+        logger.info(
+            "Refusing an owner token stamped for library %s while %s is active",
+            token_library,
+            active_uuid,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This token belongs to a library that is not currently active. "
+                "Switch to that library, or use a token created for the active "
+                "one."
+            ),
+        )
 
     def _enforce_unscoped_owner(self, request: Request) -> None:
         """Require a fully-unscoped owner via the shared AuthService helper.

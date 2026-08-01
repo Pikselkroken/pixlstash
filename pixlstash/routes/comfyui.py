@@ -527,7 +527,8 @@ def create_router(server) -> APIRouter:
             await websocket.close(code=1008)
             return
         await websocket.accept()
-        user = server.vault.db.run_task(
+        # comfyui_url is a machine setting, so it lives in the hub.
+        user = server.hub_engine.run_task(
             lambda session: session.get(User, ws_auth.user_id),
             priority=DBPriority.IMMEDIATE,
         )

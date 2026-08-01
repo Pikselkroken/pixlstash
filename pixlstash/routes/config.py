@@ -445,25 +445,46 @@ def create_router(server) -> APIRouter:
                 changed_tags = changed_penalised_tags(
                     old_penalised_tags, new_penalised_tags
                 )
-                if changed_tags:
-                    # Scoped, not library-wide: only pictures that actually carry one of
-                    # the re-weighted tags can have moved, and a blanket reset would
-                    # re-score the entire vault on every settings edit.
-                    #
-                    # Runs INSIDE this transaction, before the single commit:
-                    # invalidate_for_penalised_tag_change deliberately does not commit, so
-                    # the config write and the score invalidation land atomically. If the
-                    # process died between two separate tasks the config change would be
-                    # durable while the invalidation was lost, leaving scores stale
-                    # forever — the failure this path exists to eliminate.
-                    invalidate_for_penalised_tag_change(session, changed_tags)
                 session.commit()
                 session.refresh(user)
             return user, updated, changed_tags
 
-        user, updated, changed_tags = server.vault.db.run_task(
+        # The hub owns the user row. The five library-scoped fields (§5) still
+        # ride along here rather than in the vault's library_settings row; see
+        # the note in pixlstash/hub/schema.py.
+        user, updated, changed_tags = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+
+        if changed_tags:
+            # Scoped, not library-wide: only pictures carrying one of the
+            # re-weighted tags can have moved, and a blanket reset would
+            # re-score the whole library on every settings edit.
+            #
+            # This used to run inside the config write's transaction so the two
+            # landed atomically. That is no longer possible: the setting lives
+            # in the hub and the pictures live in the vault, and SQLite has no
+            # cross-database transaction. The window is therefore real, and the
+            # failure it leaves is stale smart scores rather than lost data. It
+            # is logged loudly with the tag list so it can be repaired by
+            # re-saving the setting, instead of failing silently and leaving
+            # scores wrong forever.
+            def _invalidate(session: Session):
+                invalidate_for_penalised_tag_change(session, changed_tags)
+                session.commit()
+
+            try:
+                server.vault.db.run_task(_invalidate, priority=DBPriority.IMMEDIATE)
+            except Exception:
+                logger.exception(
+                    "Penalised tags changed (%s) but invalidating the affected "
+                    "smart scores failed. The setting is saved; scores for "
+                    "pictures carrying those tags are stale until they are "
+                    "recomputed. Re-save the setting to retry.",
+                    ", ".join(sorted(changed_tags)),
+                )
+                raise
+
         if changed_tags:
             # The NULL-reset already committed atomically above; just nudge the scheduler
             # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
@@ -648,7 +669,7 @@ def create_router(server) -> APIRouter:
             session.add(user)
             session.commit()
 
-        server.vault.db.run_task(
+        server.hub_engine.run_task(
             _save, user_id, png_data, priority=DBPriority.IMMEDIATE
         )
         return {"status": "ok"}
@@ -671,7 +692,7 @@ def create_router(server) -> APIRouter:
             session.add(user)
             session.commit()
 
-        server.vault.db.run_task(_clear, user_id, priority=DBPriority.IMMEDIATE)
+        server.hub_engine.run_task(_clear, user_id, priority=DBPriority.IMMEDIATE)
         return {"status": "ok"}
 
     @router.get(

@@ -136,6 +136,17 @@ class RoutePolicy:
             ruling 2026-07-21 D4). The gate cannot synthesise a correct empty
             envelope for an arbitrary list shape, so "leak nothing" is a 403, not
             an empty body.
+        library_independent: ``True`` exempts the route from the library pin —
+            the rule that a token only authenticates while the library it was
+            minted for is the active one (multi-library plan §4). **The default,
+            ``False``, is the safe one:** a new data route is pinned by
+            omission, exactly as an undeclared route is denied by omission.
+            A route qualifies for the exemption only if it satisfies *both*
+            clauses: it returns no library content, **and** it cannot be used to
+            acquire access to a different library. The second clause is what
+            keeps token minting pinned — a token stamped for library A that
+            could mint while B is active would hand itself a B-stamped token and
+            reopen the pivot the pin exists to close.
         id_resolver: Names a registered resolver that maps the route's raw id(s)
             (from :attr:`id_param` or :attr:`body_ids`) to a **picture id** before
             the picture-membership check — for routes keyed by a non-picture id
@@ -151,6 +162,7 @@ class RoutePolicy:
     resolved_inline: bool = False
     scope_aware: bool = False
     id_resolver: str | None = None
+    library_independent: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy, AccessPolicy):

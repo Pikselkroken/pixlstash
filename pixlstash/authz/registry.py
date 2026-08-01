@@ -137,6 +137,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/users/me/auth"): RoutePolicy(
         _OWNER,
+        # Library-independent (2026-08-01): identity lives in the hub, so "who
+        # am I" is the same answer whichever library is active, and it returns
+        # no library content. Without this exemption a token stamped for a
+        # non-active library could not even discover why it was being refused.
+        library_independent=True,
         justification=(
             "Owner account state (owner username + has_password). F-c hardening "
             "rider (decided 2026-07-21): tightened any_token -> owner_only so a "

@@ -62,20 +62,24 @@ def get_shared_picture(vault: "Vault", pic_id: int) -> "Picture | None":
     return pics[0] if pics else None
 
 
-def get_user_watermark_bytes(vault: "Vault", user_id: int) -> bytes | None:
+def get_user_watermark_bytes(identity_db, user_id: int) -> bytes | None:
     """Return the watermark bytes for a user (custom or default).
 
-    Fetches the user's custom watermark from the database; falls back to the
-    default server watermark if none is set.
+    Fetches the user's custom watermark from the hub and falls back to the
+    default server watermark if none is set. Takes the identity database rather
+    than the vault: a watermark is the owner's brand, not a property of whichever
+    library is open (multi-library plan §5).
 
     Args:
-        vault: Application vault, used for DB task dispatch.
+        identity_db: The hub, where the user row lives.
         user_id: ID of the user whose watermark to retrieve.
 
     Returns:
         Watermark image bytes, or None if no watermark is configured.
     """
-    user = vault.db.run_immediate_read_task(lambda session: session.get(User, user_id))
+    user = identity_db.run_immediate_read_task(
+        lambda session: session.get(User, user_id)
+    )
     custom = getattr(user, "watermark_image", None) if user else None
     if custom:
         return custom
