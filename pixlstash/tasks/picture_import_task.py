@@ -13,6 +13,7 @@ from pixlstash.db_models.picture_project import PictureProjectMember
 from pixlstash.db_models.picture_set import PictureSet, PictureSetMember
 from pixlstash.db_models.tag import Tag, TAG_PENDING_SENTINEL
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import import_dedup_service
 from pixlstash.services.project_membership_service import (
     character_project_ids,
     picture_set_project_ids,
@@ -45,6 +46,14 @@ class PictureImportTask(BaseTask):
     into the vault, and inserted as a ``Picture`` row (with a pending-tag
     sentinel so the finders pick it up for downstream processing). The staging
     directory is removed on completion.
+
+    **Every staged file lands in exactly one of five disjoint buckets** —
+    imported, duplicate (live content already in the vault, including a repeat
+    inside this batch), **scrapheaped** (content matches a soft-deleted picture:
+    not imported again, offered for restore), failed, cancelled — and they sum
+    to the staged total. A scrapheaped match used to be reported as an ordinary
+    duplicate, which told the user nothing about why their file did not appear.
+    See :mod:`pixlstash.services.import_dedup_service`.
 
     Live progress is exposed via ``_total_count`` / ``_processed_count`` and read
     by ``Vault._build_worker_progress_snapshot`` so the import surfaces as a task
@@ -135,27 +144,50 @@ class PictureImportTask(BaseTask):
     def _run_task(self):
         new_pictures: list[Picture] = []
         duplicate_count = 0
+        scrapheaped_count = 0
         failed_count = 0
+        cancelled_count = 0
+        # Distinct scrapheaped pictures this import matched. Per PICTURE (the
+        # restore offer), while ``scrapheaped_count`` is per FILE (the bucket
+        # arithmetic) — several staged copies of one content name one id once.
+        scrapheaped_picture_ids: list[int] = []
+        seen_scrapheaped_ids: set[int] = set()
         # Content hashes already accepted this batch. The DB dedupe below only
         # catches files already committed; the batch is committed after the
         # loop, so two byte-identical staged files would both pass the DB check.
         # Track them here so an intra-batch duplicate is counted, not imported.
         seen_shas: set[str] = set()
 
-        for entry in self._staged_files:
+        for index, entry in enumerate(self._staged_files):
             if self._stop_event.is_set():
+                # Count the untouched tail explicitly. The buckets have to sum
+                # to the staged total on a cancelled run too, and deriving that
+                # remainder by subtracting the other buckets would report a
+                # number nobody measured.
+                cancelled_count = len(self._staged_files[index:])
                 logger.info(
                     "PictureImportTask %s cancelled; stopping early "
-                    "(staging_id=%s, processed=%d/%d)",
+                    "(staging_id=%s, processed=%d/%d, %d staged file(s) never "
+                    "reached)",
                     self.id,
                     self._staging_id,
                     self._processed_count,
                     self._total_count,
+                    cancelled_count,
                 )
                 break
 
             file_path = entry.get("file_path")
             if not file_path:
+                # A staged entry with no path can never be ingested; it belongs
+                # in the failed bucket, not in no bucket at all.
+                logger.warning(
+                    "PictureImportTask: staged entry %d has no file_path "
+                    "(staging_id=%s); counting it as failed.",
+                    index,
+                    self._staging_id,
+                )
+                failed_count += 1
                 self._processed_count += 1
                 continue
 
@@ -174,14 +206,38 @@ class PictureImportTask(BaseTask):
                 continue
 
             def find_existing(session: Session, hash_value: str):
-                return session.exec(
-                    select(Picture).where(Picture.pixel_sha == hash_value)
-                ).first()
+                # Deliberately matches soft-deleted rows too: a scrapheaped
+                # picture used to be invisible to import dedup on the one-shot
+                # path, which re-imported its file as a second row. Here the
+                # match was already found (this query never had a ``deleted``
+                # filter) but was reported as an ordinary duplicate, which hid
+                # from the user that their file is sitting in the Scrapheap.
+                # The service classifies it instead of silently collapsing it.
+                return import_dedup_service.match_one_by_pixel_sha_in_session(
+                    session, hash_value
+                )
 
-            existing = pixel_sha in seen_shas or self._db.run_task(
-                find_existing, pixel_sha
-            )
-            if existing:
+            # Submitted on the writer queue, not the immediate read path, so a
+            # picture inserted by an earlier batch of this same import is
+            # already visible.
+            match = self._db.run_task(find_existing, pixel_sha)
+            if match is not None and match.deleted:
+                logger.info(
+                    "PictureImportTask: staged file %s matches scrapheaped "
+                    "picture %d (sha %s); not importing a second copy — "
+                    "offering a restore instead (staging_id=%s)",
+                    file_path,
+                    match.id,
+                    pixel_sha,
+                    self._staging_id,
+                )
+                scrapheaped_count += 1
+                if match.id not in seen_scrapheaped_ids:
+                    seen_scrapheaped_ids.add(match.id)
+                    scrapheaped_picture_ids.append(match.id)
+                self._processed_count += 1
+                continue
+            if match is not None or pixel_sha in seen_shas:
                 logger.debug(
                     "PictureImportTask: duplicate sha %s already imported; "
                     "skipping staged file %s",
@@ -257,19 +313,54 @@ class PictureImportTask(BaseTask):
 
         logger.info(
             "PictureImportTask completed: staging_id=%s imported=%d duplicates=%d "
-            "failed=%d of %d staged",
+            "scrapheaped=%d (%d picture(s)) failed=%d cancelled=%d of %d staged",
             self._staging_id,
             len(imported_ids),
             duplicate_count,
+            scrapheaped_count,
+            len(scrapheaped_picture_ids),
             failed_count,
+            cancelled_count,
             self._total_count,
         )
+        # The five buckets are disjoint and describe every staged file. Each is
+        # counted where it happens; none is derived by subtracting the others
+        # from the total. If they ever disagree with the staged total the
+        # summary the user reads is wrong, so say so instead of shipping it
+        # quietly.
+        bucket_total = (
+            len(imported_ids)
+            + duplicate_count
+            + scrapheaped_count
+            + failed_count
+            + cancelled_count
+        )
+        if bucket_total != self._total_count:
+            logger.error(
+                "PictureImportTask %s bucket arithmetic is inconsistent "
+                "(staging_id=%s): imported=%d + duplicate=%d + scrapheaped=%d + "
+                "failed=%d + cancelled=%d = %d, but %d file(s) were staged. "
+                "(%d picture(s) were built for insert.)",
+                self.id,
+                self._staging_id,
+                len(imported_ids),
+                duplicate_count,
+                scrapheaped_count,
+                failed_count,
+                cancelled_count,
+                bucket_total,
+                self._total_count,
+                len(new_pictures),
+            )
         return {
             "staging_id": self._staging_id,
             "imported_picture_ids": imported_ids,
             "imported_count": len(imported_ids),
             "duplicate_count": duplicate_count,
+            "scrapheaped_count": scrapheaped_count,
+            "scrapheaped_picture_ids": scrapheaped_picture_ids,
             "failed_count": failed_count,
+            "cancelled_count": cancelled_count,
             "candidate_count": self._total_count,
             "origin_client_id": self._origin_client_id,
         }
