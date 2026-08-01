@@ -119,11 +119,17 @@ floor, 5 of those with a member joined to nothing else in the stack.
 
 * **Bind the list to the existing threshold slider**, not a constant. 0.90 → 26,
   0.65 → 9. The spectrum becomes drivable with a control already on the toolbar.
-* **Two surfaces, different jobs.** A `mixed` value on the grid's
-  `stackStateFilter` (`all | stacked | unstacked | unresolved`) serves discovery —
-  `unresolved` is exact precedent for a dedup-derived filter value. A third page
-  of Duplicates carries the actions, because a filter value has nowhere to put a
-  per-stack dismissal.
+* **One surface: a third page of Duplicates.** Not a sidebar destination (the
+  architecture rule is that only a destination with a to-do count earns a row,
+  and 9-26 items is not one), and **not** a grid filter value.
+
+  The grid-filter half was proposed on the grounds that `unresolved` is
+  precedent for a dedup-derived value on `stackStateFilter`. That precedent was
+  withdrawn while this spec was being written: `unresolved` is still honoured by
+  the store and the API but is no longer offered in the filter panel, because
+  "the duplicate queue owns that work" (`useFilterStore.js`). Adding `mixed`
+  there would contradict that, and discovery was the only thing the filter value
+  bought. The page carries both the discovery and the actions.
 * **Primary action** names its outcome: `Split off 1` when there is a clear
   stranger, `Unstack` when there is no majority cluster.
 * **`Keep`** — durable, server-side, keyed on stack id **plus a fingerprint of
