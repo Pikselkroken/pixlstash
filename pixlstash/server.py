@@ -44,6 +44,8 @@ from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
+from pixlstash.hub.bootstrap import bootstrap_hub
+from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -364,6 +366,28 @@ class Server(
 
         register_heif_opener()
 
+        # The hub decides which library opens, not server config. On a first run
+        # it registers the configured image_root as library 1 and moves identity
+        # out of that vault, so an upgrading install sees the same folder under a
+        # name. From then on the registry's active row wins, and image_root from
+        # config is only the migration source. Must run before the Vault is
+        # built: it copies the vault's credentials into the hub and only then
+        # blanks them, and the vault's own migrations run the moment it opens.
+        # The hub sits beside server-config.json rather than at a fixed platform
+        # path, so it follows ``--server-config`` wherever it points. That is
+        # what the plan specifies (the hub location *is* the config-dir decision,
+        # issue #168), and it means a test or an alternate deployment gets its
+        # own hub instead of reaching into the user's real one.
+        hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
+        self._hub_bootstrap = bootstrap_hub(self._server_config["image_root"], hub_path)
+        self.hub = self._hub_bootstrap.hub
+        self.library_registry = LibraryRegistry(self.hub)
+        if self._hub_bootstrap.migrated:
+            logger.info(
+                "First run after the hub/vault split: identity now lives in %s",
+                self.hub.path,
+            )
+
         _startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
         _force_cpu = (
             Server.DEFAULT_FORCE_CPU
@@ -371,7 +395,7 @@ class Server(
             else _startup_forced_cpu
         )
         self.vault = Vault(
-            image_root=self._server_config["image_root"],
+            image_root=self._hub_bootstrap.image_root,
             description=User().description,
             server_config_path=self._server_config_path,
             path_mapper=self.path_mapper,
@@ -397,12 +421,26 @@ class Server(
         self._ws_loop = None
         self.vault.add_event_listener(self.handle_vault_event)
 
+        # Identity comes from the hub, never from the active vault. Pointing this
+        # at ``self.vault.db`` would mean switching library switches *who you
+        # are*: the owner would be logged out, or logged into whatever user row
+        # the other library happened to carry.
         self.auth = AuthService(
-            self.vault.db,
+            self._hub_bootstrap.engine,
             self._server_config,
             self._server_config_path,
             logger,
         )
+        # Tokens are stamped with the library that is active when they are
+        # minted. Resolved through the registry on every mint rather than
+        # captured here, so a token minted after a library switch belongs to the
+        # library the user is actually looking at.
+        self.auth.library_uuid_provider = self._active_library_uuid
+        # Guest sessions are per-library and stay in the vault, so the auth
+        # service needs a handle on it as well as on the hub. Re-pointed when
+        # the active library changes.
+        self.auth.vault_db = self.vault.db
+
         # A full restore swaps the database file underneath the running server,
         # which invalidates the token cache and every in-memory session. Give
         # the restore path a way to reach the auth service so it can clear them
@@ -521,7 +559,36 @@ class Server(
         if hasattr(self, "vault"):
             logger.info("Closing the vault and cleaning up resources")
             self.vault.close()
+        self._close_hub()
         gc.collect()
+
+    def _active_library_uuid(self):
+        """Return the active library's uuid, for stamping newly minted tokens."""
+        library = self.library_registry.active_library()
+        return library.uuid if library else None
+
+    @property
+    def hub_engine(self):
+        """The database identity lives in, which is the hub and not the vault.
+
+        Anything reading or writing the user or its tokens goes through this.
+        Reaching for ``vault.db`` instead would work against whichever library
+        happens to be active, which is precisely the bug the split removes.
+        """
+        return self._hub_bootstrap.engine
+
+    def _close_hub(self):
+        """Release the hub connection and its engine, if they were opened.
+
+        Separate from the vault's teardown because the two have different
+        lifetimes: switching library closes and reopens the vault while the hub
+        stays open for the life of the process.
+        """
+        bootstrap = getattr(self, "_hub_bootstrap", None)
+        if bootstrap is None:
+            return
+        bootstrap.engine.close()
+        bootstrap.hub.close()
 
     def run(self):
         self._shutdown_on_lifespan = True
@@ -568,6 +635,7 @@ class Server(
         finally:
             if hasattr(self, "vault"):
                 self.vault.close()
+            self._close_hub()
 
     @asynccontextmanager
     async def lifespan(self, app):

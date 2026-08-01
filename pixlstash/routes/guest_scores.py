@@ -72,8 +72,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=403, detail="Requires a READ-scoped token")
 
         session_id: str | None = getattr(request.state, "guest_session_id", None)
-        token_id: int | None = getattr(request.state, "token_id", None)
-        if not session_id or token_id is None:
+        token_public_id: str | None = getattr(request.state, "token_public_id", None)
+        if not session_id or token_public_id is None:
             return {"scores": {}}
 
         def fetch(session: Session):
@@ -81,7 +81,7 @@ def create_router(server) -> APIRouter:
                 select(GuestScore)
                 .join(GuestSession, GuestSession.session_id == GuestScore.session_id)
                 .where(GuestScore.session_id == session_id)
-                .where(GuestSession.token_id == token_id)
+                .where(GuestSession.token_public_id == token_public_id)
             ).all()
             return {str(row.picture_id): row.score for row in rows}
 
@@ -147,9 +147,11 @@ def create_router(server) -> APIRouter:
         if token_scope is None or token_scope.scope != "READ":
             raise HTTPException(status_code=403, detail="Requires a READ-scoped token")
 
-        token_id: int = getattr(request.state, "token_id", None)
-        if token_id is None:
-            raise HTTPException(status_code=403, detail="No token_id on request state")
+        token_public_id: str = getattr(request.state, "token_public_id", None)
+        if token_public_id is None:
+            raise HTTPException(
+                status_code=403, detail="No token_public_id on request state"
+            )
 
         body: dict[str, Any] = await request.json()
 
@@ -249,7 +251,7 @@ def create_router(server) -> APIRouter:
                 # Insert new GuestSession
                 new_session = GuestSession(
                     session_id=session_id,
-                    token_id=token_id,
+                    token_public_id=token_public_id,
                     created_at=now,
                     last_active_at=now,
                     cookie_token=cookie_token,
@@ -259,7 +261,7 @@ def create_router(server) -> APIRouter:
             else:
                 # Returning session — check it belongs to the same token to
                 # prevent cross-token score writes via a replayed session_id.
-                if existing.token_id != token_id:
+                if existing.token_public_id != token_public_id:
                     raise HTTPException(
                         status_code=403,
                         detail="session_id belongs to a different share token",
@@ -275,11 +277,11 @@ def create_router(server) -> APIRouter:
                 session.exec(  # type: ignore[call-overload]
                     text(
                         "INSERT OR REPLACE INTO guest_score"
-                        " (session_id, token_id, picture_id, score, scored_at)"
+                        " (session_id, token_public_id, picture_id, score, scored_at)"
                         " VALUES (:sid, :tid, :pid, :score, :scored_at)"
                     ).bindparams(
                         sid=session_id,
-                        tid=token_id,
+                        tid=token_public_id,
                         pid=pic_id,
                         score=score_val,
                         scored_at=now.isoformat(),

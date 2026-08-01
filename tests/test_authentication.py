@@ -44,7 +44,7 @@ def reset_auth(server):
         session.exec(delete(User))
         session.commit()
 
-    server.vault.db.run_task(_wipe)
+    server.hub_engine.run_task(_wipe)
 
     # Reset in-memory auth caches that mirror the on-disk state.
     server.auth.password_hash = None

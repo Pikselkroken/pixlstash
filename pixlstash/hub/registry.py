@@ -232,17 +232,17 @@ class LibraryRegistry:
                 concerned.
         """
         where = "" if include_detached else "WHERE attached = 1 "
-        rows = self._hub.connection.execute(
+        rows = self._hub.fetchall(
             f"SELECT {_LIBRARY_COLUMNS} FROM library {where}"
             "ORDER BY is_active DESC, name COLLATE NOCASE"
-        ).fetchall()
+        )
         return [self._row_to_library(row) for row in rows]
 
     def active_library(self) -> Optional[Library]:
         """Return the active library, or None when the registry is empty."""
-        row = self._hub.connection.execute(
+        row = self._hub.fetchone(
             f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE is_active = 1"
-        ).fetchone()
+        )
         return self._row_to_library(row) if row else None
 
     def by_uuid(self, library_uuid: str) -> Optional[Library]:
@@ -251,10 +251,10 @@ class LibraryRegistry:
         The lookup every caller outside the hub should use: a uuid names one
         library for the life of the installation, where an integer id does not.
         """
-        row = self._hub.connection.execute(
+        row = self._hub.fetchone(
             f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE uuid = ?",
             (library_uuid,),
-        ).fetchone()
+        )
         return self._row_to_library(row) if row else None
 
     def get(self, name_or_id: str | int) -> Library:
@@ -265,26 +265,25 @@ class LibraryRegistry:
                 one library (which the unique-name rule should prevent, but a
                 hub edited by hand can still present it).
         """
-        conn = self._hub.connection
         row = None
         if isinstance(name_or_id, int) or str(name_or_id).isdigit():
-            row = conn.execute(
+            row = self._hub.fetchone(
                 f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE id = ?",
                 (int(name_or_id),),
-            ).fetchone()
+            )
 
         if row is None:
-            row = conn.execute(
+            row = self._hub.fetchone(
                 f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE uuid = ?",
                 (str(name_or_id),),
-            ).fetchone()
+            )
 
         if row is None:
-            rows = conn.execute(
+            rows = self._hub.fetchall(
                 f"SELECT {_LIBRARY_COLUMNS} FROM library "
                 "WHERE name = ? COLLATE NOCASE AND attached = 1",
                 (str(name_or_id),),
-            ).fetchall()
+            )
             if len(rows) > 1:
                 raise LibraryNotFoundError(
                     f'"{name_or_id}" matches {len(rows)} libraries; use the id '
@@ -629,18 +628,18 @@ class LibraryRegistry:
 
     def _token_count(self, library_uuid: str) -> int:
         """Return how many tokens are stamped with this library."""
-        row = self._hub.connection.execute(
+        row = self._hub.fetchone(
             "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ?",
             (library_uuid,),
-        ).fetchone()
+        )
         return int(row[0]) if row else 0
 
     def _find_by_path(self, resolved_path: str) -> Optional[Library]:
         """Return the library registered at *resolved_path*, if any."""
-        row = self._hub.connection.execute(
+        row = self._hub.fetchone(
             f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE path = ?",
             (resolved_path,),
-        ).fetchone()
+        )
         return self._row_to_library(row) if row else None
 
     @staticmethod

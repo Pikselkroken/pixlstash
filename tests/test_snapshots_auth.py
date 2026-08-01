@@ -87,6 +87,9 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
         session.add(
             UserToken(
                 user_id=owner.id,
+                # Identity and tokens live in the hub now, and every token is
+                # stamped with the library it belongs to.
+                library_uuid=server._active_library_uuid(),
                 token_hash=bcrypt.hash(token_value),
                 token_prefix=token_value[:8],
                 created_at=datetime.utcnow(),
@@ -98,7 +101,7 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
         )
         session.commit()
 
-    server.vault.db.run_task(_add)
+    server.hub_engine.run_task(_add)
     return token_value
 
 

@@ -104,11 +104,17 @@ def reset_vault(server):
         session.exec(text("PRAGMA foreign_keys = OFF"))
         for model in _RESET_TABLES:
             session.exec(delete(model))
-        session.exec(delete(User))
         session.commit()
         session.exec(text("PRAGMA foreign_keys = ON"))
 
+    def _wipe_identity(session: Session):
+        session.exec(delete(User))
+        session.commit()
+
+    # Two databases now: pictures and the ledger live in the vault, the user
+    # lives in the hub.
     server.vault.db.run_task(_wipe)
+    server.hub_engine.run_task(_wipe_identity)
     image_root = server.vault.image_root
     db_basenames = {"vault.db", "vault.db-wal", "vault.db-shm", "vault.db-journal"}
     for entry in os.listdir(image_root):

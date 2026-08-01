@@ -298,6 +298,20 @@ class AuthService:
         self._server_config = server_config
         self._server_config_path = server_config_path
         self._logger = logger
+        # Returns the uuid of the library a newly minted token belongs to.
+        # A callable rather than a value because the active library changes at
+        # runtime: a token must be stamped with the library that is active when
+        # it is minted, not the one that was active when the server booted.
+        # Set by ``Server``; left None for a Vault built without one (tests, the
+        # CLI tools), where minting is not exercised.
+        self.library_uuid_provider = None
+        # The *active library's* database, as distinct from ``self._db``, which
+        # is the hub. This service is not purely identity: guest sessions are
+        # per-library state and stay in the vault (plan §9), so the guest-session
+        # cookie lookup has to read from there. Re-pointed when the active
+        # library changes; falls back to ``self._db`` when unset, which is the
+        # single-database arrangement tests and CLI tools still use.
+        self.vault_db = None
         self.active_session_ids: dict[str, int] = {}
         # Which token minted which session, in both directions, so a session can
         # be ended in O(1) when its token is removed (see _register_session /
@@ -1435,6 +1449,25 @@ class AuthService:
             "has_password": bool(user.password_hash),
         }
 
+    @property
+    def _guest_db(self):
+        """The database holding guest sessions, which is the active vault."""
+        return self.vault_db if self.vault_db is not None else self._db
+
+    def _active_library_uuid(self) -> Optional[str]:
+        """Return the library a token minted right now belongs to.
+
+        Every token is stamped with exactly one library (multi-library plan §4):
+        an unpinned token would change what it grants the moment the owner
+        switched, so a share link would start serving different pictures and an
+        automation would write into the wrong place. The hub column is NOT NULL,
+        so a missing provider surfaces as a write error rather than as a token
+        that silently follows the active library.
+        """
+        if self.library_uuid_provider is None:
+            return None
+        return self.library_uuid_provider()
+
     def create_token(
         self,
         request: Request,
@@ -1532,6 +1565,7 @@ class AuthService:
                 raise HTTPException(status_code=404, detail="User not found")
             token = UserToken(
                 user_id=user_id,
+                library_uuid=self._active_library_uuid(),
                 token_hash=token_hash,
                 token_prefix=token_prefix,
                 created_at=datetime.utcnow(),
@@ -2157,6 +2191,10 @@ class AuthService:
                                 ),
                             )
                             request.state.token_id = matched_token.id
+                            # Guest sessions and guest scores live in the vault
+                            # and name their token by public id, because the
+                            # token itself is in the hub (see GuestSession).
+                            request.state.token_public_id = matched_token.public_id
                             # Resolve the guest session cookie for READ-scoped tokens.
                             # The cookie value is a server-generated cookie_token, NOT
                             # the client-supplied session_id.  We look up the DB row by
@@ -2186,7 +2224,11 @@ class AuthService:
                                 # session's own tracking (record_guest_activity,
                                 # the 30-day expiry and the eviction cap) is
                                 # in-memory and untouched by this change.
-                                gs = self._db.run_immediate_read_task(_lookup_by_token)
+                                # Reads the vault, not the hub: a guest session
+                                # belongs to one library.
+                                gs = self._guest_db.run_immediate_read_task(
+                                    _lookup_by_token
+                                )
                                 if gs is not None:
                                     request.state.guest_session_id = gs.session_id
                                     self.record_guest_activity(gs.session_id)

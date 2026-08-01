@@ -72,13 +72,19 @@ def server():
 def owner_client(server):
     """A TestClient logged in as the owner, starting from clean auth state."""
 
-    def _wipe(session: Session):
+    def _wipe_vault(session: Session):
+        # Guest sessions stay per-vault by design (plan §9), so this one is not
+        # identity and does not move to the hub.
         session.exec(delete(GuestSession))
+        session.commit()
+
+    def _wipe_identity(session: Session):
         session.exec(delete(UserToken))
         session.exec(delete(User))
         session.commit()
 
-    server.vault.db.run_task(_wipe)
+    server.vault.db.run_task(_wipe_vault)
+    server.hub_engine.run_task(_wipe_identity)
     server.auth.password_hash = None
     server.auth.username = None
     server.auth.user = None
@@ -102,6 +108,19 @@ def _mint_read_token(owner_client) -> tuple[str, int]:
     assert response.status_code == 200, response.text
     body = response.json()
     return body["token"], body["token_id"]
+
+
+def _token_public_id(server, token_id: int) -> str:
+    """Return a token's public id, which is how the vault's guest tables name it.
+
+    Guest sessions live in the vault and the token lives in the hub, so they
+    reference it by public id rather than by a foreign key (see GuestSession).
+    """
+
+    def _read(session: Session):
+        return session.get(UserToken, token_id).public_id
+
+    return server.hub_engine.run_immediate_read_task(_read)
 
 
 def _token_client(server) -> TestClient:
@@ -384,7 +403,8 @@ def test_last_used_at_is_still_recorded_off_the_critical_path(server, owner_clie
     deadline = time.monotonic() + 30.0
     last_used = None
     while time.monotonic() < deadline:
-        last_used = server.vault.db.run_immediate_read_task(_read_last_used)
+        # Tokens live in the hub now, so the refresh lands there.
+        last_used = server.hub_engine.run_immediate_read_task(_read_last_used)
         if last_used is not None:
             break
         time.sleep(0.05)
@@ -399,11 +419,15 @@ def test_last_used_at_is_still_recorded_off_the_critical_path(server, owner_clie
 # ---------------------------------------------------------------------------
 
 
-def _insert_guest_session(server, session_id: str, token_id: int, cookie_token: str):
+def _insert_guest_session(
+    server, session_id: str, token_public_id: str, cookie_token: str
+):
     def _insert(session: Session):
         session.add(
             GuestSession(
-                session_id=session_id, token_id=token_id, cookie_token=cookie_token
+                session_id=session_id,
+                token_public_id=token_public_id,
+                cookie_token=cookie_token,
             )
         )
         session.commit()
@@ -444,7 +468,9 @@ def test_guest_session_cookie_resolves_while_a_slow_write_is_in_flight(
 ):
     """A live guest session still resolves, without queueing behind the writer."""
     token_value, token_id = _mint_read_token(owner_client)
-    _insert_guest_session(server, "guest-651", token_id, "guest-cookie-651")
+    _insert_guest_session(
+        server, "guest-651", _token_public_id(server, token_id), "guest-cookie-651"
+    )
 
     client = _token_client(server)
     client.cookies.set("guest_session", "guest-cookie-651")
@@ -468,7 +494,12 @@ def test_deleted_guest_session_stops_resolving_immediately(server, owner_client)
     no invalidation step that the move to the read path could get wrong.
     """
     token_value, token_id = _mint_read_token(owner_client)
-    _insert_guest_session(server, "guest-651-gone", token_id, "guest-cookie-651-gone")
+    _insert_guest_session(
+        server,
+        "guest-651-gone",
+        _token_public_id(server, token_id),
+        "guest-cookie-651-gone",
+    )
 
     client = _token_client(server)
     client.cookies.set("guest_session", "guest-cookie-651-gone")

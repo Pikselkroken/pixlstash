@@ -23,9 +23,10 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 from platformdirs import user_config_dir
 
@@ -133,8 +134,19 @@ class HubDatabase:
         existed = os.path.exists(self._path)
         check_file_mode(self._path, repair=repair_permissions)
 
+        # ``check_same_thread=False`` plus an explicit lock, because this
+        # connection is reached from request-handler threads as well as from
+        # startup: the registry answers "which library is active" on the token
+        # path. sqlite3's own guard is per-connection and would reject those
+        # calls outright. Serialising here is safe precisely because the hub's
+        # contract is short transactions only (see the module docstring), so no
+        # caller holds the lock across I/O or user interaction.
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(
-            self._path, timeout=HUB_BUSY_TIMEOUT_S, isolation_level=""
+            self._path,
+            timeout=HUB_BUSY_TIMEOUT_S,
+            isolation_level="",
+            check_same_thread=False,
         )
         self._conn.row_factory = sqlite3.Row
 
@@ -158,6 +170,16 @@ class HubDatabase:
         """The live connection, for callers issuing their own statements."""
         return self._conn
 
+    def fetchone(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
+        """Run a read returning at most one row, serialised against writers."""
+        with self._lock:
+            return self._conn.execute(sql, params).fetchone()
+
+    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+        """Run a read returning every row, serialised against writers."""
+        with self._lock:
+            return self._conn.execute(sql, params).fetchall()
+
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """Run a short write transaction, committing on success.
@@ -166,12 +188,13 @@ class HubDatabase:
         transactions staying short, so this is for one logical write, never for
         a block that also touches the filesystem or waits on a user.
         """
-        try:
-            with self._conn:
-                yield self._conn
-        except sqlite3.Error as exc:
-            logger.error("Hub transaction on %s rolled back: %s", self._path, exc)
-            raise
+        with self._lock:
+            try:
+                with self._conn:
+                    yield self._conn
+            except sqlite3.Error as exc:
+                logger.error("Hub transaction on %s rolled back: %s", self._path, exc)
+                raise
 
     def close(self) -> None:
         """Close the connection. Safe to call more than once."""
