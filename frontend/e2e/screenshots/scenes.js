@@ -454,7 +454,8 @@ export const manual = {
   'ScreenshotShare1.jpg': 'Share dialog — reproducible next; ShareDialog page object exists',
   'ScreenshotShare2.jpg': 'Recipient share view — needs a minted public share link',
   'ScreenshotDragCharacters.jpg': 'Live HTML5 drag (drag ghost + drop-zone highlight) is not reliably capturable headless — needs a manual capture',
-  'SmartScreen.png': 'Windows SmartScreen OS dialog — not the app',
+  'SmartScreen.jpg': 'Windows SmartScreen OS dialog — not the app',
+  'SmartScreen2.jpg': 'Windows SmartScreen OS dialog — not the app',
 }
 
 /** asset → scene that produces it (first match wins). */
