@@ -7,8 +7,10 @@ world-readable.
 """
 
 import os
+import shutil
 import sqlite3
 import stat
+import uuid
 
 import pytest
 
@@ -52,6 +54,39 @@ def make_vault_folder(root, name="library", *, with_credentials=False):
     conn.commit()
     conn.close()
     return folder
+
+
+def set_vault_uuid(folder, value):
+    """Give a test vault the ``library_settings`` fingerprint row."""
+    conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+    conn.execute("CREATE TABLE IF NOT EXISTS library_settings (library_uuid TEXT)")
+    conn.execute("DELETE FROM library_settings")
+    conn.execute("INSERT INTO library_settings (library_uuid) VALUES (?)", (value,))
+    conn.commit()
+    conn.close()
+
+
+def _add_token(hub, library_uuid, *, username="owner"):
+    """Insert a user and a token stamped for *library_uuid*."""
+    with hub.transaction() as conn:
+        row = conn.execute("SELECT id FROM user").fetchone()
+        if row is None:
+            cursor = conn.execute("INSERT INTO user (username) VALUES (?)", (username,))
+            user_id = cursor.lastrowid
+        else:
+            user_id = row[0]
+        conn.execute(
+            "INSERT INTO usertoken (user_id, library_uuid, token_hash, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, library_uuid, "a-hash", "2026-08-01T00:00:00+00:00"),
+        )
+
+
+def _token_rows(hub, library_uuid):
+    """Count the tokens stamped for a library."""
+    return hub.connection.execute(
+        "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ?", (library_uuid,)
+    ).fetchone()[0]
 
 
 @pytest.fixture
@@ -267,6 +302,198 @@ class TestDetach:
 
         reattached = registry.attach(folder)
         assert reattached.name == "second"
+
+
+class TestLibraryIdentity:
+    """The uuid contract: stable, never reused, and never taken from a vault."""
+
+    def test_every_library_gets_a_uuid(self, registry, tmp_path):
+        library = registry.attach(make_vault_folder(tmp_path))
+        assert uuid.UUID(library.uuid).version == 4
+
+    def test_uuids_are_distinct(self, registry, tmp_path):
+        first = registry.attach(make_vault_folder(tmp_path, "one"))
+        second = registry.attach(make_vault_folder(tmp_path, "two"))
+        assert first.uuid != second.uuid
+
+    def test_uuid_survives_rename_and_switch(self, registry, tmp_path):
+        library = registry.attach(make_vault_folder(tmp_path, "before"))
+        registry.attach(make_vault_folder(tmp_path, "other"))
+
+        renamed = registry.rename(library.id, "after")
+        switched = registry.set_active(library.id)
+
+        assert renamed.uuid == library.uuid
+        assert switched.uuid == library.uuid
+
+    def test_every_issued_uuid_is_recorded_in_the_ledger(self, registry, hub, tmp_path):
+        first = registry.attach(make_vault_folder(tmp_path, "one"))
+        second = registry.attach(make_vault_folder(tmp_path, "two"))
+
+        issued = {
+            row[0]
+            for row in hub.connection.execute("SELECT uuid FROM library_uuid_issued")
+        }
+        assert {first.uuid, second.uuid} <= issued
+
+    def test_an_issued_uuid_can_never_be_issued_again(self, registry, hub, tmp_path):
+        library = registry.attach(make_vault_folder(tmp_path))
+
+        # The ledger is what enforces this after a row is gone, so assert on the
+        # ledger rather than on the live table.
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.connection.execute(
+                "INSERT INTO library_uuid_issued (uuid, issued_at) VALUES (?, ?)",
+                (library.uuid, "2026-08-01T00:00:00+00:00"),
+            )
+
+    def test_an_integer_id_may_be_reused_but_a_uuid_may_not(
+        self, registry, hub, tmp_path
+    ):
+        """The hazard the uuid exists for, demonstrated end to end."""
+        registry.attach(make_vault_folder(tmp_path, "keeper"))
+        second = registry.attach(make_vault_folder(tmp_path, "goes-away"))
+        original_uuid = second.uuid
+        registry.detach(second.id)
+
+        third = registry.attach(make_vault_folder(tmp_path, "brand-new"))
+
+        # Whatever happens to integer ids, the identity a token would carry is
+        # never handed to a different library.
+        assert third.uuid != original_uuid
+
+
+class TestDetachRetainsTokens:
+    def test_detach_keeps_tokens_and_they_come_back_on_reattach(
+        self, registry, hub, tmp_path
+    ):
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        folder = make_vault_folder(tmp_path, "second")
+        library = registry.attach(folder)
+        _add_token(hub, library.uuid)
+
+        registry.detach(library.id)
+        assert _token_rows(hub, library.uuid) == 1, "detach must not revoke tokens"
+
+        revived = registry.attach(folder)
+        assert revived.uuid == library.uuid
+        assert _token_rows(hub, library.uuid) == 1
+
+    def test_a_library_with_tokens_cannot_be_deleted(self, registry, hub, tmp_path):
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        library = registry.attach(make_vault_folder(tmp_path, "second"))
+        _add_token(hub, library.uuid)
+
+        # The foreign key is the second guard behind "a uuid is never reused":
+        # the row cannot go away while anything still references it.
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.connection.execute("DELETE FROM library WHERE id = ?", (library.id,))
+
+    def test_a_detached_library_is_not_listed(self, registry, tmp_path):
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        library = registry.attach(make_vault_folder(tmp_path, "second"))
+        registry.detach(library.id)
+
+        assert [entry.name for entry in registry.list_libraries()] == ["first"]
+        assert library.uuid in {
+            entry.uuid for entry in registry.list_libraries(include_detached=True)
+        }
+
+
+class TestFingerprintGuardsRevival:
+    def test_same_library_back_at_the_same_path_revives(self, registry, hub, tmp_path):
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        folder = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(folder, "11111111-1111-4111-8111-111111111111")
+        library = registry.attach(folder)
+        _add_token(hub, library.uuid)
+        registry.detach(library.id)
+
+        revived = registry.attach(folder)
+
+        assert revived.uuid == library.uuid
+        assert _token_rows(hub, library.uuid) == 1
+
+    def test_a_different_library_at_the_same_path_does_not_revive(
+        self, registry, hub, tmp_path
+    ):
+        """The reason the fingerprint exists: share links must not come back
+        pointing at content they were never issued for."""
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        folder = make_vault_folder(tmp_path, "second")
+        set_vault_uuid(folder, "11111111-1111-4111-8111-111111111111")
+        library = registry.attach(folder)
+        _add_token(hub, library.uuid)
+        registry.detach(library.id)
+
+        # Same path, different library.
+        shutil.rmtree(folder)
+        make_vault_folder(tmp_path, "second")
+        set_vault_uuid(folder, "22222222-2222-4222-8222-222222222222")
+
+        replacement = registry.attach(folder)
+
+        assert replacement.uuid != library.uuid
+        # The old tokens survive, still stamped for the old library, and inert.
+        assert _token_rows(hub, library.uuid) == 1
+        assert _token_rows(hub, replacement.uuid) == 0
+
+    def test_a_fingerprintless_library_still_revives_on_path(
+        self, registry, hub, tmp_path
+    ):
+        """Libraries that predate fingerprints keep the old path-only behaviour."""
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        folder = make_vault_folder(tmp_path, "second")
+        library = registry.attach(folder)
+        registry.detach(library.id)
+
+        assert registry.attach(folder).uuid == library.uuid
+
+    def test_the_fingerprint_is_never_used_as_the_token_binding(
+        self, registry, tmp_path
+    ):
+        """A folder cannot claim an identity tokens are already stamped with."""
+        registry.attach(make_vault_folder(tmp_path, "first"))
+        existing = registry.attach(make_vault_folder(tmp_path, "second"))
+
+        # A hostile library arrives claiming the other library's hub uuid.
+        hostile = make_vault_folder(tmp_path, "hostile")
+        set_vault_uuid(hostile, existing.uuid)
+
+        attached = registry.attach(hostile)
+        assert attached.uuid != existing.uuid
+
+
+class TestRelocate:
+    def test_relocate_keeps_the_uuid_and_its_tokens(self, registry, hub, tmp_path):
+        folder = make_vault_folder(tmp_path, "original")
+        library = registry.attach(folder)
+        _add_token(hub, library.uuid)
+
+        moved_to = os.path.join(str(tmp_path), "moved")
+        shutil.move(folder, moved_to)
+
+        relocated = registry.relocate(library.id, moved_to)
+
+        assert relocated.uuid == library.uuid
+        assert relocated.path == os.path.realpath(moved_to)
+        assert _token_rows(hub, library.uuid) == 1
+
+    def test_relocate_to_an_occupied_path_is_refused(self, registry, tmp_path):
+        first = registry.attach(make_vault_folder(tmp_path, "first"))
+        second_folder = make_vault_folder(tmp_path, "second")
+        registry.attach(second_folder)
+
+        with pytest.raises(LibraryExistsError):
+            registry.relocate(first.id, second_folder)
+
+    def test_relocate_to_a_non_vault_is_refused(self, registry, tmp_path):
+        library = registry.attach(make_vault_folder(tmp_path))
+        empty = tmp_path / "empty"
+        empty.mkdir()
+
+        with pytest.raises(NotAVaultError):
+            registry.relocate(library.id, str(empty))
 
 
 class TestOverlapDetection:

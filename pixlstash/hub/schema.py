@@ -109,10 +109,21 @@ _V1_USER_USERNAME_INDEX = (
     "CREATE INDEX IF NOT EXISTS ix_user_username ON user(username)"
 )
 
-# Mirrors the vault's ``UserToken`` plus ``library_id``. NULL library_id means
-# an owner/ALL-scope token, valid regardless of which library is active; a set
-# library_id means a resource-scoped share link, whose resource ids only mean
-# something inside that one library.
+# Mirrors the vault's ``UserToken`` plus ``library_uuid``.
+#
+# **Every token belongs to exactly one library** (decided 2026-08-01). An
+# unpinned token would change what it grants the moment the owner switched
+# library: a share link would start serving somebody else's pictures, and an
+# automation holding an ALL token (the ComfyUI node, MCP, a script) would
+# silently start writing into a different library. NOT NULL, so there is no
+# "unpinned" state to interpret; routes that legitimately need no library are
+# marked library-independent at the gate instead.
+#
+# Referenced by uuid, not by ``library.id``, and deliberately without
+# ON DELETE CASCADE: detaching a library must not destroy its share links (see
+# the note on _V1_LIBRARY). A token whose library is detached is inert, because
+# nothing unregistered can be the active library, and it works again if that
+# library is re-attached.
 #
 # Named ``usertoken``, not ``user_token``: SQLModel derives the table name from
 # the class, so this is what ``UserToken`` maps to (see the note on _V1_USER).
@@ -121,7 +132,7 @@ CREATE TABLE IF NOT EXISTS usertoken (
     id                  INTEGER PRIMARY KEY,
     public_id           TEXT UNIQUE,
     user_id             INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-    library_id          INTEGER REFERENCES library(id) ON DELETE CASCADE,
+    library_uuid        TEXT NOT NULL REFERENCES library(uuid),
     token_hash          TEXT NOT NULL,
     token_prefix        TEXT,
     description         TEXT,
@@ -138,28 +149,77 @@ CREATE TABLE IF NOT EXISTS usertoken (
 
 _V1_USER_TOKEN_INDEXES = (
     "CREATE INDEX IF NOT EXISTS ix_usertoken_user_id ON usertoken(user_id)",
-    "CREATE INDEX IF NOT EXISTS ix_usertoken_library_id ON usertoken(library_id)",
+    "CREATE INDEX IF NOT EXISTS ix_usertoken_library_uuid ON usertoken(library_uuid)",
     "CREATE INDEX IF NOT EXISTS ix_usertoken_token_hash ON usertoken(token_hash)",
     "CREATE INDEX IF NOT EXISTS ix_usertoken_token_prefix ON usertoken(token_prefix)",
 )
 
 # The library registry. ``path`` is the resolved (symlinks followed) absolute
 # path of the library *folder*, not of its vault.db.
+#
+# ``uuid`` is the library's stable identity and the only value anything outside
+# the hub may reference. The integer ``id`` must never be used for that: SQLite
+# hands the lowest free ``INTEGER PRIMARY KEY`` to the next insert, so detaching
+# a library and registering another gives the new one the old one's id, and any
+# token, URL or open browser tab still holding it would then name a *different*
+# library. That is the same hazard ``UserToken.public_id`` was introduced for
+# (see ``pixlstash/db_models/user_token.py``), applied to a longer-lived object.
+#
+# Minted by the hub, never read from a vault: a library folder copied in from
+# elsewhere must not be able to claim an identity that tokens on this machine
+# are already stamped with.
+#
+# ``attached`` is what makes ``detach`` non-destructive. Detaching clears the
+# flag instead of deleting the row, so the uuid and the tokens stamped with it
+# survive and come back when the same folder is attached again.
+# ``vault_uuid`` is the fingerprint observed inside the library itself (the
+# vault's ``library_settings`` row). It is *not* an identity: it is never
+# referenced by a token and never trusted for authorization, because a library
+# folder can arrive from anyone. Its only job is to answer "is the folder now at
+# this path the same library I registered here before?", which decides whether
+# re-attaching revives the old row and its share links. NULL for a library that
+# predates the fingerprint, which falls back to matching on path alone.
 _V1_LIBRARY = """
 CREATE TABLE IF NOT EXISTS library (
-    id          INTEGER PRIMARY KEY,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid        TEXT NOT NULL UNIQUE,
+    vault_uuid  TEXT,
     name        TEXT NOT NULL,
     path        TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     attached_at TEXT NOT NULL,
+    detached_at TEXT,
+    attached    INTEGER NOT NULL DEFAULT 1,
     is_active   INTEGER NOT NULL DEFAULT 0,
     notes       TEXT
 )
 """
 
-# Two invariants enforced by the database rather than by application code, so a
-# concurrent CLI and server cannot race their way past them:
+# Append-only ledger of every library uuid this hub has ever issued.
+#
+# **A library uuid is never reused** (decided 2026-08-01). Tokens are stamped
+# with it, so a reissued uuid would silently hand a stale token access to a
+# library it was never minted for — the recycled-identifier hazard the uuid
+# exists to eliminate, reintroduced at a different layer. Uniqueness on
+# ``library.uuid`` only constrains rows that currently exist; this ledger keeps
+# the constraint after a row is gone, so no future verb (a ``forget``, a partial
+# hub restore, a hand-edited registry) can re-issue one.
+#
+# The second guard is the foreign key: ``usertoken.library_uuid`` references
+# ``library(uuid)`` with no ON DELETE action, so SQLite refuses to delete a
+# library row while any token still points at it.
+_V1_LIBRARY_UUID_LEDGER = """
+CREATE TABLE IF NOT EXISTS library_uuid_issued (
+    uuid       TEXT PRIMARY KEY,
+    issued_at  TEXT NOT NULL,
+    first_path TEXT
+)
+"""
+
+# Three invariants enforced by the database rather than by application code, so
+# a concurrent CLI and server cannot race their way past them:
 #   * a path is registered at most once;
+#   * a uuid is unique (declared inline above);
 #   * at most one library is active (a partial index over the active rows only).
 _V1_LIBRARY_INDEXES = (
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_library_path ON library(path)",
@@ -176,6 +236,7 @@ SCHEMA_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
         1,
         (
             _V1_LIBRARY,
+            _V1_LIBRARY_UUID_LEDGER,
             *_V1_LIBRARY_INDEXES,
             _V1_USER,
             _V1_USER_USERNAME_INDEX,

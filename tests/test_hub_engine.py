@@ -27,6 +27,25 @@ def hub_path(tmp_path):
 
 
 @pytest.fixture
+def library_uuid(hub_path):
+    """A registered library, so tokens have something to be stamped with."""
+    import sqlite3
+
+    value = "33333333-3333-4333-8333-333333333333"
+    conn = sqlite3.connect(hub_path)
+    try:
+        conn.execute(
+            "INSERT INTO library (uuid, name, path, created_at, attached_at, "
+            "is_active) VALUES (?, 'Test', '/tmp/test-library', ?, ?, 1)",
+            (value, "2026-08-01T00:00:00+00:00", "2026-08-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return value
+
+
+@pytest.fixture
 def engine(hub_path):
     """A HubEngine over the temporary hub."""
     hub_engine = HubEngine(hub_path)
@@ -159,7 +178,9 @@ class TestAuthServiceOnTheHub:
         assert username == "owner"
         assert bcrypt.verify("correct horse battery staple", password_hash)
 
-    def test_a_token_stored_in_the_hub_resolves_back_through_auth(self, auth, engine):
+    def test_a_token_stored_in_the_hub_resolves_back_through_auth(
+        self, auth, engine, library_uuid
+    ):
         """The token lookup path (prefix fetch + bcrypt verify) on hub storage."""
         from passlib.hash import bcrypt
 
@@ -170,6 +191,7 @@ class TestAuthServiceOnTheHub:
             session.add(
                 UserToken(
                     user_id=user.id,
+                    library_uuid=library_uuid,
                     token_hash=bcrypt.hash(token_value),
                     token_prefix=token_value[:8],
                     created_at=__import__("datetime").datetime.utcnow(),
@@ -186,25 +208,19 @@ class TestAuthServiceOnTheHub:
         assert resolved.description == "test token"
         assert auth.token_from_value("not-the-right-token") is None
 
-    def test_library_id_defaults_to_null_for_a_token_written_via_the_model(
-        self, auth, engine, hub_path
-    ):
-        """A token minted through the shared model is library-independent.
+    def test_a_token_without_a_library_is_rejected_by_the_database(self, auth, engine):
+        """There is no such thing as an unpinned token.
 
-        ``library_id`` is a hub-only column: the shared ``UserToken`` model does
-        not declare it (it also maps to the vault's ``usertoken``, which has no
-        such column), so it is asserted here in SQL rather than through the ORM.
-        NULL is the correct default and is what makes an owner/ALL token valid
-        regardless of which library is active (plan §4). The lane that
-        implements library-scoped share links has to add a way to *write* it —
-        a hub-specific model or a small raw-SQL accessor — because the shared
-        model cannot express it.
+        The hub column is NOT NULL, so a code path that forgets to stamp a
+        token fails loudly at write time instead of quietly minting one that
+        would change what it grants whenever the owner switched library.
         """
+        import sqlalchemy.exc
         from passlib.hash import bcrypt
 
         user = auth.ensure_user()
 
-        def add_token(session):
+        def add_unstamped_token(session):
             session.add(
                 UserToken(
                     user_id=user.id,
@@ -216,17 +232,31 @@ class TestAuthServiceOnTheHub:
             )
             session.commit()
 
-        engine.run_task(add_token)
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            engine.run_task(add_unstamped_token)
 
-        import sqlite3
+    def test_a_token_cannot_name_a_library_that_does_not_exist(self, auth, engine):
+        """The foreign key, so a stamp always resolves to a real library."""
+        import sqlalchemy.exc
+        from passlib.hash import bcrypt
 
-        conn = sqlite3.connect(hub_path)
-        try:
-            rows = conn.execute("SELECT library_id FROM usertoken").fetchall()
-        finally:
-            conn.close()
+        user = auth.ensure_user()
 
-        assert rows == [(None,)]
+        def add_token(session):
+            session.add(
+                UserToken(
+                    user_id=user.id,
+                    library_uuid="00000000-0000-4000-8000-000000000000",
+                    token_hash=bcrypt.hash("x" * 32),
+                    token_prefix="xxxxxxxx",
+                    created_at=__import__("datetime").datetime.utcnow(),
+                    scope="ALL",
+                )
+            )
+            session.commit()
+
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            engine.run_task(add_token)
 
 
 def _add_user(session, username, *, commit=True):
@@ -272,7 +302,7 @@ def test_hub_schema_carries_every_column_the_token_model_declares(hub_path):
     assert declared <= columns, (
         f"hub `usertoken` is missing: {sorted(declared - columns)}"
     )
-    assert "library_id" in columns
+    assert "library_uuid" in columns
 
 
 def test_hub_file_is_the_only_database_touched(hub_path, tmp_path):
