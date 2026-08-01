@@ -28,6 +28,13 @@ import {
   unitCompositionLabel,
   stackVerdictLabel,
   candidateStackId,
+  hasStrandedMember,
+  flaggedStackIdSet,
+  mixedStackTitle,
+  mixedStackReason,
+  mixedStackAction,
+  mixedStackSuspects,
+  DENSE_STACK_BADGE_BELOW_PX,
 } from "./dedup";
 
 const candidate = (over = {}) => ({
@@ -639,5 +646,175 @@ describe("stackVerdictLabel: the button names its outcome", () => {
   it("falls back to the plain count for a degenerate group", () => {
     expect(stackVerdictLabel([deck(4, 1)]).full).toBe("Stack 1");
     expect(stackVerdictLabel([]).full).toBe("Stack 0");
+  });
+});
+
+// --- Mixed stacks (design D5) ------------------------------------------------
+
+/**
+ * One `MixedStackModel` row, in the backend's shape.
+ * @param {Object} over - fields to override.
+ */
+function mixed(over = {}) {
+  return {
+    stack_id: 42,
+    threshold: 0.9,
+    member_count: 5,
+    member_ids: [7, 8, 9, 10, 11],
+    membership_fingerprint: "abc",
+    component_count: 2,
+    component_sizes: [4, 1],
+    components: [[7, 8, 9, 10], [11]],
+    largest_component_size: 4,
+    stranded_picture_ids: [11],
+    weakest_edge: 0.9,
+    unhashed_picture_ids: [],
+    suggested_action: "split",
+    kept: false,
+    leader_picture_id: 7,
+    leader_thumbnail_version: null,
+    ...over,
+  };
+}
+
+describe("utils/dedup: the strong case, which is the only one marked", () => {
+  // The whole reason the soft cases stay off the tiles: at the measured 12% a
+  // mark is one tile in eight and stops being a warning at all.
+  it("calls a stack strong only when a member is joined to nothing", () => {
+    expect(hasStrandedMember(mixed())).toBe(true);
+    expect(hasStrandedMember(mixed({ stranded_picture_ids: [] }))).toBe(false);
+    expect(hasStrandedMember(undefined)).toBe(false);
+  });
+
+  // The flag set is keyed on STRINGS because the queue's deck reads its id out
+  // of a different payload; comparing a number to a string silently flags
+  // nothing at all.
+  it("collects only the strong cases, as strings", () => {
+    const flags = flaggedStackIdSet([
+      mixed({ stack_id: 1 }),
+      mixed({ stack_id: 2, stranded_picture_ids: [] }),
+      mixed({ stack_id: 3, stranded_picture_ids: [4, 5] }),
+    ]);
+    expect([...flags].sort()).toEqual(["1", "3"]);
+    expect(flags.has("2")).toBe(false);
+  });
+
+  it("survives an absent list", () => {
+    expect(flaggedStackIdSet(undefined).size).toBe(0);
+  });
+});
+
+describe("utils/dedup: what a mixed-stack row says", () => {
+  // The same noun phrase the queue's deck uses, so the same stack reads the
+  // same way wherever the user meets it.
+  it("titles the row with the stack's live size", () => {
+    expect(mixedStackTitle(mixed({ member_count: 12 }))).toBe("Stack of 12");
+  });
+
+  it("names the strangers in the strong case, and pluralises them", () => {
+    expect(mixedStackReason(mixed())).toBe("1 picture doesn't match the rest");
+    expect(mixedStackReason(mixed({ stranded_picture_ids: [11, 12] }))).toBe(
+      "2 pictures don't match the rest",
+    );
+  });
+
+  // The soft case blames nobody, because there is no single member the data
+  // supports blaming.
+  it("blames nobody in the soft case", () => {
+    const soft = mixed({
+      stranded_picture_ids: [],
+      component_count: 2,
+      components: [
+        [7, 8],
+        [9, 10],
+      ],
+    });
+    expect(mixedStackReason(soft)).toBe("These don't all match");
+  });
+
+  it("counts the clusters when there are more than two of them", () => {
+    const soft = mixed({
+      stranded_picture_ids: [],
+      component_count: 3,
+      components: [
+        [7, 8],
+        [9, 10],
+        [11, 12],
+      ],
+    });
+    expect(mixedStackReason(soft)).toBe(
+      "These don't all match: 3 groups that don't overlap",
+    );
+  });
+});
+
+describe("utils/dedup: the outcome the primary button names", () => {
+  it("names the split and carries the ids the row showed", () => {
+    const plan = mixedStackAction(mixed({ stranded_picture_ids: [11, 12] }));
+    expect(plan).toEqual({
+      action: "split",
+      label: "Split off 2",
+      pictureIds: [11, 12],
+    });
+  });
+
+  it("unstacks when the server sees no majority worth keeping", () => {
+    const plan = mixedStackAction(
+      mixed({ suggested_action: "unstack", stranded_picture_ids: [] }),
+    );
+    expect(plan.action).toBe("unstack");
+    expect(plan.label).toBe("Unstack");
+    expect(plan.pictureIds).toEqual([]);
+  });
+
+  // "Split off 0" is a button that cannot do anything, and the server would
+  // 400 it. A suggestion with nothing to split falls through to the outcome
+  // that is actually available.
+  it("refuses to offer a split with nothing to split off", () => {
+    const plan = mixedStackAction(
+      mixed({ suggested_action: "split", stranded_picture_ids: [] }),
+    );
+    expect(plan.action).toBe("unstack");
+  });
+});
+
+describe("utils/dedup: the suspects a row shows", () => {
+  it("leads with the stranded members", () => {
+    expect(mixedStackSuspects(mixed())).toEqual([11]);
+  });
+
+  // The majority is what SURVIVES a split. Showing four of its members behind
+  // a warning border would accuse the wrong pictures.
+  it("never shows the majority cluster in the soft case", () => {
+    const soft = mixed({
+      stranded_picture_ids: [],
+      member_count: 6,
+      components: [
+        [1, 2, 3, 4],
+        [5, 6],
+      ],
+      largest_component_size: 4,
+    });
+    expect(mixedStackSuspects(soft)).toEqual([5, 6]);
+  });
+
+  it("caps the run and never repeats a picture", () => {
+    const wide = mixed({
+      stranded_picture_ids: [1, 2, 3],
+      components: [[9], [1], [2], [3]],
+    });
+    expect(mixedStackSuspects(wide, 2)).toEqual([1, 2]);
+    expect(new Set(mixedStackSuspects(wide)).size).toBe(
+      mixedStackSuspects(wide).length,
+    );
+  });
+});
+
+describe("utils/dedup: the dense badge threshold", () => {
+  // 168px is the `small` rung of the shared thumbnail ladder, not a number
+  // invented here: the badge inverts exactly where the tile stops having room
+  // for both a glyph and a numeral.
+  it("is the ladder's small rung", () => {
+    expect(DENSE_STACK_BADGE_BELOW_PX).toBe(168);
   });
 });

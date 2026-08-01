@@ -7,7 +7,12 @@ expansion band below the strip, member promotion with its consequence, and a
 zoom over pictures). **The queue ROW's own expansion has now landed too**: the
 deck's count badge (and `E`) opens a read-only band below the row's columns, at
 most one in the queue and only on the focused row, with the members read lazily.
-The Mixed stacks page has not.
+**The Mixed stacks page has now landed too**: the third page of the destination,
+its threshold-bound list, the `Split off N` / `Unstack` / `Keep` actions, the
+strong-case warning chip on a deck in the queue row (with the dense inversion
+below 168px), and the two-way shortcut between the two. What is listed under
+"Open" below is still open.
+
 Owner decisions and the reconciled `ui-ux-expert` / `lead-designer` proposals.
 Implementation spec: where these disagree with a subagent's report, this file wins.
 
@@ -260,7 +265,8 @@ The gate is deny-by-default and an undeclared route 403s and fails CI.
   deck work, which touches the same corners of the same file.
 * **Phase 1**: backend: D1, B1, B2, B4, B5, and the `Keep` store + migration.
 * **Phase 2**: frontend: units and the deck in `DedupGroupRow`, then expansion,
-  then Compare, then Mixed stacks (page + grid filter value).
+  then Compare, then Mixed stacks. Complete. The grid filter value named in an
+  earlier draft of this line was withdrawn by D5 itself and was never built.
 * **Gate**: `chief-security-officer` review before merge; new data routes and
   their `ROUTE_POLICIES` entries are exactly the BOLA class this repo has been
   burned by.

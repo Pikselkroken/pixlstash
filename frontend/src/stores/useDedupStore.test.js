@@ -10,6 +10,14 @@ vi.mock("../api/dedup", () => ({
   keepGroupSeparate: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
+  // The third page's contract (design D5). `openQueue` reads the mixed list
+  // whether or not the page is ever shown, because the queue's warning chip is
+  // built from its flags.
+  listMixedStacks: vi.fn(),
+  splitMixedStack: vi.fn(),
+  unstackMixedStack: vi.fn(),
+  keepMixedStack: vi.fn(),
+  clearMixedStackKeep: vi.fn(),
   GLOBAL_SCOPE: "global",
 }));
 
@@ -30,6 +38,11 @@ import {
   keepGroupSeparate,
   reopenGroup,
   autoStackExact,
+  listMixedStacks,
+  splitMixedStack,
+  unstackMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
 } from "../api/dedup";
 import { useOperationStore } from "./useOperationStore";
 import {
@@ -105,6 +118,11 @@ beforeEach(() => {
     keepGroupSeparate,
     reopenGroup,
     autoStackExact,
+    listMixedStacks,
+    splitMixedStack,
+    unstackMixedStack,
+    keepMixedStack,
+    clearMixedStackKeep,
   ]) {
     fn.mockReset();
   }
@@ -117,6 +135,18 @@ beforeEach(() => {
     unresolved_groups: 0,
     by_tier: {},
     scopes: [],
+  });
+  // An empty Mixed stacks list is the default answer, because most libraries
+  // have none. `openQueue` reads it whether or not the page is ever opened.
+  listMixedStacks.mockResolvedValue({
+    threshold: 0.9,
+    total: 0,
+    kept_total: 0,
+    live_stack_count: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+    stacks: [],
   });
 });
 
@@ -2739,5 +2769,347 @@ describe("useDedupStore: a scrapheap move while the queue is open", () => {
     expect(decision.action).toBe("ignored");
     expect(store.groups).toHaveLength(2);
     expect(store.total).toBe(2);
+  });
+});
+
+// ── Mixed stacks: the third page (design D5) ────────────────────────────────
+
+/** One `MixedStackModel` row in the backend's shape. */
+function mixedStack(over = {}) {
+  return {
+    stack_id: 42,
+    threshold: 0.9,
+    member_count: 5,
+    member_ids: [7, 8, 9, 10, 11],
+    membership_fingerprint: "fp-42",
+    component_count: 2,
+    component_sizes: [4, 1],
+    components: [[7, 8, 9, 10], [11]],
+    largest_component_size: 4,
+    stranded_picture_ids: [11],
+    weakest_edge: 0.91,
+    unhashed_picture_ids: [],
+    suggested_action: "split",
+    kept: false,
+    leader_picture_id: 7,
+    leader_thumbnail_version: null,
+    ...over,
+  };
+}
+
+/** One page of `GET /dedup/mixed-stacks`. */
+function mixedPage(stacks, over = {}) {
+  return {
+    threshold: 0.9,
+    total: stacks.length,
+    kept_total: 0,
+    live_stack_count: 209,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+    stacks,
+    ...over,
+  };
+}
+
+describe("useDedupStore: the mixed-stack list is bound to the threshold", () => {
+  // The design's one non-negotiable here: the same stack is mixed at 0.90 and
+  // one clean cluster at 0.65. A list computed at a constant would describe a
+  // library the slider no longer points at.
+  it("asks at the queue's own threshold, never a constant", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledWith(
+      expect.objectContaining({ threshold: 0.9 }),
+    );
+  });
+
+  // 26 at the default 0.90 and 9 at the 0.65 floor, on the owner's library.
+  it("re-reads the list when the threshold moves", async () => {
+    listGroups.mockResolvedValue({ groups: [], total: 0 });
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 26 }, (_, i) => mixedStack({ stack_id: i })),
+      ),
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(store.mixedTotal).toBe(26);
+
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 9 }, (_, i) => mixedStack({ stack_id: i })),
+        { threshold: 0.65, total: 9 },
+      ),
+    );
+    await store.setThreshold(0.65);
+    expect(listMixedStacks).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threshold: 0.65 }),
+    );
+    expect(store.mixedTotal).toBe(9);
+    // The page states what the SERVER computed at, not what the slider says:
+    // the two differ for exactly as long as a reload is in flight.
+    expect(store.mixedThreshold).toBe(0.65);
+  });
+
+  // The list is a page, not a bag: the server's ranking IS the ordering, worst
+  // first, and the store must not re-sort it into something else.
+  it("keeps the server's least-held-together-first order", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 3, stranded_picture_ids: [1, 2] }),
+        mixedStack({ stack_id: 1, stranded_picture_ids: [4] }),
+        mixedStack({
+          stack_id: 2,
+          stranded_picture_ids: [],
+          component_count: 2,
+        }),
+      ]),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([3, 1, 2]);
+  });
+
+  // A failed read must never render as "no mixed stacks": that sentence is a
+  // claim about the library, and nobody asked.
+  it("records a failed read rather than reporting an empty library", async () => {
+    listMixedStacks.mockRejectedValue(new Error("boom"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.mixedError).toBeTruthy();
+    expect(store.mixedLoaded).toBe(false);
+    expect(store.mixedStacks).toEqual([]);
+  });
+
+  it("pages by plain offset and drops a re-served row", async () => {
+    listMixedStacks.mockResolvedValueOnce(
+      mixedPage([mixedStack({ stack_id: 1 })], { total: 2, next_offset: 1 }),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    listMixedStacks.mockResolvedValueOnce(
+      mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })], {
+        total: 2,
+        next_offset: null,
+      }),
+    );
+    await store.loadMoreMixedStacks();
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([1, 2]);
+    expect(store.hasMoreMixed).toBe(false);
+  });
+});
+
+describe("useDedupStore: the queue's warning chip reads the same list", () => {
+  // Only the STRONG case is flagged. The soft ones are often legitimate, and a
+  // mark on one tile in eight stops being a warning at all.
+  it("flags only the stacks with a stranded member", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 11, stranded_picture_ids: [99] }),
+        mixedStack({ stack_id: 12, stranded_picture_ids: [] }),
+      ]),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.isStackFlagged(11)).toBe(true);
+    expect(store.isStackFlagged("11")).toBe(true);
+    expect(store.isStackFlagged(12)).toBe(false);
+    expect(store.isStackFlagged(null)).toBe(false);
+  });
+
+  // The chip has to work whether or not the page is ever opened, so the list is
+  // read when the destination opens rather than when the page is shown.
+  it("reads the list on queue open", async () => {
+    listGroups.mockResolvedValue({ groups: [], total: 0 });
+    startScan.mockResolvedValue({ status: "complete" });
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.openQueue();
+    await Promise.resolve();
+    expect(listMixedStacks).toHaveBeenCalled();
+  });
+});
+
+describe("useDedupStore: the mixed-stack actions", () => {
+  it("splits with the ids the row showed and drops the row", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    const result = await store.resolveMixedStack(store.mixedStacks[0]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ pictureIds: [11], threshold: 0.9 }),
+    );
+    expect(result.split_picture_ids).toEqual([11]);
+    expect(store.mixedStacks).toEqual([]);
+    expect(store.mixedTotal).toBe(0);
+    // One operation, so the standard receipt covers it: no second undo
+    // mechanism is invented for this surface.
+    expect(useOperationStore().refresh).toHaveBeenCalled();
+  });
+
+  it("unstacks when there is no majority cluster", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 7,
+          suggested_action: "unstack",
+          stranded_picture_ids: [],
+        }),
+      ]),
+    );
+    unstackMixedStack.mockResolvedValue({
+      stack_id: 7,
+      split_picture_ids: [7, 8],
+      remaining_picture_ids: [],
+      stack_dissolved: true,
+      batch_id: "srv-2",
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    await store.resolveMixedStack(store.mixedStacks[0]);
+    expect(unstackMixedStack).toHaveBeenCalled();
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(store.mixedStacks).toEqual([]);
+  });
+
+  // A failed action must leave the row where it was: the page's whole promise
+  // is that nothing changes until it says it did.
+  it("keeps the row when the action fails", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue(new Error("nope"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+  });
+
+  // Keep is what makes the list drainable. It changes no picture, so it records
+  // no operation and DELETE is the only way back.
+  it("Keep removes the row, and clearing the Keep brings it back", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    keepMixedStack.mockResolvedValue({
+      stack_id: 42,
+      dismissed: true,
+      created: true,
+      membership_fingerprint: "fp-42",
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    await store.keepMixed(store.mixedStacks[0]);
+    expect(keepMixedStack).toHaveBeenCalledWith(42);
+    expect(store.mixedStacks).toEqual([]);
+    expect(store.mixedKeptTotal).toBe(1);
+    // No operation was recorded, so no receipt is raised for it.
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
+
+    clearMixedStackKeep.mockResolvedValue({
+      stack_id: 42,
+      dismissed: false,
+      removed: 1,
+    });
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    await store.unkeepMixedStack(42);
+    expect(clearMixedStackKeep).toHaveBeenCalledWith(42);
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([42]);
+  });
+});
+
+describe("useDedupStore: the two-way shortcut", () => {
+  /** A queue group that folds in one existing stack. */
+  function groupWithStack(signature, stackId) {
+    const g = group(signature, 2);
+    g.candidates[0].stack_id = stackId;
+    g.stacks = {
+      [String(stackId)]: {
+        stack_id: stackId,
+        member_count: 5,
+        leader_picture_id: 7,
+        matched_picture_ids: [g.candidates[0].picture_id],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    };
+    return g;
+  }
+
+  it("finds the loaded group a stack appears in, in ABSOLUTE indices", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1), groupWithStack("a2", 42)],
+      total: 2,
+    });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.groupIndexForStack(42)).toBe(1);
+    expect(store.groupIndexForStack("42")).toBe(1);
+    expect(store.groupIndexForStack(999)).toBe(-1);
+  });
+
+  // A shortcut that scrolled to a guessed row would be worse than one that is
+  // not offered, so the store refuses rather than moving the cursor anywhere.
+  it("declines when no loaded group holds the stack", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1)],
+      total: 1,
+    });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.showingMixed = true;
+    expect(store.showQueueForStack(42)).toBe(false);
+    expect(store.showingMixed).toBe(true);
+  });
+
+  it("puts the queue's focus on the group and leaves the page", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1), groupWithStack("a2", 42)],
+      total: 2,
+    });
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.showMixedStacks(42);
+    expect(store.showingMixed).toBe(true);
+    expect(store.mixedFocusStackId).toBe("42");
+    // The queue is untouched while the page is up, which is what lets the
+    // return restore exactly what the user left.
+    expect(store.focusIndex).toBe(0);
+
+    expect(store.showQueueForStack(42)).toBe(true);
+    expect(store.showingMixed).toBe(false);
+    expect(store.focusIndex).toBe(1);
+  });
+
+  // Flipping the page must not reload the queue: it is a page of the same
+  // destination, not a route away.
+  it("costs the queue no reload in either direction", async () => {
+    listGroups.mockResolvedValue({ groups: [group("a1")], total: 1 });
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    await store.showMixedStacks();
+    store.hideMixedStacks();
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(store.showingMixed).toBe(false);
   });
 });

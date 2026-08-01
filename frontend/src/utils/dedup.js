@@ -745,3 +745,158 @@ export function partialStackSentence(skipped, stacked) {
     : "";
   return `Stacked ${stacked}; ${held}${where}.`;
 }
+
+// --- Mixed stacks (design D5) -----------------------------------------------
+//
+// A **mixed stack** is a live stack whose members do not form one connected
+// cluster at the queue's similarity threshold. The helpers below turn one
+// server row into the three things the list draws: its title, the sentence
+// that says what is wrong with it, and the outcome its primary button names.
+//
+// They are pure and live here for the same reason the verdict copy does: the
+// wire contract rendered as English deserves a test that does not mount a view.
+
+/**
+ * The strip height below which the deck badge runs its DENSE rule.
+ *
+ * 168px is the `small` rung of the shared thumbnail ladder, and the rule
+ * inverts there rather than fading: an unflagged deck keeps its numeral and
+ * drops the icon, a flagged one keeps the icon and drops the numeral. Below
+ * that width a badge carrying both is wider than the tile it labels.
+ */
+export const DENSE_STACK_BADGE_BELOW_PX = 168;
+
+/**
+ * Whether one mixed-stack row is the STRONG case: a member joined to nothing
+ * else in the stack at this threshold.
+ *
+ * Only the strong case is ever marked on a tile. At the measured 12% a mark is
+ * one tile in eight and becomes a warning field, and the soft cases are often
+ * legitimate (a burst where one frame panned off), so marking them trains the
+ * user to dismiss the colour before the real one appears. The soft cases
+ * surface in words instead, on this list and in the expansion.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @returns {boolean}
+ */
+export function hasStrandedMember(stack) {
+  return (stack?.stranded_picture_ids?.length ?? 0) > 0;
+}
+
+/**
+ * The stack ids the queue's deck badges flag, from a page of mixed stacks.
+ *
+ * The list is ranked stranded-members-descending, so every strong case sits at
+ * the head of it: one page is enough to answer this honestly, and a stack that
+ * never appears is simply not flagged.
+ *
+ * @param {Array<Object>} stacks
+ * @returns {Set<string>} stack ids as strings, because the row's `stackId`
+ *   arrives from a different payload and the two must compare.
+ */
+export function flaggedStackIdSet(stacks) {
+  const flagged = new Set();
+  for (const stack of stacks ?? []) {
+    if (hasStrandedMember(stack)) flagged.add(String(stack.stack_id));
+  }
+  return flagged;
+}
+
+/**
+ * What one mixed-stack row is called: the stack, at its live size.
+ *
+ * The same noun phrase the queue's deck already uses, so a user meeting the
+ * same stack on both surfaces meets the same words.
+ *
+ * @param {Object} stack
+ * @returns {string}
+ */
+export function mixedStackTitle(stack) {
+  const count = Number(stack?.member_count) || 0;
+  return `Stack of ${count}`;
+}
+
+/**
+ * Why this stack is listed, in one line.
+ *
+ * The strong case names the strangers, because that is what the primary button
+ * is about to remove. The soft case says only that the members do not all
+ * match, because there is no single member to blame and naming one would be a
+ * claim the data does not support.
+ *
+ * @param {Object} stack
+ * @returns {string}
+ */
+export function mixedStackReason(stack) {
+  const stranded = stack?.stranded_picture_ids?.length ?? 0;
+  if (stranded === 1) return "1 picture doesn't match the rest";
+  if (stranded > 1) return `${stranded} pictures don't match the rest`;
+  const components = Number(stack?.component_count) || 0;
+  if (components > 2) {
+    return `These don't all match: ${components} groups that don't overlap`;
+  }
+  return "These don't all match";
+}
+
+/**
+ * The outcome the row's primary button names, and the ids it will send.
+ *
+ * `split` when a strict majority cluster survives removing the strangers,
+ * `unstack` when there is no majority worth keeping. The server decides which
+ * (`suggested_action`); this only renders it, and falls back to `unstack` when
+ * a row carries no stranded member to split off, because "Split off 0" is a
+ * button that cannot do anything.
+ *
+ * @param {Object} stack
+ * @returns {{action: string, label: string, pictureIds: Array<number>}}
+ */
+export function mixedStackAction(stack) {
+  const stranded = stack?.stranded_picture_ids ?? [];
+  const suggested = String(stack?.suggested_action ?? "");
+  if (suggested === "split" && stranded.length) {
+    return {
+      action: "split",
+      label: `Split off ${stranded.length}`,
+      pictureIds: [...stranded],
+    };
+  }
+  return { action: "unstack", label: "Unstack", pictureIds: [] };
+}
+
+/**
+ * The members the row shows as suspects, worst first.
+ *
+ * The stranded members lead: they are what the primary button acts on, and
+ * they are the row's reason to exist. Below the strong case there is no single
+ * stranger, so the row shows every member that is NOT in the majority cluster
+ * instead: the pictures the stack would shed if it were split. The largest
+ * component is deliberately excluded: it is the stack that survives, and
+ * showing four of its members beside a warning border would accuse the
+ * majority of being the problem.
+ *
+ * Capped, because the row is a list entry and not a second queue.
+ *
+ * @param {Object} stack
+ * @param {number} [limit=6]
+ * @returns {Array<number>} picture ids.
+ */
+export function mixedStackSuspects(stack, limit = 6) {
+  const seen = new Set();
+  const suspects = [];
+  const push = (id) => {
+    if (id === undefined || id === null) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    suspects.push(id);
+  };
+  for (const id of stack?.stranded_picture_ids ?? []) push(id);
+  // Smallest first, largest dropped: the survivors are not suspects.
+  const components = [...(stack?.components ?? [])]
+    .sort((a, b) => (a?.length ?? 0) - (b?.length ?? 0))
+    .slice(0, -1);
+  for (const component of components) {
+    for (const id of component ?? []) push(id);
+  }
+  return suspects.slice(0, Math.max(0, limit));
+}

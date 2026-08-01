@@ -57,6 +57,11 @@ import {
   keepGroupSeparate,
   reopenGroup,
   autoStackExact,
+  listMixedStacks,
+  splitMixedStack,
+  unstackMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
   GLOBAL_SCOPE,
 } from "../api/dedup";
 import {
@@ -71,6 +76,8 @@ import {
   unitForPictureId,
   isUnitExcluded,
   includedUnits,
+  flaggedStackIdSet,
+  mixedStackAction,
 } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
@@ -103,6 +110,18 @@ export const SELECT_ALL_MAX = 500;
  * `X` cannot walk a group into a state the Stack button is still offering.
  */
 export const MIN_STACK_MEMBERS = 2;
+
+/**
+ * How many mixed stacks one page of that list holds.
+ *
+ * Larger than the queue's page on purpose. The measured list is 9 rows at the
+ * 0.65 floor and 26 at the 0.90 default, so one page is normally the whole
+ * thing; and because the list is ranked stranded-members-first, one page also
+ * carries every stack the queue's warning chip flags. A second request to
+ * answer "is this deck flagged" would be a request that is nearly always
+ * empty. Clamped server-side to its own 200 ceiling.
+ */
+export const MIXED_STACK_PAGE_SIZE = 100;
 
 /**
  * The tier ids the server publishes, mapped to the copy the menu renders.
@@ -1027,6 +1046,13 @@ export const useDedupStore = defineStore("dedup", () => {
     stackedCount.value = 0;
     separatedCount.value = 0;
     showingDecided.value = false;
+    // The third page is a place the user visits, like Decided: arriving at the
+    // destination starts on the queue. The LIST behind it is reloaded below,
+    // because the queue's warning chip reads its flags whether or not the page
+    // is ever opened.
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
+    mixedLoaded.value = false;
     // The decided page is a place the user visits, not a lens they set, and so
     // is its verdict gate: arriving at the queue starts from every decision.
     // A link that carries one restores it below, through applyUrlFilters.
@@ -1056,6 +1082,10 @@ export const useDedupStore = defineStore("dedup", () => {
     await triggerScan();
     await loadFirstPage();
     refreshCounts();
+    // Unawaited: the queue must not wait on a list it may never show. The chip
+    // it feeds is a standing fact about a deck, so arriving a moment late is
+    // correct behaviour, not a race.
+    loadMixedStacks();
   }
 
   /**
@@ -1538,6 +1568,11 @@ export const useDedupStore = defineStore("dedup", () => {
 
   async function toggleDecided() {
     showingDecided.value = !showingDecided.value;
+    // The three pages are one at a time. Unlike the Decided flip this costs
+    // nothing to leave: the mixed list stays loaded behind it, because the
+    // queue's chip reads the same flags.
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
     await loadFirstPage();
   }
 
@@ -2189,6 +2224,11 @@ export const useDedupStore = defineStore("dedup", () => {
     if (loosened) await triggerScan();
     await loadFirstPage();
     refreshCounts();
+    // The mixed list IS a function of the threshold: the same stack is mixed at
+    // 0.90 and one clean cluster at 0.65. Leaving it at the old value would
+    // leave the page's count and the queue's chips describing a threshold the
+    // slider no longer reads.
+    await loadMixedStacks();
   }
 
   /**
@@ -2281,6 +2321,338 @@ export const useDedupStore = defineStore("dedup", () => {
       return null;
     } finally {
       busy.value = false;
+    }
+  }
+
+  // ── Mixed stacks (design D5) ─────────────────────────────────────────────
+  // The third page of the Duplicates destination: live stacks whose members do
+  // not form one connected cluster at the CURRENT threshold. Not a sidebar
+  // destination (only a to-do count earns a row, and 9-26 items is not one)
+  // and not a grid filter value.
+  //
+  // Two rules shape the state below:
+  //
+  //   * **The list is bound to the threshold slider, never to a constant.** The
+  //     same stack is mixed at 0.90 and one clean cluster at 0.65, so
+  //     `setThreshold` reloads it and the page always states what it was
+  //     computed at.
+  //   * **The page is a PAGE, not a route.** Flipping to it leaves the queue's
+  //     window, focus and per-group choices exactly where they were, which is
+  //     what lets the two-way shortcut offer a return that restores them.
+
+  const showingMixed = ref(false);
+  const mixedStacks = ref([]);
+  const mixedTotal = ref(0);
+  const mixedKeptTotal = ref(0);
+  const mixedLiveStackCount = ref(0);
+  const mixedThreshold = ref(null);
+  const mixedNextOffset = ref(null);
+  const mixedLoading = ref(false);
+  const mixedLoaded = ref(false);
+  const mixedError = ref(null);
+  const mixedBusyStackId = ref(null);
+  /** The row the two-way shortcut arrived at, so the page can reveal it. */
+  const mixedFocusStackId = ref(null);
+
+  /** More rows exist than are held. */
+  const hasMoreMixed = computed(() => mixedNextOffset.value !== null);
+
+  /**
+   * The stack ids the queue's deck badges flag: the STRONG case only, a member
+   * joined to nothing else in its stack.
+   *
+   * Derived from the loaded page rather than from a second request, which the
+   * list's stranded-first ranking makes honest: every strong case is at the
+   * head of the list, so a page that holds the head holds all of them.
+   */
+  const flaggedStackIds = computed(() => flaggedStackIdSet(mixedStacks.value));
+
+  /**
+   * Whether one stack carries the queue's warning chip.
+   * @param {number|string} stackId
+   * @returns {boolean}
+   */
+  function isStackFlagged(stackId) {
+    if (stackId === null || stackId === undefined) return false;
+    return flaggedStackIds.value.has(String(stackId));
+  }
+
+  /**
+   * Load the mixed stacks at the current threshold, replacing what was there.
+   *
+   * Called on queue open (the queue's chip needs the flags whether or not the
+   * page is ever visited), whenever the threshold moves, and when the page is
+   * shown. A failure leaves the list empty and records the error: an empty
+   * list that claims "no mixed stacks" after a failed read would be a lie, so
+   * the view branches on `mixedError` before it renders the empty state.
+   *
+   * @returns {Promise<void>}
+   */
+  async function loadMixedStacks() {
+    mixedLoading.value = true;
+    mixedError.value = null;
+    try {
+      const data = await listMixedStacks({
+        threshold: Number.isFinite(threshold.value)
+          ? threshold.value
+          : undefined,
+        offset: 0,
+        limit: MIXED_STACK_PAGE_SIZE,
+      });
+      mixedStacks.value = Array.isArray(data?.stacks) ? data.stacks : [];
+      mixedTotal.value = Number(data?.total) || mixedStacks.value.length;
+      mixedKeptTotal.value = Number(data?.kept_total) || 0;
+      mixedLiveStackCount.value = Number(data?.live_stack_count) || 0;
+      // The server echoes what it computed at, so the page can state the
+      // threshold rather than assume the slider and the list agree.
+      mixedThreshold.value = Number.isFinite(Number(data?.threshold))
+        ? Number(data.threshold)
+        : threshold.value;
+      mixedNextOffset.value = normalisedNextOffset(data);
+      mixedLoaded.value = true;
+    } catch (err) {
+      mixedError.value = err;
+      mixedStacks.value = [];
+      mixedTotal.value = 0;
+      mixedKeptTotal.value = 0;
+      mixedNextOffset.value = null;
+      mixedLoaded.value = false;
+      console.warn("[dedup] failed to load the mixed stacks", err);
+    } finally {
+      mixedLoading.value = false;
+    }
+  }
+
+  /**
+   * A page's `next_offset`, normalised to null at the end of the list.
+   * @param {Object} [data]
+   * @returns {number|null}
+   */
+  function normalisedNextOffset(data) {
+    const raw = data?.next_offset;
+    // `Number(null)` is 0, which is finite: reading it as an offset would page
+    // the first page again, forever, on every server that says "no more" the
+    // way this one does.
+    if (raw === null || raw === undefined) return null;
+    const next = Number(raw);
+    return Number.isFinite(next) ? next : null;
+  }
+
+  /**
+   * Append the next page of mixed stacks.
+   *
+   * Plain offset paging, matching the route: the list is tens of rows and is
+   * not being decided out from under the client the way the queue is.
+   *
+   * @returns {Promise<void>}
+   */
+  async function loadMoreMixedStacks() {
+    if (mixedLoading.value || mixedNextOffset.value === null) return;
+    mixedLoading.value = true;
+    try {
+      const data = await listMixedStacks({
+        threshold: Number.isFinite(threshold.value)
+          ? threshold.value
+          : undefined,
+        offset: mixedNextOffset.value,
+        limit: MIXED_STACK_PAGE_SIZE,
+      });
+      const page = Array.isArray(data?.stacks) ? data.stacks : [];
+      // De-duped by stack id: an offset over a list that a split just shortened
+      // can re-serve a row the client already holds.
+      const held = new Set(mixedStacks.value.map((s) => String(s.stack_id)));
+      mixedStacks.value = [
+        ...mixedStacks.value,
+        ...page.filter((s) => !held.has(String(s.stack_id))),
+      ];
+      mixedTotal.value = Number(data?.total) || mixedTotal.value;
+      mixedNextOffset.value = page.length ? normalisedNextOffset(data) : null;
+    } catch (err) {
+      mixedError.value = err;
+      console.warn("[dedup] failed to load more mixed stacks", err);
+    } finally {
+      mixedLoading.value = false;
+    }
+  }
+
+  /**
+   * Show the Mixed stacks page, optionally revealing one stack's row.
+   *
+   * The queue's window, focus and per-group choices are untouched: this is a
+   * page of the same destination, not a route away, which is what lets the
+   * page offer a return that restores exactly what the user left.
+   *
+   * @param {number|string} [stackId] - the row to reveal.
+   * @returns {Promise<void>}
+   */
+  async function showMixedStacks(stackId = null) {
+    showingMixed.value = true;
+    mixedFocusStackId.value = stackId === null ? null : String(stackId);
+    if (!mixedLoaded.value && !mixedLoading.value) await loadMixedStacks();
+  }
+
+  /**
+   * Return to the review queue with its focus intact.
+   * @returns {void}
+   */
+  function hideMixedStacks() {
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
+  }
+
+  /**
+   * The absolute queue index of the first LOADED group that holds one stack,
+   * or -1.
+   *
+   * Deliberately over the loaded window only. The queue is paged and the
+   * client cannot know where an unloaded group sits, and a shortcut that
+   * scrolled to the wrong row would be worse than one that is not offered:
+   * the view hides the control when this answers -1.
+   *
+   * @param {number|string} stackId
+   * @returns {number}
+   */
+  function groupIndexForStack(stackId) {
+    if (stackId === null || stackId === undefined) return -1;
+    const wanted = String(stackId);
+    const local = groups.value.findIndex((group) =>
+      Object.keys(group?.stacks ?? {}).some((key) => String(key) === wanted),
+    );
+    return local < 0 ? -1 : local + windowStart.value;
+  }
+
+  /**
+   * Jump from a mixed-stack row back to a duplicate group the stack appears in.
+   *
+   * @param {number|string} stackId
+   * @returns {boolean} false when no loaded group holds it, so the caller can
+   *   decline rather than move the cursor somewhere arbitrary.
+   */
+  function showQueueForStack(stackId) {
+    const index = groupIndexForStack(stackId);
+    if (index < 0) return false;
+    hideMixedStacks();
+    setFocus(index);
+    return true;
+  }
+
+  /**
+   * Drop one row from the list and keep the totals honest.
+   * @param {number|string} stackId
+   * @param {Object} [options]
+   * @param {boolean} [options.kept=false] - the row left because it was kept.
+   */
+  function removeMixedStack(stackId, { kept = false } = {}) {
+    const wanted = String(stackId);
+    const before = mixedStacks.value.length;
+    mixedStacks.value = mixedStacks.value.filter(
+      (stack) => String(stack.stack_id) !== wanted,
+    );
+    if (mixedStacks.value.length === before) return;
+    mixedTotal.value = Math.max(0, mixedTotal.value - 1);
+    if (kept) mixedKeptTotal.value += 1;
+    if (mixedFocusStackId.value === wanted) mixedFocusStackId.value = null;
+  }
+
+  /**
+   * Run the row's primary action: split off the strangers, or unstack.
+   *
+   * The ids the ROW showed are sent, never recomputed server-side, so the
+   * split matches what the user was looking at even if the stack has changed
+   * since. One operation either way, so the standard receipt and a single
+   * Ctrl+Z cover it, narrated through the shared operation store exactly as a
+   * verdict is, gated on the response's `batch_id`.
+   *
+   * @param {Object} stack - the row.
+   * @returns {Promise<Object|null>} the action response, or null on failure.
+   */
+  async function resolveMixedStack(stack) {
+    const stackId = stack?.stack_id;
+    if (stackId === null || stackId === undefined) return null;
+    const plan = mixedStackAction(stack);
+    mixedBusyStackId.value = stackId;
+    error.value = null;
+    try {
+      const result =
+        plan.action === "split"
+          ? await splitMixedStack(stackId, {
+              pictureIds: plan.pictureIds,
+              threshold: Number.isFinite(threshold.value)
+                ? threshold.value
+                : undefined,
+              batchId: newOperationBatchId(),
+            })
+          : await unstackMixedStack(stackId, {
+              batchId: newOperationBatchId(),
+            });
+      removeMixedStack(stackId);
+      if (result?.batch_id) narrateVerdictOperation();
+      return result;
+    } catch (err) {
+      error.value = err;
+      console.warn("[dedup] failed to resolve mixed stack %s", stackId, err);
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
+    }
+  }
+
+  /**
+   * Keep one stack as it is, so it stops being listed.
+   *
+   * Keep is what makes the list drainable: without it the legitimate-but-odd
+   * stacks sit there forever and the page becomes ignorable. It changes no
+   * picture, so it records no operation and is NOT undoable; `unkeepMixedStack`
+   * is the way back, and the caller offers it.
+   *
+   * @param {Object} stack
+   * @returns {Promise<Object|null>}
+   */
+  async function keepMixed(stack) {
+    const stackId = stack?.stack_id;
+    if (stackId === null || stackId === undefined) return null;
+    mixedBusyStackId.value = stackId;
+    error.value = null;
+    try {
+      const result = await keepMixedStack(stackId);
+      removeMixedStack(stackId, { kept: true });
+      return result;
+    } catch (err) {
+      error.value = err;
+      console.warn("[dedup] failed to keep mixed stack %s", stackId, err);
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
+    }
+  }
+
+  /**
+   * Clear every Keep on one stack, so it is listed again if it is still mixed.
+   *
+   * The list is reloaded rather than the row re-inserted from memory: the row
+   * has to come back at its ranked position, and only the server knows whether
+   * the stack is still mixed at the current threshold at all.
+   *
+   * @param {number|string} stackId
+   * @returns {Promise<Object|null>}
+   */
+  async function unkeepMixedStack(stackId) {
+    if (stackId === null || stackId === undefined) return null;
+    mixedBusyStackId.value = stackId;
+    try {
+      const result = await clearMixedStackKeep(stackId);
+      await loadMixedStacks();
+      return result;
+    } catch (err) {
+      error.value = err;
+      console.warn(
+        "[dedup] failed to clear the Keep on stack %s",
+        stackId,
+        err,
+      );
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
     }
   }
 
@@ -2386,5 +2758,29 @@ export const useDedupStore = defineStore("dedup", () => {
     stopScanPoll,
     previewAutoStack,
     runAutoStack,
+    // mixed stacks (the third page)
+    showingMixed,
+    mixedStacks,
+    mixedTotal,
+    mixedKeptTotal,
+    mixedLiveStackCount,
+    mixedThreshold,
+    mixedLoading,
+    mixedLoaded,
+    mixedError,
+    mixedBusyStackId,
+    mixedFocusStackId,
+    hasMoreMixed,
+    flaggedStackIds,
+    isStackFlagged,
+    loadMixedStacks,
+    loadMoreMixedStacks,
+    showMixedStacks,
+    hideMixedStacks,
+    groupIndexForStack,
+    showQueueForStack,
+    resolveMixedStack,
+    keepMixed,
+    unkeepMixedStack,
   };
 });

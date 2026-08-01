@@ -18,8 +18,10 @@
       every copy field by field. E shows the pictures inside an existing stack,
       below the row, and changes nothing. The number keys 1 to 9 choose the
       cover. X leaves the picture under the cursor out of the stack. Control Z
-      undoes the last verdict. Escape returns here from a control. No picture is
-      ever deleted, and a stack can be undone.
+      undoes the last verdict. Escape returns here from a control, and leaves
+      the Decided and Mixed stacks pages. Mixed stacks lists existing stacks
+      whose pictures do not all match; opening it keeps your place here. No
+      picture is ever deleted, and a stack can be undone.
     </p>
 
     <!-- One toolbar, not two. The queue's count, the way to the Decided page,
@@ -30,10 +32,14 @@
          2026-07-29). -->
     <div class="dq-toolbar">
       <div class="dq-tb-left">
-        <span v-if="store.hasGroups" class="qtitle">{{ headline }}</span>
+        <span v-if="store.hasGroups || store.showingMixed" class="qtitle">{{
+          headline
+        }}</span>
         <!-- SESSION tally, and says so: the durable record is the Decided
              page, which spans every session. -->
-        <span v-if="store.doneCount && !store.showingDecided" class="qsub"
+        <span
+          v-if="store.doneCount && !store.showingDecided && !store.showingMixed"
+          class="qsub"
           >{{ store.doneCount.toLocaleString() }} done this session</span
         >
         <!-- The flip side of the queue: review what was already decided and
@@ -43,6 +49,7 @@
              Auto-stack — so the button carries its own accessible name at
              every width. -->
         <button
+          v-if="!store.showingMixed"
           type="button"
           class="qdecided"
           :class="{ 'qdecided--on': store.showingDecided }"
@@ -55,6 +62,38 @@
             store.showingDecided ? "mdi-arrow-left" : "mdi-history"
           }}</v-icon>
           <span class="qdecided-label">{{ decidedToggleLabel }}</span>
+        </button>
+
+        <!-- The THIRD page (design D5), and deliberately not a sidebar row:
+             only a destination with a to-do count earns one, and 9 to 26
+             stacks is not a to-do count. The same header-toggle pattern as
+             Decided, verbatim, so the way in and the way back are already
+             learned.
+
+             The count rides on THIS toggle and never on the sidebar badge:
+             that badge means "groups to review", and it is the one number in
+             the app that has to stay trusted. -->
+        <button
+          v-if="!store.showingDecided && mixedToggleVisible"
+          type="button"
+          class="qdecided"
+          :class="{ 'qdecided--on': store.showingMixed }"
+          :title="mixedToggleTitle"
+          :aria-label="mixedToggleTitle"
+          :aria-pressed="store.showingMixed ? 'true' : 'false'"
+          data-testid="mixed-toggle"
+          @click="onToggleMixed"
+        >
+          <v-icon size="15">{{
+            store.showingMixed ? "mdi-arrow-left" : "mdi-alert-outline"
+          }}</v-icon>
+          <span class="qdecided-label">{{ mixedToggleLabel }}</span>
+          <span
+            v-if="!store.showingMixed && store.mixedTotal"
+            class="qmixed-count"
+            aria-hidden="true"
+            >{{ store.mixedTotal.toLocaleString() }}</span
+          >
         </button>
 
         <!-- Separator D-S1: renders at ALL widths (amendment #2). With the
@@ -128,7 +167,12 @@
              picture height and therefore the row's. Live on drag: unlike the
              grid's, this control changes a list that is already on screen, so
              the user is looking straight at the answer. -->
-        <div v-if="store.hasGroups" class="dq-size dq-fold-720">
+        <!-- Not on the Mixed stacks page: its rows draw one fixed 64px cover,
+             so a size control there would be a control with nothing to buy. -->
+        <div
+          v-if="store.hasGroups && !store.showingMixed"
+          class="dq-size dq-fold-720"
+        >
           <v-icon size="16" aria-hidden="true"
             >mdi-image-size-select-large</v-icon
           >
@@ -154,7 +198,7 @@
              "Auto-stack N" (≤720) → icon + count (≤600), the sentence
              surviving as tooltip and accessible name throughout. -->
         <button
-          v-if="store.exactCount > 0 && !readOnly"
+          v-if="store.exactCount > 0 && !readOnly && !store.showingMixed"
           type="button"
           class="dq-btn dq-btn--accent"
           :title="autoStackLabel"
@@ -201,7 +245,86 @@
       >{{ announcement }}</span
     >
 
-    <div v-if="store.loading" class="dq-state" role="status">
+    <!-- ── The Mixed stacks page (design D5) ────────────────────────────────
+         A third page of this destination, not a route away, which is why the
+         queue's window, focus and per-group choices are simply left standing
+         behind it and the way back restores them for free.
+
+         The list is bound to the queue's own threshold slider: the same stack
+         is mixed at 0.90 and one clean cluster at 0.65, so the header states
+         what it was computed at rather than letting the user guess. -->
+    <div v-if="store.showingMixed" class="mixed" data-testid="mixed-stacks">
+      <div
+        v-if="store.mixedLoading && !store.mixedStacks.length"
+        class="dq-state"
+        role="status"
+      >
+        Checking which stacks hang together.
+      </div>
+
+      <!-- A failed read must never render as "no mixed stacks": that sentence
+           is a claim about the library, and nobody asked. -->
+      <div v-else-if="store.mixedError" class="dq-state" role="alert">
+        Could not check the stacks. Nothing has changed.
+        <button type="button" class="qdecided" @click="store.loadMixedStacks()">
+          <v-icon size="15">mdi-refresh</v-icon>
+          Try again
+        </button>
+      </div>
+
+      <div v-else-if="store.mixedStacks.length" class="mixed-list">
+        <p class="mixed-lede">
+          {{ mixedLede }}
+        </p>
+        <div ref="mixedListEl" class="mlist">
+          <MixedStackRow
+            v-for="stack in store.mixedStacks"
+            :key="stack.stack_id"
+            :stack="stack"
+            :busy="String(store.mixedBusyStackId) === String(stack.stack_id)"
+            :read-only="readOnly"
+            :can-show-queue="store.groupIndexForStack(stack.stack_id) >= 0"
+            :revealed="
+              String(store.mixedFocusStackId ?? '') === String(stack.stack_id)
+            "
+            @resolve="onResolveMixed(stack)"
+            @keep="onKeepMixed(stack)"
+            @show-queue="onShowQueueForStack(stack)"
+          />
+        </div>
+        <button
+          v-if="store.hasMoreMixed"
+          type="button"
+          class="qdecided mixed-more"
+          :disabled="store.mixedLoading"
+          @click="store.loadMoreMixedStacks()"
+        >
+          <v-icon size="15">mdi-chevron-down</v-icon>
+          Show more
+        </button>
+      </div>
+
+      <!-- Mirrors the shipped "No decided groups" construction, and carries
+           its own way back for the same reason: the header toggle sits on the
+           bar, but a user who arrived here from a flagged deck needs the exit
+           where they are looking. Most libraries will never have a row here. -->
+      <div v-else class="qdone">
+        <v-icon size="48">mdi-check-circle-outline</v-icon>
+        <h3>No mixed stacks</h3>
+        <p>
+          Every stack in your library holds together at
+          {{ thresholdText }} similarity. Stacks whose pictures stop matching
+          each other land here, and lowering the similarity slider is what
+          decides how strict that is.
+        </p>
+        <button type="button" class="qdecided" @click="onToggleMixed">
+          <v-icon size="15">mdi-arrow-left</v-icon>
+          Back to review
+        </button>
+      </div>
+    </div>
+
+    <div v-else-if="store.loading" class="dq-state" role="status">
       Looking for duplicates.
     </div>
 
@@ -261,6 +384,7 @@
           :expansion-members="expansionMembers"
           :expansion-loading="expansionLoading"
           :expansion-failed="expansionFailed"
+          :flagged-stack-ids="store.flaggedStackIds"
           @focus="onRowFocus(entry.index, $event)"
           @stack="onStack(entry.group)"
           @keep-separate="onKeepSeparate(entry.group)"
@@ -270,6 +394,7 @@
           @clear-decision="onClearDecision(entry.group)"
           @toggle-expansion="onToggleExpansion(entry.group, $event)"
           @retry-expansion="retryExpansion"
+          @show-mixed="onShowMixedForStack($event)"
         />
         <div
           v-if="bottomSpacer"
@@ -415,6 +540,7 @@ import {
   serverDetail,
   lockedPictureIds,
   partialStackSentence,
+  mixedStackAction,
 } from "../../utils/dedup";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
 import { useDedupRowExpansion } from "../../composables/useDedupRowExpansion";
@@ -426,6 +552,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
+import MixedStackRow from "../widgets/MixedStackRow.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
 import DedupVerdictMenu from "../widgets/DedupVerdictMenu.vue";
 import DedupScanBanner from "../widgets/DedupScanBanner.vue";
@@ -561,6 +688,7 @@ operationStore.$onAction(({ name, args, after }) => {
 
 const rootEl = ref(null);
 const listEl = ref(null);
+const mixedListEl = ref(null);
 const tierWrapEl = ref(null);
 const tierButtonEl = ref(null);
 const tierMenuOpen = ref(false);
@@ -658,10 +786,73 @@ const autoStackLabel = computed(
 );
 
 /** What the toolbar calls the queue: the count, and which side of it is shown. */
-const headline = computed(() =>
-  store.showingDecided
+const headline = computed(() => {
+  if (store.showingMixed) {
+    const n = store.mixedTotal;
+    return `${n.toLocaleString()} mixed ${n === 1 ? "stack" : "stacks"}`;
+  }
+  return store.showingDecided
     ? `${store.total.toLocaleString()} decided ${store.total === 1 ? "group" : "groups"}`
-    : `${store.openCount.toLocaleString()} ${store.openCount === 1 ? "group" : "groups"} to review`,
+    : `${store.openCount.toLocaleString()} ${store.openCount === 1 ? "group" : "groups"} to review`;
+});
+
+// ── The Mixed stacks page (design D5) ─────────────────────────────────────
+
+/**
+ * The threshold the list was computed at, as a percentage.
+ *
+ * The list's whole verdict is threshold-relative, so the page states the
+ * number rather than leaving the user to read the slider and infer it. The
+ * SERVER'S echoed value, not the slider's, because they differ for exactly as
+ * long as a reload is in flight and that is when the page is most misleading.
+ */
+const thresholdText = computed(() => {
+  const value = Number(store.mixedThreshold ?? store.threshold);
+  return Number.isFinite(value) ? `${Math.round(value * 100)}%` : "the current";
+});
+
+/**
+ * The one line above the list, saying what it is and what moves it.
+ *
+ * The denominator is on purpose: "26 of 209" is what turns "possibly wrong"
+ * into a proportion the user can judge, and the slider is what turns it into
+ * something they can drive.
+ */
+const mixedLede = computed(() => {
+  const total = store.mixedTotal.toLocaleString();
+  const live = store.mixedLiveStackCount;
+  const of = live ? ` of ${live.toLocaleString()} stacks` : "";
+  const kept = store.mixedKeptTotal
+    ? ` ${store.mixedKeptTotal.toLocaleString()} kept.`
+    : "";
+  return `${total}${of} hold pictures that don't all match at ${thresholdText.value} similarity. Lower the similarity slider to be less strict.${kept}`;
+});
+
+/** The label on the third page's toggle. */
+const mixedToggleLabel = computed(() =>
+  store.showingMixed ? "Back to review" : "Mixed stacks",
+);
+
+/** Its tooltip and accessible name, which carry the count at every width. */
+const mixedToggleTitle = computed(() => {
+  if (store.showingMixed) return "Back to review";
+  const n = store.mixedTotal;
+  return n
+    ? `Mixed stacks: ${n.toLocaleString()} ${n === 1 ? "stack holds" : "stacks hold"} pictures that don't all match`
+    : "Mixed stacks: stacks whose pictures don't all match";
+});
+
+/**
+ * Whether the toggle is offered at all.
+ *
+ * Withheld until the list has been read once, and then only when there is
+ * something on it or the user is standing on the page. A control that opens an
+ * empty page it never had to open is a control that costs a press to learn
+ * nothing; the empty state exists for the case where the last row is drained
+ * while the page is open, which is a different moment.
+ */
+const mixedToggleVisible = computed(
+  () => store.showingMixed || (store.mixedLoaded && store.mixedTotal > 0),
 );
 
 /** The row pitch a given picture height implies, before anything is measured. */
@@ -1024,6 +1215,26 @@ watch(
   },
 );
 
+/**
+ * Bring the row the shortcut landed on into view.
+ *
+ * The list is a plain scroller of near-identical rows, so a jump that changed
+ * nothing visible would read as a dead press. The row also washes itself while
+ * it is the revealed one; both are transient and neither is a focus ring, since
+ * the DOM focus stays on the queue root that owns the keys.
+ */
+watch(
+  () => [store.showingMixed, store.mixedFocusStackId, store.mixedStacks.length],
+  async () => {
+    if (!store.showingMixed || !store.mixedFocusStackId) return;
+    await nextTick();
+    const row = mixedListEl.value?.querySelector?.(
+      `[data-testid="mixed-stack-${store.mixedFocusStackId}"]`,
+    );
+    row?.scrollIntoView?.({ block: "nearest" });
+  },
+);
+
 /** Open Compare on a row, focusing it first so the two can never disagree. */
 function onCompare(index) {
   store.setFocus(index);
@@ -1325,6 +1536,12 @@ function onEscape() {
     closeTierMenu();
     return;
   }
+  // The Mixed stacks page is the next layer out, and leaving it costs nothing:
+  // the queue is still standing behind it with its focus intact.
+  if (store.showingMixed) {
+    onToggleMixed();
+    return;
+  }
   // The selection is the next thing "on top": clearing it must not also cost
   // the user their place, so the focus stays where it is.
   if (store.selectionCount > 0) {
@@ -1445,6 +1662,129 @@ function onToggleDecided() {
   rootEl.value?.focus?.();
 }
 
+/**
+ * Flip to or from the Mixed stacks page.
+ *
+ * Unlike the Decided flip this reloads nothing: it is a page of the same
+ * destination, so the queue's window, focus and per-group choices are left
+ * standing behind it and come straight back. The keyboard goes to the list
+ * that just appeared, exactly as it does for Decided.
+ */
+async function onToggleMixed() {
+  if (store.showingMixed) {
+    store.hideMixedStacks();
+    announcement.value = `Back in the review queue, at group ${store.focusIndex + 1}.`;
+  } else {
+    await store.showMixedStacks();
+    announcement.value = `Showing ${store.mixedTotal.toLocaleString()} mixed ${
+      store.mixedTotal === 1 ? "stack" : "stacks"
+    } at ${thresholdText.value} similarity. Nothing has changed.`;
+  }
+  rootEl.value?.focus?.();
+}
+
+/**
+ * Half of the two-way shortcut: a flagged deck in the queue to its row here.
+ *
+ * The queue's focus is deliberately untouched, so the row's own "In the queue"
+ * action (and the header toggle) can put the user back exactly where they were.
+ *
+ * @param {number|string} stackId
+ */
+async function onShowMixedForStack(stackId) {
+  await store.showMixedStacks(stackId);
+  announcement.value =
+    "Showing this stack on the Mixed stacks page. Your place in the review queue is kept.";
+  rootEl.value?.focus?.();
+}
+
+/**
+ * The other half: a row here back to a duplicate group the stack appears in.
+ *
+ * Offered only when a LOADED group holds it; the queue is paged, and a
+ * shortcut that scrolled to a guessed row would be worse than one that is not
+ * offered. The store refuses rather than guessing, and the refusal is narrated
+ * instead of reading as a dead press.
+ *
+ * @param {Object} stack
+ */
+function onShowQueueForStack(stack) {
+  if (store.showQueueForStack(stack?.stack_id)) {
+    announcement.value = `Back in the review queue, at group ${store.focusIndex + 1}, which holds this stack.`;
+    rootEl.value?.focus?.();
+    return;
+  }
+  announcement.value =
+    "This stack is not in any of the duplicate groups loaded right now.";
+}
+
+/**
+ * Split off the strangers, or unstack: the row's primary action.
+ *
+ * Both are one operation, so the standard receipt and a single Ctrl+Z cover
+ * them; the store raises the receipt off the response's batch id exactly as a
+ * verdict does. The row leaves the list on success, so a failure has to be a
+ * notice rather than only a live-region line.
+ *
+ * @param {Object} stack
+ */
+async function onResolveMixed(stack) {
+  const plan = mixedStackAction(stack);
+  const result = await store.resolveMixedStack(stack);
+  if (!result) {
+    const detail = serverDetail(store.error);
+    const because = detail ? ` ${detail}` : "";
+    announcement.value = `Could not change that stack.${because} Nothing was changed.`;
+    noticeStore.error(
+      `Could not change that stack.${because} Nothing was changed, so you can try again.`,
+    );
+    return;
+  }
+  const moved = result.split_picture_ids?.length ?? 0;
+  announcement.value =
+    plan.action === "split"
+      ? `Took ${moved} ${moved === 1 ? "picture" : "pictures"} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`
+      : `Freed ${moved} ${moved === 1 ? "picture" : "pictures"} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`;
+}
+
+/**
+ * Keep one stack as it is.
+ *
+ * Keep changes no picture, so there is no operation to undo and no receipt
+ * will ever arrive for it. The way back is to clear the dismissal, which is
+ * offered here on the notice, because the row has already left the list and
+ * nothing left on screen to anchor the offer to.
+ *
+ * @param {Object} stack
+ */
+async function onKeepMixed(stack) {
+  const stackId = stack?.stack_id;
+  const result = await store.keepMixed(stack);
+  if (!result) {
+    announcement.value =
+      "Could not keep that stack. It is still listed, so nothing was lost.";
+    noticeStore.error(
+      "Could not keep that stack. It is still listed, so you can try again.",
+    );
+    return;
+  }
+  const sentence =
+    "Kept this stack as it is. It will be listed again if its pictures change.";
+  announcement.value = sentence;
+  noticeStore.info(sentence, {
+    action: {
+      label: "Undo keep",
+      handler: async () => {
+        const cleared = await store.unkeepMixedStack(stackId);
+        announcement.value = cleared
+          ? "The stack is listed again."
+          : "Could not clear that Keep. Nothing changed.";
+        if (!cleared) noticeStore.error("Could not clear that Keep.");
+      },
+    },
+  });
+}
+
 /** Open the bulk dialog on its dry run, so the preview is never stale. */
 async function openAutoStack() {
   autoStackOpen.value = true;
@@ -1538,8 +1878,14 @@ const handleKeydown = createDedupKeyHandler({
   // The auto-stack dialog is a modal and blocks everything; the tier popover
   // owns only the keys pressed inside itself, so a committed change that
   // handed focus back to the queue leaves the rows workable underneath it.
+  // The Mixed stacks page owns the screen while it is up: the queue's rows are
+  // not on it, so a verdict key would resolve a group the user cannot see.
+  // Escape is exempt by construction (it resolves before this guard), which is
+  // what keeps the way back a single press.
   isBlocked: (event) =>
-    autoStackOpen.value || (tierMenuOpen.value && tierMenuOwnsEvent(event)),
+    autoStackOpen.value ||
+    store.showingMixed ||
+    (tierMenuOpen.value && tierMenuOwnsEvent(event)),
   // One row less than the viewport holds, so a page move keeps the row the
   // user was reading on screen as the anchor for the next one.
   pageRows: () => Math.max(1, viewportRows.value - 1),
@@ -1980,6 +2326,23 @@ defineExpose({ windowedGroups, tierLabel });
   border-color: rgba(var(--v-theme-accent), 0.5);
 }
 
+/* The third page's count, on ITS toggle and nowhere else. It is deliberately
+   not the sidebar badge's shape: that badge means "groups to review", the one
+   number in this app that has to stay trusted, and a second count wearing the
+   same pill would be read as part of it. */
+.qmixed-count {
+  display: inline-flex;
+  align-items: center;
+  min-width: var(--badge-size);
+  min-height: var(--badge-size);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.1);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Appears with the selection and goes with it, so the queue has one bar in
    its resting state and a second only while a bulk gesture is live. */
 .qselbar {
@@ -2054,6 +2417,58 @@ defineExpose({ windowedGroups, tierLabel });
   padding: var(--space-6) var(--space-5);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-background), 0.6);
+}
+
+/* ── The Mixed stacks page ──────────────────────────────────────────────── */
+
+.mixed {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.mixed-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  /* The queue's own content gutter, so the two pages of one destination line
+     up down their left edge. */
+  padding: 0 var(--space-5) var(--space-4);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* What the list is, what it was computed at, and what moves it: once, above
+   the rows, rather than repeated on each of them. */
+.mixed-lede {
+  margin: 0;
+  padding: var(--space-4) 0 var(--space-3);
+  max-width: 78ch;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* A LIST, not a stack of cards: the separation is entirely the rows' own
+   dividers, and the container adds no surface, border or radius of its own.
+   Its container name is what lets a row fold its suspects under its title. */
+.mlist {
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+  container-name: mixedlist;
+}
+
+.mixed-more {
+  align-self: center;
+  margin-top: var(--space-4);
+}
+
+.mixed-more:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
 }
 
 .qdone {

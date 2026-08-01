@@ -57,6 +57,10 @@
 //      facet, so there is nothing for undo to restore and the backend
 //      deliberately writes no operation row. Callers must not wait for a receipt
 //      that will never arrive; the way back is {@link reopenGroup}.
+//   9. **Mixed stacks are a threshold-relative READ plus three writes.** The
+//      list is computed at the threshold it is asked for, so the same stack is
+//      mixed at 0.90 and cohesive at 0.65; split and unstack are one undoable
+//      operation each, and `Keep` is a durable dismissal that `DELETE` clears.
 //
 // Every route is owner-scoped on the backend. Guarding a read-only session is
 // the caller's job; this module is pure transport.
@@ -478,5 +482,180 @@ export async function autoStackExact({
   if (batchId) body.batch_id = batchId;
   if (Number.isFinite(limit)) body.limit = limit;
   const res = await apiClient.post(dedupUrl("/auto-stack", baseUrl), body);
+  return res.data;
+}
+
+// ── Mixed stacks (design D5) ────────────────────────────────────────────────
+//
+// A **mixed stack** is a live stack whose members do not form one connected
+// cluster at a similarity threshold. Three facts shape every call below.
+//
+//   1. **The threshold is the whole verdict.** The same stack is mixed at 0.90
+//      and one clean cluster at 0.65, so every caller passes the queue's own
+//      slider value and never a constant of its own.
+//   2. **Ranked least-held-together first**, by stranded members descending,
+//      then component count, then weakest edge. The clearest mistakes are
+//      therefore always on the first page, which is what lets a single page
+//      answer "which stacks carry a stranded member" for the queue's chip.
+//   3. **Split and unstack are undoable; Keep is not.** The first two record
+//      one operation each and return its `batch_id`; Keep changes no picture,
+//      so the way back is {@link clearMixedStackKeep}, not undo.
+
+/** The server's own ceiling on one Mixed stacks page (`MAX_PAGE_SIZE`). */
+export const MAX_MIXED_STACK_PAGE = 200;
+
+/**
+ * List the mixed stacks at one similarity threshold.
+ *
+ * Read-only: nothing here splits, unstacks or marks anything.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.threshold] - the queue's own threshold. Omitted
+ *   means the server's default; outside its published bounds is a 422.
+ * @param {number} [options.offset=0] - rows to skip; follow the previous
+ *   page's `next_offset`. Plain offset paging, deliberately: this list is tens
+ *   of rows and is not being decided out from under the client the way the
+ *   queue is, so the keyset cursor buys nothing.
+ * @param {number} [options.limit] - rows per page, at most
+ *   {@link MAX_MIXED_STACK_PAGE}. Omitted means the server's default (20).
+ * @param {boolean} [options.includeKept=false] - include stacks a `Keep`
+ *   covers, each marked `kept: true`. `kept_total` is reported either way.
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body: `{ threshold, total,
+ *   kept_total, live_stack_count, offset, limit, next_offset, stacks }`. Each
+ *   stack carries `stack_id`, `member_count`, `member_ids`,
+ *   `membership_fingerprint`, `component_count`, `component_sizes`,
+ *   `components`, `largest_component_size`, `stranded_picture_ids`,
+ *   `weakest_edge`, `unhashed_picture_ids`, `suggested_action` (`split` or
+ *   `unstack`), `kept`, `leader_picture_id` and `leader_thumbnail_version`.
+ */
+export async function listMixedStacks({
+  threshold,
+  offset = 0,
+  limit,
+  includeKept = false,
+  baseUrl = "",
+} = {}) {
+  const params = { offset };
+  if (Number.isFinite(threshold)) params.threshold = threshold;
+  if (Number.isFinite(limit)) {
+    params.limit = Math.min(limit, MAX_MIXED_STACK_PAGE);
+  }
+  if (includeKept) params.include_kept = true;
+  const res = await apiClient.get(dedupUrl("/mixed-stacks", baseUrl), {
+    params,
+  });
+  return res.data;
+}
+
+/**
+ * Split the stranded member(s) off one mixed stack.
+ *
+ * Send the ids the row showed (`stranded_picture_ids`), so the split matches
+ * what the user was looking at even if the stack has changed since. Omitting
+ * them makes the server recompute the stranded set at `threshold` instead,
+ * which is a different, later answer.
+ *
+ * Recorded as ONE operation, so a single `Ctrl+Z` puts every picture back in
+ * its original stack at its original position.
+ *
+ * @param {number|string} stackId
+ * @param {Object} [options]
+ * @param {Array<number>} [options.pictureIds] - the members to split off.
+ * @param {number} [options.threshold] - only read when `pictureIds` is omitted.
+ * @param {string} [options.batchId] - a client-namespaced `cli-…` id; omit to
+ *   have the server mint an `srv-` one.
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body: `{ stack_id,
+ *   split_picture_ids, remaining_picture_ids, stack_dissolved, batch_id }`.
+ */
+export async function splitMixedStack(
+  stackId,
+  { pictureIds, threshold, batchId, baseUrl = "" } = {},
+) {
+  const body = {};
+  if (Array.isArray(pictureIds) && pictureIds.length) {
+    body.picture_ids = [...pictureIds];
+  }
+  if (Number.isFinite(threshold)) body.threshold = threshold;
+  if (batchId) body.batch_id = batchId;
+  const res = await apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/split`, baseUrl),
+    body,
+  );
+  return res.data;
+}
+
+/**
+ * Dissolve one mixed stack entirely: the outcome when no majority cluster is
+ * worth keeping.
+ *
+ * Nothing is deleted and no file moves; a stack is a grouping row plus a cover
+ * pointer. Recorded as ONE operation, so a single `Ctrl+Z` recreates the stack
+ * under its original id with every member back at its original position.
+ *
+ * @param {number|string} stackId
+ * @param {Object} [options]
+ * @param {string} [options.batchId]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the same `MixedStackActionResponse` shape as
+ *   {@link splitMixedStack}, with `stack_dissolved: true`.
+ */
+export async function unstackMixedStack(
+  stackId,
+  { batchId, baseUrl = "" } = {},
+) {
+  const body = {};
+  if (batchId) body.batch_id = batchId;
+  const res = await apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/unstack`, baseUrl),
+    body,
+  );
+  return res.data;
+}
+
+/**
+ * Keep one mixed stack as it is, so it stops being listed.
+ *
+ * Durable and server-side, and keyed on the stack's MEMBERSHIP as well as its
+ * id: adding a member later produces a fingerprint no dismissal matches and
+ * the stack returns to the list. The user approved these pictures together,
+ * not the stack forever.
+ *
+ * This changes no picture, so it is not an undoable operation;
+ * {@link clearMixedStackKeep} is the way back. Idempotent: keeping an
+ * unchanged stack returns `created: false` and writes nothing.
+ *
+ * @param {number|string} stackId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body: `{ stack_id, dismissed,
+ *   created, membership_fingerprint, member_count }`.
+ */
+export async function keepMixedStack(stackId, { baseUrl = "" } = {}) {
+  const res = await apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/keep`, baseUrl),
+    {},
+  );
+  return res.data;
+}
+
+/**
+ * Clear every `Keep` on one stack, whatever membership each was made at, so it
+ * is listed again if it is still mixed.
+ *
+ * The way back from a mis-pressed Keep. Idempotent: clearing a stack that was
+ * never kept returns `removed: 0`.
+ *
+ * @param {number|string} stackId
+ * @param {Object} [options]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} the response body: `{ stack_id, dismissed: false,
+ *   removed }`.
+ */
+export async function clearMixedStackKeep(stackId, { baseUrl = "" } = {}) {
+  const res = await apiClient.delete(
+    dedupUrl(`/mixed-stacks/${stackId}/keep`, baseUrl),
+  );
   return res.data;
 }

@@ -18,6 +18,12 @@ import {
   policyBody,
   listStackMembers,
   MAX_STACK_MEMBER_PAGE,
+  listMixedStacks,
+  splitMixedStack,
+  unstackMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
+  MAX_MIXED_STACK_PAGE,
   GLOBAL_SCOPE,
 } from "./dedup";
 
@@ -376,5 +382,128 @@ describe("api/dedup: the deck expansion's lazy members", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/dedup/stacks/7/members", {
       params: { offset: 0, limit: MAX_STACK_MEMBER_PAGE },
     });
+  });
+});
+
+describe("api/dedup: mixed stacks", () => {
+  // The whole verdict is threshold-relative: the same stack is mixed at 0.90
+  // and one clean cluster at 0.65. A caller that forgot to send the queue's
+  // own value would be reading a different library from the one on screen.
+  it("listMixedStacks sends the threshold it was given", async () => {
+    apiClient.get.mockResolvedValue({ data: { stacks: [], total: 0 } });
+    await listMixedStacks({ threshold: 0.65, offset: 20, limit: 50 });
+    expect(apiClient.get).toHaveBeenCalledWith("/dedup/mixed-stacks", {
+      params: { offset: 20, threshold: 0.65, limit: 50 },
+    });
+  });
+
+  // Omitted means "the server's default", never "whatever the client guessed".
+  it("listMixedStacks omits a threshold and a limit it was not given", async () => {
+    apiClient.get.mockResolvedValue({ data: { stacks: [] } });
+    await listMixedStacks();
+    expect(apiClient.get).toHaveBeenCalledWith("/dedup/mixed-stacks", {
+      params: { offset: 0 },
+    });
+  });
+
+  it("listMixedStacks clamps the page to the server's own ceiling", async () => {
+    apiClient.get.mockResolvedValue({ data: { stacks: [] } });
+    await listMixedStacks({ limit: 5000 });
+    expect(apiClient.get.mock.calls[0][1].params.limit).toBe(
+      MAX_MIXED_STACK_PAGE,
+    );
+  });
+
+  it("listMixedStacks asks for the kept rows only when told to", async () => {
+    apiClient.get.mockResolvedValue({ data: { stacks: [] } });
+    await listMixedStacks({ includeKept: true });
+    expect(apiClient.get.mock.calls[0][1].params.include_kept).toBe(true);
+    apiClient.get.mockClear();
+    await listMixedStacks({ includeKept: false });
+    expect(apiClient.get.mock.calls[0][1].params.include_kept).toBeUndefined();
+  });
+
+  it("listMixedStacks returns the body, not the envelope", async () => {
+    apiClient.get.mockResolvedValue({ data: { total: 26, stacks: [{}] } });
+    expect(await listMixedStacks()).toEqual({ total: 26, stacks: [{}] });
+  });
+
+  // "Send the ids the row showed": the split has to match what the user was
+  // looking at, even if the stack has changed since they looked.
+  it("splitMixedStack sends the ids the row showed", async () => {
+    apiClient.post.mockResolvedValue({ data: { stack_id: 42 } });
+    await splitMixedStack(42, {
+      pictureIds: [11],
+      threshold: 0.9,
+      batchId: "cli-split-3",
+    });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/dedup/mixed-stacks/42/split",
+      {
+        picture_ids: [11],
+        threshold: 0.9,
+        batch_id: "cli-split-3",
+      },
+    );
+  });
+
+  it("splitMixedStack omits an empty id list so the server recomputes", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await splitMixedStack(42, { pictureIds: [] });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/dedup/mixed-stacks/42/split",
+      {},
+    );
+  });
+
+  it("unstackMixedStack posts to the stack's own unstack route", async () => {
+    apiClient.post.mockResolvedValue({ data: { stack_dissolved: true } });
+    const result = await unstackMixedStack(7, { batchId: "cli-unstack-9" });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/dedup/mixed-stacks/7/unstack",
+      { batch_id: "cli-unstack-9" },
+    );
+    expect(result.stack_dissolved).toBe(true);
+  });
+
+  // Keep changes no picture, so there is no batch id to send and nothing for
+  // undo to restore. DELETE on the same path is the whole way back.
+  it("keepMixedStack posts an empty body and DELETE clears it", async () => {
+    apiClient.post.mockResolvedValue({ data: { dismissed: true } });
+    apiClient.delete.mockResolvedValue({ data: { dismissed: false } });
+    expect((await keepMixedStack(42)).dismissed).toBe(true);
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/dedup/mixed-stacks/42/keep",
+      {},
+    );
+    expect((await clearMixedStackKeep(42)).dismissed).toBe(false);
+    expect(apiClient.delete).toHaveBeenCalledWith(
+      "/dedup/mixed-stacks/42/keep",
+    );
+  });
+
+  // Every route honours an explicit backend origin: the SPA and the backend are
+  // different origins in the dev server, the demo and Electron.
+  it("honours an explicit backend base on every route", async () => {
+    apiClient.get.mockResolvedValue({ data: {} });
+    apiClient.post.mockResolvedValue({ data: {} });
+    apiClient.delete.mockResolvedValue({ data: {} });
+    const baseUrl = "http://backend.test/api/v1";
+    await listMixedStacks({ baseUrl });
+    await splitMixedStack(1, { baseUrl });
+    await unstackMixedStack(1, { baseUrl });
+    await keepMixedStack(1, { baseUrl });
+    await clearMixedStackKeep(1, { baseUrl });
+    expect(apiClient.get.mock.calls[0][0]).toBe(
+      "http://backend.test/api/v1/dedup/mixed-stacks",
+    );
+    expect(apiClient.post.mock.calls.map((c) => c[0])).toEqual([
+      "http://backend.test/api/v1/dedup/mixed-stacks/1/split",
+      "http://backend.test/api/v1/dedup/mixed-stacks/1/unstack",
+      "http://backend.test/api/v1/dedup/mixed-stacks/1/keep",
+    ]);
+    expect(apiClient.delete.mock.calls[0][0]).toBe(
+      "http://backend.test/api/v1/dedup/mixed-stacks/1/keep",
+    );
   });
 });

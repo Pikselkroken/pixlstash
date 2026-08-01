@@ -142,6 +142,8 @@
             :count="unit.depth"
             :tabindex="focused ? 0 : -1"
             :expanded="isExpanded(unit)"
+            :flagged="isFlagged(unit)"
+            :dense="denseBadges"
             :action-title="expandTitle(unit)"
             @activate="onExpand(unit)"
           />
@@ -295,6 +297,34 @@
       data-testid="dedup-row-expansion"
       @click.stop
     >
+      <!-- ── The way from a flagged deck to its Mixed stacks row (D5) ────
+           The badge is already spoken for: pressing it is the disclosure,
+           and a second corner control would double-mark a corner that has
+           no room for one. So the shortcut lives HERE, in the band that
+           press opens, where there is width for a sentence saying what the
+           flag means.
+
+           It also costs the COLLAPSED row no height, which matters: the
+           queue sizes both scroll spacers from one uniform row pitch, so a
+           line that appeared on some rows and not others would put a
+           per-row variable into that arithmetic. The band is already
+           excluded from that sample.
+
+           Read-only, like the rest of the band: it changes the PAGE, not
+           the library. -->
+      <div v-if="expansionFlagged" class="gexp-flag">
+        <v-icon size="14">mdi-alert-outline</v-icon>
+        <span>These pictures don't all match at the current threshold.</span>
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="format-list-bulleted"
+          :tabindex="focused ? 0 : -1"
+          title="Open this stack's row on the Mixed stacks page. Your place in the queue is kept."
+          @click.stop="emit('show-mixed', expandedUnit.stackId)"
+          >Review this stack</AppButton
+        >
+      </div>
       <div v-if="expansionLoading" class="gexp-state" role="status">
         <v-icon size="16" class="mdi-spin">mdi-loading</v-icon>
         Reading the pictures in this stack
@@ -320,6 +350,18 @@
           >Try again</AppButton
         >
       </div>
+      <!-- ── The way from a flagged deck to its Mixed stacks row (D5) ────
+           The badge is already spoken for: pressing it is the disclosure,
+           and a second corner control would double-mark a corner that has
+           no room for one. So the shortcut lives HERE, in the band the
+           press opens, where there is width for a sentence saying what the
+           flag means. It also costs the row no height in its collapsed
+           state, which matters: the queue sizes both scroll spacers from
+           one uniform row pitch, so a line that appeared on some rows and
+           not others would put a per-row variable into that arithmetic.
+
+           Read-only, like the rest of the band: it changes the PAGE, not
+           the library. -->
       <!-- The row's own height-driven recipe, not the strip's 128x96
            default: the queue runs a 112-406px size slider, and a band that
            ignored it would contradict the tiles directly above it. Height
@@ -378,6 +420,7 @@ import {
   unitForPictureId,
   unitCompositionLabel,
   stackVerdictLabel,
+  DENSE_STACK_BADGE_BELOW_PX,
 } from "../../utils/dedup";
 import { buildLockReason } from "../../stores/useLockedSetsStore";
 import { formatUserDate } from "../../utils/utils";
@@ -454,6 +497,14 @@ const props = defineProps({
   expansionMembers: { type: Array, default: () => [] },
   expansionLoading: { type: Boolean, default: false },
   expansionFailed: { type: Boolean, default: false },
+  // ── The mixed-stack flag (D5) ──────────────────────────────────────────
+  // Stack ids (as strings) whose members do not all match at the current
+  // threshold, the STRONG case only. Read straight through to the deck's
+  // badge, which turns its icon slot into the mark. It is a standing fact
+  // about the stack and NEVER gates a verdict: a mixed stack is one a user may
+  // legitimately want to add to, and a warning that blocked would be the third
+  // control this feature offered that it could not honour.
+  flaggedStackIds: { type: Object, default: () => new Set() },
 });
 
 const emit = defineEmits([
@@ -466,6 +517,7 @@ const emit = defineEmits([
   "clear-decision",
   "toggle-expansion",
   "retry-expansion",
+  "show-mixed",
 ]);
 
 const userPrefsStore = useUserPrefsStore();
@@ -645,6 +697,31 @@ const whyLimit = computed(() =>
 );
 
 /**
+ * Whether the deck badges run their dense rule at this thumbnail size.
+ *
+ * Row-level, not per-badge: the strip's height is one number for the whole
+ * row, so a badge that inverted on one tile and not the next would be reading
+ * the size differently from its neighbour.
+ */
+const denseBadges = computed(
+  () => props.thumbHeight < DENSE_STACK_BADGE_BELOW_PX,
+);
+
+/**
+ * Whether this deck's stack does not hang together at the current threshold.
+ *
+ * A loose picture is never flagged: it belongs to no stack, so there is
+ * nothing about it that could be mixed.
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isFlagged(unit) {
+  if (unit.kind !== "deck" || unit.stackId === null) return false;
+  return props.flaggedStackIds?.has?.(String(unit.stackId)) === true;
+}
+
+/**
  * The PLACEHOLDER's estimated shape, from stored dimensions. Only an
  * estimate: stored width/height ignore EXIF rotation, so the real image may
  * arrive with the axes swapped — it then sizes the box itself.
@@ -804,6 +881,11 @@ const expansionCoverId = computed(() => {
   }
   return unit.coverPictureId;
 });
+
+/** Whether the open band belongs to a stack that does not hang together. */
+const expansionFlagged = computed(
+  () => expandedUnit.value !== null && isFlagged(expandedUnit.value),
+);
 
 /**
  * Whether this unit's members are the ones on screen.
@@ -1364,6 +1446,25 @@ function onDblClick(event) {
 }
 
 .gexp-state--error .v-icon {
+  color: rgb(var(--v-theme-warning));
+}
+
+/* The flag's sentence and its way to the Mixed stacks page. A line, not a
+   card: the band below it already carries the border, and a second boxed
+   surface inside the same disclosure would read as two panels. The hue is on
+   the glyph only; the text is `on-surface`, because `on-warning` is correct
+   only on a solid warning fill. */
+.gexp-flag {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+}
+
+.gexp-flag .v-icon {
+  flex-shrink: 0;
   color: rgb(var(--v-theme-warning));
 }
 

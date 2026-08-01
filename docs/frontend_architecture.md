@@ -140,7 +140,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, compare dialog, auto-stack dialog, tier menu, scan banner, scope pill, why-pills and confidence pill), and the Stack* family (badge, edge ticks, expansion strip)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, compare dialog, auto-stack dialog, tier menu, scan banner, scope pill, why-pills and confidence pill), `MixedStackRow` (one row of the Duplicates destination's third page), and the Stack* family (badge, edge ticks, expansion strip)
 ```
 
 ---
@@ -1038,7 +1038,7 @@ For `<img :src="...">` bindings and similar direct browser requests that bypass 
 | `api/pictureImport.js` | the streaming-staging import session (`/pictures/import/staging/*`) |
 | `api/operations.js` | `/operations`: the append-only change log, `undo-state`, and undo / redo / per-operation undo / batch undo (all OWNER_ONLY — callers guard on `isReadOnly`) |
 | `api/stacks.js` | `/stacks`: grouping, ordering, dissolving |
-| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack, and a deck's lazy members (`/dedup/stacks/{id}/members`) |
+| `api/dedup.js` | `/dedup`: the triage queue, the live counts, the scoped scan, the three verdicts, the bulk auto-stack, a deck's lazy members (`/dedup/stacks/{id}/members`), and the Mixed stacks page (`/dedup/mixed-stacks` + its `split` / `unstack` / `keep` sub-resources) |
 | `api/pictures.js` | `/pictures`, the largest resource: reads, count, stream, the searches, stats |
 
 Modules are seeded as their first call site migrates, so a module can legitimately expose one function today and a dozen once the components that use the rest of its resource move over.
@@ -1315,6 +1315,66 @@ Three rules from the design are load-bearing and are easy to break by accident:
   flash their lock chip. `serverDetail`, `lockedPictureIds` and
   `partialStackSentence` live in `utils/dedup.js` (pure, unit-tested) rather than
   in the view.
+
+**Mixed stacks is a third PAGE of this destination, not a route and not a
+sidebar row** (`docs/design/mixed-stacks-and-stack-units.md` D5). A mixed stack
+is a live stack whose members do not form one connected cluster at the queue's
+similarity threshold. It earns no sidebar row because only a destination with a
+to-do count does, and this is 9 to 26 items; it earns no grid filter value
+because `unresolved` was withdrawn from the filter panel on the grounds that
+"the duplicate queue owns that work".
+
+- **The list is bound to the queue's threshold slider, never to a constant.**
+  `setThreshold` reloads it, and the page states the threshold the SERVER
+  echoed rather than the slider's, because the two differ for exactly as long
+  as a reload is in flight. On the owner's library it is 26 rows at the default
+  0.90 and 9 at the 0.65 floor.
+- **The count rides on the page toggle** (`data-testid="mixed-toggle"`, the
+  shipped `Decided` / `Back to review` construction reused verbatim) and never
+  on the sidebar badge, which has to keep meaning "groups to review".
+- **Flipping the page reloads nothing.** `showMixedStacks` / `hideMixedStacks`
+  only flip a flag: the queue's window, focus, selection and per-group choices
+  stay standing behind it, which is what lets the two-way shortcut offer a
+  return that restores them. The queue's key model stands down while the page
+  is up (`isBlocked`), except Escape, which resolves before that guard and is
+  the one-press way back.
+- **`MixedStackRow` is deliberately not a `DedupGroupRow`.** Divider-separated,
+  no per-row border, background, radius or focus bar: the card treatment says
+  "decide now, keyboard-driven, auto-advancing", and a second thing that looked
+  like the queue would be read as a second queue with a second to-do count.
+  Left to right: the leader at a fixed 64px wearing its ticks and badge, a
+  title block (`Stack of 5` over the reason at `--text-xs`), the suspect members
+  as a run of 40px warning-bordered thumbnails (the row's reason to exist), and
+  ghost actions. Ranked worst first by the server, printed with no rank
+  numerals.
+- **Three actions, and one of them is not undoable.** `Split off N` when there
+  is a clear stranger and `Unstack` when there is no majority cluster are one
+  operation each, so the standard receipt and a single `Ctrl+Z` cover them; the
+  split sends the ids the ROW showed (`stranded_picture_ids`), never letting the
+  server recompute a later answer. **`Keep`** changes no picture, records no
+  operation and is what makes the list drainable; `DELETE` on the same path is
+  the way back, offered on the notice because the row has already left.
+- **The warning chip marks only the STRONG case** (a member joined to nothing
+  else in its stack). At the measured 12% a mark is one tile in eight and
+  becomes a warning field, and the soft cases are often legitimate. It reuses
+  `StackBadge`'s icon slot, freed because the edge ticks already say "this is a
+  stack": `mdi-alert-outline` in `--v-theme-warning` over `--scrim-photo-strong`
+  with a 1px inset warning ring, no motion. Below 168px (the ladder's `small`
+  rung) the dense rule INVERTS: an unflagged deck keeps its numeral and drops
+  the icon, a flagged one keeps the icon and drops the numeral. Badge
+  precedence is expanded > flagged > per-stack tint. **The chip never blocks or
+  disables a verdict**: a mixed stack is one a user may legitimately want to
+  add to.
+- **`useDedupStore.flaggedStackIds` is derived from the loaded page**, not from
+  a second request: the list is ranked stranded-members-descending, so a page
+  that holds the head holds every strong case. `openQueue` reads the list
+  unawaited, because the chip must work whether or not the page is ever opened.
+- **The two-way shortcut.** Queue to page: the flagged deck's expansion band
+  carries the link (the badge itself is already the disclosure, and a line in
+  the collapsed row would put a per-row variable into the uniform scroll pitch
+  the spacers are sized from). Page to queue: `showQueueForStack` searches the
+  LOADED window only and returns false rather than guessing, so the row hides
+  the control when there is nowhere real to land.
 
 **Compare is a working surface, not a detour** (owner requirements, 2026-07-30).
 A verdict given inside `DedupCompareDialog` — footer buttons, `Enter`/`S`

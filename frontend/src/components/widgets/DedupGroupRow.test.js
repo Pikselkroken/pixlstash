@@ -1046,3 +1046,146 @@ describe("DedupGroupRow: the expansion band", () => {
     expect(wrapper.emitted("focus")).toBeUndefined();
   });
 });
+
+// --- The mixed-stack warning chip (design D5) --------------------------------
+//
+// A deck whose stack does not hang together at the current threshold wears the
+// mark in the badge's icon slot. Three properties are load-bearing and are all
+// easy to break by accident: only the STRONG case is marked, the mark never
+// gates a verdict, and below the ladder's `small` rung the dense rule inverts
+// rather than dropping the mark.
+
+describe("DedupGroupRow: the mixed-stack chip", () => {
+  it("marks a deck whose stack the queue flagged", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      flaggedStackIds: new Set(["12"]),
+    });
+    const badge = wrapper.find('[data-testid="stack-badge"]');
+    expect(badge.attributes("data-flagged")).toBe("true");
+  });
+
+  // The soft cases are often legitimate (a burst where one frame panned off),
+  // and they never reach this set: the store puts only stranded-member stacks
+  // in it. A row given an empty set must therefore mark nothing.
+  it("marks nothing when the stack is not in the flagged set", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      flaggedStackIds: new Set(),
+    });
+    expect(
+      wrapper.find('[data-testid="stack-badge"]').attributes("data-flagged"),
+    ).toBeUndefined();
+  });
+
+  // Ids arrive as numbers on one payload and strings on the other, and a set
+  // keyed the wrong way silently flags nothing at all.
+  it("compares the stack id as a string", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      flaggedStackIds: new Set([12]),
+    });
+    expect(
+      wrapper.find('[data-testid="stack-badge"]').attributes("data-flagged"),
+    ).toBeUndefined();
+  });
+
+  // THE rule the design is most explicit about: a mixed stack is one a user may
+  // legitimately want to add to, and a warning that blocked would be the third
+  // control this feature offered that it could not honour.
+  it("never blocks or disables a verdict", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+      flaggedStackIds: new Set(["12"]),
+    });
+    const stack = wrapper.find(".gbtn--stack");
+    expect(stack.attributes("disabled")).toBeUndefined();
+    const keep = wrapper.findAll(".gbtn")[1];
+    expect(keep.attributes("disabled")).toBeUndefined();
+    expect(wrapper.find(".gcompare").attributes("disabled")).toBeUndefined();
+    // And the tile still answers: the cover gesture is untouched.
+    expect(
+      wrapper.findAll(".gthumb")[0].attributes("disabled"),
+    ).toBeUndefined();
+  });
+
+  it("still emits a verdict from a row holding a flagged deck", async () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+      flaggedStackIds: new Set(["12"]),
+    });
+    await wrapper.find(".gbtn--stack").trigger("click");
+    expect(wrapper.emitted("stack")).toHaveLength(1);
+  });
+
+  // 168px is the ladder's `small` rung. Below it the tile has room for one of
+  // the two, and which one survives depends on which fact the badge is for.
+  it("inverts the badge below the dense rung", () => {
+    const dense = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      thumbHeight: 140,
+      flaggedStackIds: new Set(["12"]),
+    });
+    expect(dense.find(".sbcount").exists()).toBe(false);
+    expect(dense.find(".sbico").exists()).toBe(true);
+
+    const denseUnflagged = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      thumbHeight: 140,
+      flaggedStackIds: new Set(),
+    });
+    expect(denseUnflagged.find(".sbcount").text()).toBe("4");
+    expect(denseUnflagged.find(".sbico").exists()).toBe(false);
+  });
+
+  it("draws both at and above the dense rung", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      thumbHeight: 168,
+      flaggedStackIds: new Set(["12"]),
+    });
+    expect(wrapper.find(".sbcount").text()).toBe("4");
+    expect(wrapper.find(".sbico").exists()).toBe(true);
+  });
+
+  // The shortcut to the Mixed stacks page lives in the band the badge opens,
+  // not in a second corner control: the corner is full, and a line in the
+  // collapsed row would put a per-row variable into the queue's uniform scroll
+  // pitch.
+  it("offers the way to the Mixed stacks page from the open band", async () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+      flaggedStackIds: new Set(["12"]),
+      expandedStackId: 12,
+      expansionMembers: [{ id: 501 }, { id: 503 }],
+    });
+    const link = wrapper.find(".gexp-flag button");
+    expect(link.exists()).toBe(true);
+    await link.trigger("click");
+    expect(wrapper.emitted("show-mixed")).toEqual([[12]]);
+  });
+
+  it("says nothing about a mixed stack when the open deck is not flagged", () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+      flaggedStackIds: new Set(),
+      expandedStackId: 12,
+      expansionMembers: [{ id: 501 }],
+    });
+    expect(wrapper.find(".gexp-flag").exists()).toBe(false);
+  });
+});
