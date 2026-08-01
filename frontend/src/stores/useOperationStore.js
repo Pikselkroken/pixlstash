@@ -113,6 +113,10 @@ export const OP_ICONS = {
   "picture_sets.members.replace": "mdi-playlist-edit-outline",
   "stacks.create": "mdi-layers-outline",
   "stacks.dissolve": "mdi-layers-off-outline",
+  // The inverse of the mdi-layers-plus the user pressed to build the stack, and
+  // the same glyph the menu item and the confirm button carry, so the operation
+  // is named identically at all three moments.
+  "stack.keep_cover_only": "mdi-layers-minus",
 };
 
 /** Substring rules applied when `OP_ICONS` has no exact entry. Order matters. */
@@ -141,6 +145,11 @@ const DESTRUCTIVE_RULES = [
   /remove_all/,
   /\.clear$/,
   /dissolve/,
+  // `stack.keep_cover_only` moves every copy but the cover to the scrapheap, so
+  // it earns the long window on consequence. It is named here rather than
+  // caught by /scrapheap/ because the op type describes what the user asked
+  // for, not where the pictures went.
+  /keep_cover_only/,
 ];
 
 /**

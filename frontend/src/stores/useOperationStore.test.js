@@ -137,6 +137,15 @@ describe("isDestructiveOpType", () => {
     expect(isDestructiveOpType("stacks.dissolve")).toBe(true);
   });
 
+  // Keep cover only moves every copy but the cover to the scrapheap, but its op
+  // type says what the user asked for rather than where the pictures went, so
+  // none of the other patterns catch it. Without this it would take the ordinary
+  // 5s receipt — the shortest undo window on the most consequential action.
+  it("flags keeping only a stack's cover", () => {
+    expect(isDestructiveOpType("stack.keep_cover_only")).toBe(true);
+    expect(iconForOpType("stack.keep_cover_only")).toBe("mdi-layers-minus");
+  });
+
   it("leaves ordinary edits alone", () => {
     expect(isDestructiveOpType("pictures.tags.add")).toBe(false);
     expect(isDestructiveOpType("pictures.score")).toBe(false);
