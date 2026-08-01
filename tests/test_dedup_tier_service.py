@@ -29,7 +29,7 @@ import pytest
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, PictureSet, PictureSetMember
+from pixlstash.db_models import Picture, PictureSet, PictureSetMember, PictureStack
 from pixlstash.db_models.dedup import (
     VERDICT_KEEP_SEPARATE,
     DedupGroup,
@@ -1227,3 +1227,310 @@ def test_a_folder_scope_is_normalised_to_one_scope_key():
     trailing = DedupScope(scope_type=ScopeType.FOLDER, scope_id="/photos/2026/")
     assert plain.key == trailing.key == "folder:/photos/2026"
     assert trailing.scope_id == "/photos/2026"
+
+
+# ── stack units: the deck's depth is the STACK's, not the group's ─────────────
+
+
+def _stack(server, picture_ids, thumbnails=None):
+    """Put *picture_ids* in one stack, in order, and return the stack id.
+
+    ``picture_ids[0]`` becomes the leader (``stack_position`` 0). *thumbnails*
+    optionally maps a picture id to a ``(width, height)`` pair so the leader's
+    cache-buster token is a real value rather than the unprocessed ``"0"``.
+    """
+
+    def build(session):
+        stack = PictureStack(name=None)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, picture_id in enumerate(picture_ids):
+            picture = session.get(Picture, int(picture_id))
+            picture.stack_id = int(stack.id)
+            picture.stack_position = position
+            size = (thumbnails or {}).get(int(picture_id))
+            if size is not None:
+                picture.thumbnail_width, picture.thumbnail_height = size
+            session.add(picture)
+        session.commit()
+        return int(stack.id)
+
+    return _run(server, build)
+
+
+def _lock_set(server, name, picture_ids):
+    """Create a LOCKED picture set containing *picture_ids*; return its id."""
+
+    def build(session):
+        picture_set = PictureSet(name=name, locked=True)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        for picture_id in picture_ids:
+            session.add(
+                PictureSetMember(set_id=int(picture_set.id), picture_id=int(picture_id))
+            )
+        session.commit()
+        return int(picture_set.id)
+
+    return _run(server, build)
+
+
+def _only_group(server):
+    """Scan, page the queue, and return the single group it serves."""
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1, page
+    return page[0]
+
+
+def test_a_group_naming_one_member_of_a_four_stack_reports_the_stacks_depth(server):
+    """The measured majority case: 36 of 116 stack-touching groups name ONE
+    member of a stack. The deck must still stand for the whole stack, or the
+    row draws a 4-deep stack as one picture and then silently moves four."""
+    ids = _seed(
+        server,
+        [
+            # The stack: leader, two siblings the group never names, and the
+            # member that is a byte-identical duplicate of the loose picture.
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "stack-c", "size_bytes": 12},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            # The loose picture it duplicates.
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:4], thumbnails={ids[0]: (1024, 768)})
+
+    group = _only_group(server)
+    assert sorted(c["picture_id"] for c in group["candidates"]) == sorted(ids[3:])
+
+    stacks = group["stacks"]
+    assert list(stacks) == [str(stack_id)], "keyed by stack id, as a string"
+    deck = stacks[str(stack_id)]
+    assert deck["stack_id"] == stack_id
+    # The stack's REAL depth, not the one member of it that is in the group.
+    assert deck["member_count"] == 4
+    assert deck["matched_picture_ids"] == [ids[3]]
+    # The face is the stack's leader, which is NOT the matched member.
+    assert deck["leader_picture_id"] == ids[0]
+    assert deck["leader_picture_id"] not in deck["matched_picture_ids"]
+    assert deck["leader_thumbnail_version"] == "1024x768"
+    assert deck["stackable"] is True
+    assert deck["blocked_by_sets"] == []
+    # Eager count and leader, LAZY members: the members are never inlined.
+    assert "members" not in deck
+    assert "member_ids" not in deck
+
+
+def test_a_group_naming_a_whole_two_stack_reports_two_and_two(server):
+    """When the group does name every member, depth and matched agree."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:2])
+
+    group = _only_group(server)
+    deck = group["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["matched_picture_ids"] == sorted(ids[:2])
+    assert deck["leader_picture_id"] == ids[0]
+    # The loose third picture is its own unit and contributes no stacks entry.
+    assert len(group["stacks"]) == 1
+
+
+def test_a_deck_with_one_locked_member_is_unstackable_at_unit_level(server):
+    """A stack cannot be partially stacked, so ONE frozen member freezes the
+    deck — including a member the group never names, because a locked set
+    freezes a whole stack.
+
+    Three units keep the group in the queue at all: a frozen deck plus two loose
+    pictures still leaves two stackable units, which is what
+    ``_live_groups_filter`` requires.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:2])
+    # The LEADER is locked, and the leader is not in the group at all.
+    set_id = _lock_set(server, "Frozen", [ids[0]])
+
+    group = _only_group(server)
+    deck = group["stacks"][str(stack_id)]
+    assert deck["matched_picture_ids"] == [ids[1]], "only the sibling is in the group"
+    assert deck["member_count"] == 2
+    assert deck["stackable"] is False
+    assert deck["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+    # The per-candidate value it rolls up says the same thing, and the two loose
+    # units are untouched — over-blocking would be its own regression.
+    by_id = {c["picture_id"]: c for c in group["candidates"]}
+    assert by_id[ids[1]]["stackable"] is False
+    assert by_id[ids[2]]["stackable"] is True
+    assert by_id[ids[3]]["stackable"] is True
+
+
+def test_the_deck_rollup_costs_one_query_for_the_whole_page(server):
+    """The page resolves stacks once, not once per group (no N+1).
+
+    Five groups, each touching its own stack. ``load_stack_facts`` must be
+    called exactly once for the page, with every stack id in it.
+    """
+    stack_ids = []
+    for index in range(5):
+        ids = _seed(
+            server,
+            [
+                {"pixel_sha": f"lead-{index}", "size_bytes": 10 + index},
+                {"pixel_sha": f"shared-{index}", "size_bytes": 100 + index},
+                {"pixel_sha": f"shared-{index}", "size_bytes": 100 + index},
+            ],
+        )
+        stack_ids.append(_stack(server, ids[:2]))
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+    calls = []
+    original = tiers.load_stack_facts
+
+    def counting(session, ids):
+        materialised = sorted({int(i) for i in ids})
+        calls.append(materialised)
+        return original(session, materialised)
+
+    tiers.load_stack_facts = counting
+    try:
+        page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    finally:
+        tiers.load_stack_facts = original
+
+    assert len(page) == 5
+    assert len(calls) == 1, f"one batched resolve per page, got {len(calls)}"
+    assert calls[0] == sorted(stack_ids)
+
+
+def test_the_leader_ranking_matches_the_grids(server):
+    """An unpositioned stack still names a leader, by the same rule the grid
+    uses: position (NULLs last), then score, then newest capture, then id."""
+    ids = _seed(
+        server,
+        [
+            {"score": 1, "created_at": 0},
+            {"score": 5, "created_at": 10},
+            {"score": 5, "created_at": 20},
+        ],
+    )
+
+    def unposition(session):
+        stack = PictureStack(name=None)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for picture_id in ids:
+            picture = session.get(Picture, picture_id)
+            picture.stack_id = int(stack.id)
+            picture.stack_position = None
+            session.add(picture)
+        session.commit()
+        return int(stack.id)
+
+    stack_id = _run(server, unposition)
+    facts = _run(server, tiers.load_stack_facts, [stack_id])[stack_id]
+    # Highest score wins; the newer capture breaks the tie between the two 5s.
+    assert facts.leader_picture_id == ids[2]
+    assert facts.member_ids == (ids[2], ids[1], ids[0])
+    assert facts.member_count == 3
+
+
+def test_a_scrapheaped_member_is_not_part_of_the_stacks_depth(server):
+    """``member_count`` is the LIVE member count: a deck must not promise to
+    move a picture that is already in the scrapheap."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "a", "size_bytes": 10},
+            {"pixel_sha": "b", "size_bytes": 11},
+            {"pixel_sha": "c", "size_bytes": 12, "deleted": True},
+        ],
+    )
+    stack_id = _stack(server, ids)
+    facts = _run(server, tiers.load_stack_facts, [stack_id])[stack_id]
+    assert facts.member_count == 2
+    assert facts.member_ids == (ids[0], ids[1])
+
+
+# ── the lazy half: one stack's members, paged ────────────────────────────────
+
+
+def test_stack_members_pages_in_canonical_order(server):
+    ids = _seed(server, [{"pixel_sha": f"m{index}"} for index in range(5)])
+    stack_id = _stack(server, ids, thumbnails={ids[0]: (640, 480)})
+
+    first = _run(server, tiers.stack_members_in_session, stack_id, 0, 2)
+    assert first["stack_id"] == stack_id
+    assert first["member_count"] == 5
+    assert first["leader_picture_id"] == ids[0]
+    assert first["leader_thumbnail_version"] == "640x480"
+    assert [m["picture_id"] for m in first["members"]] == ids[:2]
+    assert [m["position"] for m in first["members"]] == [0, 1]
+    assert [m["is_leader"] for m in first["members"]] == [True, False]
+    assert first["next_offset"] == 2
+    assert first["stackable"] is True
+    assert first["blocked_by_sets"] == []
+    # The tile fields are the queue candidate's, unchanged, so the expansion
+    # strip reuses the row's tile.
+    assert "thumbnail_version" in first["members"][0]
+    assert "smart_score" in first["members"][0]
+
+    last = _run(server, tiers.stack_members_in_session, stack_id, 4, 2)
+    assert [m["picture_id"] for m in last["members"]] == [ids[4]]
+    assert [m["position"] for m in last["members"]] == [4]
+    assert last["next_offset"] is None
+
+
+def test_stack_members_clamps_the_page_size(server):
+    ids = _seed(server, [{"pixel_sha": "one"}, {"pixel_sha": "two"}])
+    stack_id = _stack(server, ids)
+    page = _run(
+        server,
+        tiers.stack_members_in_session,
+        stack_id,
+        0,
+        tiers.MAX_STACK_MEMBER_PAGE_SIZE * 10,
+    )
+    assert page["limit"] == tiers.MAX_STACK_MEMBER_PAGE_SIZE
+
+
+def test_stack_members_rolls_the_lock_up_over_the_whole_stack(server):
+    """Page 2 must not report a different stackability from page 1, so the unit
+    rollup is taken over every member, not over the page."""
+    ids = _seed(server, [{"pixel_sha": f"m{index}"} for index in range(4)])
+    stack_id = _stack(server, ids)
+    set_id = _lock_set(server, "Frozen", [ids[3]])
+
+    for offset in (0, 2):
+        page = _run(server, tiers.stack_members_in_session, stack_id, offset, 2)
+        assert page["stackable"] is False, offset
+        assert page["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+        # A locked set freezes the whole stack, so every member is out.
+        assert all(member["stackable"] is False for member in page["members"])
+
+
+def test_stack_members_is_none_for_a_stack_with_no_live_members(server):
+    """The route turns this into a 404 rather than an empty stack that looks
+    like it exists."""
+    assert _run(server, tiers.stack_members_in_session, 987654, 0, 10) is None
+    ids = _seed(server, [{"pixel_sha": "gone", "deleted": True}])
+    stack_id = _stack(server, ids)
+    assert _run(server, tiers.stack_members_in_session, stack_id, 0, 10) is None

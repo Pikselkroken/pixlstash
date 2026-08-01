@@ -2317,3 +2317,392 @@ def test_the_lock_lookup_raises_rather_than_calling_an_unknown_id_unfrozen(serve
         assert partition.blocked_ids == [ids[1]]
 
     _run(server, probe)
+
+
+# ── D1: auto-stack plans the population the queue shows ───────────────────────
+#
+# `bulk_auto_stack_in_session` used to filter on `stackable_groups_filter`, which
+# says nothing about stack units, while the queue list and both counts filter on
+# `_live_groups_filter`, which requires two. On a real library that meant 62
+# planned groups behind a badge that said 3: the other 59 were already collapsed
+# into one stack, so nothing was created — and 21 of them had their curated cover
+# replaced, because the run passes no cover and `_stack_members` forces the
+# group's preselection to position 0.
+
+
+def _stack_pictures(server, picture_ids, name="hand-stacked"):
+    """Put *picture_ids* into one stack, first id leading. Returns the stack id."""
+
+    def build(session):
+        stack = PictureStack(name=name)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, picture_id in enumerate(picture_ids):
+            pic = session.get(Picture, picture_id)
+            pic.stack_id = int(stack.id)
+            pic.stack_position = position
+            session.add(pic)
+        session.commit()
+        return int(stack.id)
+
+    return _run(server, build)
+
+
+def _preselected_cover(server, signature: str) -> int:
+    return _run(
+        server,
+        lambda session: int(
+            session.exec(
+                select(DedupGroup.cover_picture_id).where(
+                    DedupGroup.signature == signature
+                )
+            ).one()
+        ),
+    )
+
+
+def test_auto_stack_never_plans_a_fully_collapsed_group(server):
+    """D1 negative: a group whose live members already share ONE stack.
+
+    It poses no decision, so the queue hides it — and the run must not plan it
+    either. Verified non-vacuous: restoring `stackable_groups_filter` on the
+    auto-stack query fails this test.
+    """
+    ids = _seed(
+        server,
+        [
+            # Distinct smart-score buckets, so the preselection is deterministic
+            # and is NOT the picture that leads the hand-made stack.
+            {"pixel_sha": "aaa", "size_bytes": 100, "smart_score": 1.0},
+            {"pixel_sha": "aaa", "size_bytes": 100, "smart_score": 2.0},
+            {"pixel_sha": "aaa", "size_bytes": 100, "smart_score": 9.0},
+        ],
+    )
+    _scan(server)
+    signature = _only_signature(server)
+    assert _preselected_cover(server, signature) == ids[2]
+    # The user then stacks them by hand from the grid, leading with ids[0].
+    stack_id = _stack_pictures(server, [ids[0], ids[1], ids[2]])
+
+    # The queue already hides it; the run must agree.
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+    dry = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert dry["groups"] == 0
+    assert dry["pictures"] == 0
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+    assert report["groups"] == 0
+    assert report["results"] == []
+    assert report["failures"] == []
+
+    # And the curated stack is untouched: same stack, same leader, no verdict.
+    assert {_picture(server, pid).stack_id for pid in ids} == {stack_id}
+    assert _picture(server, ids[0]).stack_position == 0
+    assert _run(server, lambda session: session.exec(select(DedupVerdict)).all()) == []
+
+
+def test_auto_stack_still_plans_a_genuinely_unstacked_group(server):
+    """D1 positive: over-filtering would be its own regression.
+
+    One collapsed group and one loose group in the same run: exactly the loose
+    one is planned.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 200},
+            {"pixel_sha": "bbb", "size_bytes": 200},
+        ],
+    )
+    _scan(server)
+    _stack_pictures(server, [ids[0], ids[1]], name="collapsed")
+
+    dry = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert dry["groups"] == 1
+    assert dry["pictures"] == 2
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+    assert report["groups"] == 1
+    assert report["failures"] == []
+    stacked = {int(pid) for item in report["results"] for pid in item["picture_ids"]}
+    assert stacked == {ids[2], ids[3]}
+    assert _picture(server, ids[2]).stack_id == _picture(server, ids[3]).stack_id
+    assert _picture(server, ids[2]).stack_id is not None
+
+
+def test_auto_stack_still_plans_a_group_that_folds_a_stack_in(server):
+    """D1 positive, the sharper case: a stack plus a loner still poses a decision.
+
+    Two units, so `_live_groups_filter` keeps it and the run must still act —
+    the filter tightening must not swallow the groups where a fold WOULD happen.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "zzz", "size_bytes": 900},
+        ],
+    )
+    _scan(server)
+    stack_id = _stack_pictures(server, [ids[1], ids[2]], name="pre-existing")
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
+    assert report["groups"] == 1
+    assert {_picture(server, pid).stack_id for pid in ids} == {stack_id}
+
+
+# ── B2: the cover may be a folded stack's leader ──────────────────────────────
+
+
+def test_a_folded_stacks_leader_is_an_acceptable_cover(server):
+    """B2: the deck's face is the leader, and the group names only one member.
+
+    Requiring the cover to be a group member forced the MATCHED member to be
+    promoted instead, silently re-covering a stack the user had already curated.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 0: the loose duplicate
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 1: the matched deck member
+            {"pixel_sha": "yyy", "size_bytes": 800},  # 2: the deck's LEADER
+            {"pixel_sha": "zzz", "size_bytes": 900},  # 3: another deck member
+        ],
+    )
+    # Leader first: ids[2] is at stack_position 0 and is not in the group.
+    stack_id = _stack_pictures(server, [ids[2], ids[1], ids[3]], name="deck")
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[2],
+        [],
+        None,
+    )
+    assert result.cover_picture_id == ids[2]
+    assert result.stack_id == stack_id
+    # Everything landed in the pre-existing stack and the leader never moved.
+    assert {_picture(server, pid).stack_id for pid in ids} == {stack_id}
+    assert _picture(server, ids[2]).stack_position == 0
+    # The matched member was NOT promoted over it.
+    assert _picture(server, ids[1]).stack_position != 0
+    # Every member has a distinct position (the renumber ran over the whole deck).
+    positions = sorted(_picture(server, pid).stack_position for pid in ids)
+    assert positions == [0, 1, 2, 3]
+
+
+def test_choosing_the_deck_as_cover_leaves_its_leader_where_it_was(server):
+    """B2, stated as the invariant the queue promises: nothing gets re-covered.
+
+    Scoped to **position 0**, which is the whole of the cover contract: a
+    growing stack always renumbers its non-leaders through
+    ``normalize_stack_positions``, so asserting a fixed position for anything
+    below the leader would pin that ordering rule rather than this fix.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "yyy", "size_bytes": 800},
+        ],
+    )
+    stack_id = _stack_pictures(server, [ids[2], ids[1]], name="deck")
+    assert _picture(server, ids[2]).stack_position == 0
+    _scan(server)
+
+    result = _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[2],
+        [],
+        None,
+    )
+    assert result.cover_picture_id == ids[2]
+    # The pre-existing leader still leads, and the matched member did not take
+    # its place — which is exactly what promoting the group member would do.
+    assert _picture(server, ids[2]).stack_position == 0
+    assert _picture(server, ids[1]).stack_position != 0
+    assert _picture(server, ids[0]).stack_id == stack_id
+
+
+def test_a_leader_of_an_untouched_stack_is_still_rejected_as_cover(server):
+    """B2 negative: relaxed to the resulting stack, not to anything at all.
+
+    The sharper sibling of `test_a_cover_outside_the_group_is_rejected`: the
+    offered cover IS a stack leader, just not of a stack this group folds in.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "yyy", "size_bytes": 800},
+            {"pixel_sha": "zzz", "size_bytes": 900},
+        ],
+    )
+    # A stack of its own, sharing no picture with the duplicate group.
+    _stack_pictures(server, [ids[2], ids[3]], name="elsewhere")
+    _scan(server)
+
+    with pytest.raises(DedupVerdictError, match="not an included member"):
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _one_signature(server),
+            ids[2],
+            [],
+            None,
+        )
+    # Nothing moved.
+    assert _picture(server, ids[0]).stack_id is None
+    assert _picture(server, ids[1]).stack_id is None
+    assert _operations(server) == []
+
+
+def test_an_excluded_members_stack_leader_is_not_a_legal_cover(server):
+    """B2 negative: exclusions shrink the legal cover set with the fold."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 0
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 1
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 2, deck member
+            {"pixel_sha": "yyy", "size_bytes": 800},  # 3, the deck's leader
+        ],
+    )
+    _stack_pictures(server, [ids[3], ids[2]], name="deck")
+    _scan(server)
+
+    # Excluding the deck's only group member takes its stack out of the fold, so
+    # its leader is no longer part of the resulting stack.
+    with pytest.raises(DedupVerdictError, match="not an included member"):
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            _one_signature(server),
+            ids[3],
+            [ids[2]],
+            None,
+        )
+
+
+# ── B4: the receipts count what actually moved ────────────────────────────────
+
+
+def _stack_operation_summary(server) -> str:
+    rows = [op for op in _operations(server) if op.op_type == verdicts.OP_TYPE_STACK]
+    assert len(rows) == 1, f"expected one stack operation, got {rows}"
+    return str(rows[0].summary)
+
+
+def test_the_receipt_counts_the_folded_stacks_members_too(server):
+    """B4: `len(included)` under-reported every verdict that folded a stack in."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 0, the loose duplicate
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 1, in the deck
+            {"pixel_sha": "yyy", "size_bytes": 800},  # 2, deck member, not matched
+            {"pixel_sha": "zzz", "size_bytes": 900},  # 3, deck member, not matched
+        ],
+    )
+    _stack_pictures(server, [ids[1], ids[2], ids[3]], name="deck")
+    _scan(server)
+
+    _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        ids[0],
+        [],
+        None,
+    )
+    # Four pictures ended up in the stack, so the receipt says four.
+    assert _stack_operation_summary(server) == "Stacked 4 duplicates"
+
+
+def test_the_receipt_counts_a_plain_group_exactly(server):
+    """B4 negative: no stack folded in, so nothing is inflated."""
+    _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    _run(
+        server,
+        verdicts.apply_stack_verdict_in_session,
+        _one_signature(server),
+        None,
+        [],
+        None,
+    )
+    assert _stack_operation_summary(server) == "Stacked 2 duplicates"
+
+
+def test_the_dry_run_counts_the_pictures_a_fold_would_move(server):
+    """B4: the consent dialog promised fewer pictures than the run would touch."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 0
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 1, in the deck
+            {"pixel_sha": "yyy", "size_bytes": 800},  # 2, deck member
+        ],
+    )
+    _stack_pictures(server, [ids[1], ids[2]], name="deck")
+    _scan(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert report["groups"] == 1
+    assert report["pictures"] == 3
+    assert report["dry_run_summary"]["pictures"] == 3
+    # The top-level figure and the summary still come from one computation.
+    assert report["pictures"] == report["dry_run_summary"]["pictures"]
+    # And the cover row is unchanged: the union runs over the group's members.
+    assert report["dry_run_summary"]["covers_gaining_metadata"] == 0
+
+
+def test_the_dry_run_does_not_inflate_a_group_with_no_stack(server):
+    """B4 negative: loose groups still count exactly their own members."""
+    _seed_two_exact_groups(server)
+    _scan(server)
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert report["groups"] == 2
+    assert report["pictures"] == 4
+    assert report["dry_run_summary"]["pictures"] == 4
+
+
+def test_the_dry_run_counts_a_shared_stack_once(server):
+    """B4, the other direction: honest also means not over-counting.
+
+    Two exact groups each name a member of the SAME stack, so both would fold
+    it in. Summing per group promised its members twice.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 0, in the shared stack
+            {"pixel_sha": "aaa", "size_bytes": 100},  # 1, loose twin of 0
+            {"pixel_sha": "bbb", "size_bytes": 200},  # 2, in the shared stack
+            {"pixel_sha": "bbb", "size_bytes": 200},  # 3, loose twin of 2
+        ],
+    )
+    _stack_pictures(server, [ids[0], ids[2]], name="shared")
+    _scan(server)
+
+    report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, True, None)
+    assert report["groups"] == 2
+    # Four distinct pictures would move, not six.
+    assert report["pictures"] == 4
+    assert report["dry_run_summary"]["pictures"] == 4

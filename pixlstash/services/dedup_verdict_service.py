@@ -112,7 +112,14 @@ from pixlstash.services.dedup_tier_service import (
     DedupScope,
     DedupTier,
     prune_stale_groups_in_session,
-    stackable_groups_filter,
+)
+from pixlstash.services.dedup_tier_service import (
+    # The queue list, the badge and the tier split all filter on this; since D1
+    # (2026-08-01) so does bulk auto-stack, so the run plans exactly the
+    # population the queue shows. Shared rather than duplicated: one definition
+    # of "poses a decision" keeps the list, the counts and the bulk run from
+    # ever disagreeing again.
+    live_groups_filter,
 )
 from pixlstash.services.set_lock_service import (
     LOCKED_STATUS_CODE,
@@ -461,6 +468,26 @@ def apply_metadata_union_in_session(
 # --- Stacking ---------------------------------------------------------------
 
 
+def _stack_expanded_ids(session: Session, picture_ids: list[int]) -> set[int]:
+    """Every live picture that will end up in the stack *picture_ids* produce.
+
+    The members themselves plus the **full** membership of every stack any of
+    them already belongs to — precisely the set :func:`_stack_members`
+    materialises when it folds those stacks in, because a stack moves as a unit.
+
+    Two callers need it and they must agree: the cover check (B2 — a folded
+    stack's leader is a legal cover even though it is not a group member) and
+    the receipt's count (B4 — a verdict that folds a stack in moves more
+    pictures than the group named).
+
+    Soft-deleted co-members are excluded: they are not in the resulting stack in
+    any sense the user can see, and neither the cover nor the count should
+    mention them. The undo snapshot is the one place that *does* need them, and
+    it takes its own expansion (see :func:`_undo_targets`).
+    """
+    return set(expand_picture_ids_to_stacks(session, picture_ids))
+
+
 def _stack_members(
     session: Session, picture_ids: list[int], cover_picture_id: int
 ) -> int:
@@ -470,14 +497,21 @@ def _stack_members(
     rather than orphaning it), and folds several stacks into the cover's when the
     group spans more than one. Always additive: no picture leaves a stack it was
     in, and no stack row is dropped that still has members.
+
+    *cover_picture_id* **need not be one of** *picture_ids*: a duplicate group
+    frequently names only one member of an existing stack, and the queue renders
+    that stack as a single unit whose face is its leader, so the leader is the
+    cover the user picks (B2). It is loaded alongside the members here; the
+    caller is responsible for having validated it against
+    :func:`_stack_expanded_ids`, so a picture unrelated to the fold never
+    reaches this function.
     """
+    wanted = sorted({int(pid) for pid in picture_ids} | {int(cover_picture_id)})
     pictures = {
         int(pic.id): pic
-        for pic in session.exec(
-            select(Picture).where(Picture.id.in_(picture_ids))
-        ).all()
+        for pic in session.exec(select(Picture).where(Picture.id.in_(wanted))).all()
     }
-    missing = sorted(set(picture_ids) - set(pictures))
+    missing = sorted(set(wanted) - set(pictures))
     if missing:
         raise DedupVerdictError(f"pictures {missing} no longer exist")
 
@@ -556,6 +590,16 @@ def _dry_run_summary_in_session(
         ``pictures``, ``covers_gaining_tags``, ``covers_gaining_score`` and
         ``covers_gaining_metadata`` (the union of the previous two — the row the
         design's dialog promises).
+
+        ``pictures`` counts the **distinct stack-expanded** set the run would
+        move (B4): a group that folds an existing stack in reparents that
+        stack's whole membership, so counting the group's own members
+        under-reported the dialog — and two groups can name members of the same
+        stack, so summing per group would then over-report it. The per-cover
+        figures deliberately stay on the group's own
+        members, because the tag and score union runs over exactly those —
+        :func:`apply_metadata_union_in_session` is passed ``included``, not the
+        folded stack — so widening them would promise gains the run never makes.
     """
     summary: dict[str, Any] = {
         "groups_by_tier": {tier.value: 0 for tier in DedupTier},
@@ -590,11 +634,35 @@ def _dry_run_summary_in_session(
         for group_id, ids in members_by_group.items()
     }
     all_ids = [pid for ids in members_by_group.values() for pid in ids]
-    scores = dict(
-        session.exec(
-            select(Picture.id, Picture.score).where(Picture.id.in_(all_ids))
-        ).all()
-    )
+    scores: dict[int, Any] = {}
+    stack_by_picture: dict[int, Optional[int]] = {}
+    for picture_id, score, stack_id in session.exec(
+        select(Picture.id, Picture.score, Picture.stack_id).where(
+            Picture.id.in_(all_ids)
+        )
+    ).all():
+        scores[int(picture_id)] = score
+        stack_by_picture[int(picture_id)] = (
+            int(stack_id) if stack_id is not None else None
+        )
+
+    # B4: a group that folds an existing stack in moves that stack's WHOLE
+    # membership, not only the members the group named — stacks move as a unit
+    # (:func:`_stack_members`). Counting group members alone made the consent
+    # dialog promise fewer pictures than the run would touch. Resolved in two
+    # bulk queries rather than one expansion per group, since a run can plan
+    # thousands of groups.
+    stack_ids = {sid for sid in stack_by_picture.values() if sid is not None}
+    members_by_stack: dict[int, list[int]] = defaultdict(list)
+    if stack_ids:
+        for picture_id, stack_id in session.exec(
+            select(Picture.id, Picture.stack_id).where(
+                Picture.stack_id.in_(sorted(stack_ids)),
+                Picture.deleted.is_(False),
+            )
+        ).all():
+            members_by_stack[int(stack_id)].append(int(picture_id))
+
     tags_by_picture: dict[int, set[str]] = defaultdict(set)
     for picture_id, tag in session.exec(
         select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(all_ids))
@@ -602,12 +670,20 @@ def _dry_run_summary_in_session(
         if not is_tag_sentinel(tag):
             tags_by_picture[int(picture_id)].add(str(tag))
 
+    # Accumulated DISTINCT, not summed per group: two groups can each name a
+    # picture of the same stack, and both would then fold that whole stack in.
+    # Summing would promise its members twice.
+    moved: set[int] = set()
     for group in groups:
         member_ids = members_by_group.get(int(group.id), [])
         summary["groups_by_tier"][str(group.tier)] = (
             summary["groups_by_tier"].get(str(group.tier), 0) + 1
         )
-        summary["pictures"] += len(member_ids)
+        moved.update(member_ids)
+        for pid in member_ids:
+            stack_id = stack_by_picture.get(pid)
+            if stack_id is not None:
+                moved.update(members_by_stack.get(stack_id, ()))
         cover_id = int(group.cover_picture_id or (member_ids[0] if member_ids else 0))
         if cover_id not in member_ids:
             # A frozen preselection is moved by the verdict rather than failing
@@ -626,6 +702,7 @@ def _dry_run_summary_in_session(
         summary["covers_gaining_tags"] += int(gains_tags)
         summary["covers_gaining_score"] += int(gains_score)
         summary["covers_gaining_metadata"] += int(gains_tags or gains_score)
+    summary["pictures"] = len(moved)
     return summary
 
 
@@ -649,7 +726,11 @@ def apply_stack_verdict_in_session(
             the metadata union and the verdict row land together or not at all.
         signature: The group signature from the queue.
         cover_picture_id: The cover the user confirmed. Defaults to the server's
-            preselection stored on the group.
+            preselection stored on the group. It may be a **folded stack's
+            leader** rather than a group member (B2): the queue renders an
+            existing stack as one unit whose face is its leader, and a group
+            often names only one of that stack's pictures. Anything outside the
+            resulting stack is still refused.
         excluded_picture_ids: Members the user left out (the design's X key).
             They keep their current stack and are recorded on the verdict so a
             rescan does not treat the exclusion as an unfinished decision.
@@ -666,8 +747,9 @@ def apply_stack_verdict_in_session(
         stacked, and ``cover_picture_id`` where the cover ended up.
 
     Raises:
-        DedupVerdictError: Unknown signature, a cover that is not a member, or
-            fewer than two members left after exclusions.
+        DedupVerdictError: Unknown signature, a cover that would not end up in
+            the resulting stack, or fewer than two members left after
+            exclusions.
         HTTPException: ``423`` when a locked set leaves fewer than two members
             that may legally be stacked together, so there is no partial success
             to report. The detail names both the sets and the picture ids.
@@ -697,9 +779,21 @@ def apply_stack_verdict_in_session(
         if cover_picture_id is not None
         else int(group.cover_picture_id or included[0])
     )
-    if cover_id not in included:
+    # The cover is validated against what will actually END UP in the stack, not
+    # against the group's own members (B2). A group frequently names only ONE
+    # picture of an existing stack, so that stack's leader is not a member — and
+    # the queue must be able to say "this stack leads" without promoting the
+    # matched member instead, which would silently re-cover a stack the user
+    # already curated. The legal set is therefore the group's members plus the
+    # full membership of every stack the verdict folds in, exactly what
+    # `_stack_members` materialises. It is NOT relaxed any further than that: an
+    # arbitrary picture id, or the leader of a stack this group does not touch,
+    # is still refused.
+    stack_expanded = _stack_expanded_ids(session, included)
+    if cover_id not in stack_expanded:
         raise DedupVerdictError(
-            f"cover {cover_id} is not an included member of group {signature!r}"
+            f"cover {cover_id} is not an included member of group {signature!r}, "
+            "nor a member of any stack the verdict would fold in"
         )
 
     # A frozen member can be in neither the stack (its set's membership cannot
@@ -710,9 +804,14 @@ def apply_stack_verdict_in_session(
     # path is the stale-client case, not the everyday one.
     partition = partition_stackable_members(session, included)
     skipped = list(partition.blocked)
+    blocked_ids = set(partition.blocked_ids)
     if skipped:
         included = list(partition.stackable)
-        excluded = sorted(set(excluded) | set(partition.blocked_ids))
+        excluded = sorted(set(excluded) | blocked_ids)
+        # The stack the verdict will build has changed shape, so the cover's
+        # legal set and the receipt's count both have to be re-derived from
+        # what is left.
+        stack_expanded = _stack_expanded_ids(session, included)
         logger.warning(
             "[dedup-verdict] skipped %d locked member(s) %s of group %s: stacking "
             "them would add member(s) to locked set(s) %s; the remaining %d "
@@ -742,12 +841,15 @@ def apply_stack_verdict_in_session(
                 "picture_ids": sorted(partition.blocked_ids),
             },
         )
-    if cover_id not in included:
-        # The cover the caller confirmed is one of the skipped members. Moving it
-        # is the same repair the client makes when a user excludes the cover, and
-        # the response reports where it landed. The group's own preselection gets
-        # first refusal, so the fallback is the server's ranking rather than
-        # whichever member happens to sort first.
+    if cover_id in blocked_ids or cover_id not in stack_expanded:
+        # The cover the caller confirmed is one of the skipped members, or the
+        # stack it led is no longer folded in now that a frozen member has left.
+        # Moving it is the same repair the client makes when a user excludes the
+        # cover, and the response reports where it landed. The group's own
+        # preselection gets first refusal, so the fallback is the server's
+        # ranking rather than whichever member happens to sort first. Both
+        # candidates are group members, so both are in the resulting stack by
+        # construction.
         preselected = (
             int(group.cover_picture_id) if group.cover_picture_id is not None else None
         )
@@ -776,15 +878,20 @@ def apply_stack_verdict_in_session(
         before=before,
         after=after,
         batch_id=batch_id,
-        summary=f"Stacked {len(included)} duplicates",
+        # Count what MOVED, not what the group named (B4). Folding an existing
+        # stack in reparents co-members the group never mentioned, so
+        # `len(included)` under-reported the receipt every time a stack was
+        # involved — "Stacked 2 duplicates" for a verdict that moved six.
+        summary=f"Stacked {len(stack_expanded)} duplicates",
         actor=actor,
         source=source,
         origin_client_id=origin_client_id,
     )
     session.commit()
     logger.info(
-        "[dedup-verdict] stacked %d picture(s) into stack %s (cover=%s, "
-        "excluded=%s, signature=%s, batch=%s)",
+        "[dedup-verdict] stacked %d picture(s) (%d named by the group) into "
+        "stack %s (cover=%s, excluded=%s, signature=%s, batch=%s)",
+        len(stack_expanded),
         len(included),
         stack_id,
         cover_id,
@@ -1406,6 +1513,12 @@ def bulk_auto_stack_in_session(
     Only exact groups are eligible. A near or embedding group always goes through
     the queue, no matter how confident it looks.
 
+    **The candidate query uses the queue's own filter**
+    (:func:`~pixlstash.services.dedup_tier_service.live_groups_filter`), so the
+    run acts on exactly the groups the list shows and the badge counts. See the
+    comment on the query for the already-collapsed groups the old, weaker filter
+    let through.
+
     Args:
         session: Pre-opened session.
         scope: Restrict to a scope; defaults to the whole vault.
@@ -1429,11 +1542,18 @@ def bulk_auto_stack_in_session(
     query = select(DedupGroup).where(
         DedupGroup.resolved.is_(False),
         DedupGroup.tier == TIER_EXACT,
-        # The same lock rule the queue and the badge apply. Without it the run
-        # would pick up groups the user was never shown, refuse each one with a
-        # 423 and report a pile of `blocked` failures for work it should never
-        # have planned.
-        stackable_groups_filter(),
+        # THE SAME filter the queue list, the badge and the tier counts apply.
+        # This used to run on a weaker, now-deleted filter that only required
+        # two unfrozen live members and said nothing about stack
+        # units, so a group whose live members already sit in one and the same
+        # stack was still planned: on a real library the run planned 62 groups
+        # where the badge and the button said 3. The 59 extra posed no decision
+        # (`_stack_members` reuses their existing stack, so nothing is created),
+        # and 21 of them would have had their curated cover replaced, because
+        # this path passes no cover and the group's preselection is forced to
+        # stack_position 0. One filter, so the count, the button and the run
+        # cannot disagree.
+        live_groups_filter(),
     )
     predicate = scope.picture_predicate()
     if predicate is not None:

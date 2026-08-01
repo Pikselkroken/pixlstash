@@ -10,6 +10,9 @@ Two surfaces live here, and every route is owner-only.
   re-hardcoding 0.90 and 0.65.
 * ``GET  /dedup/groups``            — one page of the queue, confidence
   descending, plus this scope's scan progress for the banner.
+* ``GET  /dedup/stacks/{stack_id}/members`` — one page of an existing stack's
+  members, for the deck expansion strip. The lazy half of the queue's stack
+  contract: a queue row ships each stack's count and leader, never its members.
 * ``POST /dedup/counts``            — the sidebar badge, the per-tier counts, and
   as many scoped counts as the context menus need, in one request. Read-only
   despite the verb: the scope list does not fit in a URL.
@@ -53,8 +56,10 @@ from pixlstash.services import dedup_sweep_service, dedup_tier_service
 from pixlstash.services import dedup_verdict_service, operation_log_service
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_PAGE_SIZE,
+    DEFAULT_STACK_MEMBER_PAGE_SIZE,
     DEFAULT_THRESHOLD,
     MAX_PAGE_SIZE,
+    MAX_STACK_MEMBER_PAGE_SIZE,
     MAX_THRESHOLD,
     MIN_THRESHOLD,
     VERDICT_ORDER,
@@ -710,6 +715,91 @@ class DedupCandidateModel(BaseModel):
     )
 
 
+class DedupStackModel(BaseModel):
+    """An existing stack the group touches, as the queue renders it: one deck.
+
+    A stack verdict moves whole **stacks**, so the queue draws each stack the
+    group touches as a single unit rather than as its individual members. The
+    unit stands for the **entire existing stack**, not just the members that
+    happen to be in the group: on a real library one stack-touching group in
+    three names only ONE member of a stack, so a client sizing the deck from
+    `candidates` would draw a 4-deep stack as a single picture and then silently
+    move all four.
+
+    Count and leader are **eager**; the members are **not**. Inlining every
+    member of every stack would put a 40-member stack's worth of tiles behind
+    one queue row. Fetch them from
+    `GET /dedup/stacks/{stack_id}/members` when the user opens the expansion.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The existing stack this deck stands for.",
+        examples=[12],
+    )
+    member_count: int = Field(
+        description=(
+            "The stack's **real live member count** — the deck's depth. This is "
+            "NOT the number of this stack's members that are in the group (see "
+            "`matched_picture_ids` for that), and it is routinely larger, so a "
+            "group's true picture total can exceed `candidates.length`. Counts "
+            "only non-scrapheaped members."
+        ),
+        examples=[4],
+    )
+    leader_picture_id: int = Field(
+        description=(
+            "The stack's leader (`stack_position` 0) — the deck's face. It is "
+            "frequently NOT one of `matched_picture_ids`, and it is deliberately "
+            "the picture shown: a cover choice on a deck resolves to the leader, "
+            "so a tile showing one picture while meaning another is the mismatch "
+            "the deck exists to remove. Ranked exactly as the grid ranks a stack "
+            "leader, so the two surfaces always show the same face."
+        ),
+        examples=[501],
+    )
+    leader_thumbnail_version: str = Field(
+        description=(
+            "Cache-buster for the LEADER's thumbnail URL, same contract as a "
+            "candidate's `thumbnail_version`: append it as `?v=`. Present so the "
+            "deck's face renders from the queue payload alone, without expanding "
+            'the stack. `"0"` until the leader has been processed.'
+        ),
+        examples=["1024x768"],
+    )
+    matched_picture_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Which of this stack's members are actually in the group — always a "
+            "subset of the group's `candidates`, ascending. Its length over "
+            '`member_count` is the accessible name\'s "1 of 4 matched"; it is '
+            "deliberately not drawn on the tile, which has no corner budget for "
+            "it."
+        ),
+        examples=[[503]],
+    )
+    stackable: bool = Field(
+        default=True,
+        description=(
+            "The **unit-level** rollup of the members' own `stackable`: false "
+            "when ANY member of this deck is frozen by a locked picture set, "
+            "because a stack cannot be partially stacked — it moves as a unit or "
+            "not at all. Already accounts for a locked sibling **outside** the "
+            "group: a locked set freezes a whole stack, so a member the group "
+            "never names still blocks the deck."
+        ),
+    )
+    blocked_by_sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description=(
+            "Empty when `stackable`. Otherwise the union of the locked sets "
+            "freezing this deck's members, deduplicated and sorted by set id, "
+            "for the tooltip that says why the whole deck is out."
+        ),
+    )
+
+
 class DedupGroupModel(BaseModel):
     """One queue row: a group, its evidence, and its cover preselection."""
 
@@ -768,6 +858,125 @@ class DedupGroupModel(BaseModel):
     candidates: list[DedupCandidateModel] = Field(
         default_factory=list,
         description="Every member, cover first, with its own evidence.",
+    )
+    stacks: dict[str, DedupStackModel] = Field(
+        default_factory=dict,
+        description=(
+            "Every **existing stack** this group touches, keyed by stack id as a "
+            "string (the id is repeated as an integer inside each entry). Empty "
+            "when no member of the group is stacked.\n\n"
+            "This is the stack truth a `stack_id` on a candidate cannot carry. "
+            "Render each entry as ONE deck whose depth is `member_count`, in "
+            "place of that stack's individual candidates: the smallest thing a "
+            "stack verdict can move is a whole stack, so a row offering to "
+            "exclude one member of one, or to make one member the cover, is "
+            "offering a gesture the backend cannot honour. Group the row's "
+            "`candidates` by `stack_id`; a candidate with a null `stack_id` is "
+            "its own unit."
+        ),
+        examples=[
+            {
+                "12": {
+                    "stack_id": 12,
+                    "member_count": 4,
+                    "leader_picture_id": 501,
+                    "leader_thumbnail_version": "1024x768",
+                    "matched_picture_ids": [503],
+                    "stackable": True,
+                    "blocked_by_sets": [],
+                }
+            }
+        ],
+    )
+
+
+class DedupStackMemberModel(DedupCandidateModel):
+    """One member of an expanded deck, in canonical stack order.
+
+    Every field a queue candidate carries, so the expansion strip reuses the
+    row's tile unchanged, plus the member's place in its stack.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    position: int = Field(
+        description=(
+            "0-based place in the canonical stack order, so `0` is the leader. "
+            "It is the member's rank across the WHOLE stack, not within this "
+            "page, and it survives paging."
+        ),
+        examples=[0],
+    )
+    is_leader: bool = Field(
+        description=(
+            "True for the one member the stack leads with — the same picture "
+            "the deck shows as its face and the grid shows as the stack's "
+            "leader."
+        )
+    )
+
+
+class DedupStackMembersResponse(BaseModel):
+    """One page of an existing stack's members, for the deck expansion strip."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(description="The stack that was expanded.", examples=[12])
+    member_count: int = Field(
+        description=(
+            "The stack's real live member count, identical to the queue row's "
+            "`stacks[stack_id].member_count`, so the strip and the deck can "
+            "never disagree about the depth."
+        ),
+        examples=[4],
+    )
+    leader_picture_id: int = Field(
+        description="The stack's leader, echoed so the strip can mark it.",
+        examples=[501],
+    )
+    leader_thumbnail_version: str = Field(
+        description="The leader's thumbnail cache-buster; same contract as the queue's.",
+        examples=["1024x768"],
+    )
+    stackable: bool = Field(
+        description=(
+            "The unit-level rollup, computed over the **whole** stack rather "
+            "than this page, so page 2 can never report a different answer from "
+            "page 1."
+        )
+    )
+    blocked_by_sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description="Empty when `stackable`; otherwise the locked sets freezing the stack.",
+    )
+    offset: int = Field(
+        description="Echo of the requested offset.",
+        examples=[0],
+    )
+    limit: int = Field(
+        description="Effective page size after clamping.",
+        examples=[DEFAULT_STACK_MEMBER_PAGE_SIZE],
+    )
+    next_offset: Optional[int] = Field(
+        default=None,
+        description=(
+            "Pass as `offset` for the next page, or `null` at the end of the "
+            "stack. Plain offset paging is correct here, unlike the queue's "
+            "cursor: a stack's membership is not a live list being decided out "
+            "from under the client."
+        ),
+        examples=[None],
+    )
+    members: list[DedupStackMemberModel] = Field(
+        default_factory=list,
+        description=(
+            "This page of members, leader first, in canonical stack order. Each "
+            "carries `why: []` — evidence is a property of the duplicate group, "
+            "not of a stack the user already made, and the expanded members are "
+            "read-only in the queue row. May be shorter than `limit` before the "
+            "end of the stack if a member was scrapheaped mid-request; that is "
+            "logged server-side."
+        ),
     )
 
 
@@ -1385,6 +1594,71 @@ def create_router(server) -> APIRouter:
         except DedupCursorError as exc:
             logger.info("[dedup] rejected queue cursor: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get(
+        "/dedup/stacks/{stack_id}/members",
+        summary="One page of an existing stack's members",
+        description=(
+            "Returns the members of one existing stack, leader first, for the "
+            "Duplicates queue's deck expansion.\n\n"
+            "This is the **lazy half** of the queue's stack contract. A queue "
+            "row already carries each stack's real member count and its leader "
+            "in `groups[].stacks`, which is everything needed to draw the deck; "
+            "the members themselves are fetched only when the user opens an "
+            "expansion, because inlining them would put a 40-member stack's "
+            "worth of tiles behind a row that has room for none.\n\n"
+            "Members come back with exactly the fields a queue candidate "
+            "carries, so the strip reuses the row's tile unchanged, plus "
+            "`position` and `is_leader`. Paged with a plain `offset` (a stack's "
+            "membership is not a live list being decided out from under the "
+            "client, so the queue's keyset cursor buys nothing here); follow "
+            "`next_offset` and stop when it is `null`. Read-only: nothing here "
+            "reorders, promotes or unstacks anything."
+        ),
+        response_model=DedupStackMembersResponse,
+        responses={
+            404: {
+                "description": (
+                    "No live member carries this stack id — the stack was "
+                    "dissolved, scrapheaped, or never existed. Reported rather "
+                    "than answered with an empty stack that appears to exist."
+                )
+            }
+        },
+    )
+    def get_dedup_stack_members(
+        stack_id: int,
+        offset: int = Query(
+            default=0,
+            ge=0,
+            description=(
+                "Members to skip, in canonical stack order. Use the previous "
+                "page's `next_offset`."
+            ),
+        ),
+        limit: int = Query(
+            default=DEFAULT_STACK_MEMBER_PAGE_SIZE,
+            ge=1,
+            le=MAX_STACK_MEMBER_PAGE_SIZE,
+            description=(
+                f"Members per page, at most {MAX_STACK_MEMBER_PAGE_SIZE}. The "
+                "cap is what keeps a pathological stack from returning an "
+                "unbounded list."
+            ),
+        ),
+    ):
+        payload = dedup_tier_service.stack_members(
+            server.vault, stack_id, offset, limit
+        )
+        if payload is None:
+            logger.info(
+                "[dedup] stack %s has no live members; expansion refused", stack_id
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"stack {stack_id} has no live members",
+            )
+        return payload
 
     @router.post(
         "/dedup/counts",

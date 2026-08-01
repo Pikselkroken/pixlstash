@@ -493,6 +493,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "exist"
         ),
     ),
+    ("GET", "/api/v1/dedup/stacks/{stack_id}/members"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "The Duplicates queue's deck expansion: returns every live member "
+            "of one existing stack with the same per-picture fields the queue "
+            "row carries. It is the lazy half of GET /dedup/groups and is "
+            "owner-only for the same reason — a stack folded into a duplicate "
+            "group is defined by content identity, not by collection "
+            "membership, so its members routinely straddle a share token's "
+            "scope boundary and narrowing the list would leak that out-of-scope "
+            "siblings exist. Deliberately NOT scoped like GET /stacks/"
+            "{stack_id}/pictures, which self-filters for a scoped token: this "
+            "surface must report the stack's TRUE depth (that is the whole "
+            "point of the deck), and a filtered depth would be a wrong number "
+            "rather than a narrower one"
+        ),
+    ),
     ("POST", "/api/v1/dedup/counts"): RoutePolicy(
         _OWNER,
         justification=(

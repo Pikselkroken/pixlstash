@@ -2075,6 +2075,48 @@ with:
 
 The server reports reasons. The user concludes.
 
+### 22.5.1 Stack units: what the queue payload says about an existing stack
+
+**A stack verdict moves whole stacks, so `stack_id` on a candidate is not enough
+to render a row** (design decision D2 / backend contract B1 in
+`docs/design/mixed-stacks-and-stack-units.md`). Every group therefore ships a
+`stacks` block: one entry per existing stack the group touches, keyed by stack id
+as a string.
+
+| field | meaning |
+|---|---|
+| `member_count` | the stack's **real live member count** — its depth. NOT the count within the group, and routinely larger: measured on a 17k-picture library, 36 of 116 stack-touching groups name only ONE member of a stack. |
+| `leader_picture_id` | the member at `stack_position` 0, ranked by exactly the window function in `Picture._get_stack_leader_ids`, so the deck's face is the same picture the grid leads that stack with. |
+| `leader_thumbnail_version` | the leader's `?v=` token (`ImageUtils.thumbnail_cache_token`), so the face renders from the queue payload alone. |
+| `matched_picture_ids` | which of the stack's members are in this group. |
+| `stackable` / `blocked_by_sets` | the **unit-level rollup** of the per-candidate values: false when ANY member is frozen, because a stack cannot be partially stacked. |
+
+**No lock rule is re-derived here.** `partition_stackable_members` is already
+correct across a whole stack — `_locked_sets_by_picture` expands its input to
+whole stacks and `locked_sets_for_pictures` rolls each frozen picture's sets back
+onto every input id — so a locked sibling the group never names has already
+marked the members inside it. The rollup is `all(...)` over values the page
+computed once.
+
+**Eager count and leader, lazy members.** Inlining every member of every stack
+would put a 40-member stack's worth of tiles behind one queue row, which is the
+never-render-the-whole-list rule the queue exists to honour. The members are
+served by `GET /dedup/stacks/{stack_id}/members`
+(`stack_members_in_session`) when the user opens an expansion: leader-first, with
+exactly the fields a queue candidate carries plus `position` and `is_leader`,
+paged with a plain `offset` (a stack's membership is not a live list being
+decided out from under the client, so §22.7's keyset cursor buys nothing) and
+capped at `MAX_STACK_MEMBER_PAGE_SIZE`. Its `stackable` rollup is taken over the
+**whole** stack rather than the page, so page 2 cannot report a different answer
+from page 1. A stack with no live member is a **404**, never an empty stack that
+appears to exist.
+
+**Batched with the page, never per group.** `load_stack_facts` resolves every
+stack the page touches in one chunked query, alongside the single
+`build_locked_set_lookup` and the single `load_candidates` — a per-group resolve
+would make the deck an N+1 on the one query the queue page is measured by
+(`test_the_deck_rollup_costs_one_query_for_the_whole_page` pins it).
+
 ### 22.6 Persistence: four tables
 
 `pixlstash/db_models/dedup.py`, migration `0088_add_dedup_tier_tables`:
@@ -2272,11 +2314,12 @@ from offering a Stack the verdict would refuse:
 - **A group with fewer than two stackable members is withheld** (owner call,
   2026-07-30) by `_live_groups_filter`'s third `HAVING`, so the queue, the badge
   (`count_unresolved_in_session`) and the tier split (`count_by_tier_in_session`)
-  all apply one identical rule and cannot disagree. `stackable_groups_filter` is
-  the weaker sibling used by bulk auto-stack, which must still see
-  already-collapsed groups for its dry run. Both are built on
-  `locked_picture_id_subquery`, the single SQL definition of "frozen" shared with
-  the write guards.
+  all apply one identical rule and cannot disagree — and since **D1**
+  (2026-08-01) so does `POST /dedup/auto-stack`, which used to filter on the
+  weaker `stackable_groups_filter` (two unfrozen live members, nothing about
+  stack units) and therefore planned 62 groups behind a badge that said 3. Both
+  filters are built on `locked_picture_id_subquery`, the single SQL definition of
+  "frozen" shared with the write guards.
   **It has to be SQL.** A post-filter after the `LIMIT` would shrink pages and
   desynchronise the keyset cursor (§22.7), which is the hazard
   `locked_picture_id_subquery`'s own docstring was written for. Nothing is
@@ -2287,14 +2330,31 @@ from offering a Stack the verdict would refuse:
   `excluded_picture_ids`, and reports them in `skipped`. Fewer than two survivors
   is a 423 whose detail names `picture_ids` as well as `sets`. Skips log at
   WARNING, mirroring `drop_locked_set_ids`.
+  **The cover is validated against the stack-expanded set** — the group's
+  members plus the full membership of every stack the verdict folds in, which
+  `_stack_expanded_ids` derives from the same `expand_picture_ids_to_stacks`
+  `_stack_members` folds with (**B2**). A group frequently names only one
+  picture of an existing stack, and the queue renders that stack as one unit
+  whose face is its leader; requiring the cover to be a group member forced the
+  matched member to be promoted instead, silently re-covering a curated stack.
+  It is relaxed no further: an unrelated id — including the leader of a stack
+  this group does not touch — is still a `DedupVerdictError`.
 - **`POST /dedup/auto-stack`** filters its own candidate query with
-  `stackable_groups_filter`, so it never plans a group it would only refuse, and
-  its **dry run counts only the members the run will actually move**. Counting
-  `member_count` there made the consent dialog promise pictures that stay put;
-  the top-level `pictures` figure is now read back off `dry_run_summary` rather
-  than recomputed, so the two cannot disagree. A frozen cover preselection is
-  moved in the preview exactly as the run moves it, or the group would silently
-  drop out of the "covers gaining metadata" row.
+  `_live_groups_filter` (**D1**, 2026-08-01) — the queue's own filter, so the
+  run plans exactly the population the list shows and the badge counts. It used
+  `stackable_groups_filter`, whose silence about stack units let already
+  collapsed groups through: 62 planned against a badge of 3, of which 59 created
+  nothing and 21 would have had their cover replaced, since the run passes no
+  cover and the group's preselection is forced to `stack_position` 0.
+  Its **dry run counts only the pictures the run will actually move**: not
+  `member_count` (which promised pictures that stay put), and since **B4** the
+  **stack-expanded** set rather than the group's members alone, because a fold
+  reparents the whole stack. The receipt summary counts the same set. The
+  top-level `pictures` figure is read back off `dry_run_summary` rather than
+  recomputed, so the two cannot disagree. A frozen cover preselection is moved
+  in the preview exactly as the run moves it, or the group would silently drop
+  out of the "covers gaining metadata" row (that row stays on the group's own
+  members: the tag/score union runs over those, not over the folded stack).
 
 Partial success is scoped to **dedup** deliberately. The manual `POST /stacks`
 routes still refuse whole-request: they act on exactly the pictures the user

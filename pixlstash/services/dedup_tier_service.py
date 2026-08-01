@@ -114,6 +114,7 @@ from pixlstash.db_models.tag import Tag
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service
 from pixlstash.services.set_lock_service import (
+    StackablePartition,
     build_locked_set_lookup,
     locked_picture_id_subquery,
     partition_stackable_members,
@@ -147,6 +148,27 @@ lower confidence so it sorts to the bottom of the queue."""
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 200
+
+DEFAULT_STACK_MEMBER_PAGE_SIZE = 50
+MAX_STACK_MEMBER_PAGE_SIZE = 200
+"""Page size and ceiling for ``GET /dedup/stacks/{stack_id}/members``.
+
+The queue row carries a stack's **count and leader only** (§B1 of
+``docs/design/mixed-stacks-and-stack-units.md``): inlining every member of every
+stack would put a 40-member stack's worth of tiles behind one queue row, which is
+exactly the never-render-the-whole-list rule the queue is built on. The expansion
+strip fetches the members when the user opens one, through this endpoint, paged
+so even a pathological stack cannot return an unbounded list."""
+
+STACK_POSITION_LAST = 999999
+"""``stack_position`` substituted for a member whose position was never assigned.
+
+Mirrors the ``COALESCE(stack_position, 999999)`` in
+``Picture._get_stack_leader_ids`` so the deck's face in the Duplicates queue is
+the same picture the grid shows as the stack's leader. A stack whose positions
+have been normalised has its leader at position 0, which is the design's
+statement of the rule; this constant is what makes the answer honest for a stack
+that has not been normalised yet."""
 
 MAX_BUCKET_MEMBERS = 4000
 """Cap on one tier-2 bucket. The within-bucket comparison is O(k^2) popcounts,
@@ -1072,6 +1094,218 @@ def load_candidates(
     return members
 
 
+# --- Stack units ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StackFacts:
+    """The truth about one existing stack, independent of any duplicate group.
+
+    The Duplicates queue renders an existing stack as a single **deck** whose
+    depth is the stack's real member count, not the number of its members that
+    happen to be in the group (design D2). On a real 17k-picture library 36 of
+    116 stack-touching groups name only ONE member of a stack, so a client that
+    counted the group's own members would draw a 4-deep stack as a single
+    picture and then silently move all four.
+
+    Attributes:
+        stack_id: The stack.
+        member_ids: Every live member, in the canonical stack order — leader
+            first. Same ranking as ``Picture._get_stack_leader_ids`` and the
+            grid's ``compareStackOrder``.
+        leader_thumbnail_version: The leader's thumbnail cache-buster, so the
+            deck's face can be rendered from the queue payload alone.
+    """
+
+    stack_id: int
+    member_ids: tuple[int, ...]
+    leader_thumbnail_version: str
+
+    @property
+    def member_count(self) -> int:
+        """The stack's REAL live member count, not the count within a group."""
+        return len(self.member_ids)
+
+    @property
+    def leader_picture_id(self) -> int:
+        """The member at ``stack_position`` 0 — the deck's face."""
+        return self.member_ids[0]
+
+
+def _stack_member_order_key(
+    picture_id: int,
+    stack_position: Optional[int],
+    score: Optional[int],
+    created_at: Optional[datetime],
+) -> tuple:
+    """Canonical stack order: the leader sorts first.
+
+    Deliberately identical to the window function in
+    ``Picture._get_stack_leader_ids`` — ``COALESCE(stack_position, 999999) ASC,
+    COALESCE(score, 0) DESC, created_at DESC, id ASC`` — and to the frontend's
+    ``compareStackOrder``. A deck whose face disagreed with the grid's leader
+    would be the same show-one-mean-another mismatch the deck exists to remove.
+
+    ``created_at DESC`` puts NULLs last (SQLite's ordering under DESC), which is
+    why an absent capture time maps to ``-inf`` before the sign flip.
+    """
+    created_ts = (
+        created_at.timestamp() if isinstance(created_at, datetime) else float("-inf")
+    )
+    return (
+        int(stack_position) if stack_position is not None else STACK_POSITION_LAST,
+        -int(score or 0),
+        -created_ts,
+        int(picture_id),
+    )
+
+
+def load_stack_facts(
+    session: Session, stack_ids: Iterable[int]
+) -> dict[int, StackFacts]:
+    """Load the real membership of every stack in *stack_ids*, in one batch.
+
+    **Batched for the whole queue page, never per group.** The page already
+    resolves its candidates and its locked-set lookup once for every group it is
+    about to serve; resolving stacks per group instead would make the deck
+    rollup an N+1 on the one query the queue page is measured by.
+
+    Args:
+        session: Pre-opened session.
+        stack_ids: The distinct non-null ``stack_id`` values a page touches.
+
+    Returns:
+        ``{stack_id: StackFacts}``. A stack with no live member is absent rather
+        than present-and-empty, so a caller cannot read a leader off it.
+    """
+    ordered = sorted({int(sid) for sid in stack_ids if sid is not None})
+    if not ordered:
+        return {}
+    rows_by_stack: dict[int, list[tuple]] = defaultdict(list)
+    thumbnails: dict[int, tuple[Optional[int], Optional[int]]] = {}
+    for start in range(0, len(ordered), ID_CHUNK):
+        chunk = ordered[start : start + ID_CHUNK]
+        rows = session.exec(
+            select(
+                Picture.id,
+                Picture.stack_id,
+                Picture.stack_position,
+                Picture.score,
+                Picture.created_at,
+                Picture.thumbnail_width,
+                Picture.thumbnail_height,
+            ).where(Picture.stack_id.in_(chunk), Picture.deleted.is_(False))
+        ).all()
+        for (
+            picture_id,
+            stack_id,
+            stack_position,
+            score,
+            created_at,
+            thumbnail_width,
+            thumbnail_height,
+        ) in rows:
+            rows_by_stack[int(stack_id)].append(
+                _stack_member_order_key(picture_id, stack_position, score, created_at)
+            )
+            thumbnails[int(picture_id)] = (thumbnail_width, thumbnail_height)
+    facts: dict[int, StackFacts] = {}
+    for stack_id, keys in rows_by_stack.items():
+        member_ids = tuple(int(key[-1]) for key in sorted(keys))
+        width, height = thumbnails.get(member_ids[0], (None, None))
+        facts[stack_id] = StackFacts(
+            stack_id=stack_id,
+            member_ids=member_ids,
+            leader_thumbnail_version=ImageUtils.thumbnail_cache_token(width, height),
+        )
+    return facts
+
+
+def build_group_stacks(
+    members: list[CandidateMember],
+    partition: StackablePartition,
+    stack_facts: dict[int, StackFacts],
+) -> dict[str, dict[str, Any]]:
+    """The per-group ``stacks`` block: one entry per existing stack it touches.
+
+    Keyed by stack id **as a string**, because that is what the key becomes on
+    the wire; the ``stack_id`` field inside each entry is the integer.
+
+    ``stackable`` and ``blocked_by_sets`` are the **unit-level rollup** of the
+    per-candidate values the caller already computed: a deck is unstackable if
+    ANY of its members is, because a stack cannot be partially stacked — it
+    moves as a unit or not at all. Nothing about locks is re-derived here.
+    ``partition_stackable_members`` is already lock-correct across a whole stack
+    (``_locked_sets_by_picture`` expands its input to whole stacks and
+    ``locked_sets_for_pictures`` rolls each frozen picture's sets back onto every
+    input id), so a locked sibling *outside* this group has already marked the
+    members inside it.
+
+    Args:
+        members: The group's live candidates.
+        partition: The group's stackable/blocked split, over the same members.
+        stack_facts: :func:`load_stack_facts` for at least every stack these
+            members belong to.
+
+    Returns:
+        ``{"<stack id>": {stack_id, member_count, leader_picture_id,
+        leader_thumbnail_version, matched_picture_ids, stackable,
+        blocked_by_sets}}``. Empty when no member of the group is stacked.
+    """
+    stackable_ids = set(partition.stackable)
+    by_stack: dict[int, list[CandidateMember]] = defaultdict(list)
+    for member in members:
+        if member.stack_id is not None:
+            by_stack[int(member.stack_id)].append(member)
+
+    block: dict[str, dict[str, Any]] = {}
+    for stack_id in sorted(by_stack):
+        matched = sorted(member.id for member in by_stack[stack_id])
+        facts = stack_facts.get(stack_id)
+        if facts is None:
+            # Every member here is a live picture carrying this stack_id, so the
+            # batched load must have found the stack. Reaching this means the
+            # caller batched too narrowly (or the stack was emptied between the
+            # two reads); report the group's own members rather than inventing a
+            # count, and say so loudly - a silently under-reported depth would
+            # make the deck claim a verdict moves fewer pictures than it does.
+            logger.warning(
+                "[dedup-queue] stack %s has no loaded facts; reporting the "
+                "group's own %d member(s) as its depth. The deck's member_count "
+                "and leader are therefore the group's, not the stack's; batch "
+                "load_stack_facts over every stack the page touches.",
+                stack_id,
+                len(matched),
+            )
+            leader = min(by_stack[stack_id], key=lambda m: m.id)
+            member_count = len(matched)
+            leader_picture_id = leader.id
+            leader_thumbnail_version = leader.thumbnail_version
+        else:
+            member_count = facts.member_count
+            leader_picture_id = facts.leader_picture_id
+            leader_thumbnail_version = facts.leader_thumbnail_version
+
+        blocked: dict[int, str] = {}
+        for member in by_stack[stack_id]:
+            for entry in partition.sets_for(member.id):
+                blocked[int(entry["id"])] = entry["name"]
+        block[str(stack_id)] = {
+            "stack_id": stack_id,
+            "member_count": member_count,
+            "leader_picture_id": leader_picture_id,
+            "leader_thumbnail_version": leader_thumbnail_version,
+            "matched_picture_ids": matched,
+            "stackable": all(
+                member.id in stackable_ids for member in by_stack[stack_id]
+            ),
+            "blocked_by_sets": [
+                {"id": set_id, "name": name} for set_id, name in sorted(blocked.items())
+            ],
+        }
+    return block
+
+
 def assemble_group(
     tier: DedupTier, confidence: float, members: list[CandidateMember]
 ) -> DetectedGroup:
@@ -1786,28 +2020,7 @@ def _unfrozen(value):
     return case((Picture.id.notin_(locked_picture_id_subquery()), value), else_=None)
 
 
-def stackable_groups_filter():
-    """Groups with at least two live members that a locked set does not freeze.
-
-    A frozen picture can join neither the stack nor the metadata union, so a
-    group left with fewer than two stackable members has no stackable decision in
-    it. Every surface that offers stacking filters on this: the queue page, the
-    two counts (through :func:`_live_groups_filter`) and the bulk auto-stack run.
-
-    Deliberately weaker than :func:`_live_groups_filter`: it says nothing about
-    stack units, because auto-stack reports already-collapsed groups in its dry
-    run and must still see them.
-    """
-    return DedupGroup.id.in_(
-        select(DedupGroupMember.group_id)
-        .join(Picture, Picture.id == DedupGroupMember.picture_id)
-        .where(Picture.deleted.is_(False))
-        .group_by(DedupGroupMember.group_id)
-        .having(func.count(_unfrozen(DedupGroupMember.picture_id)) >= 2)
-    )
-
-
-def _live_groups_filter():
+def live_groups_filter():
     """Only groups that still POSE a decision.
 
     Three conditions, one HAVING clause over the live (non-scrapheaped) members:
@@ -1930,7 +2143,7 @@ def count_unresolved_in_session(
         DedupGroup.resolved.is_(False),
         _tier_filter(policy),
         DedupGroup.confidence >= policy.threshold,
-        _live_groups_filter(),
+        live_groups_filter(),
     )
     predicate = scope.picture_predicate()
     if predicate is not None:
@@ -1959,7 +2172,7 @@ def count_by_tier_in_session(
     policy = policy or TierPolicy()
     scope = scope or DedupScope()
     query = select(DedupGroup.tier, func.count(DedupGroup.id)).where(
-        DedupGroup.resolved.is_(False), _live_groups_filter()
+        DedupGroup.resolved.is_(False), live_groups_filter()
     )
     predicate = scope.picture_predicate()
     if predicate is not None:
@@ -2077,7 +2290,7 @@ def page_queue_in_session(
         query = query.where(
             _tier_filter(policy),
             DedupGroup.confidence >= policy.threshold,
-            _live_groups_filter(),
+            live_groups_filter(),
         )
     predicate = scope.picture_predicate()
     if predicate is not None:
@@ -2182,6 +2395,19 @@ def page_queue_in_session(
     # carries its own coverage, so a group whose members are not all in the pool
     # raises rather than being reported as unfrozen.
     lock_lookup = build_locked_set_lookup(session, all_member_ids)
+    # The stack truth behind every deck on this page, resolved in one batch for
+    # the same reason as the lock lookup: the queue renders an existing stack as
+    # one unit whose depth is the STACK's live member count, which routinely
+    # exceeds the members of it that are in the group (design D2 / B1). Per group
+    # this would be a query per stack per row.
+    stack_facts = load_stack_facts(
+        session,
+        {
+            member.stack_id
+            for member in candidates.values()
+            if member.stack_id is not None
+        },
+    )
 
     payload: list[dict[str, Any]] = []
     for row in rows:
@@ -2229,6 +2455,7 @@ def page_queue_in_session(
                 "created_at": row.created_at,
                 "verdict": verdict.verdict if verdict else None,
                 "decided_at": verdict.decided_at if verdict else None,
+                "stacks": build_group_stacks(members, partition, stack_facts),
                 "candidates": [
                     {
                         **member.as_dict(
@@ -2242,6 +2469,101 @@ def page_queue_in_session(
             }
         )
     return payload, total, next_cursor
+
+
+def stack_members_in_session(
+    session: Session,
+    stack_id: int,
+    offset: int = 0,
+    limit: int = DEFAULT_STACK_MEMBER_PAGE_SIZE,
+) -> Optional[dict[str, Any]]:
+    """One existing stack's members, paged — the deck expansion's own read.
+
+    The lazy half of the design's B1 contract. The queue row ships a deck's
+    **count and leader** eagerly, because those are what it draws; the members
+    are fetched only when the user opens the expansion strip, and only a page of
+    them, so a 40-member stack cannot put 40 tiles behind a queue row that has
+    room for none.
+
+    Members come back in the canonical stack order (leader first), with exactly
+    the fields a queue candidate carries, so the strip reuses the row's tile
+    unchanged.
+
+    Args:
+        session: Pre-opened session.
+        stack_id: The stack to expand.
+        offset: Members to skip. Plain offset paging is correct here (unlike the
+            queue's, §22.7): a stack's membership is not a live list being
+            decided out from under the client, and a member added mid-scroll is
+            a change the user made.
+        limit: Page size, clamped to :data:`MAX_STACK_MEMBER_PAGE_SIZE`.
+
+    Returns:
+        The expansion payload, or ``None`` when the stack has no live member at
+        all (deleted, dissolved, or never existed) — which the route turns into
+        a 404 rather than an empty stack that appears to exist.
+    """
+    stack_id = int(stack_id)
+    limit = max(1, min(int(limit), MAX_STACK_MEMBER_PAGE_SIZE))
+    offset = max(0, int(offset))
+    facts = load_stack_facts(session, [stack_id]).get(stack_id)
+    if facts is None:
+        return None
+
+    page_ids = list(facts.member_ids[offset : offset + limit])
+    candidates = load_candidates(session, page_ids)
+    # The unit-level rollup is taken over the WHOLE stack, never over the page:
+    # a deck's stackability is a fact about the stack, and reading it off page 1
+    # would report a different answer on page 2. The lookup is stack-expanded
+    # anyway (set_lock_service), so this is the same three queries either way.
+    lookup = build_locked_set_lookup(session, facts.member_ids)
+    unit_blocked: dict[int, str] = {}
+    for picture_id in facts.member_ids:
+        for entry in lookup.sets_for(picture_id):
+            unit_blocked[int(entry["id"])] = entry["name"]
+
+    members: list[dict[str, Any]] = []
+    for position, picture_id in enumerate(page_ids, start=offset):
+        member = candidates.get(picture_id)
+        if member is None:
+            # The picture was soft-deleted between the two reads. Skipping it is
+            # correct (it is no longer a member), but never silent: the page is
+            # then shorter than `limit` without being the end of the stack.
+            logger.warning(
+                "[dedup-stack] picture %s vanished from stack %s between the "
+                "membership read and the candidate load; it is omitted from "
+                "this page, which is therefore shorter than the requested %d",
+                picture_id,
+                stack_id,
+                limit,
+            )
+            continue
+        sets = lookup.sets_for(picture_id)
+        members.append(
+            {
+                **member.as_dict(),
+                "position": position,
+                "is_leader": picture_id == facts.leader_picture_id,
+                "stackable": not sets,
+                "blocked_by_sets": sets,
+            }
+        )
+    next_offset = offset + limit
+    return {
+        "stack_id": stack_id,
+        "member_count": facts.member_count,
+        "leader_picture_id": facts.leader_picture_id,
+        "leader_thumbnail_version": facts.leader_thumbnail_version,
+        "stackable": not unit_blocked,
+        "blocked_by_sets": [
+            {"id": set_id, "name": name}
+            for set_id, name in sorted(unit_blocked.items())
+        ],
+        "offset": offset,
+        "limit": limit,
+        "next_offset": next_offset if next_offset < facts.member_count else None,
+        "members": members,
+    }
 
 
 def scope_counts_in_session(
@@ -2417,6 +2739,18 @@ def page_queue(
     )
 
 
+def stack_members(
+    vault: "Vault",
+    stack_id: int,
+    offset: int = 0,
+    limit: int = DEFAULT_STACK_MEMBER_PAGE_SIZE,
+) -> Optional[dict[str, Any]]:
+    """Read-only vault wrapper around :func:`stack_members_in_session`."""
+    return vault.db.run_immediate_read_task(
+        stack_members_in_session, stack_id, offset, limit
+    )
+
+
 def _queue_response_in_session(
     session: Session,
     policy: TierPolicy,
@@ -2539,12 +2873,15 @@ __all__ = [
     "DEFAULT_MAX_GROUP_SIZE",
     "DEFAULT_MIN_GROUP_SIZE",
     "DEFAULT_PAGE_SIZE",
+    "DEFAULT_STACK_MEMBER_PAGE_SIZE",
     "DEFAULT_THRESHOLD",
     "MAX_BUCKET_MEMBERS",
     "MAX_PAGE_SIZE",
+    "MAX_STACK_MEMBER_PAGE_SIZE",
     "MAX_THRESHOLD",
     "MIN_THRESHOLD",
     "RAW_FORMATS",
+    "STACK_POSITION_LAST",
     "TIER_ORDER",
     "TIER_STRENGTH",
     "VERDICT_KEEP_SEPARATE",
@@ -2558,10 +2895,12 @@ __all__ = [
     "DetectedGroup",
     "NearBucket",
     "ScopeType",
+    "StackFacts",
     "TierPolicy",
     "assemble_group",
     "build_candidate_evidence",
     "build_group_evidence",
+    "build_group_stacks",
     "build_near_buckets",
     "count_by_tier_in_session",
     "count_decided_by_verdict_in_session",
@@ -2578,6 +2917,7 @@ __all__ = [
     "groups_from_pairs",
     "iter_tiers",
     "load_candidates",
+    "load_stack_facts",
     "near_pairs_in_bucket",
     "page_queue",
     "page_queue_in_session",
@@ -2591,6 +2931,8 @@ __all__ = [
     "scan_progress_in_session",
     "scope_counts_in_session",
     "select_cover",
+    "stack_members",
+    "stack_members_in_session",
     "tier_strength",
     "verdict_signatures_in_session",
 ]

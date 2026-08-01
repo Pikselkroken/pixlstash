@@ -66,6 +66,7 @@ copy, reconciled against `routes/dedup.py` as shipped (2026-07-29).
 |---|---|---|
 | `GET /dedup/policy` | tier defaults, bounds and closed vocabularies | `{ defaults, bounds }` |
 | `GET /dedup/groups` | one page of the queue, confidence descending | `{ groups, total, offset, limit, next_cursor, policy, scope, scan }` |
+| `GET /dedup/stacks/{stack_id}/members` | one page of an existing stack's members, for the deck expansion | `{ stack_id, member_count, leader_picture_id, leader_thumbnail_version, stackable, blocked_by_sets, offset, limit, next_offset, members }` |
 | `POST /dedup/counts` | the sidebar badge, the per-tier split, and N scoped counts | `{ unresolved_groups, by_tier, scopes, policy, scan }` |
 | `POST /dedup/scan` | queue a scan for one scope | `ScanProgressModel` |
 | `POST /dedup/verdicts/stack` | the "same picture" verdict | `VerdictResponse` |
@@ -76,7 +77,7 @@ copy, reconciled against `routes/dedup.py` as shipped (2026-07-29).
 Shapes and rules the frontend depends on:
 
 - **A group is `{ signature, tier, confidence, member_count, cover_picture_id,
-  why, created_at, candidates }`.** `signature` is a hash of the sorted member
+  why, created_at, candidates, stacks }`.** `signature` is a hash of the sorted member
   content hashes and is the id every verdict route takes, **in the request
   body**, never in a path. `tier` is `exact | near | embedding`; the exact tier
   is rendered as a different kind of claim, never as "100% similar".
@@ -90,6 +91,37 @@ Shapes and rules the frontend depends on:
   ranking's top signals, **null-safe**: null means not computed yet or failed —
   render a dash, never a zero. `cover_score` is the **deprecated** legacy
   composite; do not build new UI on it.
+- **A group carries `stacks`, and it is the thing the row renders (2026-08-01).**
+  `{ "<stack id>": { stack_id, member_count, leader_picture_id,
+  leader_thumbnail_version, matched_picture_ids, stackable, blocked_by_sets } }`,
+  one entry per existing stack the group touches, `{}` when none is. A stack
+  verdict moves whole **stacks**, so the smallest thing the queue may offer to
+  move is a unit: a loose picture (`stack_id: null`), or a **deck** — every
+  candidate sharing a `stack_id`, drawn as one tile.
+  - **`member_count` is the STACK's live member count, not the group's.** It is
+    routinely larger than the number of that stack's members in `candidates`
+    (measured: 36 of 116 stack-touching groups name only ONE member of a stack),
+    so a group's true picture total can exceed `candidates.length`. Sizing a deck
+    from `candidates` draws a 4-deep stack as one picture and then silently moves
+    four.
+  - **`leader_picture_id` is the deck's face**, and it is frequently *not* in
+    `matched_picture_ids`. A cover choice on a deck resolves to the leader, so
+    showing a matched member while meaning the leader is the mismatch the deck
+    exists to remove. `leader_thumbnail_version` is its `?v=` token, same
+    contract as a candidate's, so the face renders without expanding anything.
+  - **`stackable` / `blocked_by_sets` are the unit-level rollup**: false when ANY
+    member of the deck is frozen, because a stack cannot be partially stacked.
+    This already covers a locked sibling **outside** the group — a locked set
+    freezes a whole stack.
+  - **Count and leader are eager; the members are not.** Shipping every member of
+    every stack would put a 40-member stack's worth of tiles behind one row.
+    `GET /dedup/stacks/{stack_id}/members` is the expansion's own read: plain
+    `offset` paging (a stack's membership is not a live list being decided out
+    from under the client), `next_offset` is `null` at the end, members come back
+    leader-first with exactly the fields a candidate carries plus `position` and
+    `is_leader`, and `why` is always `[]` — evidence belongs to the duplicate
+    group, not to a stack the user already made. A stack with no live member is a
+    **404**, never an empty stack that looks like it exists.
 - **A candidate also carries `stackable` and `blocked_by_sets`.** `stackable:
   false` means a locked picture set freezes it, so it can be neither stacked nor
   metadata-unioned, and `blocked_by_sets` is `[{id, name}]` for the tooltip.
@@ -106,6 +138,13 @@ Shapes and rules the frontend depends on:
   cursor. Groups that keep two or more stackable members are still served whole,
   frozen members included and marked. Nothing is deleted: the group row survives
   and unlocking the set brings it straight back with no rescan.
+- **A fully collapsed group is withheld the same way** (design D1): a group
+  whose live members already sit in one and the same stack poses no decision, so
+  it is not served, not counted, and — since 2026-08-01 — **not planned into
+  `POST /dedup/auto-stack` or its dry run either**. Auto-stack used a weaker
+  filter that ignored stack units, so it reported far more "stacks to create"
+  than the badge showed and would have re-covered stacks the user had already
+  curated. The button's count and the run are now the same population.
 - **A withheld group's signature stays valid.** A client holding a page from
   before the lock landed can still POST it, and that is the path the partial
   success and the `423` below exist for.
@@ -934,8 +973,16 @@ candidate bucket finishes, so poll `GET /dedup/groups` and watch
 
 All three take `{ "signature": "9f2c…", "batch_id": "…" }`; `POST
 /dedup/verdicts/stack` additionally takes `cover_picture_id` and
-`excluded_picture_ids`. An unknown signature, a cover outside the group, or
-excluding down to fewer than two members is a **400**.
+`excluded_picture_ids`. An unknown signature, a cover outside the **resulting
+stack**, or excluding down to fewer than two members is a **400**.
+
+**`cover_picture_id` may be a folded stack's leader** (design B2), not only a
+group member: a group frequently names one picture of an existing stack, the
+queue renders that stack as a single unit whose face is its leader, and picking
+the unit must not promote the matched member over the leader the user already
+chose. The accepted set is the group's members **plus the full membership of
+every stack the verdict folds in** — anything else, including the leader of a
+stack this group does not touch, is still a 400.
 
 **A locked-set member is a partial success, not a refusal (2026-07-30).** A frozen
 picture can join neither the stack (its set's membership cannot change) nor the
@@ -1036,6 +1083,13 @@ Dry run:
 a single read, so the dialog's figures can never disagree with each other. The
 union is not executed to produce them and nothing is written; a cover "gains" a
 facet when some other member of its group carries something it does not.
+
+**`pictures` is the distinct stack-expanded set the run would move** (design
+B4), not the groups' member counts: a group that folds an existing stack in
+reparents that stack's whole membership, and two groups can name members of the
+same stack. It can therefore exceed the sum of the groups' `member_count`s.
+The `covers_gaining_*` rows stay on the groups' own members, because the tag and
+score union runs over exactly those.
 
 Applied (including a partially applied run):
 
