@@ -886,7 +886,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
-| [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections) |
+| [services/set_lock_service.py](../pixlstash/services/set_lock_service.py) | Single source of truth for picture-set lock enforcement: a `PictureSet` with `locked=True` is a hard whole-set freeze (set-level and member-level protections). Stacks are guarded in **both** directions: `enforce_stack_membership_not_locked` refuses a picture *joining* a stack a locked set touches, `enforce_stack_detach_not_locked` refuses one *leaving* it, and `locked_sets_freezing_stacks` is the read-side prediction computed over the same member rows |
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
 | [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
@@ -2656,6 +2656,85 @@ a state the grid cannot render honestly, and the response says
 `pictures_changed` announcement, and both read `actor`/`source`/
 `origin_client_id` from `request_context` in the handler (§21 origin discipline).
 
+**A locked picture set refuses the whole stack, and that is one rule across
+three routes.** `set_lock_service.enforce_stack_detach_not_locked` is the single
+implementation, called by `_apply_removal` (both mixed-stack actions) and by
+`DELETE /stacks/{stack_id}/members`. It raises the ordinary `423`
+`pictures_locked` detail. Two things make it mandatory rather than tidy:
+
+* **Leaving a stack is the dangerous direction, and it was the unguarded one.**
+  `enforce_stack_membership_not_locked` has always refused a picture *joining* a
+  stack a locked set touches, because stacks reconcile to the union of their
+  members' sets. Nothing refused a picture *leaving*.
+* **It escalates into a lock escape.** Every picture-level guard runs on the
+  stack-expanded id list, so a locked set freezes a stack's siblings *through*
+  the stack. Detach them and the freeze is simply gone: `DELETE /pictures/{id}`
+  answered `423`, `POST .../unstack` returned `200`, and the same delete then
+  returned `200`. Two calls turned a hard freeze into a soft delete.
+
+The refusal covers the **whole stack**, never the frozen member alone, matching
+`docs/design/keep-cover-only.md` ("Locked sets refuse the whole stack") and
+`keep_cover_only_service`, and it counts **soft-deleted members** because all
+three routes detach the stack's scrapheaped rows when the stack dissolves. Rows
+of `GET /dedup/mixed-stacks` carry `stackable` / `blocked_by_sets` (the same pair
+`GET /dedup/stacks/{stack_id}/members` reports, rolled up over the stack) so the
+client can disable the action with a reason instead of issuing it into a `423`.
+That prediction comes from `locked_sets_freezing_stacks`, which shares
+`_stack_member_ids` with the guard on purpose: computing the row from *live*
+members while the guard reads *all* member rows would make a row say
+`stackable: true` about a stack whose only frozen member is scrapheaped, which is
+a promise the server would then break. `GET /dedup/stacks/{stack_id}/members` was
+that broken promise until 2026-08-01: it rolled its unit-level `stackable` up
+from the live member ids it already held, so the scrapheaped case read `true`
+there, `false` on the mixed-stacks row and `423` from the server. It now calls
+`locked_sets_freezing_stacks` like the row does. **Any new read that predicts a
+detach calls that helper**; deriving the answer from a member list the caller
+happens to hold is exactly how the three surfaces drifted.
+
+**The detach rule and the picture-level rule deliberately differ on one state,
+and that is a decision, not drift** (owner call, 2026-08-01). For a stack whose
+only locked-set member is soft-deleted:
+
+* **Picture level: the live siblings are NOT frozen.** `DELETE
+  /pictures/{sibling}` is a `200`, its tags are editable, and the finders still
+  select it. Both `expand_picture_ids_to_stacks` and the stack-derived arm of
+  `locked_picture_id_subquery` drop deleted co-members, so no freeze reaches
+  them. Widening that to match the stack rule would freeze live pictures nothing
+  has frozen, an over-block on every label path in the vault, so it stays.
+* **Stack level: the stack still refuses to be broken up.** The scrapheaped row
+  is itself a member of the locked set, and every detach route dissolves the
+  stack rather than leave a stack of one, taking the scrapheaped rows with it.
+  Detaching it is a *deferred* escape: restore it afterwards and it comes back
+  loose, so the freeze it would have projected over its siblings never returns.
+
+The two answer different questions ("is this picture's label data frozen?"
+versus "may this stack be broken up?"), so the three stack surfaces agree with
+each other and the label surfaces agree with each other. Narrowing the stack
+guard to just the frozen row was considered and rejected: every unstack
+dissolves, so it would change nothing a client can reach except a partial split
+on a stack with three or more live members, while the single per-stack
+`stackable` flag would still have to report `false`, i.e. the read surface would
+start deliberately under-promising to buy an outcome no UI can offer.
+
+Both directions are pinned in `tests/test_picture_set_locking.py` (all three
+routes refused, an unlocked stack still detaches, the two-call escape chain
+proved to break on step one, and the scrapheaped arm asserted alongside the live
+sibling's `200`) and `tests/test_dedup_mixed_stacks.py` (both read surfaces on
+the scrapheaped stack, plus the unlocked twin). Those tests seed
+`PictureSetMember` **directly**: `POST /picture_sets/{id}/members/{picture_id}`
+is stack-atomic, so seeding through it makes every sibling a member and the test
+can no longer tell a whole-stack guard from a per-named-id one.
+
+**`split` splits *stranded* members, and only those.** An explicit `picture_ids`
+must be a subset of the stranded set at `threshold`; anything else is a `400`.
+Accepting an arbitrary list made the route an unconstrained remove-from-stack
+primitive that would break the leader off a perfectly cohesive stack the Mixed
+stacks page would never show, i.e. a second, unframed copy of
+`DELETE /stacks/{stack_id}/members` with a different name. The subset rule keeps
+the reason the explicit list exists (act on exactly the ids the row displayed,
+never a set recomputed behind the user) while removing the ability to act on
+anything the row did not display.
+
 All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
 (§16.1); the rationale and the both-direction test coverage are in
 `docs/reviews/authz-coverage-matrix.md`.
@@ -2738,6 +2817,26 @@ soft-deleted to the Scrapheap.
   covers that gained metadata (plus `CHANGED_TAGS`), each carrying
   `origin_client_id` read from `request_context` in the handler (§21 origin
   discipline).
+
+- **The request is bounded, and the bound is on the request.**
+  `MAX_SELECTION_IDS` (2000) is checked on the **raw** list length before
+  de-duplication, and `enforce_selection_budget` applies it to `stack_ids` plus
+  `picture_ids` **together**. Both halves were wrong when this shipped: the cap
+  sat on the de-duplicated set, so a body of two million repeats of one id passed
+  outright; and each list was capped separately, so one request legitimately
+  carried 4000. A cap that bounds the *outcome* of the work rather than the
+  request is not a cap. (What no check here can un-do is Pydantic having already
+  materialised the list while binding the request model; that is inherent to any
+  modelled body and belongs to the transport, not to this route.)
+- **`batch_id` is validated, never stored verbatim.**
+  `utils/request_origin.require_client_batch_id` is the single implementation of
+  the `cli-<4-76 safe chars>` contract, shared with the `/dedup/*` routes and
+  with the `X-Operation-Batch-Id` header (which *drops* a bad value, because a
+  header is ambient, where a deliberately-named body field is a `400`). This
+  route stored the client's string as given, so a caller could mint what reads as
+  a server `srv-…` batch, or graft its rows into an existing batch so one
+  `Ctrl+Z` reversed more than the user did. Any new route taking a body
+  `batch_id` calls that helper; a second local copy is how this one drifted.
 
 Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 (§16.1); the rationale and the both-direction test coverage

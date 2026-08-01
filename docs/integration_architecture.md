@@ -121,7 +121,16 @@ Shapes and rules the frontend depends on:
     leader-first with exactly the fields a candidate carries plus `position` and
     `is_leader`, and `why` is always `[]`: evidence belongs to the duplicate
     group, not to a stack the user already made. A stack with no live member is a
-    **404**, never an empty stack that looks like it exists.
+    **404**, never an empty stack that looks like it exists. Its envelope's
+    `stackable` / `blocked_by_sets` are the same pair, with the same meaning and
+    over the same member rows, as a `GET /dedup/mixed-stacks` row: `false` means
+    split, unstack and `DELETE /stacks/{stack_id}/members` all answer `423`.
+    **The envelope can be `false` while every listed member is `true`.** The
+    envelope counts scrapheaped member rows (a scrapheaped picture in a locked
+    set still freezes its stack against being broken up); the per-member flag is
+    the narrower "may this picture be put in a dedup stack", and a scrapheaped
+    locked member freezes no live sibling. Drive the split/unstack affordance off
+    the envelope, not off the members.
 - **A candidate also carries `stackable` and `blocked_by_sets`.** `stackable:
   false` means a locked picture set freezes it, so it can be neither stacked nor
   metadata-unioned, and `blocked_by_sets` is `[{id, name}]` for the tooltip.
@@ -277,9 +286,22 @@ created. Design: `docs/design/keep-cover-only.md`; backend: §22.12 of
 
 Both take the same body: `{ stack_ids?: int[], picture_ids?: int[], batch_id?:
 string }`. At least one id list must be non-empty (400 otherwise); they are
-unioned, capped at 2000 ids each, and **the unit is the stack**, any picture
-named pulls in its whole stack, so a partial selection inside a stack collapses
-the whole stack. Loose pictures name no stack and are ignored.
+unioned, and **the unit is the stack**, any picture named pulls in its whole
+stack, so a partial selection inside a stack collapses the whole stack. Loose
+pictures name no stack and are ignored.
+
+**2000 ids per request, counted before de-duplication and shared by the two
+lists.** No list may carry more than 2000 entries and the two together may not
+exceed 2000 (400 either way). Both halves of that used to be looser: the cap was
+applied to the de-duplicated set, so a body of repeats passed, and it was applied
+per list, so one request carried 4000.
+
+**`batch_id` must be client-namespaced** (`cli-` plus 4-76 of `A-Z a-z 0-9 _ -`)
+or the request is a 400, the same rule the `/dedup/*` routes and the
+`X-Operation-Batch-Id` header enforce, from the same helper
+(`pixlstash/utils/request_origin.py::require_client_batch_id`). Omit it and the
+server mints an `srv-…`. It is the undo handle, so an unvalidated one lets a
+caller graft its rows into another batch and reverse more than the user did.
 
 Shapes and rules the frontend depends on:
 
@@ -619,6 +641,15 @@ so no summary line can overstate what happened):
 |---|---|
 | `GET /pictures/import/status?task_id=…` | `imported_count`, `duplicate_count`, `scrapheaped_count`, `scrapheaped_picture_ids[]`; per-file `results[].status` is `success` / `duplicate` / `scrapheaped` |
 | `GET /pictures/import/staging/{id}/status` | the same three plus `failed_count` and `cancelled_count` |
+
+**Both status endpoints are `OWNER_ONLY`** (corrected 2026-08-01; they were
+`ANY_TOKEN`). The table above is the reason: `results[].picture_id`,
+`results[].file` (the vault-relative filename) and `scrapheaped_picture_ids[]`
+are per-object data about pictures anywhere in the vault, which is precisely
+what `ANY_TOKEN` promises a route does not return. Neither task id nor
+`staging_id` being unguessable changes that; a capability URL is not an access
+policy. Every `POST` sibling that starts an import is already owner only, so no
+caller that could have a task to poll loses access.
 
 `scrapheaped_count` is per **file**; `scrapheaped_picture_ids` is per **picture**, so several incoming copies of one
 scrapheaped picture name its id once. The SPA feeds those ids straight to the **shipped**
@@ -1145,8 +1176,21 @@ or graft its rows into an existing one.
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
-| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids`, the `stranded_picture_ids` the row showed, so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
+| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids`, the `stranded_picture_ids` the row showed, so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. An explicit list must be a **subset of the stranded set** (a `400` otherwise): this route is not a general remove-from-stack primitive, `DELETE /stacks/{stack_id}/members` is. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
 | `POST /dedup/mixed-stacks/{stack_id}/unstack` | Dissolves a mixed stack entirely. Records one undoable `dedup.unstack` operation; `batch_id` is always present. |
+
+**A locked picture set refuses the whole stack on every route that detaches a
+member**: `POST /dedup/mixed-stacks/{id}/split`, `POST
+/dedup/mixed-stacks/{id}/unstack` and `DELETE /stacks/{id}/members`, with the
+same `423` and the same `{"code": "pictures_locked", "action", "sets",
+"picture_ids"}` detail the picture-level guards use. Stacks are set-membership
+atomic, and a locked set freezes a stack's siblings *through* the stack, so
+detaching one severs a freeze the lock exists to hold: unguarded, unstack
+followed by delete turned a hard `423` into a soft delete. It is the whole stack,
+never the frozen member alone, which is the same rule
+`docs/design/keep-cover-only.md` states. Mixed-stack rows carry `stackable` /
+`blocked_by_sets` so the client can disable the action with a reason instead of
+issuing it and reading an error.
 
 ### Mixed stacks (design D5/B5)
 
@@ -1160,7 +1204,10 @@ edge asc) and carry `component_count`, `component_sizes`, `components`,
 pair is close enough to be an edge at all), `unhashed_picture_ids` (members whose
 `perceptual_hash` has not arrived: report as *not yet comparable*, never as a
 mistake), `suggested_action` (`split` / `unstack`), `membership_fingerprint`,
-`kept`, `leader_picture_id` and `leader_thumbnail_version`. The envelope adds
+`kept`, `leader_picture_id`, `leader_thumbnail_version`, and `stackable` /
+`blocked_by_sets` (the same pair `GET /dedup/stacks/{stack_id}/members` reports,
+rolled up over the whole stack: `false` means a locked picture set freezes a
+member, so split and unstack will both answer `423`). The envelope adds
 `total`, `kept_total`, `live_stack_count` and `next_offset` (plain offset paging;
 this list is tens of rows, not thousands).
 

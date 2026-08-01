@@ -240,6 +240,36 @@ on member ids *and* their hashes, while the **`Keep` dismissal** stays keyed on
 member ids alone, because D5 is explicit that adding a member is what re-raises a
 kept stack. Each key is right for its own job.
 
+**B6: a locked set refuses the whole stack, on split and on unstack alike**
+(added after adversarial review, 2026-08-01). B3 was right that locks *propagate*
+into the read surface; what it did not cover is what happens when the write
+surface **detaches** a member. A locked set freezes a stack's siblings through
+the stack, so unstacking severs the freeze: a picture that answered `423` to
+`DELETE /pictures/{id}` a moment earlier was deletable straight after. Both
+actions therefore refuse the whole stack with `423`, never just the frozen
+member, exactly as `docs/design/keep-cover-only.md` already states for the
+collapse; and the same guard covers the older `DELETE /stacks/{id}/members`,
+which had the identical hole. Mixed-stack rows carry `stackable` /
+`blocked_by_sets` (the same pair B1 puts on a deck), so the primary button is
+disabled with the set named rather than pressed into an error.
+
+The refusal counts **scrapheaped** members, and that is deliberate rather than
+an accident of the query. A picture in the Scrapheap that is itself in a locked
+set does not freeze its live siblings (their labels stay editable, which is what
+the picture-level rule has always said), but the stack still refuses to break
+up: every detach dissolves the stack and takes the scrapheaped rows with it, and
+restoring one afterwards would bring it back loose, so the freeze it would have
+projected never returns. Both read surfaces report that same answer; the fuller
+reasoning is in `docs/backend_architecture.md` §22.
+
+**B7: `split` splits *stranded* members, and only those.** An explicit
+`picture_ids` must be a subset of the stranded set at the request's threshold.
+Sending the ids the row showed exists so the split matches what the user was
+looking at; taking an arbitrary list also made this an unconstrained
+remove-from-stack primitive on any stack, including a cohesive one this page
+would never list, which is a second and unframed copy of
+`DELETE /stacks/{id}/members`.
+
 Every new data route declares its `AccessPolicy` in `pixlstash/authz/registry.py`.
 The gate is deny-by-default and an undeclared route 403s and fails CI.
 
