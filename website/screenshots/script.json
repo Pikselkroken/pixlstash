@@ -569,9 +569,17 @@
   },
   {
     "page": "install.html",
-    "asset": "SmartScreen.png",
-    "label": "Windows SmartScreen – click More info then Run anyway",
-    "alt": "Windows SmartScreen – click More info then Run anyway",
+    "asset": "SmartScreen.jpg",
+    "label": "The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link",
+    "alt": "The Windows SmartScreen dialog as it first appears, reading Windows protected your PC, with a More info link",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "install.html",
+    "asset": "SmartScreen2.jpg",
+    "label": "The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button",
+    "alt": "The same dialog expanded, listing the publisher as Open Source Developer Gaute Lindkvist above a Run anyway button",
     "caption": null,
     "kind": "image"
   },
