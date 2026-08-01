@@ -30,6 +30,16 @@
  * not thumbnails, because the whole point of Compare is fine detail — and the
  * metadata sits under each picture as the design system's compact two-column
  * label-over-value grid instead of a tall row list.
+ *
+ * ONE CARD PER UNIT, not per candidate (`docs/design/mixed-stacks-and-stack-units.md`
+ * D2/D4). The queue row already renders units (a whole existing stack is one
+ * deck) and a verdict moves units, so a strip drawn per candidate compares
+ * things no verdict can move independently. A deck's card shows its LEADER's
+ * numbers, labelled as such and never an aggregate: the metric columns answer
+ * "which file is better", a mean megapixel count answers nothing, and an
+ * aggregate would silently break the per-column best-value highlight, which is
+ * a comparison between individual FILES. What the deck stands for is stated
+ * once, in words, by the group-level `Contains` row.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import {
@@ -45,7 +55,9 @@ import {
 import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
+import StackExpansionStrip from "./StackExpansionStrip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { listStackMembers, MAX_STACK_MEMBER_PAGE } from "../../api/dedup";
 import { API_BASE_URL } from "../../utils/apiClient";
 import {
   bestOf,
@@ -56,8 +68,13 @@ import {
   candidateSharpness,
   candidateSmartScore,
   confidenceLabel,
+  groupUnits,
+  includedUnits,
+  isUnitExcluded,
   shortenPath,
   showsPath,
+  stackVerdictLabel,
+  unitForPictureId,
 } from "../../utils/dedup";
 import { formatUserDate } from "../../utils/utils";
 
@@ -106,22 +123,44 @@ const BROWSER_IMAGE_FORMATS = new Set([
   "avif",
 ]);
 
-const candidates = computed(() => props.group?.candidates ?? []);
-
 const confidence = computed(() => confidenceLabel(props.group));
 
+/**
+ * The units under comparison: a loose picture is its own, and every candidate
+ * sharing one `stack_id` collapses into a single deck standing for the ENTIRE
+ * existing stack. The partition is `utils/dedup.js`'s, the same one the queue
+ * row, the store and the keyboard model read, so the strip, the digits, the
+ * floor and the request can never disagree about what a card is.
+ */
+const units = computed(() => groupUnits(props.group));
+
+/** Whether any card on screen stands for more than one picture. */
+const anyDeck = computed(() => units.value.some((u) => u.kind === "deck"));
+
+/**
+ * What each card renders: its unit, and the picture its numbers are read from:
+ * the loose picture itself, or a deck's stack LEADER, which is the picture the
+ * card shows and the one a cover choice on that deck resolves to.
+ */
+const cards = computed(() =>
+  units.value.map((unit) => ({ unit, face: faceOf(unit) })),
+);
+
+/**
+ * The compared FILES, for the per-column maxima.
+ *
+ * Nulls are dropped: a deck whose leader is neither a group candidate nor
+ * fetched yet has no numbers to compare, and contributing a zero would make
+ * every other card look like the winner of every column.
+ */
+const faces = computed(() => cards.value.map((c) => c.face).filter(Boolean));
+
 /** The per-column maxima that drive the best-value highlight. */
-const bestMegapixels = computed(() =>
-  bestOf(candidates.value, candidateMegapixels),
-);
-const bestFileSize = computed(() => bestOf(candidates.value, candidateSizeMb));
-const bestScore = computed(() => bestOf(candidates.value, (c) => c.score));
-const bestTagCount = computed(() =>
-  bestOf(candidates.value, (c) => c.tag_count),
-);
-const bestSmartScore = computed(() =>
-  bestOf(candidates.value, candidateSmartScore),
-);
+const bestMegapixels = computed(() => bestOf(faces.value, candidateMegapixels));
+const bestFileSize = computed(() => bestOf(faces.value, candidateSizeMb));
+const bestScore = computed(() => bestOf(faces.value, (c) => c.score));
+const bestTagCount = computed(() => bestOf(faces.value, (c) => c.tag_count));
+const bestSmartScore = computed(() => bestOf(faces.value, candidateSmartScore));
 
 /**
  * Whether ANY copy carries a displayable smart score — the same group-level
@@ -131,7 +170,7 @@ const bestSmartScore = computed(() =>
  * does not serve `smart_score` yet, no card shows the row.
  */
 const anySmartScore = computed(() =>
-  candidates.value.some((c) => candidateSmartScore(c) !== null),
+  faces.value.some((c) => candidateSmartScore(c) !== null),
 );
 
 /**
@@ -145,13 +184,11 @@ function smartScoreText(candidate) {
   return value === null ? EMPTY : value.toFixed(2);
 }
 
-const bestSharpness = computed(() =>
-  bestOf(candidates.value, candidateSharpness),
-);
+const bestSharpness = computed(() => bestOf(faces.value, candidateSharpness));
 
 /** Group-level, exactly like the Smart score column above. */
 const anySharpness = computed(() =>
-  candidates.value.some((c) => candidateSharpness(c) !== null),
+  faces.value.some((c) => candidateSharpness(c) !== null),
 );
 
 /**
@@ -176,35 +213,414 @@ function sharpnessText(candidate) {
  * comparison's whole premise is that the images are registered against each
  * other, so the row is a group-level decision: every card gets it, or none do.
  */
-const anyPathShown = computed(() => candidates.value.some(showsPath));
+const anyPathShown = computed(() => faces.value.some(showsPath));
 
-/** How many pictures the Stack verdict would collapse. */
-const stackCount = computed(
-  () => candidates.value.length - props.excludedIds.length,
+/** The units a Stack verdict would actually collect, exclusions applied. */
+const includedUnitList = computed(() =>
+  includedUnits(units.value, props.excludedIds),
 );
 
-function isCover(candidate) {
-  return props.coverId != null && candidateId(candidate) === props.coverId;
+/**
+ * What the Stack button is about to do, in the queue row's own words
+ * (`Stack 3` / `Add 1 to stack of 4` / `Merge 2 stacks`). A picture count here
+ * would contradict the row the user pressed C on, and would under-state a
+ * verdict that folds a whole existing stack in.
+ */
+const verdictLabel = computed(() => stackVerdictLabel(includedUnitList.value));
+
+/**
+ * Whether a unit is the group's cover.
+ *
+ * A deck answers to its leader as well as to its matched members, because the
+ * leader is what a cover choice on it resolves to and it is frequently not a
+ * group candidate at all.
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isUnitCover(unit) {
+  if (props.coverId == null) return false;
+  if (unitForPictureId([unit], props.coverId) === unit) return true;
+  // A member promoted from the expansion is a picture of this stack that the
+  // group never named, so the id-based match above cannot see it. Without this
+  // the card that IS the cover would stop saying so the moment the user
+  // promoted one of its own members.
+  if (unit.kind !== "deck") return false;
+  const members = membersEntry(unit.stackId)?.members ?? [];
+  return members.some((member) => candidateId(member) === props.coverId);
 }
 
-function isExcluded(candidate) {
-  return props.excludedIds.includes(candidateId(candidate));
+/**
+ * Whether every picture this unit stands for is out of the stack. Exclusion is
+ * a whole-unit gesture, so a deck is in or out, never half in.
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isUnitOut(unit) {
+  return isUnitExcluded(unit, props.excludedIds);
+}
+
+/**
+ * The picture id an exclusion gesture on this unit travels as.
+ *
+ * A matched member rather than the leader: the store resolves whichever id it
+ * is handed back to the whole unit, but only a matched member is guaranteed to
+ * be in the group the request names.
+ *
+ * @param {Object} unit
+ * @returns {number|string|null}
+ */
+function unitToggleId(unit) {
+  return unit.pictureIds[0] ?? unit.coverPictureId;
 }
 
 /**
  * The preview source: the down-scaled ORIGINAL for browser-decodable formats
  * (Compare exists to judge fine detail, which a grid-scale thumbnail cannot
- * carry), the server-rendered thumbnail for RAW and video.
+ * carry), the server-rendered thumbnail for RAW and video, and for a picture
+ * whose record the payload does not carry at all (a deck's leader before its
+ * fetch lands), the thumbnail the group already versions for us.
+ *
+ * @param {number|string} pictureId
+ * @param {Object|null} record - the candidate/member row, when we hold it.
+ * @param {string} [version] - the thumbnail cache-buster to fall back on.
+ * @returns {string}
  */
-function previewUrl(candidate) {
-  const format = String(candidate?.format || "").toLowerCase();
+function previewUrl(pictureId, record, version = "") {
+  const format = String(record?.format || "").toLowerCase();
   if (BROWSER_IMAGE_FORMATS.has(format)) {
-    return `${API_BASE_URL}/pictures/${candidateId(candidate)}.${format}`;
+    return `${API_BASE_URL}/pictures/${pictureId}.${format}`;
   }
-  return pictureThumbnailUrl(candidateId(candidate), {
-    version: candidate.thumbnail_version,
+  return pictureThumbnailUrl(pictureId, {
+    version: record?.thumbnail_version ?? version,
     baseUrl: API_BASE_URL,
   });
+}
+
+/**
+ * One unit's picture, as the card draws it.
+ * @param {Object} unit
+ * @returns {string}
+ */
+function unitPreviewUrl(unit) {
+  return previewUrl(unit.coverPictureId, faceOf(unit), unit.thumbnailVersion);
+}
+
+// ── An existing stack's members: eager leader, lazy everything else ─────────
+// The queue payload sizes a deck and names its leader, but carries the leader's
+// ROW only when the leader happens to be one of the group's candidates, which
+// it frequently is not (`stacks[id].leader_picture_id` is routinely outside
+// `matched_picture_ids`). This dialog exists to compare numbers, so the leader's
+// row is fetched on open when it is missing: one member, per deck, on a surface
+// the user opened deliberately. The rest of the stack stays lazy behind the
+// expansion, because inlining a 40-member stack is exactly what the queue's
+// never-render-whole rule forbids.
+
+/** `stackId -> { members, loading, failed, complete }`. */
+const stackMembers = ref({});
+
+/**
+ * One stack's fetch state.
+ * @param {number|string} stackId
+ * @returns {Object|null}
+ */
+function membersEntry(stackId) {
+  if (stackId === null || stackId === undefined) return null;
+  return stackMembers.value[String(stackId)] ?? null;
+}
+
+/**
+ * Fetch a stack's members, once.
+ *
+ * @param {number|string} stackId
+ * @param {Object} [options]
+ * @param {boolean} [options.full=false] - the whole stack (an expansion) rather
+ *   than just the leader (a card's numbers).
+ * @param {boolean} [options.force=false] - retry after a failure.
+ */
+async function fetchStackMembers(
+  stackId,
+  { full = false, force = false } = {},
+) {
+  const key = String(stackId);
+  const held = stackMembers.value[key];
+  if (held?.loading) return;
+  if (!force) {
+    if (held?.complete) return;
+    if (!full && held?.members?.length) return;
+  }
+  const signature = props.group?.signature;
+  stackMembers.value = {
+    ...stackMembers.value,
+    [key]: {
+      members: held?.members ?? [],
+      loading: true,
+      failed: false,
+      complete: false,
+    },
+  };
+  try {
+    const data = await listStackMembers(stackId, {
+      limit: full ? MAX_STACK_MEMBER_PAGE : 1,
+    });
+    // The dialog flips group in place (a verdict auto-advances it), so a
+    // response that outlived its group must not be written over the new one's.
+    if (props.group?.signature !== signature) return;
+    const members = Array.isArray(data?.members) ? data.members : [];
+    stackMembers.value = {
+      ...stackMembers.value,
+      [key]: {
+        members,
+        loading: false,
+        failed: false,
+        // Only a page that reached the end may be summed into a footprint.
+        complete: full && (data?.next_offset ?? null) === null,
+      },
+    };
+  } catch (err) {
+    console.warn(
+      `[dedup] failed to read the members of stack ${stackId} for the compare dialog (group ${signature}, full=${full})`,
+      err,
+    );
+    if (props.group?.signature !== signature) return;
+    stackMembers.value = {
+      ...stackMembers.value,
+      [key]: {
+        members: held?.members ?? [],
+        loading: false,
+        failed: true,
+        complete: false,
+      },
+    };
+  }
+}
+
+/**
+ * The record a unit's numbers are read from.
+ *
+ * A loose picture is its own; a deck's is its stack LEADER, taken from the
+ * group's candidates when the leader is one of them and from the fetched member
+ * page otherwise. Null while neither is available, which every metric cell
+ * renders as the en dash rather than as a confident zero.
+ *
+ * @param {Object} unit
+ * @returns {Object|null}
+ */
+function faceOf(unit) {
+  if (!unit) return null;
+  if (unit.kind !== "deck") return unit.candidates[0] ?? null;
+  if (unit.face) return unit.face;
+  const members = membersEntry(unit.stackId)?.members ?? [];
+  return (
+    members.find((m) => candidateId(m) === unit.coverPictureId) ??
+    members[0] ??
+    null
+  );
+}
+
+/**
+ * A deck's footprint on disk, or null while it is not knowable.
+ *
+ * Summed from the members, so it appears only once the whole member list has
+ * been read (the expansion). The payload carries no total, and summing the one
+ * page we hold would state a stack's size from a fraction of it.
+ *
+ * @param {Object} unit
+ * @returns {number|null} megabytes.
+ */
+function deckSizeMb(unit) {
+  const entry = membersEntry(unit?.stackId);
+  if (!entry?.complete || !entry.members.length) return null;
+  const total = entry.members.reduce(
+    (sum, member) => sum + candidateSizeMb(member),
+    0,
+  );
+  return total > 0 ? total : null;
+}
+
+/**
+ * What a card actually stands for: `5 pictures · 42 MB`, or `1 picture`.
+ *
+ * The row exists because the File column shows the LEADER's size, which on a
+ * deck would otherwise be read as the whole stack's footprint.
+ *
+ * @param {Object} unit
+ * @returns {string}
+ */
+function containsText(unit) {
+  if (unit.kind !== "deck") return "1 picture";
+  const base = `${unit.depth} pictures`;
+  const size = deckSizeMb(unit);
+  return size === null ? base : `${base} · ${size.toFixed(1)} MB`;
+}
+
+/**
+ * The In-stack readout, per unit: a deck goes in whole or not at all.
+ * @param {Object} unit
+ * @returns {string}
+ */
+function inStackText(unit) {
+  if (isUnitOut(unit)) return unit.kind === "deck" ? "None" : "No";
+  return unit.kind === "deck" ? `All ${unit.depth}` : "Yes";
+}
+
+/**
+ * A unit's name, for the accessible label and the image's alt text.
+ *
+ * The deck's whole disclosure lives here: how deep the stack really is and how
+ * much of it this group named. There is no corner budget for a second numeral.
+ *
+ * @param {Object} unit
+ * @param {number} index
+ * @returns {string}
+ */
+function unitName(unit, index) {
+  // The queue row's own vocabulary (`thumbLabel` in DedupGroupRow), so the
+  // thing a screen reader heard in the row is named the same way here.
+  const position = `${index + 1} of ${units.value.length}`;
+  if (unit.kind !== "deck") return `Picture ${position}`;
+  const depth =
+    unit.matchedCount < unit.depth
+      ? `a stack of ${unit.depth} pictures, ${unit.matchedCount} of them matched`
+      : `a stack of ${unit.depth} pictures`;
+  return `Item ${position}, ${depth}`;
+}
+
+/**
+ * What clicking a card does, said in full.
+ * @param {Object} unit
+ * @returns {string}
+ */
+function pickTitle(unit) {
+  return unit.kind === "deck"
+    ? "Make this stack the cover. Its leader, the picture shown here, leads the result."
+    : "Make this the cover";
+}
+
+// ── The expansion: what is inside a deck ───────────────────────────────────
+// A full-width band BELOW the strip, never inside a card: a card that grew by a
+// band's height would break the registration between the pictures, which is the
+// one thing this whole surface is for. At most one open at a time, for the same
+// reason: a second band pushes the cards off the screen.
+
+/** How tall the expanded members are drawn. Height only; width follows the
+ * decoded image, because stored dimensions ignore EXIF rotation. */
+const EXPANSION_THUMB_HEIGHT = 96;
+
+const expandedStackId = ref(null);
+
+/** The deck the band is open on, or null. */
+const expandedUnit = computed(() => {
+  if (expandedStackId.value === null) return null;
+  return (
+    units.value.find(
+      (unit) =>
+        unit.kind === "deck" &&
+        String(unit.stackId) === String(expandedStackId.value),
+    ) ?? null
+  );
+});
+
+const expansionEntry = computed(() =>
+  membersEntry(expandedUnit.value?.stackId),
+);
+
+const expansionLoading = computed(
+  () => Boolean(expandedUnit.value) && Boolean(expansionEntry.value?.loading),
+);
+
+const expansionFailed = computed(
+  () =>
+    Boolean(expandedUnit.value) &&
+    !expansionEntry.value?.loading &&
+    (Boolean(expansionEntry.value?.failed) ||
+      !expansionEntry.value?.members?.length),
+);
+
+/** The members in the shape `StackExpansionStrip` reads, in stack order. */
+const expansionMembers = computed(() =>
+  (expansionEntry.value?.members ?? []).map((member) => ({
+    id: candidateId(member),
+    thumbnail_version: member?.thumbnail_version,
+  })),
+);
+
+/**
+ * Which member the strip flags as the cover: the group's own cover when it is
+ * one of these pictures, the stack's leader otherwise.
+ */
+const expansionCoverId = computed(() => {
+  const unit = expandedUnit.value;
+  if (!unit) return null;
+  const ids = expansionMembers.value.map((member) => member.id);
+  if (props.coverId != null && ids.includes(props.coverId))
+    return props.coverId;
+  return unit.coverPictureId;
+});
+
+/**
+ * Whether this unit's members are on screen.
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isExpanded(unit) {
+  return (
+    unit.kind === "deck" &&
+    expandedStackId.value !== null &&
+    String(unit.stackId) === String(expandedStackId.value)
+  );
+}
+
+/**
+ * Open one deck's members, closing whichever was open.
+ * @param {Object} unit
+ */
+function toggleExpansion(unit) {
+  if (unit.kind !== "deck") return;
+  promoteId.value = null;
+  if (isExpanded(unit)) {
+    expandedStackId.value = null;
+    return;
+  }
+  expandedStackId.value = unit.stackId;
+  fetchStackMembers(unit.stackId, { full: true });
+}
+
+/** Retry the member read after a failure. */
+function retryExpansion() {
+  const unit = expandedUnit.value;
+  if (unit) fetchStackMembers(unit.stackId, { full: true, force: true });
+}
+
+// ── Promoting a member to cover ────────────────────────────────────────────
+// Allowed here and nowhere else (D2): from the queue row it was withdrawn,
+// because the gesture also re-covers that stack in the library and a tile has
+// no room to say so. This band does, so the promotion is a two-step whose
+// second step carries the consequence in its own text rather than a bare click.
+
+const promoteId = ref(null);
+
+/**
+ * A member the user asked to promote, once confirmed.
+ * @param {number|string} pictureId
+ */
+function askPromote(pictureId) {
+  if (props.readOnly) return;
+  promoteId.value = pictureId;
+}
+
+/** The sentence the confirmation is made against. */
+const promoteConsequence = computed(() => {
+  const unit = expandedUnit.value;
+  if (promoteId.value === null || !unit) return "";
+  return `Make #${promoteId.value} the cover. It also becomes the picture this stack of ${unit.depth} shows everywhere in your library, not only here.`;
+});
+
+function confirmPromote() {
+  if (promoteId.value === null) return;
+  emit("set-cover", promoteId.value);
+  promoteId.value = null;
 }
 
 /**
@@ -225,10 +641,11 @@ function resolutionText(candidate) {
 }
 
 function fileText(candidate) {
+  if (!candidate) return EMPTY;
   const size = candidateSizeMb(candidate);
-  const format = candidate?.format || EMPTY;
-  if (!Number.isFinite(size)) return format;
-  return `${size.toFixed(1)} MB, ${format}`;
+  const format = candidate.format || "";
+  if (!size) return format || EMPTY;
+  return `${size.toFixed(1)} MB, ${format || EMPTY}`;
 }
 
 function capturedText(candidate) {
@@ -243,7 +660,10 @@ function starCount(candidate) {
 }
 
 function tagText(candidate) {
-  const count = Number(candidate?.tag_count) || 0;
+  // No record is not the same claim as no tags: a deck whose leader has not
+  // arrived yet must not report an authoritative "none".
+  if (!candidate) return EMPTY;
+  const count = Number(candidate.tag_count) || 0;
   return count > 0 ? `${count} tags` : "none";
 }
 
@@ -260,7 +680,18 @@ function tagText(candidate) {
 // drag pans at every overflowing level, and a flip keeps the scale and pan so
 // the blink stays registered.
 
-const zoomIndex = ref(null);
+// The zoom flips PICTURES, not units: the flattened sequence is unit 1's
+// leader, then the rest of unit 1's known members in stack order, then unit 2's
+// leader, and so on. Being able to eyeball a sibling at 100% is the strongest
+// disclosure this surface has for a group that named only one member of a
+// stack, and a zoom that could only reach the leader would be offering the
+// deck's face as if it were the deck. The digits keep their layering: inside
+// the zoom 1-9 address these pictures, outside it they address the cards.
+
+/** The picture the zoom is showing, by ID rather than by index: the sequence
+ * GROWS when an expansion's members land, and an index would silently slide
+ * onto a different picture underneath the user. */
+const zoomId = ref(null);
 const zoomImgEl = ref(null);
 const zoomScrollEl = ref(null);
 let panState = null;
@@ -279,15 +710,86 @@ const zoomNatural = ref(null);
 let zoomCloseAccumulator = 0;
 let zoomCloseLastOutTs = 0;
 
-const zoomOpen = computed(() => props.open && zoomIndex.value != null);
-const zoomCandidate = computed(() =>
-  zoomOpen.value ? candidates.value[zoomIndex.value] : null,
+/**
+ * Every picture the zoom can reach, in reading order.
+ *
+ * A deck contributes its leader first and then the members we hold: the whole
+ * stack once an expansion has fetched it, and until then only the members this
+ * group named, because those are the only rows the payload carries.
+ */
+const zoomPictures = computed(() => {
+  const list = [];
+  for (const unit of units.value) {
+    if (unit.kind !== "deck") {
+      const candidate = unit.candidates[0];
+      list.push({
+        id: candidateId(candidate),
+        record: candidate,
+        version: unit.thumbnailVersion,
+        unit,
+      });
+      continue;
+    }
+    const fetched = membersEntry(unit.stackId)?.members ?? [];
+    if (fetched.length > 1) {
+      for (const member of fetched) {
+        list.push({
+          id: candidateId(member),
+          record: member,
+          version: String(member?.thumbnail_version ?? ""),
+          unit,
+        });
+      }
+      continue;
+    }
+    list.push({
+      id: unit.coverPictureId,
+      record: faceOf(unit),
+      version: unit.thumbnailVersion,
+      unit,
+    });
+    for (const candidate of unit.candidates) {
+      const id = candidateId(candidate);
+      if (id === unit.coverPictureId) continue;
+      list.push({
+        id,
+        record: candidate,
+        version: String(candidate?.thumbnail_version ?? ""),
+        unit,
+      });
+    }
+  }
+  return list;
+});
+
+const zoomIndex = computed(() => {
+  if (zoomId.value === null) return null;
+  const index = zoomPictures.value.findIndex(
+    (entry) => entry.id === zoomId.value,
+  );
+  return index < 0 ? null : index;
+});
+
+const zoomOpen = computed(() => props.open && zoomIndex.value !== null);
+
+/** The entry on screen: its id, the record behind it (null while a leader's
+ * row has not landed), and the unit it belongs to. */
+const zoomEntry = computed(() =>
+  zoomOpen.value ? zoomPictures.value[zoomIndex.value] : null,
 );
 
 const zoomMetaText = computed(() => {
-  const c = zoomCandidate.value;
-  if (!c) return "";
-  const parts = [`#${candidateId(c)}`, resolutionText(c), fileText(c)];
+  const entry = zoomEntry.value;
+  if (!entry) return "";
+  const c = entry.record;
+  const parts = [`#${entry.id}`, resolutionText(c), fileText(c)];
+  if (entry.unit.kind === "deck") {
+    parts.push(
+      entry.id === entry.unit.coverPictureId
+        ? `Leads a stack of ${entry.unit.depth}`
+        : `In a stack of ${entry.unit.depth}`,
+    );
+  }
   const stars = starCount(c);
   if (stars) parts.push("★".repeat(stars));
   const smart = candidateSmartScore(c);
@@ -295,20 +797,29 @@ const zoomMetaText = computed(() => {
   return parts.filter((p) => p !== EMPTY).join(" · ");
 });
 
-/** The cover's index, where Z lands when no candidate was named. */
+/** Where the picture at `index` sits, clamped into the sequence. */
+function zoomIdAt(index) {
+  const list = zoomPictures.value;
+  if (!list.length) return null;
+  const clamped = Math.max(0, Math.min(list.length - 1, index));
+  return list[clamped].id;
+}
+
+/** The cover's index, where Z lands when no picture was named. */
 function coverIndex() {
-  const index = candidates.value.findIndex((c) => isCover(c));
+  const index = zoomPictures.value.findIndex((entry) =>
+    isUnitCover(entry.unit),
+  );
   return index >= 0 ? index : 0;
 }
 
 function openZoom(index = null) {
-  if (!candidates.value.length) return;
-  const target = index == null ? coverIndex() : index;
-  zoomIndex.value = Math.max(0, Math.min(candidates.value.length - 1, target));
+  if (!zoomPictures.value.length) return;
+  zoomId.value = zoomIdAt(index == null ? coverIndex() : index);
 }
 
 function closeZoom() {
-  zoomIndex.value = null;
+  zoomId.value = null;
   zoomScale.value = null;
   zoomNatural.value = null;
   zoomCloseAccumulator = 0;
@@ -322,13 +833,23 @@ function closeZoom() {
  * own fit floor re-clamps on load). */
 function flipZoom(delta) {
   if (!zoomOpen.value) return;
-  const n = candidates.value.length;
-  zoomIndex.value = (zoomIndex.value + delta + n) % n;
+  const n = zoomPictures.value.length;
+  zoomId.value = zoomPictures.value[(zoomIndex.value + delta + n) % n].id;
 }
 
 function zoomTo(index) {
   if (!zoomOpen.value) return;
-  if (index >= 0 && index < candidates.value.length) zoomIndex.value = index;
+  if (index >= 0 && index < zoomPictures.value.length) {
+    zoomId.value = zoomPictures.value[index].id;
+  }
+}
+
+/** Where a card's own zoom button lands: that unit's leader. */
+function unitZoomStart(unitIndex) {
+  const unit = units.value[unitIndex];
+  if (!unit) return 0;
+  const index = zoomPictures.value.findIndex((entry) => entry.unit === unit);
+  return index < 0 ? 0 : index;
 }
 
 /** Whether the current scale sits on a snap stop (1% slack). */
@@ -374,7 +895,7 @@ function toggleZoomPixels() {
 function onZoomImgLoad() {
   const img = zoomImgEl.value;
   const el = zoomScrollEl.value;
-  const c = zoomCandidate.value;
+  const c = zoomEntry.value?.record;
   const naturalW = img?.naturalWidth || Number(c?.width) || 0;
   const naturalH = img?.naturalHeight || Number(c?.height) || 0;
   if (!naturalW || !naturalH) return;
@@ -485,14 +1006,15 @@ function requestClose() {
  * surface has no meaningful cursor geometry to preserve, so the zoom opens
  * at fit and anchors perfectly from the first in-tick on the zoom surface.
  *
- * @param {number} index
+ * @param {number} unitIndex - the CARD wheeled over; the zoom opens on that
+ *   unit's leader, which is the picture the card is showing.
  * @param {WheelEvent} event
  */
-function onThumbWheel(index, event) {
+function onThumbWheel(unitIndex, event) {
   if (event.deltaY >= 0) return;
   event.preventDefault();
   event.stopPropagation();
-  openZoom(index);
+  openZoom(unitZoomStart(unitIndex));
 }
 
 /**
@@ -554,12 +1076,30 @@ defineExpose({
 });
 
 // A new group, or a closed dialog, always starts un-zoomed at Fit: a zoom held
-// over from another group would open on the wrong picture.
+// over from another group would open on the wrong picture. The stack reads go
+// with it: the ids are another group's, and a member page left in the cache
+// would draw the wrong stack under the next group's deck.
 watch(
   () => [props.open, props.group?.signature],
   () => {
     closeZoom();
+    stackMembers.value = {};
+    expandedStackId.value = null;
+    promoteId.value = null;
   },
+);
+
+// A deck whose leader is not one of the group's candidates has no numbers to
+// compare until its row is read, and that is the common case rather than an
+// edge one. One member per such deck, on a surface the user opened on purpose.
+watch(
+  () => (props.open ? units.value : null),
+  (list) => {
+    for (const unit of list ?? []) {
+      if (unit.kind === "deck" && !unit.face) fetchStackMembers(unit.stackId);
+    }
+  },
+  { immediate: true },
 );
 
 // ── Drag-to-pan, at every overflowing zoom level ───────────────────────────
@@ -598,64 +1138,88 @@ function onZoomPointerUp() {
   }, 0);
 }
 
-/** Click picks the cover — unless the click was the tail end of a pan. */
+/**
+ * Click picks the cover — unless the click was the tail end of a pan.
+ *
+ * The gesture stays UNIT-level even though the zoom flips pictures: on a deck
+ * member it names the deck (its leader), because promoting one member of a
+ * stack also re-covers that stack in the library, and that consequence gets
+ * said in words in the expansion band or not offered at all.
+ */
 function onZoomClick() {
   if (panState?.moved) return;
-  const c = zoomCandidate.value;
-  if (c) emit("set-cover", candidateId(c));
+  const entry = zoomEntry.value;
+  if (entry) emit("set-cover", entry.unit.coverPictureId);
 }
 
 function onZoomContextMenu() {
-  const c = zoomCandidate.value;
-  if (c) emit("toggle-excluded", candidateId(c));
+  const entry = zoomEntry.value;
+  if (entry) emit("toggle-excluded", unitToggleId(entry.unit));
 }
 </script>
 
 <template>
-  <AppDialog :open="open" title="Compare group" fullscreen @close="requestClose">
+  <AppDialog
+    :open="open"
+    title="Compare group"
+    fullscreen
+    @close="requestClose"
+  >
     <!-- The confidence claim rides in the header, next to the close button, so
          it stays visible while the strip below scrolls. -->
     <template #header-right>
       <span class="dc-confidence">{{ confidence.label }}</span>
     </template>
 
-    <!-- ── The candidate strip ─────────────────────────────────────────────
-         One card per copy. The cards GROW into the freed width — the images
-         are the point of this surface — and scroll sideways only once there
-         are too many to fit; the comparison only works when the fields line
-         up across cards. -->
+    <!-- ── The unit strip ──────────────────────────────────────────────────
+         One card per UNIT, not per candidate: a whole existing stack is one
+         deck, because that is the smallest thing a verdict can move. The cards
+         GROW into the freed width — the images are the point of this surface —
+         and scroll sideways only once there are too many to fit; the
+         comparison only works when the fields line up across cards. -->
     <div class="dc-strip">
       <div
-        v-for="(candidate, index) in candidates"
-        :key="candidateId(candidate)"
+        v-for="({ unit, face }, index) in cards"
+        :key="unit.key"
         class="dc-card"
-        :class="{ 'dc-card--out': isExcluded(candidate) }"
-        @contextmenu.prevent="emit('toggle-excluded', candidateId(candidate))"
+        :class="{ 'dc-card--out': isUnitOut(unit) }"
+        @contextmenu.prevent="emit('toggle-excluded', unitToggleId(unit))"
       >
         <button
           type="button"
           class="dc-pick"
-          :aria-pressed="isCover(candidate)"
-          :title="'Make this the cover'"
-          @click="emit('set-cover', candidateId(candidate))"
+          :aria-pressed="isUnitCover(unit)"
+          :aria-label="unitName(unit, index)"
+          :title="pickTitle(unit)"
+          @click="emit('set-cover', unit.coverPictureId)"
         >
           <!-- Wheel over the picture starts the zoom on it: the mouse's
                equivalent of the corner button, without the pixel hunt. -->
           <span class="dc-thumb" @wheel="onThumbWheel(index, $event)">
             <img
               class="dc-thumb-img"
-              :src="previewUrl(candidate)"
-              :alt="`Copy ${index + 1}`"
+              :src="unitPreviewUrl(unit)"
+              :alt="unitName(unit, index)"
               loading="lazy"
               decoding="async"
               draggable="false"
               @dragstart.prevent
             />
             <span class="dc-index">{{ index + 1 }}</span>
-            <span v-if="isCover(candidate)" class="dc-flag dc-flag--cover">
+            <span v-if="isUnitCover(unit)" class="dc-flag dc-flag--cover">
               Cover
             </span>
-            <span v-if="isExcluded(candidate)" class="dc-flag dc-flag--out">
+            <!-- A deck is showing ONE picture and standing for several, so it
+                 says which one this is: the numbers below are its, not the
+                 stack's. -->
+            <span
+              v-if="unit.kind === 'deck'"
+              class="dc-flag dc-flag--leader"
+              title="This stack's leader. The numbers below are this picture's, and a cover choice on this card resolves to it."
+            >
+              Leader
+            </span>
+            <span v-if="isUnitOut(unit)" class="dc-flag dc-flag--out">
               Not in stack
             </span>
           </span>
@@ -666,8 +1230,8 @@ function onZoomContextMenu() {
           type="button"
           class="dc-zoom"
           title="Zoom — full-screen blink compare (Z)"
-          :aria-label="`Zoom copy ${index + 1}`"
-          @click.stop="openZoom(index)"
+          :aria-label="`Zoom ${unitName(unit, index)}`"
+          @click.stop="openZoom(unitZoomStart(index))"
         >
           <v-icon size="16">mdi-magnify-plus-outline</v-icon>
         </button>
@@ -676,9 +1240,14 @@ function onZoomContextMenu() {
              so the numbers read first and the metadata never squeezes the
              image. -->
         <span class="dc-meta">
+          <!-- A deck's numbers are its LEADER's, and the label says so: an
+               aggregate would answer no question this column exists to answer,
+               and would break the per-column best mark, which compares FILES. -->
           <span class="dc-cell">
-            <span class="dc-label">ID</span>
-            <span class="dc-val">#{{ candidateId(candidate) }}</span>
+            <span class="dc-label">{{
+              unit.kind === "deck" ? "Leader" : "ID"
+            }}</span>
+            <span class="dc-val">#{{ unit.coverPictureId }}</span>
           </span>
           <span class="dc-cell">
             <span class="dc-label">Resolution</span>
@@ -686,11 +1255,11 @@ function onZoomContextMenu() {
               class="dc-val"
               :class="{
                 'dc-val--best': isBest(
-                  candidateMegapixels(candidate),
+                  candidateMegapixels(face),
                   bestMegapixels,
                 ),
               }"
-              >{{ resolutionText(candidate) }}</span
+              >{{ resolutionText(face) }}</span
             >
           </span>
           <span class="dc-cell">
@@ -698,24 +1267,53 @@ function onZoomContextMenu() {
             <span
               class="dc-val"
               :class="{
-                'dc-val--best': isBest(candidateSizeMb(candidate), bestFileSize),
+                'dc-val--best': isBest(candidateSizeMb(face), bestFileSize),
               }"
-              >{{ fileText(candidate) }}</span
+              >{{ fileText(face) }}</span
             >
+          </span>
+          <!-- What the card actually stands for. Group-level like Location and
+               Smart score: it renders on every card or on none, because the
+               meta grid is what the picture above it gives its leftover height
+               to, and a row on some cards would leave the pictures at
+               different heights. It sits against File on purpose: File is the
+               LEADER's size, and on a deck that is the number a reader would
+               otherwise take for the whole stack's footprint. -->
+          <span v-if="anyDeck" class="dc-cell">
+            <span class="dc-label">Contains</span>
+            <span v-if="unit.kind === 'deck'" class="dc-val">
+              <button
+                type="button"
+                class="dc-expand"
+                :aria-expanded="isExpanded(unit)"
+                :title="
+                  isExpanded(unit)
+                    ? 'Hide the pictures in this stack'
+                    : 'Show the pictures in this stack, below the cards'
+                "
+                @click.stop="toggleExpansion(unit)"
+              >
+                <v-icon size="14">{{
+                  isExpanded(unit) ? "mdi-chevron-down" : "mdi-chevron-right"
+                }}</v-icon>
+                {{ containsText(unit) }}
+              </button>
+            </span>
+            <span v-else class="dc-val">{{ containsText(unit) }}</span>
           </span>
           <span class="dc-cell">
             <span class="dc-label">Captured</span>
-            <span class="dc-val">{{ capturedText(candidate) }}</span>
+            <span class="dc-val">{{ capturedText(face) }}</span>
           </span>
           <span class="dc-cell">
             <span class="dc-label">Score</span>
             <span
               class="dc-val"
-              :class="{ 'dc-val--best': isBest(candidate.score, bestScore) }"
+              :class="{ 'dc-val--best': isBest(face?.score, bestScore) }"
             >
-              <template v-if="starCount(candidate)">
+              <template v-if="starCount(face)">
                 <v-icon
-                  v-for="star in starCount(candidate)"
+                  v-for="star in starCount(face)"
                   :key="star"
                   size="13"
                   class="dc-star"
@@ -734,11 +1332,11 @@ function onZoomContextMenu() {
               class="dc-val"
               :class="{
                 'dc-val--best': isBest(
-                  candidateSmartScore(candidate),
+                  candidateSmartScore(face),
                   bestSmartScore,
                 ),
               }"
-              >{{ smartScoreText(candidate) }}</span
+              >{{ smartScoreText(face) }}</span
             >
           </span>
           <span v-if="anySharpness" class="dc-cell">
@@ -746,12 +1344,9 @@ function onZoomContextMenu() {
             <span
               class="dc-val"
               :class="{
-                'dc-val--best': isBest(
-                  candidateSharpness(candidate),
-                  bestSharpness,
-                ),
+                'dc-val--best': isBest(candidateSharpness(face), bestSharpness),
               }"
-              >{{ sharpnessText(candidate) }}</span
+              >{{ sharpnessText(face) }}</span
             >
           </span>
           <span class="dc-cell">
@@ -759,32 +1354,39 @@ function onZoomContextMenu() {
             <span
               class="dc-val"
               :class="{
-                'dc-val--best': isBest(candidate.tag_count, bestTagCount),
+                'dc-val--best': isBest(face?.tag_count, bestTagCount),
               }"
-              >{{ tagText(candidate) }}</span
+              >{{ tagText(face) }}</span
             >
           </span>
+          <!-- The checkbox toggles the whole unit: a stack goes into the
+               verdict entire or not at all, so `All 5` and `None` are the only
+               states a deck has. -->
           <span class="dc-cell">
             <span class="dc-label">In stack</span>
             <span class="dc-val dc-instack">
               <button
                 type="button"
                 class="dc-toggle"
-                :aria-pressed="!isExcluded(candidate)"
+                :aria-pressed="!isUnitOut(unit)"
                 :title="
-                  isExcluded(candidate)
-                    ? 'Put this copy back in the stack'
-                    : 'Leave this copy out of the stack'
+                  isUnitOut(unit)
+                    ? unit.kind === 'deck'
+                      ? 'Put this whole stack back in'
+                      : 'Put this copy back in the stack'
+                    : unit.kind === 'deck'
+                      ? 'Leave this whole stack out'
+                      : 'Leave this copy out of the stack'
                 "
-                @click.stop="emit('toggle-excluded', candidateId(candidate))"
+                @click.stop="emit('toggle-excluded', unitToggleId(unit))"
               >
                 <v-icon size="14">{{
-                  isExcluded(candidate)
+                  isUnitOut(unit)
                     ? "mdi-checkbox-blank-outline"
                     : "mdi-checkbox-marked-outline"
                 }}</v-icon>
               </button>
-              <span>{{ isExcluded(candidate) ? "No" : "Yes" }}</span>
+              <span>{{ inStackText(unit) }}</span>
             </span>
           </span>
           <!-- The path is shown only for a reference-folder picture, where the
@@ -795,9 +1397,9 @@ function onZoomContextMenu() {
           <span v-if="anyPathShown" class="dc-cell dc-cell--wide">
             <span class="dc-label">Location</span>
             <span
-              v-if="showsPath(candidate)"
+              v-if="showsPath(face)"
               class="dc-val dc-path"
-              :title="candidatePath(candidate)"
+              :title="candidatePath(face)"
             >
               <v-icon
                 size="13"
@@ -805,7 +1407,7 @@ function onZoomContextMenu() {
                 title="Reference folder, you manage these files yourself"
                 >mdi-folder-eye-outline</v-icon
               >
-              {{ shortenPath(candidatePath(candidate)) }}
+              {{ shortenPath(candidatePath(face)) }}
             </span>
             <span
               v-else
@@ -820,6 +1422,58 @@ function onZoomContextMenu() {
           </span>
         </span>
       </div>
+    </div>
+
+    <!-- ── The expansion: one deck's members ───────────────────────────────
+         FULL WIDTH, BELOW the strip, never inside a card. A band inside a card
+         would grow that card and take the pictures out of register with each
+         other, which is the one thing this surface exists to hold. At most one
+         is open at a time, for the same reason: two bands push the cards off
+         the screen. -->
+    <div v-if="expandedUnit" class="dc-expansion" data-testid="dedup-expansion">
+      <div v-if="expansionLoading" class="dc-expansion-state" role="status">
+        <v-icon size="16" class="mdi-spin">mdi-loading</v-icon>
+        Reading the pictures in this stack
+      </div>
+      <div
+        v-else-if="expansionFailed"
+        class="dc-expansion-state dc-expansion-state--error"
+        role="alert"
+      >
+        <v-icon size="16">mdi-alert-outline</v-icon>
+        <span
+          >Could not read the pictures in this stack. The verdict buttons still
+          work.</span
+        >
+        <AppButton variant="ghost" size="sm" @click="retryExpansion"
+          >Try again</AppButton
+        >
+      </div>
+      <template v-else>
+        <StackExpansionStrip
+          :count="expandedUnit.depth"
+          :members="expansionMembers"
+          :cover-id="expansionCoverId"
+          :reason="`${expandedUnit.matchedCount} of them are in this group`"
+          :thumb-height="EXPANSION_THUMB_HEIGHT"
+          :read-only="readOnly"
+          :show-unstack="false"
+          @set-cover="askPromote"
+        />
+        <!-- Promotion is a two-step here BECAUSE it reaches past this group:
+             the second step names what it does to the library, so the
+             consequence is read rather than discovered. -->
+        <div v-if="promoteId !== null" class="dc-promote" role="group">
+          <v-icon size="16" class="dc-promote-icon">mdi-image-move</v-icon>
+          <span class="dc-promote-text">{{ promoteConsequence }}</span>
+          <AppButton variant="ghost" size="sm" @click="promoteId = null"
+            >Cancel</AppButton
+          >
+          <AppButton variant="secondary" size="sm" @click="confirmPromote"
+            >Make it the cover</AppButton
+          >
+        </div>
+      </template>
     </div>
 
     <!-- ── Why these were grouped ──────────────────────────────────────────
@@ -856,23 +1510,25 @@ function onZoomContextMenu() {
         title="Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it."
         @click="emit('stack')"
       >
-        Stack {{ stackCount }}
+        {{ verdictLabel.full }}
       </AppButton>
     </template>
   </AppDialog>
 
   <!-- ── The blink compare ──────────────────────────────────────────────────
-       Full screen, above the dialog: one candidate at a time, flipped in
-       place so differences show as motion. Deliberately near-black chrome at
-       fixed colors — this is a photo-judgement surface, same rationale as the
-       lightbox. -->
+       Full screen, above the dialog: one PICTURE at a time, flipped in place
+       so differences show as motion. It flips pictures rather than units
+       because looking at a stack sibling at 100% is the strongest disclosure
+       this surface has when a group named only one member of a stack.
+       Deliberately near-black chrome at fixed colors — this is a
+       photo-judgement surface, same rationale as the lightbox. -->
   <Teleport to="body">
     <div v-if="zoomOpen" class="dc-zv" data-testid="dedup-zoom">
       <div class="dc-zv-top">
-        <div class="dc-zv-flip" role="tablist" aria-label="Candidate">
+        <div class="dc-zv-flip" role="tablist" aria-label="Picture">
           <button
-            v-for="(candidate, index) in candidates"
-            :key="candidateId(candidate)"
+            v-for="(entry, index) in zoomPictures"
+            :key="entry.id"
             type="button"
             :class="{ 'dc-zv-on': index === zoomIndex }"
             @click="zoomTo(index)"
@@ -881,12 +1537,12 @@ function onZoomContextMenu() {
           </button>
         </div>
         <span
-          v-if="zoomCandidate && isCover(zoomCandidate)"
+          v-if="zoomEntry && isUnitCover(zoomEntry.unit)"
           class="dc-flag dc-flag--zv"
           >Cover</span
         >
         <span
-          v-if="zoomCandidate && isExcluded(zoomCandidate)"
+          v-if="zoomEntry && isUnitOut(zoomEntry.unit)"
           class="dc-flag dc-flag--zv"
           >Not in stack</span
         >
@@ -942,9 +1598,9 @@ function onZoomContextMenu() {
              starts on the same gesture as the pan and wins the race, leaving
              the pan dead and a ghost image under the cursor. -->
         <img
-          v-if="zoomCandidate"
+          v-if="zoomEntry"
           ref="zoomImgEl"
-          :src="previewUrl(zoomCandidate)"
+          :src="previewUrl(zoomEntry.id, zoomEntry.record, zoomEntry.version)"
           :style="zoomImgStyle"
           alt=""
           draggable="false"
@@ -953,7 +1609,10 @@ function onZoomContextMenu() {
         />
       </div>
       <div class="dc-zv-foot" aria-hidden="true">
-        <span><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place — differences jump out as motion</span>
+        <span
+          ><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place —
+          differences jump out as motion</span
+        >
         <span>Scroll zooms, drag pans — zoom out past Fit to leave</span>
         <span><kbd>P</kbd> Fit ↔ 100%</span>
         <span><kbd>Enter</kbd> stack</span>
@@ -1091,6 +1750,15 @@ function onZoomContextMenu() {
   bottom: var(--space-2);
 }
 
+/* Bottom LEFT, so it never collides with the cover flag above it or the
+   excluded flag beside it. */
+.dc-flag--leader {
+  top: auto;
+  right: auto;
+  bottom: var(--space-2);
+  left: var(--space-2);
+}
+
 /* The zoom trigger sits under the index pill, over the photo. */
 .dc-zoom {
   position: absolute;
@@ -1212,6 +1880,91 @@ function onZoomContextMenu() {
 .dc-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+/* The expansion trigger reads as the value it replaces, not as a button in a
+   column of values: the chevron carries the affordance and the state. */
+.dc-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dc-expand:hover {
+  color: rgb(var(--v-theme-accent));
+}
+
+.dc-expand:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* ── The expansion band ────────────────────────────────────────────────────
+   Full width under the strip. `flex-shrink: 0` keeps it whole: the strip above
+   it is the flexible child and gives up the height, so opening a band never
+   squeezes the band itself into a scrolling sliver. */
+.dc-expansion {
+  margin-top: var(--space-4);
+  flex-shrink: 0;
+}
+
+.dc-expansion-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+/* The hue is on the glyph and the border; the text stays `on-surface`, because
+   `on-<x>` is only ever correct on a solid `<x>` fill. */
+.dc-expansion-state--error {
+  border-color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.dc-expansion-state--error .v-icon {
+  color: rgb(var(--v-theme-warning));
+}
+
+/* The consequence sentence sits with the two buttons that answer it, so the
+   cost and the commitment are read in one line. */
+.dc-promote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+}
+
+.dc-promote-icon {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  flex-shrink: 0;
+}
+
+.dc-promote-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 /* ── Why pills ───────────────────────────────────────────────────────────── */
