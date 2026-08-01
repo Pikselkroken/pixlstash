@@ -15,7 +15,12 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <script>
+      try {
+        if (localStorage.getItem("pixlstash-theme") === "light")
+          document.documentElement.setAttribute("data-theme", "light");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* ── install.html page-specific ── */
@@ -137,14 +142,44 @@
         letter-spacing: 0.05em;
       }
 
+      .smartscreen-figs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        max-width: 880px;
+        margin: 10px 0 0;
+      }
+
+      .smartscreen-fig {
+        flex: 1 1 300px;
+        min-width: 0;
+        margin: 0;
+      }
+
       .smartscreen-img {
         display: block;
-        max-width: 420px;
         width: 100%;
-        border-radius: 10px;
+        border-radius: var(--radius-md);
         border: 1px solid var(--border);
         box-shadow: 0 6px 20px var(--shadow);
-        margin-top: 10px;
+      }
+
+      .smartscreen-caption {
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+
+      .publisher-line {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        line-height: 1.5;
+        background: var(--panel-strong);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 10px 12px;
+        margin: 10px 0;
+        overflow-wrap: anywhere;
       }
 
       @media (max-width: 700px) {
@@ -336,10 +371,11 @@
             <div class="step">
               <span class="step-label">3. Use PixlStash</span>
               <p class="step-note">
-                The window opens straight into your library. There is no login prompt
-                for the local user. Your data lives in the standard per-user
-                location, so it is shared with a pip or Docker install on the
-                same machine. You can switch or update backends any time from
+                The window opens straight into your library. There is no login
+                prompt for the local user. Your data lives in the standard
+                per-user location, so it is shared with a pip or Docker install
+                on the same machine. You can switch or update backends any time
+                from
                 <strong>Backends → Compute Backends…</strong>.
               </p>
             </div>
@@ -386,17 +422,51 @@
             <div class="step">
               <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
               <p class="step-note">
-                Because the installer is not yet signed with a paid code-signing
-                certificate, Windows SmartScreen may show a red
+                Because the installer has only recently been signed with a
+                code-signing certificate, Windows SmartScreen may show a red
                 <em>"Windows protected your PC"</em> dialog. This is expected.
                 Click <strong>More info</strong> and then
                 <strong>Run anyway</strong> to proceed.
               </p>
-              <img
-                class="smartscreen-img"
-                src="assets/SmartScreen.png"
-                alt="Windows SmartScreen: click More info then Run anyway"
-              />
+              <div class="smartscreen-figs">
+                <figure class="smartscreen-fig">
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen.jpg"
+                    alt="The Windows protected your PC dialog as it first appears, with a More info link"
+                  />
+                  <figcaption class="smartscreen-caption">
+                    1. What you see first. Click <strong>More info</strong>.
+                  </figcaption>
+                </figure>
+                <figure class="smartscreen-fig">
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen2.jpg"
+                    alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
+                  />
+                  <figcaption class="smartscreen-caption">
+                    2. Expanded: check the publisher, then click
+                    <strong>Run anyway</strong>.
+                  </figcaption>
+                </figure>
+              </div>
+              <p class="step-note">
+                Before you click <strong>Run anyway</strong>, check the
+                <strong>Publisher</strong> line. It should read:
+              </p>
+              <p class="publisher-line">
+                NO, Trøndelag, Trondheim, Open Source Developer, Open Source
+                Developer Gaute Lindkvist
+              </p>
+              <p class="step-note">
+                Windows can't render the <strong>ø</strong> in
+                <em>Trøndelag</em> in this dialog, so it shows up as a black
+                diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
+                quirk in the SmartScreen dialog, not a sign the download was
+                tampered with. If the publisher says anything else, don't run
+                the file.
+              </p>
             </div>
           </div>
         </div>
@@ -405,8 +475,8 @@
         <div class="tab-panel" id="panel-windows" role="tabpanel">
           <p class="section-title">Server Installer for Windows</p>
           <p class="section-subtitle">
-            The easiest way to get started with the server on Windows. No
-            Python or Node.js required.
+            The easiest way to get started with the server on Windows. No Python
+            or Node.js required.
           </p>
 
           <div class="method-steps">
@@ -451,17 +521,53 @@
             <div class="step">
               <p class="sub-heading">⚠️ Windows SmartScreen warning</p>
               <p class="step-note">
-                Because the installer is not yet signed with a paid code-signing
-                certificate, Windows SmartScreen may show a red
+                Because the installer has only recently been signed with a
+                code-signing certificate, Windows SmartScreen may show a red
                 <em>"Windows protected your PC"</em> dialog. This is expected.
                 Click <strong>More info</strong> and then
                 <strong>Run anyway</strong> to proceed.
               </p>
-              <img
-                class="smartscreen-img"
-                src="assets/SmartScreen.png"
-                alt="Windows SmartScreen: click More info then Run anyway"
-              />
+              <div class="smartscreen-figs">
+                <figure class="smartscreen-fig">
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen.jpg"
+                    alt="The Windows protected your PC dialog as it first appears, with a More info link"
+                  />
+                  <figcaption class="smartscreen-caption">
+                    1. What you see first. Click <strong>More info</strong>.
+                  </figcaption>
+                </figure>
+                <figure class="smartscreen-fig">
+                  <img
+                    class="smartscreen-img"
+                    src="assets/SmartScreen2.jpg"
+                    alt="The expanded dialog showing the app filename and the publisher, with a Run anyway button"
+                  />
+                  <figcaption class="smartscreen-caption">
+                    2. Expanded: check the publisher, then click
+                    <strong>Run anyway</strong>.
+                  </figcaption>
+                </figure>
+              </div>
+              <p class="step-note">
+                Before you click <strong>Run anyway</strong>, check the
+                <strong>Publisher</strong> line. It should read:
+              </p>
+              <p class="publisher-line">
+                NO, Trøndelag, Trondheim, Open Source Developer, Open Source
+                Developer Gaute Lindkvist
+              </p>
+              <p class="step-note">
+                Windows can't render the <strong>ø</strong> in
+                <em>Trøndelag</em> in this dialog, so it shows up as a black
+                diamond or box: <code>Tr&#xFFFD;ndelag</code>. That's a font
+                quirk in the SmartScreen dialog, not a sign the download was
+                tampered with. If the publisher says anything else, don't run
+                the file. The screenshot above is from a desktop build, so the
+                <strong>App</strong> filename differs for the server installer;
+                the publisher is the same.
+              </p>
             </div>
           </div>
         </div>
