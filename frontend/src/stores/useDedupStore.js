@@ -77,6 +77,8 @@ import {
   isUnitExcluded,
   includedUnits,
   flaggedStackIdSet,
+  isLockedRefusal,
+  lockedSets,
   mixedStackAction,
 } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
@@ -2555,6 +2557,31 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
+   * Record on the held row that a locked set freezes this stack.
+   *
+   * A 423 is fresher truth about the row than the page it was read from: the
+   * lock landed after the list was served, so the row is stale and its primary
+   * button is still offering an outcome the server will refuse again. Patching
+   * `stackable` / `blocked_by_sets` from the refusal locks the button and names
+   * the set in the same words a freshly-read page would have, with no reload
+   * and no second vocabulary for the same fact.
+   *
+   * The row is replaced rather than mutated so a row object shared with a
+   * previous render cannot be edited underneath it.
+   *
+   * @param {number|string} stackId
+   * @param {Array<Object>} sets - `[{id, name}]` from the refusal.
+   */
+  function markMixedStackLocked(stackId, sets) {
+    const wanted = String(stackId);
+    mixedStacks.value = mixedStacks.value.map((stack) =>
+      String(stack.stack_id) === wanted
+        ? { ...stack, stackable: false, blocked_by_sets: sets }
+        : stack,
+    );
+  }
+
+  /**
    * Run the row's primary action: split off the strangers, or unstack.
    *
    * The ids the ROW showed are sent, never recomputed server-side, so the
@@ -2590,6 +2617,23 @@ export const useDedupStore = defineStore("dedup", () => {
       return result;
     } catch (err) {
       error.value = err;
+      // A locked picture set refuses the WHOLE stack with 423 and writes
+      // nothing, so the row stays exactly where it is (`removeMixedStack` is
+      // the success path's alone) and is marked with what the server named.
+      // Without the mark the button keeps offering an outcome that cannot
+      // happen, and the second press is refused for a reason nothing on screen
+      // states.
+      if (isLockedRefusal(err)) {
+        const sets = lockedSets(err);
+        markMixedStackLocked(stackId, sets);
+        console.warn(
+          "[dedup] mixed stack %s is frozen by %d locked set(s); nothing was changed",
+          stackId,
+          sets.length,
+          err,
+        );
+        return null;
+      }
       console.warn("[dedup] failed to resolve mixed stack %s", stackId, err);
       return null;
     } finally {

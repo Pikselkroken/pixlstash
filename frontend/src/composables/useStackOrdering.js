@@ -18,6 +18,7 @@ import {
   shiftRangesForDelta,
 } from "../utils/utils.js";
 import { getPictureId } from "../utils/media.js";
+import { isLockedRefusal, lockedSetsSentence, lockedSets } from "../utils/dedup.js";
 import {
   getStack,
   listStackPictures,
@@ -1107,7 +1108,37 @@ export function useStackOrdering(
       debouncedFetchAllGridImages();
     } catch (e) {
       console.error("Failed to dissolve selected stacks:", e);
+      reportStackDetachRefusal(e, "unstack");
     }
+  }
+
+  /**
+   * Say why a detach was refused, and put the grid back where the server is.
+   *
+   * `DELETE /stacks/{id}/members` gained a 423 when a locked set freezes any
+   * member of the stack. It could not answer that before, so every call site
+   * here only logged. Two things follow from a refusal and neither is optional:
+   * a locked set is the one refusal a user cannot diagnose without being told
+   * which set, and a mixed selection may already have written its unlocked
+   * stacks optimistically before the rejection skipped the corrective refetch,
+   * which would leave the grid claiming pictures left stacks they are still in.
+   *
+   * @param {*} err - the rejection.
+   * @param {string} action - verb for the message, e.g. "unstack".
+   */
+  function reportStackDetachRefusal(err, action) {
+    if (isLockedRefusal(err)) {
+      const sets = lockedSetsSentence(lockedSets(err));
+      noticeStore.error(
+        sets
+          ? `Could not ${action}: ${sets}`
+          : `Could not ${action}: a locked set freezes this stack.`,
+      );
+    }
+    // The optimistic writes above landed for whichever stacks succeeded, and
+    // the refetch that would have corrected them was skipped by the throw.
+    preserveScrollOnNextFetch.value = true;
+    debouncedFetchAllGridImages();
   }
 
   async function removeSelectedFromStack() {
@@ -1179,6 +1210,7 @@ export function useStackOrdering(
       debouncedFetchAllGridImages();
     } catch (e) {
       console.error("Failed to remove selected images from stack:", e);
+      reportStackDetachRefusal(e, "remove these from the stack");
     }
   }
 

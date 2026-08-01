@@ -287,6 +287,7 @@
             :revealed="
               String(store.mixedFocusStackId ?? '') === String(stack.stack_id)
             "
+            :lock-flash="flashSignature === mixedFlashKey(stack.stack_id)"
             @resolve="onResolveMixed(stack)"
             @keep="onKeepMixed(stack)"
             @show-queue="onShowQueueForStack(stack)"
@@ -564,7 +565,11 @@ import {
   candidateId,
   groupUnits,
   serverDetail,
+  isLockedRefusal,
+  isMixedStackStackable,
   lockedPictureIds,
+  lockedSetsSentence,
+  mixedStackLockedSets,
   partialStackSentence,
   mixedStackAction,
 } from "../../utils/dedup";
@@ -645,6 +650,21 @@ const LOCK_FLASH_MS = 1000;
  * keystroke.
  */
 const EMPTY_IDS = Object.freeze([]);
+
+/**
+ * The flash scope key for one Mixed stacks row.
+ *
+ * The lock flash is scoped by a single ref shared with the queue, and a mixed
+ * row has no group signature to be scoped by. Namespacing the stack id keeps
+ * the two sets of keys from ever colliding on a signature that happened to
+ * look like a number.
+ *
+ * @param {number|string} stackId
+ * @returns {string} empty when there is no row to scope to.
+ */
+function mixedFlashKey(stackId) {
+  return stackId === null || stackId === undefined ? "" : `mixed:${stackId}`;
+}
 
 // The settings dialog is App.vue's; the queue only asks for it, the same way
 // the grid's toolbar does.
@@ -1345,7 +1365,7 @@ function onToggleExcluded(group, pictureId) {
     // set. The chip on the thumbnail carries the how.
     announcement.value =
       "That picture is in a locked set, so it cannot be put into the stack. Unlock the set to include it.";
-    flashLockedPictures([pictureId], group);
+    flashLockedPictures([pictureId], group?.signature ?? "");
     return;
   }
   announcement.value = STACK_FLOOR_NOTICE;
@@ -1435,22 +1455,28 @@ function reportVerdictFailure(what, err, group = null) {
   // The row stays on screen, so the refusal has an anchor: flash the lock chip
   // on the exact pictures the server named. The global sentence says what
   // happened; the flash says WHICH, which no bottom-centre notice can.
-  flashLockedPictures(lockedPictureIds(err), group);
+  flashLockedPictures(lockedPictureIds(err), group?.signature ?? "");
 }
 
 /**
- * Draw the eye to the thumbnails a refusal named.
+ * Draw the eye to what a refusal named.
  *
  * One shot: the class is dropped again once the animation has run, so a second
  * refusal on the same row flashes again rather than being a no-op. The chip
  * itself is permanent; only the amber is transient.
  *
- * @param {Array<number>} pictureIds
- * @param {Object|null} group
+ * The scope key says WHICH row is answering: a group signature in the queue, or
+ * `mixedFlashKey(stackId)` on the Mixed stacks page, whose rows carry no
+ * signature and whose anchor is the row's own lock note rather than a
+ * per-thumbnail chip. One function for both, because a refusal answered two
+ * ways is two behaviours to keep in step.
+ *
+ * @param {Array<number>} pictureIds - the pictures the refusal named, if any.
+ * @param {string} [scopeKey] - the row that is flashing.
  */
-function flashLockedPictures(pictureIds, group) {
-  if (!pictureIds.length) return;
-  if (group?.signature) flashSignature.value = group.signature;
+function flashLockedPictures(pictureIds, scopeKey = "") {
+  if (!pictureIds.length && !scopeKey) return;
+  flashSignature.value = scopeKey;
   flashIds.value = pictureIds;
   if (flashTimer) clearTimeout(flashTimer);
   flashTimer = setTimeout(() => {
@@ -1782,13 +1808,24 @@ function onShowQueueForStack(stack) {
  */
 async function onResolveMixed(stack) {
   const plan = mixedStackAction(stack);
+  // The row already carries the server's own verdict on whether either outcome
+  // can land (`stackable` / `blocked_by_sets`), so the doomed call is never
+  // issued: the button is marked `aria-disabled` and the press is answered
+  // here, in the same words the 423 would have produced. The row owns the
+  // marking, the page owns the guard, which is the ReviewDecisionBar contract.
+  if (!isMixedStackStackable(stack)) {
+    reportMixedStackRefusal(
+      stack,
+      lockedSetsSentence(mixedStackLockedSets(stack)),
+    );
+    return;
+  }
   const result = await store.resolveMixedStack(stack);
   if (!result) {
-    const detail = serverDetail(store.error);
-    const because = detail ? ` ${detail}` : "";
-    announcement.value = `Could not change that stack.${because} Nothing was changed.`;
-    noticeStore.error(
-      `Could not change that stack.${because} Nothing was changed, so you can try again.`,
+    reportMixedStackRefusal(
+      stack,
+      serverDetail(store.error),
+      isLockedRefusal(store.error) ? lockedPictureIds(store.error) : [],
     );
     return;
   }
@@ -1797,6 +1834,29 @@ async function onResolveMixed(stack) {
     plan.action === "split"
       ? `Took ${moved} ${moved === 1 ? "picture" : "pictures"} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`
       : `Freed ${moved} ${moved === 1 ? "picture" : "pictures"} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`;
+}
+
+/**
+ * Say why a mixed-stack action did not run, and anchor it on the row.
+ *
+ * One reporter for both refusals, because they are the same refusal met at two
+ * moments: the list already knew the stack was frozen, or the lock landed after
+ * the page was read and the server said so with a 423. Either way the row is
+ * still on screen, which is what makes an anchor possible at all: the notice
+ * says WHAT happened and the flashed lock note on the row says WHICH stack,
+ * which no bottom-centre notice can.
+ *
+ * @param {Object} stack - the row that refused.
+ * @param {string} sentence - the named reason, already built.
+ * @param {Array<number>} [pictureIds] - the pictures a 423 named, if any.
+ */
+function reportMixedStackRefusal(stack, sentence, pictureIds = []) {
+  const because = sentence ? ` ${sentence}` : "";
+  announcement.value = `Could not change that stack.${because} Nothing was changed.`;
+  noticeStore.error(
+    `Could not change that stack.${because} Nothing was changed, so you can try again.`,
+  );
+  flashLockedPictures(pictureIds, mixedFlashKey(stack?.stack_id));
 }
 
 /**

@@ -45,6 +45,10 @@ import {
   clearMixedStackKeep,
 } from "../api/dedup";
 import { useOperationStore } from "./useOperationStore";
+// The refusal readers the view uses, asserted here on the rejection the store
+// carried up: a 423 that reaches the view unreadable is a named refusal that
+// silently degrades to the generic sentence.
+import { lockedPictureIds, serverDetail } from "../utils/dedup";
 import {
   useDedupStore,
   scopeKey,
@@ -2996,6 +3000,89 @@ describe("useDedupStore: the mixed-stack actions", () => {
     await store.loadMixedStacks();
     expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
     expect(store.mixedStacks).toHaveLength(1);
+  });
+
+  // A locked picture set refuses the WHOLE stack with 423 and writes nothing,
+  // so the row has to stay AND has to stop offering an outcome that cannot
+  // land. The refusal is fresher truth than the page the row was read from, so
+  // it is what the row is marked with.
+  it("keeps a 423-refused row and marks it with the sets the server named", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    splitMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            action: "split a stack",
+            sets: [{ id: 3, name: "Frozen" }],
+            picture_ids: [11],
+          },
+        },
+      },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedTotal).toBe(1);
+    expect(store.mixedStacks[0].stackable).toBe(false);
+    expect(store.mixedStacks[0].blocked_by_sets).toEqual([
+      { id: 3, name: "Frozen" },
+    ]);
+    // The rejection is still carried up, so the view can name the sets and
+    // flash the pictures the refusal listed.
+    expect(lockedPictureIds(store.error)).toEqual([11]);
+    expect(serverDetail(store.error)).toContain("Frozen");
+  });
+
+  // An unstack takes the same refusal, and the row it leaves behind must read
+  // the same way: one refusal, one marking.
+  it("marks the row when an unstack is refused by a lock", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 7,
+          suggested_action: "unstack",
+          stranded_picture_ids: [],
+        }),
+      ]),
+    );
+    unstackMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            sets: [
+              { id: 3, name: "Frozen" },
+              { id: 4, name: "Archive" },
+            ],
+            picture_ids: [7, 8],
+          },
+        },
+      },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedStacks[0].stackable).toBe(false);
+    expect(store.mixedStacks[0].blocked_by_sets).toHaveLength(2);
+  });
+
+  // Over-marking is its own regression: a network blip is not a lock, and a row
+  // that quietly disabled itself on one would strand work the user could do.
+  it("does not mark a row locked when the failure was not a lock", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue(new Error("nope"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedStacks[0].stackable).toBeUndefined();
   });
 
   // Keep is what makes the list drainable. It changes no picture, so it records

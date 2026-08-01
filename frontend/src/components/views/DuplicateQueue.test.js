@@ -2707,6 +2707,102 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
+  // The 423 the whole lock contract exists for. Nothing was written, so the row
+  // stays; it is marked with what the server named, so the button stops
+  // offering an outcome that cannot happen; and the sentence names the SET,
+  // because that is the only thing the user can go and act on.
+  it("keeps a 423-refused row, names the set and locks the action", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    splitMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            action: "split a stack",
+            sets: [{ id: 3, name: "Frozen" }],
+            picture_ids: [11],
+          },
+        },
+      },
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    await wrapper.find(".mactions button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "locked set 'Frozen'",
+    );
+    // The row now carries the refusal's own truth, so the reason is on screen
+    // and the second press never reaches the server.
+    const note = wrapper.find(".mlock");
+    expect(note.text()).toBe("Frozen by locked set 'Frozen'");
+    expect(note.classes()).toContain("mlock--flash");
+    const primary = wrapper.find(".mactions button");
+    expect(primary.attributes("aria-disabled")).toBe("true");
+    expect(primary.attributes("aria-describedby")).toBe(note.attributes("id"));
+
+    splitMixedStack.mockClear();
+    await primary.trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+  });
+
+  // A row the LIST already knew was frozen never issues the doomed call at all,
+  // and the press is answered rather than reading as a dead control.
+  it("answers a press on a row the list already served as frozen", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 42,
+          stackable: false,
+          blocked_by_sets: [{ id: 3, name: "Frozen" }],
+        }),
+      ]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".mlock").text()).toBe("Frozen by locked set 'Frozen'");
+    await wrapper.find(".mactions button").trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+  });
+
+  // Over-blocking is its own regression: a live row keeps its action, and the
+  // action still reaches the server.
+  it("leaves a stackable row's action live", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 42, stackable: true, blocked_by_sets: [] }),
+      ]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".mlock").exists()).toBe(false);
+    const primary = wrapper.find(".mactions button");
+    expect(primary.attributes("aria-disabled")).toBeUndefined();
+    await primary.trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+  });
+
   // Keep is what makes the list drainable, and it is the one action here that
   // is NOT undoable: it changes no picture, so DELETE is the way back and the
   // page has to offer it where the row used to be.

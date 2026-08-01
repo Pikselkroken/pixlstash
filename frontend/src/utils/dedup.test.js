@@ -17,6 +17,13 @@ import {
   candidateStackable,
   serverDetail,
   lockedPictureIds,
+  lockedSets,
+  lockedSetsSentence,
+  isLockedRefusal,
+  isMixedStackStackable,
+  mixedStackLockedSets,
+  mixedStackLockNote,
+  mixedStackLockTitle,
   partialStackSentence,
   candidateBlockedBySets,
   lockedCandidateIds,
@@ -336,6 +343,97 @@ describe("verdict-refusal copy", () => {
     expect(lockedPictureIds(reject({ picture_ids: [1, 2] }))).toEqual([1, 2]);
     expect(lockedPictureIds(reject({ code: "set_locked" }))).toEqual([]);
     expect(lockedPictureIds(undefined)).toEqual([]);
+  });
+
+  // The mixed-stack routes spell the same refusal `pictures_locked`. Reading
+  // only the verdict routes' spelling is what makes half this surface fall
+  // back to the generic sentence.
+  it("recognises both spellings of the locked refusal", () => {
+    expect(isLockedRefusal(reject({ code: "pictures_locked" }))).toBe(true);
+    expect(isLockedRefusal(reject({ code: "set_locked" }))).toBe(true);
+    expect(isLockedRefusal({ response: { status: 423, data: {} } })).toBe(true);
+    expect(isLockedRefusal(reject("a stack needs two pictures"))).toBe(false);
+    expect(isLockedRefusal(new Error("network"))).toBe(false);
+    expect(isLockedRefusal(undefined)).toBe(false);
+    expect(
+      serverDetail(
+        reject({ code: "pictures_locked", sets: [{ id: 3, name: "Frozen" }] }),
+      ),
+    ).toContain("locked set 'Frozen'");
+  });
+
+  // A 423 is fresher truth about a row than the page it was read from, so its
+  // sets come back in the same shape `blocked_by_sets` arrives in.
+  it("hands back the sets a refusal named, in the row's own shape", () => {
+    expect(
+      lockedSets(
+        reject({ code: "pictures_locked", sets: [{ id: 3, name: "Frozen" }] }),
+      ),
+    ).toEqual([{ id: 3, name: "Frozen" }]);
+    expect(lockedSets(reject({ code: "pictures_locked" }))).toEqual([]);
+    expect(lockedSets(reject({ code: "something_else", sets: [{}] }))).toEqual(
+      [],
+    );
+    expect(lockedSets(undefined)).toEqual([]);
+  });
+
+  it("words the sentence the same whether it came from a 423 or a row", () => {
+    const sets = [{ id: 3, name: "Frozen" }];
+    expect(lockedSetsSentence(sets)).toBe(
+      serverDetail(reject({ code: "pictures_locked", sets })),
+    );
+    expect(lockedSetsSentence([])).toBe(
+      "A locked set is freezing these pictures.",
+    );
+    expect(lockedSetsSentence(undefined)).toBe(
+      "A locked set is freezing these pictures.",
+    );
+  });
+});
+
+describe("mixed-stack lock copy", () => {
+  const frozen = (sets) => ({ stackable: false, blocked_by_sets: sets });
+
+  // Only an explicit `false` blocks. Over-blocking a row the user could have
+  // resolved is its own regression, and a silent one.
+  it("treats only an explicit false as frozen", () => {
+    expect(isMixedStackStackable({ stackable: true })).toBe(true);
+    expect(isMixedStackStackable({})).toBe(true);
+    expect(isMixedStackStackable(undefined)).toBe(true);
+    expect(isMixedStackStackable({ stackable: false })).toBe(false);
+    // A live row carries no lock copy at all, whatever else is on it.
+    expect(mixedStackLockedSets({ blocked_by_sets: [{ name: "X" }] })).toEqual(
+      [],
+    );
+    expect(mixedStackLockNote({ stackable: true })).toBe("");
+    expect(mixedStackLockTitle({ stackable: true })).toBe("");
+  });
+
+  it("names the set, and every set, in the row's note", () => {
+    expect(mixedStackLockNote(frozen([{ id: 3, name: "Frozen" }]))).toBe(
+      "Frozen by locked set 'Frozen'",
+    );
+    expect(
+      mixedStackLockNote(frozen([{ name: "Frozen" }, { name: "Archive" }])),
+    ).toBe("Frozen by locked sets 'Frozen, Archive'");
+    expect(mixedStackLockNote(frozen([]))).toBe("Frozen by a locked set");
+    expect(mixedStackLockNote({ stackable: false })).toBe(
+      "Frozen by a locked set",
+    );
+  });
+
+  // Cause, then remedy: the set is the thing the user has to go and unlock, and
+  // a blocked control with no way past it is a dead end.
+  it("states the cause and the remedy in the tooltip", () => {
+    const one = mixedStackLockTitle(frozen([{ name: "Frozen" }]));
+    expect(one).toContain("the locked set 'Frozen'");
+    expect(one).toContain("Unlock it to change this stack.");
+    const many = mixedStackLockTitle(
+      frozen([{ name: "Frozen" }, { name: "Archive" }]),
+    );
+    expect(many).toContain("the locked sets 'Frozen, Archive'");
+    expect(many).toContain("Unlock them");
+    expect(mixedStackLockTitle(frozen([]))).toContain("a locked set");
   });
 
   it("summarises a partial stack in one sentence", () => {

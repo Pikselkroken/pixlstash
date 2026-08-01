@@ -44,6 +44,21 @@
       <span v-if="unhashedCount" class="mreason mreason--soft">{{
         unhashedSentence
       }}</span>
+      <!-- The lock note. It is the `aria-describedby` target of the primary
+           button, so it stays in the DOM and visible for as long as the button
+           is blocked: a reason that lives only in a tooltip is a reason the
+           keyboard never reaches. Named, because the set is what has to be
+           unlocked and "locked" alone is a dead end. -->
+      <span
+        v-if="lockNote"
+        :id="lockNoteId"
+        class="mlock"
+        :class="{ 'mlock--flash': lockFlash }"
+        :title="lockTitle"
+      >
+        <v-icon size="13">mdi-lock-outline</v-icon>
+        {{ lockNote }}
+      </span>
     </div>
 
     <!-- The suspects: the row's reason to exist. Small, so the run of them
@@ -69,21 +84,33 @@
       <!-- The primary action NAMES ITS OUTCOME, because it is the last text
            before a change to the library: `Split off 1` when there is a clear
            stranger, `Unstack` when there is no majority left to keep. Both are
-           one operation, so one Ctrl+Z reverses either. -->
+           one operation, so one Ctrl+Z reverses either.
+
+           A locked picture set freezes the whole stack, so both outcomes are
+           refused: the button is marked `aria-disabled`, never `disabled`, so
+           it keeps its place in the tab order and the reason it points at
+           stays reachable. The page owns the guard, exactly as the review
+           decision bar does, so the press is answered rather than dead. -->
       <AppButton
         v-if="!readOnly"
         variant="ghost"
         size="sm"
         :icon-left="plan.action === 'split' ? 'call-split' : 'layers-off'"
         :loading="busy"
-        :title="primaryTitle"
+        :title="lockNote ? lockTitle : primaryTitle"
+        v-bind="primaryLockAttrs"
         @click="emit('resolve')"
         >{{ plan.label }}</AppButton
       >
       <!-- Keep is what makes this list drainable. Without it the
            legitimate-but-odd stacks sit here forever and the page becomes
            ignorable. It changes no picture, so it is not undoable; the way
-           back is to clear the Keep, which the page offers after the press. -->
+           back is to clear the Keep, which the page offers after the press.
+
+           It stays live on a frozen row ON PURPOSE. Keep writes a dismissal,
+           not a picture, so the backend's keep route carries no lock guard at
+           all: disabling it here would strand the one row the user cannot
+           otherwise clear from the list. -->
       <AppButton
         v-if="!readOnly"
         variant="ghost"
@@ -127,7 +154,7 @@
 // order is the ranking, and a numeral would promise a position that changes
 // the moment the threshold slider moves.
 
-import { computed } from "vue";
+import { computed, useId } from "vue";
 import AppButton from "./AppButton.vue";
 import StackBadge from "./StackBadge.vue";
 import StackEdgeTicks from "./StackEdgeTicks.vue";
@@ -136,6 +163,8 @@ import { API_BASE_URL } from "../../utils/apiClient";
 import {
   hasStrandedMember,
   mixedStackAction,
+  mixedStackLockNote,
+  mixedStackLockTitle,
   mixedStackReason,
   mixedStackSuspects,
   mixedStackTitle,
@@ -159,14 +188,41 @@ const props = defineProps({
   canShowQueue: { type: Boolean, default: false },
   /** The two-way shortcut arrived here, so the row marks itself once. */
   revealed: { type: Boolean, default: false },
+  /**
+   * A refusal named this row, so the lock note answers the press visibly.
+   *
+   * The sighted counterpart to the announcement, and the page owns its
+   * lifetime because it owns the one timer that clears every lock flash.
+   */
+  lockFlash: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["resolve", "keep", "show-queue"]);
+
+const lockNoteId = useId();
 
 const title = computed(() => mixedStackTitle(props.stack));
 const reason = computed(() => mixedStackReason(props.stack));
 const plan = computed(() => mixedStackAction(props.stack));
 const flagged = computed(() => hasStrandedMember(props.stack));
+
+/**
+ * The row's lock state, from the pair the list serves: `stackable` and
+ * `blocked_by_sets`. Empty note means nothing here is frozen.
+ */
+const lockNote = computed(() => mixedStackLockNote(props.stack));
+const lockTitle = computed(() => mixedStackLockTitle(props.stack));
+
+/**
+ * `aria-disabled` plus the pointer at the note, never the `disabled`
+ * attribute: a disabled button leaves the tab order, so a keyboard user could
+ * never reach the control to discover why it does nothing.
+ */
+const primaryLockAttrs = computed(() =>
+  lockNote.value
+    ? { "aria-disabled": "true", "aria-describedby": lockNoteId }
+    : {},
+);
 
 const suspects = computed(() => mixedStackSuspects(props.stack, SUSPECT_LIMIT));
 
@@ -199,9 +255,16 @@ const unhashedSentence = computed(() =>
  *
  * The visible row carries it across a title, a reason line and a run of
  * unlabelled thumbnails; none of that reaches assistive tech as a unit.
+ *
+ * The lock note rides along: a screen-reader user meeting the row from the top
+ * hears why the action will not run before reaching the button, rather than
+ * only on focus.
  */
-const accessibleName = computed(
-  () => `${title.value}. ${reason.value}. ${plan.value.label}.`,
+const accessibleName = computed(() =>
+  [title.value, reason.value, plan.value.label, lockNote.value]
+    .filter(Boolean)
+    .map((part) => `${part}.`)
+    .join(" "),
 );
 
 const suspectsLabel = computed(() =>
@@ -313,6 +376,58 @@ function thumbUrl(id) {
 
 .mreason--soft {
   color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+/* The lock note. It is a third line in a text column, so its own padding is
+   pulled back by exactly the step it adds: the text keeps the title's left
+   edge, and the flash wash still has a box to fill. It has to stay in the DOM
+   and visible for as long as the primary button points at it. */
+.mlock {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.mlock .v-icon {
+  color: inherit;
+}
+
+/* The visible answer to a blocked press: the announcement's counterpart for
+   the user who is looking at the row rather than listening to it. The WASH
+   moves and the text colour does not, which is the one difference from
+   ReviewDecisionBar's rs-lock-flash: that chip sits on a dark surface, and
+   `warning` as body text on this one is a 3:1 UI colour being asked to do a
+   4.5:1 text job (visual-language.md §4). */
+.mlock--flash {
+  animation: m-lock-flash var(--dur-2) var(--ease-standard);
+}
+
+@keyframes m-lock-flash {
+  50% {
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mlock--flash {
+    animation: none;
+    background: color-mix(
+      in srgb,
+      rgb(var(--v-theme-warning)) 26%,
+      transparent
+    );
+  }
 }
 
 /* The suspects. A plain run, wrapping rather than scrolling: a horizontal

@@ -209,6 +209,110 @@ describe("MixedStackRow: the actions name their outcome", () => {
   });
 });
 
+describe("MixedStackRow: a stack a locked set has frozen", () => {
+  /** The row shape the server serves for a frozen stack. */
+  function frozen(over = {}) {
+    return stack({
+      stackable: false,
+      blocked_by_sets: [{ id: 3, name: "Frozen" }],
+      ...over,
+    });
+  }
+
+  // Both writes answer 423 and change nothing, so the row must not offer
+  // either. `aria-disabled`, never `disabled`: a disabled button leaves the tab
+  // order, taking the reason it points at with it.
+  it("blocks the primary action and names the set that froze it", () => {
+    const wrapper = mountRow({ stack: frozen() });
+    const primary = wrapper.findAll(".mactions button")[0];
+    expect(primary.attributes("aria-disabled")).toBe("true");
+    expect(primary.attributes("disabled")).toBeUndefined();
+    expect(wrapper.find(".mlock").text()).toBe("Frozen by locked set 'Frozen'");
+  });
+
+  it("names every set when more than one is freezing the stack", () => {
+    const wrapper = mountRow({
+      stack: frozen({
+        blocked_by_sets: [
+          { id: 3, name: "Frozen" },
+          { id: 4, name: "Archive" },
+        ],
+      }),
+    });
+    expect(wrapper.find(".mlock").text()).toBe(
+      "Frozen by locked sets 'Frozen, Archive'",
+    );
+  });
+
+  // A refusal with no set names still has to say something the user can act
+  // on, rather than a disabled button with no explanation at all.
+  it("still says what is wrong when the sets were not named", () => {
+    const wrapper = mountRow({ stack: frozen({ blocked_by_sets: [] }) });
+    expect(wrapper.find(".mlock").text()).toBe("Frozen by a locked set");
+  });
+
+  // The reason has to survive a user who never hovers: it is real text in the
+  // row, it is what the button points at, and it rides in the row's own name.
+  it("puts the reason where assistive tech will find it, not only in a tooltip", () => {
+    const wrapper = mountRow({ stack: frozen() });
+    const note = wrapper.find(".mlock");
+    const primary = wrapper.findAll(".mactions button")[0];
+    expect(note.attributes("id")).toBeTruthy();
+    expect(primary.attributes("aria-describedby")).toBe(note.attributes("id"));
+    expect(primary.attributes("title")).toContain("'Frozen'");
+    expect(primary.attributes("title")).toContain("Unlock it");
+    expect(wrapper.find(".mrow").attributes("aria-label")).toContain(
+      "Frozen by locked set 'Frozen'",
+    );
+  });
+
+  // Keep writes a dismissal, not a picture: the backend's keep route carries no
+  // lock guard, so disabling it would strand the one row the user cannot
+  // otherwise clear from the list.
+  it("leaves Keep and the way back to the queue fully live", () => {
+    const wrapper = mountRow({ stack: frozen(), canShowQueue: true });
+    const buttons = wrapper.findAll(".mactions button");
+    expect(buttons[1].text()).toContain("Keep");
+    expect(buttons[1].attributes("aria-disabled")).toBeUndefined();
+    expect(buttons[2].attributes("aria-disabled")).toBeUndefined();
+  });
+
+  // The page owns the guard, the same way the review decision bar does, so the
+  // press is answered out loud instead of reading as a dead control.
+  it("still reports the press, so the page can say why it cannot run", async () => {
+    const wrapper = mountRow({ stack: frozen() });
+    await wrapper.findAll(".mactions button")[0].trigger("click");
+    expect(wrapper.emitted("resolve")).toHaveLength(1);
+  });
+
+  // Over-blocking is its own regression, and a silent one: a live row must keep
+  // its action and must not grow a reason it does not have.
+  it("leaves a stackable row alone, with no lock reason anywhere", () => {
+    const live = mountRow({ stack: stack({ stackable: true }) });
+    const primary = live.findAll(".mactions button")[0];
+    expect(primary.attributes("aria-disabled")).toBeUndefined();
+    expect(live.find(".mlock").exists()).toBe(false);
+    expect(live.find(".mrow").attributes("aria-label")).not.toContain("Frozen");
+    // And a server that does not publish the pair at all is not a lock either.
+    const legacy = mountRow();
+    expect(
+      legacy.findAll(".mactions button")[0].attributes("aria-disabled"),
+    ).toBeUndefined();
+    expect(legacy.find(".mlock").exists()).toBe(false);
+  });
+
+  // The sighted counterpart to the announcement, for the user who is looking at
+  // the row rather than listening to it. The page owns its lifetime.
+  it("flashes the note when the page says this row is the one that refused", () => {
+    expect(
+      mountRow({ stack: frozen() }).find(".mlock").classes(),
+    ).not.toContain("mlock--flash");
+    expect(
+      mountRow({ stack: frozen(), lockFlash: true }).find(".mlock").classes(),
+    ).toContain("mlock--flash");
+  });
+});
+
 describe("MixedStackRow: what a screen reader hears", () => {
   // The visible row spreads its meaning across a title, a reason line and a run
   // of unlabelled thumbnails; none of that reaches assistive tech as a unit.

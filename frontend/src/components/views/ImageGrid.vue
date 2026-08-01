@@ -1261,6 +1261,11 @@ import {
   sleep,
 } from "../../utils/utils.js";
 import {
+  isLockedRefusal,
+  lockedSets,
+  lockedSetsSentence,
+} from "../../utils/dedup.js";
+import {
   dedupeTagList,
   getTagId,
   hasPenalisedTags,
@@ -3320,7 +3325,21 @@ async function removeFromGroup() {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
             removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
-              (err) => console.error("Failed to remove from stack:", err),
+              (err) => {
+                console.error("Failed to remove from stack:", err);
+                // The set removal below still runs, so the user sees the
+                // pictures leave the set while the stack detach silently did
+                // not happen. A locked set is the one refusal nobody can
+                // diagnose without being told which set froze it.
+                if (isLockedRefusal(err)) {
+                  const sets = lockedSetsSentence(lockedSets(err));
+                  noticeStore.error(
+                    sets
+                      ? `They left the set, but could not leave their stack: ${sets}`
+                      : "They left the set, but could not leave their stack: a locked set freezes it.",
+                  );
+                }
+              },
             ),
           ),
         );

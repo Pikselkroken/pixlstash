@@ -674,6 +674,34 @@ export function confidenceLabel(group) {
 // the user reads on a refusal deserves a test that does not need a mounted view.
 
 /**
+ * The `detail.code` values that mean "a locked picture set refused this".
+ *
+ * Two codes, one meaning: `set_locked` is the verdict routes' spelling and
+ * `pictures_locked` the mixed-stack routes'. Reading only one of them is what
+ * makes half the surface fall back to the generic sentence.
+ */
+const LOCK_CODES = new Set(["set_locked", "pictures_locked"]);
+
+/**
+ * One sentence naming the sets that froze something, in the app's own voice.
+ *
+ * Shared by the 423 path and by a row that already KNOWS it is frozen
+ * (`blocked_by_sets`), because the two carry the same `[{id, name}]` shape and
+ * a refusal the user meets twice must not be worded two ways.
+ *
+ * @param {Array<Object>} [sets] - `[{id, name}]`.
+ * @returns {string}
+ */
+export function lockedSetsSentence(sets) {
+  const names = (sets ?? []).map((entry) => entry?.name).filter(Boolean);
+  if (!names.length) return "A locked set is freezing these pictures.";
+  const joined = names.join(", ");
+  return names.length === 1
+    ? `They are in the locked set '${joined}', which cannot gain or change members.`
+    : `They are in the locked sets '${joined}', which cannot gain or change members.`;
+}
+
+/**
  * The server's own explanation for a refusal, when it gave one.
  *
  * A dedup verdict is refused for reasons the user can act on ("a stack needs at
@@ -691,17 +719,8 @@ export function serverDetail(err) {
   // its own copy without string-parsing. Reading only strings here is what made
   // the one refusal the user can actually act on arrive as the generic line.
   if (detail && typeof detail === "object" && !Array.isArray(detail)) {
-    if (detail.code !== "set_locked" && detail.code !== "pictures_locked") {
-      return "";
-    }
-    const names = (detail.sets ?? [])
-      .map((entry) => entry?.name)
-      .filter(Boolean);
-    if (!names.length) return "A locked set is freezing these pictures.";
-    const joined = names.join(", ");
-    return names.length === 1
-      ? `They are in the locked set '${joined}', which cannot gain or change members.`
-      : `They are in the locked sets '${joined}', which cannot gain or change members.`;
+    if (!LOCK_CODES.has(detail.code)) return "";
+    return lockedSetsSentence(detail.sets);
   }
   if (typeof detail !== "string") return "";
   const text = detail.trim();
@@ -718,6 +737,39 @@ export function serverDetail(err) {
 export function lockedPictureIds(err) {
   const ids = err?.response?.data?.detail?.picture_ids;
   return Array.isArray(ids) ? ids : [];
+}
+
+/**
+ * Whether a rejection is the locked-set refusal rather than any other failure.
+ *
+ * The status alone is enough (423 is only ever this), and the code is honoured
+ * as well so a transport that loses the status still resolves it.
+ *
+ * @param {*} err
+ * @returns {boolean}
+ */
+export function isLockedRefusal(err) {
+  if (Number(err?.response?.status) === 423) return true;
+  return LOCK_CODES.has(err?.response?.data?.detail?.code);
+}
+
+/**
+ * The picture sets a refusal named, in the shape a row already carries them.
+ *
+ * A 423 is FRESHER truth about a row than the page it was read from, and its
+ * `sets` are the same `[{id, name}]` as `blocked_by_sets`, so a caller can
+ * patch the row it holds with this rather than keeping a second vocabulary for
+ * the same fact.
+ *
+ * @param {*} err
+ * @returns {Array<Object>}
+ */
+export function lockedSets(err) {
+  const detail = err?.response?.data?.detail;
+  if (!LOCK_CODES.has(detail?.code)) return [];
+  return Array.isArray(detail.sets)
+    ? detail.sets.filter((entry) => entry && typeof entry === "object")
+    : [];
 }
 
 /**
@@ -899,4 +951,80 @@ export function mixedStackSuspects(stack, limit = 6) {
     for (const id of component ?? []) push(id);
   }
   return suspects.slice(0, Math.max(0, limit));
+}
+
+/**
+ * Whether one mixed-stack row's primary action can succeed.
+ *
+ * `stackable: false` means a locked picture set freezes a member, and a stack
+ * moves whole or not at all: BOTH writes (split and unstack) then answer 423
+ * and change nothing, so the row must not offer either.
+ *
+ * Only an explicit `false` blocks. A row from a server that does not publish
+ * the field is treated as live, because over-blocking a row the user could
+ * actually have resolved is its own regression and a silent one.
+ *
+ * @param {Object} stack
+ * @returns {boolean}
+ */
+export function isMixedStackStackable(stack) {
+  return stack?.stackable !== false;
+}
+
+/**
+ * The locked sets freezing one mixed stack, as the row was served them.
+ *
+ * @param {Object} stack
+ * @returns {Array<Object>} `[{id, name}]`, empty when the row is not frozen.
+ */
+export function mixedStackLockedSets(stack) {
+  if (isMixedStackStackable(stack)) return [];
+  const sets = stack?.blocked_by_sets;
+  return Array.isArray(sets)
+    ? sets.filter((entry) => entry && typeof entry === "object")
+    : [];
+}
+
+/**
+ * The row's visible lock note: what is frozen, named.
+ *
+ * Named, not just "locked": the set is the thing the user has to go and
+ * unlock, and a disabled button with an unnamed reason is a dead end. The
+ * names are joined inside ONE pair of quotes, the same way
+ * {@link lockedSetsSentence} does it, so the note and the sentence the same
+ * refusal produces cannot look like two different conventions.
+ *
+ * @param {Object} stack
+ * @returns {string} empty when the row is not frozen.
+ */
+export function mixedStackLockNote(stack) {
+  if (isMixedStackStackable(stack)) return "";
+  const names = mixedStackLockedSets(stack)
+    .map((entry) => entry?.name)
+    .filter(Boolean);
+  if (!names.length) return "Frozen by a locked set";
+  return names.length === 1
+    ? `Frozen by locked set '${names[0]}'`
+    : `Frozen by locked sets '${names.join(", ")}'`;
+}
+
+/**
+ * The lock note's tooltip: the cause, then the remedy.
+ *
+ * Same convention as the review surface's lock copy: name the set, state why
+ * it blocks, then say the one thing that clears it.
+ *
+ * @param {Object} stack
+ * @returns {string} empty when the row is not frozen.
+ */
+export function mixedStackLockTitle(stack) {
+  if (isMixedStackStackable(stack)) return "";
+  const names = mixedStackLockedSets(stack)
+    .map((entry) => entry?.name)
+    .filter(Boolean);
+  const where = names.length
+    ? `the locked set${names.length > 1 ? "s" : ""} '${names.join(", ")}'`
+    : "a locked set";
+  const it = names.length > 1 ? "them" : "it";
+  return `Splitting or unstacking would change a picture in ${where}, which cannot gain or change members. Unlock ${it} to change this stack.`;
 }

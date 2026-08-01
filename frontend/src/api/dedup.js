@@ -527,7 +527,11 @@ export const MAX_MIXED_STACK_PAGE = 200;
  *   `membership_fingerprint`, `component_count`, `component_sizes`,
  *   `components`, `largest_component_size`, `stranded_picture_ids`,
  *   `weakest_edge`, `unhashed_picture_ids`, `suggested_action` (`split` or
- *   `unstack`), `kept`, `leader_picture_id` and `leader_thumbnail_version`.
+ *   `unstack`), `kept`, `leader_picture_id`, `leader_thumbnail_version`, and
+ *   `stackable` / `blocked_by_sets` (the same pair `getStackMembers` reports,
+ *   rolled up over the whole stack: `false` means a locked picture set freezes
+ *   a member, so split and unstack both answer 423 and the row's primary
+ *   button should be disabled with `blocked_by_sets` as the reason).
  */
 export async function listMixedStacks({
   threshold,
@@ -556,13 +560,25 @@ export async function listMixedStacks({
  * them makes the server recompute the stranded set at `threshold` instead,
  * which is a different, later answer.
  *
+ * `pictureIds` must be a SUBSET of the stranded set at `threshold`; anything
+ * else is a 400. This route splits strangers off a mixed stack and is not a
+ * general remove-from-stack primitive (`DELETE /stacks/{id}/members` is), so a
+ * named id the server no longer considers stranded means the stack moved and
+ * the row needs re-reading.
+ *
+ * A locked picture set refuses the whole stack with 423. Gate the button on the
+ * row's `stackable` / `blocked_by_sets` rather than issuing the call to find
+ * out.
+ *
  * Recorded as ONE operation, so a single `Ctrl+Z` puts every picture back in
  * its original stack at its original position.
  *
  * @param {number|string} stackId
  * @param {Object} [options]
- * @param {Array<number>} [options.pictureIds] - the members to split off.
- * @param {number} [options.threshold] - only read when `pictureIds` is omitted.
+ * @param {Array<number>} [options.pictureIds] - the members to split off; must
+ *   be a subset of the row's `stranded_picture_ids`.
+ * @param {number} [options.threshold] - selects the stranded set when
+ *   `pictureIds` is omitted, and bounds it when it is supplied.
  * @param {string} [options.batchId] - a client-namespaced `cli-…` id; omit to
  *   have the server mint an `srv-` one.
  * @param {string} [options.baseUrl=""]
@@ -593,6 +609,9 @@ export async function splitMixedStack(
  * Nothing is deleted and no file moves; a stack is a grouping row plus a cover
  * pointer. Recorded as ONE operation, so a single `Ctrl+Z` recreates the stack
  * under its original id with every member back at its original position.
+ *
+ * A locked picture set refuses the stack with 423, so gate the button on the
+ * row's `stackable` / `blocked_by_sets`.
  *
  * @param {number|string} stackId
  * @param {Object} [options]
