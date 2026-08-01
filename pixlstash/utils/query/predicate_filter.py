@@ -383,7 +383,7 @@ class PredicateFilter(BaseModel):
             # its survivor: the group had left the queue and the badge, but the
             # grid still called the remaining picture unresolved. It is imported
             # lazily for the same reason ``Picture.find`` imports this module
-            # lazily — ``db_models.picture`` sits between the two.
+            # lazily: ``db_models.picture`` sits between the two.
             from pixlstash.services.dedup_tier_service import live_groups_filter
 
             preds.append(

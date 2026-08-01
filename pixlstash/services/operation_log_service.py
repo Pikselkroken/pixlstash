@@ -123,7 +123,7 @@ OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
 
 # Keep cover only (docs/design/keep-cover-only.md): a stack keeps its cover and
 # every other live member is soft-deleted. Named `keep_cover_only`, never
-# `squash` — in git that word means "merge without losing content", so a
+# `squash`: in git that word means "merge without losing content", so a
 # git-literate reader grepping it would assume this action loses nothing.
 OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
 
@@ -494,8 +494,8 @@ def keep_cover_only_summary(stack_count: int, moved_count: int) -> str:
 
     A plain string, built from the collapse **plan** rather than from the diff
     like :func:`scrapheap_move_summary` is. The plan is already the filtered
-    truth here — skipped stacks (a locked-set member, a character link that
-    lives only on a copy) are not in it — so both figures are counted directly
+    truth here: skipped stacks (a locked-set member, a character link that
+    lives only on a copy) are not in it, so both figures are counted directly
     and neither is derived by subtracting one query's answer from another's.
 
     The sentence names what you keep *and* what moves, mirroring the confirm

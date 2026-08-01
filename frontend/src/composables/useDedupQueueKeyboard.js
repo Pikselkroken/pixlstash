@@ -23,7 +23,7 @@
 //   E                     open (or close) the focused group's stack in place:
 //                         a full-width band of that deck's members below the
 //                         row. A read gesture, so it stays live in a read-only
-//                         session, and a DISCLOSURE rather than a mode — the
+//                         session, and a DISCLOSURE rather than a mode, the
 //                         verdict keys keep working unchanged while it is open
 //   1 - 9                 point at that UNIT (a loose picture or a whole deck)
 //                         and make it the cover; on a deck that resolves to the
@@ -435,7 +435,7 @@ export function createDedupKeyHandler({
 
     // Like `C`, and above the read-only guard for the same reason: opening a
     // deck in place is looking, not deciding. Deliberately NOT offered inside
-    // Compare, which has its own expansion on its own `Contains` control —
+    // Compare, which has its own expansion on its own `Contains` control,
     // one key would then mean two different bands on one screen.
     if (key === "e") {
       claim(event);

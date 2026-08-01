@@ -5,18 +5,18 @@ member to the Scrapheap. These cover the contract in **both** directions,
 because over-blocking and over-collapsing are each their own regression:
 
 * a hand-made stack has its tags unioned onto the cover **before** anything is
-  deleted, and the tag is still there afterwards — the sharpest point in the
+  deleted, and the tag is still there afterwards: the sharpest point in the
   design, because ``apply_metadata_union_in_session`` has only ever been called
   from the dedup verdict, so grid-made stacks have never been unioned;
 * a stack with a locked-set member is refused **whole**, while its siblings in
   the **same request** still collapse;
 * a stack whose only character link sits on a copy is skipped, counted **and
-  named** — and one whose single character the union will propagate is not;
+  named**, and one whose single character the union will propagate is not;
 * the survivor keeps its ``stack_id``, no stack row is dissolved, and **one**
   undo restores the stack with its cover, positions and pre-union metadata;
 * the preview's stack buckets are disjoint and sum to ``stacks_selected``, and
   the preview and the mutation agree over the same selection;
-* both new routes are ``OWNER_ONLY`` at the central gate — a resource-scoped
+* both new routes are ``OWNER_ONLY`` at the central gate, a resource-scoped
   READ token is refused through the ``Authorization`` header *and* through
   ``?token=``, and the owner still reaches both.
 
@@ -354,7 +354,7 @@ def test_restoring_a_copy_from_the_scrapheap_returns_it_to_its_stack():
 
 
 def test_locked_member_refuses_the_whole_stack_while_siblings_collapse():
-    """One frozen member refuses its stack entirely — and only its stack.
+    """One frozen member refuses its stack entirely, and only its stack.
 
     A partial collapse is the worst available outcome (some copies gone, the
     stack still there, no visible reason), so the refusal is whole-stack. It is
@@ -389,7 +389,7 @@ def test_locked_member_refuses_the_whole_stack_while_siblings_collapse():
         _teardown(temp_dir, server)
 
 
-# ── characters: skipped, counted, named — and not over-blocked ───────────────
+# ── characters: skipped, counted, named, and not over-blocked ───────────────
 
 
 def test_character_only_on_a_copy_skips_the_stack_and_names_it():
@@ -492,7 +492,7 @@ def test_preview_buckets_are_disjoint_and_sum_to_the_total():
         assert len({row["stack_id"] for row in body["stacks"]}) == 4
         assert body["pictures_moving"] == 1
         assert body["picture_ids_moving"] == [plain_pics[1]]
-        # Bytes HELD, not freed — and only over what would actually move.
+        # Bytes HELD, not freed, and only over what would actually move.
         assert body["bytes_held_by_copies"] == 700
         assert body["originals_deleted_from_disk"] == 0
         # The default install never auto-empties the Scrapheap.

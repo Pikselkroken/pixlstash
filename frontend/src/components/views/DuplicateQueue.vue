@@ -681,8 +681,8 @@ function measureRowPitch() {
   const rows = list.querySelectorAll(".grow");
   // Sampled from a COLLAPSED row. A row with an expansion band open (D4) is
   // taller than every other row in the queue, and writing that one-off height
-  // into the pitch would size both spacers — and therefore the whole scroll
-  // track — from a state one row is in. The row AFTER the sample may be the
+  // into the pitch would size both spacers, and therefore the whole scroll
+  // track: from a state one row is in. The row AFTER the sample may be the
   // expanded one: the pitch is the first row's own height plus the gap, so
   // only the first of the pair has to be collapsed.
   for (let i = 0; i + 1 < rows.length; i += 1) {

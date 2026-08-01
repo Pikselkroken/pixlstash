@@ -19,10 +19,10 @@ tight, so a worst-pair test would condemn exactly the stacks a user most
 deliberately made. What matters is whether the members *hang together at all*,
 which is a connected-components question. Three numbers fall out of it:
 
-* **component count** — 1 means cohesive, more than 1 means mixed;
-* **stranded members** — members in no component with anything else, i.e. the
+* **component count**: 1 means cohesive, more than 1 means mixed;
+* **stranded members**: members in no component with anything else, i.e. the
   ones with no edge at all. These are the "clear stranger" case D5 splits off;
-* **weakest edge** — the lowest similarity among the edges that survive at this
+* **weakest edge**: the lowest similarity among the edges that survive at this
   threshold, matching the "confidence is the weakest link" rule the near tier
   already reports per group.
 
@@ -35,7 +35,7 @@ point.
 The cache
 ---------
 :class:`~pixlstash.db_models.mixed_stack.StackCohesion` caches the
-**threshold-independent** half — the near-pair edge list — keyed on the stack's
+**threshold-independent** half, the near-pair edge list, keyed on the stack's
 membership fingerprint. Folding components out of a cached edge list is
 microseconds, so a threshold change costs nothing and a membership change
 invalidates by construction. Cost is O(sum n^2) over stacks and stacks are
@@ -88,7 +88,7 @@ MAX_CACHED_HAMMING = int((1.0 - MIN_THRESHOLD) * PHASH_BITS)
 """Widest distance that can ever be an edge, so the cache is threshold-free.
 
 Every API threshold is at or above :data:`~pixlstash.services.dedup_tier_service.MIN_THRESHOLD`
-(0.65 — the routes carry it as a pydantic ``ge=``, so a lower value is a 422
+(0.65: the routes carry it as a pydantic ``ge=``, so a lower value is a 422
 before any handler runs), and ``max_hamming`` shrinks as the threshold rises.
 A pair further apart than this therefore cannot be an edge at *any* admissible
 threshold, so dropping it from the cache loses nothing and keeps the stored
@@ -135,7 +135,7 @@ def membership_fingerprint(picture_ids: Iterable[int]) -> str:
     canonical stack order (which a reorder changes without changing *who* is in
     the stack) never retracts a Keep; a member joining or leaving always does.
 
-    Deliberately **not** the cohesion cache's key — see
+    Deliberately **not** the cohesion cache's key, see
     :func:`content_fingerprint`.
 
     Args:
@@ -155,8 +155,8 @@ def content_fingerprint(
 
     **The cohesion cache's key**, covering the member ids *and their perceptual
     hashes*. A membership-only key would be wrong here: a hash can move without
-    membership moving — the embedding worker filling a ``NULL``, or a
-    reference-folder file being replaced under an unchanged picture row — and a
+    membership moving: the embedding worker filling a ``NULL``, or a
+    reference-folder file being replaced under an unchanged picture row and a
     membership-keyed cache would then keep serving edges derived from hashes
     that no longer exist. The visible symptom is the one this feature must never
     produce: a member frozen as "stranded" forever because its hash arrived
@@ -187,13 +187,13 @@ class CohesionReport:
     Attributes:
         stack_id: The stack.
         threshold: The similarity the components were folded at. The report is
-            only true for this value — the same stack is mixed at 0.90 and
+            only true for this value: the same stack is mixed at 0.90 and
             cohesive at 0.65.
         member_ids: Every live member, canonical stack order (leader first).
         membership_fingerprint: :func:`membership_fingerprint` of *member_ids*.
         components: Connected components, largest first, each sorted by id.
             A cohesive stack has exactly one.
-        stranded_picture_ids: Members with no edge to any sibling — in no
+        stranded_picture_ids: Members with no edge to any sibling, in no
             component with anything else. These are the "clear stranger" case.
         weakest_edge: Lowest similarity among the surviving edges, or ``None``
             when no pair is close enough to be an edge at all (every member
@@ -307,7 +307,7 @@ def _fold_components(
     same one :func:`~pixlstash.services.dedup_tier_service.groups_from_pairs`
     folds near pairs with) rather than growing a second components implementation
     on the same data. The forest only knows nodes an edge named, so members with
-    no edge are added back afterwards as their own singleton components — those
+    no edge are added back afterwards as their own singleton components; those
     are precisely the stranded members, and losing them would make a stack of
     one cluster plus one stranger look cohesive.
 
@@ -477,7 +477,7 @@ def _edges_for_stacks(
     A stack whose cached :func:`content_fingerprint` still matches is exact
     however old the row is, because every input it was derived from is
     unchanged; anything else is recomputed here, in the same batch. What the
-    cache buys is therefore the O(n^2) comparison, not the reads — the reads
+    cache buys is therefore the O(n^2) comparison, not the reads, the reads
     happen either way, because the fingerprint is the only honest staleness
     test and it needs the hashes.
 
@@ -545,7 +545,7 @@ def cohesion_for_stacks(
     Args:
         session: Pre-opened session.
         stack_ids: The stacks to score.
-        threshold: Similarity cut, bound to the queue's own threshold slider —
+        threshold: Similarity cut, bound to the queue's own threshold slider,
             never a constant. The same stack is mixed at 0.90 and cohesive at
             0.65, and that spectrum is the feature.
 
@@ -621,7 +621,7 @@ def dismiss_stack_in_session(
     Idempotent: pressing Keep twice on an unchanged stack updates nothing and
     reports ``created: false``. Keyed on the membership fingerprint, so adding a
     member later produces a fingerprint no row matches and the stack is raised
-    again — the user approved *these* pictures together, not the stack forever.
+    again: the user approved *these* pictures together, not the stack forever.
 
     Raises:
         MixedStackError: The stack has no live members.
@@ -670,7 +670,7 @@ def undismiss_stack_in_session(session: Session, stack_id: int) -> dict[str, Any
     The way back from a mis-pressed Keep. Every fingerprint is cleared rather
     than only the current one, because a dismissal made at an older membership
     would otherwise re-hide the stack the moment the user undid an unrelated
-    membership change — a Keep the user has explicitly retracted must not come
+    membership change: a Keep the user has explicitly retracted must not come
     back on its own.
     """
     stack_id = int(stack_id)
@@ -701,7 +701,7 @@ def list_mixed_stacks_in_session(
 
     Args:
         session: Pre-opened session.
-        threshold: The queue's own similarity threshold. Drives the whole list —
+        threshold: The queue's own similarity threshold. Drives the whole list,
             the same stack is mixed at 0.90 and fine at 0.65.
         offset: Rows to skip. Plain offset paging (not the queue's keyset
             cursor): this list is short by construction (tens of rows, not
@@ -709,7 +709,7 @@ def list_mixed_stacks_in_session(
             way the duplicate queue is.
         limit: Rows per page, clamped to :data:`MAX_PAGE_SIZE`.
         include_kept: Include stacks the user pressed ``Keep`` on, each marked
-            ``kept: true``. Off by default — the point of Keep is that the row
+            ``kept: true``. Off by default: the point of Keep is that the row
             leaves the list.
 
     Returns:
@@ -788,7 +788,7 @@ def _apply_removal(
 ) -> dict[str, Any]:
     """Move *leaving_ids* out of *stack_id* as ONE undoable operation.
 
-    The shared body of split and unstack — the two differ only in which members
+    The shared body of split and unstack: the two differ only in which members
     leave and what the receipt says. The whole reversible state of both is the
     members' ``stack_id`` / ``stack_position``, which
     ``operation_log_service.capture_state_in_session`` snapshots and
@@ -798,7 +798,7 @@ def _apply_removal(
 
     **Dissolves rather than leaving a stack of one.** If fewer than
     :data:`MIN_STACK_MEMBERS` would remain, everything leaves and the stack row
-    goes — the same rule ``DELETE /stacks/{stack_id}/members`` already applies,
+    goes: the same rule ``DELETE /stacks/{stack_id}/members`` already applies,
     and a "stack of 1" is a state the grid has no way to render honestly. The
     response says ``stack_dissolved`` either way rather than letting the client
     infer it.
@@ -806,7 +806,7 @@ def _apply_removal(
     **A dissolve takes the soft-deleted members with it.** ``load_stack_facts``
     reports live members only, so a stack of two live pictures and one
     scrapheaped one would otherwise be "dissolved" while the scrapheaped picture
-    still pointed at it — ``delete_emptied_stacks`` would find that survivor,
+    still pointed at it: ``delete_emptied_stacks`` would find that survivor,
     keep the row, and leave a stack nobody can see and nothing can empty.
     Restoring the scrapheaped picture would then produce a stack of one. They
     are already in the undo snapshot (``include_deleted=True``), so undo puts
@@ -871,7 +871,7 @@ def _apply_removal(
     if recorded is None:
         # Every path above moves at least one live member off the stack, so the
         # diff cannot be empty. If it somehow is, returning a batch id that
-        # points at no operation would hand the client a broken undo handle —
+        # points at no operation would hand the client a broken undo handle,
         # so the handle is dropped and the anomaly is loud.
         logger.error(
             "[mixed-stacks] %s on stack %s moved %d member(s) yet produced an "
@@ -921,7 +921,7 @@ def split_stranded_in_session(
         session: Pre-opened session; this commits once.
         stack_id: The stack to split.
         picture_ids: The members to split off. Omit to use the stranded set the
-            server computes at *threshold* — the same set the list showed. An
+            server computes at *threshold*, the same set the list showed. An
             explicit list is validated against live membership and is what the
             client should send, so the split matches the row the user was
             looking at even if the stack changed since.

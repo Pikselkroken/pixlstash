@@ -12,7 +12,7 @@
 //     rows, so a second variable-height row breaks that arithmetic. Keeping it
 //     to the focused row makes the expansion a single known offset below a
 //     single known index, and moving the focus collapses it
-//     (`keepOnlyOn`) — which is exactly why `StackExpansionStrip` was never
+//     (`keepOnlyOn`): which is exactly why `StackExpansionStrip` was never
 //     mounted in the virtualised grid.
 //   * **The members are LAZY.** The queue payload sizes each stack and names
 //     its leader eagerly (`groups[].stacks`); the members themselves are a

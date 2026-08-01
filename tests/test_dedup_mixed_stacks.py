@@ -6,12 +6,12 @@ mixed-stacks-and-stack-units.md``, D5/B5). These cover the contract in both
 directions, because over-listing is its own regression:
 
 * a genuinely mixed stack **is** listed, and a cohesive one is **not**;
-* the list is bound to the threshold, not to a constant — the same stack is
+* the list is bound to the threshold, not to a constant, the same stack is
   mixed at 0.90 and one clean cluster at 0.65;
 * a ``Keep`` drops a stack off the list and a membership change re-raises it;
 * split and unstack are each **one** operation, so a single undo puts every
   picture back in its original stack at its original position;
-* every new route is ``OWNER_ONLY`` at the central gate — a resource-scoped
+* every new route is ``OWNER_ONLY`` at the central gate, a resource-scoped
   READ token is refused via the ``Authorization`` header *and* via ``?token=``,
   and the owner still reaches all five.
 
@@ -19,7 +19,7 @@ Background workers are disabled and the pictures are inserted directly, so no
 worker can rewrite ``perceptual_hash`` underneath the assertions.
 
 The hashes are chosen so the Hamming distances are exact and legible.
-``max_hamming = int((1 - threshold) * 64)`` — 6 at 0.90, 22 at 0.65:
+``max_hamming = int((1 - threshold) * 64)``, 6 at 0.90, 22 at 0.65:
 
 ===============  ==========================  ===============================
 name             hex                         popcount vs ``_H_ZERO``
@@ -126,12 +126,12 @@ def _env():
 
     Three stacks, each testing one thing:
 
-    * ``cohesive`` — three members within one bit of each other. One cluster at
+    * ``cohesive``: three members within one bit of each other. One cluster at
       every threshold; **must never be listed**.
-    * ``mixed`` — a tight pair and a picture 32 bits away. Two components at
+    * ``mixed``: a tight pair and a picture 32 bits away. Two components at
       every threshold, with exactly one stranded member, so its suggested
       action is ``split``.
-    * ``threshold`` — two members ten bits apart. Two components at 0.90, one
+    * ``threshold``: two members ten bits apart. Two components at 0.90, one
       at 0.65: the same stack, two answers, which is the point of D5's
       "bind the list to the threshold, never a constant".
     """
@@ -327,7 +327,7 @@ def test_mixed_stack_is_listed_and_cohesive_stack_is_not():
 
 
 def test_the_list_follows_the_threshold_rather_than_a_constant():
-    """Same stack, two answers — D5's "bind it to the slider" requirement."""
+    """Same stack, two answers: D5's "bind it to the slider" requirement."""
     temp_dir, client, server, stacks, _token = _env()
     try:
         stack_id = stacks["threshold"][0]
@@ -677,7 +677,7 @@ def test_a_hash_arriving_after_the_cache_invalidates_it():
 
     The embedding worker fills ``perceptual_hash`` for a picture that had none.
     Membership does not move, so a membership-keyed cache would go on reporting
-    that member as stranded forever — the exact false positive the flag must
+    that member as stranded forever: the exact false positive the flag must
     never produce.
     """
     temp_dir, client, server, stacks, _token = _env()

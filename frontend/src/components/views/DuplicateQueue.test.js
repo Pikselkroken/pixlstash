@@ -2080,7 +2080,7 @@ describe("DuplicateQueue — a read-only session", () => {
   });
 });
 
-describe("DuplicateQueue — a picture scrapheaped elsewhere", () => {
+describe("DuplicateQueue: a picture scrapheaped elsewhere", () => {
   /** A `pictures_changed` frame, as `useUpdatesSocket` hands it to the store. */
   const removed = (picture_ids) => ({
     type: "pictures_changed",
@@ -2195,7 +2195,7 @@ function bands(wrapper) {
   return wrapper.findAll('[data-testid="dedup-row-expansion"]');
 }
 
-describe("DuplicateQueue — the expansion band", () => {
+describe("DuplicateQueue: the expansion band", () => {
   beforeEach(() => {
     listStackMembers.mockImplementation((stackId) =>
       Promise.resolve(memberPage(stackId)),
@@ -2435,7 +2435,7 @@ describe("DuplicateQueue — the expansion band", () => {
     wrapper.unmount();
   });
 
-  // Reading is not a verdict, so the band is offered in a share session too —
+  // Reading is not a verdict, so the band is offered in a share session too,
   // and it carries nothing that could write there or anywhere else.
   it("stays available, and read-only, in a read-only session", async () => {
     readOnlyRef.value = true;

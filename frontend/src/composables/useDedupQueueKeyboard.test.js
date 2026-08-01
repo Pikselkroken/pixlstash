@@ -347,7 +347,7 @@ describe("dedup keyboard — Compare", () => {
   });
 });
 
-describe("dedup keyboard — E opens the stack in place", () => {
+describe("dedup keyboard: E opens the stack in place", () => {
   it("hands the focused group to the view's toggle and claims the key", () => {
     const event = keyEvent("e");
     handle(event);
@@ -357,7 +357,7 @@ describe("dedup keyboard — E opens the stack in place", () => {
   });
 
   // Opening a deck is looking, not deciding, so it survives the guard that
-  // takes the verdict keys away — exactly as C does.
+  // takes the verdict keys away: exactly as C does.
   it("still works in a read-only session", () => {
     deps.isReadOnly.mockReturnValue(true);
     handle(keyEvent("e"));
@@ -636,11 +636,11 @@ describe("dedup keyboard — undo and the guards", () => {
   });
 });
 
-describe("dedup keyboard — digits address units, not candidates", () => {
+describe("dedup keyboard: digits address units, not candidates", () => {
   // A deck occupies one slot and one index however many of its members the
   // group named, so the number under a tile is the number that selects it. A
   // handler still indexing `candidates` would put `2` on the deck's second
-  // member — a tile that does not exist.
+  // member: a tile that does not exist.
   it("indexes the strip's units and resolves a deck to its leader", () => {
     store.groups[0] = {
       signature: "g1",

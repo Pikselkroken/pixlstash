@@ -10,7 +10,7 @@ Two surfaces live here, and every route is owner-only.
   re-hardcoding 0.90 and 0.65.
 * ``GET  /dedup/groups``            — one page of the queue, confidence
   descending, plus this scope's scan progress for the banner.
-* ``GET  /dedup/stacks/{stack_id}/members`` — one page of an existing stack's
+* ``GET  /dedup/stacks/{stack_id}/members``: one page of an existing stack's
   members, for the deck expansion strip. The lazy half of the queue's stack
   contract: a queue row ships each stack's count and leader, never its members.
 * ``POST /dedup/counts``            — the sidebar badge, the per-tier counts, and
@@ -746,7 +746,7 @@ class DedupStackModel(BaseModel):
     )
     member_count: int = Field(
         description=(
-            "The stack's **real live member count** — the deck's depth. This is "
+            "The stack's **real live member count**, the deck's depth. This is "
             "NOT the number of this stack's members that are in the group (see "
             "`matched_picture_ids` for that), and it is routinely larger, so a "
             "group's true picture total can exceed `candidates.length`. Counts "
@@ -756,7 +756,7 @@ class DedupStackModel(BaseModel):
     )
     leader_picture_id: int = Field(
         description=(
-            "The stack's leader (`stack_position` 0) — the deck's face. It is "
+            "The stack's leader (`stack_position` 0): the deck's face. It is "
             "frequently NOT one of `matched_picture_ids`, and it is deliberately "
             "the picture shown: a cover choice on a deck resolves to the leader, "
             "so a tile showing one picture while meaning another is the mismatch "
@@ -777,7 +777,7 @@ class DedupStackModel(BaseModel):
     matched_picture_ids: list[int] = Field(
         default_factory=list,
         description=(
-            "Which of this stack's members are actually in the group — always a "
+            "Which of this stack's members are actually in the group, always a "
             "subset of the group's `candidates`, ascending. Its length over "
             '`member_count` is the accessible name\'s "1 of 4 matched"; it is '
             "deliberately not drawn on the tile, which has no corner budget for "
@@ -790,7 +790,7 @@ class DedupStackModel(BaseModel):
         description=(
             "The **unit-level** rollup of the members' own `stackable`: false "
             "when ANY member of this deck is frozen by a locked picture set, "
-            "because a stack cannot be partially stacked — it moves as a unit or "
+            "because a stack cannot be partially stacked: it moves as a unit or "
             "not at all. Already accounts for a locked sibling **outside** the "
             "group: a locked set freezes a whole stack, so a member the group "
             "never names still blocks the deck."
@@ -922,7 +922,7 @@ class DedupStackMemberModel(DedupCandidateModel):
     )
     is_leader: bool = Field(
         description=(
-            "True for the one member the stack leads with — the same picture "
+            "True for the one member the stack leads with: the same picture "
             "the deck shows as its face and the grid shows as the stack's "
             "leader."
         )
@@ -984,7 +984,7 @@ class DedupStackMembersResponse(BaseModel):
         default_factory=list,
         description=(
             "This page of members, leader first, in canonical stack order. Each "
-            "carries `why: []` — evidence is a property of the duplicate group, "
+            "carries `why: []`: evidence is a property of the duplicate group, "
             "not of a stack the user already made, and the expanded members are "
             "read-only in the queue row. May be shorter than `limit` before the "
             "end of the stack if a member was scrapheaped mid-request; that is "
@@ -1967,7 +1967,7 @@ def create_router(server) -> APIRouter:
         responses={
             404: {
                 "description": (
-                    "No live member carries this stack id — the stack was "
+                    "No live member carries this stack id: the stack was "
                     "dissolved, scrapheaped, or never existed. Reported rather "
                     "than answered with an empty stack that appears to exist."
                 )

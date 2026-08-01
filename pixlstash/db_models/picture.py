@@ -896,7 +896,7 @@ class Picture(SQLModel, table=True):
                     )
                     .subquery("scoped_stack_members")
                 )
-                # rank 1 is the highest-ranked in-scope member of each stack —
+                # rank 1 is the highest-ranked in-scope member of each stack,
                 # exactly the row the correlated EXISTS was searching for.
                 scoped_leader = (
                     select(
@@ -908,8 +908,8 @@ class Picture(SQLModel, table=True):
                     .subquery("scoped_stack_leader")
                 )
                 # Testing the one leader row is equivalent to the old "does ANY
-                # sibling outrank me" test — if any member outranks this row,
-                # the best-ranked one does — and a row never outranks itself.
+                # sibling outrank me" test: if any member outranks this row,
+                # the best-ranked one does, and a row never outranks itself.
                 # A stack with no in-scope, non-deleted member at all (the trash
                 # view, where every candidate row is deleted) has no leader row,
                 # so nothing outranks the candidate and it is kept, exactly as

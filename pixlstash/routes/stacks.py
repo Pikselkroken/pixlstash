@@ -58,7 +58,7 @@ class StackOrderResponse(BaseModel):
 class KeepCoverOnlyRequest(BaseModel):
     """The selection a Keep-cover-only call acts on.
 
-    Send `stack_ids`, `picture_ids`, or both — they are unioned. At least one
+    Send `stack_ids`, `picture_ids`, or both: they are unioned. At least one
     must be non-empty. The **unit is the stack**: any picture named pulls in its
     whole stack, so a partial selection inside a stack collapses the whole
     stack. Loose (unstacked) pictures name no stack and are ignored.
@@ -70,7 +70,7 @@ class KeepCoverOnlyRequest(BaseModel):
         default=None,
         description=(
             "Stacks to collapse, named directly. Prefer this when the client "
-            "already knows the stack ids — it is the exact unit the action "
+            "already knows the stack ids: it is the exact unit the action "
             "works on. Example: `[12, 19]`."
         ),
         examples=[[12, 19]],
@@ -78,7 +78,7 @@ class KeepCoverOnlyRequest(BaseModel):
     picture_ids: Optional[list[int]] = Field(
         default=None,
         description=(
-            "Pictures whose stacks should be collapsed — normally the grid "
+            "Pictures whose stacks should be collapsed: normally the grid "
             "selection, which is usually just the visible stack leaders. Each "
             "one resolves to its stack; soft-deleted pictures and loose "
             "pictures contribute nothing. Example: `[101, 102, 250]`."
@@ -115,7 +115,7 @@ class KeepCoverOnlyStackRow(BaseModel):
     member_count: int = Field(
         description=(
             "Live members of the stack, cover included. Soft-deleted members "
-            "are not counted — they are already in the Scrapheap. Example: `4`."
+            "are not counted: they are already in the Scrapheap. Example: `4`."
         ),
         examples=[4],
     )
@@ -140,7 +140,7 @@ class KeepCoverOnlyStackRow(BaseModel):
     )
     bytes_held_by_copies: int = Field(
         description=(
-            "Bytes on disk held by `copy_picture_ids`. **Held, not freed** — a "
+            "Bytes on disk held by `copy_picture_ids`. **Held, not freed**, a "
             "soft delete frees nothing; see the response-level field of the "
             "same name. Example: `7340032`."
         ),
@@ -171,7 +171,7 @@ class KeepCoverOnlyStackRow(BaseModel):
         default=None,
         description=(
             "Why this stack is skipped, or `null` when it is eligible. One of "
-            "`set_locked` (a live member is frozen by a locked picture set — "
+            "`set_locked` (a live member is frozen by a locked picture set, "
             "the **whole** stack is refused, never one member), "
             "`character_only_on_copy` (a character link exists only on a "
             "member that would leave, and the union will not guess across "
@@ -216,7 +216,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     )
     stacks_eligible: int = Field(
         description=(
-            "Stacks that would collapse — the figure the button acts on. Example: `17`."
+            "Stacks that would collapse: the figure the button acts on. Example: `17`."
         ),
         examples=[17],
     )
@@ -236,7 +236,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     )
     stacks_skipped_single_member: int = Field(
         description=(
-            "Stacks with fewer than two live members — nothing to collapse. "
+            "Stacks with fewer than two live members: nothing to collapse. "
             "Example: `0`."
         ),
         examples=[0],
@@ -259,7 +259,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     )
     covers_kept: int = Field(
         description=(
-            "Covers that survive — one per eligible stack, by construction. "
+            "Covers that survive: one per eligible stack, by construction. "
             "Example: `17`."
         ),
         examples=[17],
@@ -285,7 +285,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     )
     covers_gaining_metadata: int = Field(
         description=(
-            "Eligible stacks whose cover gains tags **or** score — the union "
+            "Eligible stacks whose cover gains tags **or** score, the union "
             "of the two counts above, and the row the dialog shows. Not their "
             "sum: a cover can gain both. Example: `12`."
         ),
@@ -318,7 +318,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     )
     originals_deleted_from_disk: int = Field(
         description=(
-            "Always `0`, stated out loud rather than left implied — this "
+            "Always `0`, stated out loud rather than left implied; this "
             "action has no path to disk at all. Example: `0`."
         ),
         examples=[0],
@@ -328,7 +328,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
         description=(
             "The **live** `scrapheap_retention_days` setting, so the recovery "
             "copy never hardcodes a window. `null` means **Never**: auto-purge "
-            "is off and the Scrapheap does not empty on its own — and `null` "
+            "is off and the Scrapheap does not empty on its own and `null` "
             "is the default on a fresh install. Example: `30`."
         ),
         examples=[30],
@@ -345,7 +345,7 @@ class KeepCoverOnlyPreviewResponse(BaseModel):
     stacks: list[KeepCoverOnlyStackRow] = Field(
         default_factory=list,
         description=(
-            "One row per selected stack — eligible and skipped alike — so the "
+            "One row per selected stack, eligible and skipped alike, so the "
             "dialog's rows and its headline come from the same read. Ordered "
             "by stack id."
         ),
@@ -372,7 +372,7 @@ class KeepCoverOnlyResponse(BaseModel):
     )
     pictures_moved: int = Field(
         description=(
-            "Pictures soft-deleted to the Scrapheap — the number the receipt "
+            "Pictures soft-deleted to the Scrapheap: the number the receipt "
             "names. Example: `414`."
         ),
         examples=[414],
@@ -438,8 +438,7 @@ class KeepCoverOnlyResponse(BaseModel):
     stacks_skipped_single_member: list[int] = Field(
         default_factory=list,
         description=(
-            "Stack ids with fewer than two live members — nothing to do. "
-            "Example: `[7]`."
+            "Stack ids with fewer than two live members: nothing to do. Example: `[7]`."
         ),
         examples=[[7]],
     )
@@ -1241,7 +1240,7 @@ def create_router(server) -> APIRouter:
             "and the confirm dialog's only source of truth. Every figure comes "
             "from ONE read over the SAME selection through the same planner the "
             "mutation uses, so the dialog's headline and its rows cannot "
-            "disagree — the failure the neighbouring auto-stack dialog shipped "
+            "disagree: the failure the neighbouring auto-stack dialog shipped "
             'when it reported "62 stacks to create" for work that would '
             "create 3.\n\n"
             "**The stack buckets are disjoint and sum to `stacks_selected`:**\n\n"
@@ -1255,15 +1254,15 @@ def create_router(server) -> APIRouter:
             "the server refuses to answer at all if the sum does not hold. "
             "`unknown_stack_ids` sits outside the arithmetic because those are "
             "not stacks.\n\n"
-            "**Why a stack is skipped.** `set_locked` — a live member is frozen "
+            "**Why a stack is skipped.** `set_locked`, a live member is frozen "
             "by a locked picture set, which refuses the **whole** stack: stack "
             "membership reconciles to the union of its members' sets, so "
             "removing one member is exactly the mutation the lock forbids, and "
             "a partial collapse would be the worst outcome available. "
-            "`character_only_on_copy` — a character link sits only on a member "
+            "`character_only_on_copy`: a character link sits only on a member "
             "that would leave; the metadata union deliberately will not guess "
             "across several characters, so collapsing would destroy the link. "
-            "`single_member` — fewer than two live members.\n\n"
+            "`single_member`: fewer than two live members.\n\n"
             "**Nothing here is freed.** `originals_deleted_from_disk` is always "
             "`0`, and `bytes_held_by_copies` is bytes *held*: the files stay "
             "until the Scrapheap is emptied, which with "
@@ -1276,7 +1275,7 @@ def create_router(server) -> APIRouter:
         responses={
             400: {
                 "description": (
-                    "Neither `stack_ids` nor `picture_ids` was usable — absent, "
+                    "Neither `stack_ids` nor `picture_ids` was usable, absent, "
                     "not a list of integers, or over the per-request id cap."
                 )
             }
@@ -1305,7 +1304,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Each selected stack keeps its **current** cover; every other live "
             "member is **soft-deleted to the Scrapheap**, where it can be "
-            "restored. Nothing is removed from disk — this is the same soft "
+            "restored. Nothing is removed from disk: this is the same soft "
             "delete the grid's `Delete` performs, not a second permanent path. "
             "Call `POST /stacks/keep-cover-only/preview` first and show the "
             "user what it reports.\n\n"
@@ -1313,7 +1312,7 @@ def create_router(server) -> APIRouter:
             "copy leaves, the cover gains the union of the stack's tags and is "
             "lifted to the stack's best rating. This is not an optimisation to "
             "skip: only the dedup queue's stack verdict ever unioned before, so "
-            "stacks made by hand in the grid never have been — measured on a "
+            "stacks made by hand in the grid never have been: measured on a "
             "real library, two thirds of them carry tags on a copy the cover "
             "lacks.\n\n"
             "**Stacks are skipped, never partly collapsed.** A stack with a "
@@ -1338,7 +1337,7 @@ def create_router(server) -> APIRouter:
         responses={
             400: {
                 "description": (
-                    "Neither `stack_ids` nor `picture_ids` was usable — absent, "
+                    "Neither `stack_ids` nor `picture_ids` was usable, absent, "
                     "not a list of integers, or over the per-request id cap."
                 )
             },
@@ -1348,7 +1347,7 @@ def create_router(server) -> APIRouter:
                     "had already cleared. This is a defence-in-depth backstop, "
                     "not the ordinary path: a locked stack is normally reported "
                     "in `stacks_skipped_locked` while its siblings collapse. "
-                    "Nothing was written — the whole call is rolled back rather "
+                    "Nothing was written: the whole call is rolled back rather "
                     "than risk a partial collapse."
                 )
             },
@@ -1362,7 +1361,7 @@ def create_router(server) -> APIRouter:
         stack_ids, picture_ids = _selection(payload)
         # §21 origin discipline: actor / source / origin_client_id are read from
         # the request HERE, on the request's own task, and passed down
-        # explicitly — the contextvar is dead on the DB worker thread.
+        # explicitly: the contextvar is dead on the DB worker thread.
         context = operation_log_service.request_context(
             request, fallback_batch_id=operation_log_service.new_batch_id()
         )

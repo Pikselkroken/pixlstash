@@ -265,8 +265,8 @@ export const MAX_STACK_MEMBER_PAGE = 200;
  *   stackable, blocked_by_sets, offset, limit, next_offset, members }`. Each
  *   member carries every field a queue candidate does, plus `position` (its
  *   rank across the WHOLE stack, so it survives paging) and `is_leader`.
- *   Answers 404 when no live member carries the id — the stack was dissolved
- *   or scrapheaped — rather than an empty stack that appears to exist.
+ *   Answers 404 when no live member carries the id: the stack was dissolved
+ *   or scrapheaped: rather than an empty stack that appears to exist.
  */
 export async function listStackMembers(
   stackId,

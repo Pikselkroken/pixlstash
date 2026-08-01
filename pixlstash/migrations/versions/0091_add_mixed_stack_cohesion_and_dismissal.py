@@ -3,15 +3,15 @@
 Two new tables behind the Mixed stacks page
 (``docs/design/mixed-stacks-and-stack-units.md``, D5 and B5):
 
-``stackcohesion`` — the **cohesion cache**. A mixed stack is a live stack whose
+``stackcohesion``: the **cohesion cache**. A mixed stack is a live stack whose
 members do not form one connected cluster at the queue's similarity threshold,
 measured with the same 64-bit dHash Hamming distance tier 2 already uses. The
 expensive half of that measurement (reading every member's ``perceptual_hash``
 and comparing the stack's upper triangle) is *threshold-independent*, so this
 table caches the resulting near-pair edge list and the page folds components out
-of it at whatever threshold it was asked for. Keyed on ``content_fingerprint`` —
+of it at whatever threshold it was asked for. Keyed on ``content_fingerprint``,
 a digest of the stack's ``(member id, perceptual hash)`` pairs, i.e. *every*
-input the edges are derived from — so any change to either invalidates the row
+input the edges are derived from, so any change to either invalidates the row
 by construction rather than by remembering to invalidate it, and so a recycled
 SQLite stack id can never read a dead stack's edges. The hashes are deliberately
 part of the key: one can move without membership moving (the embedding worker
@@ -20,9 +20,9 @@ row), and a membership-only key would then freeze a member as "stranded"
 forever. Pure derived data: dropping the table costs one recomputation and no
 information.
 
-``mixedstackdismissal`` — the **Keep** dismissal. "This stack is fine, stop
+``mixedstackdismissal``: the **Keep** dismissal. "This stack is fine, stop
 listing it", durable and server-side. Keyed on stack id **plus** a
-``membership_fingerprint`` — the member ids only, *not* the cohesion cache's
+``membership_fingerprint``: the member ids only, *not* the cohesion cache's
 content key, because D5 is explicit that adding a member is what re-raises a
 kept stack and a re-hash must not silently retract a Keep. Adding a member later
 produces a fingerprint no row matches and the stack is raised again; the user
@@ -35,7 +35,7 @@ Both tables carry an ``ON DELETE CASCADE`` foreign key to ``picturestack``: a
 dissolved stack has neither cohesion to cache nor a listing to suppress, and a
 row outliving its stack would be a slow leak in both.
 
-Nothing is cleared and no reprocessing is triggered — there is no existing
+Nothing is cleared and no reprocessing is triggered; there is no existing
 column whose meaning changes. The cache starts empty and
 ``MissingStackCohesionFinder`` fills it on the next work sweep; until then the
 page computes what it needs inline, so an unmigrated-cache database is slower
@@ -73,7 +73,7 @@ def _index_names(inspector, existing_tables: set, table: str) -> set:
     The inspector is built before the ``create_table`` calls, so asking it about
     a table this migration is creating would raise. A table this migration
     created carries no indexes yet by construction, which is exactly the empty
-    set — and a table that predates it (a fresh database, where the baseline's
+    set, and a table that predates it (a fresh database, where the baseline's
     ``create_all`` made both tables and their indexes from the models) reports
     the ones it already has, so neither branch double-creates.
     """

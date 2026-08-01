@@ -47,10 +47,10 @@ class PictureImportTask(BaseTask):
     sentinel so the finders pick it up for downstream processing). The staging
     directory is removed on completion.
 
-    **Every staged file lands in exactly one of five disjoint buckets** —
+    **Every staged file lands in exactly one of five disjoint buckets**,
     imported, duplicate (live content already in the vault, including a repeat
     inside this batch), **scrapheaped** (content matches a soft-deleted picture:
-    not imported again, offered for restore), failed, cancelled — and they sum
+    not imported again, offered for restore), failed, cancelled and they sum
     to the staged total. A scrapheaped match used to be reported as an ordinary
     duplicate, which told the user nothing about why their file did not appear.
     See :mod:`pixlstash.services.import_dedup_service`.
@@ -149,7 +149,7 @@ class PictureImportTask(BaseTask):
         cancelled_count = 0
         # Distinct scrapheaped pictures this import matched. Per PICTURE (the
         # restore offer), while ``scrapheaped_count`` is per FILE (the bucket
-        # arithmetic) — several staged copies of one content name one id once.
+        # arithmetic): several staged copies of one content name one id once.
         scrapheaped_picture_ids: list[int] = []
         seen_scrapheaped_ids: set[int] = set()
         # Content hashes already accepted this batch. The DB dedupe below only
@@ -224,7 +224,7 @@ class PictureImportTask(BaseTask):
             if match is not None and match.deleted:
                 logger.info(
                     "PictureImportTask: staged file %s matches scrapheaped "
-                    "picture %d (sha %s); not importing a second copy — "
+                    "picture %d (sha %s); not importing a second copy, "
                     "offering a restore instead (staging_id=%s)",
                     file_path,
                     match.id,

@@ -265,10 +265,10 @@ function normalizeScan(raw) {
  * (the grid, the lightbox, another tab) makes that snapshot wrong in three
  * places at once, all of which this repairs:
  *
- *   * `candidates` — a tile whose thumbnail now 404s, which is the "empty
+ *   * `candidates`, a tile whose thumbnail now 404s, which is the "empty
  *     placeholder" in the report;
- *   * `member_count` — the group's own size, which the server reports live;
- *   * `stacks[id]` — a deck's DEPTH. A deck stands for the whole existing
+ *   * `member_count`, the group's own size, which the server reports live;
+ *   * `stacks[id]`, a deck's DEPTH. A deck stands for the whole existing
  *     stack, so a scrapheaped stack member leaves a hole in it even when the
  *     group never named that member. Only the ids this group can attribute to a
  *     stack (its matched members and the stack's leader) are subtracted; a
@@ -315,8 +315,8 @@ export function groupWithoutPictures(group, removed) {
         ? Math.max(keptMatched.length, served - lost)
         : keptMatched.length,
       matched_picture_ids: keptMatched,
-      // Which member the stack promotes next is a fact only the server holds —
-      // the canonical order can promote one this group never named — so the
+      // Which member the stack promotes next is a fact only the server holds,
+      // the canonical order can promote one this group never named so the
       // face falls back to the first surviving matched candidate. That is the
       // degradation `finaliseDeck` already applies to a payload with no
       // `stacks` block, and the true leader returns with the next page load.
@@ -635,9 +635,9 @@ export const useDedupStore = defineStore("dedup", () => {
    * **Two gestures arrive on this one channel, and the chosen ID is what tells
    * them apart.** Both must work:
    *
-   *   * *Choosing a UNIT.* Every deck-level gesture in the app — the row's
+   *   * *Choosing a UNIT.* Every deck-level gesture in the app, the row's
    *     tile, the digits `1`-`9`, Compare's card and its zoom, and the
-   *     automatic move when the cover's unit is excluded — passes that unit's
+   *     automatic move when the cover's unit is excluded: passes that unit's
    *     `coverPictureId`, i.e. the stack's LEADER. It resolves to the leader,
    *     because that is the picture the tile shows and the only one the server
    *     can lead the resulting stack with.
@@ -646,7 +646,7 @@ export const useDedupStore = defineStore("dedup", () => {
    *     click on the current cover). It is honoured verbatim: the whole point
    *     of that band's two-step confirmation is that this stack's cover
    *     changes across the library, and normalising it back to the leader made
-   *     the promotion a silent no-op for every member the group named — it
+   *     the promotion a silent no-op for every member the group named; it
    *     only ever "worked" for members the group did not name, which fell
    *     through the unit lookup by accident.
    *
@@ -728,7 +728,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * A picture count over the group's own members, which the announcements use.
    * It is deliberately not the button's number (that is
    * {@link includedUnitCountFor}) and it under-reports whenever a deck folds in
-   * a stack member the group never named — which is why the receipt prefers the
+   * a stack member the group never named: which is why the receipt prefers the
    * server's returned `picture_ids` over this estimate.
    *
    * @param {Object} group
@@ -760,7 +760,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * existing stack was a silent no-op: the backend's `_stack_members` folds in
    * every member of any stack the group touches, so the rest of that stack
    * dragged the excluded picture straight back in. A deck therefore goes out
-   * whole, and any of its pictures — matched member or leader — addresses it.
+   * whole, and any of its pictures, matched member or leader, addresses it.
    *
    * Two invariants ride on this, both because `X` is a one-key action with no
    * confirmation:
@@ -774,7 +774,7 @@ export const useDedupStore = defineStore("dedup", () => {
    *   * Excluding the cover would leave the stack with no cover, and the server
    *     rejects a cover that is not in the resulting stack. The cover moves to
    *     the best remaining included unit instead, by the same rule that
-   *     preselected it — so it lands on a surviving deck's leader rather than
+   *     preselected it, so it lands on a surviving deck's leader rather than
    *     re-curating that stack.
    *
    * @param {Object} group
@@ -1725,7 +1725,7 @@ export const useDedupStore = defineStore("dedup", () => {
   // The queue rows are a snapshot of a server read, and nothing about a
   // scrapheap move goes through this store: the user deletes from the grid, the
   // lightbox or another tab, and the loaded row keeps drawing a candidate whose
-  // thumbnail now 404s — the owner's "empty placeholder", and a group of one
+  // thumbnail now 404s: the owner's "empty placeholder", and a group of one
   // still offering a Stack the server would refuse.
   //
   // The COUNTS were never the gap: `pictures_changed` already reaches
@@ -1737,7 +1737,7 @@ export const useDedupStore = defineStore("dedup", () => {
   //
   //   * **A removal is applied surgically.** The event names exactly which
   //     pictures went, so the affected rows can be rewritten and the ones that
-  //     drop below two units removed — the same rule `live_groups_filter`
+  //     drop below two units removed: the same rule `live_groups_filter`
   //     applies server-side. `loadFirstPage` would be the easy answer and it is
   //     the wrong one: it rebases the window on the queue's head, which throws
   //     a user 250 rows into a triage back to row 1 for a change that touched
@@ -1747,14 +1747,14 @@ export const useDedupStore = defineStore("dedup", () => {
   //     cannot compute, and there is no per-signature read to fetch it with.
   //     The queue has never been a live insert surface (a scan's new groups
   //     arrive by paging too), so the badge carries the change and the row
-  //     comes back with the next page — UNLESS the window is empty, where
+  //     comes back with the next page: UNLESS the window is empty, where
   //     "nothing left to review" would be an outright lie and there is nothing
   //     on screen to disturb by rebuilding it.
   //
   // No coalescing window: a bulk scrapheap move broadcasts ONE event carrying
   // every id, and the work is a map over the ≤ one page of rows that are
   // actually loaded. This is the undo/redo subscription's counterpart, not a
-  // replacement — that one handles a dedup verdict coming back, which no
+  // replacement: that one handles a dedup verdict coming back, which no
   // picture event announces.
 
   /**
@@ -1791,7 +1791,7 @@ export const useDedupStore = defineStore("dedup", () => {
       const rewritten = groupWithoutPictures(group, removed);
       if (!rewritten) return group;
       touched += 1;
-      // A group that no longer spans two stack UNITS poses no decision — the
+      // A group that no longer spans two stack UNITS poses no decision, the
       // second HAVING clause of the server's live_groups_filter, applied to the
       // rows already on screen. The decided page keeps its thinned rows for the
       // same reason the server does: the verdict happened, and "clear this

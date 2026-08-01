@@ -2,7 +2,7 @@
 //
 // The invariant these pin is structural rather than cosmetic: `DuplicateQueue`
 // sizes both of its scroll spacers from a single uniform row pitch, so a second
-// open band — or one left behind on a row the cursor has walked away from —
+// open band, or one left behind on a row the cursor has walked away from,
 // is a second variable-height row and the whole scroll track stops meaning
 // anything.
 
@@ -46,7 +46,7 @@ beforeEach(() => {
   expansion = useDedupRowExpansion({ fetchMembers });
 });
 
-describe("useDedupRowExpansion — opening and closing", () => {
+describe("useDedupRowExpansion: opening and closing", () => {
   it("reads the members once, at the server's own page ceiling", async () => {
     expect(expansion.toggle("d1", 12)).toBe(true);
     expect(fetchMembers).toHaveBeenCalledWith(12, { limit: 200 });
@@ -99,7 +99,7 @@ describe("useDedupRowExpansion — opening and closing", () => {
   });
 });
 
-describe("useDedupRowExpansion — the band follows the focus", () => {
+describe("useDedupRowExpansion: the band follows the focus", () => {
   // Stated as "keep it only on this row" rather than "collapse on any focus
   // change" BECAUSE the gestures arrive in the other order: the badge on an
   // unfocused row emits focus and THEN the toggle, so a blind collapse would
@@ -127,7 +127,7 @@ describe("useDedupRowExpansion — the band follows the focus", () => {
   });
 });
 
-describe("useDedupRowExpansion — the E key's target", () => {
+describe("useDedupRowExpansion: the E key's target", () => {
   it("opens the focused group's first deck", () => {
     expect(expansion.toggleForGroup(deckGroup())).toEqual({
       open: true,
@@ -160,7 +160,7 @@ describe("useDedupRowExpansion — the E key's target", () => {
   });
 });
 
-describe("useDedupRowExpansion — failure", () => {
+describe("useDedupRowExpansion: failure", () => {
   it("reports a rejected read and retries the same stack", async () => {
     fetchMembers.mockRejectedValueOnce(new Error("boom"));
     expansion.toggle("d1", 12);

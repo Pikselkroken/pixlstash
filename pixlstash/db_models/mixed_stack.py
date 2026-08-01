@@ -5,13 +5,13 @@ cluster at the queue's similarity threshold, measured with the same 64-bit dHash
 Hamming distance and the same connected-components test tier 2 already uses
 (``docs/design/mixed-stacks-and-stack-units.md``, D5). Two tables carry it:
 
-* :class:`StackCohesion` — the **cohesion cache**. Cohesion is *computed*, never
+* :class:`StackCohesion`: the **cohesion cache**. Cohesion is *computed*, never
   a column on ``picture``; what is cached is the threshold-independent half of
   the computation (the near-pair edge list), so a threshold change re-folds
   cheap components instead of re-reading and re-comparing every hash. The cache
   is keyed on the stack's **membership fingerprint**, so a member joining or
   leaving invalidates it by construction rather than by remembering to.
-* :class:`MixedStackDismissal` — the **Keep** dismissal. "This stack is fine,
+* :class:`MixedStackDismissal`: the **Keep** dismissal. "This stack is fine,
   stop listing it", durable and server-side, keyed on stack id **plus** the
   membership fingerprint so adding a member later re-raises the stack.
 
@@ -54,8 +54,8 @@ class StackCohesion(SQLModel, table=True):
     **Its key is deliberately NOT the dismissal's key.** A ``Keep`` is keyed on
     *membership* (D5: adding a member re-raises the stack, and only that), but
     the edges depend on the member ids **and their perceptual hashes**. A hash
-    can move without membership moving — the embedding worker filling a NULL, or
-    a reference-folder file being replaced — and a membership-keyed cache would
+    can move without membership moving: the embedding worker filling a NULL, or
+    a reference-folder file being replaced, and a membership-keyed cache would
     then serve edges derived from hashes that no longer exist, freezing a member
     as "stranded" forever. :attr:`content_fingerprint` therefore covers both,
     which is the only honest key for derived data.
@@ -64,12 +64,12 @@ class StackCohesion(SQLModel, table=True):
         stack_id: The stack this describes. Primary key, and a cascade FK, so a
             dissolved stack takes its cache with it.
         content_fingerprint: Digest of the stack's ``(member id, perceptual
-            hash)`` pairs — every input the edge list is derived from. See
+            hash)`` pairs: every input the edge list is derived from. See
             ``mixed_stack_service.content_fingerprint``.
         member_count: Live member count at the time of the computation,
             denormalised so a staleness check needs no join.
         member_ids: JSON list of the live member ids, canonical stack order
-            (leader first) — the same order the deck renders in.
+            (leader first): the same order the deck renders in.
         unhashed_picture_ids: JSON list of members with no usable
             ``perceptual_hash``. They can carry no edge at all, so they would
             otherwise look identical to a genuinely stranded member; recording
@@ -77,7 +77,7 @@ class StackCohesion(SQLModel, table=True):
             belong".
         edges: JSON ``[[picture_id_a, picture_id_b, hamming], ...]`` with
             ``a < b``, every pair at or below the widest admissible distance.
-        computed_at: When the edges were last derived. Diagnostics only — the
+        computed_at: When the edges were last derived. Diagnostics only, the
             fingerprint decides staleness.
     """
 
@@ -113,7 +113,7 @@ class MixedStackDismissal(SQLModel, table=True):
 
     Without this the legitimate-but-odd stacks (a burst where one frame panned
     off, a deliberate before/after pair) sit in the Mixed stacks list forever
-    and the list becomes ignorable — which is the failure mode D5 names.
+    and the list becomes ignorable: which is the failure mode D5 names.
 
     **Keyed on membership, not just the stack.** Adding a member later produces
     a different fingerprint, no row matches, and the stack is raised again: the

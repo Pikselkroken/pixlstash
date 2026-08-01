@@ -342,7 +342,7 @@ describe("api/dedup — bulk auto-stack", () => {
   });
 });
 
-describe("api/dedup — the deck expansion's lazy members", () => {
+describe("api/dedup: the deck expansion's lazy members", () => {
   // The eager half (each stack's real member count and its leader) rides on the
   // queue row; this is the only route that returns the members themselves, and
   // it exists so a 40-member stack is not inlined behind a row with room for

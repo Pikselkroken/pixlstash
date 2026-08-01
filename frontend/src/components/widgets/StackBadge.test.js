@@ -122,7 +122,7 @@ describe("StackBadge: stack colour", () => {
   });
 });
 
-describe("StackBadge — as a disclosure trigger", () => {
+describe("StackBadge: as a disclosure trigger", () => {
   // The queue row's band is opened from this badge. A CSS-only open state says
   // nothing at all to a screen reader (WCAG 4.1.2).
   it("publishes aria-expanded when the caller says it opens something", () => {

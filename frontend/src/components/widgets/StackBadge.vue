@@ -61,7 +61,7 @@ const props = defineProps({
   expanded: { type: Boolean, default: null },
   /**
    * Overrides the badge's own name where the press does something other than
-   * state the count — the queue row's expansion trigger, where the name has
+   * state the count: the queue row's expansion trigger, where the name has
    * to say what opens. Empty keeps the count sentence below.
    */
   actionTitle: { type: String, default: "" },

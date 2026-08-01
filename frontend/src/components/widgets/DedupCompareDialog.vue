@@ -1139,7 +1139,7 @@ function onZoomPointerUp() {
 }
 
 /**
- * Click picks the cover — unless the click was the tail end of a pan.
+ * Click picks the cover: unless the click was the tail end of a pan.
  *
  * The gesture stays UNIT-level even though the zoom flips pictures: on a deck
  * member it names the deck (its leader), because promoting one member of a
@@ -1174,7 +1174,7 @@ function onZoomContextMenu() {
     <!-- ── The unit strip ──────────────────────────────────────────────────
          One card per UNIT, not per candidate: a whole existing stack is one
          deck, because that is the smallest thing a verdict can move. The cards
-         GROW into the freed width — the images are the point of this surface —
+         GROW into the freed width, the images are the point of this surface,
          and scroll sideways only once there are too many to fit; the
          comparison only works when the fields line up across cards. -->
     <div class="dc-strip">
@@ -1520,7 +1520,7 @@ function onZoomContextMenu() {
        so differences show as motion. It flips pictures rather than units
        because looking at a stack sibling at 100% is the strongest disclosure
        this surface has when a group named only one member of a stack.
-       Deliberately near-black chrome at fixed colors — this is a
+       Deliberately near-black chrome at fixed colors: this is a
        photo-judgement surface, same rationale as the lightbox. -->
   <Teleport to="body">
     <div v-if="zoomOpen" class="dc-zv" data-testid="dedup-zoom">
@@ -1610,7 +1610,7 @@ function onZoomContextMenu() {
       </div>
       <div class="dc-zv-foot" aria-hidden="true">
         <span
-          ><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place —
+          ><kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> flip in place,
           differences jump out as motion</span
         >
         <span>Scroll zooms, drag pans — zoom out past Fit to leave</span>

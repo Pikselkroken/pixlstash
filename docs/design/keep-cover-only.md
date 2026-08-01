@@ -1,4 +1,4 @@
-# Keep cover only — collapsing a stack to its cover
+# Keep cover only: collapsing a stack to its cover
 
 Status: designed and approved by the owner, not implemented.
 Reconciled `ui-ux-expert` / `lead-designer` proposals. Where they disagreed, the
@@ -37,8 +37,8 @@ as though it has already happened.
 
 **The title says what you keep; the button says what you lose.** That pairing is
 the dialog's safety property and it survives whatever the menu item is called.
-The button label and the headline figure render from the **same computed value**
-— not merely the same endpoint — so they can never disagree.
+The button label and the headline figure render from the **same computed value**,
+not merely the same endpoint, so they can never disagree.
 
 Code / op type: `keepCoverOnly` / `stack.keep_cover_only`. Keep `squash` out of
 identifiers too; a git-literate reader grepping it will assume merge.
@@ -76,7 +76,7 @@ first would silently destroy metadata on two-thirds of them.
 
 So: **re-run the union onto the cover before any soft delete, unconditionally.**
 It is idempotent where it already ran. Do not optimise it away on the grounds
-that the queue does it — the queue is not the only way stacks get made.
+that the queue does it: the queue is not the only way stacks get made.
 
 * **Tags** union onto the cover; **score** lifts to the stack's best.
 * **Characters:** the union deliberately refuses to guess when members reference
@@ -92,7 +92,7 @@ that the queue does it — the queue is not the only way stacks get made.
 
 Not skip-the-member. Stack membership reconciles to the union of its members'
 sets, so removing a member from a stack a locked set touches is exactly the
-mutation the lock forbids — and a partial collapse is the worst available
+mutation the lock forbids, and a partial collapse is the worst available
 outcome: some copies gone, the stack still there, no visible reason.
 
 Menu state follows the shipped `Delete` item: disabled with the lock reason only
@@ -112,19 +112,20 @@ Order:
    Scrapheap, where you can restore it.
 2. **The headline figure**, one instance, larger than the dialog's own heading:
    **414** over "pictures move to the Scrapheap". The numeral is `on-surface`,
-   never `error` — the hue goes on a leading rail, because a 22px red numeral
+   never `error`: the hue goes on a leading rail, because a 22px red numeral
    would be the loudest object in the app. While the preview is in flight or has
    failed it shows an en dash at the same size and the confirm is disabled:
    never a zero, never a stale number.
 3. **The rows** (`<dl>`, neutral, no hue): stacks collapsed, covers kept, covers
    gaining metadata from copies, stacks skipped, and **originals deleted from
-   disk — 0**, stated out loud exactly as the sibling states its own zero.
-4. **The recovery panel**, info-tinted not error — recovery is reassuring, and
-   `DeleteForeverDialog` already made this call for the same reason.
+   disk: 0**, stated out loud exactly as the sibling states its own zero.
+4. **The recovery panel**, info-tinted rather than error. Recovery is
+   reassuring, and `DeleteForeverDialog` already made this call for the same
+   reason.
 5. **Undo**, matching the sibling verbatim.
 
 **The retention sentence must read the live setting.** `DEFAULT_RETENTION_DAYS`
-is `None` — on a default install **the Scrapheap never empties on its own**.
+is `None`: on a default install **the Scrapheap never empties on its own**.
 Hardcoding "30 days" would be the same class of error the whole dialog exists to
 avoid. Copy branches on the user's configured value.
 
@@ -154,7 +155,7 @@ not a high-frequency verb.
 
 The unit is the stack: a selection *names* stacks and each collapses to its own
 cover. Loose pictures in a mixed selection are ignored, which is honest only
-because the label counts stacks — `Keep cover only (3 stacks)`. A partial
+because the label counts stacks: `Keep cover only (3 stacks)`. A partial
 selection inside a stack collapses the **whole** stack, and the dialog must say
 so, because it is the one place the action does more than the selection literally
 names. Partial eligibility goes in the label: `Keep cover only (12 of 20)`.
@@ -170,7 +171,7 @@ and it is the moment the user has stacks and nothing left to triage. The toolbar
 is wrong: it would put this in front of someone mid-triage.
 
 Shown whenever the library has at least one live stack with 2+ members, **not**
-gated on this session's tally — the owner has 160 stacks predating the feature.
+gated on this session's tally: the owner has 160 stacks predating the feature.
 
 **The shortcut goes to the place, not to the action.** It lands in All Pictures
 with the stacked filter applied, nothing selected, nothing about to happen. A
@@ -180,7 +181,7 @@ deletions is how you get a bad afternoon. A real route change carrying
 
 ## The receipt
 
-Inherits `DESTRUCTIVE_RECEIPT_MS` (8s) automatically via `isDestructiveOpType` —
+Inherits `DESTRUCTIVE_RECEIPT_MS` (8s) automatically via `isDestructiveOpType`,
 no new duration, no new component. Glyph matches the menu item and the confirm
 button so the operation is named identically at all three moments.
 
@@ -191,10 +192,10 @@ exists, a destructive *colour* does not.
 
 Text names the consequence in the user's unit: *"414 pictures moved to the
 Scrapheap"*, with Undo. Skips get a second sentence rather than a separate toast.
-**No space figure in the receipt** — it was a potential in the preview; in a
+**No space figure in the receipt**: it was a potential in the preview; in a
 receipt it would be false at the moment it is displayed.
 
-## Interactions during the Scrapheap stay — verified
+## Interactions during the Scrapheap stay: verified
 
 Checked because a picture may now sit there for 30/60/90+ days:
 
@@ -218,7 +219,7 @@ Checked because a picture may now sit there for 30/60/90+ days:
 `routes/pictures/_helpers.py:132` matches by content hash with
 `Picture.find(..., pixel_shas=shas)`, and `include_deleted` defaults to `False`.
 Re-importing a file whose picture is scrapheaped creates a second row while the
-original is still there — so a collapse is silently undone, disk use roughly
+original is still there, so a collapse is silently undone, disk use roughly
 doubles, and the duplicate queue refills.
 
 Pre-existing for any scrapheaped picture, but this action makes it predictable:
@@ -227,7 +228,7 @@ files that still exist wherever the user imports from.
 
 **Owner decision: import matches against scrapheaped rows and offers to restore
 rather than importing a second copy.** Reported as a third, disjoint bucket
-alongside imported and duplicate — never automatic, because the user deliberately
+alongside imported and duplicate: never automatic, because the user deliberately
 scrapheapped them. In progress separately.
 
 ## New token
@@ -242,7 +243,7 @@ surface picking 3px". Three components already carry a raw 3px rail.
 1. `AppButton.vue`'s danger comment claims `on-error` "flips to the warm
    near-black" in dark. `main.js` has `"on-error": "#f7f1ea"` in **both** themes,
    one line even saying "(same value in both themes)". Fix the comment, not the
-   value — a stale contrast note gets "corrected" in the wrong direction.
+   value: a stale contrast note gets "corrected" in the wrong direction.
 2. Two destructive-button looks: `AppButton variant="danger"` (solid fill) versus
    `DeleteForeverDialog`'s hand-rolled tinted `.btn-danger`. Converge on the
    `App*` layer.

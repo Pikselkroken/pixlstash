@@ -1110,7 +1110,7 @@ class StackFacts:
 
     Attributes:
         stack_id: The stack.
-        member_ids: Every live member, in the canonical stack order — leader
+        member_ids: Every live member, in the canonical stack order, leader
             first. Same ranking as ``Picture._get_stack_leader_ids`` and the
             grid's ``compareStackOrder``.
         leader_thumbnail_version: The leader's thumbnail cache-buster, so the
@@ -1128,7 +1128,7 @@ class StackFacts:
 
     @property
     def leader_picture_id(self) -> int:
-        """The member at ``stack_position`` 0 — the deck's face."""
+        """The member at ``stack_position`` 0: the deck's face."""
         return self.member_ids[0]
 
 
@@ -1141,8 +1141,8 @@ def _stack_member_order_key(
     """Canonical stack order: the leader sorts first.
 
     Deliberately identical to the window function in
-    ``Picture._get_stack_leader_ids`` — ``COALESCE(stack_position, 999999) ASC,
-    COALESCE(score, 0) DESC, created_at DESC, id ASC`` — and to the frontend's
+    ``Picture._get_stack_leader_ids``: ``COALESCE(stack_position, 999999) ASC,
+    COALESCE(score, 0) DESC, created_at DESC, id ASC`` and to the frontend's
     ``compareStackOrder``. A deck whose face disagreed with the grid's leader
     would be the same show-one-mean-another mismatch the deck exists to remove.
 
@@ -1233,7 +1233,7 @@ def build_group_stacks(
 
     ``stackable`` and ``blocked_by_sets`` are the **unit-level rollup** of the
     per-candidate values the caller already computed: a deck is unstackable if
-    ANY of its members is, because a stack cannot be partially stacked — it
+    ANY of its members is, because a stack cannot be partially stacked; it
     moves as a unit or not at all. Nothing about locks is re-derived here.
     ``partition_stackable_members`` is already lock-correct across a whole stack
     (``_locked_sets_by_picture`` expands its input to whole stacks and
@@ -2434,7 +2434,7 @@ def page_queue_in_session(
             #
             # The DECIDED page keeps it. The verdict already happened, and the
             # "clear this decision" way back has to survive its members going to
-            # the Scrapheap — hiding it would strand the decision with no way
+            # the Scrapheap: hiding it would strand the decision with no way
             # to reopen it.
             logger.info(
                 "[dedup-queue] group %s has %d live member(s); %s",
@@ -2470,7 +2470,7 @@ def page_queue_in_session(
                 "confidence": float(row.confidence or 0.0),
                 # The LIVE member count, not the stored one. ``dedupgroup``
                 # remembers how many members the scan found, and a scrapheaped
-                # member is still counted there until the next prune — so the
+                # member is still counted there until the next prune so the
                 # stored number described a group the payload does not contain
                 # and made the row claim a picture that is in the Scrapheap.
                 "member_count": len(members),
@@ -2501,7 +2501,7 @@ def stack_members_in_session(
     offset: int = 0,
     limit: int = DEFAULT_STACK_MEMBER_PAGE_SIZE,
 ) -> Optional[dict[str, Any]]:
-    """One existing stack's members, paged — the deck expansion's own read.
+    """One existing stack's members, paged: the deck expansion's own read.
 
     The lazy half of the design's B1 contract. The queue row ships a deck's
     **count and leader** eagerly, because those are what it draws; the members
@@ -2524,7 +2524,7 @@ def stack_members_in_session(
 
     Returns:
         The expansion payload, or ``None`` when the stack has no live member at
-        all (deleted, dissolved, or never existed) — which the route turns into
+        all (deleted, dissolved, or never existed): which the route turns into
         a 404 rather than an empty stack that appears to exist.
     """
     stack_id = int(stack_id)

@@ -12,7 +12,7 @@ These tests pin both directions:
 
 * a scrapheaped match is NOT imported again, is reported in its own bucket, and
   is offered for restore (rather than restored behind the user's back);
-* a genuinely new file still imports — over-matching is its own regression;
+* a genuinely new file still imports: over-matching is its own regression;
 * a permanently purged (and ledgered) file is not resurrected: with no row left
   there is nothing to match, so a deliberate re-import is a NEW picture;
 * the buckets are disjoint and sum to the file total, on every path.
@@ -65,7 +65,7 @@ def owner_server():
 
 
 # ---------------------------------------------------------------------------
-# Helpers — the two import paths
+# Helpers: the two import paths
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def test_staging_reimport_of_scrapheaped_picture_creates_no_second_row(owner_ser
 
     status = _staging_import(client, [("a-again.png", data)])
     assert status["imported_count"] == 0, status
-    # NOT an ordinary duplicate — a distinct outcome the user can act on.
+    # NOT an ordinary duplicate: a distinct outcome the user can act on.
     assert status["duplicate_count"] == 0, status
     assert status["scrapheaped_count"] == 1, status
     assert status["scrapheaped_picture_ids"] == [original_id], status
@@ -185,7 +185,7 @@ def test_staging_reimport_of_scrapheaped_picture_creates_no_second_row(owner_ser
 
 
 def test_one_shot_reimport_of_scrapheaped_picture_creates_no_second_row(owner_server):
-    """One-shot ``POST /pictures/import`` — the path that carried the bug."""
+    """One-shot ``POST /pictures/import``: the path that carried the bug."""
     srv, client = owner_server
     data = _png_bytes(color=(44, 55, 66))
 

@@ -117,7 +117,7 @@ def _create_picture_imports(
     ``include_deleted`` defaults to False, so a soft-deleted picture was
     invisible here and its file imported again as a brand-new second row. The
     lookup now goes through :mod:`pixlstash.services.import_dedup_service`,
-    which sees soft-deleted rows *for this query only* — ``Picture.find``'s
+    which sees soft-deleted rows *for this query only*, ``Picture.find``'s
     default is unchanged, so no listing, search, count or dedup query gains
     deleted rows. See that module for the full rationale and for why a
     permanently purged file is correctly NOT a match.

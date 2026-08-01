@@ -2325,7 +2325,7 @@ def test_the_lock_lookup_raises_rather_than_calling_an_unknown_id_unfrozen(serve
 # says nothing about stack units, while the queue list and both counts filter on
 # `_live_groups_filter`, which requires two. On a real library that meant 62
 # planned groups behind a badge that said 3: the other 59 were already collapsed
-# into one stack, so nothing was created — and 21 of them had their curated cover
+# into one stack, so nothing was created, and 21 of them had their curated cover
 # replaced, because the run passes no cover and `_stack_members` forces the
 # group's preselection to position 0.
 
@@ -2365,7 +2365,7 @@ def _preselected_cover(server, signature: str) -> int:
 def test_auto_stack_never_plans_a_fully_collapsed_group(server):
     """D1 negative: a group whose live members already share ONE stack.
 
-    It poses no decision, so the queue hides it — and the run must not plan it
+    It poses no decision, so the queue hides it, and the run must not plan it
     either. Verified non-vacuous: restoring `stackable_groups_filter` on the
     auto-stack query fails this test.
     """
@@ -2436,7 +2436,7 @@ def test_auto_stack_still_plans_a_genuinely_unstacked_group(server):
 def test_auto_stack_still_plans_a_group_that_folds_a_stack_in(server):
     """D1 positive, the sharper case: a stack plus a loner still poses a decision.
 
-    Two units, so `_live_groups_filter` keeps it and the run must still act —
+    Two units, so `_live_groups_filter` keeps it and the run must still act,
     the filter tightening must not swallow the groups where a fold WOULD happen.
     """
     ids = _seed(
@@ -2527,7 +2527,7 @@ def test_choosing_the_deck_as_cover_leaves_its_leader_where_it_was(server):
     )
     assert result.cover_picture_id == ids[2]
     # The pre-existing leader still leads, and the matched member did not take
-    # its place — which is exactly what promoting the group member would do.
+    # its place: which is exactly what promoting the group member would do.
     assert _picture(server, ids[2]).stack_position == 0
     assert _picture(server, ids[1]).stack_position != 0
     assert _picture(server, ids[0]).stack_id == stack_id

@@ -472,12 +472,12 @@ def _stack_expanded_ids(session: Session, picture_ids: list[int]) -> set[int]:
     """Every live picture that will end up in the stack *picture_ids* produce.
 
     The members themselves plus the **full** membership of every stack any of
-    them already belongs to — precisely the set :func:`_stack_members`
+    them already belongs to: precisely the set :func:`_stack_members`
     materialises when it folds those stacks in, because a stack moves as a unit.
 
-    Two callers need it and they must agree: the cover check (B2 — a folded
+    Two callers need it and they must agree: the cover check (B2, a folded
     stack's leader is a legal cover even though it is not a group member) and
-    the receipt's count (B4 — a verdict that folds a stack in moves more
+    the receipt's count (B4: a verdict that folds a stack in moves more
     pictures than the group named).
 
     Soft-deleted co-members are excluded: they are not in the resulting stack in
@@ -594,12 +594,12 @@ def _dry_run_summary_in_session(
         ``pictures`` counts the **distinct stack-expanded** set the run would
         move (B4): a group that folds an existing stack in reparents that
         stack's whole membership, so counting the group's own members
-        under-reported the dialog — and two groups can name members of the same
+        under-reported the dialog, and two groups can name members of the same
         stack, so summing per group would then over-report it. The per-cover
         figures deliberately stay on the group's own
-        members, because the tag and score union runs over exactly those —
+        members, because the tag and score union runs over exactly those,
         :func:`apply_metadata_union_in_session` is passed ``included``, not the
-        folded stack — so widening them would promise gains the run never makes.
+        folded stack, so widening them would promise gains the run never makes.
     """
     summary: dict[str, Any] = {
         "groups_by_tier": {tier.value: 0 for tier in DedupTier},
@@ -647,7 +647,7 @@ def _dry_run_summary_in_session(
         )
 
     # B4: a group that folds an existing stack in moves that stack's WHOLE
-    # membership, not only the members the group named — stacks move as a unit
+    # membership, not only the members the group named, stacks move as a unit
     # (:func:`_stack_members`). Counting group members alone made the consent
     # dialog promise fewer pictures than the run would touch. Resolved in two
     # bulk queries rather than one expansion per group, since a run can plan
@@ -781,7 +781,7 @@ def apply_stack_verdict_in_session(
     )
     # The cover is validated against what will actually END UP in the stack, not
     # against the group's own members (B2). A group frequently names only ONE
-    # picture of an existing stack, so that stack's leader is not a member — and
+    # picture of an existing stack, so that stack's leader is not a member and
     # the queue must be able to say "this stack leads" without promoting the
     # matched member instead, which would silently re-cover a stack the user
     # already curated. The legal set is therefore the group's members plus the
@@ -881,7 +881,7 @@ def apply_stack_verdict_in_session(
         # Count what MOVED, not what the group named (B4). Folding an existing
         # stack in reparents co-members the group never mentioned, so
         # `len(included)` under-reported the receipt every time a stack was
-        # involved — "Stacked 2 duplicates" for a verdict that moved six.
+        # involved: "Stacked 2 duplicates" for a verdict that moved six.
         summary=f"Stacked {len(stack_expanded)} duplicates",
         actor=actor,
         source=source,

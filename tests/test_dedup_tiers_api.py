@@ -1786,7 +1786,7 @@ def test_a_queue_row_carries_the_stack_truth_behind_each_deck():
     """A `stack_id` alone cannot render a deck, so every group ships a `stacks`
     block with the stack's REAL depth and its leader.
 
-    Picture 2 (unique) leads a stack that also contains picture 0 — one half of
+    Picture 2 (unique) leads a stack that also contains picture 0, one half of
     the exact pair. The group therefore names ONE member of a 2-stack, and the
     row has to say the deck is 2 deep and led by a picture the group never
     mentions.
@@ -1912,7 +1912,7 @@ def test_expanding_a_stack_with_no_live_members_is_a_404():
 
 def test_a_locked_sibling_outside_the_group_makes_the_whole_deck_unstackable():
     """A stack cannot be partially stacked, so one frozen member freezes the
-    deck — even a member the group never names.
+    deck: even a member the group never names.
 
     The group keeps two other stackable units (the two loose duplicates), so it
     is still served; the deck inside it is marked instead of the row vanishing.

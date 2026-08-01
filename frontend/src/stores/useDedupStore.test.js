@@ -2282,7 +2282,7 @@ function stackGroupFixture(over = {}) {
   };
 }
 
-describe("useDedupStore — the cover default with a deck present", () => {
+describe("useDedupStore: the cover default with a deck present", () => {
   // The whole point: the default verdict must not silently re-curate a stack
   // the user already made. The server's own preselection (a loose picture here)
   // loses to the deck.
@@ -2327,7 +2327,7 @@ describe("useDedupStore — the cover default with a deck present", () => {
 
   // ── The two gestures that arrive on setCover, told apart by the id ───────
   //
-  // Choosing the DECK passes the unit's own `coverPictureId` (the leader) —
+  // Choosing the DECK passes the unit's own `coverPictureId` (the leader),
   // that is what the row's tile, the digits, Compare's card and its zoom all
   // emit. Promoting a MEMBER passes one of the stack's other pictures, which
   // only Compare's expansion band ever does. Both must stick.
@@ -2348,14 +2348,14 @@ describe("useDedupStore — the cover default with a deck present", () => {
 
   // The bug this closes: `unitForPictureId` resolved a promoted member back to
   // its deck and handed back the LEADER, so promoting a member the group had
-  // named was a silent no-op — and the gesture only appeared to work for the
+  // named was a silent no-op, and the gesture only appeared to work for the
   // members the group had NOT named, which fell through the lookup by accident.
   it("honours a member promoted from inside the deck", async () => {
     servePage([stackGroupFixture()], { total: 1 });
     const store = useDedupStore();
     await store.loadFirstPage();
     const g = store.groups[0];
-    // 503 is a matched member of stack 12 — the case that used to snap back.
+    // 503 is a matched member of stack 12: the case that used to snap back.
     store.setCover(g.signature, 503);
     expect(store.coverIdFor(g)).toBe(503);
   });
@@ -2415,7 +2415,7 @@ describe("useDedupStore — the cover default with a deck present", () => {
   });
 });
 
-describe("useDedupStore — exclusion is a whole-unit gesture", () => {
+describe("useDedupStore: exclusion is a whole-unit gesture", () => {
   // Excluding one member of an existing stack was a silent no-op: the rest of
   // its stack dragged it straight back in. The deck goes out entire instead.
   it("takes every picture of a deck out at once", async () => {
@@ -2432,7 +2432,7 @@ describe("useDedupStore — exclusion is a whole-unit gesture", () => {
   });
 
   // The leader is usually not a group member, so it has to address the deck
-  // too — that is what the row emits when the deck's tile is right-clicked.
+  // too: that is what the row emits when the deck's tile is right-clicked.
   it("addresses a deck by its leader as well as by its members", async () => {
     servePage([stackGroupFixture()], { total: 1 });
     const store = useDedupStore();
@@ -2453,7 +2453,7 @@ describe("useDedupStore — exclusion is a whole-unit gesture", () => {
     const store = useDedupStore();
     await store.loadFirstPage();
     const g = store.groups[0];
-    // Five pictures in play, but only two units — so nothing may be excluded.
+    // Five pictures in play, but only two units, so nothing may be excluded.
     expect(store.stackSizeFor(g)).toBe(2);
     expect(store.includedUnitCountFor(g)).toBe(2);
     expect(store.isAtStackFloor(g)).toBe(true);
@@ -2513,7 +2513,7 @@ describe("useDedupStore — exclusion is a whole-unit gesture", () => {
   });
 });
 
-describe("useDedupStore — a scrapheap move while the queue is open", () => {
+describe("useDedupStore: a scrapheap move while the queue is open", () => {
   /** A `pictures_changed` message in the backend's shape. */
   const event = (change_kind, picture_ids) => ({
     type: "pictures_changed",
@@ -2604,7 +2604,7 @@ describe("useDedupStore — a scrapheap move while the queue is open", () => {
   });
 
   // The deck stands for a whole existing stack, so a deleted member must not
-  // leave a hole in its depth — the row would promise to move a picture that is
+  // leave a hole in its depth: the row would promise to move a picture that is
   // already in the Scrapheap.
   it("shrinks a deck's depth when one of its matched members goes", async () => {
     const g = deckGroup("g1", 7, [10, 11], 4, 10);

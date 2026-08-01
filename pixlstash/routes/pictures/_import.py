@@ -241,7 +241,7 @@ class StagingStatusResponse(BaseModel):
     """
 
     scrapheaped_picture_ids: Optional[list[int]] = None
-    """Distinct scrapheaped pictures behind ``scrapheaped_count`` — per PICTURE,
+    """Distinct scrapheaped pictures behind ``scrapheaped_count``, per PICTURE,
     so several incoming copies of one content name its id once. Feed these
     straight to ``POST /pictures/scrapheap/restore``."""
 
@@ -294,7 +294,7 @@ class ImportStatusResponse(BaseModel):
     Counted per FILE, so ``imported_count + duplicate_count +
     scrapheaped_count == total``. These files were deliberately not imported
     again (that would double the bytes on disk and refill the duplicate queue)
-    and deliberately not restored either — the user scrapheapped them on
+    and deliberately not restored either: the user scrapheapped them on
     purpose, so restoring is offered, not performed.
     """
 
@@ -971,7 +971,7 @@ def register_routes(router, server):
         if task["status"] == "completed":
             payload["results"] = task.get("results") or []
             # The three disjoint buckets, each counted directly while the results
-            # were built — never derived from the total by subtraction.
+            # were built: never derived from the total by subtraction.
             payload["imported_count"] = task.get("imported_count")
             payload["duplicate_count"] = task.get("duplicate_count")
             payload["scrapheaped_count"] = task.get("scrapheaped_count")

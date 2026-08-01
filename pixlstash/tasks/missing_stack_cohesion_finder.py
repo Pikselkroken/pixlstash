@@ -1,7 +1,7 @@
 """Finder that keeps the mixed-stack cohesion cache current.
 
 Queues one :class:`~pixlstash.tasks.stack_cohesion_task.StackCohesionTask` per
-batch of stacks whose cached cohesion row is missing or stale — stale meaning
+batch of stacks whose cached cohesion row is missing or stale, stale meaning
 the stack's live membership fingerprint no longer matches the cached one, which
 is the only staleness that exists here (a row whose fingerprint still matches is
 exact however old it is, because its inputs have not moved).
@@ -30,7 +30,7 @@ class MissingStackCohesionFinder(BaseTaskFinder):
 
     def max_inflight_tasks(self) -> int:
         # One at a time. Two concurrent tasks would fight over the same
-        # ``stackcohesion`` rows for no gain — the work is a short DB write, not
+        # ``stackcohesion`` rows for no gain: the work is a short DB write, not
         # a GPU pipeline, and the batch query is already amortised over 200
         # stacks.
         return 1
@@ -39,7 +39,7 @@ class MissingStackCohesionFinder(BaseTaskFinder):
         # Cohesion is measured on ``picture.perceptual_hash``, which the image
         # embedding worker writes. Running ahead of it would cache an edge list
         # derived from members that simply have no hash yet, and every one of
-        # them would look stranded — the exact false positive the flag must not
+        # them would look stranded: the exact false positive the flag must not
         # produce. Waiting means the first answer is the honest one.
         return [TaskType.IMAGE_EMBEDDING]
 

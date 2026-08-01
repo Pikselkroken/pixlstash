@@ -96,7 +96,7 @@ Shapes and rules the frontend depends on:
   leader_thumbnail_version, matched_picture_ids, stackable, blocked_by_sets } }`,
   one entry per existing stack the group touches, `{}` when none is. A stack
   verdict moves whole **stacks**, so the smallest thing the queue may offer to
-  move is a unit: a loose picture (`stack_id: null`), or a **deck** — every
+  move is a unit: a loose picture (`stack_id: null`), or a **deck**, every
   candidate sharing a `stack_id`, drawn as one tile.
   - **`member_count` is the STACK's live member count, not the group's.** It is
     routinely larger than the number of that stack's members in `candidates`
@@ -111,7 +111,7 @@ Shapes and rules the frontend depends on:
     contract as a candidate's, so the face renders without expanding anything.
   - **`stackable` / `blocked_by_sets` are the unit-level rollup**: false when ANY
     member of the deck is frozen, because a stack cannot be partially stacked.
-    This already covers a locked sibling **outside** the group — a locked set
+    This already covers a locked sibling **outside** the group, a locked set
     freezes a whole stack.
   - **Count and leader are eager; the members are not.** Shipping every member of
     every stack would put a 40-member stack's worth of tiles behind one row.
@@ -119,7 +119,7 @@ Shapes and rules the frontend depends on:
     `offset` paging (a stack's membership is not a live list being decided out
     from under the client), `next_offset` is `null` at the end, members come back
     leader-first with exactly the fields a candidate carries plus `position` and
-    `is_leader`, and `why` is always `[]` — evidence belongs to the duplicate
+    `is_leader`, and `why` is always `[]`: evidence belongs to the duplicate
     group, not to a stack the user already made. A stack with no live member is a
     **404**, never an empty stack that looks like it exists.
 - **A candidate also carries `stackable` and `blocked_by_sets`.** `stackable:
@@ -140,7 +140,7 @@ Shapes and rules the frontend depends on:
   and unlocking the set brings it straight back with no rescan.
 - **A fully collapsed group is withheld the same way** (design D1): a group
   whose live members already sit in one and the same stack poses no decision, so
-  it is not served, not counted, and — since 2026-08-01 — **not planned into
+  it is not served, not counted, and, since 2026-08-01, **not planned into
   `POST /dedup/auto-stack` or its dry run either**. Auto-stack used a weaker
   filter that ignored stack units, so it reported far more "stacks to create"
   than the badge showed and would have re-covered stacks the user had already
@@ -266,7 +266,7 @@ shipped surface does not provide; none is worked around silently):
 ### 2.2 The `Keep cover only` contract
 
 Two routes on the **stacks** surface, not the dedup one, because the action is
-about stacks however they were made — the queue is not the only way stacks get
+about stacks however they were made: the queue is not the only way stacks get
 created. Design: `docs/design/keep-cover-only.md`; backend: §22.12 of
 `docs/backend_architecture.md`.
 
@@ -277,7 +277,7 @@ created. Design: `docs/design/keep-cover-only.md`; backend: §22.12 of
 
 Both take the same body: `{ stack_ids?: int[], picture_ids?: int[], batch_id?:
 string }`. At least one id list must be non-empty (400 otherwise); they are
-unioned, capped at 2000 ids each, and **the unit is the stack** — any picture
+unioned, capped at 2000 ids each, and **the unit is the stack**, any picture
 named pulls in its whole stack, so a partial selection inside a stack collapses
 the whole stack. Loose pictures name no stack and are ignored.
 
@@ -286,7 +286,7 @@ Shapes and rules the frontend depends on:
 - **Every figure in the dialog comes from the preview, and only from it.** The
   headline and the button label must render from the *same computed value*, not
   merely the same endpoint. While the preview is in flight or has failed, show
-  an en dash and disable the confirm — never a zero, never a stale number.
+  an en dash and disable the confirm: never a zero, never a stale number.
 - **The stack buckets are disjoint and sum to `stacks_selected`:**
   `stacks_eligible + stacks_skipped_locked + stacks_skipped_character_on_copy +
   stacks_skipped_single_member`. Do not derive one by subtracting the others;
@@ -296,9 +296,9 @@ Shapes and rules the frontend depends on:
   so it never includes a skipped stack's members. `picture_ids_moving` is the id
   list behind it, for marking cards.
 - **`covers_gaining_metadata` is a union, not a sum**, of
-  `covers_gaining_tags` and `covers_gaining_score` — a cover can gain both.
+  `covers_gaining_tags` and `covers_gaining_score`: a cover can gain both.
 - **`bytes_held_by_copies` is held, not freed.** Never render it as freed,
-  reclaimed or saved space, and never as a figure block — it is a *sentence*
+  reclaimed or saved space, and never as a figure block; it is a *sentence*
   about what could later be reclaimed. Nothing is freed until the Scrapheap is
   emptied, and `scrapheap_retention_days: null` means **never** (the default on
   a fresh install), so the retention copy must branch on this value rather than
@@ -315,7 +315,7 @@ Shapes and rules the frontend depends on:
   read, which is the property the auto-stack dialog lacked when it reported "62
   stacks to create" for work that would create 3.
 - **`skip_reason` is a closed vocabulary:** `set_locked` (a live member is
-  frozen by a locked picture set — the **whole** stack is refused, with
+  frozen by a locked picture set: the **whole** stack is refused, with
   `locked_sets` naming what to unlock), `character_only_on_copy` (a character
   link sits only on a copy, with `lost_characters` naming it), `single_member`.
   Menu state follows the shipped `Delete` item: disabled with the lock reason
@@ -533,10 +533,10 @@ The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/com
    - `updated` with known fields that are **invisible** to the current sort/filter → **ignored** (e.g. a background `smart_score` recompute under a date sort) to avoid a per-card `/metadata` + thumbnail **refetch storm** for values that aren't even displayed.
 4. **Unrecognised shape** (e.g. a bulk sort/filter-defining change) → a rare, **logged** full-reload fallback.
 
-**The grid is not the only destination.** `useUpdatesSocket` routes each `pictures_changed` frame to every store that holds a snapshot of a server read, and each destination owns its own decision — the grid's table above is *not* shared. The other subscriber is the **Duplicates queue** (`useDedupStore.applyPictureEvent`), whose rows are groups rather than cards:
+**The grid is not the only destination.** `useUpdatesSocket` routes each `pictures_changed` frame to every store that holds a snapshot of a server read, and each destination owns its own decision, the grid's table above is *not* shared. The other subscriber is the **Duplicates queue** (`useDedupStore.applyPictureEvent`), whose rows are groups rather than cards:
 
-- `removed` **with ids** → **surgical**. The named pictures are taken out of every loaded group (candidates, the group's `member_count`, and each deck's depth/`matched_picture_ids`/leader), then any group left spanning fewer than two stack units is removed — the client-side twin of `live_groups_filter`'s HAVING clauses. A full `loadFirstPage` is deliberately *not* used: the queue is windowed and keyset-paged, so rebuilding it throws a triage in progress back to row 1.
-- `removed` **with no ids**, and `restored` → **not applied to the list**. A returning group lands at a position in the confidence ordering the client cannot compute (there is no per-signature read), and the queue has never been a live insert surface — a scan's new groups arrive by paging too. The badge, which refreshes on `useSidebarRefresh`'s own `pictures_changed` path, carries the change and the row returns with the next page. The one exception is an **empty window**: "nothing left to review" while the badge says otherwise is a lie, and there is nothing on screen to disturb, so the first page is reloaded.
+- `removed` **with ids** → **surgical**. The named pictures are taken out of every loaded group (candidates, the group's `member_count`, and each deck's depth/`matched_picture_ids`/leader), then any group left spanning fewer than two stack units is removed, the client-side twin of `live_groups_filter`'s HAVING clauses. A full `loadFirstPage` is deliberately *not* used: the queue is windowed and keyset-paged, so rebuilding it throws a triage in progress back to row 1.
+- `removed` **with no ids**, and `restored` → **not applied to the list**. A returning group lands at a position in the confidence ordering the client cannot compute (there is no per-signature read), and the queue has never been a live insert surface, a scan's new groups arrive by paging too. The badge, which refreshes on `useSidebarRefresh`'s own `pictures_changed` path, carries the change and the row returns with the next page. The one exception is an **empty window**: "nothing left to review" while the badge says otherwise is a lie, and there is nothing on screen to disturb, so the first page is reloaded.
 - **Origin is not consulted.** Unlike the grid, this store never applies a scrapheap move optimistically (no queue action deletes a picture), so its own tab's echo is as new to it as another tab's.
 - The **decided page** keeps its thinned rows and only loses their dead tiles, matching the server: the verdict already happened and "clear this decision" is the only route back to it.
 
@@ -582,7 +582,7 @@ The decision to watermark is made server-side per request based on `User.embed_w
 
 - **Endpoint**: `POST /api/v1/pictures/import` (multipart/form-data).
 - **Content**: image files or `.zip` archives (extracted server-side).
-- **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips content it already has — **including content sitting in the Scrapheap**. See below.
+- **Deduplication**: server computes `pixel_sha` (SHA-256 of decoded pixels) and skips content it already has, **including content sitting in the Scrapheap**. See below.
 - **Async**: the response includes a `task_id`. The frontend polls `GET /api/v1/pictures/import/status?task_id=…` for completion percentage.
 - **Real-time**: as pictures are persisted, the backend also broadcasts `picture_imported` over the WebSocket carrying the uniform envelope (§8). The SPA distinguishes its **own** upload (drives a progress dialog) from a **foreign owner tab** (slick insert) and from **external** imports (the "New pictures" pill) via `source`/`origin_client_id`.
 
@@ -1089,7 +1089,7 @@ group member: a group frequently names one picture of an existing stack, the
 queue renders that stack as a single unit whose face is its leader, and picking
 the unit must not promote the matched member over the leader the user already
 chose. The accepted set is the group's members **plus the full membership of
-every stack the verdict folds in** — anything else, including the leader of a
+every stack the verdict folds in**: anything else, including the leader of a
 stack this group does not touch, is still a 400.
 
 **A locked-set member is a partial success, not a refusal (2026-07-30).** A frozen
@@ -1129,20 +1129,20 @@ or graft its rows into an existing one.
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
-| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids` — the `stranded_picture_ids` the row showed — so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
+| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids`, the `stranded_picture_ids` the row showed, so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
 | `POST /dedup/mixed-stacks/{stack_id}/unstack` | Dissolves a mixed stack entirely. Records one undoable `dedup.unstack` operation; `batch_id` is always present. |
 
 ### Mixed stacks (design D5/B5)
 
 `GET /dedup/mixed-stacks?threshold=&offset=&limit=&include_kept=` lists live
-stacks whose members do not form one connected cluster at *that* threshold —
+stacks whose members do not form one connected cluster at *that* threshold,
 **pass the queue's own slider value; the list is threshold-relative and the same
 stack is mixed at 0.90 and cohesive at 0.65.** Rows are ranked
 least-held-together first (stranded members desc, component count desc, weakest
 edge asc) and carry `component_count`, `component_sizes`, `components`,
 `largest_component_size`, `stranded_picture_ids`, `weakest_edge` (`null` when no
 pair is close enough to be an edge at all), `unhashed_picture_ids` (members whose
-`perceptual_hash` has not arrived — report as *not yet comparable*, never as a
+`perceptual_hash` has not arrived: report as *not yet comparable*, never as a
 mistake), `suggested_action` (`split` / `unstack`), `membership_fingerprint`,
 `kept`, `leader_picture_id` and `leader_thumbnail_version`. The envelope adds
 `total`, `kept_total`, `live_stack_count` and `next_offset` (plain offset paging;
@@ -1153,7 +1153,7 @@ this list is tens of rows, not thousands).
 adding a member later re-raises the stack; `POST` is idempotent
 (`created: false` when it was already kept) and `DELETE` clears every
 fingerprint (`removed: N`). Keep changes no picture, so it is **not** an undoable
-operation and returns no `batch_id` — `DELETE` is the way back, not `Ctrl+Z`.
+operation and returns no `batch_id`: `DELETE` is the way back, not `Ctrl+Z`.
 
 Both actions return `{stack_id, split_picture_ids, remaining_picture_ids,
 stack_dissolved, batch_id}`. **`stack_dissolved` is reported, not inferred**: a

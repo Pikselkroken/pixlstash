@@ -926,7 +926,7 @@ def _soft_delete(server, picture_id):
 
 
 def test_a_group_thinned_below_two_leaves_the_queue_at_once(server):
-    """Not "on the next verdict or scan" — immediately, with no prune in between.
+    """Not "on the next verdict or scan": immediately, with no prune in between.
 
     The owner's report: scrapheap one of a pair and the queue kept the row,
     drawn as a lone picture beside an empty slot.
@@ -949,7 +949,7 @@ def test_a_group_thinned_below_two_leaves_the_queue_at_once(server):
     assert total == 0
     assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
     assert _run(server, tiers.count_by_tier_in_session, None, None)["exact"] == 0
-    # The row itself is still there, unpruned — it is the READ that filters, so
+    # The row itself is still there, unpruned: it is the READ that filters, so
     # restoring the picture must bring the group straight back.
     assert (
         len(_run(server, lambda session: session.exec(select(DedupGroup)).all())) == 1
@@ -985,7 +985,7 @@ def test_a_restored_member_brings_its_group_back_without_a_rescan(server):
 def test_a_group_with_two_live_members_left_keeps_its_place_in_the_queue(server):
     """Over-filtering is its own regression: three minus one is still a decision.
 
-    The row stays, and every number on it counts the LIVE members only — the
+    The row stays, and every number on it counts the LIVE members only, the
     stored ``member_count`` still says three until the next prune.
     """
     ids = _seed(
@@ -1044,7 +1044,7 @@ def test_a_decks_depth_in_the_queue_follows_a_scrapheaped_stack_member(server):
     """A deleted member must not leave a hole in the deck's depth.
 
     The deck's depth is the STACK's live member count, so scrapheaping a member
-    the group never even names still has to shrink it — otherwise the row
+    the group never even names still has to shrink it, otherwise the row
     promises to move a picture that is in the Scrapheap.
     """
     ids = _seed(
@@ -1527,7 +1527,7 @@ def test_a_group_naming_a_whole_two_stack_reports_two_and_two(server):
 
 def test_a_deck_with_one_locked_member_is_unstackable_at_unit_level(server):
     """A stack cannot be partially stacked, so ONE frozen member freezes the
-    deck — including a member the group never names, because a locked set
+    deck: including a member the group never names, because a locked set
     freezes a whole stack.
 
     Three units keep the group in the queue at all: a frozen deck plus two loose
@@ -1554,7 +1554,7 @@ def test_a_deck_with_one_locked_member_is_unstackable_at_unit_level(server):
     assert deck["stackable"] is False
     assert deck["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
     # The per-candidate value it rolls up says the same thing, and the two loose
-    # units are untouched — over-blocking would be its own regression.
+    # units are untouched: over-blocking would be its own regression.
     by_id = {c["picture_id"]: c for c in group["candidates"]}
     assert by_id[ids[1]]["stackable"] is False
     assert by_id[ids[2]]["stackable"] is True

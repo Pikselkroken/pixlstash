@@ -93,7 +93,7 @@ function connect() {
   });
 }
 
-describe("useUpdatesSocket — routing to the duplicate queue", () => {
+describe("useUpdatesSocket: routing to the duplicate queue", () => {
   it("hands a scrapheap move to the dedup store", () => {
     connect();
     const payload = {
@@ -107,7 +107,7 @@ describe("useUpdatesSocket — routing to the duplicate queue", () => {
   });
 
   // The queue never applies a scrapheap move optimistically, so its own tab's
-  // echo is as new to it as another tab's — unlike the grid, which suppresses it.
+  // echo is as new to it as another tab's: unlike the grid, which suppresses it.
   it("hands over its own tab's echo too", () => {
     connect();
     receive({

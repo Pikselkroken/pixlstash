@@ -13,7 +13,7 @@ beforeEach(() => {
   apiClient.get.mockReset();
 });
 
-describe("api/pictureImport — staging status buckets", () => {
+describe("api/pictureImport: staging status buckets", () => {
   it("maps every completion bucket, Scrapheap matches included", async () => {
     apiClient.get.mockResolvedValue({
       data: {

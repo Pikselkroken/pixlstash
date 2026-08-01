@@ -369,7 +369,7 @@ describe("DedupGroupRow — hover score overlays", () => {
   });
 });
 
-describe("DedupGroupRow — the thumbnail's badge corners and its fade", () => {
+describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
   /** A pair where #1 is the user's exclusion and #2 is the server's lock. */
   const mixed = {
     ...group(2),
@@ -580,7 +580,7 @@ function stackedGroup(over = {}) {
   };
 }
 
-describe("DedupGroupRow — the deck", () => {
+describe("DedupGroupRow: the deck", () => {
   it("draws one tile per unit, not one per candidate", () => {
     const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
     expect(wrapper.findAll(".gunit")).toHaveLength(3);
@@ -588,7 +588,7 @@ describe("DedupGroupRow — the deck", () => {
   });
 
   // The deck's face is the stack's LEADER, which this group never names as a
-  // candidate — a tile showing one picture while meaning another is exactly the
+  // candidate: a tile showing one picture while meaning another is exactly the
   // mismatch the deck exists to remove.
   it("faces a deck with its stack's leader, at the leader's own version", () => {
     const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
@@ -669,7 +669,7 @@ describe("DedupGroupRow — the deck", () => {
   });
 });
 
-describe("DedupGroupRow — cover and exclusion over units", () => {
+describe("DedupGroupRow: cover and exclusion over units", () => {
   // A cover choice on a deck resolves to the stack's leader, because that is
   // the only picture the server can lead the resulting stack with.
   it("emits the leader when a deck is picked as cover", async () => {
@@ -708,7 +708,7 @@ describe("DedupGroupRow — cover and exclusion over units", () => {
   });
 
   // Exclusion is whole-unit, so the deck's tile shows the excluded treatment
-  // once its member is out — a half-dimmed deck would be a state the gesture
+  // once its member is out: a half-dimmed deck would be a state the gesture
   // never produces.
   it("reads a deck as out once every picture it stands for is out", () => {
     const out = mountRow({
@@ -742,7 +742,7 @@ describe("DedupGroupRow — cover and exclusion over units", () => {
   });
 });
 
-describe("DedupGroupRow — the verdict button names its outcome", () => {
+describe("DedupGroupRow: the verdict button names its outcome", () => {
   const labelOf = (wrapper) =>
     wrapper
       .find(".gbtn--stack")
@@ -753,7 +753,7 @@ describe("DedupGroupRow — the verdict button names its outcome", () => {
     const wrapper = mountRow();
     expect(labelOf(wrapper)).toEqual(["Stack 3"]);
     // One form, so it must never wear the classes that hide it under width
-    // pressure — there would be nothing left in flow to replace it.
+    // pressure: there would be nothing left in flow to replace it.
     expect(wrapper.find(".gsl").exists()).toBe(false);
   });
 
@@ -811,7 +811,7 @@ describe("DedupGroupRow — the verdict button names its outcome", () => {
   });
 });
 
-describe("DedupGroupRow — the composition and the accessible names", () => {
+describe("DedupGroupRow: the composition and the accessible names", () => {
   it("states the composition in the header and the row's name", () => {
     const wrapper = mountRow({ group: stackedGroup(), coverId: 501, index: 2 });
     expect(wrapper.find(".gn").text()).toContain("Stack of 4 + 2 pictures");
@@ -898,7 +898,7 @@ function mountExpanded(props = {}) {
   });
 }
 
-describe("DedupGroupRow — the expansion band", () => {
+describe("DedupGroupRow: the expansion band", () => {
   it("renders nothing until a stack is named", () => {
     const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
     expect(wrapper.find('[data-testid="dedup-row-expansion"]').exists()).toBe(
@@ -907,7 +907,7 @@ describe("DedupGroupRow — the expansion band", () => {
   });
 
   // Inline in `.gstrip` would nest a second horizontal scroller on the same
-  // axis — ambiguous on a trackpad and on touch — and would explode the deck
+  // axis, ambiguous on a trackpad and on touch, and would explode the deck
   // the row exists to present as one unit.
   it("sits below the row's columns, never inside the picture strip", () => {
     const wrapper = mountExpanded();

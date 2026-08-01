@@ -1,4 +1,4 @@
-"""Keep cover only — collapsing a stack to its cover.
+"""Keep cover only: collapsing a stack to its cover.
 
 Owner of the one destructive action on the stack surface
 (``docs/design/keep-cover-only.md``). A stack keeps its **current** leader and
@@ -10,7 +10,7 @@ in the design review:
 
 1. **The metadata union is mandatory and unconditional.**
    :func:`~pixlstash.services.dedup_verdict_service.apply_metadata_union_in_session`
-   is called from exactly one other place — the dedup stack verdict — so stacks
+   is called from exactly one other place, the dedup stack verdict, so stacks
    made by hand in the grid have **never** been unioned. Measured on the owner's
    library: **110 of 160 stacks** have a copy carrying tags the cover lacks.
    Collapsing without unioning first is therefore silent metadata loss on two
@@ -23,12 +23,12 @@ in the design review:
    skipped, counted and named.** The union deliberately refuses to guess when
    the members reference more than one character. Under *stacking* that is
    right, because nothing is lost. Here the copy carrying the link would leave,
-   so the link would be **destroyed** — see :func:`_character_loss`.
+   so the link would be **destroyed**, see :func:`_character_loss`.
 
 3. **A locked-set member refuses the WHOLE stack**, never just that member.
    Stack membership reconciles to the union of its members' sets
    (:mod:`~pixlstash.services.stack_membership`), so removing one member is
-   exactly the mutation a locked set forbids — and a partial collapse is the
+   exactly the mutation a locked set forbids, and a partial collapse is the
    worst outcome available: some copies gone, the stack still there, no visible
    reason. Siblings in the same request still proceed, matching the shipped bulk
    soft-delete's skip-and-report behaviour.
@@ -51,7 +51,7 @@ The dry run
 one read over the same selection the mutation acts on and through the same
 :func:`plan_in_session`. Its stack buckets are **disjoint and sum to
 ``stacks_selected``**, and every one of them is counted by appending to its own
-list — **never derived by subtraction**. The neighbouring auto-stack dialog once
+list: **never derived by subtraction**. The neighbouring auto-stack dialog once
 reported "62 stacks to create" for work that would create 3, precisely because
 its headline came from a different query than its rows.
 
@@ -117,7 +117,7 @@ SKIP_CHARACTER_ON_COPY = "character_only_on_copy"
 """Skip reason: a character link exists only on a member that would leave."""
 
 SKIP_SINGLE_MEMBER = "single_member"
-"""Skip reason: fewer than :data:`MIN_STACK_MEMBERS` live members — nothing to do."""
+"""Skip reason: fewer than :data:`MIN_STACK_MEMBERS` live members, nothing to do."""
 
 SKIP_REASONS = (SKIP_SINGLE_MEMBER, SKIP_LOCKED, SKIP_CHARACTER_ON_COPY)
 """Every skip reason, in the order :func:`plan_in_session` evaluates them.
@@ -144,13 +144,13 @@ class StackPlan:
             cover; fusing a cover choice into a destructive click is two
             decisions in one press.
         member_ids: Every live member, cover first, in leader order.
-        copy_ids: The live members that would move to the Scrapheap — i.e.
+        copy_ids: The live members that would move to the Scrapheap, i.e.
             :attr:`member_ids` without the cover. Empty on a skipped stack.
         reference_copy_ids: The subset of :attr:`copy_ids` that belong to a
             reference folder. A **subset**, not a bucket: their rows move like
             any other, but their files are user-managed and are not touched.
         bytes_held: Sum of ``size_bytes`` over :attr:`copy_ids`. Bytes *held*,
-            never bytes freed — a soft delete frees nothing.
+            never bytes freed: a soft delete frees nothing.
         gains_tags: The union would copy at least one tag onto the cover.
         gains_score: The union would lift the cover's score.
         skip_reason: One of :data:`SKIP_REASONS`, or ``None`` when eligible.
@@ -204,7 +204,7 @@ class KeepCoverOnlyPlan:
         stacks: Every stack the selection resolved to, in stack-id order.
         unknown_stack_ids: Ids the caller named that resolve to no live stack.
             Reported **outside** the bucket arithmetic below, because they are
-            not stacks — a caller that names a purged or dissolved stack should
+            not stacks: a caller that names a purged or dissolved stack should
             see that, not have it folded into a skip count.
     """
 
@@ -269,7 +269,7 @@ def resolve_selection_in_session(
 
     **The unit is the stack.** A selection *names* stacks: any selected picture
     pulls in its whole stack, so a partial selection inside a stack collapses the
-    whole stack (the dialog must say so — it is the one place this action does
+    whole stack (the dialog must say so: it is the one place this action does
     more than the selection literally names). Loose pictures name no stack and
     are ignored, which is honest only because the dialog counts *stacks*.
 
@@ -282,7 +282,7 @@ def resolve_selection_in_session(
             user cannot see.
 
     Returns:
-        ``(resolved_stack_ids, unknown_stack_ids)`` — the stacks with at least
+        ``(resolved_stack_ids, unknown_stack_ids)``: the stacks with at least
         one live member, and the explicitly named ids that have none.
     """
     named = {int(sid) for sid in (stack_ids or []) if sid is not None}
@@ -327,8 +327,8 @@ def _live_members_by_stack(
 
     Leader order is the one :func:`~pixlstash.stacking.normalize_stack_positions`
     writes: explicit positions ascending, ``NULL`` positions last, ties by id.
-    The first entry is therefore the stack's current cover — the same row the
-    grid renders — so this function and the grid can never disagree about which
+    The first entry is therefore the stack's current cover, the same row the
+    grid renders, so this function and the grid can never disagree about which
     picture is kept.
     """
     if not stack_ids:
@@ -398,8 +398,8 @@ def _character_loss(
     in either direction is a bug: predicting a loss the union prevents skips a
     stack for nothing, and missing one destroys a character link.
 
-    * The union assigns a character to the cover — through
-      ``pending_character_id``, never a fabricated ``Face`` row — only when the
+    * The union assigns a character to the cover: through
+      ``pending_character_id``, never a fabricated ``Face`` row, only when the
       stack references **exactly one** character. That case therefore loses
       nothing and is not reported here.
     * With more than one character the union writes nothing, so every character
@@ -407,7 +407,7 @@ def _character_loss(
 
     A copy's own ``pending_character_id`` is deliberately **not** treated as a
     link to preserve. It is an unconfirmed suggestion, and it is what the union
-    itself writes — so counting it would make an already-unioned stack look like
+    itself writes, so counting it would make an already-unioned stack look like
     it was about to lose the very character the union just propagated.
 
     Returns:
@@ -455,14 +455,14 @@ def plan_in_session(
     one test, so the evaluation order below is the tie-break, and it is what
     keeps the buckets disjoint:
 
-    1. :data:`SKIP_SINGLE_MEMBER` — fewer than two live members, so there is no
+    1. :data:`SKIP_SINGLE_MEMBER`: fewer than two live members, so there is no
        copy to move. Checked first because the other two tests are meaningless
        on a stack of one.
-    2. :data:`SKIP_LOCKED` — any live member is frozen by a locked picture set.
+    2. :data:`SKIP_LOCKED`: any live member is frozen by a locked picture set.
        The **whole** stack is refused: stack membership reconciles to the union
        of its members' sets, so removing one member is the mutation the lock
        forbids, and a partial collapse is the worst outcome available.
-    3. :data:`SKIP_CHARACTER_ON_COPY` — see :func:`_character_loss`.
+    3. :data:`SKIP_CHARACTER_ON_COPY`: see :func:`_character_loss`.
 
     Everything else is eligible. No bucket is ever computed by subtraction: each
     stack is appended to exactly one, and :func:`preview_in_session` asserts the
@@ -626,7 +626,7 @@ def preview_in_session(
         picture_ids: Pictures whose stacks should be collapsed.
         retention_days: The live ``scrapheap_retention_days`` setting, read by
             the handler from server-config and passed in so the client never
-            hardcodes a window. ``None`` means "Never" — the default — in which
+            hardcodes a window. ``None`` means "Never", the default, in which
             case the Scrapheap never empties on its own.
 
     Returns:
@@ -702,8 +702,8 @@ def keep_cover_only_in_session(
 ) -> dict[str, Any]:
     """Collapse every eligible stack in the selection to its cover.
 
-    One session, one commit, **one** operation-log row under **one** ``batch_id``
-    — so the whole gesture is a single ``Ctrl+Z`` however many stacks it named.
+    One session, one commit, **one** operation-log row under **one** ``batch_id``:
+    so the whole gesture is a single ``Ctrl+Z`` however many stacks it named.
 
     Per eligible stack, in this order and never the other way round:
 
@@ -768,7 +768,7 @@ def keep_cover_only_in_session(
     # Defense in depth, evaluated before ANY write so a refusal can never leave a
     # half-collapsed stack. :func:`plan_in_session` has already dropped every
     # stack with a frozen member into the ``set_locked`` bucket, so this can only
-    # fire if the planner and the lock helper disagree — and in that case
+    # fire if the planner and the lock helper disagree and in that case
     # refusing outright is the only safe answer: skipping the picture would
     # produce exactly the partial collapse the design forbids, and soft-deleting
     # it would mutate a set the user froze. Nothing is committed until the end of
@@ -837,7 +837,7 @@ def keep_cover_only_in_session(
     if recorded is None:
         # Every eligible stack soft-deletes at least one live member, so the diff
         # cannot be empty. If it somehow is, returning a batch id that points at
-        # no operation would hand the client a broken undo handle — so the handle
+        # no operation would hand the client a broken undo handle so the handle
         # is dropped and the anomaly is loud.
         logger.error(
             "[keep-cover-only] collapsed %d stack(s) moving %d picture(s) yet "

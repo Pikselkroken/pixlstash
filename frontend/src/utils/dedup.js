@@ -213,14 +213,14 @@ export function lockedCandidateIds(group) {
 //
 // A **unit** is the smallest thing a verdict moves independently:
 //
-//   * a **loose picture** — `stack_id IS NULL`, its own unit;
-//   * a **deck** — every candidate sharing one non-null `stack_id`, collapsed.
+//   * a **loose picture**, `stack_id IS NULL`, its own unit;
+//   * a **deck**, every candidate sharing one non-null `stack_id`, collapsed.
 //
 // A deck stands for the ENTIRE existing stack, not the members that happen to
 // be in the group: `stacks[id].member_count` is the stack's live depth and is
 // routinely larger than the number of matched candidates, so a group's true
 // picture total can exceed `candidates.length`. Its face is the stack's leader,
-// which is frequently NOT one of the matched members — that is the common case,
+// which is frequently NOT one of the matched members; that is the common case,
 // and it is deliberately the picture shown, because a cover choice on a deck
 // resolves to the leader.
 
@@ -425,7 +425,7 @@ export function includedUnits(units, excludedIds) {
 /**
  * How a group is composed, for the row header: `Stack of 5 + 1 picture`.
  *
- * Decks lead, in strip order, then the loose pictures as one count — the shape
+ * Decks lead, in strip order, then the loose pictures as one count, the shape
  * the spec's examples take, and the one that stays readable when a group holds
  * two stacks and three strays. A group with no deck keeps the plain `N
  * pictures` the header has always shown.

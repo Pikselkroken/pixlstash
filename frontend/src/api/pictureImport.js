@@ -29,13 +29,13 @@ import { apiClient } from "../utils/apiClient";
  *     `scrapheaped_count` / `failed_count` / `cancelled_count`, which sum to
  *     `total`. `scrapheaped_picture_ids` carries the restore offer (see below).
  *
- * THE SCRAPHEAP BUCKET — a file whose content matches a SOFT-DELETED picture is
+ * THE SCRAPHEAP BUCKET: a file whose content matches a SOFT-DELETED picture is
  * neither imported nor an ordinary duplicate. Importing it again would put a
  * second copy of every scrapheaped picture back on disk, which a bulk "Keep
  * cover only" cleanup makes a predictable way to undo the cleanup and double the
  * bytes. Restoring it automatically would be the opposite surprise: the user
  * scrapheapped it deliberately. So the import reports it, and the UI offers
- * `POST /pictures/scrapheap/restore` with `scrapheaped_picture_ids` — the
+ * `POST /pictures/scrapheap/restore` with `scrapheaped_picture_ids`, the
  * shipped restore route, which already clears `deleted_at` and re-folds stack
  * positions. There is deliberately no second restore path here.
  *
@@ -226,7 +226,7 @@ export async function cancelStaging({ backendUrl, stagingId }) {
  * @property {number|null} duplicateCount  Skipped: content already live in the vault.
  * @property {number|null} scrapheapedCount Skipped: content matches a picture in the
  *   Scrapheap. Counted per FILE. Not imported again (that would double the bytes on
- *   disk) and not restored either — restoring is offered, because the user
+ *   disk) and not restored either: restoring is offered, because the user
  *   scrapheapped those pictures on purpose.
  * @property {number[]} scrapheapedPictureIds Distinct scrapheaped pictures behind
  *   `scrapheapedCount`, per PICTURE. Feed straight to `restoreScrapheap()`.

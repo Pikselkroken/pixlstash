@@ -1,4 +1,4 @@
-"""Content-hash matching for the import paths — Scrapheap included.
+"""Content-hash matching for the import paths: Scrapheap included.
 
 **Why this module exists.** Import de-duplication used to ask only "is there a
 LIVE picture with this ``pixel_sha``?". ``Picture.find`` defaults
@@ -17,16 +17,16 @@ the cleanup.
 **The rule this module encodes.** A content-hash match is one of exactly two
 things, and the import must be able to tell them apart:
 
-* a **live** match — the file is already in the library. Nothing to do; it is a
+* a **live** match; the file is already in the library. Nothing to do; it is a
   duplicate, exactly as before.
-* a **scrapheaped** match — the row exists but is soft-deleted. The file is NOT
+* a **scrapheaped** match, the row exists but is soft-deleted. The file is NOT
   imported again (that is the doubling bug), and it is NOT reported as an
   ordinary duplicate either: the user deliberately scrapheaped it, so silently
   restoring would be its own surprise. It is reported as a third, distinct
   outcome and the caller is offered a restore.
 
-**Live wins over scrapheaped for the same hash.** Both can exist today —
-precisely because the bug above already created second rows — and a live row
+**Live wins over scrapheaped for the same hash.** Both can exist today,
+precisely because the bug above already created second rows and a live row
 means the content IS in the library, so "duplicate" is the honest answer.
 
 **A permanently purged file is not a match, by construction.** Delete-forever
@@ -91,7 +91,7 @@ def partition_by_pixel_sha_in_session(
         shas: The incoming files' content hashes (duplicates tolerated).
 
     Returns:
-        ``(live, scrapheaped)`` — two dicts keyed by ``pixel_sha``. They are
+        ``(live, scrapheaped)``: two dicts keyed by ``pixel_sha``. They are
         **disjoint**: a hash with both a live and a soft-deleted row appears only
         in ``live``. A hash in neither dict is genuinely new.
     """
@@ -104,7 +104,7 @@ def partition_by_pixel_sha_in_session(
     for start in range(0, len(wanted), _SHA_QUERY_CHUNK):
         chunk = wanted[start : start + _SHA_QUERY_CHUNK]
         rows = session.exec(
-            # No ``deleted`` predicate on purpose — seeing the Scrapheap is the
+            # No ``deleted`` predicate on purpose: seeing the Scrapheap is the
             # whole point. The rows are classified below, not filtered out.
             select(Picture.id, Picture.pixel_sha, Picture.file_path, Picture.deleted)
             .where(Picture.pixel_sha.in_(chunk))
@@ -131,7 +131,7 @@ def partition_by_pixel_sha_in_session(
     if scrapheaped:
         logger.info(
             "Import dedup: %d incoming content hash(es) match scrapheaped "
-            "picture(s) %s — they will NOT be imported again and are reported "
+            "picture(s) %s: they will NOT be imported again and are reported "
             "as a restorable outcome, not as ordinary duplicates.",
             len(scrapheaped),
             sorted({m.id for m in scrapheaped.values()}),

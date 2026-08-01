@@ -2,7 +2,7 @@
 
 ``stack_leaders_only`` renders one tile per stack. On the unscoped grid the
 leader is simply ``stack_position == 0``. When the caller passes an explicit id
-filter — a picture set, a share token's scope, a split — the global position-0
+filter, a picture set, a share token's scope, a split, the global position-0
 leader may not be inside that filter, and requiring it rendered NEITHER picture:
 a set holding only a non-cover stack member showed five tiles for its six
 members and no stack at all (#670 / #1746). The id-scoped branch therefore
@@ -19,10 +19,10 @@ the same set view, same ids returned.
 These tests pin both halves of that change:
 
 * ``_legacy_scoped_leader_ids`` reproduces the correlated formulation verbatim
-  and is used as an oracle — the id sets must be identical, not merely the same
+  and is used as an oracle: the id sets must be identical, not merely the same
   size, across every scenario (stack wholly inside the scope, wholly outside it,
   straddling it, unstacked rows, NULL ``stack_position``, deleted members, and
-  all three lifecycle modes — live, ``include_deleted``, ``only_deleted``).
+  all three lifecycle modes: live, ``include_deleted``, ``only_deleted``).
 * ``test_id_scoped_leader_count_is_single_pass`` fails if the per-row shape ever
   comes back: it counts an 8,000-id scope that is half stacked, which the old
   formulation cannot do inside the budget.
@@ -96,7 +96,7 @@ def _legacy_scoped_leader_ids(
 
     ``only_deleted`` / ``include_deleted`` mirror the same ``Picture.find``
     arguments, because they decide whether a candidate row can be OUTSIDE the
-    ranking set (which is always live rows only) — the one place where "compare
+    ranking set (which is always live rows only): the one place where "compare
     against the best member" and "no sibling outranks me" could have diverged.
     """
     sibling = aliased(Picture)
@@ -175,7 +175,7 @@ def test_straddling_stack_is_represented_by_its_best_in_scope_member(session):
     """The #670 / #1746 case: the cover is outside the id filter.
 
     Exactly one tile must still stand for the stack, and it must be the
-    lowest-positioned member that IS in the filter — not nothing, and not one
+    lowest-positioned member that IS in the filter: not nothing, and not one
     tile per member.
     """
     stack = _new_stack(session)
@@ -365,6 +365,6 @@ def test_id_scoped_leader_count_is_single_pass(session):
     elapsed = min(_timed_count(session, ids, expected=6000) for _ in range(3))
     assert elapsed < _SINGLE_PASS_BUDGET_S, (
         f"id-scoped stack-leader COUNT took {elapsed:.2f}s for {len(ids)} ids "
-        f"(budget {_SINGLE_PASS_BUDGET_S}s) — the per-row correlated subquery "
+        f"(budget {_SINGLE_PASS_BUDGET_S}s): the per-row correlated subquery "
         "has probably come back"
     )

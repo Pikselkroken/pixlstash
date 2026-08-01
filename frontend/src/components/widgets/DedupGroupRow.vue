@@ -225,7 +225,7 @@
              `Merge 2 stacks`), because expansion is opt-in: a user working at
              speed with Enter never opens one, so this is the last text before
              committing. Under width pressure it sheds the size and then the
-             destination, in CSS both ways — the fold is a container query, not
+             destination, in CSS both ways: the fold is a container query, not
              a measurement, exactly as the toolbar's overflow works. The
              degrading classes are applied ONLY when there is something to shed,
              so a label with one form is never hidden with nothing to replace
@@ -323,7 +323,7 @@
       <!-- The row's own height-driven recipe, not the strip's 128x96
            default: the queue runs a 112-406px size slider, and a band that
            ignored it would contradict the tiles directly above it. Height
-           only — the width follows the decoded image, because stored
+           only: the width follows the decoded image, because stored
            dimensions ignore EXIF rotation. -->
       <StackExpansionStrip
         v-else
@@ -686,7 +686,7 @@ function lockNamesOf(unit) {
  * actually matched when those differ. On a real library one stack-touching
  * group in three names only ONE member of a stack, so the tile shows a picture
  * that stands for four; that sentence is the whole disclosure until the count
- * badge is pressed, and there is no visual substitute for it — the corner has
+ * badge is pressed, and there is no visual substitute for it; the corner has
  * no budget for a second numeral (the spec's dropped "1 of 4 matched" marker).
  *
  * @param {Object} unit
@@ -862,7 +862,7 @@ function onRowMouseDown(event) {
 /**
  * A unit's smart score for the hover chip: the metadata panel's own two-decimal
  * precision, empty when the backend served none (NULL), when the computation
- * failed (-1.0), or when the unit is a deck whose leader is not in the group —
+ * failed (-1.0), or when the unit is a deck whose leader is not in the group,
  * no chip in any of those cases.
  * @param {Object} unit
  * @returns {string}
@@ -875,8 +875,8 @@ function smartTextOf(unit) {
 /**
  * Clicking a tile focuses the row and makes that unit the cover.
  *
- * On a deck the cover resolves to the stack's LEADER — the picture the tile is
- * already showing — because that is the only picture the server can lead the
+ * On a deck the cover resolves to the stack's LEADER, the picture the tile is
+ * already showing: because that is the only picture the server can lead the
  * resulting stack with, and picking a matched member instead would re-curate a
  * stack the user already made.
  *
@@ -955,7 +955,7 @@ function onDblClick(event) {
   /* The row is the query container for its own verdict label, so that label
      degrades on the width it actually has rather than on the viewport's. Same
      mechanism as the toolbar's overflow fold: CSS both ways, no measurement.
-     Inline-size only — the row's HEIGHT must stay content-driven, because
+     Inline-size only: the row's HEIGHT must stay content-driven, because
      DuplicateQueue samples its scroll pitch from it. */
   container: grow / inline-size;
   border-radius: var(--radius-md);
@@ -1186,7 +1186,7 @@ function onDblClick(event) {
   align-items: flex-end;
   /* Stated rather than left to DOM order: this column is a SIBLING of the tile
      and has to paint over it, which is exactly what `--z-raised` names
-     ("lifted over an immediate sibling: tile badge"). `.gtl` needs none — it is
+     ("lifted over an immediate sibling: tile badge"). `.gtl` needs none; it is
      inside the tile. */
   z-index: var(--z-raised);
 }
@@ -1283,9 +1283,9 @@ function onDblClick(event) {
 
 /* ── Hover-only score overlays ─────────────────────────────────────────────
    The grid's exact reveal recipe (opacity on the overlay, shown on the thumb's
-   hover; the grid has no focus-triggered display and neither does this —
+   hover; the grid has no focus-triggered display and neither does this,
    matched deliberately, hover means hover). Display-only: pointer-events stays
-   OFF at all times, unlike the grid where hover arms the stars for clicking —
+   OFF at all times, unlike the grid where hover arms the stars for clicking,
    here the thumbnail owns click=cover, right-click=exclude and
    double-click=compare, and an interactive star would swallow the cover click
    on the very pixels a hover invites. These keep full strength on an excluded
@@ -1420,7 +1420,7 @@ function onDblClick(event) {
 
    The widths are the point at which the three-column row starts squeezing the
    picture strip rather than the verdict column, measured against the row's own
-   inline size — the strip is the column that must keep its room. */
+   inline size: the strip is the column that must keep its room. */
 .gsl--mid,
 .gsl--short {
   display: none;

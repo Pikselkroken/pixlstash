@@ -365,7 +365,7 @@ describe("verdict-refusal copy", () => {
 //
 // A stack verdict moves whole STACKS, so the queue's smallest addressable thing
 // is a unit: a loose picture, or a whole existing stack collapsed into one deck.
-// The case that makes this load-bearing rather than tidy is the common one — a
+// The case that makes this load-bearing rather than tidy is the common one, a
 // group that names ONE member of a four-deep stack, where a client sizing the
 // deck from `candidates` draws a single picture and then silently moves four.
 
@@ -393,7 +393,7 @@ function mixedGroup() {
   };
 }
 
-describe("groupUnits — the partition", () => {
+describe("groupUnits: the partition", () => {
   it("reads a candidate's stack id, or null when it has none", () => {
     expect(candidateStackId({ stack_id: 12 })).toBe(12);
     expect(candidateStackId({ stackId: 12 })).toBe(12);
@@ -478,7 +478,7 @@ describe("groupUnits — the partition", () => {
   });
 });
 
-describe("groupUnits — the lock rollup", () => {
+describe("groupUnits: the lock rollup", () => {
   // A locked set freezes a WHOLE stack, including members outside the group,
   // so the deck's own `stackable` is the answer even when every visible
   // candidate says it is free.
@@ -547,7 +547,7 @@ describe("unitForPictureId / isUnitExcluded / includedUnits", () => {
   });
 });
 
-describe("unitCompositionLabel — what the header says", () => {
+describe("unitCompositionLabel: what the header says", () => {
   it("keeps the plain picture count when nothing is stacked", () => {
     expect(
       unitCompositionLabel(
@@ -591,7 +591,7 @@ describe("unitCompositionLabel — what the header says", () => {
   });
 });
 
-describe("stackVerdictLabel — the button names its outcome", () => {
+describe("stackVerdictLabel: the button names its outcome", () => {
   const deck = (depth, id) => ({ kind: "deck", depth, coverPictureId: id });
   const loose = () => ({ kind: "picture", depth: 1 });
 
@@ -619,7 +619,7 @@ describe("stackVerdictLabel — the button names its outcome", () => {
 
   // 11 of 1,726 unresolved groups on a real library are two stacks WITH a loose
   // picture alongside. "Merge 2 stacks" would move three things while naming
-  // two, which is the class of lie this labelling exists to remove — rarity is
+  // two, which is the class of lie this labelling exists to remove, rarity is
   // not a reason to tolerate it.
   it("names the loose pictures that fold in alongside a merge", () => {
     const label = stackVerdictLabel([deck(5, 1), deck(3, 2), loose()]);

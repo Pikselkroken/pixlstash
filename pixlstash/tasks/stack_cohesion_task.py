@@ -2,8 +2,8 @@
 
 Cohesion is *computed*, never a column on ``picture``
 (``docs/design/mixed-stacks-and-stack-units.md``, B5). What this task maintains
-is the cache of the threshold-independent half — the within-stack near-pair edge
-list keyed on the stack's membership fingerprint — so the Mixed stacks page
+is the cache of the threshold-independent half: the within-stack near-pair edge
+list keyed on the stack's membership fingerprint, so the Mixed stacks page
 folds components out of stored edges instead of re-reading and re-comparing
 every member's perceptual hash on every request, and so the flag is already
 right the first time a user opens the page after stacking something.
