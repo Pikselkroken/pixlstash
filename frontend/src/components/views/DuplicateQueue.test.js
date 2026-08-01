@@ -2073,3 +2073,60 @@ describe("DuplicateQueue — a read-only session", () => {
     wrapper.unmount();
   });
 });
+
+describe("DuplicateQueue — a picture scrapheaped elsewhere", () => {
+  /** A `pictures_changed` frame, as `useUpdatesSocket` hands it to the store. */
+  const removed = (picture_ids) => ({
+    type: "pictures_changed",
+    change_kind: "removed",
+    picture_ids,
+    source: "ui",
+  });
+
+  const rowIds = (wrapper) =>
+    wrapper
+      .findAll("[data-testid^='dedup-group-']")
+      .map((el) => el.attributes("data-testid"));
+
+  // The reported bug, at the surface it was reported on: the row for a group
+  // that is now one picture stayed on screen, drawing an empty slot beside it.
+  it("takes a group thinned below two off the screen without a reload", async () => {
+    const { wrapper, store } = await mountQueue([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+    ]);
+    expect(rowIds(wrapper)).toEqual([
+      "dedup-group-g1",
+      "dedup-group-g2",
+      "dedup-group-g3",
+    ]);
+    listGroups.mockClear();
+
+    store.applyPictureEvent(
+      removed([store.groups[1].candidates[0].picture_id]),
+    );
+    await wrapper.vm.$nextTick();
+
+    expect(rowIds(wrapper)).toEqual(["dedup-group-g1", "dedup-group-g3"]);
+    // Surgical, not a rebuild: the window and the user's place in it survive.
+    expect(listGroups).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Over-filtering is its own regression, and so is a tile that outlives its
+  // picture: the row stays, one tile lighter.
+  it("keeps a group that still has two, minus the deleted tile", async () => {
+    const { wrapper, store } = await mountQueue([group("g1", 3)]);
+    const gone = store.groups[0].candidates[2].picture_id;
+    expect(wrapper.findAll(".gunit")).toHaveLength(3);
+
+    store.applyPictureEvent(removed([gone]));
+    await wrapper.vm.$nextTick();
+
+    expect(rowIds(wrapper)).toEqual(["dedup-group-g1"]);
+    expect(wrapper.findAll(".gunit")).toHaveLength(2);
+    expect(wrapper.html()).not.toContain(`/pictures/thumbnails/${gone}.webp`);
+    wrapper.unmount();
+  });
+});

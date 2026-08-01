@@ -2249,6 +2249,11 @@ def page_queue_in_session(
         scrollbar without a second request. *next_cursor* is ``None`` once the
         page is not full, which is end-of-found.
 
+        Every group is reported over its **live** members only: a scrapheaped
+        picture is absent from ``candidates``, from ``member_count`` and from
+        the ``stacks`` depths, and an open-queue group left with fewer than two
+        of them is not reported at all.
+
     Raises:
         DedupCursorError: *cursor* is not a cursor this server minted.
     """
@@ -2417,14 +2422,28 @@ def page_queue_in_session(
             if pid in candidates
         ]
         if len(members) < 2:
-            # Members disappeared between the scan and this read. Report the row
-            # as-is rather than dropping it silently; prune_stale_groups removes
-            # it on the next verdict or scan.
+            # Fewer than two LIVE members: the group no longer poses a decision.
+            # ``live_groups_filter`` already excludes it from the open queue in
+            # SQL, so reaching this on the open queue means a member was
+            # scrapheaped between the group read and the candidate load. The row
+            # is dropped rather than served thin: a group of one renders as a
+            # lone picture with an empty slot beside it, and its verdict buttons
+            # offer a stack the server would refuse (owner report, 2026-08-01).
+            # ``prune_stale_groups_in_session`` removes the row itself on the
+            # next verdict or scan; until then every read filters it out.
+            #
+            # The DECIDED page keeps it. The verdict already happened, and the
+            # "clear this decision" way back has to survive its members going to
+            # the Scrapheap — hiding it would strand the decision with no way
+            # to reopen it.
             logger.info(
-                "[dedup-queue] group %s has %d live member(s); it will be pruned",
+                "[dedup-queue] group %s has %d live member(s); %s",
                 row.signature,
                 len(members),
+                "kept on the decided page" if decided else "dropped from the queue",
             )
+            if not decided:
+                continue
         cover_id = (
             int(row.cover_picture_id)
             if row.cover_picture_id is not None
@@ -2449,7 +2468,12 @@ def page_queue_in_session(
                 "signature": row.signature,
                 "tier": row.tier,
                 "confidence": float(row.confidence or 0.0),
-                "member_count": int(row.member_count or len(members)),
+                # The LIVE member count, not the stored one. ``dedupgroup``
+                # remembers how many members the scan found, and a scrapheaped
+                # member is still counted there until the next prune — so the
+                # stored number described a group the payload does not contain
+                # and made the row claim a picture that is in the Scrapheap.
+                "member_count": len(members),
                 "cover_picture_id": cover_id,
                 "why": json.loads(row.evidence) if row.evidence else [],
                 "created_at": row.created_at,

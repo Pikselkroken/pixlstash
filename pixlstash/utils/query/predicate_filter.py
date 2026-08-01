@@ -377,6 +377,15 @@ class PredicateFilter(BaseModel):
             # NOT on the caller's tier policy, so this matches what the sidebar
             # badge counts (see ``DedupGroup.resolved``); filtering by tier here
             # would show a count the grid could not account for.
+            #
+            # ``live_groups_filter`` is the OTHER half of what the badge counts,
+            # and leaving it out is what let a scrapheaped partner keep marking
+            # its survivor: the group had left the queue and the badge, but the
+            # grid still called the remaining picture unresolved. It is imported
+            # lazily for the same reason ``Picture.find`` imports this module
+            # lazily — ``db_models.picture`` sits between the two.
+            from pixlstash.services.dedup_tier_service import live_groups_filter
+
             preds.append(
                 exists(
                     select(DedupGroupMember.picture_id)
@@ -384,6 +393,7 @@ class PredicateFilter(BaseModel):
                     .where(
                         DedupGroupMember.picture_id == Picture.id,
                         DedupGroup.resolved.is_(False),
+                        live_groups_filter(),
                     )
                 )
             )

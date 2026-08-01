@@ -2448,3 +2448,232 @@ describe("useDedupStore — exclusion is a whole-unit gesture", () => {
     expect(store.toggleExcluded(g, 501)).toBe("locked");
   });
 });
+
+describe("useDedupStore — a scrapheap move while the queue is open", () => {
+  /** A `pictures_changed` message in the backend's shape. */
+  const event = (change_kind, picture_ids) => ({
+    type: "pictures_changed",
+    change_kind,
+    picture_ids,
+    source: "ui",
+  });
+
+  /** A group whose candidates sit in one existing stack (a deck). */
+  function deckGroup(signature, stackId, matched, depth, leader) {
+    const g = group(signature, matched.length);
+    g.candidates = matched.map((id, i) => ({
+      ...g.candidates[i],
+      picture_id: id,
+      stack_id: stackId,
+    }));
+    g.stacks = {
+      [String(stackId)]: {
+        stack_id: stackId,
+        member_count: depth,
+        leader_picture_id: leader,
+        leader_thumbnail_version: "800x600",
+        matched_picture_ids: [...matched],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    };
+    return g;
+  }
+
+  it("drops a group whose live members fall below two", async () => {
+    servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const doomed = idsOf(store.groups[1])[0];
+
+    const decision = store.applyPictureEvent(event("removed", [doomed]));
+
+    expect(decision.action).toBe("targeted");
+    expect(decision.dropped).toEqual(["g2"]);
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g3"]);
+  });
+
+  // Over-filtering is its own regression: three copies minus one is still a
+  // decision the user has to make.
+  it("keeps a group that still has two live members, minus the deleted tile", async () => {
+    servePage([group("g1", 3)], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const gone = idsOf(store.groups[0])[2];
+
+    store.applyPictureEvent(event("removed", [gone]));
+
+    expect(store.groups).toHaveLength(1);
+    const survivor = store.groups[0];
+    expect(idsOf(survivor)).not.toContain(gone);
+    expect(survivor.candidates).toHaveLength(2);
+    // Every count on the row is the LIVE one; the server reports it the same way.
+    expect(survivor.member_count).toBe(2);
+  });
+
+  it("takes the row out of the count and the queue's own total", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    getCounts.mockResolvedValue({ unresolved_groups: 2, by_tier: {} });
+    const store = useDedupStore();
+    await store.refreshCounts();
+    await store.loadFirstPage();
+    expect(store.openCount).toBe(2);
+    expect(store.total).toBe(2);
+
+    store.applyPictureEvent(event("removed", [idsOf(store.groups[0])[0]]));
+
+    expect(store.openCount).toBe(1);
+    expect(store.total).toBe(1);
+  });
+
+  it("walks the focus off a row it removes", async () => {
+    servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.setFocus(2);
+
+    store.applyPictureEvent(event("removed", [idsOf(store.groups[2])[0]]));
+
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2"]);
+    expect(store.focusIndex).toBe(1);
+    expect(store.focusedGroup.signature).toBe("g2");
+  });
+
+  // The deck stands for a whole existing stack, so a deleted member must not
+  // leave a hole in its depth — the row would promise to move a picture that is
+  // already in the Scrapheap.
+  it("shrinks a deck's depth when one of its matched members goes", async () => {
+    const g = deckGroup("g1", 7, [10, 11], 4, 10);
+    g.candidates.push({ ...group("g1").candidates[0], picture_id: 99 });
+    servePage([g], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    store.applyPictureEvent(event("removed", [11]));
+
+    const deck = store.groups[0].stacks["7"];
+    expect(deck.member_count).toBe(3);
+    expect(deck.matched_picture_ids).toEqual([10]);
+    expect(deck.leader_picture_id).toBe(10);
+  });
+
+  // The stack's next leader is a fact only the server holds, so the face falls
+  // back to a surviving matched member rather than a 404 thumbnail.
+  it("moves a deck's face off a deleted leader", async () => {
+    const g = deckGroup("g1", 7, [10, 11], 4, 10);
+    g.candidates.push({ ...group("g1").candidates[0], picture_id: 99 });
+    servePage([g], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    store.applyPictureEvent(event("removed", [10]));
+
+    const units = store.unitsFor(store.groups[0]);
+    const deck = units.find((u) => u.kind === "deck");
+    expect(deck.depth).toBe(3);
+    expect(deck.coverPictureId).toBe(11);
+    expect(store.groups[0].stacks["7"].leader_picture_id).toBeNull();
+  });
+
+  // A choice that names a picture the Scrapheap took is not a choice any more:
+  // left in place it rides along as an `excluded_picture_ids` entry the server
+  // cannot resolve, and `coverIdFor` hands back a raw deleted id.
+  it("forgets a cover choice and an exclusion that named a deleted picture", async () => {
+    servePage([group("g1", 4)], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    const [first, , third, fourth] = idsOf(g);
+    store.toggleExcluded(g, fourth);
+    store.setCover("g1", third);
+    expect(store.excludedFor("g1")).toEqual([fourth]);
+
+    store.applyPictureEvent(event("removed", [third, fourth]));
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.coverChoices.g1).toBeUndefined();
+    expect(store.excludedFor("g1")).toEqual([]);
+    expect(store.coverIdFor(store.groups[0])).toBe(first);
+  });
+
+  // The decided page reviews decisions that have already been made; hiding a
+  // row because its pictures were scrapheaped would strand the decision with no
+  // way back to it.
+  it("never drops a row from the decided page, only its dead tiles", async () => {
+    servePage([group("g1")], { total: 1 });
+    const store = useDedupStore();
+    store.showingDecided = true;
+    await store.loadFirstPage();
+    const gone = idsOf(store.groups[0])[0];
+
+    store.applyPictureEvent(event("removed", [gone]));
+
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1"]);
+    expect(idsOf(store.groups[0])).not.toContain(gone);
+  });
+
+  // The queue is windowed and keyset-paged: a restore lands at a position in the
+  // confidence ordering the client cannot compute, and rebuilding the window
+  // would throw a triage in progress back to row one for one returning group.
+  it("does not yank a triage in progress back to the top on a restore", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.setFocus(1);
+    listGroups.mockClear();
+
+    const decision = store.applyPictureEvent(event("restored", [4242]));
+
+    expect(decision.action).toBe("ignored");
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(store.focusIndex).toBe(1);
+  });
+
+  // ...but "nothing left to review" while the badge says otherwise is the one
+  // lie a to-do count cannot afford, and an empty window has nothing to disturb.
+  it("rebuilds an empty queue when a restore puts a group back", async () => {
+    servePage([], { total: 0 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    servePage([group("g1")], { total: 1 });
+
+    const decision = store.applyPictureEvent(event("restored", [4242]));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(decision.action).toBe("reload");
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1"]);
+  });
+
+  it("ignores events that are not a scrapheap move", async () => {
+    servePage([group("g1")], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    expect(
+      store.applyPictureEvent({
+        type: "pictures_changed",
+        change_kind: "updated",
+        fields: ["smart_score"],
+        picture_ids: idsOf(store.groups[0]),
+      }).action,
+    ).toBe("ignored");
+    expect(
+      store.applyPictureEvent({ type: "picture_imported", picture_ids: [1] })
+        .action,
+    ).toBe("ignored");
+    expect(store.groups).toHaveLength(1);
+  });
+
+  it("leaves the queue alone when the deletion touches no loaded group", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    const decision = store.applyPictureEvent(event("removed", [999999]));
+
+    expect(decision.action).toBe("ignored");
+    expect(store.groups).toHaveLength(2);
+    expect(store.total).toBe(2);
+  });
+});

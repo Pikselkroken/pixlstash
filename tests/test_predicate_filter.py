@@ -399,11 +399,53 @@ def test_stack_state_unresolved_survives_a_second_resolved_group(session):
     # A picture can sit in more than one group. One unresolved group is enough
     # to keep it in the queue, so the predicate must be an EXISTS over the
     # picture's groups rather than a property of any single one.
+    #
+    # Both groups are seeded with TWO members, because that is the smallest
+    # group the detector can produce and the predicate now requires a group to
+    # still pose a decision (two live members) before it marks anything.
     pic = _add_picture(session, file_path="a.jpg")
-    _add_dedup_group(session, [pic.id], signature="resolved-one", resolved=True)
-    _add_dedup_group(session, [pic.id], signature="pending-one", resolved=False)
+    settled_partner = _add_picture(session, file_path="b.jpg")
+    pending_partner = _add_picture(session, file_path="c.jpg")
+    _add_dedup_group(
+        session, [pic.id, settled_partner.id], signature="resolved-one", resolved=True
+    )
+    _add_dedup_group(
+        session, [pic.id, pending_partner.id], signature="pending-one", resolved=False
+    )
 
-    _assert_matches_agrees(session, PredicateFilter(stack_state="unresolved"), {pic.id})
+    _assert_matches_agrees(
+        session,
+        PredicateFilter(stack_state="unresolved"),
+        {pic.id, pending_partner.id},
+    )
+
+
+def test_stack_state_unresolved_drops_a_group_thinned_by_the_scrapheap(session):
+    """A scrapheaped partner must stop marking its survivor as unresolved.
+
+    The group has already left the Duplicates queue and the sidebar badge the
+    moment one of its two members is soft-deleted (``live_groups_filter``), so a
+    grid that still called the survivor "unresolved" was quoting a decision that
+    no longer exists. Both directions: the thinned group's survivor drops out,
+    the intact group's members stay in.
+    """
+    thinned_survivor = _add_picture(session, file_path="a.jpg")
+    scrapheaped = _add_picture(session, file_path="b.jpg", deleted=True)
+    intact_a = _add_picture(session, file_path="c.jpg")
+    intact_b = _add_picture(session, file_path="d.jpg")
+
+    _add_dedup_group(
+        session, [thinned_survivor.id, scrapheaped.id], signature="s1", resolved=False
+    )
+    _add_dedup_group(
+        session, [intact_a.id, intact_b.id], signature="s2", resolved=False
+    )
+
+    flt = PredicateFilter(stack_state="unresolved")
+    # `deleted` defaults to False on the filter, so the scrapheaped picture is
+    # out of the listing anyway; the point is its SURVIVOR.
+    _assert_matches_agrees(session, flt, {intact_a.id, intact_b.id})
+    assert flt.matches(session, thinned_survivor.id) is False
 
 
 def test_stack_state_absent_or_unrecognised_filters_nothing(session):

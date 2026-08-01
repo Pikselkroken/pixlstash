@@ -258,6 +258,82 @@ function normalizeScan(raw) {
   };
 }
 
+/**
+ * Rewrite one loaded group as if the given pictures had never been in it.
+ *
+ * The queue's rows are a SNAPSHOT of a server read, and a soft-delete elsewhere
+ * (the grid, the lightbox, another tab) makes that snapshot wrong in three
+ * places at once, all of which this repairs:
+ *
+ *   * `candidates` — a tile whose thumbnail now 404s, which is the "empty
+ *     placeholder" in the report;
+ *   * `member_count` — the group's own size, which the server reports live;
+ *   * `stacks[id]` — a deck's DEPTH. A deck stands for the whole existing
+ *     stack, so a scrapheaped stack member leaves a hole in it even when the
+ *     group never named that member. Only the ids this group can attribute to a
+ *     stack (its matched members and the stack's leader) are subtracted; a
+ *     sibling outside the group is not knowable from the payload and its depth
+ *     corrects itself on the next page load.
+ *
+ * Returns a NEW group object when anything changed and `null` when the group is
+ * untouched, so the caller can leave unaffected rows at their existing object
+ * identity and not re-render them.
+ *
+ * @param {Object} group - a loaded queue group.
+ * @param {Set<number|string>} removed - the picture ids that went away.
+ * @returns {Object|null}
+ */
+export function groupWithoutPictures(group, removed) {
+  const candidates = group?.candidates ?? [];
+  const kept = candidates.filter((c) => !removed.has(candidateId(c)));
+  const stacks = group?.stacks ?? {};
+  let stacksChanged = false;
+  const nextStacks = {};
+  for (const [key, entry] of Object.entries(stacks)) {
+    const matched = Array.isArray(entry?.matched_picture_ids)
+      ? entry.matched_picture_ids
+      : [];
+    const keptMatched = matched.filter((id) => !removed.has(id));
+    const leaderId = entry?.leader_picture_id;
+    const leaderGone =
+      leaderId !== null && leaderId !== undefined && removed.has(leaderId);
+    if (keptMatched.length === matched.length && !leaderGone) {
+      nextStacks[key] = entry;
+      continue;
+    }
+    stacksChanged = true;
+    // The leader counts once: it is only an EXTRA loss when it was not already
+    // one of the matched members this group named.
+    const lost =
+      matched.length -
+      keptMatched.length +
+      (leaderGone && !matched.includes(leaderId) ? 1 : 0);
+    const served = Number(entry?.member_count);
+    nextStacks[key] = {
+      ...entry,
+      member_count: Number.isFinite(served)
+        ? Math.max(keptMatched.length, served - lost)
+        : keptMatched.length,
+      matched_picture_ids: keptMatched,
+      // Which member the stack promotes next is a fact only the server holds —
+      // the canonical order can promote one this group never named — so the
+      // face falls back to the first surviving matched candidate. That is the
+      // degradation `finaliseDeck` already applies to a payload with no
+      // `stacks` block, and the true leader returns with the next page load.
+      ...(leaderGone
+        ? { leader_picture_id: null, leader_thumbnail_version: "" }
+        : {}),
+    };
+  }
+  if (kept.length === candidates.length && !stacksChanged) return null;
+  return {
+    ...group,
+    candidates: kept,
+    stacks: nextStacks,
+    member_count: kept.length,
+  };
+}
+
 export const useDedupStore = defineStore("dedup", () => {
   // --- The server's policy, bounds and vocabularies ------------------------
   const policyDefaults = ref(null);
@@ -1618,6 +1694,152 @@ export const useDedupStore = defineStore("dedup", () => {
     setFocus(Math.min(absolute, windowStart.value + groups.value.length - 1));
   }
 
+  // --- Live picture events -------------------------------------------------
+  //
+  // The queue rows are a snapshot of a server read, and nothing about a
+  // scrapheap move goes through this store: the user deletes from the grid, the
+  // lightbox or another tab, and the loaded row keeps drawing a candidate whose
+  // thumbnail now 404s — the owner's "empty placeholder", and a group of one
+  // still offering a Stack the server would refuse.
+  //
+  // The COUNTS were never the gap: `pictures_changed` already reaches
+  // `useSidebarRefresh`, which refreshes the badge on every removal and every
+  // restore. What was missing is the LIST, and it is repaired here rather than
+  // in the view so it works whichever route is mounted.
+  //
+  // The decision table below is deliberately narrow, and asymmetric on purpose:
+  //
+  //   * **A removal is applied surgically.** The event names exactly which
+  //     pictures went, so the affected rows can be rewritten and the ones that
+  //     drop below two units removed — the same rule `live_groups_filter`
+  //     applies server-side. `loadFirstPage` would be the easy answer and it is
+  //     the wrong one: it rebases the window on the queue's head, which throws
+  //     a user 250 rows into a triage back to row 1 for a change that touched
+  //     one row.
+  //   * **A restore is NOT inserted.** The group returns to the server's
+  //     unresolved set at a position in the confidence ordering the client
+  //     cannot compute, and there is no per-signature read to fetch it with.
+  //     The queue has never been a live insert surface (a scan's new groups
+  //     arrive by paging too), so the badge carries the change and the row
+  //     comes back with the next page — UNLESS the window is empty, where
+  //     "nothing left to review" would be an outright lie and there is nothing
+  //     on screen to disturb by rebuilding it.
+  //
+  // No coalescing window: a bulk scrapheap move broadcasts ONE event carrying
+  // every id, and the work is a map over the ≤ one page of rows that are
+  // actually loaded. This is the undo/redo subscription's counterpart, not a
+  // replacement — that one handles a dedup verdict coming back, which no
+  // picture event announces.
+
+  /**
+   * Rebuild the queue only when there is nothing on screen to disturb.
+   *
+   * @param {string} reason - for the returned descriptor.
+   * @returns {{action: string, reason: string}}
+   */
+  function refillIfEmpty(reason) {
+    if (showingDecided.value) {
+      // The decided page lists resolved groups whatever happened to their
+      // members, so nothing returns to it and nothing leaves it.
+      return { action: "ignored", reason: `${reason}-decided-page` };
+    }
+    if (groups.value.length || loading.value) {
+      return { action: "ignored", reason: `${reason}-mid-triage` };
+    }
+    // loadFirstPage owns its own error handling and never rejects.
+    loadFirstPage();
+    return { action: "reload", reason };
+  }
+
+  /**
+   * Take the given pictures out of every loaded group.
+   *
+   * @param {Array<number|string>} pictureIds
+   * @returns {{action: string, reason: string, dropped: Array<string>}}
+   */
+  function dropPictures(pictureIds) {
+    const removed = new Set(pictureIds);
+    const doomed = [];
+    let touched = 0;
+    groups.value = groups.value.map((group) => {
+      const rewritten = groupWithoutPictures(group, removed);
+      if (!rewritten) return group;
+      touched += 1;
+      // A group that no longer spans two stack UNITS poses no decision — the
+      // second HAVING clause of the server's live_groups_filter, applied to the
+      // rows already on screen. The decided page keeps its thinned rows for the
+      // same reason the server does: the verdict happened, and "clear this
+      // decision" is the only way back to it.
+      if (
+        !showingDecided.value &&
+        groupUnits(rewritten).length < MIN_STACK_MEMBERS
+      ) {
+        doomed.push(rewritten.signature);
+      }
+      return rewritten;
+    });
+    // Per-group choices can now name a picture that is gone: an exclusion would
+    // be sent to the server as an excluded id it cannot resolve, and a cover
+    // choice would survive `coverIdFor`'s unit lookup as a raw deleted id.
+    for (const group of groups.value) {
+      const signature = group?.signature;
+      if (signature === undefined || signature === null) continue;
+      const chosen = coverChoices.value[signature];
+      if (chosen !== undefined && removed.has(chosen)) {
+        const { [signature]: _gone, ...rest } = coverChoices.value;
+        coverChoices.value = rest;
+      }
+      const excluded = exclusions.value[signature];
+      if (!excluded) continue;
+      const kept = excluded.filter((id) => !removed.has(id));
+      if (kept.length !== excluded.length) {
+        exclusions.value = { ...exclusions.value, [signature]: kept };
+      }
+    }
+    // removeGroup is what already knows how to take a row out: it walks the
+    // focus, drops the selection, forgets the per-group choices, corrects the
+    // offset and refills an emptied window.
+    for (const signature of doomed) removeGroup(signature);
+    if (doomed.length) {
+      openCount.value = Math.max(0, openCount.value - doomed.length);
+      invalidateScopeCounts();
+    }
+    if (!touched) return { action: "ignored", reason: "removed-untouched" };
+    return { action: "targeted", reason: "removed", dropped: doomed };
+  }
+
+  /**
+   * Apply one live picture-mutation event to the loaded queue.
+   *
+   * Called for every `/ws/updates` picture event regardless of origin: unlike
+   * the grid, this store never applies a scrapheap move optimistically, so its
+   * own tab's echo is as new to it as another tab's.
+   *
+   * @param {Object} payload - a `/ws/updates` message.
+   * @returns {{action: string, reason: string}} the DECISION, for tests and
+   *   logging; callers ignore it.
+   */
+  function applyPictureEvent(payload) {
+    if (payload?.type !== "pictures_changed") {
+      return { action: "ignored", reason: "not-a-picture-change" };
+    }
+    const changeKind = payload?.change_kind;
+    const pictureIds = Array.isArray(payload?.picture_ids)
+      ? payload.picture_ids
+      : [];
+    if (changeKind === "removed") {
+      // A removal with no ids (a bulk purge that could not name them) is
+      // untargetable: there is no way to tell which rows it thinned, so the
+      // window is rebuilt only if it is empty, exactly like a restore.
+      if (!pictureIds.length) {
+        return refillIfEmpty("removed-untargetable-empty-ids");
+      }
+      return dropPictures(pictureIds);
+    }
+    if (changeKind === "restored") return refillIfEmpty("restored");
+    return { action: "ignored", reason: `change-kind-${changeKind ?? "none"}` };
+  }
+
   /**
    * Raise the standard action receipt for a verdict that recorded an
    * operation.
@@ -2117,6 +2339,7 @@ export const useDedupStore = defineStore("dedup", () => {
     focusNext,
     focusPrev,
     removeGroup,
+    applyPictureEvent,
     // per-group choices
     coverChoices,
     exclusions,

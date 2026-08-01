@@ -913,6 +913,185 @@ def test_stale_groups_are_pruned_when_their_members_go_to_the_scrapheap(server):
     assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
 
 
+def _soft_delete(server, picture_id):
+    """Move one picture to the scrapheap, the way ``DELETE /pictures/{id}`` does."""
+
+    def go(session):
+        picture = session.get(Picture, picture_id)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    _run(server, go)
+
+
+def test_a_group_thinned_below_two_leaves_the_queue_at_once(server):
+    """Not "on the next verdict or scan" — immediately, with no prune in between.
+
+    The owner's report: scrapheap one of a pair and the queue kept the row,
+    drawn as a lone picture beside an empty slot.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1 and total == 1
+
+    _soft_delete(server, ids[1])
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert page == []
+    assert total == 0
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+    assert _run(server, tiers.count_by_tier_in_session, None, None)["exact"] == 0
+    # The row itself is still there, unpruned — it is the READ that filters, so
+    # restoring the picture must bring the group straight back.
+    assert (
+        len(_run(server, lambda session: session.exec(select(DedupGroup)).all())) == 1
+    )
+
+
+def test_a_restored_member_brings_its_group_back_without_a_rescan(server):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _run(server, tiers.page_queue_in_session)[0][0]["signature"]
+    _soft_delete(server, ids[1])
+    assert _run(server, tiers.page_queue_in_session)[0] == []
+
+    def restore(session):
+        picture = session.get(Picture, ids[1])
+        picture.deleted = False
+        session.add(picture)
+        session.commit()
+
+    _run(server, restore)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert [group["signature"] for group in page] == [signature]
+    assert total == 1
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+
+
+def test_a_group_with_two_live_members_left_keeps_its_place_in_the_queue(server):
+    """Over-filtering is its own regression: three minus one is still a decision.
+
+    The row stays, and every number on it counts the LIVE members only — the
+    stored ``member_count`` still says three until the next prune.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "bbb", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    _soft_delete(server, ids[2])
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1
+    assert total == 1
+    group = page[0]
+    assert group["member_count"] == 2
+    assert sorted(c["picture_id"] for c in group["candidates"]) == sorted(ids[:2])
+    assert group["cover_picture_id"] in ids[:2]
+    stored = _run(
+        server,
+        lambda session: session.exec(select(DedupGroup)).first().member_count,
+    )
+    assert stored == 3, "the payload's count is live even while the stored one lags"
+
+
+def test_a_thinned_group_still_lists_on_the_decided_page(server):
+    """The way back must survive the scrapheap.
+
+    The open queue drops a group that no longer poses a decision, but the
+    decided page keeps it: the verdict already happened and "clear this
+    decision" is the only route back to it.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "ccc", "size_bytes": 100},
+            {"pixel_sha": "ccc", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _run(server, tiers.page_queue_in_session)[0][0]["signature"]
+    _run(server, verdicts.apply_keep_separate_in_session, signature, None)
+    _soft_delete(server, ids[1])
+
+    page, total, _cursor = _run(
+        server, tiers.page_queue_in_session, None, None, 0, 20, None, True
+    )
+    assert [group["signature"] for group in page] == [signature]
+    assert total == 1
+    assert page[0]["member_count"] == 1, "live members only, even here"
+
+
+def test_a_decks_depth_in_the_queue_follows_a_scrapheaped_stack_member(server):
+    """A deleted member must not leave a hole in the deck's depth.
+
+    The deck's depth is the STACK's live member count, so scrapheaping a member
+    the group never even names still has to shrink it — otherwise the row
+    promises to move a picture that is in the Scrapheap.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:3])
+    group = _only_group(server)
+    assert group["stacks"][str(stack_id)]["member_count"] == 3
+
+    # A sibling the group never names: it is not a candidate, but it IS depth.
+    _soft_delete(server, ids[1])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1
+    deck = page[0]["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["leader_picture_id"] == ids[0]
+    assert deck["matched_picture_ids"] == [ids[2]]
+
+
+def test_a_deck_whose_leader_is_scrapheaped_reports_the_next_live_leader(server):
+    """The face has to move: a deck drawn from a scrapheaped leader is the
+    404-thumbnail the queue's empty placeholder was made of."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:3])
+    assert _only_group(server)["stacks"][str(stack_id)]["leader_picture_id"] == ids[0]
+
+    _soft_delete(server, ids[0])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    deck = page[0]["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["leader_picture_id"] == ids[1]
+
+
 def test_scoped_counts_are_reported_per_scope(server):
     ids = _seed(
         server,
