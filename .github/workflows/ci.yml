@@ -220,6 +220,7 @@ jobs:
           tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_database_engine_config.py
+          tests/test_dedup_mixed_stacks.py
           tests/test_dedup_sweep_api.py
           tests/test_dedup_sweep_service.py
           tests/test_dedup_tier_service.py
@@ -236,6 +237,7 @@ jobs:
           tests/test_invalid_image_endless_retry.py
           tests/test_ip_locality_fail_closed.py
           tests/test_label_ledger.py
+          tests/test_import_scrapheap_match.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
@@ -261,6 +263,7 @@ jobs:
           tests/test_snapshots.py
           tests/test_snapshots_auth.py
           tests/test_ssl_generation.py
+          tests/test_keep_cover_only.py
           tests/test_stack_leader_scope.py
           tests/test_stack_state_filter.py
           tests/test_tag_prediction_scope.py
