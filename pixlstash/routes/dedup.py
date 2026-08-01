@@ -828,7 +828,14 @@ class DedupGroupModel(BaseModel):
             "queue is ordered by this, descending."
         )
     )
-    member_count: int = Field(description="How many pictures are in the group.")
+    member_count: int = Field(
+        description=(
+            "How many **live** pictures are in the group, matching `candidates` "
+            "exactly. A member that has been moved to the Scrapheap is not "
+            "counted and is not listed: a soft-deleted picture never appears in "
+            "the queue, in a group, or in any count."
+        )
+    )
     cover_picture_id: Optional[int] = Field(
         default=None,
         description=(
