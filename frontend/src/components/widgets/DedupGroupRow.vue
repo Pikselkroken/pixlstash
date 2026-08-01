@@ -133,11 +133,17 @@
              leading member that is only `opacity: 0` is still in flow, so the
              column itself never moves; only what sits beneath it does. -->
         <div v-if="unit.kind === 'deck' || loadThumbnails" class="gtr">
+          <!-- The badge is the EXPANSION trigger (D4). It used to repeat the
+               tile's own set-cover gesture, which made it a second control
+               doing the first one's job; the count is the natural handle for
+               "show me what is in there". -->
           <StackBadge
             v-if="unit.kind === 'deck'"
             :count="unit.depth"
             :tabindex="focused ? 0 : -1"
-            @activate="onPick(unit)"
+            :expanded="isExpanded(unit)"
+            :action-title="expandTitle(unit)"
+            @activate="onExpand(unit)"
           />
           <!-- Hover-only, DISPLAY-ONLY (pointer-events stays off, see the CSS):
                the tile keeps owning click=cover, right-click=exclude,
@@ -266,6 +272,70 @@
         <kbd v-if="focused" aria-hidden="true">C</kbd>
       </button>
     </div>
+
+    <!-- ── The expansion: what is inside a deck (D4) ──────────────────────
+         A full-width band BELOW the row's three columns, never inline in
+         `.gstrip`: that strip is already an `overflow-x` scroller, and
+         nesting a second horizontal scroller on the same axis is ambiguous
+         on a trackpad and on touch. Exploding a deck into the strip would
+         also destroy the unit reading the row exists to create.
+
+         The queue owns the "at most one open, on the focused row" rule,
+         because its scroll spacers are sized from a single uniform row
+         pitch and a variable-height row breaks that arithmetic.
+
+         READ-ONLY here, deliberately: `StackExpansionStrip` can emit
+         `unstack` and `set-cover`, and both would rewrite the user's
+         library from inside a panel they opened in order to LOOK.
+         Promotion lives in Compare, where the consequence sentence has
+         room to be read. -->
+    <div
+      v-if="expandedUnit"
+      class="gexp"
+      data-testid="dedup-row-expansion"
+      @click.stop
+    >
+      <div v-if="expansionLoading" class="gexp-state" role="status">
+        <v-icon size="16" class="mdi-spin">mdi-loading</v-icon>
+        Reading the pictures in this stack
+      </div>
+      <!-- The verdict is still live while the read fails: the band is
+           disclosure, and a failure to disclose must not read as a failure
+           to decide. -->
+      <div
+        v-else-if="expansionFailed"
+        class="gexp-state gexp-state--error"
+        role="alert"
+      >
+        <v-icon size="16">mdi-alert-outline</v-icon>
+        <span
+          >Could not read the pictures in this stack. The verdict buttons still
+          work.</span
+        >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          :tabindex="focused ? 0 : -1"
+          @click.stop="emit('retry-expansion')"
+          >Try again</AppButton
+        >
+      </div>
+      <!-- The row's own height-driven recipe, not the strip's 128x96
+           default: the queue runs a 112-406px size slider, and a band that
+           ignored it would contradict the tiles directly above it. Height
+           only — the width follows the decoded image, because stored
+           dimensions ignore EXIF rotation. -->
+      <StackExpansionStrip
+        v-else
+        :count="expandedUnit.depth"
+        :members="expansionMembers"
+        :cover-id="expansionCoverId"
+        :reason="expansionReason"
+        :thumb-height="thumbHeight"
+        read-only
+        :show-unstack="false"
+      />
+    </div>
   </div>
 </template>
 
@@ -295,6 +365,7 @@
 // the treatment exists to remove.
 
 import { computed } from "vue";
+import AppButton from "./AppButton.vue";
 import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -313,6 +384,7 @@ import { formatUserDate } from "../../utils/utils";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
 import StackBadge from "./StackBadge.vue";
 import StackEdgeTicks from "./StackEdgeTicks.vue";
+import StackExpansionStrip from "./StackExpansionStrip.vue";
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
@@ -371,6 +443,17 @@ const props = defineProps({
   // Picture ids to flash the lock chip on: the sighted counterpart to the
   // announcement when a Stack was refused. The queue sets it and clears it.
   flashIds: { type: Array, default: () => [] },
+  // ── The expansion band (D4) ────────────────────────────────────────────
+  // The stack whose members are showing under this row, or null. The QUEUE
+  // owns this state, not the row: at most one expansion exists in the whole
+  // queue and it lives on the focused row, because `DuplicateQueue` sizes
+  // both scroll spacers from a single uniform row pitch and a second
+  // variable-height row breaks that arithmetic.
+  expandedStackId: { type: [Number, String], default: null },
+  // `[{ id, thumbnail_version }]` in stack order, fetched lazily by the queue.
+  expansionMembers: { type: Array, default: () => [] },
+  expansionLoading: { type: Boolean, default: false },
+  expansionFailed: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -381,6 +464,8 @@ const emit = defineEmits([
   "set-cover",
   "toggle-excluded",
   "clear-decision",
+  "toggle-expansion",
+  "retry-expansion",
 ]);
 
 const userPrefsStore = useUserPrefsStore();
@@ -600,10 +685,9 @@ function lockNamesOf(unit) {
  * **A deck's name states the stack's true size**, and how many of it the group
  * actually matched when those differ. On a real library one stack-touching
  * group in three names only ONE member of a stack, so the tile shows a picture
- * that stands for four; that sentence is the whole disclosure, and there is no
- * visual substitute for it — the corner has no budget for a second numeral
- * (the spec's dropped "1 of 4 matched" marker) and the expansion that would
- * show the rest has not landed yet.
+ * that stands for four; that sentence is the whole disclosure until the count
+ * badge is pressed, and there is no visual substitute for it — the corner has
+ * no budget for a second numeral (the spec's dropped "1 of 4 matched" marker).
  *
  * @param {Object} unit
  * @param {number} i - the unit's zero-based position, which is what `1`-`9`
@@ -677,6 +761,91 @@ function thumbTitle(unit, i) {
     : `Click ${cover}, right-click to leave it out`;
 }
 
+// ── The expansion band ─────────────────────────────────────────────────────
+// Disclosure, not a mode: opening one changes nothing else about the row. The
+// verdicts stay live, the other units keep their numbers, their cover and their
+// exclusion state, and an `Enter` pressed straight after opening does exactly
+// what it would have done anyway.
+
+/** The deck whose members are on screen, or null. */
+const expandedUnit = computed(() => {
+  if (props.expandedStackId === null || props.expandedStackId === undefined) {
+    return null;
+  }
+  return (
+    units.value.find(
+      (unit) =>
+        unit.kind === "deck" &&
+        String(unit.stackId) === String(props.expandedStackId),
+    ) ?? null
+  );
+});
+
+/** What the band's header says about the group's reach into this stack. */
+const expansionReason = computed(() => {
+  const unit = expandedUnit.value;
+  if (!unit) return "";
+  return unit.matchedCount === 1
+    ? "1 of them is in this group"
+    : `${unit.matchedCount} of them are in this group`;
+});
+
+/**
+ * Which member the strip flags as the cover: the group's own cover when it is
+ * one of these pictures, the stack's leader otherwise. A promotion made in
+ * Compare therefore still reads as the cover here.
+ */
+const expansionCoverId = computed(() => {
+  const unit = expandedUnit.value;
+  if (!unit) return null;
+  if (props.coverId != null) {
+    const ids = props.expansionMembers.map((member) => member.id);
+    if (ids.includes(props.coverId)) return props.coverId;
+  }
+  return unit.coverPictureId;
+});
+
+/**
+ * Whether this unit's members are the ones on screen.
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isExpanded(unit) {
+  return expandedUnit.value === unit;
+}
+
+/**
+ * What the count badge promises, and where it puts it.
+ *
+ * Only the focused row answers to `E`, so only the focused row claims it works.
+ *
+ * @param {Object} unit
+ * @returns {string}
+ */
+function expandTitle(unit) {
+  if (isExpanded(unit)) {
+    return props.focused
+      ? "Hide the pictures in this stack, or press E"
+      : "Hide the pictures in this stack";
+  }
+  const what = `Show the ${unit.depth} pictures in this stack, below the row`;
+  return props.focused ? `${what}, or press E` : what;
+}
+
+/**
+ * The badge opens the deck in place.
+ *
+ * It focuses the row first, because the expansion may only live on the focused
+ * row: pressing a badge on another row moves the cursor there rather than
+ * leaving two rows disagreeing about which one the keyboard acts on.
+ *
+ * @param {Object} unit
+ */
+function onExpand(unit) {
+  emit("focus");
+  emit("toggle-expansion", unit.stackId);
+}
+
 /**
  * A modified press means "select rows", so the browser's own gesture on the
  * same input — extending a text selection from wherever the caret last was —
@@ -711,9 +880,8 @@ function smartTextOf(unit) {
  * resulting stack with, and picking a matched member instead would re-curate a
  * stack the user already made.
  *
- * Also the deck badge's action for now. The badge becomes the expansion trigger
- * when D4 lands; until then it must not be a dead press, so it does what the
- * tile under it does.
+ * The tile alone: the deck's count badge is the expansion trigger (D4), not a
+ * second way to press the tile it sits on.
  *
  * @param {Object} unit
  */
@@ -1160,6 +1328,43 @@ function onDblClick(event) {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── The expansion band ────────────────────────────────────────────────────
+   Its own grid row, spanning all three columns: the band belongs to the row,
+   not to any one of its columns, and `1 / -1` is what keeps it out of the
+   picture strip's `overflow-x` scroller. A reading surface, so it does not
+   take the row's pointer affordance. */
+.gexp {
+  grid-column: 1 / -1;
+  min-width: 0;
+  cursor: default;
+}
+
+/* The Compare band's own state recipe (`.dc-expansion-state`), so the two
+   surfaces that can show a stack's members report a slow or failed read the
+   same way. */
+.gexp-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+/* The hue is on the glyph and the border; the text stays `on-surface`, because
+   `on-<x>` is only ever correct on a solid `<x>` fill. */
+.gexp-state--error {
+  border-color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.gexp-state--error .v-icon {
+  color: rgb(var(--v-theme-warning));
 }
 
 /* The verdict column: one action per line, never wrapping under the strip. */

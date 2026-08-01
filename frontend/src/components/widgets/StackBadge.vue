@@ -9,6 +9,7 @@
     }"
     :title="title"
     :aria-label="title"
+    :aria-expanded="expanded === null ? undefined : String(expanded)"
     data-testid="stack-badge"
     @click.stop="emit('activate')"
   >
@@ -33,7 +34,10 @@
 //     user believing pictures were already merged when nothing has happened.
 //
 // Purely presentational: it reports the click and the parent decides whether
-// that means "expand the stack" or "jump to this group in the queue".
+// that means "expand the stack" or "jump to this group in the queue". A parent
+// whose press opens a disclosure (the duplicate queue row's expansion band)
+// says so with `expanded` + `actionTitle`, so the badge announces itself as
+// the disclosure it is on that surface and as a plain count everywhere else.
 
 import { computed } from "vue";
 
@@ -47,6 +51,20 @@ const props = defineProps({
    * `applyStackBadgeTint`. Null when the tile has no stack colour to show.
    */
   tint: { type: String, default: null },
+  /**
+   * When the press opens a DISCLOSURE, whether that disclosure is currently
+   * open. Null (the default) publishes no `aria-expanded` at all, which is
+   * the honest answer on the surfaces where the press navigates or selects
+   * instead: a control that claims to be a disclosure while opening nothing
+   * is a lie to a screen reader (WCAG 4.1.2).
+   */
+  expanded: { type: Boolean, default: null },
+  /**
+   * Overrides the badge's own name where the press does something other than
+   * state the count — the queue row's expansion trigger, where the name has
+   * to say what opens. Empty keeps the count sentence below.
+   */
+  actionTitle: { type: String, default: "" },
 });
 
 const emit = defineEmits(["activate"]);
@@ -75,11 +93,14 @@ const label = computed(() =>
   props.unresolved ? `${props.count}?` : `${props.count}`,
 );
 
-const title = computed(() =>
-  props.unresolved
+const title = computed(() => {
+  // The caller's sentence wins whenever it has one: a badge that expands must
+  // name the expansion, not repeat the count the numeral already carries.
+  if (props.actionTitle) return props.actionTitle;
+  return props.unresolved
     ? `${props.count} possible duplicates, not stacked yet. Open Duplicates to decide.`
-    : `Stack of ${props.count} pictures`,
-);
+    : `Stack of ${props.count} pictures`;
+});
 </script>
 
 <style scoped>

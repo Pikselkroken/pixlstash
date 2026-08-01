@@ -77,6 +77,7 @@ frontend/src/
 │   ├── useVersionCheck.js       # "New version available" check (pixlstash.dev poll); single owner gated by `enabled`
 │   ├── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
 │   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
+│   ├── useDedupRowExpansion.js  # The queue row's one stack-expansion band: the "one open, on the focused row" invariant + the lazy member read (+ *.test.js)
 │   ├── useOneTimeNotice.js      # A notice shown once per browser and then never again; localStorage-backed (+ *.test.js)
 │   └── useSubmitGuard.js        # One in-flight submit at a time + the `pending` flag its button wears — see §10.2 (+ *.test.js)
 │
@@ -1226,18 +1227,57 @@ Three rules from the design are load-bearing and are easy to break by accident:
     whenever a group holds one (deepest wins a tie). Otherwise the default
     verdict silently re-curates a stack the user already made. This lives in
     `useDedupStore.coverIdFor` / `pickCoverForUnits`, not in the row.
+  - **Two cover gestures share one channel, and the ID tells them apart.**
+    Passing a unit's `coverPictureId` chooses that UNIT and resolves to the
+    stack's leader (the row's tile, the digits, Compare's card and its zoom, and
+    the automatic move when the cover's unit is excluded all do this). Passing a
+    deck's non-leader MEMBER — which only Compare's expansion band does — is
+    honoured verbatim, because that band's two-step confirmation exists to say
+    the cover changes across the library. Normalising both to the leader made
+    promotion a silent no-op for every member the group had named (it appeared
+    to work only for members outside the group, which fell through the unit
+    lookup by accident). A future gesture meaning "this deck" must therefore
+    keep passing `unit.coverPictureId`, never one of its matched members.
   - **The button names its outcome** and the header the composition:
     `Stack 3` / `Add 1 to stack of 4` / `Merge 2 stacks`, over
     `Stack of 5 + 1 picture`. The button degrades `Add 1 to stack of 4` →
     `Add 1 to stack` → `Add 1` in CSS both ways, via a `@container grow` query
     on the row — the toolbar's fold pattern, no measurement. The size never
     leaves the header.
-  - **In the queue row the deck's accessible name is the whole disclosure**:
-    `a stack of 4 pictures, 1 of them matched`. There is no visual substitute
-    there: the corner has no budget for a second numeral, and the row's own
-    expansion (D4's queue half) has not landed. Compare carries the visible
-    disclosure today: a `Contains` row, the expansion band, and a zoom that
-    reaches the stack's other members.
+  - **The deck's accessible name carries the disclosure until it is opened**:
+    `a stack of 4 pictures, 1 of them matched`. The corner has no budget for a
+    second numeral (the spec's dropped "1 of 4 matched" marker), so that
+    sentence is the only always-present statement of the depth and the overlap.
+  - **Expansion in place (D4), in both the queue row and Compare.** Pressing a
+    deck's `StackBadge` — or `E` — opens that stack's members as a **full-width
+    band below the row's three columns** (`grid-column: 1 / -1`), never inline
+    in `.gstrip`, which is already an `overflow-x` scroller. Compare's band sits
+    below `.dc-strip`, never inside a card, so the cards stay height-registered.
+    Both mount `StackExpansionStrip` at the caller's own picture height
+    (`thumbHeight`; the queue runs a 112–406px slider) with width auto, because
+    stored dimensions ignore EXIF rotation.
+    - **At most one band in the whole queue, and it lives on the FOCUSED row.**
+      Not a preference: `DuplicateQueue` sizes both scroll spacers from a single
+      uniform `rowPitchPx`, so a second variable-height row breaks that
+      arithmetic. `composables/useDedupRowExpansion.js` owns the invariant, the
+      lazy `listStackMembers` read and its loading/failed states; moving the
+      focus collapses the band (`keepOnlyOn`, stated as "keep it only on this
+      row" because the badge focuses an unfocused row *before* it opens it).
+      `measureRowPitch` samples two rows whose first is collapsed, so the band's
+      one-off height never becomes the whole track's pitch.
+    - **Disclosure, not a mode.** Verdicts stay live and unchanged while a band
+      is open, other units keep their numbers, cover and exclusion state, digits
+      still address units (never expanded members), and `Enter` straight after
+      opening does what it would have done anyway.
+    - **The queue row's band is READ-ONLY** (`readOnly`, `showUnstack: false`).
+      `StackExpansionStrip` emits `unstack` and `set-cover`, and both would
+      rewrite the library from inside a panel opened in order to look.
+      **Promotion lives in Compare**, where the two-step confirmation carries
+      the consequence ("it also becomes the picture this stack shows everywhere
+      in your library") in its own text.
+    - `StackBadge` publishes `aria-expanded` + `actionTitle` only where the
+      press really is a disclosure; on the grid, where it jumps or expands the
+      tile itself, it publishes neither.
 - **A stack needs two UNITS.** `useDedupStore.toggleExcluded` refuses an `X`
   that would leave a single included unit and returns `false`, so a two-unit
   group accepts no exclusion at all and the Stack button the row is still

@@ -632,10 +632,27 @@ export const useDedupStore = defineStore("dedup", () => {
    * The cover picture id in force for a group: the user's override when they
    * made one, otherwise the preselection.
    *
-   * A choice is normalised to its UNIT's cover, so clicking anything that
-   * stands for a deck resolves to that stack's leader — the picture the tile
-   * actually shows, and the only one the server can lead the resulting stack
-   * with.
+   * **Two gestures arrive on this one channel, and the chosen ID is what tells
+   * them apart.** Both must work:
+   *
+   *   * *Choosing a UNIT.* Every deck-level gesture in the app — the row's
+   *     tile, the digits `1`-`9`, Compare's card and its zoom, and the
+   *     automatic move when the cover's unit is excluded — passes that unit's
+   *     `coverPictureId`, i.e. the stack's LEADER. It resolves to the leader,
+   *     because that is the picture the tile shows and the only one the server
+   *     can lead the resulting stack with.
+   *   * *Promoting a MEMBER.* Compare's expansion band passes a specific
+   *     picture of a deck, which is never the leader (the strip refuses a
+   *     click on the current cover). It is honoured verbatim: the whole point
+   *     of that band's two-step confirmation is that this stack's cover
+   *     changes across the library, and normalising it back to the leader made
+   *     the promotion a silent no-op for every member the group named — it
+   *     only ever "worked" for members the group did not name, which fell
+   *     through the unit lookup by accident.
+   *
+   * So a non-leader picture of a deck means the member, and anything else
+   * means the unit. A future gesture that means "this deck" must therefore
+   * keep passing `unit.coverPictureId`, never one of its matched members.
    *
    * @param {Object} group
    * @returns {number|null}
@@ -649,7 +666,11 @@ export const useDedupStore = defineStore("dedup", () => {
       // A locked-out unit cannot lead a stack it is not in. The server would
       // move the cover for us and report where it landed, but doing it here
       // keeps the row's "Cover" label truthful before Stack is ever pressed.
-      if (unit?.stackable) return unit.coverPictureId;
+      if (unit?.stackable) {
+        return unit.kind === "deck" && chosen !== unit.coverPictureId
+          ? chosen
+          : unit.coverPictureId;
+      }
       if (!unit) return chosen;
     }
     return pickCoverForUnits(group, units, []);
@@ -720,6 +741,11 @@ export const useDedupStore = defineStore("dedup", () => {
 
   /**
    * Choose a group's cover.
+   *
+   * The id carries the gesture: a unit's `coverPictureId` chooses that unit, a
+   * deck's non-leader member promotes that member. See {@link coverIdFor},
+   * which is where the two are told apart.
+   *
    * @param {string} signature
    * @param {number} pictureId
    */

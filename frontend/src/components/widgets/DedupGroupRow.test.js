@@ -678,10 +678,16 @@ describe("DedupGroupRow — cover and exclusion over units", () => {
     expect(wrapper.emitted("set-cover")).toEqual([[501]]);
   });
 
-  it("emits the leader when the deck's badge is pressed", async () => {
+  // The badge is the EXPANSION trigger (D4), not a second way to press the tile
+  // it sits on: two controls doing one job means one of them is spare, and the
+  // count is the natural handle for "show me what is in there".
+  it("expands the deck from its badge instead of re-picking the cover", async () => {
     const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
     await wrapper.findComponent({ name: "StackBadge" }).vm.$emit("activate");
-    expect(wrapper.emitted("set-cover")).toEqual([[501]]);
+    expect(wrapper.emitted("set-cover")).toBeUndefined();
+    expect(wrapper.emitted("toggle-expansion")).toEqual([[12]]);
+    // It focuses the row first: the band may only live on the focused row.
+    expect(wrapper.emitted("focus")).toHaveLength(1);
   });
 
   // Right-click addresses the UNIT; the store takes the whole deck out.
@@ -860,5 +866,183 @@ describe("DedupGroupRow — the composition and the accessible names", () => {
     expect(tiles[0].attributes("title")).toContain("this stack's cover");
     expect(tiles[0].attributes("title")).toContain("leave this stack out");
     expect(tiles[1].attributes("title")).toContain("leave this picture out");
+  });
+});
+
+// --- The expansion band (D4) -------------------------------------------------
+//
+// The row shows one picture of a stack and moves the whole thing. The band is
+// where the rest of it can be looked at, and the two rules that make it safe
+// are structural: it is a full-width row BELOW the columns (never inside the
+// strip, which is already a horizontal scroller), and it is read-only (the
+// strip can emit `unstack` and `set-cover`, and both would rewrite the library
+// from inside a panel opened in order to look).
+
+/** The two members `stacks[12]` names, in the shape the strip reads. */
+const MEMBERS = [
+  { id: 501, thumbnail_version: "a" },
+  { id: 502, thumbnail_version: "b" },
+  { id: 503, thumbnail_version: "c" },
+  { id: 504, thumbnail_version: "d" },
+];
+
+/** A row with the band open on stack 12. */
+function mountExpanded(props = {}) {
+  return mountRow({
+    group: stackedGroup(),
+    coverId: 501,
+    focused: true,
+    expandedStackId: 12,
+    expansionMembers: MEMBERS,
+    ...props,
+  });
+}
+
+describe("DedupGroupRow — the expansion band", () => {
+  it("renders nothing until a stack is named", () => {
+    const wrapper = mountRow({ group: stackedGroup(), coverId: 501 });
+    expect(wrapper.find('[data-testid="dedup-row-expansion"]').exists()).toBe(
+      false,
+    );
+  });
+
+  // Inline in `.gstrip` would nest a second horizontal scroller on the same
+  // axis — ambiguous on a trackpad and on touch — and would explode the deck
+  // the row exists to present as one unit.
+  it("sits below the row's columns, never inside the picture strip", () => {
+    const wrapper = mountExpanded();
+    const band = wrapper.find('[data-testid="dedup-row-expansion"]');
+    expect(band.exists()).toBe(true);
+
+    const strip = wrapper.find(".gstrip").element;
+    expect(strip.contains(band.element)).toBe(false);
+    expect(
+      strip.compareDocumentPosition(band.element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The whole stack, not only the member this group named.
+    expect(band.findAll('[data-testid="stack-member"]')).toHaveLength(4);
+  });
+
+  // The verdict is the row's job and the band is a disclosure: opening one must
+  // not take a control away or change what Enter would do.
+  it("leaves every verdict control exactly as it was", () => {
+    const collapsed = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+    });
+    const labels = (wrapper) =>
+      wrapper
+        .findAll(".gact button")
+        .map((b) => [b.text(), b.attributes("disabled")]);
+    expect(labels(mountExpanded())).toEqual(labels(collapsed));
+  });
+
+  // Promotion re-covers that stack across the whole library. The band is a
+  // place to LOOK, and it has no room for that sentence; Compare does.
+  it("offers no control that could rewrite the library", () => {
+    const band = mountExpanded().find('[data-testid="dedup-row-expansion"]');
+    expect(band.find('[data-testid="stack-unstack"]').exists()).toBe(false);
+    for (const member of band.findAll('[data-testid="stack-member"]')) {
+      expect(member.attributes("disabled")).toBeDefined();
+    }
+    expect(
+      band.findComponent({ name: "StackExpansionStrip" }).props("readOnly"),
+    ).toBe(true);
+  });
+
+  // The queue runs a 112-406px size slider; a band at the strip's own 96px
+  // default would contradict the tiles directly above it.
+  it("draws its members at the row's own picture height", () => {
+    const strip = mountExpanded({ thumbHeight: 240 }).findComponent({
+      name: "StackExpansionStrip",
+    });
+    expect(strip.props("thumbHeight")).toBe(240);
+  });
+
+  // The cover the row is showing, not the strip's fallback to stack order: a
+  // member promoted in Compare must still read as the cover here.
+  it("flags the group's cover when it is one of the members", () => {
+    expect(
+      mountExpanded({ coverId: 503 })
+        .findComponent({ name: "StackExpansionStrip" })
+        .props("coverId"),
+    ).toBe(503);
+    // A cover outside the stack falls back to the stack's leader, so exactly
+    // one member is flagged rather than none.
+    expect(
+      mountExpanded({ coverId: 700 })
+        .findComponent({ name: "StackExpansionStrip" })
+        .props("coverId"),
+    ).toBe(501);
+  });
+
+  it("says it is reading while the members are in flight", () => {
+    const band = mountExpanded({
+      expansionMembers: [],
+      expansionLoading: true,
+    }).find('[data-testid="dedup-row-expansion"]');
+    expect(band.attributes("role")).toBeUndefined();
+    expect(band.find('[role="status"]').text()).toContain(
+      "Reading the pictures in this stack",
+    );
+    expect(band.findComponent({ name: "StackExpansionStrip" }).exists()).toBe(
+      false,
+    );
+  });
+
+  // A failure to DISCLOSE must not read as a failure to decide, so the message
+  // says the verdict buttons still work and the retry sits next to it.
+  it("reports a failed read and offers the retry", async () => {
+    const wrapper = mountExpanded({
+      expansionMembers: [],
+      expansionFailed: true,
+    });
+    const band = wrapper.find('[data-testid="dedup-row-expansion"]');
+    expect(band.find('[role="alert"]').text()).toContain(
+      "The verdict buttons still work",
+    );
+    await band.find(".gexp-state--error button").trigger("click");
+    expect(wrapper.emitted("retry-expansion")).toHaveLength(1);
+  });
+
+  // The badge is the disclosure's trigger, so it has to say so: the CSS
+  // rotation of a chevron is nothing at all to a screen reader.
+  it("publishes the badge's disclosure state and names what it opens", () => {
+    const closed = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+      focused: true,
+    }).findComponent({ name: "StackBadge" });
+    expect(closed.attributes("aria-expanded")).toBe("false");
+    expect(closed.attributes("title")).toBe(
+      "Show the 4 pictures in this stack, below the row, or press E",
+    );
+
+    const open = mountExpanded().findComponent({ name: "StackBadge" });
+    expect(open.attributes("aria-expanded")).toBe("true");
+    expect(open.attributes("title")).toBe(
+      "Hide the pictures in this stack, or press E",
+    );
+  });
+
+  // Only the focused row answers to E, so only the focused row claims it.
+  it("drops the key from the badge's name on an unfocused row", () => {
+    const badge = mountRow({
+      group: stackedGroup(),
+      coverId: 501,
+    }).findComponent({ name: "StackBadge" });
+    expect(badge.attributes("title")).toBe(
+      "Show the 4 pictures in this stack, below the row",
+    );
+  });
+
+  // A click inside the band is a read, and the row's own click clears a
+  // multi-selection: pressing Try again must not cost the user their gesture.
+  it("keeps a click inside the band off the row", () => {
+    const wrapper = mountExpanded();
+    wrapper.find('[data-testid="dedup-row-expansion"]').trigger("click");
+    expect(wrapper.emitted("focus")).toBeUndefined();
   });
 });

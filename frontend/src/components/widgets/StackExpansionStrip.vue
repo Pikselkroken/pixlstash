@@ -62,10 +62,19 @@
 //
 // Presentational: it owns no stack state and reports both actions upward.
 //
-// FIRST MOUNT: `DedupCompareDialog`'s expansion band (design decision D4 in
-// `docs/design/mixed-stacks-and-stack-units.md`), which renders it full width
-// BELOW the candidate strip, never inside a card, where a variable-height band
-// would destroy the height registration the whole comparison depends on.
+// MOUNTED BY the two surfaces that show a duplicate group (design decision D4
+// in `docs/design/mixed-stacks-and-stack-units.md`), both full width and BELOW
+// their own strip of pictures:
+//
+//   * `DedupCompareDialog`, below the candidate strip and never inside a card,
+//     where a variable-height band would destroy the height registration the
+//     whole comparison depends on. That one allows promotion, behind a two-step
+//     confirmation that says the cover changes across the library.
+//   * `DedupGroupRow`, below the row's three columns and never inline in its
+//     `overflow-x` picture strip. That one passes `readOnly` and
+//     `showUnstack: false`: the queue row is a place to LOOK, and neither of
+//     this component's two actions can be honoured there without rewriting the
+//     library from inside a panel opened to inspect it.
 //
 // STILL NOT MOUNTED IN `ImageGrid`, deliberately. The strip has to span the full
 // grid width above the stack's members, and `ImageGrid` is virtualised on a

@@ -15,10 +15,11 @@
       Up and Down arrows choose a group. Page Up and Page Down move a screenful
       at a time, and Home and End jump to the first and last group. Enter or S
       stacks it. K keeps it separate. Down moves on without deciding. C compares
-      every copy field by field. The number keys 1 to 9 choose the cover. X
-      leaves the picture under the cursor out of the stack. Control Z undoes the
-      last verdict. Escape returns here from a control. No picture is ever
-      deleted, and a stack can be undone.
+      every copy field by field. E shows the pictures inside an existing stack,
+      below the row, and changes nothing. The number keys 1 to 9 choose the
+      cover. X leaves the picture under the cursor out of the stack. Control Z
+      undoes the last verdict. Escape returns here from a control. No picture is
+      ever deleted, and a stack can be undone.
     </p>
 
     <!-- One toolbar, not two. The queue's count, the way to the Decided page,
@@ -256,6 +257,10 @@
           :flash-ids="
             flashSignature === entry.group.signature ? flashIds : EMPTY_IDS
           "
+          :expanded-stack-id="expandedStackIdFor(entry.group.signature)"
+          :expansion-members="expansionMembers"
+          :expansion-loading="expansionLoading"
+          :expansion-failed="expansionFailed"
           @focus="onRowFocus(entry.index, $event)"
           @stack="onStack(entry.group)"
           @keep-separate="onKeepSeparate(entry.group)"
@@ -263,6 +268,8 @@
           @set-cover="store.setCover(entry.group.signature, $event)"
           @toggle-excluded="onToggleExcluded(entry.group, $event)"
           @clear-decision="onClearDecision(entry.group)"
+          @toggle-expansion="onToggleExpansion(entry.group, $event)"
+          @retry-expansion="retryExpansion"
         />
         <div
           v-if="bottomSpacer"
@@ -404,11 +411,13 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import {
   candidateId,
+  groupUnits,
   serverDetail,
   lockedPictureIds,
   partialStackSentence,
 } from "../../utils/dedup";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
+import { useDedupRowExpansion } from "../../composables/useDedupRowExpansion";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
@@ -571,6 +580,65 @@ let flashTimer = null;
 
 const readOnly = computed(() => Boolean(isReadOnly.value));
 
+// ── The row's stack expansion (D4) ────────────────────────────────────────
+// One band in the whole queue, on the focused row, with its members read
+// lazily. The composable holds that invariant and the read; the view only
+// wires the two gestures to it and narrates them, because the band replaces
+// its own `role="status"` loading line with the strip and nothing would
+// otherwise announce that the pictures had arrived.
+const {
+  members: expansionMembers,
+  loading: expansionLoading,
+  failed: expansionFailed,
+  stackIdFor: expandedStackIdFor,
+  toggle: toggleExpansion,
+  toggleForGroup: toggleExpansionForGroup,
+  retry: retryExpansion,
+  keepOnlyOn: keepExpansionOnFocusedRow,
+} = useDedupRowExpansion();
+
+/**
+ * The count badge was pressed on one of a row's decks.
+ * @param {Object} group
+ * @param {number|string} stackId
+ */
+function onToggleExpansion(group, stackId) {
+  announceExpansion(group, stackId, toggleExpansion(group?.signature, stackId));
+}
+
+/**
+ * `E`: toggle the focused group's expansion.
+ * @param {Object} group
+ */
+function onExpansionKey(group) {
+  const result = toggleExpansionForGroup(group);
+  if (!result) {
+    // Not a dead key: a group of loose pictures has nothing folded away, and
+    // saying so is what stops the user pressing it again.
+    announcement.value =
+      "This group holds no stack, so there is nothing to open.";
+    return;
+  }
+  announceExpansion(group, result.stackId, result.open);
+}
+
+/**
+ * Narrate the disclosure.
+ * @param {Object} group
+ * @param {number|string} stackId
+ * @param {boolean} open
+ */
+function announceExpansion(group, stackId, open) {
+  if (!open) {
+    announcement.value = "Closed the stack's pictures.";
+    return;
+  }
+  const unit = groupUnits(group).find(
+    (candidateUnit) => String(candidateUnit.stackId) === String(stackId),
+  );
+  announcement.value = `Showing the ${unit?.depth ?? 0} pictures in this stack, below the row. Nothing has changed.`;
+}
+
 const maxSizeLevel = MAX_THUMBNAIL_SIZE_LEVEL;
 const sizeLabel = computed(() => sizeLabelForLevel(store.sizeLevel));
 
@@ -611,9 +679,17 @@ function measureRowPitch() {
   const list = listEl.value;
   if (!list) return;
   const rows = list.querySelectorAll(".grow");
-  if (rows.length >= 2) {
-    const pitch = rows[1].offsetTop - rows[0].offsetTop;
+  // Sampled from a COLLAPSED row. A row with an expansion band open (D4) is
+  // taller than every other row in the queue, and writing that one-off height
+  // into the pitch would size both spacers — and therefore the whole scroll
+  // track — from a state one row is in. The row AFTER the sample may be the
+  // expanded one: the pitch is the first row's own height plus the gap, so
+  // only the first of the pair has to be collapsed.
+  for (let i = 0; i + 1 < rows.length; i += 1) {
+    if (rows[i].querySelector(".gexp")) continue;
+    const pitch = rows[i + 1].offsetTop - rows[i].offsetTop;
     if (pitch > 0) rowPitchPx.value = pitch;
+    break;
   }
   if (list.clientHeight > 0) {
     viewportRows.value = Math.ceil(list.clientHeight / rowPitchPx.value) + 1;
@@ -926,6 +1002,12 @@ watch(
 watch(
   () => store.focusedGroup,
   (group) => {
+    // The expansion lives on the focused row and nowhere else (D4), so a
+    // cursor move takes it with it. Stated as "keep it only on this row"
+    // rather than as a plain collapse, because the badge on an UNFOCUSED row
+    // focuses that row before it opens: a blind collapse here would close the
+    // band the same click had just opened.
+    keepExpansionOnFocusedRow(group?.signature ?? "");
     if (!group) {
       // The queue ran out from under Compare — the last verdict, whichever
       // path gave it (footer buttons, Enter/S), or a reload that emptied the
@@ -1465,6 +1547,9 @@ const handleKeydown = createDedupKeyHandler({
   onExclusionRefused: () => {
     announcement.value = STACK_FLOOR_NOTICE;
   },
+  // `E` is a READ gesture, so it stays live in a read-only session exactly as
+  // `C` does; the band it opens carries no control that could write.
+  toggleExpansion: onExpansionKey,
   selectAll: onSelectAll,
   // The blink compare's state lives in the dialog; its KEYS live in the one
   // keyboard model, driven through the dialog's exposed surface.

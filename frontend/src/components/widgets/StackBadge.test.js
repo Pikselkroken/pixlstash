@@ -122,6 +122,43 @@ describe("StackBadge: stack colour", () => {
   });
 });
 
+describe("StackBadge — as a disclosure trigger", () => {
+  // The queue row's band is opened from this badge. A CSS-only open state says
+  // nothing at all to a screen reader (WCAG 4.1.2).
+  it("publishes aria-expanded when the caller says it opens something", () => {
+    expect(
+      mountBadge({ count: 4, expanded: false })
+        .get('[data-testid="stack-badge"]')
+        .attributes("aria-expanded"),
+    ).toBe("false");
+    expect(
+      mountBadge({ count: 4, expanded: true })
+        .get('[data-testid="stack-badge"]')
+        .attributes("aria-expanded"),
+    ).toBe("true");
+  });
+
+  // On the grid the press jumps or expands the tile itself; claiming to be a
+  // disclosure there would be a lie, so the attribute is absent by default.
+  it("publishes none where the press is not a disclosure", () => {
+    expect(
+      mountBadge({ count: 4 })
+        .get('[data-testid="stack-badge"]')
+        .attributes("aria-expanded"),
+    ).toBeUndefined();
+  });
+
+  // The name has to describe the ACTION where the press does something other
+  // than state the count the numeral already carries.
+  it("lets the caller name what the press does", () => {
+    expect(
+      mountBadge({ count: 4, actionTitle: "Show the 4 pictures in this stack" })
+        .get('[data-testid="stack-badge"]')
+        .attributes("title"),
+    ).toBe("Show the 4 pictures in this stack");
+  });
+});
+
 describe("StackBadge — activation", () => {
   it("emits activate when clicked", () => {
     // The parent decides what a click means; the badge only reports it.

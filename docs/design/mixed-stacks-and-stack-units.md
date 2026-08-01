@@ -4,8 +4,10 @@ Status: approved by the owner. Phase 0 and Phase 1 (backend) are implemented;
 Phase 2 (frontend) is partly done — the queue row's unit model and deck have
 landed, and so has Compare (one card per unit, the `Contains` row, D4's
 expansion band below the strip, member promotion with its consequence, and a
-zoom over pictures). The queue ROW's own expansion and the Mixed stacks page
-have not.
+zoom over pictures). **The queue ROW's own expansion has now landed too**: the
+deck's count badge (and `E`) opens a read-only band below the row's columns, at
+most one in the queue and only on the focused row, with the members read lazily.
+The Mixed stacks page has not.
 Owner decisions and the reconciled `ui-ux-expert` / `lead-designer` proposals.
 Implementation spec: where these disagree with a subagent's report, this file wins.
 

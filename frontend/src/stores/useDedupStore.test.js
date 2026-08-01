@@ -2325,17 +2325,81 @@ describe("useDedupStore — the cover default with a deck present", () => {
     expect(store.coverIdFor(store.groups[0])).toBe(600);
   });
 
-  // A click anywhere on the deck resolves to the leader, because that is the
-  // only picture the server can lead the resulting stack with.
-  it("normalises a choice on a matched member to its stack's leader", async () => {
+  // ── The two gestures that arrive on setCover, told apart by the id ───────
+  //
+  // Choosing the DECK passes the unit's own `coverPictureId` (the leader) —
+  // that is what the row's tile, the digits, Compare's card and its zoom all
+  // emit. Promoting a MEMBER passes one of the stack's other pictures, which
+  // only Compare's expansion band ever does. Both must stick.
+
+  // Choosing the deck resolves to its leader: the picture the tile shows, and
+  // the only one the server can lead the resulting stack with.
+  it("keeps a deck's choice on the stack's leader", async () => {
     servePage([stackGroupFixture()], { total: 1 });
     const store = useDedupStore();
     await store.loadFirstPage();
     const g = store.groups[0];
     store.setCover(g.signature, 700);
     expect(store.coverIdFor(g)).toBe(700);
-    store.setCover(g.signature, 503);
+    // The deck, addressed the way every deck-level gesture addresses it.
+    store.setCover(g.signature, 501);
     expect(store.coverIdFor(g)).toBe(501);
+  });
+
+  // The bug this closes: `unitForPictureId` resolved a promoted member back to
+  // its deck and handed back the LEADER, so promoting a member the group had
+  // named was a silent no-op — and the gesture only appeared to work for the
+  // members the group had NOT named, which fell through the lookup by accident.
+  it("honours a member promoted from inside the deck", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    // 503 is a matched member of stack 12 — the case that used to snap back.
+    store.setCover(g.signature, 503);
+    expect(store.coverIdFor(g)).toBe(503);
+  });
+
+  // The other half of the same stack: a member the group never named. It
+  // already stuck, and it must keep sticking through the new branch.
+  it("honours a promoted member the group never named", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 504);
+    expect(store.coverIdFor(g)).toBe(504);
+  });
+
+  // A promotion sends that picture as the verdict's cover: the server resolves
+  // it against the pictures that will END UP in the stack (backend contract
+  // B2), which includes every member of a folded stack.
+  it("sends a promoted member as the verdict's cover", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    stackGroup.mockResolvedValue({ signature: "sg", picture_ids: [503, 700] });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 503);
+    await store.stack(g);
+    expect(stackGroup).toHaveBeenCalledWith(
+      "sg",
+      expect.objectContaining({ coverPictureId: 503 }),
+    );
+  });
+
+  // A frozen deck cannot lead a stack it is not in, whichever of its pictures
+  // was named: the promotion branch must not smuggle one past the lock.
+  it("refuses a promoted member of a frozen deck", async () => {
+    const frozen = stackGroupFixture();
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 503);
+    expect(store.coverIdFor(g)).toBe(700);
   });
 
   // A frozen deck cannot lead a stack it is not in, so the label stays truthful

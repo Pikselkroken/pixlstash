@@ -68,6 +68,7 @@ beforeEach(() => {
     isBlocked: vi.fn(() => false),
     onEscape: vi.fn(),
     onExclusionRefused: vi.fn(),
+    toggleExpansion: vi.fn(),
   };
   handle = createDedupKeyHandler(deps);
 });
@@ -346,6 +347,49 @@ describe("dedup keyboard — Compare", () => {
   });
 });
 
+describe("dedup keyboard — E opens the stack in place", () => {
+  it("hands the focused group to the view's toggle and claims the key", () => {
+    const event = keyEvent("e");
+    handle(event);
+    expect(deps.toggleExpansion).toHaveBeenCalledWith(store.groups[0]);
+    // Claimed, so it never reaches the app shell underneath.
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  // Opening a deck is looking, not deciding, so it survives the guard that
+  // takes the verdict keys away — exactly as C does.
+  it("still works in a read-only session", () => {
+    deps.isReadOnly.mockReturnValue(true);
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).toHaveBeenCalledTimes(1);
+  });
+
+  // Disclosure, not a mode: the verdict the user was about to give is the same
+  // verdict a moment after they opened a deck to check it.
+  it("leaves the verdict keys untouched", () => {
+    handle(keyEvent("e"));
+    handle(keyEvent("Enter"));
+    expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
+    handle(keyEvent("k"));
+    expect(store.keepSeparate).toHaveBeenCalledWith(store.groups[0]);
+  });
+
+  // Compare has its own expansion on its own control. One key meaning two
+  // different bands on one screen is how a key stops being trusted.
+  it("does not open a second band from inside Compare", () => {
+    compareOpen = true;
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).not.toHaveBeenCalled();
+  });
+
+  // The default is a no-op rather than a crash: the model predates the band and
+  // is mounted by tests that never pass the dep.
+  it("no-ops when the view supplies no toggle", () => {
+    const bare = createDedupKeyHandler({ ...deps, toggleExpansion: undefined });
+    expect(() => bare(keyEvent("e"))).not.toThrow();
+  });
+});
+
 describe("dedup keyboard — select all", () => {
   it("Ctrl+A selects every loaded group and claims the key", () => {
     store.selectAll = vi.fn();
@@ -621,6 +665,32 @@ describe("dedup keyboard — digits address units, not candidates", () => {
     handle(event);
     expect(store.setCover).not.toHaveBeenCalled();
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  // The band shows a deck's members, and it must not become a second thing the
+  // digits can address: `1`-`9` keep meaning the strip's tiles whether it is
+  // open or not, or the same key means two things on one screen.
+  it("keeps addressing units while an expansion is open", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+      },
+    };
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).toHaveBeenCalledTimes(1);
+
+    handle(keyEvent("1"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 501);
+    handle(keyEvent("2"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 700);
+    // Not 503/504: the deck's own members are never addressable by digit.
+    expect(store.setCover).toHaveBeenCalledTimes(2);
   });
 
   // A frozen unit cannot lead a stack it is not in, exactly as a click on it

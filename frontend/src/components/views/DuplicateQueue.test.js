@@ -41,6 +41,10 @@ vi.mock("../../api/dedup", () => ({
   keepGroupSeparate: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
+  // The lazy half of the stack contract: a row's expansion reads its members
+  // only when the user opens one.
+  listStackMembers: vi.fn(),
+  MAX_STACK_MEMBER_PAGE: 200,
   GLOBAL_SCOPE: "global",
 }));
 
@@ -116,6 +120,7 @@ import {
   stackGroup,
   keepGroupSeparate,
   reopenGroup,
+  listStackMembers,
 } from "../../api/dedup";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -237,6 +242,7 @@ beforeEach(() => {
     stackGroup,
     keepGroupSeparate,
     reopenGroup,
+    listStackMembers,
     errorSpy,
     notices.info,
     notices.warning,
@@ -2127,6 +2133,322 @@ describe("DuplicateQueue — a picture scrapheaped elsewhere", () => {
     expect(rowIds(wrapper)).toEqual(["dedup-group-g1"]);
     expect(wrapper.findAll(".gunit")).toHaveLength(2);
     expect(wrapper.html()).not.toContain(`/pictures/thumbnails/${gone}.webp`);
+    wrapper.unmount();
+  });
+});
+
+// --- The row's expansion band (D4) -------------------------------------------
+//
+// A deck stands for a whole existing stack and the row shows one picture of it.
+// The band is where the rest can be looked at, and the invariant that makes it
+// safe is the queue's, not the row's: ONE band, on the FOCUSED row. Both scroll
+// spacers are sized from a single uniform row pitch, so a second
+// variable-height row breaks the arithmetic the whole track is built from.
+
+/** A group of one deck (stack 12, four deep) and one loose picture. */
+function deckGroup(signature = "d1", stackId = 12) {
+  return {
+    signature,
+    tier: "near",
+    confidence: 0.91,
+    member_count: 2,
+    cover_picture_id: null,
+    why: [],
+    candidates: [
+      { picture_id: stackId * 10 + 3, stack_id: stackId },
+      { picture_id: stackId * 10 + 7 },
+    ],
+    stacks: {
+      [stackId]: {
+        stack_id: stackId,
+        member_count: 4,
+        leader_picture_id: stackId * 10 + 1,
+        leader_thumbnail_version: "vlead",
+        matched_picture_ids: [stackId * 10 + 3],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+  };
+}
+
+/** The whole member list, as `GET /dedup/stacks/{id}/members` serves it. */
+function memberPage(stackId) {
+  return {
+    stack_id: stackId,
+    member_count: 4,
+    members: Array.from({ length: 4 }, (_, i) => ({
+      picture_id: stackId * 10 + i + 1,
+      thumbnail_version: `v${i}`,
+      position: i,
+    })),
+    next_offset: null,
+  };
+}
+
+/** The badges of every mounted row, in render order. */
+function badges(wrapper) {
+  return wrapper.findAll('[data-testid="stack-badge"]');
+}
+
+function bands(wrapper) {
+  return wrapper.findAll('[data-testid="dedup-row-expansion"]');
+}
+
+describe("DuplicateQueue — the expansion band", () => {
+  beforeEach(() => {
+    listStackMembers.mockImplementation((stackId) =>
+      Promise.resolve(memberPage(stackId)),
+    );
+  });
+
+  // Lazy by contract: the payload sizes the stack and names its leader, and
+  // the members are a separate read the user asks for. Nothing is fetched
+  // until a badge is pressed.
+  it("reads a deck's members only when its badge is pressed", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    expect(listStackMembers).not.toHaveBeenCalled();
+    expect(bands(wrapper)).toHaveLength(0);
+
+    await badges(wrapper)[0].trigger("click");
+    expect(listStackMembers).toHaveBeenCalledWith(12, { limit: 200 });
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.exists()).toBe(true);
+    // The whole stack, not the one member this group named.
+    expect(band.findAll('[data-testid="stack-member"]')).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // Inline in the strip would nest a second horizontal scroller on the same
+  // axis, and would break the unit reading the row exists to create.
+  it("opens below the row's columns, inside the row", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const row = wrapper.find(".grow").element;
+    const band = bands(wrapper)[0].element;
+    const strip = wrapper.find(".gstrip").element;
+    expect(row.contains(band)).toBe(true);
+    expect(strip.contains(band)).toBe(false);
+    expect(
+      strip.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  // The hard constraint. A second open band is a second variable-height row,
+  // and the spacers are sized from one uniform pitch.
+  it("keeps at most one band in the whole queue", async () => {
+    const { wrapper } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(badges(wrapper)[0].attributes("aria-expanded")).toBe("true");
+
+    await badges(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(badges(wrapper)[0].attributes("aria-expanded")).toBe("false");
+    expect(badges(wrapper)[1].attributes("aria-expanded")).toBe("true");
+    wrapper.unmount();
+  });
+
+  // Pressing the same badge again closes it, without a second read.
+  it("closes on a second press", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    expect(listStackMembers).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  // The band lives on the focused row and nowhere else, so the keyboard cursor
+  // takes it with it. This is what keeps the pitch sampled from collapsed rows.
+  it("collapses when the focus moves off its row", async () => {
+    const { wrapper, store } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+
+    await wrapper.find(".dq").trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(store.focusIndex).toBe(1);
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // A verdict advances the cursor onto a different group under the same index,
+  // so the collapse cannot be keyed on the index alone.
+  it("collapses when a verdict advances onto another group", async () => {
+    const { wrapper, store } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    stackGroup.mockResolvedValue({ signature: "d1", picture_ids: [121, 127] });
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+
+    await store.stack(store.groups[0]);
+    await flushPromises();
+    expect(store.focusIndex).toBe(0);
+    expect(store.focusedGroup.signature).toBe("d2");
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // Disclosure, not a mode: the verdict a user was about to give is the same
+  // verdict a moment after they opened a deck to check it.
+  it("leaves the verdict live, and Enter does what it would have done", async () => {
+    const { wrapper } = await mountQueue([deckGroup(), group("g2")]);
+    stackGroup.mockResolvedValue({ signature: "d1", picture_ids: [121, 127] });
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const stackButton = wrapper.find(".gbtn--stack");
+    expect(stackButton.attributes("disabled")).toBeUndefined();
+    // The label still names the verdict's outcome over the row's units.
+    expect(stackButton.text()).toContain("Add 1 to stack of 4");
+
+    await wrapper.find(".dq").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(stackGroup).toHaveBeenCalledWith(
+      "d1",
+      expect.objectContaining({ coverPictureId: 121 }),
+    );
+    wrapper.unmount();
+  });
+
+  // The digits address the strip's tiles whether the band is open or not: one
+  // key meaning two things on one screen is how a key stops being trusted.
+  it("keeps the digits on the units while a band is open", async () => {
+    const { wrapper, store } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    await wrapper.find(".dq").trigger("keydown", { key: "2" });
+    expect(store.coverIdFor(store.groups[0])).toBe(127);
+    await wrapper.find(".dq").trigger("keydown", { key: "1" });
+    // The deck's LEADER, not one of the members the band just put on screen.
+    expect(store.coverIdFor(store.groups[0])).toBe(121);
+    wrapper.unmount();
+  });
+
+  // E is the keyboard's way in, and it is a read gesture: no verdict, no
+  // change to the cover, nothing but the band.
+  it("opens and closes the focused group's stack with E", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Showing the 4 pictures in this stack",
+    );
+
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // Not a dead key on a group of loose pictures: there is nothing folded away,
+  // and saying so is what stops the user pressing it again.
+  it("says so when the focused group holds no stack", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "no stack",
+    );
+    wrapper.unmount();
+  });
+
+  it("shows a reading state while the members are in flight", async () => {
+    let settle;
+    listStackMembers.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const band = bands(wrapper)[0];
+    expect(band.find('[role="status"]').text()).toContain(
+      "Reading the pictures in this stack",
+    );
+    expect(band.findAll('[data-testid="stack-member"]')).toHaveLength(0);
+
+    settle(memberPage(12));
+    await flushPromises();
+    expect(
+      bands(wrapper)[0].findAll('[data-testid="stack-member"]'),
+    ).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // A failure to DISCLOSE is not a failure to decide, and the retry sits with
+  // the sentence that says so.
+  it("reports a failed read, keeps the verdict, and retries", async () => {
+    listStackMembers.mockRejectedValueOnce(new Error("boom"));
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.find('[role="alert"]').text()).toContain(
+      "The verdict buttons still work",
+    );
+    expect(wrapper.find(".gbtn--stack").attributes("disabled")).toBeUndefined();
+
+    listStackMembers.mockImplementation((stackId) =>
+      Promise.resolve(memberPage(stackId)),
+    );
+    await band.find(".gexp-state--error button").trigger("click");
+    await flushPromises();
+    expect(
+      bands(wrapper)[0].findAll('[data-testid="stack-member"]'),
+    ).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // A stack that answered with nothing is a failed read, not an empty stack:
+  // the route 404s rather than serving an empty membership.
+  it("treats an empty member list as a failed read", async () => {
+    listStackMembers.mockResolvedValue({ stack_id: 12, members: [] });
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)[0].find('[role="alert"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // Reading is not a verdict, so the band is offered in a share session too —
+  // and it carries nothing that could write there or anywhere else.
+  it("stays available, and read-only, in a read-only session", async () => {
+    readOnlyRef.value = true;
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.exists()).toBe(true);
+    expect(band.find('[data-testid="stack-unstack"]').exists()).toBe(false);
+    for (const member of band.findAll('[data-testid="stack-member"]')) {
+      expect(member.attributes("disabled")).toBeDefined();
+    }
     wrapper.unmount();
   });
 });

@@ -20,6 +20,11 @@
 //                         self-healing)
 //   K                     keep the focused group separate
 //   C                     open Compare on the focused group
+//   E                     open (or close) the focused group's stack in place:
+//                         a full-width band of that deck's members below the
+//                         row. A read gesture, so it stays live in a read-only
+//                         session, and a DISCLOSURE rather than a mode — the
+//                         verdict keys keep working unchanged while it is open
 //   1 - 9                 point at that UNIT (a loose picture or a whole deck)
 //                         and make it the cover; on a deck that resolves to the
 //                         stack's leader
@@ -140,6 +145,10 @@ function isActivatableTarget(event) {
  * @param {function(Object): void} [deps.onExclusionRefused] - called with the
  *   group when `X` was refused because the stack floor was reached. The view
  *   narrates it; this handler has no opinion on how.
+ * @param {function(Object): void} [deps.toggleExpansion] - what `E` runs, with
+ *   the focused group. The band's state belongs to the view (only it knows
+ *   which row is on screen and what its scroll spacers assume); the KEY lives
+ *   here, so the queue keeps exactly one keyboard owner.
  * @param {function(): number} [deps.pageRows] - how many rows `PageUp` and
  *   `PageDown` move. The viewport's row capacity, which only the view can
  *   measure; the fallback is a conservative screenful.
@@ -175,6 +184,7 @@ export function createDedupKeyHandler({
   isBlocked = () => false,
   onEscape = () => {},
   onExclusionRefused = () => {},
+  toggleExpansion = () => {},
   selectAll = null,
   pageRows = () => DEFAULT_PAGE_ROWS,
   zoom = NO_ZOOM,
@@ -420,6 +430,16 @@ export function createDedupKeyHandler({
     if (key === "c") {
       claim(event);
       openCompare();
+      return;
+    }
+
+    // Like `C`, and above the read-only guard for the same reason: opening a
+    // deck in place is looking, not deciding. Deliberately NOT offered inside
+    // Compare, which has its own expansion on its own `Contains` control —
+    // one key would then mean two different bands on one screen.
+    if (key === "e") {
+      claim(event);
+      toggleExpansion(group);
       return;
     }
 
