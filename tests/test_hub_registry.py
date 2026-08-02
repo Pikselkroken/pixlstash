@@ -25,7 +25,7 @@ from pixlstash.hub.registry import (
     validate_vault_folder,
 )
 from pixlstash.hub.schema import CURRENT_SCHEMA_VERSION, read_schema_version
-from pixlstash.libraries import main as libraries_main
+from pixlstash.cli import main as cli_main
 
 
 def make_vault_folder(root, name="library", *, with_credentials=False):
@@ -524,7 +524,7 @@ class TestRename:
 
 class TestCli:
     def test_list_on_an_empty_hub_explains_how_to_add_one(self, tmp_path, capsys):
-        code = libraries_main(["--hub", str(tmp_path / "hub.db"), "list"])
+        code = cli_main(["--hub", str(tmp_path / "hub.db"), "libraries", "list"])
 
         assert code == 0
         assert "attach" in capsys.readouterr().out
@@ -533,8 +533,8 @@ class TestCli:
         hub_path = str(tmp_path / "hub.db")
         folder = make_vault_folder(tmp_path, "family")
 
-        assert libraries_main(["--hub", hub_path, "attach", folder]) == 0
-        assert libraries_main(["--hub", hub_path, "list"]) == 0
+        assert cli_main(["--hub", hub_path, "libraries", "attach", folder]) == 0
+        assert cli_main(["--hub", hub_path, "libraries", "list"]) == 0
 
         out = capsys.readouterr().out
         assert "family" in out
@@ -544,7 +544,9 @@ class TestCli:
         empty = tmp_path / "empty"
         empty.mkdir()
 
-        code = libraries_main(["--hub", str(tmp_path / "hub.db"), "attach", str(empty)])
+        code = cli_main(
+            ["--hub", str(tmp_path / "hub.db"), "libraries", "attach", str(empty)]
+        )
 
         assert code == 1
         assert "vault.db" in capsys.readouterr().err
@@ -554,10 +556,10 @@ class TestCli:
     ):
         hub_path = str(tmp_path / "hub.db")
         folder = make_vault_folder(tmp_path, "only")
-        libraries_main(["--hub", hub_path, "attach", folder])
+        cli_main(["--hub", hub_path, "libraries", "attach", folder])
         capsys.readouterr()
 
-        code = libraries_main(["--hub", hub_path, "detach", "only"])
+        code = cli_main(["--hub", hub_path, "libraries", "detach", "only"])
 
         err = capsys.readouterr().err
         assert code == 1
@@ -566,12 +568,14 @@ class TestCli:
 
     def test_detach_reassures_that_files_are_kept(self, tmp_path, capsys):
         hub_path = str(tmp_path / "hub.db")
-        libraries_main(["--hub", hub_path, "attach", make_vault_folder(tmp_path, "a")])
+        cli_main(
+            ["--hub", hub_path, "libraries", "attach", make_vault_folder(tmp_path, "a")]
+        )
         folder = make_vault_folder(tmp_path, "b")
-        libraries_main(["--hub", hub_path, "attach", folder])
+        cli_main(["--hub", hub_path, "libraries", "attach", folder])
         capsys.readouterr()
 
-        code = libraries_main(["--hub", hub_path, "detach", "b"])
+        code = cli_main(["--hub", hub_path, "libraries", "detach", "b"])
 
         out = capsys.readouterr().out
         assert code == 0
@@ -581,11 +585,11 @@ class TestCli:
     def test_overlap_is_a_warning_not_a_refusal(self, tmp_path, capsys):
         hub_path = str(tmp_path / "hub.db")
         outer = make_vault_folder(tmp_path, "outer")
-        libraries_main(["--hub", hub_path, "attach", outer])
+        cli_main(["--hub", hub_path, "libraries", "attach", outer])
         inner = make_vault_folder(outer, "inner")
         capsys.readouterr()
 
-        code = libraries_main(["--hub", hub_path, "attach", inner])
+        code = cli_main(["--hub", hub_path, "libraries", "attach", inner])
 
         captured = capsys.readouterr()
         assert code == 0

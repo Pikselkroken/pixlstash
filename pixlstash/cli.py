@@ -1,4 +1,4 @@
-"""The library CLI: ``pixlstash-libraries`` / ``python -m pixlstash.libraries``.
+"""The PixlStash CLI: ``pixlstash-cli`` / ``python -m pixlstash.cli``.
 
 Creates, attaches, detaches and lists libraries. In the MVP this is the only
 way to change the registry: the server exposes no HTTP route that accepts a
@@ -40,10 +40,9 @@ EXIT_HUB_UNAVAILABLE = 3
 def build_parser() -> argparse.ArgumentParser:
     """Return the argument parser for the library CLI."""
     parser = argparse.ArgumentParser(
-        prog="pixlstash-libraries",
+        prog="pixlstash-cli",
         description=(
-            "Manage PixlStash libraries. A library is a folder holding "
-            "vault.db and its images. Run this on the machine hosting "
+            "PixlStash command line. Run this on the machine hosting "
             "PixlStash, signed in as the user that owns it."
         ),
     )
@@ -54,7 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Hub database to use (default: {default_hub_path()}).",
     )
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    # Verbs are grouped so the CLI has room for more than libraries later.
+    groups = parser.add_subparsers(dest="group", required=True)
+    libraries = groups.add_parser(
+        "libraries",
+        help="Manage libraries.",
+        description=(
+            "Manage PixlStash libraries. A library is a folder holding "
+            "vault.db and its images."
+        ),
+    )
+    subparsers = libraries.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser(
         "list", help="Show the registered libraries and which one is active."
@@ -132,7 +141,7 @@ def _cmd_list(registry: LibraryRegistry, _args: argparse.Namespace) -> int:
     libraries = registry.list_libraries()
     if not libraries:
         print("No libraries are registered yet.")
-        print("Add one with:  pixlstash-libraries attach /path/to/library")
+        print("Add one with:  pixlstash-cli libraries attach /path/to/library")
         return EXIT_OK
 
     name_width = max(len(library.name) for library in libraries)
@@ -189,7 +198,9 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     library = registry.detach(args.library)
     print(f'Detached library "{library.name}".')
     print(f"No files were removed. {library.path} is unchanged.")
-    print(f'Add it back at any time with:  pixlstash-libraries attach "{library.path}"')
+    print(
+        f'Add it back at any time with:  pixlstash-cli libraries attach "{library.path}"'
+    )
     return EXIT_OK
 
 

@@ -23,13 +23,13 @@ from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
-# The console script declared in pyproject. The plan writes the verbs as
-# ``pixlstash libraries <verb>``; the package ships them as a dedicated script
-# instead, matching the existing ``pixlstash-server`` entry point rather than
-# introducing an umbrella command that would have to absorb it.
-CONSOLE_SCRIPT = "pixlstash-libraries"
+# The console script declared in pyproject, mirroring ``pixlstash-server``.
+# Verbs are grouped, so the plan's ``pixlstash libraries <verb>`` is spelled
+# ``pixlstash-cli libraries <verb>`` and the CLI has room for command groups
+# beyond libraries.
+CONSOLE_SCRIPT = "pixlstash-cli"
 
-MODULE_INVOCATION = "-m pixlstash.libraries"
+MODULE_INVOCATION = "-m pixlstash.cli"
 
 
 def running_in_docker() -> bool:
@@ -45,12 +45,12 @@ def running_in_docker() -> bool:
     return os.path.exists("/.dockerenv")
 
 
-def cli_hint(verb: str = "list") -> str:
+def cli_hint(verb: str = "libraries list") -> str:
     """Return a copy-pasteable command that runs the library CLI here.
 
     Args:
-        verb: The verb to show. ``list`` is the safe one to put in front of a
-            user who has not read the docs yet.
+        verb: The command to show, group included. ``libraries list`` is the
+            safe one to put in front of a user who has not read the docs yet.
 
     Returns:
         A single shell command line. Paths are quoted, so a Windows install

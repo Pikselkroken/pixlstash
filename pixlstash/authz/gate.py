@@ -456,6 +456,12 @@ class AuthzGate:
         ladder lives in exactly one place. The object-scoped classes are handled
         by :meth:`_enforce_scoped_policy` (Step 4).
         """
+        # Mid-swap the server's vault is being replaced, so a request served now
+        # could read from one library and write to another. Refused before any
+        # other check, including the pin, because during the swap there is no
+        # settled answer to "which library is active".
+        self._refuse_while_switching(request, route_policy)
+
         # The library pin runs before every policy branch, so no access level
         # can sidestep it and a route added without thinking about libraries is
         # pinned by default.
@@ -614,6 +620,38 @@ class AuthzGate:
             )
         check = _MEMBERSHIP_BY_POLICY[route_policy.policy]
         check(self._server, request, obj_id)
+
+    def _refuse_while_switching(
+        self, request: Request, route_policy: RoutePolicy
+    ) -> None:
+        """Return 503 while the active library is being replaced.
+
+        The swap closes one vault and opens another. A request that landed in
+        that window would be served against a half-swapped server, which is
+        worse than an error: it could return a plausible answer from the wrong
+        library. 503 with ``Retry-After`` says "come back in a second", which is
+        exactly what is true.
+
+        Library-independent routes are exempt: they touch no library content, so
+        they remain answerable throughout, which is what lets a client ask what
+        is going on instead of seeing everything fail.
+        """
+        if route_policy.library_independent:
+            return
+
+        from pixlstash.services.library_switch_service import (
+            SwitchState,
+            switching_state_of,
+        )
+
+        if switching_state_of(self._server) is not SwitchState.SWITCHING:
+            return
+
+        raise HTTPException(
+            status_code=503,
+            detail="PixlStash is switching library. Try again in a moment.",
+            headers={"Retry-After": "2"},
+        )
 
     def _enforce_library_pin(self, request: Request, route_policy: RoutePolicy) -> None:
         """Refuse a token whose library is not the active one.

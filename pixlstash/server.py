@@ -46,6 +46,7 @@ from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.hub.bootstrap import bootstrap_hub
 from pixlstash.hub.registry import LibraryRegistry
+from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -388,33 +389,7 @@ class Server(
                 self.hub.path,
             )
 
-        _startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
-        _force_cpu = (
-            Server.DEFAULT_FORCE_CPU
-            if Server.DEFAULT_FORCE_CPU is not None
-            else _startup_forced_cpu
-        )
-        self.vault = Vault(
-            image_root=self._hub_bootstrap.image_root,
-            description=User().description,
-            server_config_path=self._server_config_path,
-            path_mapper=self.path_mapper,
-            disable_background_workers=self._server_config.get(
-                "disable_background_workers", False
-            ),
-            force_cpu=bool(_force_cpu),
-            fast_captions=Server.DEFAULT_FAST_CAPTIONS,
-            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
-            insightface_model_pack=self._server_config.get(
-                "insightface_model_pack", "buffalo_l"
-            ),
-            scrapheap_retention_days=scrapheap_service.read_retention_days(
-                self._server_config
-            ),
-            scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
-                self._server_config
-            ),
-        )
+        self.vault = self.build_vault(self._hub_bootstrap.image_root)
 
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
@@ -459,34 +434,12 @@ class Server(
         # owner session so the local window opens straight into the library.
         # No-op for every other install type (env var unset).
         self.auth.seed_desktop_session()
-        if self._user and self._user.description is not None:
-            self.vault.set_description(self._user.description)
-        self.vault.set_keep_models_in_memory(
-            getattr(self._user, "keep_models_in_memory", True)
-        )
-        effective_vram_gb = (
-            Server.DEFAULT_MAX_VRAM_GB
-            if Server.DEFAULT_MAX_VRAM_GB is not None
-            else getattr(self._user, "max_vram_gb", None)
-        )
-        self.vault.set_max_vram_usage_gb(effective_vram_gb)
-        # Initialise tagger_settings from the stored JSON (fills defaults for any
-        # missing plugin entries so the engine always has a complete config).
-        if self._user is not None:
-            import json as _json
-            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
-
-            raw_settings = getattr(self._user, "tagger_settings", None)
-            if raw_settings:
-                try:
-                    parsed = _json.loads(raw_settings)
-                except (ValueError, TypeError):
-                    parsed = {}
-            else:
-                parsed = {}
-            filled = get_tagger_plugin_manager().fill_defaults(parsed)
-            self.vault.set_tagger_settings(filled)
+        self.apply_user_settings_to_vault(self.vault)
         self.vault.start()
+
+        # Owns replacing the vault when the active library changes, and the
+        # state requests are refused in while that is happening.
+        self.library_switch = LibrarySwitchService(self)
 
         self.api = FastAPI(
             title="PixlStash API",
@@ -561,6 +514,77 @@ class Server(
             self.vault.close()
         self._close_hub()
         gc.collect()
+
+    def apply_user_settings_to_vault(self, vault: Vault) -> None:
+        """Push the owner's stored settings onto *vault*.
+
+        Shared by startup and by switching library. The settings live in the hub
+        and so survive a switch; the vault they are applied to does not, which is
+        why this has to run again for every vault the process opens.
+        """
+        if self._user and self._user.description is not None:
+            vault.set_description(self._user.description)
+        vault.set_keep_models_in_memory(
+            getattr(self._user, "keep_models_in_memory", True)
+        )
+        effective_vram_gb = (
+            Server.DEFAULT_MAX_VRAM_GB
+            if Server.DEFAULT_MAX_VRAM_GB is not None
+            else getattr(self._user, "max_vram_gb", None)
+        )
+        vault.set_max_vram_usage_gb(effective_vram_gb)
+        # Initialise tagger_settings from the stored JSON (fills defaults for any
+        # missing plugin entries so the engine always has a complete config).
+        if self._user is not None:
+            import json as _json
+            from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
+
+            raw_settings = getattr(self._user, "tagger_settings", None)
+            if raw_settings:
+                try:
+                    parsed = _json.loads(raw_settings)
+                except (ValueError, TypeError):
+                    parsed = {}
+            else:
+                parsed = {}
+            filled = get_tagger_plugin_manager().fill_defaults(parsed)
+            vault.set_tagger_settings(filled)
+
+    def build_vault(self, image_root: str) -> Vault:
+        """Construct (but do not start) a Vault over *image_root*.
+
+        Shared by startup and by switching library, so a vault opened by a
+        switch is configured exactly like one opened at boot. Anything that
+        diverges here is a bug that only shows up after the first switch, which
+        is the hardest kind to find.
+        """
+        startup_forced_cpu = self._startup_check_report.get("forced_cpu", False)
+        force_cpu = (
+            Server.DEFAULT_FORCE_CPU
+            if Server.DEFAULT_FORCE_CPU is not None
+            else startup_forced_cpu
+        )
+        return Vault(
+            image_root=image_root,
+            description=User().description,
+            server_config_path=self._server_config_path,
+            path_mapper=self.path_mapper,
+            disable_background_workers=self._server_config.get(
+                "disable_background_workers", False
+            ),
+            force_cpu=bool(force_cpu),
+            fast_captions=Server.DEFAULT_FAST_CAPTIONS,
+            daily_snapshots_enabled=self._server_config.get("daily_snapshots", True),
+            insightface_model_pack=self._server_config.get(
+                "insightface_model_pack", "buffalo_l"
+            ),
+            scrapheap_retention_days=scrapheap_service.read_retention_days(
+                self._server_config
+            ),
+            scrapheap_retention_reduced_at=scrapheap_service.read_retention_reduced_at(
+                self._server_config
+            ),
+        )
 
     def _active_library_uuid(self):
         """Return the active library's uuid, for stamping newly minted tokens."""
