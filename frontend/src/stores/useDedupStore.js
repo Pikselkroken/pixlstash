@@ -1048,9 +1048,8 @@ export const useDedupStore = defineStore("dedup", () => {
     separatedCount.value = 0;
     showingDecided.value = false;
     // The third page is a place the user visits, like Decided: arriving at the
-    // destination starts on the queue. The LIST behind it is reloaded below,
-    // because the queue's warning chip reads its flags whether or not the page
-    // is ever opened.
+    // destination starts on the queue. Its potentially cold all-stack list is
+    // left unloaded until the page is actually opened.
     showingMixed.value = false;
     mixedFocusStackId.value = null;
     mixedLoaded.value = false;
@@ -1083,10 +1082,11 @@ export const useDedupStore = defineStore("dedup", () => {
     await triggerScan();
     await loadFirstPage();
     refreshCounts();
-    // Unawaited: the queue must not wait on a list it may never show. The chip
-    // it feeds is a standing fact about a deck, so arriving a moment late is
-    // correct behaviour, not a race.
-    loadMixedStacks();
+    // Do not prefetch the Mixed stacks page here. The first startup after a
+    // cohesion-cache migration is necessarily cold, and that endpoint ranks
+    // every live stack before paging. Launching it from the ordinary queue made
+    // an optional page occupy the serial database worker during startup. The
+    // page loads on showMixedStacks(); until then its warning chips are absent.
   }
 
   /**
@@ -2225,11 +2225,10 @@ export const useDedupStore = defineStore("dedup", () => {
     if (loosened) await triggerScan();
     await loadFirstPage();
     refreshCounts();
-    // The mixed list IS a function of the threshold: the same stack is mixed at
-    // 0.90 and one clean cluster at 0.65. Leaving it at the old value would
-    // leave the page's count and the queue's chips describing a threshold the
-    // slider no longer reads.
-    await loadMixedStacks();
+    // The mixed list IS a function of the threshold, but it is an optional page.
+    // Reload it only after it has actually been opened; otherwise a threshold
+    // change on the ordinary queue would reintroduce the cold all-stack scan.
+    if (mixedLoaded.value || showingMixed.value) await loadMixedStacks();
   }
 
   /**
@@ -2381,9 +2380,8 @@ export const useDedupStore = defineStore("dedup", () => {
   /**
    * Load the mixed stacks at the current threshold, replacing what was there.
    *
-   * Called on queue open (the queue's chip needs the flags whether or not the
-   * page is ever visited), whenever the threshold moves, and when the page is
-   * shown. A failure leaves the list empty and records the error: an empty
+   * Called when the page is shown, and on later threshold changes after that
+   * first load. A failure leaves the list empty and records the error: an empty
    * list that claims "no mixed stacks" after a failed read would be a lie, so
    * the view branches on `mixedError` before it renders the empty state.
    *

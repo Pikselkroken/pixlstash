@@ -10,9 +10,8 @@ vi.mock("../api/dedup", () => ({
   keepGroupSeparate: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
-  // The third page's contract (design D5). `openQueue` reads the mixed list
-  // whether or not the page is ever shown, because the queue's warning chip is
-  // built from its flags.
+  // The third page's contract (design D5). It is lazy: a cold all-stack score
+  // must not occupy the database worker during ordinary queue startup.
   listMixedStacks: vi.fn(),
   splitMixedStack: vi.fn(),
   unstackMixedStack: vi.fn(),
@@ -140,8 +139,7 @@ beforeEach(() => {
     by_tier: {},
     scopes: [],
   });
-  // An empty Mixed stacks list is the default answer, because most libraries
-  // have none. `openQueue` reads it whether or not the page is ever opened.
+  // An empty Mixed stacks list is the default answer when the page is opened.
   listMixedStacks.mockResolvedValue({
     threshold: 0.9,
     total: 0,
@@ -2925,16 +2923,18 @@ describe("useDedupStore: the queue's warning chip reads the same list", () => {
     expect(store.isStackFlagged(null)).toBe(false);
   });
 
-  // The chip has to work whether or not the page is ever opened, so the list is
-  // read when the destination opens rather than when the page is shown.
-  it("reads the list on queue open", async () => {
+  // The first request after cache invalidation scores every stack. It belongs to
+  // the optional page, never to ordinary queue startup.
+  it("defers the mixed list until the page is opened", async () => {
     listGroups.mockResolvedValue({ groups: [], total: 0 });
     startScan.mockResolvedValue({ status: "complete" });
     listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
     const store = useDedupStore();
     await store.openQueue();
-    await Promise.resolve();
-    expect(listMixedStacks).toHaveBeenCalled();
+    expect(listMixedStacks).not.toHaveBeenCalled();
+
+    await store.showMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
   });
 });
 
