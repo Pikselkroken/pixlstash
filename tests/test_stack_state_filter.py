@@ -184,6 +184,76 @@ def test_stack_state_unstacked_narrows_the_stream():
         gc.collect()
 
 
+def _scrapheap(server, picture_id: int) -> None:
+    """Soft-delete one picture, leaving its ``stack_id`` in place.
+
+    That is what the app really does: a scrapheaped picture keeps its stack_id so
+    a restore can put it back, and so undoing a collapse is a flag flip.
+    """
+
+    def _delete(session):
+        pic = session.get(Picture, picture_id)
+        pic.deleted = True
+        session.commit()
+
+    server.vault.db.run_task(_delete, priority=DBPriority.IMMEDIATE)
+
+
+def test_a_stack_whose_only_sibling_is_scrapheaped_is_not_stacked():
+    """The survivor of a collapsed stack is not in a stack any more.
+
+    It still carries a ``stack_id``, deliberately, so a restore can put its
+    sibling back. But one live picture is not a stack, and every other surface
+    already agreed: ``_enrich_stack_counts`` counts live members only and
+    ``StackBadge`` hides below two, so the grid draws that picture plain. The
+    filter used to key on the column alone and serve it under ``stacked``, which
+    is what the owner hit after collapsing a stack to its cover.
+    """
+    tmp, client, server = _setup_server()
+    try:
+        ids = _seed(server)
+        _scrapheap(server, ids["member"])
+
+        # The stack it was in is gone, so the survivor is not stacked...
+        assert ids["leader"] not in _stream_ids_uncollapsed(
+            client, "&stack_state=stacked"
+        )
+        # ...and it is not lost either: it now answers to the other half.
+        assert ids["leader"] in _stream_ids_uncollapsed(
+            client, "&stack_state=unstacked"
+        )
+        # The filter and what the grid draws must agree, which is the assertion
+        # that would have caught this: stack_count is what decides the badge.
+        resp = client.get("/pictures/stream?offset=0&batch_limit=500&fields=grid")
+        assert resp.status_code == 200, resp.text
+        survivor = next(p for p in resp.json()["pictures"] if p["id"] == ids["leader"])
+        assert (survivor.get("stack_count") or 0) < 2
+    finally:
+        server.vault.close()
+        tmp.cleanup()
+        gc.collect()
+
+
+def test_a_stack_with_two_live_members_is_still_stacked():
+    """The over-blocking twin: scrapheaping must not empty the filter wholesale."""
+    tmp, client, server = _setup_server()
+    try:
+        ids = _seed(server)
+        _scrapheap(server, ids["pending_a"])  # not a stack member at all
+
+        assert _stream_ids_uncollapsed(client, "&stack_state=stacked") == {
+            ids["leader"],
+            ids["member"],
+        }
+        assert ids["leader"] not in _stream_ids_uncollapsed(
+            client, "&stack_state=unstacked"
+        )
+    finally:
+        server.vault.close()
+        tmp.cleanup()
+        gc.collect()
+
+
 def test_stack_state_unresolved_returns_only_undecided_group_members():
     tmp, client, server = _setup_server()
     try:

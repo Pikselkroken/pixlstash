@@ -20,6 +20,7 @@ specific pictures and a stack may mix characters); the UI refuses per-member
 character edits instead.
 """
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -27,6 +28,39 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
 )
+
+
+def in_a_live_stack():
+    """A picture that is in a stack **that is still a stack**.
+
+    ``stack_id IS NOT NULL`` on its own is not that. A soft-deleted picture keeps
+    its ``stack_id``, deliberately: it is what lets a Scrapheap restore put the
+    picture back into the stack it came from, and what makes undoing a collapse a
+    flag flip rather than a rebuild. So a stack whose other members are all in the
+    Scrapheap leaves one live picture still carrying a ``stack_id``, and that
+    picture is not stacked in any sense the user would recognise.
+
+    The rest of the app already knew this and this predicate did not, which is the
+    bug it exists to close. ``_enrich_stack_counts`` counts live members only and
+    ``StackBadge`` hides below two, so the grid draws that survivor as a plain
+    picture while the ``stacked`` filter served it as a stack. Collapsing a stack
+    to its cover produces exactly that state every time, so what had been a rare
+    inconsistency became a guaranteed one.
+
+    One definition, used by every surface that asks the question, so the filter,
+    the count and the badge cannot drift apart again.
+
+    Returns:
+        A SQLAlchemy predicate over :class:`Picture`, true when the picture is
+        live, carries a ``stack_id``, and at least one OTHER live picture shares
+        it.
+    """
+    return Picture.stack_id.is_not(None) & Picture.stack_id.in_(
+        select(Picture.stack_id)
+        .where(Picture.stack_id.is_not(None), Picture.deleted.is_(False))
+        .group_by(Picture.stack_id)
+        .having(func.count(Picture.id) >= 2)
+    )
 
 
 def expand_picture_ids_to_stacks(
