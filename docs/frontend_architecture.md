@@ -1498,8 +1498,11 @@ about the row not looking like the queue is superseded.
   add to.
 - **`useDedupStore.flaggedStackIds` is derived from the loaded page**, not from
   a second request: the list is ranked stranded-members-descending, so a page
-  that holds the head holds every strong case. `openQueue` reads the list
-  unawaited, because the chip must work whether or not the page is ever opened.
+  that holds the head holds every strong case. The list loads when Mixed stacks
+  is opened, not during ordinary queue startup: after a cache migration the
+  first score is an all-stack operation and must not occupy the serialized
+  database worker for a page the user did not visit. Warning chips appear after
+  that first page load.
 - **The two-way shortcut.** Queue to page: the flagged deck's expansion band
   carries the link (the badge itself is already the disclosure, and a line in
   the collapsed row would put a per-row variable into the uniform scroll pitch
