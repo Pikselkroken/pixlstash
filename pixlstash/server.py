@@ -44,7 +44,7 @@ from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
-from pixlstash.telemetry import ensure_install_identity
+from pixlstash.telemetry import ensure_install_identity, maybe_send_in_background
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -522,6 +522,35 @@ class Server(
         self.staging_sessions = {}
         self._shutdown_on_lifespan = False
 
+    def _maybe_send_telemetry_ping(self) -> None:
+        """Send the daily install ping, if the owner has turned it on.
+
+        Runs from the server process rather than the browser on purpose: the
+        update check in ``useVersionCheck.js`` is frontend-only and
+        localStorage-gated, so a headless install would otherwise only ever
+        report when somebody opened the web UI. The retention design assumes
+        Docker installs ping daily because they are persistent services, and
+        that is only true if the ping comes from here.
+
+        Never raises and never blocks startup: it hands off to a daemon thread
+        and returns. A failure to report is not worth degrading the server for.
+        """
+        try:
+            user = getattr(self, "_user", None)
+            if user is None or not getattr(user, "telemetry_send_install_id", False):
+                return
+            maybe_send_in_background(
+                self._server_config_path,
+                Server.install_type(),
+                consent_enabled=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not dispatch the telemetry ping (%s); continuing. This "
+                "affects reporting only, never the running server.",
+                exc,
+            )
+
     @property
     def server_config_path(self) -> str:
         """Path to the server-only config file this server was started with.
@@ -609,6 +638,7 @@ class Server(
         # after vault.start() (non-blocking) and reports progress via
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
+        self._maybe_send_telemetry_ping()
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
             # The desktop window uses the ephemeral loopback HTTP port (env), not
             # the configured host/port — those describe the optional external

@@ -1,22 +1,22 @@
 # PixlStash Privacy Policy
 
-_Last updated: 2026-06-11_
+_Last updated: 2026-08-02_
 
 PixlStash is a self-hosted application for managing your own picture and video
 library. It is private by design: your content stays on hardware you control.
 This policy explains exactly what PixlStash does and does not do with your data,
-and the one optional feature that makes a network request to us.
+and the two optional features that make a network request to us.
 
 ## Your library stays yours
 
-Everything you import into PixlStash — your images and videos, and everything
+Everything you import into PixlStash, meaning your images and videos and everything
 PixlStash derives from them (thumbnails, tags, captions, face data, search
-embeddings, ratings, and other metadata) — is stored **locally**, in the library
+embeddings, ratings, and other metadata), is stored **locally**, in the library
 folder and database on the machine where you run PixlStash.
 
 PixlStash does **not** upload, transmit, or send this content anywhere. There is
 no PixlStash account, no cloud sync, and no central server that receives your
-library. We cannot see your library, because it never reaches us — it stays under
+library. We cannot see your library, because it never reaches us. It stays under
 your control on your own hardware.
 
 ## Sharing is explicit and user-controlled
@@ -31,7 +31,7 @@ time.
 
 PixlStash can check whether a newer version is available. This is the only feature
 that contacts a PixlStash-operated server, and it is **off unless you enable
-"Check for updates" in Settings → Behaviour.** Until you opt in, no update check
+"Check for updates" in Settings → Privacy.** Until you opt in, no update check
 is ever made.
 
 When enabled, the app contacts `https://pixlstash.dev` at most once every 24 hours
@@ -40,7 +40,7 @@ critical-severity **security** fix, so you are warned promptly). Each check send
 two pieces of information, both in the request URL:
 
 1. **Your current app version**, and
-2. **Your installation type**, as a coarse category — `docker`, `pip`,
+2. **Your installation type**, as a coarse category: `docker`, `pip`,
    `electron` (the desktop app), or `other`.
 
 As with any request to any website, the receiving server and its content-delivery
@@ -52,7 +52,7 @@ We use this information to:
 
 - tell you whether an update is available, show you a changelog relevant to your
   version, and direct you to the correct way to update for your installation type
-  — including flagging security-relevant updates; and
+  including flagging security-relevant updates; and
 - produce a rough, **aggregate** lower-bound estimate of the number of daily active
   installations.
 
@@ -62,19 +62,36 @@ you, and we do not use the IP address to identify you. If you later click the
 and installation type so it can show you the right upgrade instructions for your
 install.
 
-You can turn the update check off again at any time in Settings → Behaviour; once
+You can turn the update check off again at any time in Settings → Privacy; once
 disabled, no further checks are made.
 
-## The anonymous install ID (stored locally, off by default)
+## The anonymous install ID (off until you turn it on)
 
 PixlStash generates a random identifier for your installation the first time it
 starts, and stores it in a file called `install-id.json` next to your
-`server-config.json`. **This version sends it nowhere.** Nothing in PixlStash
-transmits it, and no setting in this version can make it transmit.
+`server-config.json`. It is **off** on every installation and every install type,
+and upgrading from an earlier version leaves it off. Nothing is sent unless you
+turn on **"Send an anonymous install ID"** in Settings → Privacy.
 
-It exists so that a future, opt-in feature can tell whether an installation is
-still in use, which plain visit counts cannot answer. That feature is not in this
-release, and if it arrives it will be off until you turn it on.
+It exists to answer one question that plain visit counts cannot: whether people
+keep using PixlStash, or install it once and stop. Without it we can count
+requests but cannot tell ten people using PixlStash once from one person using it
+ten times.
+
+When you turn it on, PixlStash sends once a day, at most:
+
+```
+{
+  "install_id": "9f2c1b7e-4d5a-4c81-b3e6-8a7d2f0e5c14",
+  "is_new_install": true,
+  "install_type": "pip"
+}
+```
+
+That is the whole message. `is_new_install` records whether this was a fresh
+install or an upgrade, so people who have used PixlStash for months are not
+counted as brand new. `install_type` is the same coarse category as the update
+check, where `pip` also covers the Windows server installer.
 
 Two things about how the identifier is made:
 
@@ -85,26 +102,23 @@ Two things about how the identifier is made:
   creation moment would itself be close to unique.
 
 Settings has a **Recreate ID** button. It replaces the identifier with a new
-random one; the old one is overwritten and nothing on disk links the two.
+random one; the old one is overwritten, is never sent again, and nothing on disk
+links the two.
 
-**About your IP address.** If you do turn the install ID on, the request that
-carries it reaches a server, and any server can see the address a request came
-from. We do not log it and we do not retain it. It is used for one thing, for the
-moment the request is being handled: refusing floods of traffic from a single
-source, so that fabricated data cannot swamp the counts. It is never written to
-storage, never attached to your install ID, and never leaves the code that
-handles the request.
+**About your IP address.** Any server can see the address a request arrives from,
+and ours is no exception. We do not log it and we do not retain it. It is used
+for one thing, only while the request is being handled: refusing floods from a
+single source, so that fabricated data cannot swamp the counts. It is never
+written to storage and never attached to your install ID.
 
-Alongside it, Settings carries four telemetry choices: install ID, feature usage
-and outcomes, error and crash reports, and hardware and environment profile.
-**All four are off**, on every installation and every install type, and this
-version sends nothing for any of them. Upgrading from an earlier version leaves
-them off.
+We store your install ID, the dates we first and last heard from it, and a
+compact record of which days it was active. Nothing else. That record is deleted
+after 400 days of silence, and only aggregate counts are ever published.
 
 ## Software downloads from third parties
 
 To do its work, PixlStash downloads AI model weights (for tagging, captioning, and
-search) and — in the desktop app, when you add GPU acceleration — Python packages.
+search) and, in the desktop app when you add GPU acceleration, Python packages.
 These are fetched on demand from third-party services such as Hugging Face, the
 Python Package Index (PyPI), and the PyTorch download index. Those requests go
 directly to those providers and are subject to **their** privacy policies;
@@ -116,7 +130,7 @@ information) and **never** your library content.
 Visiting `https://pixlstash.dev` (including any public demo) is an ordinary website
 visit, subject to standard web-server and CDN request logging (such as IP address,
 request time, and user-agent). Any content you upload to a **public demo** instance
-is not private — please do not upload anything sensitive to a shared demo.
+is not private, so please do not upload anything sensitive to a shared demo.
 
 ## Changes to this policy
 
