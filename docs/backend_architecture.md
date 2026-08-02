@@ -448,8 +448,14 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/auto-stack                                                      | dedup           | Bulk auto-stack the exact tier                             |
 | POST   | /api/v1/dedup/counts                                                          | dedup           | Live duplicate counts, global and scoped                   |
 | GET    | /api/v1/dedup/groups                                                          | dedup           | One page of the duplicate queue                            |
+| GET    | /api/v1/dedup/mixed-stacks                                                    | dedup           | Live stacks whose members do not all match                 |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Keep a mixed stack as it is                                |
+| DELETE | /api/v1/dedup/mixed-stacks/{stack_id}/keep                                    | dedup           | Undo a Keep                                                |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/split                                   | dedup           | Split the marked member(s) off a mixed stack               |
+| POST   | /api/v1/dedup/mixed-stacks/{stack_id}/unstack                                 | dedup           | Dissolve a mixed stack                                     |
 | GET    | /api/v1/dedup/policy                                                          | dedup           | Duplicate detection tier defaults                          |
 | POST   | /api/v1/dedup/scan                                                            | dedup           | Queue a duplicate scan                                     |
+| GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                    |
 | POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
 | GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
@@ -560,6 +566,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/snapshots/{snapshot_id}/restore/{resource_type}/{resource_id}/preview | snapshots       | Preview Resource Restore                                   |
 | GET    | /api/v1/sort_mechanisms                                                       | pictures        | List picture sort mechanisms                               |
 | POST   | /api/v1/stacks                                                                | stacks          | Create stack                                               |
+| POST   | /api/v1/stacks/keep-cover-only                                                | stacks          | Collapse stacks to their covers                            |
+| POST   | /api/v1/stacks/keep-cover-only/preview                                        | stacks          | Preview collapsing stacks to their covers                  |
 | GET    | /api/v1/stacks/{stack_id}                                                     | stacks          | Get stack details                                          |
 | POST   | /api/v1/stacks/{stack_id}/members                                             | stacks          | Add stack members                                          |
 | DELETE | /api/v1/stacks/{stack_id}/members                                             | stacks          | Remove stack members                                       |
