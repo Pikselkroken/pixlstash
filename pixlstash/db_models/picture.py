@@ -1322,9 +1322,7 @@ class Picture(SQLModel, table=True):
                     PictureStack.updated_at.desc()
                     if sort_mech.descending
                     else PictureStack.updated_at.asc(),
-                    Picture.id.desc()
-                    if sort_mech.descending
-                    else Picture.id.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to

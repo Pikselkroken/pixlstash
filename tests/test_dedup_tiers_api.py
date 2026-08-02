@@ -704,9 +704,7 @@ def test_decided_compare_groups_follow_the_latest_stack_change():
 
         stacked = client.post(STACK_URL, json={"signature": stacked_signature})
         assert stacked.status_code == 200, stacked.text
-        kept = client.post(
-            KEEP_SEPARATE_URL, json={"signature": separate_signature}
-        )
+        kept = client.post(KEEP_SEPARATE_URL, json={"signature": separate_signature})
         assert kept.status_code == 200, kept.text
 
         initial = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
@@ -728,9 +726,7 @@ def test_decided_compare_groups_follow_the_latest_stack_change():
 
         _run(server, touch_stack_after_latest_decision)
 
-        first_page = client.get(
-            GROUPS_URL, params={"decided": True, "limit": 1}
-        ).json()
+        first_page = client.get(GROUPS_URL, params={"decided": True, "limit": 1}).json()
         assert [group["signature"] for group in first_page["groups"]] == [
             stacked_signature
         ]

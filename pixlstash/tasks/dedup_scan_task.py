@@ -164,8 +164,7 @@ class DedupScanTask(BaseTask):
                         DedupScanTask._persist_embedding_slice,
                         self._scan_id,
                         components[
-                            start_index : start_index
-                            + EMBEDDING_COMPONENTS_PER_SLICE
+                            start_index : start_index + EMBEDDING_COMPONENTS_PER_SLICE
                         ],
                         policy,
                     )
@@ -240,9 +239,7 @@ class DedupScanTask(BaseTask):
         """Publish an atomic, phase-based Task Manager snapshot."""
         with self._progress_lock:
             self._total_count = max(1, int(total))
-            self._processed_count = min(
-                max(0, int(processed)), self._total_count
-            )
+            self._processed_count = min(max(0, int(processed)), self._total_count)
 
     def task_progress(self) -> tuple[int, int]:
         """Return ``(processed phases, total phases)`` for Task Manager."""
@@ -463,9 +460,7 @@ class DedupScanTask(BaseTask):
         edges = rows
         if in_scope is not None:
             edges = [
-                edge
-                for edge in rows
-                if edge[0] in in_scope and edge[1] in in_scope
+                edge for edge in rows if edge[0] in in_scope and edge[1] in in_scope
             ]
         return {
             "edges": edges,

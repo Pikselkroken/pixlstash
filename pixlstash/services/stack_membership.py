@@ -87,9 +87,7 @@ def expand_picture_ids_to_stacks(
     if not ids:
         return []
 
-    input_scope = scope_id_subquery(
-        session, ids, name="_pixlstash_expand_picture_ids"
-    )
+    input_scope = scope_id_subquery(session, ids, name="_pixlstash_expand_picture_ids")
     stack_ids = {
         int(stack_id)
         for stack_id in session.exec(
@@ -188,9 +186,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     # Keep the scalar Picture.project_id consistent across the stack: a single
     # deterministic primary (lowest project id in the union, else None).
     primary_project_id = min(project_ids) if project_ids else None
-    for pic in session.exec(
-        select(Picture).where(Picture.id.in_(member_scope))
-    ).all():
+    for pic in session.exec(select(Picture).where(Picture.id.in_(member_scope))).all():
         if pic.project_id != primary_project_id:
             pic.project_id = primary_project_id
             session.add(pic)

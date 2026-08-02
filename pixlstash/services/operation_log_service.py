@@ -244,9 +244,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
         session, ids, name="_pixlstash_operation_picture_ids"
     )
     state: dict[str, dict] = {}
-    pictures = session.exec(
-        select(Picture).where(Picture.id.in_(picture_scope))
-    ).all()
+    pictures = session.exec(select(Picture).where(Picture.id.in_(picture_scope))).all()
     for picture in pictures:
         if picture.id is None:
             continue

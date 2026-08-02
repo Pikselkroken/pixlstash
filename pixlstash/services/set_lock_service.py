@@ -51,6 +51,7 @@ logger = get_logger(__name__)
 # 403 (token scope) and 409 (name conflict) codes already used on these routes.
 LOCKED_STATUS_CODE = 423
 
+
 def _picture_stack_ids(session: Session, picture_ids) -> dict[int, Optional[int]]:
     """Return picture-to-stack mappings without exceeding SQLite bind limits."""
     scope = scope_id_subquery(
@@ -85,9 +86,7 @@ def _locked_sets_by_picture(
     expanded = expand_picture_ids_to_stacks(session, ids)
     if not expanded:
         return {}
-    scope = scope_id_subquery(
-        session, expanded, name="_pixlstash_locked_picture_ids"
-    )
+    scope = scope_id_subquery(session, expanded, name="_pixlstash_locked_picture_ids")
     rows = session.exec(
         select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
         .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
@@ -455,14 +454,10 @@ def _stack_member_ids(session: Session, stack_ids) -> dict[int, list[int]]:
     ids = sorted({int(sid) for sid in stack_ids if sid is not None})
     if not ids:
         return {}
-    stack_scope = scope_id_subquery(
-        session, ids, name="_pixlstash_detach_stack_ids"
-    )
+    stack_scope = scope_id_subquery(session, ids, name="_pixlstash_detach_stack_ids")
     members: dict[int, list[int]] = {}
     for picture_id, stack_id in session.exec(
-        select(Picture.id, Picture.stack_id).where(
-            Picture.stack_id.in_(stack_scope)
-        )
+        select(Picture.id, Picture.stack_id).where(Picture.stack_id.in_(stack_scope))
     ).all():
         members.setdefault(int(stack_id), []).append(int(picture_id))
     return members

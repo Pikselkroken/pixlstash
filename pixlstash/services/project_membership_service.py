@@ -257,9 +257,7 @@ def reconcile_entity_projects_change(
     picture_scope = scope_id_subquery(
         session, pic_id_list, name="_pixlstash_entity_project_picture_ids"
     )
-    for pic in session.exec(
-        select(Picture).where(Picture.id.in_(picture_scope))
-    ).all():
+    for pic in session.exec(select(Picture).where(Picture.id.in_(picture_scope))).all():
         if pic.id is None:
             continue
 

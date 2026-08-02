@@ -725,6 +725,28 @@ def test_a_stranded_member_reports_the_real_similarity_it_just_missed():
         _teardown(temp_dir, server)
 
 
+def test_strangers_that_differ_are_named_as_a_range():
+    """One number for several strangers would misdescribe all but one of them.
+
+    Three strangers here: two are 7 bits apart (89%) and the third is 32 bits
+    from its own closest sibling (50%). Quoting only the best would flatter the
+    stack and only the worst would libel two pictures, so the pill spans them.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, _picture_ids = _make_stack(server, [_H_ZERO, _H_ALMOST, _H_FAR])
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["component_sizes"] == [1, 1, 1]
+        assert _pill_texts(row)[0] == (
+            "3 pictures are only 50-89% like the rest",
+            True,
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_a_strangers_similarity_survives_the_cached_edge_lists_floor():
     """The other half of the bug: distances the edge cache never stored.
 

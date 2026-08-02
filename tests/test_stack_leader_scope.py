@@ -102,17 +102,13 @@ def test_stack_leaders_sort_by_the_stack_updated_time(session):
         session,
         stack_leaders_only=True,
         stack_state="stacked",
-        sort_mech=SortMechanism(
-            SortMechanism.Keys.STACK_UPDATED_AT, descending=True
-        ),
+        sort_mech=SortMechanism(SortMechanism.Keys.STACK_UPDATED_AT, descending=True),
     )
     oldest_first = Picture.find(
         session,
         stack_leaders_only=True,
         stack_state="stacked",
-        sort_mech=SortMechanism(
-            SortMechanism.Keys.STACK_UPDATED_AT, descending=False
-        ),
+        sort_mech=SortMechanism(SortMechanism.Keys.STACK_UPDATED_AT, descending=False),
     )
 
     assert [pic.id for pic in recent_first] == [newer_cover.id, older_cover.id]
@@ -131,9 +127,7 @@ def test_unassigned_stack_leaders_support_recently_changed_sort(session):
         session,
         stack_leaders_only=True,
         stack_state="stacked",
-        sort_mech=SortMechanism(
-            SortMechanism.Keys.STACK_UPDATED_AT, descending=True
-        ),
+        sort_mech=SortMechanism(SortMechanism.Keys.STACK_UPDATED_AT, descending=True),
     )
 
     assert [pic.id for pic in found] == [newer_cover.id, older_cover.id]

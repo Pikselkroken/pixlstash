@@ -679,14 +679,18 @@ def purge_rows_in_session(
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
-    """Use :func:`locked_picture_ids` as THE lock lookup for the scrapheap.
+    """Chunked :func:`locked_picture_ids` — THE lock lookup for the scrapheap.
 
     Both the auto-purge finder and the scrapheap listing go through here so the
     countdown the UI renders and the decision the sweep makes can never disagree
     about which pictures are frozen (including the live-stack-sibling case that
     ``locked_picture_ids`` resolves).
     """
-    return locked_picture_ids(session, picture_ids)
+    ids = [int(pid) for pid in picture_ids if pid is not None]
+    locked: set[int] = set()
+    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
+        locked |= locked_picture_ids(session, ids[start : start + LOCK_QUERY_CHUNK])
+    return locked
 
 
 def locked_scrapheap_picture_ids(vault, picture_ids) -> set[int]:

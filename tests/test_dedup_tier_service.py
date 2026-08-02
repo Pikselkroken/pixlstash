@@ -1048,8 +1048,7 @@ def test_large_group_evidence_tracks_the_live_member_count(server):
     page, _total, _cursor = _run(server, tiers.page_queue_in_session, policy)
     assert page[0]["member_count"] == 2
     assert not any(
-        pill["text"].startswith("Unusually large group")
-        for pill in page[0]["why"]
+        pill["text"].startswith("Unusually large group") for pill in page[0]["why"]
     )
 
 
