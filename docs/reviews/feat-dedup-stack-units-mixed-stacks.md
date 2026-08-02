@@ -193,6 +193,16 @@ Three separable pieces:
 3. A threshold change should fold, not rescan: the edges do not move when the cut
    moves, only the components do.
 
+Resolved: explicit splits now skip cohesion entirely; live-stack enumeration is
+aggregated in SQLite; warm list requests fold the stored, threshold-independent
+edges without rereading picture hashes; and database triggers invalidate the
+derived row in the same transaction whenever membership, deletion state or a
+perceptual hash changes. `MissingStackCohesionFinder` no longer waits behind the
+whole `IMAGE_EMBEDDING` queue. Global ranking is preserved, but a warm threshold
+change now performs cheap cached folds rather than picture reads and O(n²)
+comparisons. Non-400/non-423 client failures also use operational error wording
+instead of the locked-set refusal reporter.
+
 ---
 
 ## 3. Correctness found by using it
@@ -240,12 +250,10 @@ Recorded because that ratio is the useful signal.
   flagged members from 65 to 16 on the owner's library, and every one of the 49
   removed has a sibling 70 to 90% similar. A decision, not a bug.
 * `GET /pictures/export/download/{task_id}` (H1 above), on `main`.
-* `DELETE /stacks/{stack_id}/members` still disagrees with its sibling on the
-  dissolve rule: it counts soft-deleted rows, so it can leave a stack with
-  exactly one live member. Pre-existing; the comment claiming the routes now
-  agree is true only of the undo snapshot.
-* `split_picture_ids` under-reports on a dissolve: the scrapheaped rows are
-  detached but not listed. Undo and the websocket fan-out are correct; only the
-  receipt is short.
-* None of the frontend has been exercised by an automated browser test. Every
-  correctness item in section 3 was found by hand.
+
+Resolved after this review: `DELETE /stacks/{stack_id}/members` now decides the
+dissolve rule from live members and detaches every remaining row, including
+scrapheaped members. Dissolve receipts now include those hidden detached rows in
+`split_picture_ids` as well. Focused component tests cover the client-side error
+classification; the frontend still has no automated browser-level coverage, so
+the manual-testing limitation recorded in section 3 remains.
