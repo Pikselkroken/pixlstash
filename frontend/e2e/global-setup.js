@@ -61,10 +61,18 @@ export default async function globalSetup(config) {
   }
   const { token } = await tokenRes.json()
 
-  // Decide the first-run "Check for updates automatically?" prompt up front so
-  // its modal scrim never blocks test interactions (null = undecided = shown).
+  // Decide first-run prompts up front so their modal scrims never block test
+  // interactions. Telemetry remains explicitly opted out; its prompted flag
+  // only records that this throwaway e2e user has already answered.
   const cfg = await ctx.patch('/api/v1/users/me/config', {
-    data: { check_for_updates: false },
+    data: {
+      check_for_updates: false,
+      telemetry_send_install_id: false,
+      telemetry_send_feature_usage: false,
+      telemetry_send_error_reports: false,
+      telemetry_send_hardware_profile: false,
+      telemetry_consent_prompted: true,
+    },
   })
   if (!cfg.ok()) {
     throw new Error(
