@@ -29,6 +29,15 @@ from pixlstash.db_models import (
     PictureSetMember,
 )
 
+ID_CHUNK = 900
+"""Ids per ``IN (...)`` clause, under SQLite's 999-variable ceiling."""
+
+
+def _id_chunks(ids):
+    ordered = sorted({int(value) for value in ids if value is not None})
+    for start in range(0, len(ordered), ID_CHUNK):
+        yield ordered[start : start + ID_CHUNK]
+
 
 def in_a_live_stack():
     """A picture that is in a stack **that is still a stack**.
@@ -86,22 +95,25 @@ def expand_picture_ids_to_stacks(
     if not ids:
         return []
 
-    stack_ids = {
-        int(stack_id)
-        for stack_id in session.exec(
-            select(Picture.stack_id).where(
-                Picture.id.in_(ids),
-                Picture.stack_id.is_not(None),
-            )
-        ).all()
-        if stack_id is not None
-    }
+    stack_ids: set[int] = set()
+    for chunk in _id_chunks(ids):
+        stack_ids.update(
+            int(stack_id)
+            for stack_id in session.exec(
+                select(Picture.stack_id).where(
+                    Picture.id.in_(chunk),
+                    Picture.stack_id.is_not(None),
+                )
+            ).all()
+            if stack_id is not None
+        )
     if stack_ids:
-        member_query = select(Picture.id).where(Picture.stack_id.in_(stack_ids))
-        if not include_deleted:
-            member_query = member_query.where(Picture.deleted.is_(False))
-        member_ids = session.exec(member_query).all()
-        ids.update(int(mid) for mid in member_ids if mid is not None)
+        for chunk in _id_chunks(stack_ids):
+            member_query = select(Picture.id).where(Picture.stack_id.in_(chunk))
+            if not include_deleted:
+                member_query = member_query.where(Picture.deleted.is_(False))
+            member_ids = session.exec(member_query).all()
+            ids.update(int(mid) for mid in member_ids if mid is not None)
 
     return sorted(ids)
 

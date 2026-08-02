@@ -17,6 +17,7 @@ import uuid
 
 import numpy as np
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import delete, select
 
 from pixlstash.db_models import (
@@ -31,6 +32,8 @@ from pixlstash.db_models import (
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
+from pixlstash.services import set_lock_service, stack_membership
+from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.near_neighbor import EMBEDDING_DIM
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -131,6 +134,47 @@ def _add_member_directly(server, set_id, pic_id):
 def _set_locked(client, set_id, locked):
     resp = client.patch(f"/picture_sets/{set_id}", json={"locked": locked})
     assert resp.status_code == 200, resp.text
+
+
+def test_large_lock_lookup_batches_every_id_query(monkeypatch):
+    """Regression for #694: reference scans can submit over 100k picture ids."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_ids = _first_n_pictures(server, 5)
+        _seed_stack_directly(server, picture_ids[:2])
+        set_id = _create_set(client, "LargeLookupFreeze")
+        _add_member_directly(server, set_id, picture_ids[0])
+        _add_member_directly(server, set_id, picture_ids[2])
+        _set_locked(client, set_id, True)
+
+        # Make every unbounded query fail this assertion with only five rows,
+        # rather than manufacturing the 100k-row vault from the report.
+        monkeypatch.setattr(stack_membership, "ID_CHUNK", 2)
+        monkeypatch.setattr(set_lock_service, "ID_CHUNK", 2)
+        parameter_counts = []
+        engine = server.vault.db._engine
+
+        def record_in_clause(
+            _conn, _cursor, statement, parameters, _context, _executemany
+        ):
+            if " IN (" in statement:
+                parameter_counts.append(len(parameters))
+
+        event.listen(engine, "before_cursor_execute", record_in_clause)
+        try:
+            frozen = server.vault.db.run_task(
+                lambda session: locked_picture_ids(session, picture_ids)
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", record_in_clause)
+
+        assert frozen == set(picture_ids[:3])
+        assert parameter_counts
+        assert max(parameter_counts) <= 2
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
 
 
 def _seed_tag(server, pic_id, tag):

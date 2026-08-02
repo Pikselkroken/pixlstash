@@ -58,6 +58,27 @@ because that module imports this one, so borrowing the constant would make the
 dependency circular."""
 
 
+def _id_chunks(ids):
+    ordered = sorted({int(value) for value in ids if value is not None})
+    for start in range(0, len(ordered), ID_CHUNK):
+        yield ordered[start : start + ID_CHUNK]
+
+
+def _picture_stack_ids(session: Session, picture_ids) -> dict[int, Optional[int]]:
+    """Return picture-to-stack mappings without exceeding SQLite bind limits."""
+    result: dict[int, Optional[int]] = {}
+    for chunk in _id_chunks(picture_ids):
+        result.update(
+            {
+                int(pid): (int(sid) if sid is not None else None)
+                for pid, sid in session.exec(
+                    select(Picture.id, Picture.stack_id).where(Picture.id.in_(chunk))
+                ).all()
+            }
+        )
+    return result
+
+
 def _locked_sets_by_picture(
     session: Session, picture_ids
 ) -> dict[int, list[tuple[int, str]]]:
@@ -79,17 +100,18 @@ def _locked_sets_by_picture(
     expanded = expand_picture_ids_to_stacks(session, ids)
     if not expanded:
         return {}
-    rows = session.exec(
-        select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
-        .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
-        .where(
-            PictureSetMember.picture_id.in_(expanded),
-            PictureSet.locked.is_(True),
-        )
-    ).all()
     result: dict[int, list[tuple[int, str]]] = {}
-    for pic_id, set_id, set_name in rows:
-        result.setdefault(int(pic_id), []).append((int(set_id), set_name))
+    for chunk in _id_chunks(expanded):
+        rows = session.exec(
+            select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
+            .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+            .where(
+                PictureSetMember.picture_id.in_(chunk),
+                PictureSet.locked.is_(True),
+            )
+        ).all()
+        for pic_id, set_id, set_name in rows:
+            result.setdefault(int(pic_id), []).append((int(set_id), set_name))
     return result
 
 
@@ -127,14 +149,7 @@ def locked_sets_for_pictures(session: Session, picture_ids) -> dict[int, list[di
 
     # A locked-set member freezes its whole stack, so roll each frozen picture's
     # sets up to its stack, then hand them to every input id on that stack.
-    stack_by_picture = {
-        int(pid): (int(sid) if sid is not None else None)
-        for pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(
-                Picture.id.in_(sorted(set(ids) | set(detail)))
-            )
-        ).all()
-    }
+    stack_by_picture = _picture_stack_ids(session, set(ids) | set(detail))
     sets_by_stack: dict[int, dict[int, str]] = {}
     for frozen_id, pairs in detail.items():
         stack_id = stack_by_picture.get(frozen_id)
@@ -183,17 +198,10 @@ def locked_picture_ids(session: Session, picture_ids) -> set[int]:
         return set()
     # An input id is frozen if it is itself a locked-set member, or shares a stack
     # with one. Map both the inputs and the locked members to their stack ids.
-    stack_by_id = {
-        int(pid): (int(sid) if sid is not None else None)
-        for pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(Picture.id.in_(ids))
-        ).all()
-    }
+    stack_by_id = _picture_stack_ids(session, ids)
     locked_stack_ids = {
         int(sid)
-        for _pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(Picture.id.in_(locked_expanded))
-        ).all()
+        for sid in _picture_stack_ids(session, locked_expanded).values()
         if sid is not None
     }
     frozen: set[int] = set()
