@@ -106,6 +106,7 @@ from pixlstash.db_models import DeletedFileLog, Picture, ReferenceFolder
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
@@ -127,13 +128,6 @@ DEFAULT_RETENTION_DAYS: Optional[int] = None
 # retention window was *lowered*, so a reduction never purges anything the same
 # day it is applied.
 REDUCTION_GRACE_DAYS: int = 1
-
-# Max ids per locked-set lookup. SQLITE_LIMIT_VARIABLE_NUMBER is 999 on SQLite
-# builds older than 3.32, so an unchunked ``IN (...)`` over a large scrapheap
-# would raise — and, because the finder catches and returns no work, would
-# SILENTLY disable auto-purge on those builds. Chunking keeps a big scrapheap
-# from turning the feature off by accident.
-LOCK_QUERY_CHUNK: int = 900
 
 # Rows per page when scanning past-deadline candidates. Also the floor for the
 # over-fetch: protected/locked rows are filtered out AFTER the SQL window, so a
@@ -484,7 +478,10 @@ def fetch_scrapheap_rows_in_session(
         Picture.deleted_at,
     ).where(Picture.deleted.is_(True))
     if ids is not None:
-        query = query.where(Picture.id.in_(ids))
+        scope = scope_id_subquery(
+            session, ids, name="_pixlstash_scrapheap_row_ids"
+        )
+        query = query.where(Picture.id.in_(scope))
     return [ScrapheapRow(*row) for row in session.exec(query).all()]
 
 
@@ -502,21 +499,15 @@ def fetch_no_delete_folder_ids_in_session(session: Session) -> set[int]:
 def still_scrapheaped_ids_in_session(
     session: Session, picture_ids: list[int]
 ) -> set[int]:
-    """Which of ``picture_ids`` are, RIGHT NOW, still soft-deleted.
-
-    Chunked for the same reason :data:`LOCK_QUERY_CHUNK` exists: a whole-heap
-    delete-forever can hand over more ids than SQLITE_LIMIT_VARIABLE_NUMBER
-    allows in one ``IN (...)`` on builds older than SQLite 3.32.
-    """
+    """Which of ``picture_ids`` are, RIGHT NOW, still soft-deleted."""
     ids = [int(pid) for pid in picture_ids if pid is not None]
-    still: set[int] = set()
-    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
-        chunk = ids[start : start + LOCK_QUERY_CHUNK]
-        rows = session.exec(
-            select(Picture.id).where(Picture.id.in_(chunk), Picture.deleted.is_(True))
-        ).all()
-        still |= {int(pid) for pid in rows if pid is not None}
-    return still
+    scope = scope_id_subquery(
+        session, ids, name="_pixlstash_still_scrapheaped_ids"
+    )
+    rows = session.exec(
+        select(Picture.id).where(Picture.id.in_(scope), Picture.deleted.is_(True))
+    ).all()
+    return {int(pid) for pid in rows if pid is not None}
 
 
 def existing_picture_ids_in_session(
@@ -527,15 +518,14 @@ def existing_picture_ids_in_session(
     Used immediately after the guarded DELETE, inside the same transaction, to
     learn which ids it ACTUALLY removed. ``rowcount`` gives a total but not an
     identity, and the file removal has to be driven by identity — see
-    :func:`purge_rows_in_session`. Chunked like its sibling above.
+    :func:`purge_rows_in_session`.
     """
     ids = [int(pid) for pid in picture_ids if pid is not None]
-    existing: set[int] = set()
-    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
-        chunk = ids[start : start + LOCK_QUERY_CHUNK]
-        rows = session.exec(select(Picture.id).where(Picture.id.in_(chunk))).all()
-        existing |= {int(pid) for pid in rows if pid is not None}
-    return existing
+    scope = scope_id_subquery(
+        session, ids, name="_pixlstash_existing_picture_ids"
+    )
+    rows = session.exec(select(Picture.id).where(Picture.id.in_(scope))).all()
+    return {int(pid) for pid in rows if pid is not None}
 
 
 def purge_rows_in_session(
@@ -642,14 +632,17 @@ def purge_rows_in_session(
         # Deliberately NOT owned, so a failed removal here can never reach back
         # and downgrade it.
     purgeable_ids = sorted(purgeable)
-    for start in range(0, len(purgeable_ids), LOCK_QUERY_CHUNK):
-        chunk = purgeable_ids[start : start + LOCK_QUERY_CHUNK]
-        # ``deleted`` is repeated in the DELETE itself, not just in the SELECT
-        # above: belt-and-braces against anything that could commit between the
-        # two statements in this same session.
-        session.exec(
-            delete(Picture).where(Picture.id.in_(chunk), Picture.deleted.is_(True))
+    purge_scope = scope_id_subquery(
+        session, purgeable_ids, name="_pixlstash_purge_picture_ids"
+    )
+    # ``deleted`` is repeated in the DELETE itself, not just in the SELECT
+    # above: belt-and-braces against anything that could commit between the
+    # two statements in this same session.
+    session.exec(
+        delete(Picture).where(
+            Picture.id.in_(purge_scope), Picture.deleted.is_(True)
         )
+    )
     # The DELETE is authoritative, not the re-check above. Read the removed set
     # back BEFORE committing: a row its predicate spared must keep its file and
     # must not be ledgered, which needs identity, not a rowcount.
@@ -679,18 +672,14 @@ def purge_rows_in_session(
 
 
 def locked_scrapheap_picture_ids_in_session(session: Session, picture_ids) -> set[int]:
-    """Chunked :func:`locked_picture_ids` — THE lock lookup for the scrapheap.
+    """Run :func:`locked_picture_ids` — THE lock lookup for the scrapheap.
 
     Both the auto-purge finder and the scrapheap listing go through here so the
     countdown the UI renders and the decision the sweep makes can never disagree
     about which pictures are frozen (including the live-stack-sibling case that
     ``locked_picture_ids`` resolves).
     """
-    ids = [int(pid) for pid in picture_ids if pid is not None]
-    locked: set[int] = set()
-    for start in range(0, len(ids), LOCK_QUERY_CHUNK):
-        locked |= locked_picture_ids(session, ids[start : start + LOCK_QUERY_CHUNK])
-    return locked
+    return locked_picture_ids(session, picture_ids)
 
 
 def locked_scrapheap_picture_ids(vault, picture_ids) -> set[int]:
