@@ -1,3 +1,9 @@
+# [1.8.3] [Security:Moderate]
+
+If you have given a share link to anyone, please update. Once you have, your existing links are safe again and keep working. Reissue a link only if you would rather the person you gave it to had never been able to see the information described below.
+
+- Fixed: a share link could be used to read details about pictures outside what was actually shared, including their file names and the folders they sit in on your computer. Nobody could see the pictures themselves, only information about them, and only while using one specific combination of filters. Affects every release from 1.3.0 onward. We will publish the details once people have had a chance to update.
+
 # [1.8.2]
 
 - Signed Windows installers and nothing else. If you already installed or you're not on Windows, this is not the release for you.

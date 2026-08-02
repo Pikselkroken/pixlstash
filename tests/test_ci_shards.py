@@ -95,6 +95,21 @@ MUST_BLOCK_ON_EVERY_PR = frozenset(
         # Streaming variant of the picture list — a separate code path from the
         # paged list, and historically its own BOLA vector.
         "test_pictures_stream.py",
+        # The token-level half of share-link scoping: the only suite that mints a
+        # real READ token and asserts on what comes back through the HTTP routes.
+        # `/pictures`, `/pictures/stream` and `/pictures/count` are SCOPED_LIST
+        # with `scope_aware=True`, so the AuthzGate does not object-check their
+        # rows and the handler's narrowing is the sole enforcement, so nothing
+        # else in the suite can catch a route that stops narrowing. It was
+        # already on the ci.yml gate; pinning it here makes deferral unavailable.
+        "test_read_token_security.py",
+        # The ComfyUI membership filter is the one leaf `Picture.find()` does not
+        # delegate to `PredicateFilter`: it hand-rolls a raw `text()` WHERE
+        # fragment. An unparenthesised `OR` in it let the stack-member branch
+        # escape the id/project scope narrowing, so a scoped share token could
+        # read grid metadata library-wide. Same risk class as
+        # test_pictures_stream.py above.
+        "test_comfyui_stack_filter.py",
         # Deleted-picture retention: proves scrapheap rows stay scoped and are
         # actually reaped rather than lingering readable.
         "test_scrapheap_retention.py",

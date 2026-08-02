@@ -4,7 +4,9 @@ Coverage
 --------
 1. Read token cannot perform any write operation (POST/PUT/PATCH/DELETE).
 2. Read token cannot access owner-only data (config, token list, server config).
-3. Read token scoped to one resource cannot read a different resource.
+3. Read token scoped to one resource cannot read a different resource, including
+   via the ComfyUI stack-member filter on /pictures, /pictures/stream and
+   /pictures/count (see TestComfyuiFilterCannotEscapeTokenScope).
 4. Expired read token is rejected.
 5. ALL-scope bearer token scoped-token checks (READ token cannot create tokens).
 6. Unauthenticated login endpoint brute-force lockout (≥5 failures → 429).
@@ -17,6 +19,7 @@ the pictures from ``pictures/good/`` to give each scenario a realistic dataset.
 """
 
 import io
+import json
 import tempfile
 import time
 from pathlib import Path
@@ -28,7 +31,7 @@ from PIL import Image
 import pixlstash.routes.pictures._character_likeness as likeness_module
 import pixlstash.routes.pictures._listing as listing_module
 import pixlstash.utils.rate_limiter as rl_module
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, PictureStack
 from pixlstash.server import Server
 from tests.utils import upload_pictures_and_wait
 
@@ -1450,6 +1453,414 @@ class TestResourceScopedReadTokenIsolation:
                     assert r.status_code == 200, (
                         f"Set-A token wrongly scope-blocked from its own "
                         f"picture's workflow: {r.status_code} {r.text}"
+                    )
+            finally:
+                server.__exit__(None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# 3b. The ComfyUI stack filter must not widen a scoped token's grant
+# ---------------------------------------------------------------------------
+
+
+class TestComfyuiFilterCannotEscapeTokenScope:
+    """Token-level regression for the ComfyUI stack-member scope escape.
+
+    ``Picture.find`` expands a stack-collapsed grid so a stack leader shows when
+    *any* member of its stack was made with the filtered model or LoRA.  That
+    expansion is a raw ``text()`` fragment, and ``text()`` is opaque to
+    SQLAlchemy, so nothing parenthesises its ``OR`` for us.  ``AND`` binds
+    tighter than ``OR``, so an unwrapped fragment renders as ``<all other
+    predicates> AND self_match OR member_match`` and the member branch escapes
+    every ANDed predicate -- including the ``id IN (...)`` narrowing that a
+    share token's scope is expressed as.
+
+    ``/api/v1/pictures`` and its siblings are declared ``SCOPED_LIST`` with
+    ``scope_aware=True`` (``pixlstash/authz/registry.py``), which means the
+    AuthzGate deliberately does *not* object-check the rows that come back: the
+    handler's narrowing is the only enforcement there is.  So this is a property
+    of the route, not of the query builder, and it needs a test that actually
+    mints a token.  ``tests/test_comfyui_stack_filter.py`` calls
+    ``Picture.find`` directly and would still pass if the route stopped
+    narrowing altogether.
+
+    The fixture is a stack that **straddles** the token's scope boundary, which
+    is the only shape that reproduces the leak.  Picture-set membership is
+    stack-atomic on add, so a *picture*-scoped share token is the reliable way
+    to straddle; the set-scoped case only straddles when the pictures are
+    stacked after set membership is granted, which the last test does.
+    """
+
+    MODEL = "shared-model.safetensors"
+    LORA = "shared-lora.safetensors"
+    FILTER_PARAMS = ("comfyui_model", "comfyui_lora")
+
+    # Which seeded pictures carry the filtered model/LoRA, and how the two
+    # stacks are laid out once _form_stacks runs (``*`` = matches the filter)::
+    #
+    #     shared stack : cover*  sibling_a*  sibling_b*
+    #     other stack  : quiet_cover   quiet_member*
+    #     loose        : lone*
+    #
+    # Only ``cover`` is ever inside the token's grant. ``quiet_cover`` is the
+    # one that must come back for the *owner* purely through the member branch.
+    _MATCHING = {"cover", "sibling_a", "sibling_b", "quiet_member", "lone"}
+    _SHARED_STACK = ("cover", "sibling_a", "sibling_b")
+    _OTHER_STACK = ("quiet_cover", "quiet_member")
+
+    def _filter_value(self, filter_param: str) -> str:
+        return self.MODEL if filter_param == "comfyui_model" else self.LORA
+
+    def _seed_pictures(self, server) -> dict:
+        """Create the six unstacked pictures with their ComfyUI metadata.
+
+        ``comfyui_models`` / ``comfyui_loras`` are pipeline-populated JSON
+        columns with no owner-facing write API, so they are seeded directly via
+        the DB task runner (same pattern as ``_seed_comfyui_vocab`` above).
+        """
+
+        def _seed(session):
+            ids = {}
+            for name in (
+                *self._SHARED_STACK,
+                *self._OTHER_STACK,
+                "lone",
+            ):
+                matching = name in self._MATCHING
+                pic = Picture(
+                    file_path=f"/home/owner/private/{name}.png",
+                    comfyui_models=json.dumps(
+                        [self.MODEL if matching else "unrelated-model"]
+                    ),
+                    comfyui_loras=json.dumps(
+                        [self.LORA if matching else "unrelated-lora"]
+                    ),
+                )
+                session.add(pic)
+                session.commit()
+                session.refresh(pic)
+                ids[name] = pic.id
+            return ids
+
+        return server.vault.db.run_task(_seed)
+
+    def _form_stacks(self, server, ids: dict) -> None:
+        """Stack the seeded pictures, keeping ``lone`` unstacked.
+
+        Done in the DB rather than through the stack API so the stack can be
+        formed at an arbitrary point relative to picture-set membership -- the
+        set-scoped test below depends on forming it *after*.
+        """
+
+        def _stack(session):
+            for names in (self._SHARED_STACK, self._OTHER_STACK):
+                stack = PictureStack()
+                session.add(stack)
+                session.commit()
+                session.refresh(stack)
+                for position, name in enumerate(names):
+                    pic = session.get(Picture, ids[name])
+                    pic.stack_id = stack.id
+                    pic.stack_position = position
+                    session.add(pic)
+            session.commit()
+
+        server.vault.db.run_task(_stack)
+
+    def _setup(self, tmp: str):
+        """Start a server, seed the straddling stack, mint a picture token.
+
+        Returns ``(server, owner_client, ids, picture_token)`` where the token
+        grants READ on ``ids["cover"]`` and nothing else.
+        """
+        server = Server(f"{tmp}/server-config.json")
+        server.__enter__()
+        owner_client = TestClient(server.api, raise_server_exceptions=True)
+
+        r = owner_client.post(
+            f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert r.status_code == 200, r.text
+
+        ids = self._seed_pictures(server)
+        self._form_stacks(server, ids)
+
+        r = owner_client.post(
+            f"{API}/users/me/token",
+            json={
+                "description": "single picture share",
+                "scope": "READ",
+                "resource_type": "picture",
+                "resource_id": ids["cover"],
+            },
+        )
+        assert r.status_code == 200, r.text
+        return server, owner_client, ids, r.json()["token"]
+
+    @staticmethod
+    def _ids_from(response) -> set[int]:
+        """Pull the id set out of a list response or a stream envelope."""
+        assert response.status_code == 200, response.text
+        body = response.json()
+        if isinstance(body, dict):
+            body = body["pictures"]
+        return {row["id"] for row in body}
+
+    def _scoped_get(self, server, token: str, path: str, params: dict):
+        return TestClient(server.api).get(
+            f"{API}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+        )
+
+    def test_picture_token_cannot_widen_the_grid_via_comfyui_filter(self):
+        """``GET /pictures?fields=grid&comfyui_model=...`` stays inside scope.
+
+        ``fields=grid`` implies ``stack_leaders_only``, so this is the default
+        share-gallery view: the exact request a share-link visitor's browser
+        makes when they touch the ComfyUI filter chips.  Under the bug the
+        response carried grid rows -- ``file_path`` included -- for every member
+        of every stack that contained a match, library-wide.
+        """
+        for filter_param in self.FILTER_PARAMS:
+            with tempfile.TemporaryDirectory() as tmp:
+                server, _owner, ids, token = self._setup(tmp)
+                try:
+                    r = self._scoped_get(
+                        server,
+                        token,
+                        "/pictures",
+                        {
+                            "fields": "grid",
+                            "limit": 500,
+                            filter_param: self._filter_value(filter_param),
+                        },
+                    )
+                    returned = self._ids_from(r)
+                    out_of_scope = returned - {ids["cover"]}
+                    assert not out_of_scope, (
+                        f"Single-picture token leaked ids {sorted(out_of_scope)} "
+                        f"via /pictures?fields=grid&{filter_param}=..."
+                    )
+                    # Positive: the granted picture is still served. The whole
+                    # point of the narrowing is to return this row and no other.
+                    assert returned == {ids["cover"]}, (
+                        f"In-scope picture {ids['cover']} was dropped from "
+                        f"/pictures?fields=grid&{filter_param}=...: {returned}"
+                    )
+                    # The grid projection carries file_path, so the leak handed
+                    # out on-disk locations of pictures that were never shared.
+                    paths = {row.get("file_path") for row in r.json()}
+                    assert paths == {"/home/owner/private/cover.png"}, (
+                        f"Grid rows exposed out-of-scope file paths: {paths}"
+                    )
+                finally:
+                    server.__exit__(None, None, None)
+
+    def test_picture_token_cannot_widen_the_stream_via_comfyui_filter(self):
+        """``/pictures/stream`` is a separate handler and leaked identically.
+
+        Both the ``fields=grid`` form and the explicit ``stack_leaders_only``
+        form are exercised, because the stream endpoint reaches the collapsed
+        query by two different routes.
+        """
+        for filter_param in self.FILTER_PARAMS:
+            with tempfile.TemporaryDirectory() as tmp:
+                server, _owner, ids, token = self._setup(tmp)
+                try:
+                    value = self._filter_value(filter_param)
+                    for extra in (
+                        {"fields": "grid"},
+                        {"stack_leaders_only": "true"},
+                    ):
+                        r = self._scoped_get(
+                            server,
+                            token,
+                            "/pictures/stream",
+                            {"batch_limit": 500, filter_param: value, **extra},
+                        )
+                        returned = self._ids_from(r)
+                        out_of_scope = returned - {ids["cover"]}
+                        assert not out_of_scope, (
+                            f"Single-picture token leaked ids "
+                            f"{sorted(out_of_scope)} via /pictures/stream "
+                            f"({extra}, {filter_param})"
+                        )
+                        assert returned == {ids["cover"]}, (
+                            f"In-scope picture {ids['cover']} was dropped from "
+                            f"/pictures/stream ({extra}, {filter_param}): "
+                            f"{returned}"
+                        )
+                finally:
+                    server.__exit__(None, None, None)
+
+    def test_picture_token_cannot_widen_the_count_via_comfyui_filter(self):
+        """``/pictures/count`` leaked the size of the library, not just rows.
+
+        The count runs ``SELECT COUNT(*)`` over the same WHERE clause, so the
+        escaped ``OR`` inflated it to every member of every matching stack --
+        5 instead of 1 in this fixture.  Nothing in the suite asserted on that
+        number before.
+        """
+        for filter_param in self.FILTER_PARAMS:
+            with tempfile.TemporaryDirectory() as tmp:
+                server, _owner, ids, token = self._setup(tmp)
+                try:
+                    r = self._scoped_get(
+                        server,
+                        token,
+                        "/pictures/count",
+                        {
+                            "stack_leaders_only": "true",
+                            filter_param: self._filter_value(filter_param),
+                        },
+                    )
+                    assert r.status_code == 200, r.text
+                    count = r.json()["count"]
+                    # Exactly one: the granted picture matches the filter, so
+                    # this pins both directions at once -- an inflated count is
+                    # the leak, a zero count is over-blocking.
+                    assert count == 1, (
+                        f"Single-picture token saw count={count} for "
+                        f"{filter_param}; expected 1 (only picture "
+                        f"{ids['cover']} is in scope)"
+                    )
+                finally:
+                    server.__exit__(None, None, None)
+
+    def test_owner_still_gets_the_legitimate_stack_expansion(self):
+        """The over-blocking direction: the feature the fragment exists for.
+
+        For an unscoped owner the collapsed grid must return one tile per
+        matching stack: ``cover`` (the leader itself matches), ``quiet_cover``
+        (only a non-leader member matches -- the member branch) and ``lone``.
+        Tightening the parentheses must not cost the member branch its reach.
+        """
+        for filter_param in self.FILTER_PARAMS:
+            with tempfile.TemporaryDirectory() as tmp:
+                server, owner_client, ids, _token = self._setup(tmp)
+                try:
+                    value = self._filter_value(filter_param)
+                    r = owner_client.get(
+                        f"{API}/pictures",
+                        params={"fields": "grid", "limit": 500, filter_param: value},
+                    )
+                    returned = self._ids_from(r)
+                    expected = {ids["cover"], ids["quiet_cover"], ids["lone"]}
+                    assert returned == expected, (
+                        f"Owner's collapsed grid for {filter_param} returned "
+                        f"{sorted(returned)}, expected {sorted(expected)} "
+                        "(one leader per matching stack, plus the loose match)"
+                    )
+                    r = owner_client.get(
+                        f"{API}/pictures/count",
+                        params={"stack_leaders_only": "true", filter_param: value},
+                    )
+                    assert r.status_code == 200, r.text
+                    assert r.json()["count"] == len(expected), (
+                        f"Owner count for {filter_param} disagrees with the "
+                        f"row set: {r.json()['count']} vs {len(expected)}"
+                    )
+                finally:
+                    server.__exit__(None, None, None)
+
+    def test_set_token_cannot_widen_via_comfyui_filter_on_a_late_stack(self):
+        """The set-scoped straddle: pictures stacked *after* set membership.
+
+        Adding a picture to a set pulls its whole stack in (membership is
+        stack-atomic), so a set-scoped token normally cannot straddle a stack at
+        all.  It can when the stack is formed afterwards, which is exactly what
+        an auto-stack pass does to an already-shared set.  Same three routes,
+        same expectation: only the set's own picture comes back.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Server(f"{tmp}/server-config.json")
+            server.__enter__()
+            try:
+                owner_client = TestClient(server.api, raise_server_exceptions=True)
+                r = owner_client.post(
+                    f"{API}/login", json={"username": "owner", "password": "ownerpass1"}
+                )
+                assert r.status_code == 200, r.text
+
+                # Order matters: seed loose pictures, put ONE of them in the set
+                # while nothing is stacked (so the stack-atomic add pulls in
+                # nothing), and only then form the stacks around it.
+                ids = self._seed_pictures(server)
+
+                r = owner_client.post(f"{API}/picture_sets", json={"name": "Shared"})
+                assert r.status_code == 200, r.text
+                set_id = r.json()["picture_set"]["id"]
+
+                r = owner_client.post(
+                    f"{API}/picture_sets/{set_id}/members/{ids['cover']}"
+                )
+                assert r.status_code in {200, 201, 204}, r.text
+
+                self._form_stacks(server, ids)
+
+                r = owner_client.post(
+                    f"{API}/users/me/token",
+                    json={
+                        "description": "set share",
+                        "scope": "READ",
+                        "resource_type": "picture_set",
+                        "resource_id": set_id,
+                    },
+                )
+                assert r.status_code == 200, r.text
+                token = r.json()["token"]
+
+                # Sanity: without the ComfyUI filter the token already sees only
+                # the cover, so any widening below is the filter's doing.
+                baseline = self._ids_from(
+                    self._scoped_get(
+                        server, token, "/pictures", {"fields": "grid", "limit": 500}
+                    )
+                )
+                assert baseline == {ids["cover"]}, (
+                    f"Set token's unfiltered grid is not the straddle shape this "
+                    f"test needs: {baseline}"
+                )
+
+                for filter_param in self.FILTER_PARAMS:
+                    value = self._filter_value(filter_param)
+                    returned = self._ids_from(
+                        self._scoped_get(
+                            server,
+                            token,
+                            "/pictures",
+                            {"fields": "grid", "limit": 500, filter_param: value},
+                        )
+                    )
+                    assert returned == {ids["cover"]}, (
+                        f"Set token widened via /pictures {filter_param}: "
+                        f"{sorted(returned)}"
+                    )
+
+                    returned = self._ids_from(
+                        self._scoped_get(
+                            server,
+                            token,
+                            "/pictures/stream",
+                            {"fields": "grid", "batch_limit": 500, filter_param: value},
+                        )
+                    )
+                    assert returned == {ids["cover"]}, (
+                        f"Set token widened via /pictures/stream {filter_param}: "
+                        f"{sorted(returned)}"
+                    )
+
+                    r = self._scoped_get(
+                        server,
+                        token,
+                        "/pictures/count",
+                        {"stack_leaders_only": "true", filter_param: value},
+                    )
+                    assert r.status_code == 200, r.text
+                    assert r.json()["count"] == 1, (
+                        f"Set token widened /pictures/count for {filter_param}: "
+                        f"{r.json()['count']}"
                     )
             finally:
                 server.__exit__(None, None, None)
