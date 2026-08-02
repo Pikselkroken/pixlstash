@@ -18,7 +18,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
+import { useDedupStore } from "../../stores/useDedupStore.js";
 import { ref, computed } from "vue";
+
+const { dedupStoreMock } = vi.hoisted(() => ({
+  dedupStoreMock: { scan: { status: "idle" } },
+}));
+
+vi.mock("../../stores/useDedupStore.js", () => ({
+  useDedupStore: () => dedupStoreMock,
+}));
 
 // One seam for every network call: all `src/api/*` modules go through this
 // axios instance, so counting its GETs counts the grid's actual queries.
@@ -218,6 +227,32 @@ describe("the person suggestion search is dropped by a view change", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(wrapper.vm.searchResultsActive).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("character navigation while duplicate scanning continues", () => {
+  it("issues the singleton character grid request without waiting for the scan", async () => {
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    apiGet.mockClear();
+    useDedupStore().scan = {
+      status: "running",
+      scanned: 5000,
+      total: 12098,
+    };
+
+    useSelectionStore().selectedCharacter = 42;
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const gridUrls = apiGet.mock.calls
+      .map(([url]) => String(url ?? ""))
+      .filter(
+        (url) =>
+          url.includes("/pictures/count") || url.includes("/pictures/stream"),
+      );
+    expect(gridUrls.some((url) => url.includes("character_id=42"))).toBe(true);
     wrapper.unmount();
   });
 });

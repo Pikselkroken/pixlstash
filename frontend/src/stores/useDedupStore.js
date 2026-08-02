@@ -47,7 +47,7 @@
 // user's `1`-`9` and `X` choices.
 
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import {
   getPolicy,
   listGroups,
@@ -218,7 +218,11 @@ function storedSizeLevel() {
 
 /** The empty scan record, so consumers never branch on `null`. */
 const IDLE_SCAN = Object.freeze({
+  scanId: null,
+  scopeKey: null,
   status: "idle",
+  tiers: [],
+  threshold: null,
   scanned: 0,
   total: 0,
   percent: 100,
@@ -258,16 +262,27 @@ export function scopeKey(type, id) {
  */
 function normalizeScan(raw) {
   if (!raw) return { ...IDLE_SCAN };
+  const status = raw.status || "idle";
   const scanned = Number(raw.scanned_pictures) || 0;
   const total = Number(raw.total_pictures) || 0;
   const buckets = Number(raw.scanned_buckets) || 0;
   const totalBuckets = Number(raw.total_buckets) || 0;
-  let percent = 100;
-  if (total > 0) percent = Math.round((scanned / total) * 100);
-  else if (totalBuckets > 0)
+  // Status is the terminal truth. A fresh pending/running scan has no totals
+  // yet, which means "unknown", not "100%". Near scans can finish their
+  // picture enumeration before their candidate batches, so once the backend
+  // publishes bucket counters those are the authoritative progress slice.
+  let percent = RUNNING_STATUSES.has(status) ? 0 : 100;
+  if (totalBuckets > 0)
     percent = Math.round((buckets / totalBuckets) * 100);
+  else if (total > 0) percent = Math.round((scanned / total) * 100);
   return {
-    status: raw.status || "idle",
+    scanId: raw.scan_id ?? null,
+    scopeKey: raw.scope_key ?? null,
+    status,
+    tiers: Array.isArray(raw.tiers) ? [...raw.tiers] : [],
+    threshold: Number.isFinite(Number(raw.threshold))
+      ? Number(raw.threshold)
+      : null,
     scanned,
     total,
     percent: Math.max(0, Math.min(100, percent)),
@@ -369,6 +384,14 @@ export const useDedupStore = defineStore("dedup", () => {
   // --- Per-scope counts, for the context menus ----------------------------
   const scopeCounts = ref({});
   const scopeCountsInFlight = new Map();
+  // Concurrent mounts/router syncs for the same destination share the whole
+  // open operation. Without this, both could observe the same completed scan
+  // and enqueue two fresh passes before either response reached the store.
+  const openQueueInFlight = new Map();
+  // Explicit tier/threshold gestures can race a route open too. The backend is
+  // also idempotent for equivalent active scans; this client layer avoids the
+  // duplicate round trip in the first place.
+  const scanRequestInFlight = new Map();
 
   // --- The queue ----------------------------------------------------------
   const scopeType = ref(GLOBAL_SCOPE);
@@ -1031,7 +1054,7 @@ export const useDedupStore = defineStore("dedup", () => {
     }
   }
 
-  async function openQueue({
+  async function openQueueOnce({
     type = GLOBAL_SCOPE,
     id = null,
     label = "",
@@ -1075,18 +1098,72 @@ export const useDedupStore = defineStore("dedup", () => {
     // its filter params — while the real navigation from the params was still
     // in flight, so the params were dropped for good.
     filtersRestored.value = true;
-    // Opening the queue IS the scan trigger (design contract: the queue opens
-    // over whatever has been found while the banner streams progress). The
-    // group cache only fills when a scan runs; without this the queue reads an
-    // empty cache forever and no tier or threshold setting can change that.
-    await triggerScan();
+    // A poll belongs to the old scope/policy. Stop it before adopting this
+    // destination; the active scan discovered below starts the right one.
+    stopScanPoll();
+    // Read the durable queue and its scan progress before requesting work, so
+    // rows already found render before a potentially long pass begins.
     await loadFirstPage();
+    const request = currentScanRequest();
+    if (RUNNING_STATUSES.has(scan.value.status) && scanHasPolicy(scan.value)) {
+      if (!scanMatchesRequest(scan.value, request)) {
+        // The backend refuses a different policy with 409 rather than mutating
+        // active work. Waiting here avoids that known-busy request; completion
+        // gets exactly one retry for the policy the user actually asked for.
+        deferScanUntilCurrentCompletes(request);
+      }
+      startScanPoll();
+    } else {
+      // `complete` is progress, not a freshness proof: pictures may have been
+      // imported since it finished. Ask the backend, which joins equivalent
+      // active work and starts completed/failed rows anew.
+      await triggerScan(request);
+    }
     refreshCounts();
     // Do not prefetch the Mixed stacks page here. The first startup after a
     // cohesion-cache migration is necessarily cold, and that endpoint ranks
     // every live stack before paging. Launching it from the ordinary queue made
     // an optional page occupy the serial database worker during startup. The
     // page loads on showMixedStacks(); until then its warning chips are absent.
+  }
+
+  /**
+   * Point the queue at one destination, sharing concurrent equivalent opens.
+   *
+   * @param {Object} [options]
+   * @returns {Promise<void>}
+   */
+  function openQueue(options = {}) {
+    const normalized = {
+      type:
+        !options.type || options.type === "library"
+          ? GLOBAL_SCOPE
+          : options.type,
+      id: options.id ?? null,
+      label: options.label ?? "",
+      icon: options.icon ?? "",
+      filters: options.filters ?? null,
+    };
+    const key = JSON.stringify({
+      type: normalized.type,
+      id: normalized.id,
+      filters: normalized.filters
+        ? {
+            near: normalized.filters.near ?? null,
+            embedding: normalized.filters.embedding ?? null,
+            threshold: normalized.filters.threshold ?? null,
+            decided: normalized.filters.decided ?? null,
+            verdicts: normalized.filters.verdicts ?? null,
+          }
+        : null,
+    });
+    const joined = openQueueInFlight.get(key);
+    if (joined) return joined;
+    const request = openQueueOnce(normalized).finally(() => {
+      if (openQueueInFlight.get(key) === request) openQueueInFlight.delete(key);
+    });
+    openQueueInFlight.set(key, request);
+    return request;
   }
 
   /**
@@ -1977,19 +2054,31 @@ export const useDedupStore = defineStore("dedup", () => {
       // id, so the operation log coalesces the verdicts into one undo step.
       const gestureId = batchId || newOperationBatchId();
       let last = null;
+      let recorded = false;
+      const stackedTargets = [];
       const gestureSkipped = [];
       for (const target of targets) {
-        last = await stackOne(target, { batchId: gestureId });
+        last = await stackOne(target, {
+          batchId: gestureId,
+          deferCommit: true,
+        });
         // Stop on the first failure rather than half-applying silently; the
         // failed group and the rest stay selected and in the queue. A PARTIAL
         // success is not a failure: the group was decided, so the run carries
         // on and the skips are reported once for the whole gesture.
-        if (!last) return null;
+        if (!last) {
+          commitStackedGroups(stackedTargets);
+          if (recorded) narrateVerdictOperation();
+          return null;
+        }
+        stackedTargets.push(target);
+        if (last.batch_id) recorded = true;
         gestureSkipped.push(...(last.skipped ?? []));
       }
+      commitStackedGroups(stackedTargets);
       clearSelection();
       // One receipt per GESTURE, not per group: the batch is one undo step.
-      if (last?.batch_id) narrateVerdictOperation();
+      if (recorded) narrateVerdictOperation();
       return { ...last, gesture_skipped: gestureSkipped };
     }
     const result = await stackOne(group, { batchId });
@@ -1999,7 +2088,7 @@ export const useDedupStore = defineStore("dedup", () => {
       : result;
   }
 
-  async function stackOne(group, { batchId } = {}) {
+  async function stackOne(group, { batchId, deferCommit = false } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
@@ -2012,11 +2101,7 @@ export const useDedupStore = defineStore("dedup", () => {
         excludedPictureIds: effectiveExcludedFor(group),
         batchId,
       });
-      stackedCount.value += 1;
-      removeGroup(group.signature);
-      openCount.value = Math.max(0, openCount.value - 1);
-      invalidateScopeCounts();
-      reconcileCounts();
+      if (!deferCommit) commitStackedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
@@ -2025,6 +2110,68 @@ export const useDedupStore = defineStore("dedup", () => {
     } finally {
       busy.value = false;
     }
+  }
+
+  /**
+   * Apply one settled stack gesture to the visible queue in one assignment.
+   *
+   * Bulk requests stay sequential for the server's operation ordering, but a
+   * response is not permission to make the list jump while more selected rows
+   * are still being processed. Successful targets are therefore collected and
+   * committed together after the sequence settles. On a refusal, only the
+   * successes leave; the failed target and every unattempted target remain
+   * selected for an honest retry.
+   *
+   * @param {Object[]} stackedGroups
+   */
+  function commitStackedGroups(stackedGroups) {
+    const signatures = new Set(
+      stackedGroups.map((group) => group?.signature).filter(Boolean),
+    );
+    if (!signatures.size) return;
+    const firstLocal = groups.value.findIndex((group) =>
+      signatures.has(group.signature),
+    );
+    const removed = groups.value.filter((group) =>
+      signatures.has(group.signature),
+    ).length;
+    if (!removed) return;
+
+    groups.value = groups.value.filter(
+      (group) => !signatures.has(group.signature),
+    );
+    selectedSignatures.value = new Set(
+      [...selectedSignatures.value].filter(
+        (signature) => !signatures.has(signature),
+      ),
+    );
+    coverChoices.value = Object.fromEntries(
+      Object.entries(coverChoices.value).filter(
+        ([signature]) => !signatures.has(signature),
+      ),
+    );
+    exclusions.value = Object.fromEntries(
+      Object.entries(exclusions.value).filter(
+        ([signature]) => !signatures.has(signature),
+      ),
+    );
+    if (nextCursor.value === null) {
+      nextOffset.value = Math.max(0, nextOffset.value - removed);
+    }
+    total.value = Math.max(0, total.value - removed);
+    stackedCount.value += removed;
+    openCount.value = Math.max(0, openCount.value - removed);
+    invalidateScopeCounts();
+    reconcileCounts();
+
+    if (!groups.value.length) {
+      focusIndex.value = -1;
+      if (hasMore.value) loadMore();
+      else if (windowStart.value > 0) loadPrevious();
+      return;
+    }
+    const absolute = windowStart.value + Math.max(0, firstLocal);
+    setFocus(Math.min(absolute, windowStart.value + groups.value.length - 1));
   }
 
   /**
@@ -2231,22 +2378,95 @@ export const useDedupStore = defineStore("dedup", () => {
     if (mixedLoaded.value || showingMixed.value) await loadMixedStacks();
   }
 
+  /** Snapshot the scope and policy a scan request must retain across a retry. */
+  function currentScanRequest() {
+    return {
+      policy: { ...policyArgs.value },
+      scopeType: scopeType.value,
+      scopeId: scopeId.value,
+    };
+  }
+
+  function scanRequestKey(request) {
+    return JSON.stringify({
+      scopeType: request.scopeType,
+      scopeId: request.scopeId ?? null,
+      nearEnabled: Boolean(request.policy?.nearEnabled),
+      embeddingEnabled: Boolean(request.policy?.embeddingEnabled),
+      threshold: Number(request.policy?.threshold),
+    });
+  }
+
+  function requestedTiers(request) {
+    const tiers = ["exact"];
+    if (request.policy?.nearEnabled) tiers.push("near");
+    if (request.policy?.embeddingEnabled) tiers.push("embedding");
+    return tiers;
+  }
+
+  function scanHasPolicy(active) {
+    return (
+      Array.isArray(active?.tiers) &&
+      active.tiers.length > 0 &&
+      Number.isFinite(active?.threshold)
+    );
+  }
+
+  function scanMatchesRequest(active, request) {
+    const wanted = requestedTiers(request);
+    return (
+      active.tiers.length === wanted.length &&
+      active.tiers.every((tier, index) => tier === wanted[index]) &&
+      Number(active.threshold) === Number(request.policy?.threshold)
+    );
+  }
+
+  let deferredScanRequest = null;
+
+  function deferScanUntilCurrentCompletes(request) {
+    deferredScanRequest = { request, retriesRemaining: 1 };
+  }
+
+  function busyScanFrom(err) {
+    const detail = err?.response?.data?.detail;
+    return detail?.code === "dedup_scan_busy" ? detail.active_scan : null;
+  }
+
   /**
-   * Queue a scan for the current scope and adopt its progress.
-   * @returns {Promise<void>}
+   * Queue a scan for one captured scope/policy and adopt its progress.
+   * @returns {Promise<Object|null>}
    */
-  async function triggerScan() {
-    try {
-      const data = await startScan({
-        policy: policyArgs.value,
-        scopeType: scopeType.value,
-        scopeId: scopeId.value,
-      });
-      scan.value = normalizeScan(data);
-      startScanPoll();
-    } catch (err) {
-      console.warn("[dedup] failed to start a duplicate scan", err);
-    }
+  async function triggerScan(
+    request = currentScanRequest(),
+    { deferOnBusy = true } = {},
+  ) {
+    const key = scanRequestKey(request);
+    const joined = scanRequestInFlight.get(key);
+    if (joined) return joined;
+    const pending = (async () => {
+      try {
+        const data = await startScan(request);
+        scan.value = normalizeScan(data);
+        startScanPoll();
+        return data;
+      } catch (err) {
+        const active = busyScanFrom(err);
+        if (active) {
+          scan.value = normalizeScan(active);
+          if (deferOnBusy) deferScanUntilCurrentCompletes(request);
+          startScanPoll();
+          return active;
+        }
+        console.warn("[dedup] failed to start a duplicate scan", err);
+        return null;
+      }
+    })().finally(() => {
+      if (scanRequestInFlight.get(key) === pending) {
+        scanRequestInFlight.delete(key);
+      }
+    });
+    scanRequestInFlight.set(key, pending);
+    return pending;
   }
 
   // --- Scan progress polling ----------------------------------------------
@@ -2257,22 +2477,46 @@ export const useDedupStore = defineStore("dedup", () => {
   // surface on their own, and a triage already in progress is never yanked
   // back to the top.
   let scanPollTimer = null;
+  let scanPollGeneration = 0;
+  let scanPollTickGeneration = null;
 
-  function stopScanPoll() {
+  function stopScanPoll({ discardDeferred = true } = {}) {
+    scanPollGeneration += 1;
     if (scanPollTimer) {
       clearInterval(scanPollTimer);
       scanPollTimer = null;
     }
+    if (discardDeferred) deferredScanRequest = null;
   }
 
   function startScanPoll() {
     if (scanPollTimer || !isScanning.value) return;
+    const generation = ++scanPollGeneration;
     scanPollTimer = setInterval(async () => {
-      await refreshCounts();
-      if (!groups.value.length) await loadFirstPage();
-      if (!isScanning.value) stopScanPoll();
+      if (scanPollTickGeneration === generation) return;
+      scanPollTickGeneration = generation;
+      try {
+        await refreshCounts();
+        if (generation !== scanPollGeneration) return;
+        if (!groups.value.length) await loadFirstPage();
+        if (generation !== scanPollGeneration) return;
+        if (!isScanning.value) {
+          const deferred = deferredScanRequest;
+          deferredScanRequest = null;
+          stopScanPoll({ discardDeferred: false });
+          if (deferred?.retriesRemaining > 0) {
+            await triggerScan(deferred.request, { deferOnBusy: false });
+          }
+        }
+      } finally {
+        if (scanPollTickGeneration === generation) {
+          scanPollTickGeneration = null;
+        }
+      }
     }, 2000);
   }
+
+  onScopeDispose(stopScanPoll);
 
   /**
    * Preview the bulk auto-stack of the exact tier.

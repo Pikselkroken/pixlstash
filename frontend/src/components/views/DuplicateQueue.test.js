@@ -1935,6 +1935,58 @@ describe("DuplicateQueue — multi-select", () => {
     expect(batchIds[1]).toBe(batchIds[0]);
   });
 
+  it("keeps rows and announcement stable until the selected stack gesture settles", async () => {
+    const { wrapper, store } = await mountQueue([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+    ]);
+    const rows = wrapper.findAll(".grow");
+    await rows[0].trigger("click", { ctrlKey: true });
+    await rows[2].trigger("click", { ctrlKey: true });
+    let resolveFirst;
+    let resolveSecond;
+    stackGroup
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    await wrapper.findAll(".grow")[0].find(".gbtn--stack").trigger("click");
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-visible" });
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+    await wrapper.vm.$nextTick();
+
+    expect(store.groups.map((entry) => entry.signature)).toEqual([
+      "g1",
+      "g2",
+      "g3",
+    ]);
+    expect(wrapper.findAll(".grow")).toHaveLength(3);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).not.toContain(
+      "Stacked",
+    );
+
+    resolveSecond({ signature: "g3", batch_id: "cli-visible" });
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+    expect(store.groups.map((entry) => entry.signature)).toEqual(["g2"]);
+    expect(wrapper.findAll(".grow")).toHaveLength(1);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Stacked 2 groups",
+    );
+    wrapper.unmount();
+  });
+
   it("shift+click selects the range from the focus, Escape clears it", async () => {
     const { wrapper, store } = await mountQueue([
       group("g1"),
@@ -3246,18 +3298,22 @@ describe("DuplicateQueue: the two-way shortcut", () => {
 // ── The route from the queue-clear screen to the stacks ────────────────────
 //
 // The end-of-task surface is the one place this is offered: the toolbar would
-// put it in front of someone mid-triage. Two properties are load-bearing and
-// are pinned here: the gate is a fact about the LIBRARY, not about this
-// session's tally, and the shortcut goes to a PLACE rather than to the action.
+// put it in front of someone mid-triage. The library fact arrives lazily with
+// the optional Mixed stacks read, so a cold queue never starts an all-stack
+// score just to decide whether to show a shortcut.
 describe("DuplicateQueue: the route to the stacks", () => {
   /** Mount straight onto the queue-clear screen. */
-  async function mountCleared({ liveStackCount = 209 } = {}) {
+  async function mountCleared({ liveStackCount = 209, loadStackFacts = true } = {}) {
     listMixedStacks.mockResolvedValue(
       mixedPage([], { live_stack_count: liveStackCount }),
     );
     const { wrapper, store } = await mountQueue([]);
     await flushPromises();
     expect(wrapper.text()).toContain("Queue clear");
+    if (loadStackFacts) {
+      await store.loadMixedStacks();
+      await flushPromises();
+    }
     return { wrapper, store };
   }
 
@@ -3268,9 +3324,15 @@ describe("DuplicateQueue: the route to the stacks", () => {
       .find((b) => b.text().includes("Review your stacks"));
   }
 
-  // The owner's library holds 160 stacks that predate the feature. Gating on
-  // this session's verdicts would hide the route from exactly that user.
-  it("is offered on a cleared queue that decided nothing this session", async () => {
+  it("does not cold-load the optional all-stack facts on queue startup", async () => {
+    const { wrapper } = await mountCleared({ loadStackFacts: false });
+    expect(listMixedStacks).not.toHaveBeenCalled();
+    expect(stacksButton(wrapper)).toBeUndefined();
+  });
+
+  // Once the optional page has supplied the library fact, the route is not
+  // gated on this session's verdict tally: old stacks count too.
+  it("is offered after the library's stack facts have been loaded", async () => {
     const { wrapper, store } = await mountCleared();
     expect(store.stackedCount).toBe(0);
     expect(stacksButton(wrapper)).toBeTruthy();

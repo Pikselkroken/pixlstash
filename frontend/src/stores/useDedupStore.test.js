@@ -1719,6 +1719,47 @@ describe("useDedupStore — multi-select", () => {
     expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
   });
 
+  it("keeps the selected queue stable until every bulk stack request settles", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
+    store.toggleSelected(0);
+    store.toggleSelected(2);
+    const before = store.groups.map((g) => g.signature);
+    const beforeFocus = store.focusIndex;
+    let resolveFirst;
+    let resolveSecond;
+    stackGroup
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const pending = store.stack(store.groups[2]);
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-one", skipped: [] });
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+
+    // The first server verdict landed, but the visible gesture has not.
+    expect(store.groups.map((g) => g.signature)).toEqual(before);
+    expect(store.selectionCount).toBe(2);
+    expect(store.focusIndex).toBe(beforeFocus);
+
+    resolveSecond({ signature: "g3", batch_id: "cli-one", skipped: [] });
+    await pending;
+    expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
+    expect(store.selectionCount).toBe(0);
+    expect(store.focusIndex).toBe(0);
+    expect(getCounts).toHaveBeenCalledTimes(1);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps every selected group separate in one gesture", async () => {
     const store = await openWith([group("g1"), group("g2")]);
     store.toggleSelected(0);
@@ -1741,18 +1782,47 @@ describe("useDedupStore — multi-select", () => {
     expect(store.selectionCount).toBe(2);
   });
 
-  it("stops at the first failure and keeps the unresolved groups selected", async () => {
-    const store = await openWith([group("g1"), group("g2")]);
+  it("commits earlier successes once after a bulk failure and keeps unresolved groups selected", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
     store.toggleSelected(0);
-    store.toggleSelected(1);
+    store.selectRange(2);
+    let resolveFirst;
+    let rejectSecond;
     stackGroup
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error("locked"));
-    const result = await store.stack(store.groups[0]);
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSecond = reject;
+          }),
+      );
+
+    const pending = store.stack(store.groups[0]);
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-partial" });
+    await vi.waitFor(() => expect(rejectSecond).toBeTypeOf("function"));
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2", "g3"]);
+    expect(store.selectionCount).toBe(3);
+    expect(store.focusIndex).toBe(2);
+
+    rejectSecond(new Error("locked"));
+    const result = await pending;
     expect(result).toBeNull();
-    // g1 landed and left; g2 failed and stays both queued and selected.
-    expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
+    // g1 landed; g2 failed and g3 was never attempted. Both remain selected.
+    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(store.groups.map((g) => g.signature)).toEqual(["g2", "g3"]);
     expect(store.isSelected("g2")).toBe(true);
+    expect(store.isSelected("g3")).toBe(true);
+    expect(store.focusIndex).toBe(0);
+    expect(getCounts).toHaveBeenCalledTimes(1);
+    // The successful first verdict is still one undoable batch and earns one
+    // receipt even though a later selected group was refused.
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
   });
 
   it("clears the selection when the list reloads", async () => {
@@ -1898,14 +1968,251 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
 });
 
 describe("useDedupStore — scans and bulk auto-stack", () => {
-  it("opening the queue queues a scan: the cache only fills when one runs", async () => {
-    // The regression this pins: openQueue read the (empty) cache and nothing
-    // ever requested a scan, so the queue stayed empty no matter which tiers
-    // or threshold the user set.
-    servePage([]);
+  it("keeps a pending person scan queued with unknown totals", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = {
+        status: "pending",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 0,
+        total_pictures: 0,
+        scanned_buckets: 0,
+        total_buckets: 0,
+      };
+      servePage([], {
+        scan: pending,
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: pending,
+      });
+      const store = useDedupStore();
+      await store.openQueue({ type: "character", id: 7, label: "Ada" });
+      expect(listGroups).toHaveBeenCalledWith(
+        expect.objectContaining({ scopeType: "character", scopeId: 7 }),
+      );
+      expect(store.scan).toMatchObject({ status: "pending", percent: 0 });
+      expect(store.isScanning).toBe(true);
+      expect(startScan).not.toHaveBeenCalled();
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses candidate-batch progress for a running person scan", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 3,
+        total_pictures: 3,
+        scanned_buckets: 1,
+        total_buckets: 4,
+      };
+      servePage([], {
+        scan: running,
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: running,
+      });
+      const store = useDedupStore();
+      await store.openQueue({ type: "character", id: 7, label: "Ada" });
+      expect(store.scan).toMatchObject({
+        status: "running",
+        scanned: 3,
+        total: 3,
+        buckets: 1,
+        totalBuckets: 4,
+        percent: 25,
+      });
+      expect(store.isScanning).toBe(true);
+      expect(startScan).not.toHaveBeenCalled();
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opening an unscanned queue queues its first scan", async () => {
+    servePage([], { scan: { status: "idle" } });
     const store = useDedupStore();
     await store.openQueue({});
     expect(startScan).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.invocationCallOrder[0]).toBeLessThan(
+      startScan.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not mistake completed progress for proof the library is still fresh", async () => {
+    servePage([], {
+      scan: { status: "complete", scanned_pictures: 12098, total_pictures: 12098 },
+    });
+    const store = useDedupStore();
+    await store.openQueue({});
+    expect(startScan).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares concurrent equivalent queue opens", async () => {
+    let resolvePage;
+    listGroups.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    startScan.mockResolvedValue({ status: "pending" });
+    const store = useDedupStore();
+    const first = store.openQueue({ type: "global" });
+    const second = store.openQueue({ type: "global" });
+    await vi.waitFor(() => expect(resolvePage).toBeTypeOf("function"));
+    resolvePage({ groups: [], total: 0, scan: { status: "idle" } });
+    await Promise.all([first, second]);
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(startScan).toHaveBeenCalledTimes(1);
+    store.stopScanPoll();
+  });
+
+  it("joins an equivalent active scan without posting another request", async () => {
+    vi.useFakeTimers();
+    try {
+      servePage([group("g1")], {
+        scan: {
+          status: "running",
+          tiers: ["exact"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: {
+          status: "running",
+          tiers: ["exact"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      expect(startScan).not.toHaveBeenCalled();
+      expect(store.isScanning).toBe(true);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a different-policy active scan once after it completes", async () => {
+    vi.useFakeTimers();
+    try {
+      servePage([group("g1")], {
+        scan: {
+          status: "running",
+          tiers: ["exact", "near"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete" },
+      });
+      startScan.mockResolvedValue({ status: "pending" });
+      const store = useDedupStore();
+      await store.openQueue({});
+      expect(startScan).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(startScan).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(startScan).toHaveBeenCalledTimes(1);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adopts a 409 busy scan and retries the requested policy only once", async () => {
+    vi.useFakeTimers();
+    try {
+      startScan
+        .mockRejectedValueOnce({
+          response: {
+            data: {
+              detail: {
+                code: "dedup_scan_busy",
+                message: "another policy is active",
+                active_scan: {
+                  status: "running",
+                  tiers: ["exact", "near"],
+                  threshold: 0.9,
+                },
+              },
+            },
+          },
+        })
+        .mockResolvedValueOnce({ status: "pending" });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete" },
+      });
+      const store = useDedupStore();
+      await store.triggerScan();
+      expect(store.isScanning).toBe(true);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(startScan).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(startScan).toHaveBeenCalledTimes(2);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops scan polling when the store is disposed", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 1,
+        total_pictures: 10,
+      };
+      servePage([group("g1")], { scan: active });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: active,
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      await vi.advanceTimersByTimeAsync(0);
+      getCounts.mockClear();
+      store.$dispose();
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(getCounts).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rescans when a tier is enabled, not when one is disabled", async () => {

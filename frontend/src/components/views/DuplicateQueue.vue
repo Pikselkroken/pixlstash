@@ -407,7 +407,7 @@
     </div>
 
     <div v-else-if="store.loading" class="dq-state" role="status">
-      Looking for duplicates.
+      Opening duplicate queue.
     </div>
 
     <div v-else-if="store.hasGroups" class="queue">
@@ -1511,6 +1511,22 @@ async function onStack(group) {
       reportPartialStack(result, pictures);
       return;
     }
+    const unresolved = targets.filter((target) =>
+      store.groups.some((queued) => queued.signature === target.signature),
+    );
+    const completed = targets.length - unresolved.length;
+    if (completed > 0) {
+      const detail = serverDetail(store.error);
+      const because = detail ? ` ${detail}` : "";
+      const sentence = `Stacked ${completed} of ${targets.length} groups.${because} The remaining ${unresolved.length} ${unresolved.length === 1 ? "group is" : "groups are"} still selected, and one undo reverses the completed ${completed === 1 ? "stack" : "stacks"}.`;
+      announcement.value = sentence;
+      noticeStore.error(sentence);
+      flashLockedPictures(
+        lockedPictureIds(store.error),
+        unresolved[0]?.signature ?? "",
+      );
+      return;
+    }
     reportVerdictFailure("stack those groups", store.error, group);
     return;
   }
@@ -1934,11 +1950,11 @@ function onToggleDecided() {
  * Does the LIBRARY hold a stack worth looking at?
  *
  * `mixedLiveStackCount` is the server's own count of live stacks with two or
- * more members, and the store loads it on every queue open (the deck badges
- * need the same read), so this is a standing fact about the vault rather than a
- * tally of what this session decided. That distinction is the point: a user can
- * arrive with hundreds of stacks built long before the duplicate queue existed,
- * and gating the route on today's verdicts would hide it from exactly them.
+ * more members. It arrives with the optional Mixed stacks page rather than on
+ * ordinary queue startup: after a cold cohesion-cache migration that list can
+ * score the whole library, so a shortcut must not make the image grid wait for
+ * a page the user never opened. Once loaded it remains a library fact rather
+ * than a tally of what this session decided.
  */
 const hasLiveStacks = computed(() => store.mixedLiveStackCount > 0);
 

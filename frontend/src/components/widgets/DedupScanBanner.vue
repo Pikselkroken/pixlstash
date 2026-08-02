@@ -7,9 +7,9 @@
  * far the comparison has got, so a short list reads as "not finished yet"
  * rather than as "you have almost no duplicates".
  *
- * It removes itself the moment it stops being true, at 100 percent or as soon
- * as the scan leaves a running state. A banner that lingers at 99 percent after
- * a cancelled scan would be worse than no banner at all.
+ * It removes itself when the durable scan status becomes terminal. Counters
+ * may reach their totals while a final comparison phase is still running, so
+ * status — not a locally derived percentage — decides when the queue is done.
  */
 import { computed } from "vue";
 
@@ -36,15 +36,38 @@ const percent = computed(() => {
   return Math.min(100, Math.max(0, Math.round(value)));
 });
 
-const visible = computed(
-  () => RUNNING_STATES.has(props.scan?.status) && percent.value < 100,
-);
+const status = computed(() => props.scan?.status ?? "idle");
+const visible = computed(() => RUNNING_STATES.has(status.value));
+const pending = computed(() => status.value === "pending");
 
 /**
  * Tier 2 streams its groups in as each candidate bucket finishes, so a scope
  * whose picture total is not known yet still has honest progress to report.
  */
-const countsPictures = computed(() => Number(props.scan?.total) > 0);
+const countsBuckets = computed(
+  () =>
+    status.value === "running" && Number(props.scan?.totalBuckets) > 0,
+);
+const countsPictures = computed(
+  () =>
+    status.value === "running" &&
+    !countsBuckets.value &&
+    Number(props.scan?.total) > 0,
+);
+const determinate = computed(
+  () => countsBuckets.value || countsPictures.value,
+);
+const progressLabel = computed(() => {
+  if (pending.value) return "Duplicate scan queued";
+  if (countsBuckets.value) return "Duplicate candidate batches processed";
+  if (countsPictures.value) return "Duplicate pictures processed";
+  return "Duplicate scan starting";
+});
+const metaText = computed(() => {
+  if (pending.value) return "Queued";
+  if (!determinate.value) return "Starting";
+  return `${percent.value}%`;
+});
 const bucketsText = computed(() =>
   Number(props.scan?.buckets ?? 0).toLocaleString(),
 );
@@ -61,28 +84,43 @@ const totalText = computed(() =>
 </script>
 
 <template>
-  <div v-if="visible" class="scan-banner">
+  <div
+    v-if="visible"
+    class="scan-banner"
+    role="status"
+    aria-live="polite"
+    aria-atomic="true"
+  >
     <v-icon class="scan-banner__ico" size="18">mdi-radar</v-icon>
-    <p v-if="countsPictures" class="scan-banner__line">
+    <p v-if="pending" class="scan-banner__line">
+      Duplicate scan queued. Waiting for earlier scan work to finish.
+    </p>
+    <p v-else-if="countsBuckets" class="scan-banner__line">
+      Still scanning. <b>{{ bucketsText }}</b> of
+      <b>{{ totalBucketsText }}</b> candidate batches compared. Groups appear
+      here as they are found.
+    </p>
+    <p v-else-if="countsPictures" class="scan-banner__line">
       Still scanning. <b>{{ scannedText }}</b> of
       <b>{{ totalText }}</b> pictures compared. Groups appear here as they are
       found.
     </p>
     <p v-else class="scan-banner__line">
-      Still scanning. <b>{{ bucketsText }}</b> of
-      <b>{{ totalBucketsText }}</b> candidate batches compared. Groups appear
-      here as they are found.
+      Duplicate scan is starting. Preparing pictures to compare.
     </p>
-    <span class="scan-banner__meta">{{ percent }}%</span>
+    <span class="scan-banner__meta">{{ metaText }}</span>
     <span
       class="scan-banner__track"
       role="progressbar"
-      aria-label="Duplicate scan progress"
-      :aria-valuenow="percent"
+      :aria-label="progressLabel"
+      :aria-valuenow="determinate ? percent : null"
       aria-valuemin="0"
       aria-valuemax="100"
     >
-      <span class="scan-banner__fill" :style="{ width: `${percent}%` }"></span>
+      <span
+        class="scan-banner__fill"
+        :style="{ width: determinate ? `${percent}%` : '0%' }"
+      ></span>
     </span>
   </div>
 </template>
