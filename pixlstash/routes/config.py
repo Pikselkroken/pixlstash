@@ -151,6 +151,47 @@ def create_router(server) -> APIRouter:
         keep_models_in_memory: Optional[bool] = None
         max_vram_gb: Optional[float] = None
         check_for_updates: Optional[bool] = None
+        telemetry_send_install_id: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true, the anonymous install ID is sent with update "
+                "checks, which is what makes day-7/day-30 cohort retention "
+                "computable. Off by default on every install."
+            ),
+        )
+        telemetry_send_feature_usage: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true, which features were used and whether they "
+                "succeeded is sent. Never includes search queries themselves, "
+                "only their shape. Off by default on every install."
+            ),
+        )
+        telemetry_send_error_reports: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true, error and crash reports are sent. Off by default "
+                "on every install."
+            ),
+        )
+        telemetry_send_hardware_profile: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When true, a coarse environment profile is sent: OS, GPU "
+                "vendor, RAM bucket, install type, library-size bucket. Never "
+                "file paths or the library location. Off by default on every "
+                "install."
+            ),
+        )
+        telemetry_consent_prompted: Optional[bool] = Field(
+            default=None,
+            description=(
+                "True once the telemetry question has been put to the user. "
+                "Set by the consent dialog so the question is asked exactly "
+                "once and never re-raised. Declining is a recorded decision, "
+                "not an unanswered prompt."
+            ),
+        )
         show_keyboard_hint: Optional[bool] = None
         embed_watermark: Optional[bool] = None
         smart_score_penalised_tags: Optional[dict] = None

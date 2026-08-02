@@ -65,6 +65,34 @@ install.
 You can turn the update check off again at any time in Settings → Behaviour; once
 disabled, no further checks are made.
 
+## The anonymous install ID (stored locally, sent nowhere)
+
+PixlStash generates a random identifier for your installation the first time it
+starts, and stores it in a file called `install-id.json` next to your
+`server-config.json`. **This version sends it nowhere.** Nothing in PixlStash
+transmits it, and no setting in this version can make it transmit.
+
+It exists so that a future, opt-in feature can tell whether an installation is
+still in use, which plain visit counts cannot answer. That feature is not in this
+release, and if it arrives it will be off until you turn it on.
+
+Two things about how the identifier is made:
+
+- It is random. It is never derived from your MAC address, hostname, machine ID,
+  serial number, or any other property of your computer, so it cannot be used to
+  recognise your machine anywhere else.
+- The file records the date it was created, not the time, because a precise
+  creation moment would itself be close to unique.
+
+Settings has a **Recreate ID** button. It replaces the identifier with a new
+random one; the old one is overwritten and nothing on disk links the two.
+
+Alongside it, Settings carries four telemetry choices: install ID, feature usage
+and outcomes, error and crash reports, and hardware and environment profile.
+**All four are off**, on every installation and every install type, and this
+version sends nothing for any of them. Upgrading from an earlier version leaves
+them off.
+
 ## Software downloads from third parties
 
 To do its work, PixlStash downloads AI model weights (for tagging, captioning, and

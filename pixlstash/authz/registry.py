@@ -128,6 +128,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Owner config; READ_BLOCKED_GET_PATHS blocks READ tokens; only owner reaches",
     ),
     ("GET", "/api/v1/users/me/penalised-tags"): RoutePolicy(_ANY),
+    # ── telemetry.py (anonymous install ID) ─────────────────────────────────
+    # Owner-only, not any_token: the install ID is a stable identifier for the
+    # installation, so handing it to a share-link holder would let them
+    # correlate visits across links. It returns no per-object picture data,
+    # which is why it is owner_only rather than a *_SCOPED policy.
+    ("GET", "/api/v1/telemetry/install-id"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner-only read of the installation's anonymous install ID. Not "
+            "any_token: the ID is a stable installation identifier and a "
+            "resource-scoped share token must not be able to read it."
+        ),
+    ),
+    ("POST", "/api/v1/telemetry/install-id/recreate"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Owner-only rotation of the install ID; POST is blocked for READ "
+            "tokens, so only an unscoped owner reaches it. Sibling of GET "
+            "/telemetry/install-id."
+        ),
+    ),
     ("PATCH", "/api/v1/users/me/config"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner; owner config write"
     ),

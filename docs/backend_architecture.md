@@ -2997,6 +2997,99 @@ Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 
 ---
 
-*Last updated: 2026-08-01. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
+## 23. Opt-in telemetry: the install ID and the consent flags (v1.9 Lane F)
+
+Nothing in this section transmits anything. It is the local half of the
+telemetry mechanism: storage, consent state, and the surface the UI reads.
+Ingestion and the payload builder are separate changes.
+
+### 23.1 Why an install ID exists at all
+
+Aggregate counts cannot distinguish an installation that **paused** from one that
+**churned**. That ambiguity has already cost a full review cycle: during the
+2026-06 window the North Star fell while the maintainer was away, part of the
+audience was away, and the demo was offline, and no available data could separate
+the three. Cohort retention needs a stable per-install identifier, and retention
+data is time-series and cannot be backfilled, which is why this slice ships
+ahead of the rest of the mechanism.
+
+### 23.2 The ID: `pixlstash/telemetry/install_id.py`
+
+A random UUIDv4 in `install-id.json`, stored **beside `server-config.json`**, not
+in the library database. Four properties are load-bearing; weakening any of them
+turns the file from a counter into a fingerprint:
+
+| Property | Why |
+|---|---|
+| Random, never derived | Never seeded from MAC, hostname, machine ID, or any hardware property. A derived ID *is* a fingerprint and will be read as one regardless of intent. |
+| Beside the server config, not in the DB | A snapshot restore, a library switch (Lane E), or a rebuilt vault must not change or duplicate the installation's identity. |
+| Coarse by construction | The record stores a creation **date**, never a timestamp, because a precise creation instant is close to unique on its own, so it is not written in the first place rather than trimmed at send time. |
+| Never transmitted from here | The module opens no socket. Sending is consent-gated and lands later. |
+
+`is_new_install` separates genuinely new installs from the upgrade wave. Every
+existing user who upgrades and opts in would otherwise carry a first-seen date of
+the upgrade, so their "week 1" would really be week 40 and week-1 retention would
+read absurdly high. The flag is decided **once**, when the ID is created, from
+whether the installation already had a server config. That is why
+`ensure_install_identity` is called in `Server.__init__` **before**
+`init_server_config`. Afterwards the config file always exists and the
+distinction is gone.
+
+**Failure behaviour is deliberate.** A corrupt, truncated, wrong-version, or
+non-UUID record is logged and regenerated rather than trusted. An *unwritable*
+store returns `None`, and the endpoint reports `available: false`: a
+non-persisted ID would be regenerated on every boot and would inflate the install
+count rather than measure it, so none is invented.
+
+**Recreate** overwrites the file with a fresh UUID; nothing on disk links the two.
+It always records `is_new_install=false`: the identity is new, the installation
+is not, and reporting otherwise would drop an established user into the
+new-install cohort, which is the exact bias the flag exists to remove.
+
+### 23.3 The consent flags
+
+Five booleans on `user`, added by migration `0090_add_telemetry_consent`, riding
+the existing `/users/me/config` GET/PATCH pair like every other user setting:
+
+| Column | Category |
+|---|---|
+| `telemetry_send_install_id` | Send the anonymous install ID with update checks |
+| `telemetry_send_feature_usage` | Send feature usage and outcomes |
+| `telemetry_send_error_reports` | Send error and crash reports |
+| `telemetry_send_hardware_profile` | Send hardware and environment profile |
+| `telemetry_consent_prompted` | The question has been asked |
+
+Every category is **off by default on every install and every deployment type**.
+The columns are added nullable, so rows that predate the migration read NULL and
+fall back to the model default of `False`. An upgrade therefore stays fully off,
+and `telemetry_consent_prompted` reads false, so the question is put to existing
+users exactly once.
+
+Two details that are easy to get wrong:
+
+- The patch ladder coerces `"false"`, `"0"`, `""`, and `"null"` to `False`. A
+  bare `bool()` would treat the *string* `"false"` as truthy and silently enable
+  a category for a client that sent form-encoded values.
+- `telemetry_consent_prompted` is what enforces "asked once, never nagged".
+  Declining is a recorded decision, not an unanswered prompt, so a user who
+  says no is never re-prompted.
+
+### 23.4 Routes
+
+Two routes in `pixlstash/routes/telemetry.py`, both `OWNER_ONLY` in
+`ROUTE_POLICIES` (§16.2):
+
+| Route | Policy | Why not `any_token` |
+|---|---|---|
+| `GET /api/v1/telemetry/install-id` | `owner_only` | The ID is a stable installation identifier; a share-link holder able to read it could correlate visits across links. |
+| `POST /api/v1/telemetry/install-id/recreate` | `owner_only` | Rotation is an owner action; POST is not in `READ_SAFE_POST_PATHS`, so READ tokens are blocked at the middleware too. |
+
+Both are covered in both directions by
+`tests/test_telemetry_install_id_authz.py` (out-of-scope 403 **and** in-scope
+200), per the §16 discipline.
+
+---
+
+*Last updated: 2026-08-02. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
 
 ### Known drift / cleanup notes

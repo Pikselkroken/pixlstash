@@ -5,6 +5,7 @@ Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as
 - Full Undo/Redo for soft-deletion, tagging, editing descriptions, image associations, image movement, etc. Use standard keyboard shortcuts (CTRL-Z, CTRL-Y),
   undo/redo-buttons or the undo history to undo more than one edit.
 - A brand new Duplicates view that helps you stack duplicates in your current view.
+- PixlStash now generates a random ID for your installation and keeps it in a file next to your server config. This version sends it nowhere, and no setting in it can. Settings gains four telemetry choices, all off on every install and every install type, plus a Recreate ID button that replaces the identifier with a fresh random one. Upgrading leaves everything off. The ID is random, never derived from anything about your computer, and PRIVACY.md spells out what it is for.
 - Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
 - Filter your views on stacked or unstacked images, and collapse a stack down to the copy you want to keep with **Keep cover only**. The rest go to the Scrapheap, so you can change your mind.
 

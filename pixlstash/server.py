@@ -44,6 +44,7 @@ from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
+from pixlstash.telemetry import ensure_install_identity
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -82,6 +83,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
@@ -318,6 +320,13 @@ class Server(
 
         self.path_mapper = PathMapper(path_map)
 
+        # Before init_server_config, deliberately: ensure_install_identity reads
+        # the presence of the server config to decide whether this is a fresh
+        # install or an existing one upgrading in. Once init_server_config has
+        # run, that file always exists and the distinction is gone. The ID is
+        # written locally and transmitted by nothing in this release.
+        ensure_install_identity(server_config_path)
+
         self._server_config = self.init_server_config(server_config_path)
         self._startup_check_report = StartupChecks(
             server_config=self._server_config,
@@ -512,6 +521,15 @@ class Server(
         # background PictureImportTask id.
         self.staging_sessions = {}
         self._shutdown_on_lifespan = False
+
+    @property
+    def server_config_path(self) -> str:
+        """Path to the server-only config file this server was started with.
+
+        Read-only. The telemetry install ID is stored beside this file, so it
+        follows a custom ``--server-config`` location.
+        """
+        return self._server_config_path
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -1040,6 +1058,12 @@ class Server(
             create_config_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_telemetry_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["telemetry"],
             dependencies=gate,
         )
         self.api.include_router(
