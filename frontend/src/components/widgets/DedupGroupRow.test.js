@@ -390,20 +390,31 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
   }
 
   // jsdom computes no layout, so the corner geometry is pinned at the source
-  // like the verdict-label alignment above.
+  // like the verdict-label alignment above. It now lives in the SHARED strip:
+  // the queue row and the Mixed stacks row draw the same tile, so the recipe
+  // is one implementation and this guardrail follows it there. The DOM
+  // assertions below are unchanged and still run against the mounted row,
+  // which is what proves the extraction did not regress it.
   const styleSource = () => {
+    const source = readFileSync(
+      `${process.cwd()}/src/components/widgets/DedupPictureStrip.vue`,
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    return source.slice(source.indexOf("<style"));
+  };
+  const rowStyleSource = () => {
     const source = readFileSync(
       `${process.cwd()}/src/components/widgets/DedupGroupRow.vue`,
       "utf8",
     ).replace(/\/\*[\s\S]*?\*\//g, "");
     return source.slice(source.indexOf("<style"));
   };
-  const blockOf = (marker) => {
-    const source = styleSource();
+  const blockIn = (source, marker) => {
     const start = source.indexOf(marker);
     expect(start).toBeGreaterThan(-1);
     return source.slice(start, source.indexOf("}", start));
   };
+  const blockOf = (marker) => blockIn(styleSource(), marker);
 
   // The bug: both chips were absolutely positioned at the same top-left inset,
   // so a locked candidate in a focused row drew its index underneath the lock.
@@ -423,7 +434,9 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
     expect(layout).toContain("flex-direction: column");
     expect(layout).toContain("gap: var(--space-1)");
     expect(blockOf(".gnum {")).not.toContain("top:");
-    expect(blockOf(".glock {")).not.toContain("top:");
+    // The lock chip shares its construction with the Mixed row's stranger
+    // chip, so the block is a selector list located by its first selector.
+    expect(blockOf(".glock,")).not.toContain("top:");
   });
 
   // The top-right corner is a column for the same reason before it needs to be:
@@ -433,8 +446,11 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
     expect(column.exists()).toBe(true);
     expect(column.find(".gstars").exists()).toBe(true);
     // The reveal opacity stays on the member, not the column, so one column can
-    // hold a hover-only badge and a permanent one at once.
-    expect(blockOf(".gstars,")).toContain("opacity: 0");
+    // hold a hover-only badge and a permanent one at once. The stars are
+    // slotted content, rendered in the row's scope, so the strip reaches them
+    // through `:slotted()` rather than by owning their markup.
+    expect(blockOf(".gsmart,")).toContain("opacity: 0");
+    expect(blockOf(".gsmart,")).toContain(":slotted(.gstars)");
     expect(blockOf(".gtl,")).not.toContain("opacity");
   });
 
@@ -480,11 +496,12 @@ describe("DedupGroupRow: the thumbnail's badge corners and its fade", () => {
   // Design-token drift: raw opacities and a raw 0.15s ease in a file that has
   // tokens for both.
   it("carries no raw opacity or duration in the strip", () => {
-    const source = styleSource();
-    expect(source).not.toContain("opacity: 0.4");
-    expect(source).not.toContain("opacity: 0.38");
-    expect(source).not.toContain("0.15s ease");
-    expect(blockOf(".gbtn:disabled")).toContain(
+    for (const source of [styleSource(), rowStyleSource()]) {
+      expect(source).not.toContain("opacity: 0.4");
+      expect(source).not.toContain("opacity: 0.38");
+      expect(source).not.toContain("0.15s ease");
+    }
+    expect(blockIn(rowStyleSource(), ".gbtn:disabled")).toContain(
       "opacity: var(--opacity-disabled)",
     );
   });

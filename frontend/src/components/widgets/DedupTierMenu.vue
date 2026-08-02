@@ -38,23 +38,13 @@
 
     <!-- The threshold and its floor are the server's. Stating a number here
          would put the same bound in two places that can drift apart. -->
-    <div v-if="hasThreshold" class="tm-threshold">
-      <label class="tm-threshold-label" :for="thresholdId"
-        >Similar enough at</label
-      >
-      <input
-        :id="thresholdId"
-        class="tm-threshold-input"
-        type="range"
-        :min="minThreshold"
-        :max="maxThreshold"
-        step="0.01"
-        :value="threshold"
-        :disabled="!anyLooserTierOn"
-        @change="emit('threshold', Number($event.target.value))"
-      />
-      <output class="tm-threshold-value">{{ thresholdPercent }}%</output>
-    </div>
+    <DedupThresholdControl
+      :threshold="threshold"
+      :min="minThreshold"
+      :max="maxThreshold"
+      :disabled="!anyLooserTierOn"
+      @change="emit('threshold', $event)"
+    />
 
     <!-- The loosest tier states its own risk in place, so the warning arrives
          where the decision is made rather than in a preamble nobody reads. -->
@@ -83,7 +73,9 @@
 // `GET /dedup/policy` through the store. This component renders them and reports
 // what the user pressed.
 
-import { computed, useId } from "vue";
+import { computed } from "vue";
+
+import DedupThresholdControl from "./DedupThresholdControl.vue";
 
 const props = defineProps({
   /**
@@ -103,21 +95,10 @@ const props = defineProps({
 
 const emit = defineEmits(["toggle", "threshold"]);
 
-const thresholdId = useId();
-
 const groupCountLabel = computed(() => {
   const n = Number(props.groupCount) || 0;
   return `${n.toLocaleString()} ${n === 1 ? "group" : "groups"}`;
 });
-
-const hasThreshold = computed(
-  () =>
-    Number.isFinite(props.threshold) &&
-    Number.isFinite(props.minThreshold) &&
-    Number.isFinite(props.maxThreshold),
-);
-
-const thresholdPercent = computed(() => Math.round(props.threshold * 100));
 
 /** Whether any tier the threshold applies to is switched on. */
 const anyLooserTierOn = computed(() =>
@@ -286,40 +267,6 @@ function formatCount(value) {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.tm-threshold {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-}
-
-.tm-threshold-label {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  white-space: nowrap;
-}
-
-.tm-threshold-input {
-  flex: 1;
-  min-width: 0;
-  accent-color: rgb(var(--v-theme-accent));
-}
-
-.tm-threshold-input:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
-.tm-threshold-input:disabled {
-  opacity: 0.38;
-}
-
-.tm-threshold-value {
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
 .tierwarn {

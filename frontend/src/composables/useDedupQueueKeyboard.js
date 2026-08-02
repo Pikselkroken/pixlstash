@@ -156,6 +156,22 @@ function isActivatableTarget(event) {
  *   `{ isOpen, open, close, flip, to, togglePixels }`. The zoom's state lives
  *   in the dialog; the KEYS live here, so the queue keeps exactly one
  *   keyboard owner. Omitted (the default no-op) in tests that predate it.
+ * @param {function(Object): Array<Object>} [deps.unitsOf] - what `1`-`9`
+ *   addresses on a row, defaulting to the duplicate group's units. The MIXED
+ *   stacks queue is the second caller: its rows are stacks and its addressable
+ *   things are that stack's members, so the digits point at a different list
+ *   while meaning exactly the same thing (the item under the cursor). Each
+ *   entry needs a `coverPictureId` and a `stackable` flag.
+ * @param {function(Object): (number|string)} [deps.signatureOf] - how a row
+ *   names itself to `setCover`, defaulting to `group.signature`. A mixed row is
+ *   keyed on its stack id instead.
+ * @param {function(Object): void} [deps.onStackSynonym] - what `S` does when it
+ *   is NOT a synonym of the primary. `S` is Stack in the review queue, and a
+ *   user trained there reads it as Stack on any dedup surface; on the Mixed
+ *   stacks queue the primary is Split, which is the OPPOSITE act. So the key is
+ *   still claimed (it must never fall through to the shell, and it must never
+ *   run the primary by accident) and this hook answers it out loud. Absent, `S`
+ *   keeps its shipped synonym role.
  * @returns {function(KeyboardEvent): void}
  */
 /**
@@ -188,6 +204,9 @@ export function createDedupKeyHandler({
   selectAll = null,
   pageRows = () => DEFAULT_PAGE_ROWS,
   zoom = NO_ZOOM,
+  unitsOf = groupUnits,
+  signatureOf = (group) => group?.signature,
+  onStackSynonym = null,
 }) {
   /**
    * A page move in rows, never zero: a viewport too short to hold one row must
@@ -228,12 +247,14 @@ export function createDedupKeyHandler({
       claim(event);
       // Digits address UNITS, matching the strip: a deck occupies one slot and
       // one index however many of its members the group named, so the number
-      // under a tile is the number that selects it.
-      const unit = groupUnits(group)[Number(key) - 1];
+      // under a tile is the number that selects it. On the Mixed stacks queue
+      // `unitsOf` points them at the stack's members instead, which is the same
+      // rule applied to a different row.
+      const unit = unitsOf(group)[Number(key) - 1];
       // A locked unit cannot lead a stack it is not in, exactly as a click on
       // it does not set the cover.
       if (!unit || !unit.stackable) return true;
-      store.setCover(group.signature, unit.coverPictureId);
+      store.setCover(signatureOf(group), unit.coverPictureId);
       return true;
     }
     return false;
@@ -350,6 +371,14 @@ export function createDedupKeyHandler({
       // reading IS Stack, so the slip is now self-healing.
       if (key === "enter" || key === "s") {
         claim(event);
+        // Claimed either way; what S MEANS is the surface's call. See
+        // `onStackSynonym`: on a queue whose primary is not Stack, running the
+        // primary off a key the user pressed meaning Stack would do the
+        // opposite of what they asked.
+        if (key === "s" && onStackSynonym) {
+          onStackSynonym(group);
+          return;
+        }
         zoom.close();
         store.stack(group);
         return;
@@ -445,9 +474,14 @@ export function createDedupKeyHandler({
 
     if (isReadOnly() || store.busy) return;
 
-    // S is a synonym of Enter (amendment #3, see the compare branch's note).
+    // S is a synonym of Enter (amendment #3, see the compare branch's note),
+    // unless the surface says otherwise (`onStackSynonym`).
     if (key === "enter" || key === "s") {
       claim(event);
+      if (key === "s" && onStackSynonym) {
+        onStackSynonym(group);
+        return;
+      }
       store.stack(group);
       return;
     }

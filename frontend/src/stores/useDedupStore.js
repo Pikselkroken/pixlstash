@@ -59,7 +59,6 @@ import {
   autoStackExact,
   listMixedStacks,
   splitMixedStack,
-  unstackMixedStack,
   keepMixedStack,
   clearMixedStackKeep,
   GLOBAL_SCOPE,
@@ -79,7 +78,7 @@ import {
   flaggedStackIdSet,
   isLockedRefusal,
   lockedSets,
-  mixedStackAction,
+  mixedStackEngineMarks,
 } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
@@ -2582,36 +2581,58 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * Run the row's primary action: split off the strangers, or unstack.
+   * The threshold the mixed LIST was computed at.
    *
-   * The ids the ROW showed are sent, never recomputed server-side, so the
-   * split matches what the user was looking at even if the stack has changed
-   * since. One operation either way, so the standard receipt and a single
-   * Ctrl+Z cover it, narrated through the shared operation store exactly as a
-   * verdict is, gated on the response's `batch_id`.
+   * Not the slider's live value. The two differ for exactly as long as a
+   * reload is in flight, and that is the window in which a write built from
+   * the rows on screen would be bounded by a threshold those rows were never
+   * computed at. The server echoes what it used; that echo is the answer.
+   *
+   * @returns {number|undefined} undefined when neither is known, which lets the
+   *   server pick its own default.
+   */
+  function listThreshold() {
+    if (Number.isFinite(mixedThreshold.value)) return mixedThreshold.value;
+    return Number.isFinite(threshold.value) ? threshold.value : undefined;
+  }
+
+  /**
+   * Run the row's primary action: take the marked members out of the stack.
+   *
+   * **One call for both outcomes.** The split route takes any live member of
+   * the stack, so an unstack is simply "every member leaves": the server
+   * dissolves a stack that would be left with fewer than two members either
+   * way, and reports which happened in `stack_dissolved`. Routing between two
+   * endpoints on a client-side prediction would only create a case where the
+   * prediction and the request disagree.
+   *
+   * The ids the ROW showed are sent, never recomputed server-side, so the split
+   * matches what the user marked even if the stack has changed since. One
+   * operation, so the standard receipt and a single Ctrl+Z cover it, narrated
+   * through the shared operation store exactly as a verdict is, gated on the
+   * response's `batch_id`.
    *
    * @param {Object} stack - the row.
+   * @param {Array<number>} [pictureIds] - the marks in force. Defaults to the
+   *   engine's own marks, which is what the row opens with.
    * @returns {Promise<Object|null>} the action response, or null on failure.
    */
-  async function resolveMixedStack(stack) {
+  async function resolveMixedStack(stack, pictureIds) {
     const stackId = stack?.stack_id;
     if (stackId === null || stackId === undefined) return null;
-    const plan = mixedStackAction(stack);
+    const ids =
+      Array.isArray(pictureIds) && pictureIds.length
+        ? [...pictureIds]
+        : mixedStackEngineMarks(stack);
+    if (!ids.length) return null;
     mixedBusyStackId.value = stackId;
     error.value = null;
     try {
-      const result =
-        plan.action === "split"
-          ? await splitMixedStack(stackId, {
-              pictureIds: plan.pictureIds,
-              threshold: Number.isFinite(threshold.value)
-                ? threshold.value
-                : undefined,
-              batchId: newOperationBatchId(),
-            })
-          : await unstackMixedStack(stackId, {
-              batchId: newOperationBatchId(),
-            });
+      const result = await splitMixedStack(stackId, {
+        pictureIds: ids,
+        threshold: listThreshold(),
+        batchId: newOperationBatchId(),
+      });
       removeMixedStack(stackId);
       if (result?.batch_id) narrateVerdictOperation();
       return result;
@@ -2632,6 +2653,22 @@ export const useDedupStore = defineStore("dedup", () => {
           sets.length,
           err,
         );
+        return null;
+      }
+      // A 400 means the request no longer describes the stack: a marked member
+      // has left it, or been scrapheaped, since the list was read. The row is
+      // therefore STALE, and leaving it on screen unchanged is what made this
+      // present as a dead button. Re-read the list so the row either comes back
+      // correct or leaves, and let the caller say the stack changed. The reload
+      // is awaited so the caller narrates over the truth, not over the row that
+      // just failed.
+      if (Number(err?.response?.status) === 400) {
+        console.warn(
+          "[dedup] mixed stack %s no longer matches the row it was read from; re-reading the list",
+          stackId,
+          err,
+        );
+        await loadMixedStacks();
         return null;
       }
       console.warn("[dedup] failed to resolve mixed stack %s", stackId, err);

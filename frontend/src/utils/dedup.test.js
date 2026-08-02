@@ -18,6 +18,10 @@ import {
   serverDetail,
   lockedPictureIds,
   lockedSets,
+  mixedStackMembers,
+  mixedStackEngineMarks,
+  mixedStackPrimary,
+  edgePercentText,
   lockedSetsSentence,
   isLockedRefusal,
   isMixedStackStackable,
@@ -39,7 +43,6 @@ import {
   flaggedStackIdSet,
   mixedStackTitle,
   mixedStackReason,
-  mixedStackAction,
   mixedStackSuspects,
   DENSE_STACK_BADGE_BELOW_PX,
 } from "./dedup";
@@ -846,36 +849,6 @@ describe("utils/dedup: what a mixed-stack row says", () => {
   });
 });
 
-describe("utils/dedup: the outcome the primary button names", () => {
-  it("names the split and carries the ids the row showed", () => {
-    const plan = mixedStackAction(mixed({ stranded_picture_ids: [11, 12] }));
-    expect(plan).toEqual({
-      action: "split",
-      label: "Split off 2",
-      pictureIds: [11, 12],
-    });
-  });
-
-  it("unstacks when the server sees no majority worth keeping", () => {
-    const plan = mixedStackAction(
-      mixed({ suggested_action: "unstack", stranded_picture_ids: [] }),
-    );
-    expect(plan.action).toBe("unstack");
-    expect(plan.label).toBe("Unstack");
-    expect(plan.pictureIds).toEqual([]);
-  });
-
-  // "Split off 0" is a button that cannot do anything, and the server would
-  // 400 it. A suggestion with nothing to split falls through to the outcome
-  // that is actually available.
-  it("refuses to offer a split with nothing to split off", () => {
-    const plan = mixedStackAction(
-      mixed({ suggested_action: "split", stranded_picture_ids: [] }),
-    );
-    expect(plan.action).toBe("unstack");
-  });
-});
-
 describe("utils/dedup: the suspects a row shows", () => {
   it("leads with the stranded members", () => {
     expect(mixedStackSuspects(mixed())).toEqual([11]);
@@ -914,5 +887,199 @@ describe("utils/dedup: the dense badge threshold", () => {
   // for both a glyph and a numeral.
   it("is the ladder's small rung", () => {
     expect(DENSE_STACK_BADGE_BELOW_PX).toBe(168);
+  });
+});
+
+// --- The Mixed stacks QUEUE ---------------------------------------------------
+
+describe("utils/dedup: a mixed stack's members", () => {
+  // `member_edges` is parallel to `member_ids`, and it is keyed by picture
+  // rather than trusted positionally: a payload that lost the pairing must
+  // degrade to "no edge known" rather than to another member's number.
+  it("pairs each member with its own strongest edge", () => {
+    const members = mixedStackMembers(
+      mixed({
+        member_edges: [
+          {
+            picture_id: 8,
+            strongest_edge: 0.97,
+            closest_picture_id: 9,
+            nearest_edge: 0.97,
+            nearest_picture_id: 9,
+          },
+          {
+            picture_id: 7,
+            strongest_edge: 0.94,
+            closest_picture_id: 8,
+            nearest_edge: 0.94,
+            nearest_picture_id: 8,
+          },
+          {
+            picture_id: 11,
+            strongest_edge: null,
+            closest_picture_id: null,
+            nearest_edge: 0.89,
+            nearest_picture_id: 8,
+          },
+        ],
+      }),
+    );
+    expect(members.map((m) => m.pictureId)).toEqual([7, 8, 9, 10, 11]);
+    expect(members[0].strongestEdge).toBe(0.94);
+    expect(members[0].closestPictureId).toBe(8);
+    expect(members[1].strongestEdge).toBe(0.97);
+    // A member the payload names no edge for is not a member with a 0% edge.
+    expect(members[2].strongestEdge).toBeNull();
+    expect(members[4].strongestEdge).toBeNull();
+    expect(members[4].stranded).toBe(true);
+  });
+
+  // The two numbers are NOT interchangeable and this is the case that proves
+  // it: the stranger has no surviving edge (the verdict) and a measured 89% to
+  // its closest sibling (the truth). Collapsing them is what made the page
+  // print a dash and say the picture matched nothing.
+  it("carries the unconditional closest match beside the thresholded one", () => {
+    const members = mixedStackMembers(
+      mixed({
+        member_edges: [
+          {
+            picture_id: 11,
+            strongest_edge: null,
+            closest_picture_id: null,
+            nearest_edge: 0.89,
+            nearest_picture_id: 8,
+          },
+        ],
+      }),
+    );
+    const stranger = members.find((m) => m.pictureId === 11);
+    expect(stranger.strongestEdge).toBeNull();
+    expect(stranger.nearestEdge).toBe(0.89);
+    expect(stranger.nearestPictureId).toBe(8);
+    // And nothing to compare against stays an absence, not a zero.
+    expect(members[0].nearestEdge).toBeNull();
+    expect(members[0].nearestPictureId).toBeNull();
+  });
+
+  it("degrades to no edges at all on a payload that carries none", () => {
+    const members = mixedStackMembers(mixed());
+    expect(members).toHaveLength(5);
+    expect(members.every((m) => m.strongestEdge === null)).toBe(true);
+  });
+
+  it("marks the not-yet-analysed members as such, not as strangers", () => {
+    const members = mixedStackMembers(
+      mixed({ unhashed_picture_ids: [10], stranded_picture_ids: [10, 11] }),
+    );
+    expect(members.find((m) => m.pictureId === 10).unhashed).toBe(true);
+    expect(members.find((m) => m.pictureId === 11).unhashed).toBe(false);
+  });
+});
+
+describe("utils/dedup: the marks a row opens with", () => {
+  it("takes the engine's strangers", () => {
+    expect(mixedStackEngineMarks(mixed())).toEqual([11]);
+  });
+
+  // The one false positive this feature cannot afford: a member with no hash
+  // can carry no edge, so the cohesion fold necessarily lists it as stranded.
+  // Marking it would report "this does not belong" about a picture nothing has
+  // compared yet. Same subtraction the backend's own evidence pills make.
+  it("never pre-marks a picture that has not been analysed yet", () => {
+    const marks = mixedStackEngineMarks(
+      mixed({ stranded_picture_ids: [10, 11], unhashed_picture_ids: [10] }),
+    );
+    expect(marks).toEqual([11]);
+  });
+
+  it("falls back to the non-majority clusters when nobody is stranded", () => {
+    const marks = mixedStackEngineMarks(
+      mixed({
+        stranded_picture_ids: [],
+        member_ids: [1, 2, 3, 4, 5, 6],
+        member_count: 6,
+        components: [
+          [1, 2, 3, 4],
+          [5, 6],
+        ],
+        largest_component_size: 4,
+      }),
+    );
+    expect(marks).toEqual([5, 6]);
+  });
+});
+
+describe("utils/dedup: mixedStackSuspects matches its own docstring", () => {
+  // The bug: the two readings are ALTERNATIVES, and the shipped code appended
+  // the non-largest components unconditionally. A stack with one lone stranger
+  // and a legitimate pair therefore accused the pair as well, and this list is
+  // now what opens marked on the row, so a wrong id here is a wrong id in the
+  // request.
+  it("does not append whole clusters once a member is already stranded", () => {
+    const both = mixed({
+      member_ids: [1, 2, 3, 4, 5],
+      member_count: 5,
+      stranded_picture_ids: [5],
+      components: [[1, 2, 3], [4], [5]],
+      largest_component_size: 3,
+    });
+    expect(mixedStackSuspects(both)).toEqual([5]);
+  });
+});
+
+describe("utils/dedup: what the primary button names", () => {
+  it("splits the marked members while a majority survives", () => {
+    const plan = mixedStackPrimary(mixed(), [11]);
+    expect(plan.action).toBe("split");
+    expect(plan.label).toBe("Split off 1");
+    expect(plan.icon).toBe("call-split");
+    expect(plan.pictureIds).toEqual([11]);
+  });
+
+  it("counts the marks, not the engine's opinion", () => {
+    expect(mixedStackPrimary(mixed(), [9, 10, 11]).label).toBe("Split off 3");
+  });
+
+  // The dissolve boundary, in both directions. A stack needs two members, so
+  // marks that would leave one dissolve it; the server applies the same floor,
+  // and the button has to say so BEFORE the press rather than after it.
+  it("flips to unstack the moment fewer than two would be left", () => {
+    const row = mixed();
+    expect(mixedStackPrimary(row, [9, 10, 11]).action).toBe("split");
+    const over = mixedStackPrimary(row, [8, 9, 10, 11]);
+    expect(over.action).toBe("unstack");
+    expect(over.label).toBe("Unstack all 5");
+    expect(over.icon).toBe("layers-off");
+    // Every live member travels, because one call carries both outcomes.
+    expect(over.pictureIds).toEqual([7, 8, 9, 10, 11]);
+    // And back again.
+    expect(mixedStackPrimary(row, [9, 10, 11]).label).toBe("Split off 3");
+  });
+
+  // "Split off 0" is a button that cannot do anything, and the server 400s an
+  // empty list. Nothing marked means the only outcome left is to free the lot.
+  it("names the unstack when nothing is marked at all", () => {
+    const plan = mixedStackPrimary(mixed(), []);
+    expect(plan.action).toBe("unstack");
+    expect(plan.label).toBe("Unstack all 5");
+    expect(plan.pictureIds).toHaveLength(5);
+  });
+
+  it("ignores a mark that is not a member of this stack", () => {
+    expect(mixedStackPrimary(mixed(), [11, 9999]).label).toBe("Split off 1");
+  });
+});
+
+describe("utils/dedup: one member's strongest match", () => {
+  it("reads as a whole percentage", () => {
+    expect(edgePercentText(0.90625)).toBe("91%");
+    expect(edgePercentText(1)).toBe("100%");
+  });
+
+  // The en dash, never a zero: "0%" is a measured similarity and this is the
+  // absence of one, which is precisely what the column exists to show.
+  it("says the absence of an edge with the en dash", () => {
+    expect(edgePercentText(null)).toBe("–");
+    expect(edgePercentText(undefined)).toBe("–");
   });
 });

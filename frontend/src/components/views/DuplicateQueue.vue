@@ -11,7 +11,19 @@
          assistive tech and this sentence carries the model instead. It also
          carries the two keys the strip has no room for, and the one fact that
          makes the whole queue safe to work fast. -->
-    <p id="dq-key-help" class="visually-hidden">
+    <p v-if="store.showingMixed" id="dq-key-help" class="visually-hidden">
+      Mixed stacks lists existing stacks whose pictures do not all match. Up and
+      Down arrows choose a stack, and Page Up, Page Down, Home and End move
+      further. The pictures already marked are the ones this stack does not hold
+      together with; the number keys 1 to 9 point at a picture and X marks or
+      unmarks it. Enter splits the marked pictures out, or unstacks the whole
+      stack when fewer than two would be left, and the button says which. K
+      keeps the stack as it is, and is the only action that applies to a
+      selection of rows. C compares every picture in the stack side by side, and
+      Z zooms. Control Z undoes the last change. Escape returns to the review
+      queue, where your place is kept. No picture is ever deleted.
+    </p>
+    <p v-else id="dq-key-help" class="visually-hidden">
       Up and Down arrows choose a group. Page Up and Page Down move a screenful
       at a time, and Home and End jump to the first and last group. Enter or S
       stacks it. K keeps it separate. Down moves on without deciding. C compares
@@ -273,14 +285,74 @@
       </div>
 
       <div v-else-if="store.mixedStacks.length" class="mixed-list">
-        <p class="mixed-lede">
-          {{ mixedLede }}
-        </p>
+        <!-- The threshold header. It is sticky INSIDE the list's own scroller,
+             because the whole list is a function of one number and a user who
+             has scrolled past that number is reading a verdict without its
+             premise. The count is the sentence's SUBJECT rather than a separate
+             figure beside it: "26 stacks don't hang together at 90% similar" is
+             one fact, and splitting it into a numeral and a caption is what
+             lets the two drift apart.
+
+             The slider is the shipped threshold control, the same component the
+             tier popover mounts, so the label, the step and the number
+             formatting cannot differ between the two places the user meets it. -->
+        <div class="mixed-head">
+          <p class="mixed-lede">
+            <b>{{ store.mixedTotal.toLocaleString() }}</b>
+            {{ store.mixedTotal === 1 ? "stack doesn't" : "stacks don't" }} hang
+            together at <b>{{ thresholdText }}</b> similar<template
+              v-if="store.mixedLiveStackCount"
+            >
+              , of
+              <b>{{ store.mixedLiveStackCount.toLocaleString() }}</b> in your
+              library</template
+            >.<template v-if="store.mixedKeptTotal">
+              {{ store.mixedKeptTotal.toLocaleString() }} kept.</template
+            >
+          </p>
+          <DedupThresholdControl
+            class="mixed-threshold"
+            :threshold="store.threshold"
+            :min="store.bounds?.min_threshold ?? null"
+            :max="store.bounds?.max_threshold ?? null"
+            label="Similar enough at"
+            @change="onThresholdChange"
+          />
+        </div>
+
+        <!-- The bulk-scope statement, and it names the ONE verdict that acts on
+             a selection. The primary's outcome differs per row (one stack
+             splits, the next dissolves), so a bulk primary could not name what
+             it was about to do. -->
+        <div v-if="mixedSelectionCount > 1" class="qselbar">
+          <span class="qselchip" role="status">
+            <v-icon size="14">mdi-checkbox-multiple-marked-outline</v-icon>
+            {{ mixedSelectionCount }} rows selected: Keep applies to all
+            <button
+              type="button"
+              class="qselclear"
+              title="Clear the selection (Esc)"
+              @click="clearMixedSelection()"
+            >
+              Clear
+            </button>
+          </span>
+        </div>
+
         <div ref="mixedListEl" class="mlist">
-          <MixedStackRow
-            v-for="stack in store.mixedStacks"
+          <MixedQueueRow
+            v-for="(stack, i) in store.mixedStacks"
             :key="stack.stack_id"
             :stack="stack"
+            :index="i"
+            :total="store.mixedStacks.length"
+            :focused="i === mixedFocusIndex"
+            :selected="isMixedSelected(stack)"
+            :selection-count="mixedSelectionCount"
+            :bulk-keys="mixedBulkKeysActive"
+            :marked-ids="mixedMarksFor(stack)"
+            :cursor-index="mixedCursorFor(stack)"
+            :thumb-height="store.thumbHeight"
             :busy="String(store.mixedBusyStackId) === String(stack.stack_id)"
             :read-only="readOnly"
             :can-show-queue="store.groupIndexForStack(stack.stack_id) >= 0"
@@ -288,9 +360,18 @@
               String(store.mixedFocusStackId ?? '') === String(stack.stack_id)
             "
             :lock-flash="flashSignature === mixedFlashKey(stack.stack_id)"
+            :flash-ids="
+              flashSignature === mixedFlashKey(stack.stack_id)
+                ? flashIds
+                : EMPTY_IDS
+            "
+            @focus="onMixedRowFocus(i, $event)"
             @resolve="onResolveMixed(stack)"
             @keep="onKeepMixed(stack)"
+            @compare="onCompareMixed(i)"
             @show-queue="onShowQueueForStack(stack)"
+            @toggle-mark="onToggleMark(stack, $event)"
+            @set-cursor="setMixedCursor(stack, $event)"
           />
         </div>
         <button
@@ -482,10 +563,19 @@
       </p>
     </div>
 
+    <!-- One dialog, two modes. Compare is where the zoom lives, and the zoom is
+         the single largest thing the Mixed stacks page gains by being a queue:
+         a second dialog would be a second copy of it. What the mode changes is
+         what a card MEANS and what its primary click does, nothing else. -->
     <DedupCompareDialog
       ref="compareRef"
       :open="compareOpen"
+      :mode="store.showingMixed ? 'mixed' : 'group'"
       :group="store.focusedGroup"
+      :mixed-stack="mixedFocusedRow"
+      :marked-ids="mixedFocusedRow ? mixedMarksFor(mixedFocusedRow) : EMPTY_IDS"
+      :primary-label="mixedPlan.label"
+      :primary-icon="mixedPlan.icon"
       :cover-id="
         store.focusedGroup ? store.coverIdFor(store.focusedGroup) : null
       "
@@ -494,7 +584,7 @@
           ? store.excludedFor(store.focusedGroup.signature)
           : []
       "
-      :busy="store.busy"
+      :busy="store.busy || store.mixedBusyStackId !== null"
       :read-only="readOnly"
       @close="closeCompare"
       @set-cover="
@@ -506,6 +596,9 @@
       "
       @stack="onCompareStack"
       @keep-separate="onCompareKeepSeparate"
+      @toggle-mark="mixedFocusedRow && onToggleMark(mixedFocusedRow, $event)"
+      @resolve="mixedFocusedRow && onResolveMixed(mixedFocusedRow)"
+      @keep="mixedFocusedRow && onKeepMixed(mixedFocusedRow)"
     />
 
     <DedupAutoStackDialog
@@ -571,10 +664,11 @@ import {
   lockedSetsSentence,
   mixedStackLockedSets,
   partialStackSentence,
-  mixedStackAction,
+  mixedStackPrimary,
 } from "../../utils/dedup";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
 import { useDedupRowExpansion } from "../../composables/useDedupRowExpansion";
+import { useMixedStackQueue } from "../../composables/useMixedStackQueue";
 import {
   MAX_THUMBNAIL_SIZE_LEVEL,
   sizeLabelForLevel,
@@ -583,7 +677,8 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import UndoControl from "../panels/UndoControl.vue";
 import DedupGroupRow from "../widgets/DedupGroupRow.vue";
-import MixedStackRow from "../widgets/MixedStackRow.vue";
+import MixedQueueRow from "../widgets/MixedQueueRow.vue";
+import DedupThresholdControl from "../widgets/DedupThresholdControl.vue";
 import DedupTierMenu from "../widgets/DedupTierMenu.vue";
 import DedupVerdictMenu from "../widgets/DedupVerdictMenu.vue";
 import DedupScanBanner from "../widgets/DedupScanBanner.vue";
@@ -842,7 +937,114 @@ const headline = computed(() => {
     : `${store.openCount.toLocaleString()} ${store.openCount === 1 ? "group" : "groups"} to review`;
 });
 
-// ── The Mixed stacks page (design D5) ─────────────────────────────────────
+// ── The Mixed stacks queue (design D5) ────────────────────────────────────
+// The THIRD queue, not a list with buttons on it. Its rows are stacks, its
+// tiles are those stacks' members, and its verdicts are split / unstack / keep.
+// Everything that makes the review queue workable at speed is inherited: the
+// focus model, the multi-selection gestures, the auto-advance, the key handler
+// and the action receipt. The composable holds the per-page view state (marks,
+// the member cursor, the focus, the selection); the store owns the rows.
+const {
+  focusIndex: mixedFocusIndex,
+  focusedRow: mixedFocusedRow,
+  selectionCount: mixedSelectionCount,
+  selectedRows: mixedSelectedRows,
+  isSelected: isMixedSelected,
+  toggleSelected: toggleMixedSelected,
+  selectRange: selectMixedRange,
+  clearSelection: clearMixedSelection,
+  selectAll: selectAllMixed,
+  setFocus: setMixedFocus,
+  focusNext: mixedFocusNext,
+  focusPrev: mixedFocusPrev,
+  focusStart: mixedFocusStart,
+  focusEnd: mixedFocusEnd,
+  marksFor: mixedMarksFor,
+  toggleMark: toggleMixedMark,
+  cursorFor: mixedCursorFor,
+  setCursor: setMixedCursor,
+  setCursorToPicture: setMixedCursorToPicture,
+  memberIdAtCursor: mixedMemberIdAtCursor,
+  unitsFor: mixedUnitsFor,
+  forgetRow: forgetMixedRow,
+  reset: resetMixedQueue,
+} = useMixedStackQueue(store);
+
+/**
+ * What the focused row's primary button is about to do.
+ *
+ * Read here as well as in the row because Compare's footer shows the same
+ * button, and the two must never disagree about what Enter does.
+ */
+const mixedPlan = computed(() =>
+  mixedFocusedRow.value
+    ? mixedStackPrimary(
+        mixedFocusedRow.value,
+        mixedMarksFor(mixedFocusedRow.value),
+      )
+    : {
+        action: "unstack",
+        label: "",
+        icon: "",
+        pictureIds: [],
+        dissolves: true,
+      },
+);
+
+/**
+ * Whether `K` would genuinely take the whole selection: two or more rows
+ * selected AND the keyboard cursor inside it. Only then may every selected row
+ * wear the chip, because a chip on a row the key will not hit is a lie.
+ */
+const mixedBulkKeysActive = computed(() => {
+  const row = mixedFocusedRow.value;
+  return Boolean(row && mixedSelectionCount.value > 1 && isMixedSelected(row));
+});
+
+/**
+ * The rows one Keep press acts on: the selection when the pressed row is inside
+ * it, that row alone otherwise. The review queue's `verdictTargets` rule,
+ * applied to the one verdict here that acts in bulk.
+ *
+ * @param {Object} stack
+ * @returns {Array<Object>}
+ */
+function mixedVerdictTargets(stack) {
+  if (mixedSelectionCount.value > 1 && isMixedSelected(stack)) {
+    return mixedSelectedRows.value;
+  }
+  return stack ? [stack] : [];
+}
+
+/**
+ * A row click chooses; a modified row click SELECTS. The review queue's own
+ * conventions, so nothing new has to be learned on this page.
+ *
+ * @param {number} index
+ * @param {MouseEvent} [event] - absent when a row control re-emits focus.
+ */
+function onMixedRowFocus(index, event) {
+  if (!event) {
+    setMixedFocus(index);
+    return;
+  }
+  if (event.shiftKey) {
+    selectMixedRange(index);
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    toggleMixedSelected(index);
+    return;
+  }
+  setMixedFocus(index);
+  clearMixedSelection();
+}
+
+/** Open Compare on a mixed row, focusing it first so the two cannot disagree. */
+function onCompareMixed(index) {
+  setMixedFocus(index);
+  compareOpen.value = true;
+}
 
 /**
  * The threshold the list was computed at, as a percentage.
@@ -855,23 +1057,6 @@ const headline = computed(() => {
 const thresholdText = computed(() => {
   const value = Number(store.mixedThreshold ?? store.threshold);
   return Number.isFinite(value) ? `${Math.round(value * 100)}%` : "the current";
-});
-
-/**
- * The one line above the list, saying what it is and what moves it.
- *
- * The denominator is on purpose: "26 of 209" is what turns "possibly wrong"
- * into a proportion the user can judge, and the slider is what turns it into
- * something they can drive.
- */
-const mixedLede = computed(() => {
-  const total = store.mixedTotal.toLocaleString();
-  const live = store.mixedLiveStackCount;
-  const of = live ? ` of ${live.toLocaleString()} stacks` : "";
-  const kept = store.mixedKeptTotal
-    ? ` ${store.mixedKeptTotal.toLocaleString()} kept.`
-    : "";
-  return `${total}${of} hold pictures that don't all match at ${thresholdText.value} similarity. Lower the similarity slider to be less strict.${kept}`;
 });
 
 /** The label on the third page's toggle. */
@@ -1281,6 +1466,24 @@ watch(
   },
 );
 
+/**
+ * Keep the Mixed queue's keyboard cursor on screen.
+ *
+ * The same contract the review queue's `scrollFocusIntoView` holds, and it has
+ * to hold here for the same reason: the arrow keys move a cursor the user can
+ * only act on if they can see it. `nearest` so a move never scrolls further
+ * than it has to, which is what keeps a run of Enter presses from lurching.
+ */
+watch(
+  () => [store.showingMixed, mixedFocusIndex.value],
+  async () => {
+    if (!store.showingMixed) return;
+    await nextTick();
+    const row = mixedListEl.value?.querySelector?.(".grow--focus");
+    row?.scrollIntoView?.({ block: "nearest" });
+  },
+);
+
 /** Open Compare on a row, focusing it first so the two can never disagree. */
 function onCompare(index) {
   store.setFocus(index);
@@ -1588,6 +1791,13 @@ function onEscape() {
     closeTierMenu();
     return;
   }
+  // On the Mixed stacks page the selection is the layer above the page itself,
+  // exactly as it is on the review queue below: clearing it must not also cost
+  // the user the page they are standing on.
+  if (store.showingMixed && mixedSelectionCount.value > 0) {
+    clearMixedSelection();
+    return;
+  }
   // The Mixed stacks page is the next layer out, and leaving it costs nothing:
   // the queue is still standing behind it with its focus intact.
   if (store.showingMixed) {
@@ -1690,6 +1900,12 @@ async function onVerdictToggle(id, on) {
 async function onThresholdChange(value) {
   const byPointer = thresholdPointerTuning;
   thresholdPointerTuning = false;
+  // The mixed list is a function of this number, so a move replaces every row's
+  // verdict about itself: which members are strangers, and therefore which the
+  // engine marks. An edit made at 90% is not an answer at 65%, so the page's
+  // marks and its selection go with the list rather than being replayed against
+  // a different question.
+  resetMixedQueue();
   await store.setThreshold(value);
   if (byPointer) rootEl.value?.focus?.();
 }
@@ -1750,15 +1966,38 @@ function onReviewStacks() {
  */
 async function onToggleMixed() {
   if (store.showingMixed) {
+    // The selection is scoped to the page and must not survive it: coming back
+    // to twelve rows selected by a gesture made minutes ago is a bulk Keep
+    // waiting to be pressed by accident. The marks DO survive, keyed on each
+    // stack's membership, because they are the work the user was doing.
+    clearMixedSelection();
     store.hideMixedStacks();
     announcement.value = `Back in the review queue, at group ${store.focusIndex + 1}.`;
   } else {
     await store.showMixedStacks();
+    focusRevealedMixedRow();
     announcement.value = `Showing ${store.mixedTotal.toLocaleString()} mixed ${
       store.mixedTotal === 1 ? "stack" : "stacks"
     } at ${thresholdText.value} similarity. Nothing has changed.`;
   }
   rootEl.value?.focus?.();
+}
+
+/**
+ * Put the keyboard cursor where the user is looking.
+ *
+ * On the row the two-way shortcut named, or on the first row. A page whose
+ * cursor sat on row 1 while the view had scrolled to row 14 would answer Enter
+ * with a change to a stack nobody was reading.
+ */
+function focusRevealedMixedRow() {
+  const wanted = store.mixedFocusStackId;
+  const index = wanted
+    ? store.mixedStacks.findIndex(
+        (row) => String(row.stack_id) === String(wanted),
+      )
+    : 0;
+  setMixedFocus(index < 0 ? 0 : index);
 }
 
 /**
@@ -1771,6 +2010,7 @@ async function onToggleMixed() {
  */
 async function onShowMixedForStack(stackId) {
   await store.showMixedStacks(stackId);
+  focusRevealedMixedRow();
   announcement.value =
     "Showing this stack on the Mixed stacks page. Your place in the review queue is kept.";
   rootEl.value?.focus?.();
@@ -1797,17 +2037,22 @@ function onShowQueueForStack(stack) {
 }
 
 /**
- * Split off the strangers, or unstack: the row's primary action.
+ * Split the marked members off, or unstack: the row's primary action.
  *
- * Both are one operation, so the standard receipt and a single Ctrl+Z cover
- * them; the store raises the receipt off the response's batch id exactly as a
- * verdict does. The row leaves the list on success, so a failure has to be a
- * notice rather than only a live-region line.
+ * Both outcomes are one call and one operation, so the standard receipt and a
+ * single Ctrl+Z cover them; the store raises the receipt off the response's
+ * batch id exactly as a verdict does. The row leaves the list on success, so a
+ * failure has to be a notice rather than only a live-region line.
+ *
+ * **What happened is read off the response, never off the prediction.** The
+ * button predicts `Split off 2` or `Unstack all 5` so the user knows what they
+ * are pressing, but the stack can have changed between the read and the press
+ * and the server applies the same floor itself. `stack_dissolved` is the
+ * answer, and it is the only thing this narration trusts.
  *
  * @param {Object} stack
  */
 async function onResolveMixed(stack) {
-  const plan = mixedStackAction(stack);
   // The row already carries the server's own verdict on whether either outcome
   // can land (`stackable` / `blocked_by_sets`), so the doomed call is never
   // issued: the button is marked `aria-disabled` and the press is answered
@@ -1820,20 +2065,85 @@ async function onResolveMixed(stack) {
     );
     return;
   }
-  const result = await store.resolveMixedStack(stack);
+  const stackId = stack?.stack_id;
+  const result = await store.resolveMixedStack(stack, mixedMarksFor(stack));
   if (!result) {
-    reportMixedStackRefusal(
-      stack,
-      serverDetail(store.error),
-      isLockedRefusal(store.error) ? lockedPictureIds(store.error) : [],
-    );
+    // A 400 means the row no longer describes the stack: a marked member has
+    // left it since the page was read. The store has already re-read the list,
+    // so the row on screen is now the truth and the user is told to look again
+    // rather than pressing a button that will fail the same way.
+    if (Number(store.error?.response?.status) === 400) {
+      forgetMixedRow(stackId);
+      const sentence =
+        "This stack changed since the page was read, so nothing was done. The list has been re-read; check the marks and try again.";
+      announcement.value = sentence;
+      noticeStore.warning(sentence);
+      return;
+    }
+    if (isLockedRefusal(store.error)) {
+      reportMixedStackRefusal(
+        stack,
+        serverDetail(store.error),
+        lockedPictureIds(store.error),
+      );
+      return;
+    }
+    reportMixedStackFailure(serverDetail(store.error));
     return;
   }
+  forgetMixedRow(stackId);
   const moved = result.split_picture_ids?.length ?? 0;
-  announcement.value =
-    plan.action === "split"
-      ? `Took ${moved} ${moved === 1 ? "picture" : "pictures"} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`
-      : `Freed ${moved} ${moved === 1 ? "picture" : "pictures"} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`;
+  announcement.value = result.stack_dissolved
+    ? `Freed ${moved} ${moved === 1 ? "picture" : "pictures"} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`
+    : `Took ${moved} ${moved === 1 ? "picture" : "pictures"} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`;
+}
+
+/**
+ * Mark or unmark one member as a stranger.
+ *
+ * The same gesture from three places: the row's tile, the row's `X` key and
+ * Compare's card. A locked set freezes the whole stack, so a marked member
+ * could never be moved and the mark is refused rather than accepted and then
+ * ignored, which is exactly how the review queue answers a cover on a frozen
+ * unit.
+ *
+ * @param {Object} stack
+ * @param {number} pictureId
+ */
+function onToggleMark(stack, pictureId) {
+  const outcome = toggleMixedMark(stack, pictureId);
+  if (outcome === "locked") {
+    announcement.value = `${lockedSetsSentence(mixedStackLockedSets(stack))} Nothing in this stack can be moved until the set is unlocked.`;
+    flashLockedPictures([], mixedFlashKey(stack?.stack_id));
+    return;
+  }
+  if (outcome !== true) return;
+  const marked = mixedMarksFor(stack).some(
+    (id) => String(id) === String(pictureId),
+  );
+  const plan = mixedStackPrimary(stack, mixedMarksFor(stack));
+  announcement.value = marked
+    ? `Marked as a stranger. ${plan.label}.`
+    : `Back in the stack. ${plan.label}.`;
+}
+
+/**
+ * The answer to `S` on this page.
+ *
+ * `S` is Stack in the review queue and a user trained there presses it here
+ * meaning Stack, which is the OPPOSITE of what this page's primary does. So the
+ * key is claimed (it must never run the primary by accident, and it must never
+ * fall through to the app shell) and answered out loud instead of doing
+ * nothing, which would read as a broken key.
+ *
+ * @param {Object} stack
+ */
+function onMixedStackSynonym(stack) {
+  const plan = mixedStackPrimary(stack, mixedMarksFor(stack));
+  announcement.value = `S means Stack in the review queue. Here the primary action is ${plan.label}; press Enter.`;
+  noticeStore.info(
+    `S means Stack in the review queue. Here the primary action is ${plan.label}; press Enter.`,
+  );
 }
 
 /**
@@ -1859,37 +2169,68 @@ function reportMixedStackRefusal(stack, sentence, pictureIds = []) {
   flashLockedPictures(pictureIds, mixedFlashKey(stack?.stack_id));
 }
 
+/** Report an operational failure without presenting it as a lock refusal. */
+function reportMixedStackFailure(sentence) {
+  const because = sentence ? ` ${sentence}` : "";
+  announcement.value = `The stack could not be changed.${because}`;
+  noticeStore.error(
+    `The stack could not be changed.${because} Check the connection or server log, then try again.`,
+  );
+}
+
 /**
- * Keep one stack as it is.
+ * Keep one stack, or every selected stack, as it is.
  *
- * Keep changes no picture, so there is no operation to undo and no receipt
- * will ever arrive for it. The way back is to clear the dismissal, which is
- * offered here on the notice, because the row has already left the list and
- * nothing left on screen to anchor the offer to.
+ * Keep is the ONLY verdict on this page that acts in bulk. The primary's
+ * outcome differs per row (one stack splits, the next dissolves), so a bulk
+ * primary could not name what it was about to do, and a button that cannot name
+ * its outcome must not act on twelve rows at once. Keep names the same outcome
+ * on every row it touches, so it can.
+ *
+ * Keep changes no picture, so there is no operation to undo and no receipt will
+ * ever arrive for it. The way back is to clear the dismissal, which is offered
+ * here on the notice, because the row has already left the list and there is
+ * nothing on screen to anchor the offer to.
  *
  * @param {Object} stack
  */
 async function onKeepMixed(stack) {
-  const stackId = stack?.stack_id;
-  const result = await store.keepMixed(stack);
-  if (!result) {
-    announcement.value =
-      "Could not keep that stack. It is still listed, so nothing was lost.";
-    noticeStore.error(
-      "Could not keep that stack. It is still listed, so you can try again.",
-    );
+  const targets = mixedVerdictTargets(stack);
+  const ids = targets.map((row) => row?.stack_id);
+  const results = [];
+  for (const row of targets) {
+    // Sequential rather than parallel: each Keep removes a row and moves the
+    // totals, and the store's list is one array. A burst of concurrent writes
+    // over it would race the removals against each other.
+    results.push(await store.keepMixed(row));
+  }
+  const kept = results.filter(Boolean).length;
+  if (!kept) {
+    const what =
+      targets.length > 1
+        ? "Could not keep those stacks. They are still listed"
+        : "Could not keep that stack. It is still listed";
+    announcement.value = `${what}, so nothing was lost.`;
+    noticeStore.error(`${what}, so you can try again.`);
     return;
   }
+  for (const id of ids) forgetMixedRow(id);
+  clearMixedSelection();
   const sentence =
-    "Kept this stack as it is. It will be listed again if its pictures change.";
+    targets.length > 1
+      ? `Kept ${kept} of ${targets.length} stacks as they are. They will be listed again if their pictures change.`
+      : "Kept this stack as it is. It will be listed again if its pictures change.";
   announcement.value = sentence;
   noticeStore.info(sentence, {
     action: {
-      label: "Undo keep",
+      label: targets.length > 1 ? "Undo keeps" : "Undo keep",
       handler: async () => {
-        const cleared = await store.unkeepMixedStack(stackId);
+        let cleared = 0;
+        for (const id of ids) {
+          if (await store.unkeepMixedStack(id)) cleared += 1;
+        }
         announcement.value = cleared
-          ? "The stack is listed again."
+          ? `${cleared === 1 ? "The stack is" : `${cleared} stacks are`} listed again.`
           : "Could not clear that Keep. Nothing changed.";
         if (!cleared) noticeStore.error("Could not clear that Keep.");
       },
@@ -2022,6 +2363,100 @@ const handleKeydown = createDedupKeyHandler({
 });
 
 /**
+ * The Mixed stacks queue's rows, in the shape the shared key handler reads.
+ *
+ * This is the whole reason `createDedupKeyHandler` was written as a factory
+ * taking its dependencies by name: the model (five decline guards, the
+ * preventDefault-plus-stopPropagation claim contract, the Escape layering, the
+ * Compare-open branch, the auto-repeat guard) is identical on both queues, and a
+ * second copy of it would be a second place for those to drift.
+ *
+ * The three hooks that differ are the three facts that differ: `unitsOf` points
+ * the digits at a stack's MEMBERS rather than at a group's units, `signatureOf`
+ * keys a row on its stack id, and `onStackSynonym` takes `S` away from the
+ * primary because Split is not Stack.
+ *
+ * `toggleExcluded` always reports success: `onToggleMark` narrates its own
+ * refusal (a locked set freezes the whole stack), so returning false here would
+ * produce a second announcement of the same event in different words.
+ */
+const mixedKeyStore = {
+  get groups() {
+    return store.mixedStacks;
+  },
+  get focusIndex() {
+    return mixedFocusIndex.value;
+  },
+  get focusedGroup() {
+    return mixedFocusedRow.value;
+  },
+  get busy() {
+    return store.mixedBusyStackId !== null;
+  },
+  focusNext: mixedFocusNext,
+  focusPrev: mixedFocusPrev,
+  setFocus: setMixedFocus,
+  focusStart: mixedFocusStart,
+  focusEnd: mixedFocusEnd,
+  coverIdFor: (row) => mixedMemberIdAtCursor(row),
+  toggleExcluded: (row, pictureId) => {
+    onToggleMark(row, pictureId);
+    return true;
+  },
+  setCover: (stackId, pictureId) => setMixedCursorToPicture(stackId, pictureId),
+  stack: (row) => onResolveMixed(row),
+  keepSeparate: (row) => onKeepMixed(row),
+};
+
+/**
+ * Ctrl+A on the Mixed stacks page, and it says what the selection can do.
+ *
+ * Only Keep acts on it, so the announcement names Keep rather than leaving the
+ * user to discover that the primary did not follow.
+ */
+function onSelectAllMixed() {
+  const { selected } = selectAllMixed();
+  if (!selected) return;
+  announcement.value = `Selected all ${selected.toLocaleString()} ${
+    selected === 1 ? "stack" : "stacks"
+  }. Keep applies to all of them; the primary action still acts on one row.`;
+}
+
+const handleMixedKeydown = createDedupKeyHandler({
+  store: mixedKeyStore,
+  isCompareOpen: () => compareOpen.value,
+  openCompare: () => {
+    if (mixedFocusedRow.value) compareOpen.value = true;
+  },
+  closeCompare,
+  undo: () => operationStore.undo(),
+  isReadOnly: () => readOnly.value,
+  isBlocked: (event) =>
+    autoStackOpen.value || (tierMenuOpen.value && tierMenuOwnsEvent(event)),
+  pageRows: () => Math.max(1, viewportRows.value - 1),
+  onEscape,
+  // `E` opens a deck in the review queue. Here every member is already on
+  // screen, which is the point of the page, so the key is answered rather than
+  // left to read as broken.
+  toggleExpansion: () => {
+    announcement.value =
+      "Every picture in this stack is already on the row, so there is nothing to open.";
+  },
+  selectAll: onSelectAllMixed,
+  zoom: {
+    isOpen: () => Boolean(compareRef.value?.isZoomOpen?.()),
+    open: () => compareRef.value?.openZoom?.(),
+    close: () => compareRef.value?.closeZoom?.(),
+    flip: (delta) => compareRef.value?.flipZoom?.(delta),
+    to: (index) => compareRef.value?.zoomTo?.(index),
+    togglePixels: () => compareRef.value?.toggleZoomPixels?.(),
+  },
+  unitsOf: mixedUnitsFor,
+  signatureOf: (row) => row?.stack_id,
+  onStackSynonym: onMixedStackSynonym,
+});
+
+/**
  * The queue's keys, bound at the DOCUMENT for as long as the view is mounted.
  *
  * They used to be bound on the queue root, which meant they only worked while
@@ -2039,6 +2474,14 @@ const handleKeydown = createDedupKeyHandler({
  */
 function onKeydown(event) {
   if (foreignDialogOpen()) return;
+  // Two queues, one key owner each, and exactly one of them is on screen. The
+  // review queue's handler still declines the Mixed page through its own
+  // `isBlocked` as a belt: a verdict key resolving a group the user cannot see
+  // is the failure this routing exists to prevent.
+  if (store.showingMixed) {
+    handleMixedKeydown(event);
+    return;
+  }
   handleKeydown(event);
 }
 
@@ -2552,23 +2995,62 @@ defineExpose({ windowedGroups, tierLabel });
   scrollbar-gutter: stable;
 }
 
-/* What the list is, what it was computed at, and what moves it: once, above
-   the rows, rather than repeated on each of them. */
-.mixed-lede {
-  margin: 0;
+/* The threshold header. STICKY inside the list's own scroller, because every
+   row on this page is a verdict relative to one number and a user who has
+   scrolled that number off the screen is reading the verdict without its
+   premise. It is the list's own band rather than a toolbar row: the number it
+   states and the rows it states it about scroll in the same box.
+
+   `--z-sticky` is the named rung for exactly this ("sticky headers/toolbars
+   inside a scroll container"), and the background is opaque `background` rather
+   than a wash, because rows pass underneath it. */
+.mixed-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
   padding: var(--space-4) 0 var(--space-3);
+  background: rgb(var(--v-theme-background));
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* The count is the sentence's SUBJECT, not a figure beside a caption: "26
+   stacks don't hang together at 90% similar" is one fact, and splitting it into
+   two elements is what lets the two drift apart. The numerals carry the weight
+   and the tabular figures; the words around them do not. */
+.mixed-lede {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   max-width: 78ch;
   font-size: var(--text-sm);
   line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* A LIST, not a stack of cards: the separation is entirely the rows' own
-   dividers, and the container adds no surface, border or radius of its own.
-   Its container name is what lets a row fold its suspects under its title. */
+.mixed-lede b {
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-background));
+}
+
+/* The slider caps itself at `--stats-panel-w`; this only stops it stretching
+   into the sentence's line when the band is wide. */
+.mixed-threshold {
+  flex: 0 1 var(--stats-panel-w);
+}
+
+/* The rows, at the queue's own rhythm: this is the third QUEUE, so its rows sit
+   in the same column with the same gap as the review queue's, and a user moving
+   between the two pages meets one list shape rather than two. */
 .mlist {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
   container-type: inline-size;
   container-name: mixedlist;
 }

@@ -40,6 +40,27 @@
  * aggregate would silently break the per-column best-value highlight, which is
  * a comparison between individual FILES. What the deck stands for is stated
  * once, in words, by the group-level `Contains` row.
+ *
+ * TWO MODES, ONE COMPONENT (`mode`). Compare serves the Mixed stacks page as
+ * well, and the two surfaces differ in what a card MEANS, not in how the
+ * comparison is drawn: one strip, one zoom, one footer, one set of styles.
+ *
+ *   * `group` (the default) is the review queue's: a card is a unit, its
+ *     primary click chooses the cover, right-click leaves it out, and the
+ *     footer gives the stack / keep-separate verdict.
+ *   * `mixed` is one live stack: a card is one MEMBER, so the deck logic, the
+ *     lazy member fetch, the `Contains` row and the expansion band all fall
+ *     away on their own, because a mixed card's unit is a single picture. Its
+ *     primary click MARKS that member as a stranger (click and right-click are
+ *     one gesture, exactly as the row's are, because a mixed stack has no cover
+ *     to choose), and the footer's primary splits the marked members off or
+ *     unstacks the lot. The per-column best-value chip is suppressed: it
+ *     answers "which is the better file" and this page asks "which of these
+ *     does not belong".
+ *
+ * A second dialog was deliberately NOT built. The zoom alone is ~200 lines of
+ * cursor-anchored scale arithmetic, and a copy of it would drift the moment
+ * either surface was touched.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import {
@@ -71,9 +92,13 @@ import {
   groupUnits,
   includedUnits,
   isUnitExcluded,
+  mixedStackMembers,
+  mixedStackPrimaryTitle,
+  mixedStackReason,
   shortenPath,
   showsPath,
   stackVerdictLabel,
+  edgePercentText,
   unitForPictureId,
 } from "../../utils/dedup";
 import { formatUserDate } from "../../utils/utils";
@@ -81,10 +106,40 @@ import { formatUserDate } from "../../utils/utils";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /**
+   * Which surface opened this: `group` (the duplicate review queue) or `mixed`
+   * (the Mixed stacks page). It decides what a card MEANS and what its primary
+   * click does; everything else about the dialog is shared.
+   */
+  mode: {
+    type: String,
+    default: "group",
+    validator: (value) => ["group", "mixed"].includes(value),
+  },
+  /**
    * The group under comparison:
    * `{ id, kind, confidence, why: [{label, against}], candidates: [...] }`.
    */
   group: { type: Object, default: null },
+  /**
+   * `mode: "mixed"` only: the one `MixedStackModel` row under comparison. Its
+   * `member_ids` are the cards, in canonical stack order.
+   */
+  mixedStack: { type: Object, default: null },
+  /**
+   * `mode: "mixed"` only: the picture ids marked as strangers, the server's
+   * opening marks as the user has since adjusted them. The page owns this list
+   * and the footer's primary acts on it.
+   */
+  markedIds: { type: Array, default: () => [] },
+  /**
+   * `mode: "mixed"` only: the footer primary's label, already predicted by the
+   * page (`Split off 2` / `Unstack all 5`). It is the page's prediction rather
+   * than a second computation here, because the row and the dialog naming the
+   * same press two different things is the one bug this cannot afford.
+   */
+  primaryLabel: { type: String, default: "" },
+  /** `mode: "mixed"` only: that button's icon, without the `mdi-` prefix. */
+  primaryIcon: { type: String, default: "" },
   /** The cover currently in force, as chosen by the parent. */
   coverId: { type: [Number, String], default: null },
   /** Candidates the user has left out of the stack. */
@@ -101,10 +156,17 @@ const props = defineProps({
 
 const emit = defineEmits([
   "close",
+  // `mode: "group"`.
   "set-cover",
   "toggle-excluded",
   "stack",
   "keep-separate",
+  // `mode: "mixed"`. `toggle-mark` carries the member's picture id; the other
+  // two are the footer's two verdicts and carry nothing, because the page owns
+  // the marks the request is built from.
+  "toggle-mark",
+  "resolve",
+  "keep",
 ]);
 
 // The en dash placeholder for a value the picture does not carry. A blank cell
@@ -125,14 +187,107 @@ const BROWSER_IMAGE_FORMATS = new Set([
 
 const confidence = computed(() => confidenceLabel(props.group));
 
+/** Whether a card is one member of a live stack rather than a group unit. */
+const isMixed = computed(() => props.mode === "mixed");
+
+/** The dialog names what it is comparing, because the two are not the same
+ * object: a proposal in one mode, an existing stack in the other. */
+const dialogTitle = computed(() =>
+  isMixed.value ? "Compare stack" : "Compare group",
+);
+
+/**
+ * The claim in the header, beside the close button: the group's confidence, or
+ * the mixed row's own reason for being listed. Both are the one-line answer to
+ * "why am I looking at this", so they share the slot.
+ */
+const headerNote = computed(() =>
+  isMixed.value ? mixedStackReason(props.mixedStack) : confidence.value.label,
+);
+
+/**
+ * One mixed stack's members, in canonical stack order. Empty in `group` mode,
+ * so nothing on that path ever reads `mixedStack`.
+ */
+const mixedMembers = computed(() =>
+  isMixed.value ? mixedStackMembers(props.mixedStack) : [],
+);
+
+/** The marks in force, keyed as strings because the ids arrive from a payload
+ * the page has already round-tripped. */
+const markedSet = computed(
+  () => new Set((props.markedIds ?? []).map((id) => String(id))),
+);
+
+/**
+ * One member as a single-picture UNIT.
+ *
+ * The strip, the meta grid and the zoom all speak units, and a mixed card
+ * genuinely IS one: a stack member is the smallest thing the split acts on.
+ * Modelling it as a unit rather than adding a second card shape is what makes
+ * every deck-shaped branch below (the `Contains` row, the expansion band, the
+ * lazy leader fetch) fall away on its own instead of being switched off by
+ * hand.
+ *
+ * @param {Object} member - one `mixedStackMembers` entry.
+ * @returns {Object} a `DedupUnit`, plus the member model the Match column and
+ *   the stranger treatment read.
+ */
+function memberUnit(member) {
+  return {
+    kind: "picture",
+    key: member.key,
+    stackId: props.mixedStack?.stack_id ?? null,
+    coverPictureId: member.pictureId,
+    depth: 1,
+    matchedCount: 1,
+    candidates: [],
+    pictureIds: [member.pictureId],
+    stackable: true,
+    blockedBySets: [],
+    thumbnailVersion: "",
+    face: null,
+    member,
+  };
+}
+
 /**
  * The units under comparison: a loose picture is its own, and every candidate
  * sharing one `stack_id` collapses into a single deck standing for the ENTIRE
  * existing stack. The partition is `utils/dedup.js`'s, the same one the queue
  * row, the store and the keyboard model read, so the strip, the digits, the
  * floor and the request can never disagree about what a card is.
+ *
+ * In `mixed` mode there is nothing to collapse: every card is one member.
  */
-const units = computed(() => groupUnits(props.group));
+const units = computed(() =>
+  isMixed.value ? mixedMembers.value.map(memberUnit) : groupUnits(props.group),
+);
+
+/**
+ * Whether this card's member is marked as a stranger.
+ *
+ * @param {Object} unit
+ * @returns {boolean} always false outside `mixed` mode.
+ */
+function isMarkedUnit(unit) {
+  if (!isMixed.value) return false;
+  return markedSet.value.has(String(unit?.coverPictureId));
+}
+
+/**
+ * Whether this card's picture will NOT be in the resulting stack, whichever
+ * gesture put it there: the user's exclusion in `group` mode, their stranger
+ * mark in `mixed`. The In-stack checkbox reads this; the card's border does
+ * not, because the two states look deliberately different (a dashed excluded
+ * card, a warning-bordered stranger).
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function leavesStack(unit) {
+  return isMixed.value ? isMarkedUnit(unit) : isUnitOut(unit);
+}
 
 /** Whether any card on screen stands for more than one picture. */
 const anyDeck = computed(() => units.value.some((u) => u.kind === "deck"));
@@ -229,6 +384,39 @@ const includedUnitList = computed(() =>
 const verdictLabel = computed(() => stackVerdictLabel(includedUnitList.value));
 
 /**
+ * The evidence under the strip, from whichever payload owns it.
+ *
+ * Same component, same `[{text, against}]` shape, different TONE: a duplicate
+ * group is a proposal and its pills argue for and against it, while a mixed
+ * stack already exists and its pills describe what was measured about it. A row
+ * of red chips over a stack the user made would read as an accusation.
+ */
+const whyPills = computed(() =>
+  isMixed.value ? (props.mixedStack?.why ?? []) : (props.group?.why ?? []),
+);
+
+/**
+ * Which outcome the footer's primary names, read off the icon the page handed
+ * us rather than recomputed.
+ *
+ * The label and the icon move together (`mixedStackPrimary` decides both at
+ * once), so the icon IS the outcome; recomputing it here would give the tooltip
+ * its own opinion, and a tooltip that can contradict the label beside it is
+ * worse than no tooltip.
+ */
+const primaryAction = computed(() =>
+  props.primaryIcon === "call-split" ? "split" : "unstack",
+);
+
+/** The primary's tooltip, in the same words the queue row's carries. */
+const primaryTitle = computed(() =>
+  mixedStackPrimaryTitle({
+    action: primaryAction.value,
+    pictureIds: props.markedIds ?? [],
+  }),
+);
+
+/**
  * Whether a unit is the group's cover.
  *
  * A deck answers to its leader as well as to its matched members, because the
@@ -239,6 +427,9 @@ const verdictLabel = computed(() => stackVerdictLabel(includedUnitList.value));
  * @returns {boolean}
  */
 function isUnitCover(unit) {
+  // A mixed stack already exists and already has a leader, so there is no cover
+  // to choose here: the card's press marks a stranger instead.
+  if (isMixed.value) return false;
   if (props.coverId == null) return false;
   if (unitForPictureId([unit], props.coverId) === unit) return true;
   // A member promoted from the expansion is a picture of this stack that the
@@ -258,6 +449,11 @@ function isUnitCover(unit) {
  * @returns {boolean}
  */
 function isUnitOut(unit) {
+  // Mixed mode has no exclusions. A member is in the stack or marked as a
+  // stranger, and a stranger is NOT drawn as an excluded card: it is the row's
+  // evidence, and the dashed, quieted treatment would say "inert" about the one
+  // card that is not.
+  if (isMixed.value) return false;
   return isUnitExcluded(unit, props.excludedIds);
 }
 
@@ -307,18 +503,57 @@ function unitPreviewUrl(unit) {
   return previewUrl(unit.coverPictureId, faceOf(unit), unit.thumbnailVersion);
 }
 
-// ── An existing stack's members: eager leader, lazy everything else ─────────
-// The queue payload sizes a deck and names its leader, but carries the leader's
-// ROW only when the leader happens to be one of the group's candidates, which
-// it frequently is not (`stacks[id].leader_picture_id` is routinely outside
-// `matched_picture_ids`). This dialog exists to compare numbers, so the leader's
-// row is fetched on open when it is missing: one member, per deck, on a surface
-// the user opened deliberately. The rest of the stack stays lazy behind the
-// expansion, because inlining a 40-member stack is exactly what the queue's
-// never-render-whole rule forbids.
+// ── An existing stack's members ────────────────────────────────────────────
+// Neither payload carries the picture rows this dialog compares, so both modes
+// read them, and they read them differently because they need different amounts.
+//
+//   * `group`: the queue payload sizes a deck and names its leader, but carries
+//     the leader's ROW only when the leader happens to be one of the group's
+//     candidates, which it frequently is not (`stacks[id].leader_picture_id` is
+//     routinely outside `matched_picture_ids`). So the leader's row is fetched
+//     on open when it is missing: ONE member, per deck. The rest of the stack
+//     stays lazy behind the expansion, because inlining a 40-member stack is
+//     what the queue's never-render-whole rule forbids.
+//   * `mixed`: every member is a card, so the whole stack is read in ONE
+//     request on open. That rule is about the queue's ROWS, not about a dialog
+//     the user opened deliberately, and the row already told us how many
+//     members there are. Without it every metric cell is an en dash and, worse,
+//     `previewUrl` has no `format` and serves a THUMBNAIL into a zoom whose
+//     whole job is to show actual pixels.
+//
+// Neither read is load-bearing. A failure leaves the ids, the evidence, the
+// gestures and both verdicts working, because all of those come off the row.
 
 /** `stackId -> { members, loading, failed, complete }`. */
 const stackMembers = ref({});
+
+/**
+ * What the dialog is showing right now, as one comparable token.
+ *
+ * The dialog flips its subject IN PLACE, in both modes: a verdict auto-advances
+ * the queue to the next group, and the mixed cursor moves to the next row. So a
+ * response that outlived its subject must be dropped rather than written over
+ * the rows of whatever is on screen when it lands.
+ *
+ * The mixed half is keyed on the MEMBERSHIP as well as the stack, and the
+ * fingerprint is the load-bearing half of that pair even though the id is the
+ * obvious choice. A stack re-served at a different threshold has the same
+ * membership, so the fingerprint is unchanged and nothing is re-read: the same
+ * cost the id alone would have had. The two differ only when membership
+ * actually changes, which is exactly when a re-read is wanted, and the case
+ * that forces it is a member being ADDED: that card has no cached row, so
+ * without the fingerprint it would show the en dash for the rest of the
+ * dialog's life with nothing left to trigger a second read. `member_ids` is
+ * what `useMixedStackQueue` already compares for its own held-row check.
+ *
+ * The stack id stays in the key so a server that publishes no fingerprint
+ * degrades to id-only behaviour rather than to one undefined key for every row.
+ */
+const subjectKey = computed(() =>
+  isMixed.value
+    ? `stack:${props.mixedStack?.stack_id ?? ""}:${props.mixedStack?.membership_fingerprint ?? ""}`
+    : `group:${props.group?.signature ?? ""}`,
+);
 
 /**
  * One stack's fetch state.
@@ -350,7 +585,7 @@ async function fetchStackMembers(
     if (held?.complete) return;
     if (!full && held?.members?.length) return;
   }
-  const signature = props.group?.signature;
+  const subject = subjectKey.value;
   stackMembers.value = {
     ...stackMembers.value,
     [key]: {
@@ -364,9 +599,10 @@ async function fetchStackMembers(
     const data = await listStackMembers(stackId, {
       limit: full ? MAX_STACK_MEMBER_PAGE : 1,
     });
-    // The dialog flips group in place (a verdict auto-advances it), so a
-    // response that outlived its group must not be written over the new one's.
-    if (props.group?.signature !== signature) return;
+    // The dialog flips its subject in place (a verdict auto-advances the group,
+    // the mixed cursor moves to the next stack), so a response that outlived
+    // that subject must not be written over the new one's rows.
+    if (subjectKey.value !== subject) return;
     const members = Array.isArray(data?.members) ? data.members : [];
     stackMembers.value = {
       ...stackMembers.value,
@@ -380,10 +616,10 @@ async function fetchStackMembers(
     };
   } catch (err) {
     console.warn(
-      `[dedup] failed to read the members of stack ${stackId} for the compare dialog (group ${signature}, full=${full})`,
+      `[dedup] failed to read the members of stack ${stackId} for the compare dialog (subject ${subject}, full=${full})`,
       err,
     );
-    if (props.group?.signature !== signature) return;
+    if (subjectKey.value !== subject) return;
     stackMembers.value = {
       ...stackMembers.value,
       [key]: {
@@ -396,19 +632,53 @@ async function fetchStackMembers(
   }
 }
 
+/** The mixed stack's one member read, once it has been attempted. */
+const mixedFacesEntry = computed(() =>
+  isMixed.value ? membersEntry(props.mixedStack?.stack_id) : null,
+);
+
+/**
+ * Whether that read failed.
+ *
+ * Nothing is blocked behind it. The ids, the Match column, the evidence pills,
+ * the marking gestures and both verdicts are all built from the row payload the
+ * page already holds, so what is missing is the per-picture DETAIL: the metric
+ * cells and the full-size previews. The line says that and offers the retry;
+ * it does not disable anything, because a surface that still works must not be
+ * presented as broken.
+ */
+const mixedFacesFailed = computed(() => Boolean(mixedFacesEntry.value?.failed));
+
+/** Read the mixed stack's members again after a failure. */
+function retryMixedFaces() {
+  const stackId = props.mixedStack?.stack_id;
+  if (stackId === null || stackId === undefined) return;
+  fetchStackMembers(stackId, { full: true, force: true });
+}
+
 /**
  * The record a unit's numbers are read from.
  *
  * A loose picture is its own; a deck's is its stack LEADER, taken from the
  * group's candidates when the leader is one of them and from the fetched member
- * page otherwise. Null while neither is available, which every metric cell
- * renders as the en dash rather than as a confident zero.
+ * page otherwise; a mixed card's is that member's own row out of the one page
+ * this stack was read as. Null while none is available, which every metric cell
+ * renders as the en dash rather than as a confident zero, and which
+ * `previewUrl` renders as the thumbnail until the real format is known.
  *
  * @param {Object} unit
  * @returns {Object|null}
  */
 function faceOf(unit) {
   if (!unit) return null;
+  if (isMixed.value) {
+    const members = membersEntry(unit.stackId)?.members ?? [];
+    // No `?? members[0]` fallback, unlike the deck below: there the first
+    // member IS a usable stand-in for the leader, here every card is a
+    // different picture and the wrong row would put one member's numbers under
+    // another member's photo.
+    return members.find((m) => candidateId(m) === unit.coverPictureId) ?? null;
+  }
   if (unit.kind !== "deck") return unit.candidates[0] ?? null;
   if (unit.face) return unit.face;
   const members = membersEntry(unit.stackId)?.members ?? [];
@@ -456,13 +726,92 @@ function containsText(unit) {
 }
 
 /**
+ * What the In-stack row is called.
+ *
+ * `In the stack` in mixed mode, because the stack is a thing that already
+ * exists and the question is whether this picture belongs to it; `In stack` in
+ * group mode, where the stack is the one about to be made.
+ */
+const inStackLabel = computed(() =>
+  isMixed.value ? "In the stack" : "In stack",
+);
+
+/**
  * The In-stack readout, per unit: a deck goes in whole or not at all.
  * @param {Object} unit
  * @returns {string}
  */
 function inStackText(unit) {
+  // `Stranger`, not `No`: the mark says what this picture IS relative to its
+  // siblings, which is the fact the primary button acts on.
+  if (isMixed.value) return isMarkedUnit(unit) ? "Stranger" : "Yes";
   if (isUnitOut(unit)) return unit.kind === "deck" ? "None" : "No";
   return unit.kind === "deck" ? `All ${unit.depth}` : "Yes";
+}
+
+/**
+ * What the In-stack checkbox is about to do, said in full.
+ * @param {Object} unit
+ * @returns {string}
+ */
+function inStackToggleTitle(unit) {
+  if (isMixed.value) {
+    return isMarkedUnit(unit)
+      ? "Put this picture back in the stack"
+      : "Mark this picture as a stranger, so it comes out of the stack";
+  }
+  if (isUnitOut(unit)) {
+    return unit.kind === "deck"
+      ? "Put this whole stack back in"
+      : "Put this copy back in the stack";
+  }
+  return unit.kind === "deck"
+    ? "Leave this whole stack out"
+    : "Leave this copy out of the stack";
+}
+
+/**
+ * One member's closest match to any sibling, as a percentage.
+ *
+ * Bound to `nearestEdge`, which is measured whatever the threshold says, so a
+ * stranded member shows the 89% it really is instead of a dash that read as
+ * "matches nothing". The en dash survives for the one case where there is
+ * genuinely no measurement: nothing comparable to measure against.
+ *
+ * @param {Object} unit
+ * @returns {string}
+ */
+function matchText(unit) {
+  return edgePercentText(unit?.member?.nearestEdge);
+}
+
+/**
+ * The Match cell's tooltip: what the number is, then what a dash stands for.
+ *
+ * The absences are NOT one fact reported several ways. A picture nothing has
+ * analysed yet is not a mistake and must never be reported as one; a picture
+ * with nothing to compare against has no measurement rather than a poor one;
+ * and a measured value names the sibling it was measured against, plus whether
+ * the threshold put it outside the cluster. The same sentences the queue row
+ * says, so a user meeting the member on both surfaces meets the same words.
+ *
+ * @param {Object} unit
+ * @returns {string}
+ */
+function matchTitle(unit) {
+  const member = unit?.member;
+  if (!member) return "";
+  const lead = "How close this picture gets to its nearest sibling.";
+  if (member.unhashed) {
+    return `${lead} This picture has not been analysed yet, so it cannot be compared.`;
+  }
+  if (member.nearestEdge === null) {
+    return `${lead} Nothing else in this stack has been analysed yet, so there is nothing to compare this against.`;
+  }
+  const closest = `${lead} Closest match ${edgePercentText(member.nearestEdge)}, to picture #${member.nearestPictureId}.`;
+  return member.stranded
+    ? `${closest} That is below your threshold, so it is out of the stack's cluster.`
+    : closest;
 }
 
 /**
@@ -479,6 +828,15 @@ function unitName(unit, index) {
   // The queue row's own vocabulary (`thumbLabel` in DedupGroupRow), so the
   // thing a screen reader heard in the row is named the same way here.
   const position = `${index + 1} of ${units.value.length}`;
+  if (isMixed.value) {
+    // The strip is deliberately unlabelled imagery, so without the mark in the
+    // name every card reaches assistive tech as the same anonymous control
+    // repeated N times. It leads, because it is the one fact the primary button
+    // acts on. The same sentence the queue row's tiles carry.
+    return isMarkedUnit(unit)
+      ? `Picture ${position}, marked as a stranger, it comes out of the stack`
+      : `Picture ${position}, in the stack`;
+  }
   if (unit.kind !== "deck") return `Picture ${position}`;
   const depth =
     unit.matchedCount < unit.depth
@@ -493,9 +851,78 @@ function unitName(unit, index) {
  * @returns {string}
  */
 function pickTitle(unit) {
+  if (isMixed.value) {
+    const marked = isMarkedUnit(unit);
+    if (props.readOnly) {
+      return marked
+        ? "Marked as a stranger; it would come out of the stack."
+        : "In the stack.";
+    }
+    return marked
+      ? "Click, or press X, to put this picture back in the stack."
+      : "Click, or press X, to mark this picture as a stranger, so it comes out of the stack.";
+  }
   return unit.kind === "deck"
     ? "Make this stack the cover. Its leader, the picture shown here, leads the result."
     : "Make this the cover";
+}
+
+/**
+ * The card's PRIMARY gesture, which is the whole difference between the two
+ * modes: choose a cover, or mark a stranger.
+ *
+ * @param {Object} unit
+ */
+function onCardPick(unit) {
+  if (!isMixed.value) {
+    emit("set-cover", unit.coverPictureId);
+    return;
+  }
+  markMember(unit);
+}
+
+/**
+ * The card's SECONDARY gesture.
+ *
+ * In group mode right-click leaves a unit out, which is a different verdict
+ * from choosing a cover. In mixed mode it is the SAME gesture as the click,
+ * because the queue row it mirrors makes it so: a mixed stack has no cover, so
+ * there is one thing a tile can mean and both buttons perform it.
+ *
+ * @param {Object} unit
+ */
+function onCardContext(unit) {
+  if (!isMixed.value) {
+    emit("toggle-excluded", unitToggleId(unit));
+    return;
+  }
+  markMember(unit);
+}
+
+/**
+ * The In-stack checkbox, which travels with the mode: the unit's exclusion, or
+ * the member's stranger mark.
+ *
+ * @param {Object} unit
+ */
+function onInStackToggle(unit) {
+  if (!isMixed.value) {
+    emit("toggle-excluded", unitToggleId(unit));
+    return;
+  }
+  markMember(unit);
+}
+
+/**
+ * Mark or unmark one member as a stranger. Refused in a read-only session, the
+ * same way the verdict footer is: a gesture the server would refuse is worse
+ * offered than absent.
+ *
+ * @param {Object} unit
+ */
+function markMember(unit) {
+  if (props.readOnly) return;
+  emit("toggle-mark", unit.coverPictureId);
 }
 
 // ── The expansion: what is inside a deck ───────────────────────────────────
@@ -627,8 +1054,15 @@ function confirmPromote() {
  * Whether a value ties the column maximum, so it renders as the best one.
  *
  * A column whose maximum is 0 has nothing to win, so nothing is highlighted.
+ *
+ * NEVER in mixed mode. The chip answers "which of these is the better file",
+ * and that page is asking "which of these does not belong": a winner's chip
+ * next to a stranger's warning border is a confident answer to the wrong
+ * question, and the reader has to work out which of the two marks to believe.
+ * The Match column is that page's comparison, and it has its own chip.
  */
 function isBest(value, best) {
+  if (isMixed.value) return false;
   const numeric = Number(value);
   return best > 0 && Number.isFinite(numeric) && numeric === best;
 }
@@ -719,6 +1153,18 @@ let zoomCloseLastOutTs = 0;
  */
 const zoomPictures = computed(() => {
   const list = [];
+  // Mixed mode has nothing folded: one entry per member, in stack order, which
+  // is exactly the strip's own order. The record is that member's fetched row,
+  // so the zoom serves the down-scaled ORIGINAL rather than a thumbnail; until
+  // it lands it is null, and the thumbnail stands in.
+  if (isMixed.value) {
+    return units.value.map((unit) => ({
+      id: unit.coverPictureId,
+      record: faceOf(unit),
+      version: unit.thumbnailVersion,
+      unit,
+    }));
+  }
   for (const unit of units.value) {
     if (unit.kind !== "deck") {
       const candidate = unit.candidates[0];
@@ -1081,13 +1527,40 @@ defineExpose({
 // would draw the wrong stack under the next group's deck.
 watch(
   () => [props.open, props.group?.signature],
+  () => resetSubjectState(),
+);
+
+/**
+ * The mixed half of the same reset, as a SEPARATE watcher on a string key.
+ *
+ * It cannot be a fourth element of the array above, and that is not a style
+ * choice. That getter returns a fresh array on every evaluation, so `Object.is`
+ * always reports a change and the watcher fires whenever the caller hands over
+ * a new `mixedStack` object at all, identical contents included. Keying the
+ * reset on membership would then be decorative: a threshold reload re-serves
+ * the same stack as a new object and would throw away the picture rows and
+ * re-read them, which is exactly the cost the fingerprint exists to avoid.
+ * `subjectKey` is a string, so this fires when the membership genuinely
+ * changes and not otherwise.
+ *
+ * Guarded on the mode so the group path keeps precisely the watcher it always
+ * had, and gains no second, differently-timed reset.
+ */
+watch(
+  () => subjectKey.value,
   () => {
-    closeZoom();
-    stackMembers.value = {};
-    expandedStackId.value = null;
-    promoteId.value = null;
+    if (!isMixed.value) return;
+    resetSubjectState();
   },
 );
+
+/** Everything held about the subject that just went off screen. */
+function resetSubjectState() {
+  closeZoom();
+  stackMembers.value = {};
+  expandedStackId.value = null;
+  promoteId.value = null;
+}
 
 // A deck whose leader is not one of the group's candidates has no numbers to
 // compare until its row is read, and that is the common case rather than an
@@ -1095,6 +1568,17 @@ watch(
 watch(
   () => (props.open ? units.value : null),
   (list) => {
+    if (isMixed.value) {
+      // The whole stack, in one request: every member is a card here, and
+      // without their rows the metric cells are dashes and the zoom is looking
+      // at a thumbnail. The reset watch above has already cleared the cache for
+      // a new stack, so this refetches when the cursor moves to the next row.
+      const stackId = props.mixedStack?.stack_id;
+      if (list?.length && stackId !== null && stackId !== undefined) {
+        fetchStackMembers(stackId, { full: true });
+      }
+      return;
+    }
     for (const unit of list ?? []) {
       if (unit.kind === "deck" && !unit.face) fetchStackMembers(unit.stackId);
     }
@@ -1149,49 +1633,63 @@ function onZoomPointerUp() {
 function onZoomClick() {
   if (panState?.moved) return;
   const entry = zoomEntry.value;
-  if (entry) emit("set-cover", entry.unit.coverPictureId);
+  if (!entry) return;
+  // The zoom's gesture is the card's gesture at full screen, so it follows the
+  // mode with it: choose the cover, or mark the stranger. In mixed mode the
+  // entry IS the member, so there is no unit-level indirection to make.
+  if (isMixed.value) {
+    markMember(entry.unit);
+    return;
+  }
+  emit("set-cover", entry.unit.coverPictureId);
 }
 
 function onZoomContextMenu() {
   const entry = zoomEntry.value;
-  if (entry) emit("toggle-excluded", unitToggleId(entry.unit));
+  if (!entry) return;
+  if (isMixed.value) {
+    markMember(entry.unit);
+    return;
+  }
+  emit("toggle-excluded", unitToggleId(entry.unit));
 }
 </script>
 
 <template>
-  <AppDialog
-    :open="open"
-    title="Compare group"
-    fullscreen
-    @close="requestClose"
-  >
-    <!-- The confidence claim rides in the header, next to the close button, so
-         it stays visible while the strip below scrolls. -->
+  <AppDialog :open="open" :title="dialogTitle" fullscreen @close="requestClose">
+    <!-- The claim rides in the header, next to the close button, so it stays
+         visible while the strip below scrolls: the group's confidence, or the
+         mixed row's own reason for being listed. -->
     <template #header-right>
-      <span class="dc-confidence">{{ confidence.label }}</span>
+      <span class="dc-confidence">{{ headerNote }}</span>
     </template>
 
     <!-- ── The unit strip ──────────────────────────────────────────────────
          One card per UNIT, not per candidate: a whole existing stack is one
-         deck, because that is the smallest thing a verdict can move. The cards
-         GROW into the freed width, the images are the point of this surface,
-         and scroll sideways only once there are too many to fit; the
+         deck, because that is the smallest thing a verdict can move. In mixed
+         mode a unit is one member of one live stack, which is the smallest
+         thing a split can move: same strip, same cards, different meaning.
+         The cards GROW into the freed width, the images are the point of this
+         surface, and scroll sideways only once there are too many to fit; the
          comparison only works when the fields line up across cards. -->
     <div class="dc-strip">
       <div
         v-for="({ unit, face }, index) in cards"
         :key="unit.key"
         class="dc-card"
-        :class="{ 'dc-card--out': isUnitOut(unit) }"
-        @contextmenu.prevent="emit('toggle-excluded', unitToggleId(unit))"
+        :class="{
+          'dc-card--out': isUnitOut(unit),
+          'dc-card--split': isMarkedUnit(unit),
+        }"
+        @contextmenu.prevent="onCardContext(unit)"
       >
         <button
           type="button"
           class="dc-pick"
-          :aria-pressed="isUnitCover(unit)"
+          :aria-pressed="isMixed ? isMarkedUnit(unit) : isUnitCover(unit)"
           :aria-label="unitName(unit, index)"
           :title="pickTitle(unit)"
-          @click="emit('set-cover', unit.coverPictureId)"
+          @click="onCardPick(unit)"
         >
           <!-- Wheel over the picture starts the zoom on it: the mouse's
                equivalent of the corner button, without the pixel hunt. -->
@@ -1222,6 +1720,12 @@ function onZoomContextMenu() {
             <span v-if="isUnitOut(unit)" class="dc-flag dc-flag--out">
               Not in stack
             </span>
+            <!-- The stranger says what is about to happen to it, in the same
+                 corner the excluded flag uses, because it is the same kind of
+                 statement: this picture is not staying with the others. -->
+            <span v-if="isMarkedUnit(unit)" class="dc-flag dc-flag--split">
+              Split off
+            </span>
           </span>
         </button>
         <!-- The zoom trigger is a sibling of the pick button (a button inside
@@ -1248,6 +1752,25 @@ function onZoomContextMenu() {
               unit.kind === "deck" ? "Leader" : "ID"
             }}</span>
             <span class="dc-val">#{{ unit.coverPictureId }}</span>
+          </span>
+          <!-- The Match column is the mixed page's whole comparison: how close
+               this member gets to its nearest sibling, measured whatever the
+               threshold says, so a stranger reads 89% rather than a dash that
+               looked like "matches nothing". The en dash is left for the one
+               case with no measurement at all: nothing comparable to measure
+               against. It sits beside the ID because those two are
+               what a reader scans first here. Group-level like Location and
+               Smart score (every card or none), because the meta grid is what
+               the picture above it gives its leftover height to, and a row on
+               some cards only would leave the pictures out of register. -->
+          <span v-if="isMixed" class="dc-cell">
+            <span class="dc-label">Match</span>
+            <span
+              class="dc-val"
+              :class="{ 'dc-val--gap': isMarkedUnit(unit) }"
+              :title="matchTitle(unit)"
+              >{{ matchText(unit) }}</span
+            >
           </span>
           <span class="dc-cell">
             <span class="dc-label">Resolution</span>
@@ -1361,27 +1884,21 @@ function onZoomContextMenu() {
           </span>
           <!-- The checkbox toggles the whole unit: a stack goes into the
                verdict entire or not at all, so `All 5` and `None` are the only
-               states a deck has. -->
+               states a deck has. In mixed mode the unit is one member and the
+               checkbox is the stranger mark, so the same control keeps meaning
+               "will this picture be in the stack when I press the button". -->
           <span class="dc-cell">
-            <span class="dc-label">In stack</span>
+            <span class="dc-label">{{ inStackLabel }}</span>
             <span class="dc-val dc-instack">
               <button
                 type="button"
                 class="dc-toggle"
-                :aria-pressed="!isUnitOut(unit)"
-                :title="
-                  isUnitOut(unit)
-                    ? unit.kind === 'deck'
-                      ? 'Put this whole stack back in'
-                      : 'Put this copy back in the stack'
-                    : unit.kind === 'deck'
-                      ? 'Leave this whole stack out'
-                      : 'Leave this copy out of the stack'
-                "
-                @click.stop="emit('toggle-excluded', unitToggleId(unit))"
+                :aria-pressed="!leavesStack(unit)"
+                :title="inStackToggleTitle(unit)"
+                @click.stop="onInStackToggle(unit)"
               >
                 <v-icon size="14">{{
-                  isUnitOut(unit)
+                  leavesStack(unit)
                     ? "mdi-checkbox-blank-outline"
                     : "mdi-checkbox-marked-outline"
                 }}</v-icon>
@@ -1422,6 +1939,34 @@ function onZoomContextMenu() {
           </span>
         </span>
       </div>
+    </div>
+
+    <!-- ── The mixed member read's one failure state ───────────────────────
+         The comparison is NOT blocked behind this read: the ids, the Match
+         column, the evidence, the marking gestures and both verdicts all come
+         off the row payload, and the thumbnails still draw. What is missing is
+         the per-picture detail, so the line says exactly that and disables
+         nothing. Same construction as the expansion band's error, in the same
+         place below the strip, because it is the same kind of statement. -->
+    <div
+      v-if="mixedFacesFailed"
+      class="dc-expansion-state dc-expansion-state--error dc-mixed-error"
+      role="status"
+      data-testid="dedup-mixed-error"
+    >
+      <v-icon size="16">mdi-alert-outline</v-icon>
+      <!-- The sentence names all three things that are actually missing and
+           claims only what is tested: the marks and both verdicts are built
+           from the row payload, so they still round-trip. The zoom is named
+           because it degrades quietly: it still opens, on thumbnails, and a
+           1:1 readout over a thumbnail is not the comparison it promises. -->
+      <span
+        >Could not read these pictures' details, so the sizes, dates and
+        full-size previews are missing. Marking and splitting still work.</span
+      >
+      <AppButton variant="ghost" size="sm" @click="retryMixedFaces"
+        >Try again</AppButton
+      >
     </div>
 
     <!-- ── The expansion: one deck's members ───────────────────────────────
@@ -1479,39 +2024,87 @@ function onZoomContextMenu() {
     <!-- ── Why these were grouped ──────────────────────────────────────────
          The same pill component the queue row uses, so the evidence a user
          glanced at in the row is literally the same treatment they study here.
-         Compare shows all of it, where the row shows only the first two. -->
-    <DedupWhyPills class="dc-why" :why="group?.why" />
+         Compare shows all of it, where the row shows only the first two. The
+         `fact` tone on the mixed page: the stack already exists, so its pills
+         report what was measured rather than argue for a verdict. -->
+    <DedupWhyPills
+      class="dc-why"
+      :why="whyPills"
+      :variant="isMixed ? 'fact' : 'argument'"
+    />
 
+    <!-- ── The verdict footer ──────────────────────────────────────────────
+         The whole decision is made here, in both modes, so opening Compare is
+         never a detour the user has to back out of before they can act. -->
     <template #footer>
       <span v-if="!readOnly" class="dc-hint">
-        Click a picture, or press its number, to make it the cover. Right-click,
-        or press X, to leave it out. Z zooms. No file is ever deleted.
+        <template v-if="isMixed">
+          Click a picture, or press X, to mark it as a stranger. Z zooms. No
+          file is ever deleted.
+        </template>
+        <template v-else>
+          Click a picture, or press its number, to make it the cover.
+          Right-click, or press X, to leave it out. Z zooms. No file is ever
+          deleted.
+        </template>
       </span>
       <AppButton variant="ghost" key-hint="esc" @click="requestClose"
         >Close</AppButton
       >
-      <AppButton
-        v-if="!readOnly"
-        variant="secondary"
-        icon-left="call-split"
-        key-hint="k"
-        :disabled="busy"
-        title="Leave these as separate pictures. They stay in your library and stop being suggested."
-        @click="emit('keep-separate')"
-      >
-        Keep separate
-      </AppButton>
-      <AppButton
-        v-if="!readOnly"
-        variant="primary"
-        icon-left="layers-plus"
-        key-hint="enter"
-        :disabled="busy"
-        title="Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it."
-        @click="emit('stack')"
-      >
-        {{ verdictLabel.full }}
-      </AppButton>
+      <template v-if="isMixed">
+        <!-- Keep is what makes the mixed list drainable: it changes no picture,
+             so it is not undoable, and the way back is to clear the Keep. -->
+        <AppButton
+          v-if="!readOnly"
+          variant="secondary"
+          icon-left="check"
+          key-hint="k"
+          :disabled="busy"
+          title="This stack is fine. It stops being listed until its pictures change."
+          @click="emit('keep')"
+        >
+          Keep
+        </AppButton>
+        <!-- The primary NAMES ITS OUTCOME, and the page owns that prediction:
+             the row and this footer must say the same thing about the same
+             press, so the label and the icon arrive as props rather than being
+             computed a second time here. -->
+        <AppButton
+          v-if="!readOnly"
+          variant="primary"
+          :icon-left="primaryIcon"
+          key-hint="enter"
+          :disabled="busy"
+          :title="primaryTitle"
+          @click="emit('resolve')"
+        >
+          {{ primaryLabel }}
+        </AppButton>
+      </template>
+      <template v-else>
+        <AppButton
+          v-if="!readOnly"
+          variant="secondary"
+          icon-left="call-split"
+          key-hint="k"
+          :disabled="busy"
+          title="Leave these as separate pictures. They stay in your library and stop being suggested."
+          @click="emit('keep-separate')"
+        >
+          Keep separate
+        </AppButton>
+        <AppButton
+          v-if="!readOnly"
+          variant="primary"
+          icon-left="layers-plus"
+          key-hint="enter"
+          :disabled="busy"
+          title="Group these behind one cover. Every file stays on disk, and Ctrl+Z reverses it."
+          @click="emit('stack')"
+        >
+          {{ verdictLabel.full }}
+        </AppButton>
+      </template>
     </template>
   </AppDialog>
 
@@ -1545,6 +2138,13 @@ function onZoomContextMenu() {
           v-if="zoomEntry && isUnitOut(zoomEntry.unit)"
           class="dc-flag dc-flag--zv"
           >Not in stack</span
+        >
+        <!-- One flag replaces both on the mixed page, because there is one
+             state a member can be in that the card does not already show. -->
+        <span
+          v-if="zoomEntry && isMarkedUnit(zoomEntry.unit)"
+          class="dc-flag dc-flag--zv"
+          >Split off</span
         >
         <span class="dc-zv-meta">{{ zoomMetaText }}</span>
         <!-- Fit and 100% are SNAP STOPS on the wheel's continuum; the
@@ -1615,8 +2215,10 @@ function onZoomContextMenu() {
         >
         <span>Scroll zooms, drag pans — zoom out past Fit to leave</span>
         <span><kbd>P</kbd> Fit ↔ 100%</span>
-        <span><kbd>Enter</kbd> stack</span>
-        <span><kbd>K</kbd> keep separate</span>
+        <!-- The legend names the verdicts the footer is actually offering; the
+             keys are the same two in both modes, the outcomes are not. -->
+        <span><kbd>Enter</kbd> {{ isMixed ? primaryLabel : "stack" }}</span>
+        <span><kbd>K</kbd> {{ isMixed ? "keep" : "keep separate" }}</span>
         <span><kbd>Esc</kbd> back</span>
       </div>
     </div>
@@ -1664,6 +2266,14 @@ function onZoomContextMenu() {
 .dc-card--out {
   border-style: dashed;
   border-color: rgba(var(--v-theme-on-surface), 0.35);
+}
+
+/* A stranger. Deliberately NOT the excluded treatment: the border carries the
+   hue at full strength, because this card is the evidence the page exists for
+   and quieting it would say "inert" about the one card that is not. The flag
+   chip is the second, non-colour channel (WCAG 1.4.1). */
+.dc-card--split {
+  border-color: rgb(var(--v-theme-warning));
 }
 
 .dc-pick {
@@ -1745,7 +2355,8 @@ function onZoomContextMenu() {
   font-weight: var(--weight-semibold);
 }
 
-.dc-flag--out {
+.dc-flag--out,
+.dc-flag--split {
   top: auto;
   bottom: var(--space-2);
 }
@@ -1832,6 +2443,23 @@ function onZoomContextMenu() {
   font-weight: var(--weight-semibold);
   background: rgba(var(--v-theme-primary), 0.18);
   border: 1px solid rgba(var(--v-theme-primary), 0.5);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+/* The stranger's Match value: the same chip construction re-tinted to warning,
+   so the two read as one component with one differing signal rather than as two
+   inventions. It marks the OPPOSITE claim, that this is the value which does
+   not belong, which is why the two never appear on the same card: `isBest` is
+   suppressed in mixed mode entirely. The text stays `on-surface`: `warning` is
+   a 3:1 UI colour and the tint is not a solid fill, so an `on-warning`
+   foreground here would be the "on-<x> on a tint" trap (visual-language.md §4). */
+.dc-val--gap {
+  font-weight: var(--weight-semibold);
+  background: rgba(var(--v-theme-warning), 0.12);
+  border: 1px solid rgba(var(--v-theme-warning), 0.35);
   border-radius: var(--radius-sm);
   padding: 0 var(--space-2);
   align-self: flex-start;
@@ -1928,6 +2556,15 @@ function onZoomContextMenu() {
   background: rgb(var(--v-theme-surface));
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+/* The mixed read's failure line borrows the band's construction but not its
+   parent, because mixed mode has no expansion band. So it carries `.dc-expansion`'s
+   own two rules itself: the strip above is the flexible child and gives up the
+   height, which is what stops this line being squeezed into a scrolling sliver. */
+.dc-mixed-error {
+  margin-top: var(--space-4);
+  flex-shrink: 0;
 }
 
 /* The hue is on the glyph and the border; the text stays `on-surface`, because

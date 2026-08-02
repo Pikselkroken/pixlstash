@@ -78,6 +78,7 @@ frontend/src/
 │   ├── useSidebarExpansion.js   # Which sidebar sections / projects / folders are open; localStorage-backed (+ *.test.js)
 │   ├── useDedupQueueKeyboard.js # The duplicate queue's key model, as a dependency-injected factory (+ *.test.js)
 │   ├── useDedupRowExpansion.js  # The queue row's one stack-expansion band: the "one open, on the focused row" invariant + the lazy member read (+ *.test.js)
+│   ├── useMixedStackQueue.js    # The Mixed stacks queue's view state: focus, selection, stranger marks and the member cursor (+ *.test.js)
 │   ├── useOneTimeNotice.js      # A notice shown once per browser and then never again; localStorage-backed (+ *.test.js)
 │   └── useSubmitGuard.js        # One in-flight submit at a time + the `pending` flag its button wears — see §10.2 (+ *.test.js)
 │
@@ -141,7 +142,7 @@ frontend/src/
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
     ├── io/          # Import / export / external-service connection, ComfyUiRunner, RemixDialog
-    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, compare dialog, auto-stack dialog, tier menu, scan banner, scope pill, why-pills and confidence pill), `MixedStackRow` (one row of the Duplicates destination's third page), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), and the Stack* family (badge, edge ticks, expansion strip)
+    └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), and the Stack* family (badge, edge ticks, expansion strip)
 ```
 
 ---
@@ -1380,25 +1381,110 @@ because `unresolved` was withdrawn from the filter panel on the grounds that
 - **Flipping the page reloads nothing.** `showMixedStacks` / `hideMixedStacks`
   only flip a flag: the queue's window, focus, selection and per-group choices
   stay standing behind it, which is what lets the two-way shortcut offer a
-  return that restores them. The queue's key model stands down while the page
-  is up (`isBlocked`), except Escape, which resolves before that guard and is
-  the one-press way back.
-- **`MixedStackRow` is deliberately not a `DedupGroupRow`.** Divider-separated,
-  no per-row border, background, radius or focus bar: the card treatment says
-  "decide now, keyboard-driven, auto-advancing", and a second thing that looked
-  like the queue would be read as a second queue with a second to-do count.
-  Left to right: the leader at a fixed 64px wearing its ticks and badge, a
-  title block (`Stack of 5` over the reason at `--text-xs`), the suspect members
-  as a run of 40px warning-bordered thumbnails (the row's reason to exist), and
-  ghost actions. Ranked worst first by the server, printed with no rank
-  numerals.
-- **Three actions, and one of them is not undoable.** `Split off N` when there
-  is a clear stranger and `Unstack` when there is no majority cluster are one
-  operation each, so the standard receipt and a single `Ctrl+Z` cover them; the
-  split sends the ids the ROW showed (`stranded_picture_ids`), never letting the
-  server recompute a later answer. **`Keep`** changes no picture, records no
-  operation and is what makes the list drainable; `DELETE` on the same path is
-  the way back, offered on the notice because the row has already left.
+  return that restores them. Escape is the one-press way back.
+
+**The page is the THIRD QUEUE** (owner reversal, 2026-08-02). The first cut was
+a divider-separated list on the reasoning that a second card stack would be read
+as a second to-do count. The owner rejected it as under-equipped: "no zoom, no
+Compare Group view, no individual selection, no threshold, no multi-select, no
+keyboard shortcuts". Every one of those is queue machinery that already exists,
+so the page now **reuses** it rather than re-deciding it, and the D5 paragraph
+about the row not looking like the queue is superseded.
+
+- **`MixedQueueRow` is a SIBLING of `DedupGroupRow`, not a mode of it.** Same
+  box, same three columns, same focus treatment, same roving tab stop. What
+  differs is everything the row means: its tiles are one existing stack's
+  MEMBERS (never collapsed into a deck, because looking inside is the point),
+  its verdicts are split / unstack / keep, and its evidence describes an object
+  that already exists. `DedupGroupRow` is 1,500 lines; a second variant axis
+  inside it would be a file nobody can change safely.
+- **`DedupPictureStrip` is the shared half**, extracted out of `DedupGroupRow`
+  and mounted by both: the height-driven sizing math (`stripHeightForSizeLevel`,
+  the 2.4:1 panorama ceiling, the placeholder's EXIF-blind shape estimate), the
+  roving tabindex rule, the corner columns and the whole chip system. It keeps
+  the shipped class names (`.gstrip`, `.gunit`, `.gthumb`, `.gt`, `.gtl`,
+  `.gtr`, `.gnum`, `.gcv`, `.glock`, `.gx`, `.gsmart`) on purpose: they are the
+  vocabulary of the tests, the e2e page object and three design documents, and
+  renaming them would hide a real regression inside the noise. Rows hand it
+  plain tile objects and slots for the components that are theirs alone
+  (`StackEdgeTicks`, `StackBadge`, `StarRatingOverlay`).
+- **Marks are the model, and there is ONE stranger treatment.** Members start in
+  the stack; `X` (and a click, and Compare's card) marks a stranger, and the
+  marked ones are what the primary takes out. The server pre-marks the members
+  it believes are strangers, so a row opens with some already marked, exactly as
+  the review queue opens with the server's exclusions applied on an unstackable
+  candidate. An engine mark and a user mark are drawn identically and unmark
+  identically: the button acts on one list, and a user cannot act on a
+  distinction the button does not make. A marked tile takes a `warning` BORDER
+  plus an 18px neutral glyph chip, never `.gthumb--out`'s fade: a marked tile is
+  the evidence, and fading it would say "inert" about the only tiles that are
+  not. **A not-yet-analysed member is never pre-marked** (it carries no hash, so
+  the cohesion fold necessarily lists it as stranded); the row says so in words.
+- **The member cursor is a RAIL, not a ring** (`.gunit--cursor::after`): the
+  tile's border already carries two meanings, accent for the cover and warning
+  for a stranger, and a third would be a third colour on one edge nobody could
+  read. The strip scrolls the cursor into view, since a cursor a digit pushed
+  off the right edge is a cursor the user cannot act on.
+- **The primary names its outcome and predicts it from the marks**: `Split off
+  N` normally, `Unstack all N` (with the icon changing to `layers-off` at the
+  same instant) the moment the marks would leave fewer than two members. It is a
+  PREDICTION; what happened is reported from the response's `stack_dissolved`,
+  because the stack can change between the read and the press.
+- **One call carries both outcomes.** `POST …/split` takes any live member of
+  the stack (widened 2026-08-02, reversing security finding F7 now that the user
+  marks rather than the engine), so an unstack is "every member leaves" and the
+  server applies the two-member floor itself. No client-side routing between two
+  endpoints, so the prediction and the request can never disagree. `Keep`
+  changes no picture, records no operation and is what makes the list drainable;
+  `DELETE` on the same path is the way back, offered on the notice because the
+  row has already left.
+- **A 400 is a STALE row, and it has a handler.** It means a marked member has
+  left the stack since the list was read. Without one the button simply did
+  nothing, which is the definition of a dead control; the store re-reads the
+  list and the page says the stack changed.
+- **`useDedupQueueKeyboard` is reused parameterised, never copied.** The five
+  decline guards, the `preventDefault` + `stopPropagation` claim contract, the
+  Escape layering and the Compare-open branch are identical on both queues.
+  Three hooks carry the three facts that differ: `unitsOf` points `1`-`9` at a
+  stack's members rather than a group's units, `signatureOf` keys a row on its
+  stack id, and `onStackSynonym` takes `S` off the primary. **`S` is bound to
+  nothing here but is still claimed and answered**: a queue-trained user reads it
+  as Stack and would mean Split, which are opposite acts, so the page says "S
+  means Stack in the review queue. Here the primary action is Split off 2; press
+  Enter" rather than running it or going quiet.
+- **Only `Keep` acts in bulk.** Multi-select is inherited whole, but the
+  primary's outcome differs per row (one stack splits, the next dissolves) and a
+  bulk button cannot name an outcome it does not have. The selection bar says
+  `12 rows selected: Keep applies to all`.
+- **The threshold header is sticky inside the list's own scroller**, because
+  every row is a verdict relative to one number and a user who has scrolled that
+  number away is reading the verdict without its premise. The count is the
+  sentence's SUBJECT ("26 stacks don't hang together at 90% similar"), not a
+  figure beside a caption, so the two cannot drift. The slider is
+  `DedupThresholdControl`, extracted so the tier popover and this band cannot
+  differ in label, step or number formatting.
+- **A frozen row keeps its primary reachable.** A locked set refuses split and
+  unstack alike and refuses the WHOLE stack, so every tile fades and none is
+  markable, the reason is a line in the info column, and the button takes
+  `aria-disabled` rather than `disabled` so it stays a tab stop pointing at that
+  reason. The payload rolls the lock up over the stack and names no member, so
+  the per-tile lock chip waits for a 423 that does (`lockChip`, distinct from
+  `locked`, in the strip's tile model): a chip on every tile of a frozen row
+  would be a lock field and the colour would stop meaning anything.
+- **`useMixedStackQueue` holds the page's view state** (focus, selection, marks,
+  member cursor) and the store keeps owning the rows and the writes. Marks are
+  keyed on each stack's `membership_fingerprint`, so an edit is dropped rather
+  than replayed against a stack whose membership changed underneath it, and they
+  are reset wholesale when the threshold moves, because the engine's marks are a
+  function of that number.
+- **Compare is mode-varied, not forked.** One card per member, the card's
+  primary click marks and unmarks (matching the row's `X` exactly), `In the
+  stack` reads `Yes` / `Stranger`, the per-column best-value chip is suppressed
+  (it answers "which is the better file" and this page asks "which does not
+  belong"), the `Contains` row and the expansion band go, and a group-level
+  `Match` row shows each member's strongest edge as a percentage with the en
+  dash for none. The zoom is reused verbatim and is the single largest thing the
+  page gains by being a queue.
 - **The warning chip marks only the STRONG case** (a member joined to nothing
   else in its stack). At the measured 12% a mark is one tile in eight and
   becomes a warning field, and the soft cases are often legitimate. It reuses

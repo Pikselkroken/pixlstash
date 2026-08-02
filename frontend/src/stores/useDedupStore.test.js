@@ -2966,17 +2966,25 @@ describe("useDedupStore: the mixed-stack actions", () => {
     expect(useOperationStore().refresh).toHaveBeenCalled();
   });
 
-  it("unstacks when there is no majority cluster", async () => {
+  // ONE call carries both outcomes. The split route takes any live member of
+  // the stack, so an unstack is "every member leaves" and the server dissolves
+  // a stack that would be left with fewer than two members either way. Routing
+  // between two endpoints on a client-side prediction only creates a case where
+  // the prediction and the request disagree.
+  it("unstacks through the same split call, naming every member", async () => {
     listMixedStacks.mockResolvedValue(
       mixedPage([
         mixedStack({
           stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
           suggested_action: "unstack",
           stranded_picture_ids: [],
+          components: [[7], [8]],
         }),
       ]),
     );
-    unstackMixedStack.mockResolvedValue({
+    splitMixedStack.mockResolvedValue({
       stack_id: 7,
       split_picture_ids: [7, 8],
       remaining_picture_ids: [],
@@ -2985,10 +2993,59 @@ describe("useDedupStore: the mixed-stack actions", () => {
     });
     const store = useDedupStore();
     await store.loadMixedStacks();
-    await store.resolveMixedStack(store.mixedStacks[0]);
-    expect(unstackMixedStack).toHaveBeenCalled();
-    expect(splitMixedStack).not.toHaveBeenCalled();
+    await store.resolveMixedStack(store.mixedStacks[0], [7, 8]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ pictureIds: [7, 8] }),
+    );
+    expect(unstackMixedStack).not.toHaveBeenCalled();
     expect(store.mixedStacks).toEqual([]);
+  });
+
+  // The threshold the LIST was computed at, not the slider's live value. The
+  // two differ for exactly as long as a reload is in flight, and that is the
+  // window in which a write built from the rows on screen would be bounded by a
+  // threshold those rows were never computed at.
+  it("sends the threshold the list was served at, not the live slider", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack()], { threshold: 0.72 }),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-3",
+    });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(store.threshold).toBe(0.9);
+    expect(store.mixedThreshold).toBe(0.72);
+    await store.resolveMixedStack(store.mixedStacks[0]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ threshold: 0.72 }),
+    );
+  });
+
+  // A 400 means the row no longer describes the stack: a marked member left it
+  // since the list was read. Without a handler the button simply did nothing,
+  // which is the definition of a dead control. The list is re-read so the row
+  // either comes back correct or leaves.
+  it("re-reads the list when the server says the row is stale", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue({
+      response: { status: 400, data: { detail: "not members of stack 42" } },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(listMixedStacks).toHaveBeenCalledTimes(2);
+    // The row stays: nothing was written, so nothing may leave the list on the
+    // strength of a refusal.
+    expect(store.mixedStacks).toHaveLength(1);
   });
 
   // A failed action must leave the row where it was: the page's whole promise
@@ -3039,18 +3096,22 @@ describe("useDedupStore: the mixed-stack actions", () => {
   });
 
   // An unstack takes the same refusal, and the row it leaves behind must read
-  // the same way: one refusal, one marking.
+  // the same way: one refusal, one marking. It travels as a split over every
+  // member, so this is the same call refused with the same code.
   it("marks the row when an unstack is refused by a lock", async () => {
     listMixedStacks.mockResolvedValue(
       mixedPage([
         mixedStack({
           stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
           suggested_action: "unstack",
           stranded_picture_ids: [],
+          components: [[7], [8]],
         }),
       ]),
     );
-    unstackMixedStack.mockRejectedValue({
+    splitMixedStack.mockRejectedValue({
       response: {
         status: 423,
         data: {

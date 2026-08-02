@@ -32,139 +32,63 @@
 
     <!-- Thumbnails at grid scale, edge to edge, carrying no metadata: only the
          cover label and the index, and the index only while the row is focused
-         because that is the only row `1`-`9` can address. -->
-    <div class="gstrip" :style="stripStyle">
-      <!-- One tile per UNIT, not per picture. A deck occupies one slot however
-           many of its members the group named, because a stack verdict moves
-           the whole stack: a strip that drew them apart was offering per-picture
-           gestures the backend folds back together. -->
-      <div v-for="(unit, i) in units" :key="unit.key" class="gunit">
-        <!-- Behind the tile and OUTSIDE it: `.gthumb` clips its overflow, and
-             the deck's peeking edges are drawn past the tile's own box. -->
-        <StackEdgeTicks v-if="unit.kind === 'deck'" :count="unit.depth" />
-        <button
-          type="button"
-          class="gthumb"
-          :class="{
-            'gthumb--cover':
-              isCover(unit) && !isOut(unit) && !isLockedOut(unit),
-            'gthumb--out': isOut(unit) && !isLockedOut(unit),
-            'gthumb--locked': isLockedOut(unit),
-          }"
-          :tabindex="focused ? 0 : -1"
-          :aria-pressed="isCover(unit)"
-          :aria-label="thumbLabel(unit, i)"
-          :title="thumbTitle(unit, i)"
-          @click.stop="onPick(unit)"
-          @contextmenu.prevent.stop="onToggle(unit)"
-        >
-          <!-- The IMG sizes its own box: the stored width/height are the raw
-               file dimensions and ignore EXIF rotation, so a portrait phone
-               shot reports landscape numbers. The browser decodes the rotated
-               pixels, so height-fixed + width-auto is the only shape that is
-               always true. The placeholder uses the metadata as an estimate;
-               the image corrects it on load. -->
-          <img
-            v-if="loadThumbnails"
-            class="gt"
-            :src="thumbUrl(unit)"
-            alt=""
-            loading="lazy"
-            decoding="async"
-          />
-          <span
-            v-else
-            class="gt gt--placeholder"
-            :style="thumbBoxStyle(unit)"
-            aria-hidden="true"
-          ></span>
-          <!-- The top-left corner is a COLUMN, not a slot: the index and the
-               lock chip can both be present (a locked unit in a focused row)
-               and used to be stacked on the same pixels. Same construction as
-               ImageGrid's .thumbnail-top-left-badges. The index leads because
-               `focused` is a row-level fact (every tile in the strip shows its
-               index, or none does), so leading with it keeps the whole strip's
-               indices on one line, which is the only reason the index
-               exists. -->
-          <div v-if="focused || isLockedOut(unit)" class="gtl">
-            <span v-if="focused" class="gnum">{{ i + 1 }}</span>
-            <!-- The server's exclusion, not the user's, so it gets its own
-                 marker: the two can appear in the same strip and must never be
-                 read as the same walk-back-able state. Same chip as
-                 ReviewBinaryCard's .rs-thumb-lock, so the app has one lock
-                 chip. -->
-            <span
-              v-if="isLockedOut(unit)"
-              class="glock"
-              :class="{ 'glock--flash': isFlashing(unit) }"
-            >
-              <v-icon size="12">mdi-lock-outline</v-icon>
-            </span>
-          </div>
-          <span
-            v-if="isCover(unit) && !isOut(unit) && !isLockedOut(unit)"
-            class="gcv"
-            >Cover</span
-          >
-          <!-- The smart score, bottom-right and hover-only. Drawn from the
-               unit's FACE, so a deck shows it only when its leader is one of
-               the group's candidates: the alternative is labelling the leader's
-               picture with a matched member's number, which is exactly the
-               mismatch the deck exists to remove. -->
-          <span
-            v-if="loadThumbnails && smartTextOf(unit)"
-            class="gsmart"
-            aria-hidden="true"
-            :title="`Smart score ${smartTextOf(unit)}`"
-          >
-            <v-icon size="12">mdi-brain</v-icon>
-            {{ smartTextOf(unit) }}
-          </span>
-          <v-icon v-if="isOut(unit) && !isLockedOut(unit)" class="gx" size="20"
-            >mdi-minus-circle-outline</v-icon
-          >
-        </button>
-        <!-- The top-right badge column is an absolutely-positioned SIBLING of
-             the tile, not a child: `StackBadge` is a <button> and `.gthumb` is
-             a <button>, and a button inside a button is invalid markup. Same
-             construction as `.dc-zoom` in DedupCompareDialog.
+         because that is the only row `1`-`9` can address.
 
-             Grid rule: a PERMANENT badge leads, a hover-only one follows. A
-             leading member that is only `opacity: 0` is still in flow, so the
-             column itself never moves; only what sits beneath it does. -->
-        <div v-if="unit.kind === 'deck' || loadThumbnails" class="gtr">
-          <!-- The badge is the EXPANSION trigger (D4). It used to repeat the
-               tile's own set-cover gesture, which made it a second control
-               doing the first one's job; the count is the natural handle for
-               "show me what is in there". -->
-          <StackBadge
-            v-if="unit.kind === 'deck'"
-            :count="unit.depth"
-            :tabindex="focused ? 0 : -1"
-            :expanded="isExpanded(unit)"
-            :flagged="isFlagged(unit)"
-            :dense="denseBadges"
-            :action-title="expandTitle(unit)"
-            @activate="onExpand(unit)"
+         ONE TILE PER UNIT, not per picture. A deck occupies one slot however
+         many of its members the group named, because a stack verdict moves the
+         whole stack: a strip that drew them apart was offering per-picture
+         gestures the backend folds back together.
+
+         The strip itself is `DedupPictureStrip`, shared with the Mixed stacks
+         row: the sizing math, the panorama ceiling, the placeholder estimate,
+         the roving tab stop, the corner columns and the chip recipes are one
+         implementation, so the two rows cannot drift apart. -->
+    <DedupPictureStrip
+      :tiles="tiles"
+      :thumb-height="thumbHeight"
+      :focused="focused"
+      :load-thumbnails="loadThumbnails"
+      @pick="onPick($event.unit)"
+      @toggle="onToggle($event.unit)"
+    >
+      <template #behind="{ tile }">
+        <StackEdgeTicks
+          v-if="tile.unit.kind === 'deck'"
+          :count="tile.unit.depth"
+        />
+      </template>
+      <template #top-right="{ tile }">
+        <!-- The badge is the EXPANSION trigger (D4). It used to repeat the
+             tile's own set-cover gesture, which made it a second control doing
+             the first one's job; the count is the natural handle for "show me
+             what is in there". -->
+        <StackBadge
+          v-if="tile.unit.kind === 'deck'"
+          :count="tile.unit.depth"
+          :tabindex="focused ? 0 : -1"
+          :expanded="isExpanded(tile.unit)"
+          :flagged="isFlagged(tile.unit)"
+          :dense="denseBadges"
+          :action-title="expandTitle(tile.unit)"
+          @activate="onExpand(tile.unit)"
+        />
+        <!-- Hover-only, DISPLAY-ONLY (pointer-events stays off, see the strip's
+             CSS): the tile keeps owning click=cover, right-click=exclude,
+             double-click=compare. aria-hidden, because the same facts live in
+             Compare's meta grid, the queue's readable surface for them. -->
+        <span
+          v-if="loadThumbnails && tile.unit.face"
+          class="gstars"
+          aria-hidden="true"
+        >
+          <StarRatingOverlay
+            :score="Number(tile.unit.face.score) || 0"
+            :icon-size="14"
+            :compact="true"
           />
-          <!-- Hover-only, DISPLAY-ONLY (pointer-events stays off, see the CSS):
-               the tile keeps owning click=cover, right-click=exclude,
-               double-click=compare. aria-hidden, because the same facts live in
-               Compare's meta grid, the queue's readable surface for them. -->
-          <span
-            v-if="loadThumbnails && unit.face"
-            class="gstars"
-            aria-hidden="true"
-          >
-            <StarRatingOverlay
-              :score="Number(unit.face.score) || 0"
-              :icon-size="14"
-              :compact="true"
-            />
-          </span>
-        </div>
-      </div>
-    </div>
+        </span>
+      </template>
+    </DedupPictureStrip>
 
     <div v-if="verdict" class="gact">
       <!-- A decided row states its verdict and offers the one way back.
@@ -409,6 +333,7 @@
 import { computed } from "vue";
 import AppButton from "./AppButton.vue";
 import DedupConfidencePill from "./DedupConfidencePill.vue";
+import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
@@ -434,12 +359,6 @@ import {
 } from "../../utils/thumbnailSizes";
 import { MIN_STACK_MEMBERS } from "../../stores/useDedupStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-
-/**
- * The widest shape a thumbnail may keep before it is cropped, as a ratio. A
- * ceiling, not a crop: only a beyond-panoramic picture reaches it.
- */
-const MAX_THUMB_RATIO = 2.4;
 
 /**
  * Below this height the info column, not the strip, sets the row height, and
@@ -679,17 +598,47 @@ function thumbUrl(unit) {
 }
 
 /**
- * The strip's measurements as CSS variables, so ONE number drives the box, the
- * unknown-shape fallback and the panorama ceiling together. Sizing the box in
- * CSS and the placeholder in JS from two copies of the height is how a row
- * starts jumping as its images decode.
+ * The strip's tiles: one per unit, in strip order.
+ *
+ * The strip draws chips and borders from data rather than from a second copy of
+ * the row's logic, so the two rows that mount it get the same treatment for the
+ * same facts. Each tile keeps a handle on its `unit` so the row's own handlers
+ * and the badge slot can address it without a second lookup.
  */
-const stripStyle = computed(() => ({
-  "--gthumb-h": `${props.thumbHeight}px`,
-  "--gthumb-max-w": `${Math.round(props.thumbHeight * MAX_THUMB_RATIO)}px`,
-  // The unknown-shape fallback is a 4:3 box at the strip's height.
-  "--gthumb-fallback-w": `${Math.round((props.thumbHeight * 4) / 3)}px`,
-}));
+const tiles = computed(() =>
+  units.value.map((unit, i) => {
+    const locked = isLockedOut(unit);
+    const out = isOut(unit) && !locked;
+    const cover = isCover(unit) && !out && !locked;
+    const smart = smartTextOf(unit);
+    return {
+      key: unit.key,
+      unit,
+      src: thumbUrl(unit),
+      // A deck whose leader is not a group candidate has no dimensions to
+      // estimate a placeholder from, and falls through to the strip's 4:3 box.
+      box: unit.face
+        ? { width: unit.face.width, height: unit.face.height }
+        : null,
+      ariaLabel: thumbLabel(unit, i),
+      title: thumbTitle(unit, i),
+      pressed: isCover(unit),
+      cover,
+      out,
+      locked,
+      lockFlash: isFlashing(unit),
+      cornerLabel: cover ? "Cover" : "",
+      centreIcon: out ? "mdi-minus-circle-outline" : "",
+      // The smart score is drawn from the unit's FACE, so a deck shows it only
+      // when its leader is one of the group's candidates: the alternative is
+      // labelling the leader's picture with a matched member's number, which is
+      // exactly the mismatch the deck exists to remove.
+      chip: smart
+        ? { icon: "mdi-brain", text: smart, title: `Smart score ${smart}` }
+        : null,
+    };
+  }),
+);
 
 /** How many why-pills the info column has room for at this size. */
 const whyLimit = computed(() =>
@@ -719,26 +668,6 @@ const denseBadges = computed(
 function isFlagged(unit) {
   if (unit.kind !== "deck" || unit.stackId === null) return false;
   return props.flaggedStackIds?.has?.(String(unit.stackId)) === true;
-}
-
-/**
- * The PLACEHOLDER's estimated shape, from stored dimensions. Only an
- * estimate: stored width/height ignore EXIF rotation, so the real image may
- * arrive with the axes swapped — it then sizes the box itself.
- *
- * A deck whose leader is not a group candidate has no dimensions to estimate
- * from and falls through to the strip's 4:3 box, exactly as an unknown shape
- * does.
- *
- * @param {Object} unit
- * @returns {Object|null} an inline width, or null when the shape is unknown.
- */
-function thumbBoxStyle(unit) {
-  const w = Number(unit.face?.width);
-  const h = Number(unit.face?.height);
-  if (!w || !h) return null;
-  const ratio = Math.min(MAX_THUMB_RATIO, Math.max(0.45, w / h));
-  return { width: `${Math.round(props.thumbHeight * ratio)}px` };
 }
 
 /**
@@ -1151,265 +1080,6 @@ function onDblClick(event) {
   color: rgba(var(--v-theme-on-surface), 0.6);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.gstrip {
-  display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-gutter: stable;
-  /* Headroom for a deck's edge ticks, which are drawn up and to the right of
-     the tile by exactly two `--space-1` steps. `overflow-x: auto` computes
-     `overflow-y: auto` as well, so without this the peek is clipped away and a
-     deck reads as a flat picture with a badge on it. */
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-1);
-}
-
-/* One unit's box. It exists so the count badge can be an absolutely-positioned
-   SIBLING of the tile rather than a child: `StackBadge` is a <button> and
-   `.gthumb` is a <button>, and nesting them is invalid markup that no browser
-   resolves the way the markup reads (`.dc-zoom` in DedupCompareDialog is the
-   shipped precedent). It wraps the tile exactly, so the corner insets below are
-   the tile's corners. */
-.gunit {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  height: var(--gthumb-h);
-}
-
-.gthumb {
-  position: relative;
-  flex: 0 0 auto;
-  /* Width comes from the child: the decoded image (always the true, EXIF-
-     corrected shape) or the placeholder's metadata estimate. */
-  width: auto;
-  min-width: 44px;
-  /* Set by the strip from the queue's size control. */
-  height: var(--gthumb-h);
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  overflow: hidden;
-  cursor: pointer;
-}
-
-.gthumb:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
-.gthumb--cover {
-  border-color: rgb(var(--v-theme-accent));
-}
-
-/* An excluded candidate stays visible and stays clickable: it is a choice the
-   user can walk back, not a deletion.
-
-   The fade lands on the IMAGE, never on the button. Everything else in the box
-   (the exclusion tick, the lock chip, the index, the rating) is what EXPLAINS
-   the state, and fading the explanation along with the photo is what made the
-   lock chip need a flash animation to be noticed at all. Same rule for the
-   server's lock below: only the picture dims. */
-.gthumb--out .gt,
-.gthumb--locked .gt {
-  opacity: var(--opacity-disabled);
-}
-
-.gt {
-  display: block;
-  width: auto;
-  height: 100%;
-  /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. Scaled
-     with the height so the widest allowed shape stays the same 2.4:1. */
-  max-width: var(--gthumb-max-w);
-  object-fit: cover;
-  /* Right-click toggles the exclusion in place, so the dim has to read as a
-     change rather than as a different picture appearing. */
-  transition: opacity var(--dur-1) var(--ease-standard);
-}
-
-/* The unknown-shape fallback: a 4:3 box at the strip's height. */
-.gt--placeholder {
-  width: var(--gthumb-fallback-w);
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-/* The two top corners are badge COLUMNS, mirroring ImageGrid's
-   .thumbnail-top-left-badges / .thumbnail-top-right-badges. A corner that is a
-   single absolutely-positioned slot only works until it holds two things, which
-   is how the index came to be drawn underneath the lock chip. Pointer-inert as a
-   container: the tile owns the whole gesture vocabulary and only a member that
-   is itself a control (the deck badge) opts back in. */
-.gtl,
-.gtr {
-  position: absolute;
-  top: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  pointer-events: none;
-}
-
-.gtl {
-  left: var(--space-2);
-  align-items: flex-start;
-}
-
-/* The deck badge's corner, with the hover-only stars beneath it: a PERMANENT
-   badge leads the column, a hover-only one follows, so the badge's rest
-   position is never set by the height of an invisible star strip. This column
-   is a sibling of `.gthumb`, not a child (see `.gunit`). */
-.gtr {
-  right: var(--space-2);
-  align-items: flex-end;
-  /* Stated rather than left to DOM order: this column is a SIBLING of the tile
-     and has to paint over it, which is exactly what `--z-raised` names
-     ("lifted over an immediate sibling: tile badge"). `.gtl` needs none; it is
-     inside the tile. */
-  z-index: var(--z-raised);
-}
-
-.gnum,
-.gcv {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* In the top-left column; the column owns the inset. */
-.gnum {
-  min-width: var(--badge-size);
-  text-align: center;
-}
-
-.gcv {
-  position: absolute;
-  bottom: var(--space-2);
-  left: var(--space-2);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-}
-
-.gx {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* A locked-out candidate is dimmed like a user exclusion (on the image, see
-   .gthumb--out above), but it is NOT a choice the user can walk back, so it does
-   not take the pointer affordance. Double-click still opens Compare: looking at
-   it is always allowed. */
-.gthumb--locked {
-  cursor: not-allowed;
-}
-
-/* The server's exclusion marker. Same chip as ReviewBinaryCard's
-   .rs-thumb-lock (one lock chip in the app), on the spacing scale rather than
-   that card's 3px one-off, and in the top-left column because .gx owns the
-   middle and the two can appear in the same strip. Neutral at rest: the amber
-   is spent only on a refused press, or a page of frozen rows becomes a
-   warning field and the colour stops meaning anything. */
-.glock {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  pointer-events: none;
-}
-
-/* The sighted counterpart to the announcement, on the exact thumbnail that
-   blocked the press. Same recipe as ReviewDecisionBar's rs-lock-flash. */
-.glock--flash {
-  animation: g-lock-flash var(--dur-2) var(--ease-standard);
-}
-
-@keyframes g-lock-flash {
-  50% {
-    background: color-mix(
-      in srgb,
-      rgb(var(--v-theme-warning)) 26%,
-      transparent
-    );
-    color: rgb(var(--v-theme-warning));
-  }
-}
-
-/* Not a no-op: the refusal still has to be visible, so the animation collapses
-   to its own end state rather than disappearing. */
-@media (prefers-reduced-motion: reduce) {
-  .glock--flash {
-    animation: none;
-    background: color-mix(
-      in srgb,
-      rgb(var(--v-theme-warning)) 26%,
-      transparent
-    );
-    color: rgb(var(--v-theme-warning));
-  }
-}
-
-/* ── Hover-only score overlays ─────────────────────────────────────────────
-   The grid's exact reveal recipe (opacity on the overlay, shown on the thumb's
-   hover; the grid has no focus-triggered display and neither does this,
-   matched deliberately, hover means hover). Display-only: pointer-events stays
-   OFF at all times, unlike the grid where hover arms the stars for clicking,
-   here the thumbnail owns click=cover, right-click=exclude and
-   double-click=compare, and an interactive star would swallow the cover click
-   on the very pixels a hover invites. These keep full strength on an excluded
-   thumb: the fade is the picture's, not the box's.
-
-   The opacity lives on the OVERLAY, not on the .gtr column, so that one column
-   can hold both a hover-only member and a permanent one. */
-.gstars,
-.gsmart {
-  opacity: 0;
-  transition: opacity var(--dur-1) var(--ease-standard);
-  pointer-events: none;
-}
-
-/* Hovered on the UNIT, not the button: the stars now live in a sibling column
-   (see `.gunit`), so a `.gthumb:hover` descendant selector can no longer reach
-   them. `.gunit` is exactly the tile's box, so the trigger area is unchanged. */
-.gunit:hover .gstars,
-.gunit:hover .gsmart {
-  opacity: 1;
-}
-
-/* The smart score chip, bottom-right. The grid has NO thumbnail smart-score
-   overlay to reuse (it shows the number in the info row under the card), so
-   this mirrors the closest shipped recipes instead: this strip's own
-   photo-chip treatment (.gnum/.gcv — --scrim-photo fill, --radius-sm,
-   --text-2xs on on-dark-surface), the sort menu's mdi-brain iconography and
-   the metadata panel's two-decimal precision. */
-.gsmart {
-  position: absolute;
-  bottom: var(--space-2);
-  right: var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── The expansion band ────────────────────────────────────────────────────

@@ -160,8 +160,58 @@ in earlier drafts was that narrower reading on the pre-split library.
   (desc), component count (desc), weakest edge (asc). No visible rank numerals.
 * Count on the page toggle, **never on the sidebar badge**, the queue's to-do
   count is the one number that must stay trusted.
-* The row is a list, not a card stack: no per-row border, background, radius or
-  focus bar. It must not look like a second queue.
+* ~~The row is a list, not a card stack: no per-row border, background, radius
+  or focus bar. It must not look like a second queue.~~ **Superseded by D7.**
+
+### D7: the Mixed stacks page is the third QUEUE (owner reversal, 2026-08-02)
+
+D5's "must not look like a second queue" was rejected on sight of the shipped
+list: "no zoom, no Compare Group view, no individual selection, no threshold, no
+multi-select, no keyboard shortcuts". The reasoning was sound and the conclusion
+was wrong; what the list-shape avoided was a second to-do count, and what it
+cost was every affordance the queue already has. The count stays off the sidebar
+badge (D5's real protection); the row becomes a queue row.
+
+**The model.** A row's stack is what a group is: its **members** are what a
+group's units are, one tile each and never collapsed, because the point of this
+page is to look inside. The verdicts are split / unstack / keep.
+
+**`X` is not analogous to the queue's exclude, it is the same gesture.** In the
+queue, candidates start in and `X` takes one out and it ends up loose. Here,
+members start in and `X` marks a stranger and it ends up loose. The server
+pre-marks the stranded members, so a row opens with some already marked; the
+queue already opens with server-marked exclusions when `stackable: false`, so
+that pattern ships.
+
+* **One stranger treatment, not two.** An engine mark and a user mark behave
+  identically and compose into the one list the button acts on, so they are
+  drawn identically. A marked tile takes a `warning` border plus an 18px neutral
+  glyph chip, and deliberately **not** `.gthumb--out`'s fade: a marked tile is
+  the evidence, and fading it says "inert" about the only tiles that are not.
+* **The member cursor is a rail, not a ring**, because the border slot is
+  already spent twice over.
+* **The primary predicts, the response reports.** `Split off N` normally,
+  `Unstack all N` (icon `layers-off`, at the same instant) when the marks would
+  leave fewer than two members. What actually happened is read off
+  `stack_dissolved`, never off the prediction.
+* **B7 is withdrawn** and the split route is widened to accept any live member
+  of the stack. B7 bound an explicit list to a subset of the stranded set on the
+  reasoning that an arbitrary list would be an unframed remove-from-stack
+  primitive. Once the user marks, their marks ARE the input and "stranded" is
+  only the opening position, so that bound would refuse the feature. What
+  replaces it is the real safety property: every id must be a live member of
+  this stack. One call therefore carries both outcomes, and no client-side
+  routing between endpoints can make the label and the request disagree.
+* **Only `Keep` acts in bulk.** Multi-select is inherited whole, but the
+  primary's outcome differs per row and a bulk button cannot name an outcome it
+  does not have.
+* **`S` is bound to nothing and is still claimed and answered.** A queue-trained
+  user reads `S` as Stack and would mean Split; the two are opposite acts.
+* **Compare is mode-varied, not forked**: one card per member, the card's
+  primary click marks and unmarks, the per-column best-value chip is suppressed
+  (it answers "which is the better file"; this page asks "which does not
+  belong"), and the zoom is reused verbatim, which is the single largest thing
+  the page gains.
 
 **Only the strong case is marked on a tile.** At 12% a warning is one tile in
 eight and becomes a warning field; the soft cases are often legitimate (a burst
@@ -262,13 +312,34 @@ restoring one afterwards would bring it back loose, so the freeze it would have
 projected never returns. Both read surfaces report that same answer; the fuller
 reasoning is in `docs/backend_architecture.md` §22.
 
-**B7: `split` splits *stranded* members, and only those.** An explicit
-`picture_ids` must be a subset of the stranded set at the request's threshold.
-Sending the ids the row showed exists so the split matches what the user was
-looking at; taking an arbitrary list also made this an unconstrained
-remove-from-stack primitive on any stack, including a cohesive one this page
-would never list, which is a second and unframed copy of
-`DELETE /stacks/{id}/members`.
+**B7: `split` splits the members the user marked, bounded by the stack's live
+membership** (widened 2026-08-02; see the reversal note below). Every id in an
+explicit `picture_ids` must be a **live member of the stack named in the path**.
+A picture in another stack or in none is a `400`, and so is a soft-deleted
+member: the caller cannot see those on the row it marked, so a mark cannot mean
+one of them, and the refusal says "Scrapheap" rather than "not a member" so a
+client is not sent hunting for a bug that is not there. B6's locked-set guard is
+unchanged and still refuses the whole stack with `423`, before any of this is
+read. Omit `picture_ids` and the stranded set at `threshold` is used, which is
+the marking the row opens with.
+
+*Reversal note, recorded rather than quietly applied.* B7 was originally written
+on 2026-08-01 in response to security-review finding **F7**, which required an
+explicit `picture_ids` to be a **subset of the stranded set** at the request's
+threshold, reasoning that an arbitrary list "would let it break up a cohesive
+stack this page would never list". That reasoning protected the endpoint's
+*name*, not the user's intent, and the intent has changed: this page is being
+rebuilt so the user marks which members are strangers, starting from the
+engine's marks and adjusting them. Once the user can mark, **their marks are the
+input and "stranded" is only the opening position**, so a bound that refuses any
+mark the engine did not make refuses the feature. The engine keeps the default;
+it stops being a veto. F7 was rated LOW by the reviewer on the grounds that it
+"is not a privilege boundary: the route is `OWNER_ONLY` and
+`DELETE /stacks/{stack_id}/members` gives the same principal an unrestricted
+remove" — so the widening grants no capability the principal lacked. What was
+given up is that the route's name no longer describes its full input space;
+what replaced it is the property that actually protects data, live membership
+of the named stack, tested in both directions.
 
 Every new data route declares its `AccessPolicy` in `pixlstash/authz/registry.py`.
 The gate is deny-by-default and an undeclared route 403s and fails CI.

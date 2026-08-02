@@ -891,31 +891,6 @@ export function mixedStackReason(stack) {
 }
 
 /**
- * The outcome the row's primary button names, and the ids it will send.
- *
- * `split` when a strict majority cluster survives removing the strangers,
- * `unstack` when there is no majority worth keeping. The server decides which
- * (`suggested_action`); this only renders it, and falls back to `unstack` when
- * a row carries no stranded member to split off, because "Split off 0" is a
- * button that cannot do anything.
- *
- * @param {Object} stack
- * @returns {{action: string, label: string, pictureIds: Array<number>}}
- */
-export function mixedStackAction(stack) {
-  const stranded = stack?.stranded_picture_ids ?? [];
-  const suggested = String(stack?.suggested_action ?? "");
-  if (suggested === "split" && stranded.length) {
-    return {
-      action: "split",
-      label: `Split off ${stranded.length}`,
-      pictureIds: [...stranded],
-    };
-  }
-  return { action: "unstack", label: "Unstack", pictureIds: [] };
-}
-
-/**
  * The members the row shows as suspects, worst first.
  *
  * The stranded members lead: they are what the primary button acts on, and
@@ -943,14 +918,230 @@ export function mixedStackSuspects(stack, limit = 6) {
     suspects.push(id);
   };
   for (const id of stack?.stranded_picture_ids ?? []) push(id);
-  // Smallest first, largest dropped: the survivors are not suspects.
-  const components = [...(stack?.components ?? [])]
-    .sort((a, b) => (a?.length ?? 0) - (b?.length ?? 0))
-    .slice(0, -1);
-  for (const component of components) {
-    for (const id of component ?? []) push(id);
+  // The two readings are alternatives, not a union. The non-largest components
+  // are the fallback for a row with NO stranded member, which is what "Below
+  // the strong case ... instead" means above. Appending them unconditionally
+  // (the shipped behaviour until now) accused a whole two-member cluster of not
+  // belonging whenever one lone member was already stranded, which named the
+  // wrong pictures. It matters more than it did: this list is now what opens
+  // marked on the row, so a wrong id here is a wrong id in the request.
+  if (!suspects.length) {
+    // Smallest first, largest dropped: the survivors are not suspects.
+    const components = [...(stack?.components ?? [])]
+      .sort((a, b) => (a?.length ?? 0) - (b?.length ?? 0))
+      .slice(0, -1);
+    for (const component of components) {
+      for (const id of component ?? []) push(id);
+    }
   }
   return suspects.slice(0, Math.max(0, limit));
+}
+
+// --- The Mixed stacks QUEUE ---------------------------------------------------
+//
+// The Mixed stacks page is the third queue, not a bespoke list: a row is one
+// stack, its tiles are that stack's members, and the verdicts are split /
+// unstack / keep. The helpers below turn one server row into the member models
+// the strip draws and the outcome the primary button names.
+//
+// Two facts from the payload drive all of it. `member_ids` is the stack in
+// canonical order (leader first) and `member_edges` is PARALLEL to it, one
+// entry per member. Each entry carries TWO numbers and they are not
+// interchangeable: `strongest_edge` is the best edge that survives at the row's
+// threshold, so it is null for a stranded member by construction, and
+// `nearest_edge` is how close that member really gets to its closest sibling,
+// measured whatever the threshold says. The verdict is made on the first; the
+// number shown to a user is always the second.
+
+/** A stack needs two members; anything fewer dissolves it (`MIN_STACK_MEMBERS`). */
+const MIXED_STACK_FLOOR = 2;
+
+/**
+ * @typedef {Object} MixedStackMember
+ * @property {number} pictureId
+ * @property {string} key - stable `v-for` key.
+ * @property {number|null} strongestEdge - similarity to its closest sibling
+ *   counting only edges that survive at the row's threshold, so null for a
+ *   stranded member by construction. Not the number to display.
+ * @property {number|null} closestPictureId - the sibling on the other end.
+ * @property {number|null} nearestEdge - similarity to its closest sibling,
+ *   full stop: not thresholded, so present even for a stranded member. Null
+ *   only when there is nothing comparable to measure against. THIS is the
+ *   number the Match column and the tile chips show.
+ * @property {number|null} nearestPictureId - the sibling that was measured.
+ * @property {boolean} unhashed - not comparable yet, which is NOT a mistake.
+ * @property {boolean} stranded - the engine's own verdict: no edge to anything.
+ */
+
+/**
+ * One edge value, or null.
+ *
+ * The null check comes before the coercion because `Number(null)` is 0 and 0 is
+ * finite: reading it as a similarity would turn "nothing was measured here" into
+ * a measured zero, which is the one thing this number must never say. Same rule
+ * {@link candidateSmartScore} follows for the same reason.
+ *
+ * @param {*} raw
+ * @returns {number|null}
+ */
+function edgeValue(raw) {
+  if (raw === null || raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * One mixed stack's members, in canonical stack order.
+ *
+ * `member_edges` is keyed by picture rather than trusted positionally: it is
+ * documented as parallel to `member_ids`, but a row that arrives from an older
+ * server carries none at all and a mismatched pair must degrade to "no edge
+ * known" rather than to another member's number.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @returns {Array<MixedStackMember>}
+ */
+export function mixedStackMembers(stack) {
+  const edges = new Map(
+    (stack?.member_edges ?? []).map((edge) => [String(edge?.picture_id), edge]),
+  );
+  const unhashed = new Set(
+    (stack?.unhashed_picture_ids ?? []).map((id) => String(id)),
+  );
+  const stranded = new Set(
+    (stack?.stranded_picture_ids ?? []).map((id) => String(id)),
+  );
+  return (stack?.member_ids ?? []).map((pictureId) => {
+    const key = String(pictureId);
+    const edge = edges.get(key);
+    return {
+      pictureId,
+      key: `m:${key}`,
+      // Checked BEFORE coercion: `Number(null)` is 0, which is finite, and
+      // would turn "nothing was measured" into a confident 0% edge. A member
+      // with no measurement is a member nothing has been compared against, and
+      // it must not be shown as one that resembles nothing.
+      strongestEdge: edgeValue(edge?.strongest_edge),
+      closestPictureId: edge?.closest_picture_id ?? null,
+      nearestEdge: edgeValue(edge?.nearest_edge),
+      nearestPictureId: edge?.nearest_picture_id ?? null,
+      unhashed: unhashed.has(key),
+      stranded: stranded.has(key),
+    };
+  });
+}
+
+/**
+ * The members the row opens MARKED: the engine's own strangers.
+ *
+ * The server pre-marks them, exactly as the review queue opens with the
+ * server's exclusions already applied on an unstackable candidate. They are the
+ * opening position and nothing more: the user adds and removes marks, and their
+ * marks are what the request carries.
+ *
+ * **A not-yet-analysed member is never pre-marked.** It carries no hash, so it
+ * can carry no edge, so the cohesion fold necessarily lists it as stranded;
+ * marking it would report "this does not belong" about a picture nothing has
+ * compared yet, which is the one false positive this feature cannot afford. The
+ * row says so in words instead. This is the same subtraction the backend's own
+ * evidence pills make.
+ *
+ * @param {Object} stack
+ * @returns {Array<number>} picture ids, in the row's own suspect order.
+ */
+export function mixedStackEngineMarks(stack) {
+  const unhashed = new Set(
+    (stack?.unhashed_picture_ids ?? []).map((id) => String(id)),
+  );
+  return mixedStackSuspects(stack, Number.POSITIVE_INFINITY).filter(
+    (id) => !unhashed.has(String(id)),
+  );
+}
+
+/**
+ * What the row's primary button is about to do, given the marks in force.
+ *
+ * Three rules, in order:
+ *
+ *   * **no marks at all** means there is no stranger to take out, so the only
+ *     outcome left is to free the whole stack. `Split off 0` is a button that
+ *     cannot do anything;
+ *   * **marks that would leave fewer than two members** dissolve the stack
+ *     anyway (the server applies the same floor), so the button says so BEFORE
+ *     the press rather than reporting it afterwards;
+ *   * otherwise the strangers come out and the rest stays together.
+ *
+ * The label is a PREDICTION and the icon moves with it, at the same moment. The
+ * outcome that gets reported comes from the response's `stack_dissolved`, never
+ * from this: the stack can have changed between the read and the press.
+ *
+ * Both outcomes travel as one call. The split route takes any live member of
+ * the stack, so an unstack is "every member leaves", which is one operation and
+ * one Ctrl+Z exactly as a split is.
+ *
+ * @param {Object} stack - one `MixedStackModel` row.
+ * @param {Array<number>} markedIds - the marks in force.
+ * @returns {{action: string, label: string, icon: string,
+ *   pictureIds: Array<number>, dissolves: boolean}}
+ */
+export function mixedStackPrimary(stack, markedIds) {
+  const members = (stack?.member_ids ?? []).map((id) => id);
+  const total = members.length || Number(stack?.member_count) || 0;
+  const marked = new Set((markedIds ?? []).map((id) => String(id)));
+  const leaving = members.filter((id) => marked.has(String(id)));
+  const remaining = total - leaving.length;
+  if (!leaving.length || remaining < MIXED_STACK_FLOOR) {
+    return {
+      action: "unstack",
+      label: `Unstack all ${total}`,
+      icon: "layers-off",
+      // Every live member, because the split route is what carries both
+      // outcomes and an empty list is a 400.
+      pictureIds: [...members],
+      dissolves: true,
+    };
+  }
+  return {
+    action: "split",
+    label: `Split off ${leaving.length}`,
+    icon: "call-split",
+    pictureIds: leaving,
+    dissolves: false,
+  };
+}
+
+/**
+ * The primary button's tooltip, matching the outcome it names.
+ *
+ * @param {{action: string, pictureIds: Array<number>}} plan
+ * @returns {string}
+ */
+export function mixedStackPrimaryTitle(plan) {
+  if (plan?.action !== "split") {
+    return "Free every picture in this stack. Nothing is deleted, and Ctrl+Z restores the stack exactly as it was.";
+  }
+  const one = plan.pictureIds.length === 1;
+  return `Take ${one ? "that picture" : "those pictures"} out of the stack and leave the rest together. Nothing is deleted, and Ctrl+Z puts ${one ? "it" : "them"} back.`;
+}
+
+/**
+ * One similarity, as a percentage.
+ *
+ * Feed it `nearestEdge`, never `strongestEdge`: the thresholded value is absent
+ * for every stranded member, and printing a dash there told people a picture
+ * matched nothing when its closest sibling was 89% similar.
+ *
+ * The en dash rather than a zero when there really is no number: "0%" is a
+ * measured similarity and this is the absence of one. That absence now means
+ * one thing only, that the picture has nothing comparable to be measured
+ * against, which is why the callers say "not comparable" in words beside it.
+ *
+ * @param {number|null} edge
+ * @returns {string}
+ */
+export function edgePercentText(edge) {
+  const value = edgeValue(edge);
+  return value === null ? "–" : `${Math.round(value * 100)}%`;
 }
 
 /**

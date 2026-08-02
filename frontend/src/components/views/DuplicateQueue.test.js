@@ -773,7 +773,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     store.nearEnabled = true;
     await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
     await wrapper.vm.$nextTick();
-    const input = wrapper.find(".tm-threshold-input");
+    const input = wrapper.find(".dth-input");
     input.element.focus();
     wrapper
       .findComponent({ name: "DedupTierMenu" })
@@ -786,7 +786,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
   it("keys pressed on the threshold slider never fire verdicts", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
-    const input = wrapper.find(".tm-threshold-input").element;
+    const input = wrapper.find(".dth-input").element;
     input.focus();
     stackGroup.mockResolvedValue({});
     key("s", input);
@@ -803,7 +803,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     const trigger = wrapper.find(".dq-tier-wrap .dq-btn");
     await trigger.trigger("click");
     await wrapper.vm.$nextTick();
-    const input = wrapper.find(".tm-threshold-input");
+    const input = wrapper.find(".dth-input");
     input.element.focus();
     await input.trigger("keydown", { key: "Escape" });
     expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
@@ -2602,7 +2602,7 @@ describe("DuplicateQueue: the Mixed stacks page", () => {
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(3);
-    expect(wrapper.text()).toContain("90% similarity");
+    expect(wrapper.text()).toContain("90% similar");
 
     listMixedStacks.mockResolvedValue(
       mixedPage([mixedStack({ stack_id: 1 })], { threshold: 0.65, total: 1 }),
@@ -2613,7 +2613,7 @@ describe("DuplicateQueue: the Mixed stacks page", () => {
       expect.objectContaining({ threshold: 0.65 }),
     );
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
-    expect(wrapper.text()).toContain("65% similarity");
+    expect(wrapper.text()).toContain("65% similar");
   });
 
   // Mirrors the shipped "No decided groups" construction, and carries its own
@@ -2654,7 +2654,7 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     });
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    await wrapper.find(".mactions button").trigger("click");
+    await wrapper.find(".gact button").trigger("click");
     await flushPromises();
     expect(splitMixedStack).toHaveBeenCalledWith(
       42,
@@ -2667,17 +2667,26 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     );
   });
 
-  it("unstacks the row the server sees no majority in", async () => {
+  // The primary names its outcome, and the name is a function of the MARKS:
+  // `Unstack all N` the moment they would leave fewer than two members. Both
+  // outcomes travel as one split call, so there is never a case where the label
+  // and the request disagree about what is being done.
+  it("unstacks, through the same split call, when nothing would be left", async () => {
     listMixedStacks.mockResolvedValue(
       mixedPage([
         mixedStack({
           stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
+          component_sizes: [1, 1],
+          components: [[7], [8]],
+          largest_component_size: 1,
+          stranded_picture_ids: [7, 8],
           suggested_action: "unstack",
-          stranded_picture_ids: [],
         }),
       ]),
     );
-    unstackMixedStack.mockResolvedValue({
+    splitMixedStack.mockResolvedValue({
       stack_id: 7,
       split_picture_ids: [7, 8],
       remaining_picture_ids: [],
@@ -2686,12 +2695,19 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     });
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    expect(wrapper.find(".mactions").text()).toContain("Unstack");
-    await wrapper.find(".mactions button").trigger("click");
+    expect(wrapper.find(".gact").text()).toContain("Unstack all 2");
+    await wrapper.find(".gact button").trigger("click");
     await flushPromises();
-    expect(unstackMixedStack).toHaveBeenCalledWith(7, expect.any(Object));
-    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ pictureIds: [7, 8] }),
+    );
+    expect(unstackMixedStack).not.toHaveBeenCalled();
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+    // Reported from the response, never from the prediction.
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "removed the stack",
+    );
   });
 
   // A failed action leaves the row exactly where it was, and says so: the
@@ -2701,10 +2717,14 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     splitMixedStack.mockRejectedValue(new Error("nope"));
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    await wrapper.find(".mactions button").trigger("click");
+    await wrapper.find(".gact button").trigger("click");
     await flushPromises();
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
     expect(errorSpy).toHaveBeenCalled();
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain(
+      "Check the connection or server log",
+    );
+    expect(errorSpy.mock.calls.at(-1)[0]).not.toContain("Nothing was changed");
   });
 
   // The 423 the whole lock contract exists for. Nothing was written, so the row
@@ -2730,7 +2750,7 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     });
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    await wrapper.find(".mactions button").trigger("click");
+    await wrapper.find(".gact button").trigger("click");
     await flushPromises();
 
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
@@ -2740,10 +2760,10 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     );
     // The row now carries the refusal's own truth, so the reason is on screen
     // and the second press never reaches the server.
-    const note = wrapper.find(".mlock");
+    const note = wrapper.find(".mqlock");
     expect(note.text()).toBe("Frozen by locked set 'Frozen'");
-    expect(note.classes()).toContain("mlock--flash");
-    const primary = wrapper.find(".mactions button");
+    expect(note.classes()).toContain("mqlock--flash");
+    const primary = wrapper.find(".gact button");
     expect(primary.attributes("aria-disabled")).toBe("true");
     expect(primary.attributes("aria-describedby")).toBe(note.attributes("id"));
 
@@ -2768,8 +2788,10 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     );
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    expect(wrapper.find(".mlock").text()).toBe("Frozen by locked set 'Frozen'");
-    await wrapper.find(".mactions button").trigger("click");
+    expect(wrapper.find(".mqlock").text()).toBe(
+      "Frozen by locked set 'Frozen'",
+    );
+    await wrapper.find(".gact button").trigger("click");
     await flushPromises();
     expect(splitMixedStack).not.toHaveBeenCalled();
     expect(unstackMixedStack).not.toHaveBeenCalled();
@@ -2794,8 +2816,8 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     });
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    expect(wrapper.find(".mlock").exists()).toBe(false);
-    const primary = wrapper.find(".mactions button");
+    expect(wrapper.find(".mqlock").exists()).toBe(false);
+    const primary = wrapper.find(".gact button");
     expect(primary.attributes("aria-disabled")).toBeUndefined();
     await primary.trigger("click");
     await flushPromises();
@@ -2817,7 +2839,7 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     });
     const { wrapper, store } = await mountQueue([group("g1")]);
     await openMixedPage(wrapper, store);
-    const buttons = wrapper.findAll(".mactions button");
+    const buttons = wrapper.findAll(".gact button");
     await buttons[1].trigger("click");
     await flushPromises();
     expect(keepMixedStack).toHaveBeenCalledWith(42);
@@ -2837,6 +2859,215 @@ describe("DuplicateQueue: the Mixed stacks actions", () => {
     await flushPromises();
     expect(clearMixedStackKeep).toHaveBeenCalledWith(42);
     expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+});
+
+// ── The Mixed stacks page as a QUEUE ───────────────────────────────────────
+//
+// The owner rejected the first cut as under-equipped: no zoom, no Compare, no
+// individual selection, no threshold, no multi-select, no keyboard. It is now
+// the third queue, reusing the review queue's machinery rather than being a
+// bespoke list, so what is pinned here is the machinery arriving intact.
+
+describe("DuplicateQueue: the Mixed stacks queue's keyboard", () => {
+  // A queue-trained user reads S as Stack and would mean Split; the two acts
+  // are opposites. The key is claimed either way (it must never run the primary
+  // by accident, and it must never fall through to the app shell) and answered
+  // out loud rather than doing nothing, which would read as a broken key.
+  it("answers S instead of running the primary", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    splitMixedStack.mockClear();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }));
+    await flushPromises();
+
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    const said = wrapper.find('[data-testid="dedup-announcement"]').text();
+    expect(said).toContain("S means Stack in the review queue");
+    expect(said).toContain("Split off 1");
+    expect(said).toContain("press Enter");
+  });
+
+  // The digits address the same tiles on both queues and mean the same thing,
+  // "point at this one". On this page pointing is all they do; the mark is X, a
+  // second and deliberate press.
+  it("moves the member cursor with a digit and marks it with X", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "3" }));
+    await flushPromises();
+    const units = wrapper.findAll(".gunit");
+    expect(units[2].classes()).toContain("gunit--cursor");
+    // Pointing changes nothing about the outcome.
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+    expect(wrapper.find(".gact button").text()).toContain("Split off 2");
+    expect(wrapper.findAll(".gunit")[2].find(".gthumb").classes()).toContain(
+      "gthumb--marked",
+    );
+
+    // Symmetric: the same key takes the mark straight back off.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+  });
+
+  // The engine's marks and the user's are one list, so X unmarks a member the
+  // SERVER marked exactly as it unmarks one the user did.
+  it("unmarks an engine mark with the same key", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    // Member 11 is the fifth tile, and the engine opened with it marked.
+    expect(wrapper.findAll(".gunit")[4].find(".gthumb").classes()).toContain(
+      "gthumb--marked",
+    );
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "5" }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+
+    expect(
+      wrapper.findAll(".gunit")[4].find(".gthumb").classes(),
+    ).not.toContain("gthumb--marked");
+    // Nothing marked means the only outcome left is to free the whole stack.
+    expect(wrapper.find(".gact button").text()).toContain("Unstack all 5");
+  });
+});
+
+describe("DuplicateQueue: the Mixed stacks queue's selection", () => {
+  // Only Keep acts in bulk: the primary's outcome differs per row, so a bulk
+  // primary could not name what it was about to do.
+  it("says Keep is the only bulk action, and acts on the whole selection", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 1 }),
+        mixedStack({ stack_id: 2 }),
+        mixedStack({ stack_id: 3 }),
+      ]),
+    );
+    keepMixedStack.mockResolvedValue({ stack_id: 1, dismissed: true });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    const rows = wrapper.findAll('[data-testid^="mixed-stack-"]');
+    await rows[0].trigger("click", { ctrlKey: true });
+    await rows[1].trigger("click", { ctrlKey: true });
+    expect(wrapper.find(".qselchip").text()).toContain(
+      "2 rows selected: Keep applies to all",
+    );
+
+    // The primary keeps naming ONE row's outcome while the selection holds.
+    const buttons = rows[1].findAll(".gact button");
+    expect(buttons[0].text()).toContain("Split off 1");
+    expect(buttons[0].text()).not.toContain("2 stacks");
+    expect(buttons[1].text()).toContain("Keep 2 stacks");
+
+    keepMixedStack.mockClear();
+    await buttons[1].trigger("click");
+    await flushPromises();
+    expect(keepMixedStack.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2]);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+
+  // Ctrl+A names what the selection can do, rather than leaving the user to
+  // discover that the primary did not follow.
+  it("names Keep when Ctrl+A takes the page", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await flushPromises();
+    const said = wrapper.find('[data-testid="dedup-announcement"]').text();
+    expect(said).toContain("Selected all 2 stacks");
+    expect(said).toContain("Keep applies to all of them");
+  });
+});
+
+describe("DuplicateQueue: the Mixed stacks threshold header", () => {
+  // The count is the sentence's SUBJECT, not a figure beside a caption: one
+  // fact, so the two cannot drift apart. The band is sticky inside the list's
+  // own scroller, because every row is a verdict relative to that number.
+  it("states the count and the threshold as one sentence, and moves both", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 3 }, (_, i) => mixedStack({ stack_id: i + 1 })),
+      ),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    const head = wrapper.find(".mixed-head");
+    expect(head.exists()).toBe(true);
+    expect(head.find(".mixed-lede").text()).toContain(
+      "3 stacks don't hang together at 90% similar",
+    );
+    // The slider is the SHIPPED control, so its label, step and formatting
+    // cannot differ from the tier popover's copy of the same number.
+    expect(head.find(".dth-input").exists()).toBe(true);
+
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 })], { threshold: 0.65, total: 1 }),
+    );
+    await head.find(".dth-input").trigger("change");
+    await store.setThreshold(0.65);
+    await flushPromises();
+
+    expect(wrapper.find(".mixed-lede").text()).toContain(
+      "1 stack doesn't hang together at 65% similar",
+    );
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+});
+
+describe("DuplicateQueue: Compare on the Mixed stacks queue", () => {
+  // The zoom is the single largest thing this page gains by being a queue, and
+  // a second dialog would be a second copy of it. What matters at this level is
+  // that the dialog is handed the SAME marks the row is drawing, so a mark made
+  // in one place is the mark the other shows.
+  it("opens the shared dialog in mixed mode over the focused row's marks", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }));
+    await flushPromises();
+
+    const dialog = wrapper.findComponent({ name: "DedupCompareDialog" });
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("mode")).toBe("mixed");
+    expect(dialog.props("mixedStack").stack_id).toBe(42);
+    expect(dialog.props("markedIds")).toEqual([11]);
+    expect(dialog.props("primaryLabel")).toBe("Split off 1");
+    expect(dialog.props("primaryIcon")).toBe("call-split");
+
+    // A mark made from Compare is the row's mark: one list, one gesture.
+    dialog.vm.$emit("toggle-mark", 9);
+    await flushPromises();
+    expect(dialog.props("markedIds")).toEqual([11, 9]);
+    expect(dialog.props("primaryLabel")).toBe("Split off 2");
+    expect(wrapper.find(".gact button").text()).toContain("Split off 2");
   });
 });
 
@@ -2935,7 +3166,7 @@ describe("DuplicateQueue: the two-way shortcut", () => {
     // The row that was jumped to says so, or the jump reads as a dead press on
     // a list of near-identical rows.
     expect(wrapper.find('[data-testid="mixed-stack-12"]').classes()).toContain(
-      "mrow--revealed",
+      "grow--revealed",
     );
     // And the queue is exactly where it was left.
     expect(store.focusIndex).toBe(1);
@@ -2958,7 +3189,7 @@ describe("DuplicateQueue: the two-way shortcut", () => {
     // No loaded group holds stack 99, so the row does not offer the jump.
     expect(orphan.text()).not.toContain("In the queue");
 
-    await held.findAll(".mactions button").at(-1).trigger("click");
+    await held.findAll(".gact button").at(-1).trigger("click");
     await flushPromises();
     expect(store.showingMixed).toBe(false);
     expect(store.focusIndex).toBe(1);
@@ -2980,21 +3211,35 @@ describe("DuplicateQueue: the two-way shortcut", () => {
     expect(listGroups).not.toHaveBeenCalled();
   });
 
-  // While the page is up the queue's rows are not on screen, so a verdict key
-  // would resolve a group the user cannot see.
+  // While the page is up the REVIEW queue's rows are not on screen, so its
+  // verdict keys must never reach them: Enter belongs to the page in front of
+  // the user, which is now a queue of its own.
   // Asserted on this queue's own state rather than on the shared api mock:
   // earlier cases in this file attach their queues to the document and never
   // unmount them, so a document-level key reaches all of them.
-  it("stands the verdict keys down while the page is showing", async () => {
-    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+  it("gives Enter to the Mixed queue, never to the group underneath", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
     const { wrapper, store } = await mountQueue([group("g0")]);
     await openMixedPage(wrapper, store);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await flushPromises();
-    // A verdict would have removed the row and left the page.
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ pictureIds: [11] }),
+    );
+    // The group behind the page is untouched, and the page is still up.
     expect(store.groups).toHaveLength(1);
     expect(store.showingMixed).toBe(true);
-    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
   });
 });
 
