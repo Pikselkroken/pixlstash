@@ -22,8 +22,9 @@ export const useFilterStore = defineStore("filter", () => {
   const impossibleSources = ref([]);
   // Stack state: 'all' | 'stacked' | 'unstacked' | 'unresolved'. Stacked and
   // unstacked are a filter rather than a destination, because neither carries a
-  // to-do count. 'unresolved' is the third state the grid needs a name for: a
-  // group the duplicate queue has found but nobody has ruled on yet.
+  // to-do count. 'unresolved' (a group the duplicate queue has found but nobody
+  // has ruled on yet) is still honoured by the store and the API, but the filter
+  // panel no longer offers it: the duplicate queue owns that work.
   const stackStateFilter = ref("all");
 
   function resetFilters() {
