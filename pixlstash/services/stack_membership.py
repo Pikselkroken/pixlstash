@@ -28,15 +28,7 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
 )
-
-ID_CHUNK = 900
-"""Ids per ``IN (...)`` clause, under SQLite's 999-variable ceiling."""
-
-
-def _id_chunks(ids):
-    ordered = sorted({int(value) for value in ids if value is not None})
-    for start in range(0, len(ordered), ID_CHUNK):
-        yield ordered[start : start + ID_CHUNK]
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 
 def in_a_live_stack():
@@ -95,25 +87,28 @@ def expand_picture_ids_to_stacks(
     if not ids:
         return []
 
-    stack_ids: set[int] = set()
-    for chunk in _id_chunks(ids):
-        stack_ids.update(
-            int(stack_id)
-            for stack_id in session.exec(
-                select(Picture.stack_id).where(
-                    Picture.id.in_(chunk),
-                    Picture.stack_id.is_not(None),
-                )
-            ).all()
-            if stack_id is not None
-        )
+    input_scope = scope_id_subquery(
+        session, ids, name="_pixlstash_expand_picture_ids"
+    )
+    stack_ids = {
+        int(stack_id)
+        for stack_id in session.exec(
+            select(Picture.stack_id).where(
+                Picture.id.in_(input_scope),
+                Picture.stack_id.is_not(None),
+            )
+        ).all()
+        if stack_id is not None
+    }
     if stack_ids:
-        for chunk in _id_chunks(stack_ids):
-            member_query = select(Picture.id).where(Picture.stack_id.in_(chunk))
-            if not include_deleted:
-                member_query = member_query.where(Picture.deleted.is_(False))
-            member_ids = session.exec(member_query).all()
-            ids.update(int(mid) for mid in member_ids if mid is not None)
+        stack_scope = scope_id_subquery(
+            session, stack_ids, name="_pixlstash_expand_stack_ids"
+        )
+        member_query = select(Picture.id).where(Picture.stack_id.in_(stack_scope))
+        if not include_deleted:
+            member_query = member_query.where(Picture.deleted.is_(False))
+        member_ids = session.exec(member_query).all()
+        ids.update(int(mid) for mid in member_ids if mid is not None)
 
     return sorted(ids)
 
@@ -157,6 +152,9 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     enforce_stack_membership_not_locked(
         session, member_ids, stack_id, "stack pictures together"
     )
+    member_scope = scope_id_subquery(
+        session, member_ids, name="_pixlstash_reconcile_stack_members"
+    )
 
     changed = False
 
@@ -165,7 +163,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
         int(pid)
         for pid in session.exec(
             select(PictureProjectMember.project_id).where(
-                PictureProjectMember.picture_id.in_(member_ids)
+                PictureProjectMember.picture_id.in_(member_scope)
             )
         ).all()
         if pid is not None
@@ -175,7 +173,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
             int(pic_id)
             for pic_id in session.exec(
                 select(PictureProjectMember.picture_id).where(
-                    PictureProjectMember.picture_id.in_(member_ids),
+                    PictureProjectMember.picture_id.in_(member_scope),
                     PictureProjectMember.project_id == project_id,
                 )
             ).all()
@@ -190,7 +188,9 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     # Keep the scalar Picture.project_id consistent across the stack: a single
     # deterministic primary (lowest project id in the union, else None).
     primary_project_id = min(project_ids) if project_ids else None
-    for pic in session.exec(select(Picture).where(Picture.id.in_(member_ids))).all():
+    for pic in session.exec(
+        select(Picture).where(Picture.id.in_(member_scope))
+    ).all():
         if pic.project_id != primary_project_id:
             pic.project_id = primary_project_id
             session.add(pic)
@@ -201,7 +201,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
         int(sid)
         for sid in session.exec(
             select(PictureSetMember.set_id).where(
-                PictureSetMember.picture_id.in_(member_ids)
+                PictureSetMember.picture_id.in_(member_scope)
             )
         ).all()
         if sid is not None
@@ -211,7 +211,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
             int(pic_id)
             for pic_id in session.exec(
                 select(PictureSetMember.picture_id).where(
-                    PictureSetMember.picture_id.in_(member_ids),
+                    PictureSetMember.picture_id.in_(member_scope),
                     PictureSetMember.set_id == set_id,
                 )
             ).all()

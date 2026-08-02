@@ -12,6 +12,7 @@ import gc
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import uuid
 
@@ -32,8 +33,10 @@ from pixlstash.db_models import (
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
-from pixlstash.services import set_lock_service, stack_membership
-from pixlstash.services.set_lock_service import locked_picture_ids
+from pixlstash.services.set_lock_service import (
+    locked_picture_ids,
+    locked_sets_for_pictures,
+)
 from pixlstash.utils.near_neighbor import EMBEDDING_DIM
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -136,41 +139,62 @@ def _set_locked(client, set_id, locked):
     assert resp.status_code == 200, resp.text
 
 
-def test_large_lock_lookup_batches_every_id_query(monkeypatch):
+def _force_variable_limit(server, limit=999):
+    """Lower every new vault connection to SQLite's historical bind limit."""
+    engine = server.vault.db._engine
+
+    def set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    event.listen(engine, "connect", set_limit)
+    engine.dispose()
+
+
+def test_large_lock_lookups_survive_sqlite_variable_ceiling():
     """Regression for #694: reference scans can submit over 100k picture ids."""
     temp_dir, client, server = _setup()
     try:
-        picture_ids = _first_n_pictures(server, 5)
+        picture_ids = _first_n_pictures(server, 1001)
         _seed_stack_directly(server, picture_ids[:2])
         set_id = _create_set(client, "LargeLookupFreeze")
-        _add_member_directly(server, set_id, picture_ids[0])
-        _add_member_directly(server, set_id, picture_ids[2])
+        _add_member(client, set_id, picture_ids[0])
+        _add_member(client, set_id, picture_ids[2])
         _set_locked(client, set_id, True)
+        _force_variable_limit(server)
 
-        # Make every unbounded query fail this assertion with only five rows,
-        # rather than manufacturing the 100k-row vault from the report.
-        monkeypatch.setattr(stack_membership, "ID_CHUNK", 2)
-        monkeypatch.setattr(set_lock_service, "ID_CHUNK", 2)
-        parameter_counts = []
-        engine = server.vault.db._engine
-
-        def record_in_clause(
-            _conn, _cursor, statement, parameters, _context, _executemany
-        ):
-            if " IN (" in statement:
-                parameter_counts.append(len(parameters))
-
-        event.listen(engine, "before_cursor_execute", record_in_clause)
-        try:
-            frozen = server.vault.db.run_task(
-                lambda session: locked_picture_ids(session, picture_ids)
+        frozen, detail = server.vault.db.run_task(
+            lambda session: (
+                locked_picture_ids(session, picture_ids),
+                locked_sets_for_pictures(session, picture_ids),
             )
-        finally:
-            event.remove(engine, "before_cursor_execute", record_in_clause)
+        )
 
         assert frozen == set(picture_ids[:3])
-        assert parameter_counts
-        assert max(parameter_counts) <= 2
+        assert set(detail) == set(picture_ids[:3])
+        assert {item["id"] for item in detail[picture_ids[1]]} == {set_id}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_large_project_and_stack_routes_survive_sqlite_variable_ceiling():
+    """Expanded bulk mutations must not rebind the full id list downstream."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_ids = _first_n_pictures(server, 1001)
+        _force_variable_limit(server)
+
+        project_response = client.patch(
+            "/pictures/project",
+            json={"picture_ids": picture_ids, "project_id": None, "mode": "set"},
+        )
+        assert project_response.status_code == 200, project_response.text
+        assert project_response.json()["missing_ids"] == []
+
+        stack_response = client.post("/stacks", json={"picture_ids": picture_ids})
+        assert stack_response.status_code == 200, stack_response.text
+        assert set(stack_response.json()["picture_ids"]) == set(picture_ids)
     finally:
         server.vault.close()
         temp_dir.cleanup()

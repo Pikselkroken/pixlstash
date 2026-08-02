@@ -25,6 +25,7 @@ from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.request_origin import require_client_batch_id
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -780,8 +781,11 @@ def create_router(server) -> APIRouter:
             picture_ids: list[int],
             name: Optional[str],
         ) -> int:
+            picture_scope = scope_id_subquery(
+                session, picture_ids, name="_pixlstash_stack_route_picture_ids"
+            )
             pictures = session.exec(
-                select(Picture).where(Picture.id.in_(picture_ids))
+                select(Picture).where(Picture.id.in_(picture_scope))
             ).all()
             if len(pictures) != len(picture_ids):
                 missing = sorted(set(picture_ids) - {pic.id for pic in pictures})
@@ -1006,8 +1010,11 @@ def create_router(server) -> APIRouter:
             if stack is None:
                 raise HTTPException(status_code=404, detail="Stack not found")
 
+            picture_scope = scope_id_subquery(
+                session, picture_ids, name="_pixlstash_stack_route_picture_ids"
+            )
             pictures = session.exec(
-                select(Picture).where(Picture.id.in_(picture_ids))
+                select(Picture).where(Picture.id.in_(picture_scope))
             ).all()
             if len(pictures) != len(picture_ids):
                 missing = sorted(set(picture_ids) - {pic.id for pic in pictures})
@@ -1116,8 +1123,11 @@ def create_router(server) -> APIRouter:
                 session, stack_id, "remove pictures from a locked stack"
             )
 
+            picture_scope = scope_id_subquery(
+                session, picture_ids, name="_pixlstash_stack_route_picture_ids"
+            )
             pictures = session.exec(
-                select(Picture).where(Picture.id.in_(picture_ids))
+                select(Picture).where(Picture.id.in_(picture_scope))
             ).all()
             for pic in pictures:
                 if pic.stack_id == stack_id:

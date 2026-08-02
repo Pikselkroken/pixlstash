@@ -43,6 +43,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
@@ -50,33 +51,17 @@ logger = get_logger(__name__)
 # 403 (token scope) and 409 (name conflict) codes already used on these routes.
 LOCKED_STATUS_CODE = 423
 
-ID_CHUNK = 900
-"""Ids per ``IN (...)`` clause, under SQLite's 999-variable ceiling.
-
-Same value and same reason as ``dedup_tier_service.ID_CHUNK``; defined locally
-because that module imports this one, so borrowing the constant would make the
-dependency circular."""
-
-
-def _id_chunks(ids):
-    ordered = sorted({int(value) for value in ids if value is not None})
-    for start in range(0, len(ordered), ID_CHUNK):
-        yield ordered[start : start + ID_CHUNK]
-
-
 def _picture_stack_ids(session: Session, picture_ids) -> dict[int, Optional[int]]:
     """Return picture-to-stack mappings without exceeding SQLite bind limits."""
-    result: dict[int, Optional[int]] = {}
-    for chunk in _id_chunks(picture_ids):
-        result.update(
-            {
-                int(pid): (int(sid) if sid is not None else None)
-                for pid, sid in session.exec(
-                    select(Picture.id, Picture.stack_id).where(Picture.id.in_(chunk))
-                ).all()
-            }
-        )
-    return result
+    scope = scope_id_subquery(
+        session, picture_ids, name="_pixlstash_lock_stack_picture_ids"
+    )
+    return {
+        int(pid): (int(sid) if sid is not None else None)
+        for pid, sid in session.exec(
+            select(Picture.id, Picture.stack_id).where(Picture.id.in_(scope))
+        ).all()
+    }
 
 
 def _locked_sets_by_picture(
@@ -100,18 +85,20 @@ def _locked_sets_by_picture(
     expanded = expand_picture_ids_to_stacks(session, ids)
     if not expanded:
         return {}
+    scope = scope_id_subquery(
+        session, expanded, name="_pixlstash_locked_picture_ids"
+    )
+    rows = session.exec(
+        select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
+        .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
+        .where(
+            PictureSetMember.picture_id.in_(scope),
+            PictureSet.locked.is_(True),
+        )
+    ).all()
     result: dict[int, list[tuple[int, str]]] = {}
-    for chunk in _id_chunks(expanded):
-        rows = session.exec(
-            select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
-            .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
-            .where(
-                PictureSetMember.picture_id.in_(chunk),
-                PictureSet.locked.is_(True),
-            )
-        ).all()
-        for pic_id, set_id, set_name in rows:
-            result.setdefault(int(pic_id), []).append((int(set_id), set_name))
+    for pic_id, set_id, set_name in rows:
+        result.setdefault(int(pic_id), []).append((int(set_id), set_name))
     return result
 
 
@@ -383,11 +370,14 @@ def enforce_stack_membership_not_locked(
         # A single-member stack has no sibling to inherit membership from.
         return
 
+    member_scope = scope_id_subquery(
+        session, members, name="_pixlstash_stack_lock_members"
+    )
     rows = session.exec(
         select(PictureSetMember.set_id, PictureSetMember.picture_id, PictureSet.name)
         .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
         .where(
-            PictureSetMember.picture_id.in_(sorted(members)),
+            PictureSetMember.picture_id.in_(member_scope),
             PictureSet.locked.is_(True),
         )
     ).all()
@@ -465,13 +455,16 @@ def _stack_member_ids(session: Session, stack_ids) -> dict[int, list[int]]:
     ids = sorted({int(sid) for sid in stack_ids if sid is not None})
     if not ids:
         return {}
+    stack_scope = scope_id_subquery(
+        session, ids, name="_pixlstash_detach_stack_ids"
+    )
     members: dict[int, list[int]] = {}
-    for start in range(0, len(ids), ID_CHUNK):
-        chunk = ids[start : start + ID_CHUNK]
-        for picture_id, stack_id in session.exec(
-            select(Picture.id, Picture.stack_id).where(Picture.stack_id.in_(chunk))
-        ).all():
-            members.setdefault(int(stack_id), []).append(int(picture_id))
+    for picture_id, stack_id in session.exec(
+        select(Picture.id, Picture.stack_id).where(
+            Picture.stack_id.in_(stack_scope)
+        )
+    ).all():
+        members.setdefault(int(stack_id), []).append(int(picture_id))
     return members
 
 

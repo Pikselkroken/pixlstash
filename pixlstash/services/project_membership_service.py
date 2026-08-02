@@ -64,6 +64,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
@@ -253,7 +254,12 @@ def reconcile_entity_projects_change(
     if not ensure_ids and not remove_ids:
         return result
 
-    for pic in session.exec(select(Picture).where(Picture.id.in_(pic_id_list))).all():
+    picture_scope = scope_id_subquery(
+        session, pic_id_list, name="_pixlstash_entity_project_picture_ids"
+    )
+    for pic in session.exec(
+        select(Picture).where(Picture.id.in_(picture_scope))
+    ).all():
         if pic.id is None:
             continue
 

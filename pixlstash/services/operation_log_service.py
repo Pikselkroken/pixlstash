@@ -76,6 +76,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
     invalidate_on_anomaly_change,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -239,8 +240,13 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
     if not ids:
         return {}
 
+    picture_scope = scope_id_subquery(
+        session, ids, name="_pixlstash_operation_picture_ids"
+    )
     state: dict[str, dict] = {}
-    pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+    pictures = session.exec(
+        select(Picture).where(Picture.id.in_(picture_scope))
+    ).all()
     for picture in pictures:
         if picture.id is None:
             continue
@@ -271,10 +277,8 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
     if not state:
         return {}
 
-    present = [int(pid) for pid in state]
-
     for picture_id, tag in session.exec(
-        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(present))
+        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(picture_scope))
     ).all():
         state[str(int(picture_id))][FACET_TAGS].append(tag)
 
@@ -303,7 +307,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             TagPrediction.labeled_at,
             TagPrediction.label_model_version,
             TagPrediction.label_confidence,
-        ).where(TagPrediction.picture_id.in_(present))
+        ).where(TagPrediction.picture_id.in_(picture_scope))
     ).all():
         state[str(int(picture_id))][FACET_TAG_PREDICTIONS][tag] = {
             # The tagger's own live fields. Captured so a row the operation itself
@@ -323,21 +327,21 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
 
     for picture_id, set_id in session.exec(
         select(PictureSetMember.picture_id, PictureSetMember.set_id).where(
-            PictureSetMember.picture_id.in_(present)
+            PictureSetMember.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_SETS].append(int(set_id))
 
     for picture_id, project_id in session.exec(
         select(PictureProjectMember.picture_id, PictureProjectMember.project_id).where(
-            PictureProjectMember.picture_id.in_(present)
+            PictureProjectMember.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_PROJECTS].append(int(project_id))
 
     for face_id, picture_id, character_id in session.exec(
         select(Face.id, Face.picture_id, Face.character_id).where(
-            Face.picture_id.in_(present)
+            Face.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_CHARACTERS][str(int(face_id))] = (
@@ -352,10 +356,13 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
         if entry[FACET_STACK]["id"] is not None
     }
     if stack_ids:
+        stack_scope = scope_id_subquery(
+            session, stack_ids, name="_pixlstash_operation_stack_ids"
+        )
         names = dict(
             session.exec(
                 select(PictureStack.id, PictureStack.name).where(
-                    PictureStack.id.in_(sorted(stack_ids))
+                    PictureStack.id.in_(stack_scope)
                 )
             ).all()
         )
