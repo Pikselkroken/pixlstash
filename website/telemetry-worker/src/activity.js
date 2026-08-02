@@ -1,5 +1,6 @@
 /**
- * The rolling activity bitmap: eight bytes per install, no event log.
+ * The rolling activity bitmap: one fixed-width 17-character field per install,
+ * no event log.
  *
  * Bit N set means "this install pinged N days before its last_seen date". That
  * is what separates a pause from a churn, which first_seen/last_seen alone
@@ -12,15 +13,37 @@
  * or double-run sweep silently corrupts every row's history with no way to
  * detect it afterwards. Lazy shifting is idempotent and self-correcting.
  *
- * SQLite INTEGER is **signed** 64-bit, so the window is 63 bits rather than 64.
- * Nine weeks of daily resolution covers day-30 retention and the >=14-day
- * resurrection question with room to spare.
+ * The established window is 63 bits: nine weeks of daily resolution covers
+ * day-30 retention and the >=14-day resurrection question with room to spare.
  */
 
-/** Usable history, in days. 63 not 64: bit 63 is SQLite's sign bit. */
+/** Usable history, in days. */
 export const ACTIVITY_BITS = 63;
 
 const MASK = (1n << BigInt(ACTIVITY_BITS)) - 1n;
+
+/**
+ * D1 cannot bind JavaScript BigInt values, and reading a 64-bit INTEGER through
+ * the Workers API narrows it to a Number. Store the bitmap as a fixed-width,
+ * prefixed hex string instead. The non-numeric `h` prefix also prevents an
+ * older INTEGER-affinity schema from coercing an all-decimal bitmap back into
+ * an imprecise INTEGER.
+ */
+const ENCODED_ACTIVITY = /^h([0-9a-f]{16})$/;
+
+/** Decode either the durable string form or a legacy in-memory numeric value. */
+export function decodeActivity(activity) {
+  if (typeof activity === "string") {
+    const match = ENCODED_ACTIVITY.exec(activity);
+    if (match) return BigInt(`0x${match[1]}`) & MASK;
+  }
+  return BigInt(activity) & MASK;
+}
+
+/** Return the D1-safe fixed-width representation of an activity bitmap. */
+export function encodeActivity(activity) {
+  return `h${decodeActivity(activity).toString(16).padStart(16, "0")}`;
+}
 
 /**
  * Roll an activity bitmap forward and record a ping on the new current day.
@@ -32,7 +55,7 @@ const MASK = (1n << BigInt(ACTIVITY_BITS)) - 1n;
  * @returns {bigint} The bitmap relative to today, with bit 0 set.
  */
 export function rollActivity(activity, daysElapsed) {
-  let bits = BigInt(activity) & MASK;
+  let bits = decodeActivity(activity);
   if (daysElapsed >= ACTIVITY_BITS) {
     // Everything we knew has aged out of the window.
     return 1n;
@@ -72,7 +95,7 @@ export function activeInWeek(activity, week) {
   if (start >= ACTIVITY_BITS) return false;
   const span = Math.min(7, ACTIVITY_BITS - start);
   const window = ((1n << BigInt(span)) - 1n) << BigInt(start);
-  return ((BigInt(activity) & MASK) & window) !== 0n;
+  return (decodeActivity(activity) & window) !== 0n;
 }
 
 /**

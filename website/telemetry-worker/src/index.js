@@ -11,7 +11,8 @@
  * is answered at the edge and the request never reaches Pages.
  *
  * What is stored: one row per install (id, first/last seen date, a 63-bit
- * activity bitmap, a new-install flag, one of four install-type buckets).
+ * activity bitmap, a sticky resurrection flag, a new-install flag, one of four
+ * install-type buckets).
  * What is not stored: IP addresses, user agents, request timestamps, versions,
  * or anything else from the request.
  */
@@ -20,8 +21,10 @@ import {
   accumulateRow,
   createAccumulator,
   finalizeAggregate,
+  hasResurrected,
+  RESURRECTION_GAP_DAYS,
 } from "./aggregate.js";
-import { daysBetween, rollActivity } from "./activity.js";
+import { daysBetween, encodeActivity, rollActivity } from "./activity.js";
 import { MAX_BODY_BYTES, validatePing } from "./validate.js";
 
 /** Rows whose last_seen is older than this are deleted by the daily cron. */
@@ -245,7 +248,10 @@ async function bumpInstallCounters(db, date) {
  */
 async function recordPing(db, ping, date) {
   const existing = await db
-    .prepare("SELECT first_seen, last_seen, activity FROM install WHERE install_id = ?")
+    .prepare(
+      `SELECT first_seen, last_seen, activity, has_resurrected
+         FROM install WHERE install_id = ?`,
+    )
     .bind(ping.install_id)
     .first();
 
@@ -259,11 +265,20 @@ async function recordPing(db, ping, date) {
     await db
       .prepare(
         `INSERT INTO install
-           (install_id, first_seen, last_seen, activity, is_new_install, install_type)
-         VALUES (?, ?, ?, 1, ?, ?)
+           (install_id, first_seen, last_seen, activity, has_resurrected,
+            is_new_install, install_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(install_id) DO NOTHING`,
       )
-      .bind(ping.install_id, date, date, ping.is_new_install ? 1 : 0, ping.install_type)
+      .bind(
+        ping.install_id,
+        date,
+        date,
+        encodeActivity(1n),
+        0,
+        ping.is_new_install ? 1 : 0,
+        ping.install_type,
+      )
       .run();
     await bumpInstallCounters(db, date);
     return "created";
@@ -271,22 +286,33 @@ async function recordPing(db, ping, date) {
 
   const elapsed = daysBetween(existing.last_seen, date);
   const activity = rollActivity(existing.activity, elapsed);
+  // Once observed, resurrection is a durable fact about this installation.
+  // Recomputing it solely from the 63-day bitmap makes a genuine return turn
+  // back into "never returned" when the historical gap ages out.
+  const resurrected =
+    Boolean(existing.has_resurrected) ||
+    // `elapsed - 1` is the number of silent days between the two pings. Check
+    // it directly because rollActivity deliberately discards the old bit when
+    // the return falls beyond the 63-day bitmap window.
+    elapsed - 1 >= RESURRECTION_GAP_DAYS ||
+    // Backfill the sticky field from any older gap still visible in rows that
+    // predate this column.
+    hasResurrected(activity);
   // first_seen and is_new_install are write-once: a later ping must not be able
   // to rewrite an install's cohort or move it into the new-install population.
   await db
     .prepare(
       `UPDATE install
-          SET last_seen = ?, activity = ?, install_type = ?
+          SET last_seen = ?, activity = ?, has_resurrected = ?, install_type = ?
         WHERE install_id = ?`,
     )
     .bind(
       elapsed > 0 ? date : existing.last_seen,
-      // Bound as a BigInt, NOT Number(). float64 has 53 bits of mantissa, so
-      // narrowing here silently discarded the low bits once an install passed
-      // ~53 days of history: the whole activity record collapsed, and a fully
-      // active install exceeded INT64_MAX. Those are exactly the long-lived
-      // installs the retention curve is about.
-      activity,
+      // D1 cannot bind BigInt and exposes INTEGER values as Number, whose
+      // 53-bit mantissa cannot carry this 63-bit bitmap. The fixed-width text
+      // encoding preserves every bit through the Workers API.
+      encodeActivity(activity),
+      resurrected ? 1 : 0,
       ping.install_type,
       ping.install_id,
     )
@@ -426,7 +452,8 @@ export default {
     let cursor = "";
     for (;;) {
       const { results } = await env.DB.prepare(
-        `SELECT install_id, first_seen, last_seen, activity, is_new_install, install_type
+        `SELECT install_id, first_seen, last_seen, activity, has_resurrected,
+                is_new_install, install_type
            FROM install WHERE install_id > ? ORDER BY install_id LIMIT ?`,
       )
         .bind(cursor, AGGREGATE_SCAN_PAGE)

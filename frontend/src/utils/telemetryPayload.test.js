@@ -31,6 +31,13 @@ describe("buildPayloadForChoice", () => {
     expect(requests[1].method).toBe("POST");
   });
 
+  it("shows only the ping when an existing update-check opt-out adds the ID", () => {
+    const requests = buildPayloadForChoice("id", CONTEXT);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe("POST");
+    expect(requests[0].url).toContain("t.pixlstash.dev");
+  });
+
   it("puts the version and install type in the version-check path", () => {
     const { url } = buildVersionCheckRequest("1.9.0", "docker");
     expect(url).toBe("https://pixlstash.dev/latest-version/1.9.0/docker.json");
@@ -99,6 +106,12 @@ describe("buildPayloadLegend", () => {
 
   it("names nothing when nothing is sent", () => {
     expect(buildPayloadLegend("none", CONTEXT)).toEqual([]);
+  });
+
+  it("does not claim a version is sent for the ID-only choice", () => {
+    const legend = buildPayloadLegend("id", CONTEXT);
+    expect(legend.map((entry) => entry.term)).not.toContain("1.9.0");
+    expect(legend.map((entry) => entry.term)).toContain("install_id");
   });
 
   it("reflects the running install rather than a hardcoded sample", () => {

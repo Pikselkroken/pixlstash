@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 TELEMETRY_ENDPOINT = "https://t.pixlstash.dev/v1/ping"
 
-#: Records the last successful send so a restart loop cannot ping repeatedly.
+#: Records the last send attempt so a restart loop cannot ping repeatedly.
 #: Sits beside the install ID rather than in the library database, for the same
 #: reason: a snapshot restore must not change how often an install reports.
 SEND_STATE_FILENAME = "telemetry-state.json"
@@ -74,18 +74,20 @@ def suppressed_reason() -> str | None:
     return None
 
 
-def _read_last_sent(server_config_path: str) -> float | None:
-    """Return the last successful send as a POSIX timestamp, or None."""
+def _read_last_attempt(server_config_path: str) -> float | None:
+    """Return the last send attempt as a POSIX timestamp, or None."""
     path = _state_path(server_config_path)
     if not os.path.exists(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as handle:
             record = json.load(handle)
-        value = record.get("last_sent_at")
+        # `last_sent_at` is the original field name from pre-release builds.
+        # Read it as a fallback so upgrading does not immediately send again.
+        value = record.get("last_attempt_at", record.get("last_sent_at"))
         return float(value) if value is not None else None
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        # A corrupt marker means we do not know when we last sent. Treat that as
+        # A corrupt marker means we do not know when we last attempted. Treat that as
         # "never": at worst one extra ping, which the server deduplicates by id.
         logger.warning(
             "Could not read telemetry send state %s (%s); treating as never sent.",
@@ -95,24 +97,26 @@ def _read_last_sent(server_config_path: str) -> float | None:
         return None
 
 
-def _write_last_sent(server_config_path: str, when: float) -> None:
-    """Record a successful send. Best-effort: a failure only costs a repeat."""
+def _write_last_attempt(server_config_path: str, when: float) -> bool:
+    """Durably reserve one send attempt. Return False if that is impossible."""
     path = _state_path(server_config_path)
     try:
-        write_json_atomic(path, {"last_sent_at": when})
+        write_json_atomic(path, {"last_attempt_at": when})
     except OSError as exc:
         logger.warning(
-            "Could not write telemetry send state %s (%s); the next start may "
-            "send again. This affects nothing but send frequency.",
+            "Could not write telemetry send state %s (%s); refusing to send "
+            "because the once-per-day limit cannot be enforced.",
             path,
             exc,
         )
+        return False
+    return True
 
 
 def is_due(server_config_path: str, now: float | None = None) -> bool:
-    """True if a ping is due, i.e. none has succeeded in the last 24 hours."""
+    """True if a ping is due, i.e. none was attempted in the last 24 hours."""
     moment = now if now is not None else datetime.now(timezone.utc).timestamp()
-    last = _read_last_sent(server_config_path)
+    last = _read_last_attempt(server_config_path)
     if last is None:
         return True
     # A clock moved backwards would otherwise suppress sending until real time
@@ -172,6 +176,17 @@ def send_install_ping(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+
+    # Reserve the attempt BEFORE opening the connection. If this marker cannot
+    # be persisted, sending would make the hourly loop transmit every hour once
+    # the previous marker is stale, violating the user-facing "once a day, at
+    # most" promise. A failed network attempt is deliberately not retried until
+    # tomorrow; telemetry is never important enough to trade privacy guarantees
+    # for delivery.
+    attempted_at = datetime.now(timezone.utc).timestamp()
+    if not _write_last_attempt(server_config_path, attempted_at):
+        return False
+
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             ok = 200 <= response.status < 300
@@ -191,7 +206,6 @@ def send_install_ping(
         return False
 
     if ok:
-        _write_last_sent(server_config_path, datetime.now(timezone.utc).timestamp())
         logger.debug("Sent the anonymous install ping.")
     return ok
 

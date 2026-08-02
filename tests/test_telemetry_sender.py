@@ -86,7 +86,7 @@ def test_not_suppressed_on_an_ordinary_install(monkeypatch):
 
 
 def test_does_not_send_twice_within_a_day(config_path, monkeypatch):
-    sender._write_last_sent(config_path, 1_000_000.0)
+    sender._write_last_attempt(config_path, 1_000_000.0)
     monkeypatch.setattr(
         sender, "is_due", lambda path, now=None: sender.is_due(path, now=1_000_100.0)
     )
@@ -98,7 +98,7 @@ def test_does_not_send_twice_within_a_day(config_path, monkeypatch):
 
 
 def test_is_due_after_the_interval(config_path):
-    sender._write_last_sent(config_path, 1_000_000.0)
+    sender._write_last_attempt(config_path, 1_000_000.0)
 
     assert sender.is_due(config_path, now=1_000_000.0 + 3600) is False
     assert (
@@ -112,7 +112,7 @@ def test_is_due_when_nothing_was_ever_sent(config_path):
 
 
 def test_a_backwards_clock_does_not_suppress_forever(config_path):
-    sender._write_last_sent(config_path, 2_000_000.0)
+    sender._write_last_attempt(config_path, 2_000_000.0)
 
     # A machine whose clock jumped back would otherwise stay silent until real
     # time caught up, which on a badly-set clock could be years.
@@ -179,7 +179,7 @@ def test_sends_no_version_timestamp_or_machine_detail(config_path, monkeypatch):
     assert "version" not in captured["raw"]
 
 
-def test_records_the_send_so_the_next_start_stays_quiet(config_path, monkeypatch):
+def test_records_the_attempt_so_the_next_start_stays_quiet(config_path, monkeypatch):
     monkeypatch.setattr(
         sender.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(204)
     )
@@ -189,14 +189,13 @@ def test_records_the_send_so_the_next_start_stays_quiet(config_path, monkeypatch
     assert sender.is_due(config_path) is False
 
 
-def test_a_refused_ping_is_not_recorded_as_sent(config_path, monkeypatch):
+def test_a_refused_ping_is_not_retried_until_the_next_day(config_path, monkeypatch):
     monkeypatch.setattr(
         sender.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(500)
     )
 
     assert sender.send_install_ping(config_path, "pip") is False
-    # Not recorded, so a later start retries rather than assuming success.
-    assert sender.is_due(config_path) is True
+    assert sender.is_due(config_path) is False
 
 
 def test_network_failure_never_raises(config_path, monkeypatch):
@@ -205,10 +204,10 @@ def test_network_failure_never_raises(config_path, monkeypatch):
 
     monkeypatch.setattr(sender.urllib.request, "urlopen", _boom)
 
-    # Offline is the normal state for many self-hosted installs. It must cost
-    # nothing but a missing datapoint.
+    # Offline is normal for many self-hosted installs. It costs one datapoint,
+    # never an hourly retry loop.
     assert sender.send_install_ping(config_path, "pip") is False
-    assert sender.is_due(config_path) is True
+    assert sender.is_due(config_path) is False
 
 
 def test_http_error_never_raises(config_path, monkeypatch):
@@ -218,6 +217,22 @@ def test_http_error_never_raises(config_path, monkeypatch):
         )
 
     monkeypatch.setattr(sender.urllib.request, "urlopen", _http_error)
+
+    assert sender.send_install_ping(config_path, "pip") is False
+    assert sender.is_due(config_path) is False
+
+
+def test_unwritable_send_state_refuses_before_opening_the_network(
+    config_path, monkeypatch
+):
+    def _refuse_state(*args, **kwargs):
+        raise OSError("read-only file system")
+
+    def _fail_if_sent(*args, **kwargs):
+        raise AssertionError("network opened without a durable daily marker")
+
+    monkeypatch.setattr(sender, "write_json_atomic", _refuse_state)
+    monkeypatch.setattr(sender.urllib.request, "urlopen", _fail_if_sent)
 
     assert sender.send_install_ping(config_path, "pip") is False
 
@@ -286,16 +301,36 @@ def test_dispatch_resolves_a_real_install_type(tmp_path):
 def test_consent_is_re_read_rather_than_captured(tmp_path):
     from unittest import mock
 
+    from pixlstash.database import DBPriority
+    from pixlstash.db_models import User
+
     server = _server(tmp_path)
     try:
         with mock.patch("pixlstash.server.start_periodic_sender") as dispatch:
             server._maybe_send_telemetry_ping()
         consent_check = dispatch.call_args[0][2]
 
-        server.auth.user.telemetry_send_install_id = True
+        def persist_consent(value):
+            def update(session):
+                user = session.get(User, server.auth.user.id)
+                user.telemetry_send_install_id = value
+                session.add(user)
+                session.commit()
+
+            server.vault.db.run_task(update, priority=DBPriority.IMMEDIATE)
+
+        # The settings endpoint writes a different ORM instance from the
+        # detached object cached on AuthService. The callback must see the DB,
+        # not require a process restart to observe the opt-in.
+        assert server.auth.user.telemetry_send_install_id is False
+        persist_consent(True)
         assert consent_check() is True
+
         # Opting out must take effect on the next cycle, not the next restart.
-        server.auth.user.telemetry_send_install_id = False
+        # Leave the cached object claiming consent is on to prove it cannot
+        # override the persisted withdrawal.
+        server.auth.user.telemetry_send_install_id = True
+        persist_consent(False)
         assert consent_check() is False
     finally:
         server.__exit__(None, None, None)

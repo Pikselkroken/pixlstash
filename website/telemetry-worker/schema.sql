@@ -12,10 +12,13 @@ CREATE TABLE IF NOT EXISTS install (
   -- instant is close to unique on its own.
   first_seen     TEXT    NOT NULL,
   last_seen      TEXT    NOT NULL,
-  -- 63-bit rolling activity bitmap, relative to last_seen. Bit N set means the
-  -- install pinged N days before last_seen. 63 and not 64 because SQLite
-  -- INTEGER is signed.
-  activity       INTEGER NOT NULL DEFAULT 1,
+  -- 63-bit rolling activity bitmap, relative to last_seen. Stored as a
+  -- fixed-width `h`-prefixed hex string because D1's Workers API cannot bind
+  -- BigInt and returns INTEGER as an imprecise JavaScript Number above 2^53.
+  activity       TEXT    NOT NULL DEFAULT 'h0000000000000001',
+  -- Sticky once a ping closes a >=14-day silence. This cannot be derived from
+  -- the rolling bitmap forever because the gap eventually ages out.
+  has_resurrected INTEGER NOT NULL DEFAULT 0,
   -- Write-once, from the first ping. Separates genuine new installs from the
   -- upgrade wave, which would otherwise make week-1 retention read absurdly
   -- high.

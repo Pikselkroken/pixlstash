@@ -65,10 +65,10 @@ def create_router(server) -> APIRouter:
             default=None,
             description=(
                 "True only if this installation had no server config when the "
-                "ID was generated, i.e. it is a genuinely fresh install rather "
-                "than an existing one that upgraded. Separates real new-install "
-                "cohorts from the upgrade wave. Always false after a recreate: "
-                "the identity is new, the installation is not."
+                "ID was generated and install-ID telemetry was not declined in "
+                "the initial consent decision. Separates real new-install "
+                "cohorts from upgrades and delayed opt-ins. Always false after "
+                "a recreate: the identity is new, the installation is not."
             ),
         )
 

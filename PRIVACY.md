@@ -88,10 +88,12 @@ When you turn it on, PixlStash sends once a day, at most:
 }
 ```
 
-That is the whole message. `is_new_install` records whether this was a fresh
-install or an upgrade, so people who have used PixlStash for months are not
-counted as brand new. `install_type` is the same coarse category as the update
-check, where `pip` also covers the Windows server installer.
+That is the whole message. `is_new_install` is true only when install-ID
+telemetry was enabled as part of the first consent decision on a fresh install.
+It is false for upgrades and for people who decline first and opt in later, so
+people who have used PixlStash for months are not counted as brand new.
+`install_type` is the same coarse category as the update check, where `pip` also
+covers the Windows server installer.
 
 Two things about how the identifier is made:
 

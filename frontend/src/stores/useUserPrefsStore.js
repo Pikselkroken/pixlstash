@@ -42,7 +42,7 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
   );
 
   /**
-   * Persist a slice of the telemetry settings and mirror it into the store.
+   * Persist a consent/settings patch and mirror its relevant fields locally.
    *
    * The local refs are updated only after the PATCH resolves. An optimistic
    * update here would leave the sidebar indicator claiming telemetry is on
@@ -58,6 +58,7 @@ export const useUserPrefsStore = defineStore("userPrefs", () => {
       return false;
     }
     const apply = {
+      check_for_updates: checkForUpdates,
       telemetry_send_install_id: telemetrySendInstallId,
       telemetry_send_feature_usage: telemetrySendFeatureUsage,
       telemetry_send_error_reports: telemetrySendErrorReports,

@@ -12,7 +12,12 @@
  * month of permanently missing cells, not a month to be reconstructed later.
  */
 
-import { ACTIVITY_BITS, daysBetween, weekStart } from "./activity.js";
+import {
+  ACTIVITY_BITS,
+  daysBetween,
+  decodeActivity,
+  weekStart,
+} from "./activity.js";
 
 /**
  * Smallest cohort we will publish a percentage for.
@@ -55,18 +60,26 @@ function anyBitInRange(bits, lo, hi) {
  * relative to last_seen, so the range has to be re-expressed in days-before-
  * last_seen before it can be tested.
  *
- * @param {{first_seen: string, last_seen: string, activity: bigint|number}} row
+ * @param {{first_seen: string, last_seen: string, activity: bigint|number|string}} row
  * @param {number} week 0-based life week.
+ * @param {string} today UTC aggregation date, YYYY-MM-DD.
  * @returns {boolean|null} null when the week has aged out of the window, or has
- *   not happened yet, and therefore cannot be answered either way.
+ *   not fully elapsed yet, and therefore cannot be answered either way.
  */
-export function activeInLifeWeek(row, week) {
-  const bits = BigInt(row.activity) & MASK;
+export function activeInLifeWeek(row, week, today) {
+  const bits = decodeActivity(row.activity) & MASK;
+  const ageToday = daysBetween(row.first_seen, today);
+  const weekEnd = week * 7 + 6;
+  if (ageToday < weekEnd) return null;
+
   const ageAtLastSeen = daysBetween(row.first_seen, row.last_seen);
   // Days-before-last_seen that correspond to this life week.
   const hi = ageAtLastSeen - week * 7;
   const lo = hi - 6;
-  if (hi < 0) return null; // the week is in the future for this install
+  // The week has elapsed, but this install stopped pinging before it began.
+  // That is an inactive answer, not an unknown one; excluding it would remove
+  // churned installs from the denominator and inflate retention.
+  if (hi < 0) return false;
   if (lo > ACTIVITY_BITS - 1) return null; // aged out; unanswerable
   return anyBitInRange(bits, lo, hi);
 }
@@ -82,7 +95,7 @@ export function activeInLifeWeek(row, week) {
  * @returns {boolean}
  */
 export function hasResurrected(activity) {
-  const bits = BigInt(activity) & MASK;
+  const bits = decodeActivity(activity) & MASK;
   if (bits === 0n) return false;
 
   // Start at the OLDEST set bit, not at the top of the window. The zero bits
@@ -110,7 +123,8 @@ export function hasResurrected(activity) {
  * Build the day's publishable aggregate.
  *
  * @param {Array<{install_id: string, first_seen: string, last_seen: string,
- *   activity: number, is_new_install: number, install_type: string}>} rows
+ *   activity: bigint|number|string, has_resurrected: number,
+ *   is_new_install: number, install_type: string}>} rows
  * @param {string} today UTC date, YYYY-MM-DD.
  * @returns {object} JSON-safe aggregate. Contains counts and percentages only:
  *   no ids, no dates finer than a week, nothing per-install.
@@ -135,7 +149,7 @@ export function createAccumulator() {
  * storage question rather than a "will the daily job OOM" question.
  *
  * @param {object} state From createAccumulator.
- * @param {object} row One install row.
+ * @param {{first_seen: string, last_seen: string, activity: bigint|number|string, has_resurrected: number, is_new_install: number, install_type: string}} row One install row.
  * @param {string} today UTC date.
  */
 export function accumulateRow(state, row, today) {
@@ -149,7 +163,7 @@ export function accumulateRow(state, row, today) {
 
   if (daysBetween(row.first_seen, today) >= RESURRECTION_GAP_DAYS) {
     state.resurrectionEligible += 1;
-    if (hasResurrected(row.activity)) state.resurrected += 1;
+    if (row.has_resurrected) state.resurrected += 1;
   }
 
   if (!row.is_new_install) return;
@@ -168,7 +182,7 @@ export function accumulateRow(state, row, today) {
 
   const maxWeek = Math.ceil(ACTIVITY_BITS / 7);
   for (let week = 0; week < maxWeek; week++) {
-    const answer = activeInLifeWeek(row, week);
+    const answer = activeInLifeWeek(row, week, today);
     if (answer === null) continue;
     if (!cohort.cells[week]) cohort.cells[week] = { answerable: 0, active: 0 };
     cohort.cells[week].answerable += 1;
@@ -194,7 +208,11 @@ export function finalizeAggregate(state, today) {
     }
     const cells = [];
     for (const cell of cohort.cells) {
-      if (!cell || cell.answerable < MIN_COHORT) break;
+      // A percentage over only the still-answerable subset is biased: rows
+      // whose bitmap has aged out are not a random sample. The daily snapshots
+      // preserve each cell when all cohort members can still be evaluated, so
+      // omit it rather than later recomputing it from a partial denominator.
+      if (!cell || cell.answerable !== cohort.size) break;
       cells.push(Math.round((cell.active / cell.answerable) * 1000) / 10);
     }
     if (cells.length) retention[cohortWeek] = cells;

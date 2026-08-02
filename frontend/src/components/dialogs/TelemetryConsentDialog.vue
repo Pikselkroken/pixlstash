@@ -7,9 +7,15 @@
 
       <p class="tc__lede">
         <template v-if="isUpgrade">
-          You already have update checks turned on. You could help PixlStash
-          improve by sending a random number alongside them. Nothing else about
-          your setup changes either way.
+          <template v-if="updateChecksEnabled">
+            You already have update checks turned on. You could help PixlStash
+            improve by sending a random number alongside them. Nothing else
+            about your setup changes either way.
+          </template>
+          <template v-else>
+            You chose not to check for updates. That stays unchanged. You could
+            still help PixlStash improve by sending a random number once a day.
+          </template>
         </template>
         <template v-else>
           PixlStash can check pixlstash.dev once a day for a new version.
@@ -56,6 +62,7 @@
         :variant="shownVariant"
         :version="version"
         :install-type="installType"
+        :is-new-install="isNewInstall"
       />
 
       <p class="tc__never">
@@ -82,8 +89,11 @@ const props = defineProps({
   open: { type: Boolean, default: false },
   /** True for an existing user upgrading, who already answered the update question. */
   isUpgrade: { type: Boolean, default: false },
+  /** Existing answer; false means the upgrade preview must not invent a GET. */
+  updateChecksEnabled: { type: Boolean, default: false },
   version: { type: String, default: "" },
   installType: { type: String, default: "" },
+  isNewInstall: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["decide"]);
@@ -117,7 +127,7 @@ const NEW_OPTIONS = [
 // Re-asking a decision the user already made would let "No thanks" silently
 // switch off update checks they had turned on, which is a regression dressed
 // as a consent flow.
-const UPGRADE_OPTIONS = [
+const UPGRADE_OPTIONS_WITH_CHECKS = [
   {
     key: "check",
     name: "No thanks",
@@ -132,8 +142,27 @@ const UPGRADE_OPTIONS = [
   },
 ];
 
+const UPGRADE_OPTIONS_WITHOUT_CHECKS = [
+  {
+    key: "none",
+    name: "No thanks",
+    desc: "Your update checks stay off, and nothing is sent.",
+    patch: { telemetry_send_install_id: false },
+  },
+  {
+    key: "id",
+    name: "Add the random number",
+    desc: "Sends only the random number, install type, and whether telemetry began on a new install.",
+    patch: { telemetry_send_install_id: true },
+  },
+];
+
 const options = computed(() =>
-  props.isUpgrade ? UPGRADE_OPTIONS : NEW_OPTIONS,
+  props.isUpgrade
+    ? props.updateChecksEnabled
+      ? UPGRADE_OPTIONS_WITH_CHECKS
+      : UPGRADE_OPTIONS_WITHOUT_CHECKS
+    : NEW_OPTIONS,
 );
 
 /** Hover and focus preview transiently; the committed choice is the fallback. */

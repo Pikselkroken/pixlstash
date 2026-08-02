@@ -20,6 +20,7 @@ from pixlstash.telemetry.install_id import (
     InstallIdentity,
     ensure_install_identity,
     install_id_path,
+    mark_install_established,
     read_install_identity,
     recreate_install_identity,
 )
@@ -125,6 +126,27 @@ def test_is_new_install_survives_a_reread(config_path):
 
     assert reread is not None
     assert reread.is_new_install is False
+
+
+def test_declined_fresh_install_can_be_excluded_from_new_cohorts(config_path):
+    original = ensure_install_identity(config_path)
+
+    established = mark_install_established(config_path)
+
+    assert original is not None and established is not None
+    assert established.install_id == original.install_id
+    assert established.created_date == original.created_date
+    assert established.is_new_install is False
+    assert read_install_identity(config_path).is_new_install is False
+
+
+def test_marking_an_install_established_is_idempotent(config_path):
+    original = ensure_install_identity(config_path)
+    first = mark_install_established(config_path)
+    second = mark_install_established(config_path)
+
+    assert original is not None and first is not None and second is not None
+    assert first == second
 
 
 # ---------------------------------------------------------------------------

@@ -63,7 +63,7 @@
     </template>
     <!-- The random number, riding along. -->
     <circle
-      v-if="variant === 'checkid'"
+      v-if="variant === 'id' || variant === 'checkid'"
       cx="27"
       cy="6"
       r="3.6"
@@ -74,7 +74,7 @@
 
 <script setup>
 defineProps({
-  /** One of "none", "check", "checkid". */
+  /** One of "none", "check", "id", "checkid". */
   variant: { type: String, required: true },
 });
 </script>

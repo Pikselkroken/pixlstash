@@ -24,9 +24,10 @@ counter into a fingerprint:
 ``is_new_install`` separates genuinely new installs from the upgrade wave. Every
 existing user who upgrades and opts in would otherwise appear with a first-seen
 date of the upgrade, so their "week 1" would really be week 40 of their life as a
-user and the week-1 retention number would read absurdly high. The flag is
-decided once, when the ID is created, from whether this installation already had
-a server config: if it did, the install predates the ID and is an upgrade.
+user and the week-1 retention number would read absurdly high. A fresh identity
+starts eligible, but is permanently marked established if the initial consent
+decision declines install-ID telemetry. That prevents an opt-in months later
+from making a long-running installation appear brand new.
 """
 
 from __future__ import annotations
@@ -58,8 +59,8 @@ class InstallIdentity:
         created_date: UTC date the ID was generated, ``YYYY-MM-DD``. Deliberately
             a date and not a timestamp. See the module docstring.
         is_new_install: True only if this installation had no server config when
-            the ID was generated, i.e. it is a genuinely fresh install rather
-            than an existing one that upgraded into the telemetry release.
+            the ID was generated and did not subsequently decline install-ID
+            telemetry during its initial consent decision.
     """
 
     install_id: str
@@ -243,6 +244,45 @@ def ensure_install_identity(server_config_path: str) -> InstallIdentity | None:
             "Generated anonymous install ID (new_install=%s). It is stored "
             "locally and is not sent anywhere unless telemetry is enabled.",
             is_new_install,
+        )
+    return written
+
+
+def mark_install_established(server_config_path: str) -> InstallIdentity | None:
+    """Permanently exclude this identity from new-install cohorts.
+
+    A fresh installation is eligible for a new-install cohort only when the
+    user enables install-ID telemetry in the initial consent decision. If they
+    decline and opt in later, the Worker's first-seen date is the later opt-in
+    date, not the installation date; retaining ``is_new_install=True`` would
+    therefore put an established installation into a brand-new cohort.
+
+    The UUID and its coarse creation date are preserved. If the identity is
+    already established this is an idempotent no-op.
+
+    Args:
+        server_config_path: Path to the server config file.
+
+    Returns:
+        The updated identity, or None if no readable identity exists or the
+        update could not be persisted.
+    """
+    identity = read_install_identity(server_config_path)
+    if identity is None:
+        return None
+    if not identity.is_new_install:
+        return identity
+
+    established = InstallIdentity(
+        install_id=identity.install_id,
+        created_date=identity.created_date,
+        is_new_install=False,
+    )
+    written = _write_identity(install_id_path(server_config_path), established)
+    if written is not None:
+        logger.info(
+            "Anonymous install ID left the new-install cohort after the initial "
+            "consent decision."
         )
     return written
 

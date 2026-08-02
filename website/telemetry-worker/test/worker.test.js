@@ -17,7 +17,14 @@ import worker, {
   MAX_TOTAL_INSTALLS,
 } from "../src/index.js";
 import { validatePing, MAX_BODY_BYTES } from "../src/validate.js";
-import { rollActivity, daysBetween, weekStart, ACTIVITY_BITS } from "../src/activity.js";
+import {
+  rollActivity,
+  daysBetween,
+  decodeActivity,
+  encodeActivity,
+  weekStart,
+  ACTIVITY_BITS,
+} from "../src/activity.js";
 import {
   buildAggregate,
   hasResurrected,
@@ -103,7 +110,7 @@ describe("rollActivity", () => {
     assert.equal(rollActivity(0xffffn, ACTIVITY_BITS + 10), 1n);
   });
 
-  it("never sets the sign bit, because SQLite INTEGER is signed", () => {
+  it("stays inside the deliberately bounded 63-day window", () => {
     let bits = 1n;
     for (let i = 0; i < 200; i++) bits = rollActivity(bits, 1);
     assert.ok(bits <= (1n << BigInt(ACTIVITY_BITS)) - 1n);
@@ -113,6 +120,13 @@ describe("rollActivity", () => {
   it("records without rolling backwards on a clock-skewed ping", () => {
     // A ping dated before last_seen must not rewrite history.
     assert.equal(rollActivity(0b110n, -5), 0b111n);
+  });
+
+  it("round-trips every bit through the D1-safe text encoding", () => {
+    const bits = (1n << 62n) | (1n << 54n) | 0b101n;
+    const encoded = encodeActivity(bits);
+    assert.match(encoded, /^h[0-9a-f]{16}$/);
+    assert.equal(decodeActivity(encoded), bits);
   });
 });
 
@@ -153,18 +167,32 @@ describe("hasResurrected", () => {
 
 describe("activeInLifeWeek", () => {
   const row = { first_seen: "2026-07-01", last_seen: "2026-07-20", activity: 1n };
+  const today = "2026-07-21";
 
   it("returns null for a week that has not happened yet", () => {
-    assert.equal(activeInLifeWeek(row, 12), null);
+    assert.equal(activeInLifeWeek(row, 12, today), null);
   });
 
   it("finds the week containing the last ping", () => {
     // last_seen is day 19 of life, which falls in life-week 2 (days 14-20).
-    assert.equal(activeInLifeWeek(row, 2), true);
+    assert.equal(activeInLifeWeek(row, 2, today), true);
   });
 
   it("reports a week with no pings as false, not null", () => {
-    assert.equal(activeInLifeWeek(row, 0), false);
+    assert.equal(activeInLifeWeek(row, 0, today), false);
+  });
+
+  it("counts an elapsed week after the final ping as inactive", () => {
+    const churned = {
+      first_seen: "2026-07-01",
+      last_seen: "2026-07-01",
+      activity: 1n,
+    };
+    assert.equal(activeInLifeWeek(churned, 1, "2026-07-20"), false);
+  });
+
+  it("waits until the whole life-week has elapsed", () => {
+    assert.equal(activeInLifeWeek(row, 2, "2026-07-20"), null);
   });
 });
 
@@ -178,6 +206,7 @@ function cohortRows(count, firstSeen, lastSeen, activity) {
     first_seen: firstSeen,
     last_seen: lastSeen,
     activity,
+    has_resurrected: 0,
     is_new_install: 1,
     install_type: "pip",
   }));
@@ -196,6 +225,34 @@ describe("buildAggregate", () => {
     const agg = buildAggregate(rows, "2026-07-20");
     assert.equal(Object.keys(agg.cohort_retention).length, 1);
     assert.equal(agg.suppressed_cohorts, 0);
+  });
+
+  it("includes installs that churned after their first ping in later weeks", () => {
+    const rows = cohortRows(
+      MIN_COHORT,
+      "2026-07-01",
+      "2026-07-01",
+      encodeActivity(1n),
+    );
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.deepEqual(agg.cohort_retention["2026-06-29"], [100, 0]);
+  });
+
+  it("does not publish a cell from only a subset of its cohort", () => {
+    const answerable = cohortRows(
+      MIN_COHORT,
+      "2026-07-01",
+      "2026-07-01",
+      encodeActivity(1n),
+    );
+    const agedOut = cohortRows(
+      1,
+      "2026-07-01",
+      "2026-10-01",
+      encodeActivity(1n),
+    );
+    const agg = buildAggregate([...answerable, ...agedOut], "2026-10-01");
+    assert.deepEqual(agg.cohort_retention, {});
   });
 
   it("excludes upgrade-wave installs from cohorts", () => {
@@ -223,6 +280,24 @@ describe("buildAggregate", () => {
     assert.equal(agg.resurrection_rate, null);
   });
 
+  it("keeps a resurrection after the original gap ages out of the bitmap", () => {
+    const rows = [
+      {
+        install_id: "returned-and-stayed",
+        first_seen: "2026-01-01",
+        last_seen: "2026-07-20",
+        // Dense recent activity no longer contains the old gap. The sticky
+        // field is the durable record that the return happened.
+        activity: encodeActivity((1n << 63n) - 1n),
+        has_resurrected: 1,
+        is_new_install: 0,
+        install_type: "pip",
+      },
+    ];
+
+    assert.equal(buildAggregate(rows, "2026-07-20").resurrection_rate, 100);
+  });
+
   it("publishes no identifiers", () => {
     const rows = cohortRows(MIN_COHORT, "2026-07-01", "2026-07-20", 1n);
     const serialised = JSON.stringify(buildAggregate(rows, "2026-07-20"));
@@ -247,7 +322,7 @@ describe("POST /v1/ping", () => {
     const e = env();
     await worker.fetch(pingRequest(VALID), e);
     const row = e.DB.installs.get(UUID);
-    assert.equal(BigInt(row.activity), 1n);
+    assert.equal(row.activity, encodeActivity(1n));
     assert.equal(row.is_new_install, 1);
     assert.equal(row.install_type, "pip");
     assert.equal(row.first_seen, row.last_seen);
@@ -258,7 +333,7 @@ describe("POST /v1/ping", () => {
     await worker.fetch(pingRequest(VALID), e);
     await worker.fetch(pingRequest(VALID), e);
     assert.equal(e.DB.installs.size, 1);
-    assert.equal(BigInt(e.DB.installs.get(UUID).activity), 1n);
+    assert.equal(decodeActivity(e.DB.installs.get(UUID).activity), 1n);
   });
 
   it("never lets a later ping rewrite first_seen or the new-install flag", async () => {
@@ -269,6 +344,41 @@ describe("POST /v1/ping", () => {
     const after = e.DB.installs.get(UUID);
     assert.equal(after.first_seen, before.first_seen);
     assert.equal(after.is_new_install, before.is_new_install);
+  });
+
+  it("records resurrection as a sticky fact when a long silence closes", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    const row = e.DB.installs.get(UUID);
+    const fifteenDaysAgo = new Date(Date.now() - 15 * 86400000)
+      .toISOString()
+      .slice(0, 10);
+    row.last_seen = fifteenDaysAgo;
+    row.activity = encodeActivity(1n);
+
+    await worker.fetch(pingRequest(VALID), e);
+    assert.equal(row.has_resurrected, 1);
+
+    // Even after the bitmap no longer contains the gap, another update must
+    // never clear the durable result.
+    row.activity = encodeActivity((1n << 63n) - 1n);
+    await worker.fetch(pingRequest(VALID), e);
+    assert.equal(row.has_resurrected, 1);
+  });
+
+  it("records a return after the old ping has aged out of the bitmap", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    const row = e.DB.installs.get(UUID);
+    row.last_seen = new Date(Date.now() - 70 * 86400000)
+      .toISOString()
+      .slice(0, 10);
+    row.activity = encodeActivity(1n);
+
+    await worker.fetch(pingRequest(VALID), e);
+
+    assert.equal(decodeActivity(row.activity), 1n);
+    assert.equal(row.has_resurrected, 1);
   });
 
   it("rejects an unrecognised key without storing anything", async () => {
@@ -380,19 +490,17 @@ describe("activity bitmap durability", () => {
     const popcount = bits.toString(2).split("1").length - 1;
     assert.equal(popcount, 63, "63 consecutive daily pings must set 63 bits");
     assert.ok(bits > BigInt(Number.MAX_SAFE_INTEGER), "must exceed 2^53");
-    assert.ok(bits <= (1n << 63n) - 1n, "must stay inside signed INT64");
+    assert.ok(bits <= (1n << 63n) - 1n, "must stay inside the 63-bit window");
 
-    // And the value the Worker actually binds must still be a BigInt.
+    // The Worker binding must be a D1-safe string while preserving all 63 bits.
     await worker.fetch(pingRequest(VALID), e);
     const row = e.DB.installs.get(UUID);
-    row.activity = bits;
-    row.last_seen = "2020-01-01";
+    row.activity = encodeActivity(bits);
+    row.last_seen = new Date().toISOString().slice(0, 10);
     await worker.fetch(pingRequest(VALID), e);
-    assert.equal(
-      typeof e.DB.installs.get(UUID).activity,
-      "bigint",
-      "activity must be bound as a BigInt, never narrowed to a Number",
-    );
+    const stored = e.DB.installs.get(UUID).activity;
+    assert.equal(typeof stored, "string", "D1 must never receive a BigInt binding");
+    assert.equal(decodeActivity(stored), bits, "all 63 bits must survive storage");
   });
 });
 

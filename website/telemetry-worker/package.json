@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Cloudflare Worker that ingests anonymous install pings and publishes aggregate cohort numbers.",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },

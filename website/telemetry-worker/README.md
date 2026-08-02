@@ -14,7 +14,7 @@ Three places, and only the first two ever hold an identifier.
 | Where | What | Retention |
 |---|---|---|
 | The user's own machine | `install-id.json` beside `server-config.json`: one random UUIDv4 | Until the user hits Recreate, or deletes it |
-| Cloudflare D1 | One row per install: the UUID, first-seen and last-seen **dates**, a 63-bit activity bitmap, a new-install flag, one of four install-type buckets | 400 days since last seen, then pruned by the daily cron |
+| Cloudflare D1 | One row per install: the UUID, first-seen and last-seen **dates**, a 63-bit activity bitmap, a sticky resurrection flag, a new-install flag, one of four install-type buckets | 400 days since last seen, then pruned by the daily cron |
 | `pixlstash-metrics` (private git) | Aggregates only: counts and percentages | Forever, which is exactly why no identifier may ever go there |
 
 Nothing touches the PixlStash library database. The install ID deliberately
@@ -95,9 +95,11 @@ credential that can write to anything of ours.
 
 ## How the counting works
 
-**The activity bitmap.** Eight bytes per install, no event log. Bit N set means
-the install pinged N days before `last_seen`. The window is 63 bits, not 64,
-because SQLite `INTEGER` is signed.
+**The activity bitmap.** One fixed-width 17-character field per install, no
+event log. Bit N set means the install pinged N days before `last_seen`. The
+window is 63 bits. It is encoded as prefixed hexadecimal text because D1's
+Workers API cannot bind JavaScript `BigInt` values or return integers above
+`Number.MAX_SAFE_INTEGER` without losing precision.
 
 It is shifted **lazily on write**, not swept nightly by the cron. A sweep that
 misses a day or runs twice silently corrupts every row with no way to detect it
@@ -114,7 +116,9 @@ misses an exact day-7 check and would read as churned.
 
 **Resurrection rate** is the metric that answers pause-versus-churn directly: a
 silence of 14 days or more that a later ping closes. `first_seen`/`last_seen`
-alone give a decay curve and cannot distinguish the two.
+alone give a decay curve and cannot distinguish the two. Once observed, that
+return is stored as a sticky boolean so it remains true after the original gap
+ages out of the rolling bitmap.
 
 ## Poisoning
 
@@ -136,7 +140,7 @@ the metrics README when the numbers first appear.
 ## Development
 
 ```sh
-npm test          # 50 tests, no install required beyond Node
+npm test          # 71 tests, no install required beyond Node
 npm run dev       # wrangler dev, needs the D1 binding
 ```
 

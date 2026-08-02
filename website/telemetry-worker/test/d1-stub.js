@@ -36,6 +36,9 @@ class StubStatement {
   }
 
   bind(...args) {
+    if (args.some((value) => typeof value === "bigint")) {
+      throw new TypeError("D1Stub: BigInt bindings are not supported by D1");
+    }
     this.args = args;
     return this;
   }
@@ -44,7 +47,11 @@ class StubStatement {
     if (this.sql.startsWith("SELECT COUNT(*) AS n FROM install")) {
       return { n: this.db.installs.size };
     }
-    if (this.sql.startsWith("SELECT first_seen, last_seen, activity FROM install")) {
+    if (
+      this.sql.startsWith(
+        "SELECT first_seen, last_seen, activity, has_resurrected FROM install",
+      )
+    ) {
       return this.db.installs.get(this.args[0]) ?? null;
     }
     if (this.sql.startsWith("SELECT value, day FROM counter")) {
@@ -76,13 +83,22 @@ class StubStatement {
 
   async run() {
     if (this.sql.startsWith("INSERT INTO install")) {
-      const [install_id, first_seen, last_seen, is_new_install, install_type] = this.args;
+      const [
+        install_id,
+        first_seen,
+        last_seen,
+        activity,
+        has_resurrected,
+        is_new_install,
+        install_type,
+      ] = this.args;
       if (!this.db.installs.has(install_id)) {
         this.db.installs.set(install_id, {
           install_id,
           first_seen,
           last_seen,
-          activity: 1,
+          activity,
+          has_resurrected,
           is_new_install,
           install_type,
         });
@@ -90,9 +106,17 @@ class StubStatement {
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("UPDATE install")) {
-      const [last_seen, activity, install_type, install_id] = this.args;
+      const [last_seen, activity, has_resurrected, install_type, install_id] =
+        this.args;
       const row = this.db.installs.get(install_id);
-      if (row) Object.assign(row, { last_seen, activity, install_type });
+      if (row) {
+        Object.assign(row, {
+          last_seen,
+          activity,
+          has_resurrected,
+          install_type,
+        });
+      }
       return { meta: { changes: row ? 1 : 0 } };
     }
     if (this.sql.startsWith("DELETE FROM install WHERE last_seen <")) {

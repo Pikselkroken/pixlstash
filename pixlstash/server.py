@@ -551,7 +551,12 @@ class Server(
                 has opted out, and the window between opting out and the next
                 restart is exactly when honouring it matters.
                 """
-                user = self.auth.user or getattr(self, "_user", None)
+                # `auth.user` and `_user` are detached startup snapshots. The
+                # config PATCH writes through a fresh ORM session, so reading
+                # either cached object here misses both opt-ins and opt-outs
+                # until the process restarts. An hourly DB read is negligible
+                # and makes persisted consent the single source of truth.
+                user = self.auth.get_user()
                 return bool(getattr(user, "telemetry_send_install_id", False))
 
             self._telemetry_thread = start_periodic_sender(

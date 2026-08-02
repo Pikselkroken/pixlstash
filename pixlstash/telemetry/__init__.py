@@ -9,6 +9,7 @@ from pixlstash.telemetry.install_id import (
     InstallIdentity,
     ensure_install_identity,
     install_id_path,
+    mark_install_established,
     read_install_identity,
     recreate_install_identity,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "start_periodic_sender",
     "ensure_install_identity",
     "install_id_path",
+    "mark_install_established",
     "read_install_identity",
     "recreate_install_identity",
 ]

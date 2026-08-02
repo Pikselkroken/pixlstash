@@ -9,8 +9,8 @@ false, so the question is put to existing users exactly once.
 Schema-only and additive. No reprocessing reset is needed: no derived data
 depends on these columns.
 
-Revision ID: 0090_add_telemetry_consent
-Revises: 0089_add_dedupverdict_reopen_batch_id
+Revision ID: 0094_add_telemetry_consent
+Revises: 0093_invalidate_stackcohesion_inputs
 Create Date: 2026-08-02 00:00:00.000000
 
 """
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "0090_add_telemetry_consent"
-down_revision: Union[str, None] = "0089_add_dedupverdict_reopen_batch_id"
+revision: str = "0094_add_telemetry_consent"
+down_revision: Union[str, None] = "0093_invalidate_stackcohesion_inputs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

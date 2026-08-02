@@ -19,22 +19,24 @@ import {
 } from "../../utils/telemetryPayload";
 
 const props = defineProps({
-  /** "none", "check", "checkid", or null before anything is hovered/focused. */
+  /** "none", "check", "id", "checkid", or null before hover/focus. */
   variant: { type: String, default: null },
   version: { type: String, default: "" },
   installType: { type: String, default: "" },
+  /** Actual local classification; the UUID remains a placeholder. */
+  isNewInstall: { type: Boolean, default: false },
 });
 
-// A placeholder ID, not this machine's. The real one is only generated once the
-// user opts in, so showing it here would mean minting an identifier before
-// consent. The shape is what matters, and it is the shape the sender uses.
+// A placeholder ID, not this machine's. The shape is what matters; unlike the
+// identifier, is_new_install is the real local value because showing `true` to
+// every upgrading user would make the consent preview disagree with the sender.
 const SAMPLE_ID = "9f2c1b7e-4d5a-4c81-b3e6-8a7d2f0e5c14";
 
 const context = computed(() => ({
   version: props.version || "1.9.0",
   installType: props.installType || "pip",
   installId: SAMPLE_ID,
-  isNewInstall: true,
+  isNewInstall: props.isNewInstall,
 }));
 
 const label = computed(() =>

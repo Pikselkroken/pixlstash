@@ -103,6 +103,10 @@ jobs:
           npm ci
           npm test
 
+      - name: Test telemetry Worker
+        working-directory: website/telemetry-worker
+        run: npm test
+
   # ---------------------------------------------------------------------------
   # The backend gate. Split across 8 runners instead of one job with 22
   # sequential steps.
@@ -271,6 +275,9 @@ jobs:
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
           tests/test_token_identity.py
+          tests/test_telemetry_install_id.py
+          tests/test_telemetry_install_id_authz.py
+          tests/test_telemetry_sender.py
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py

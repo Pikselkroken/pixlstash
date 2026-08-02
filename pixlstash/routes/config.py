@@ -19,6 +19,7 @@ from pixlstash.db_models.tag import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import config_service, scrapheap_service
+from pixlstash.telemetry import mark_install_established
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
@@ -466,6 +467,13 @@ def create_router(server) -> APIRouter:
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
 
+            consent_was_prompted = bool(
+                getattr(user, "telemetry_consent_prompted", False)
+            )
+            install_id_was_enabled = bool(
+                getattr(user, "telemetry_send_install_id", False)
+            )
+
             old_penalised_tags = _resolved_penalised_tags(
                 user.smart_score_penalised_tags
             )
@@ -473,6 +481,32 @@ def create_router(server) -> APIRouter:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+            consent_is_prompted = bool(
+                getattr(user, "telemetry_consent_prompted", False)
+            )
+            install_id_is_enabled = bool(
+                getattr(user, "telemetry_send_install_id", False)
+            )
+            # A fresh identity is a valid new-install cohort member only when
+            # telemetry is accepted as part of the first consent decision. If
+            # that decision declines it, a later opt-in's first ping describes
+            # an established install. The second condition retries the
+            # demotion on that later opt-in if the original file write failed.
+            exclude_from_new_cohort = (
+                not consent_was_prompted
+                and consent_is_prompted
+                and not install_id_is_enabled
+            ) or (
+                consent_was_prompted
+                and not install_id_was_enabled
+                and install_id_is_enabled
+            )
+            if exclude_from_new_cohort:
+                # Do this before commit. Once the opt-in is visible to the
+                # periodic sender, the on-disk identity must already carry the
+                # established classification.
+                mark_install_established(server.server_config_path)
 
             changed_tags: set[str] = set()
             if updated:

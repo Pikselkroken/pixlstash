@@ -61,17 +61,20 @@ export function buildInstallPingRequest({
 /**
  * Everything a given consent choice sends, in order.
  *
- * @param {string} variant "none", "check" or "checkid".
+ * @param {string} variant "none", "check", "id" or "checkid".
  * @param {{version: string, installType: string, installId: string,
  *   isNewInstall: boolean}} context
  * @returns {Array<{method: string, url: string, body?: Object}>} Empty for "none".
  */
 export function buildPayloadForChoice(variant, context) {
   if (variant === "none") return [];
-  const requests = [
-    buildVersionCheckRequest(context.version, context.installType),
-  ];
-  if (variant === "checkid") {
+  const requests = [];
+  if (variant === "check" || variant === "checkid") {
+    requests.push(
+      buildVersionCheckRequest(context.version, context.installType),
+    );
+  }
+  if (variant === "id" || variant === "checkid") {
     requests.push(
       buildInstallPingRequest({
         installId: context.installId,
@@ -96,19 +99,20 @@ export function buildPayloadForChoice(variant, context) {
  */
 export function buildPayloadLegend(variant, context) {
   if (variant === "none") return [];
-  const legend = [
-    {
+  const legend = [];
+  if (variant === "check" || variant === "checkid") {
+    legend.push({
       term: context.version,
       meaning: "the PixlStash version you are running right now",
-    },
-    {
-      term: context.installType,
-      meaning:
-        'how you installed it. "pip" covers both a pip install and the Windows ' +
-        'server installer. The other two are "docker" and "electron", the desktop app',
-    },
-  ];
-  if (variant === "checkid") {
+    });
+  }
+  legend.push({
+    term: context.installType,
+    meaning:
+      'how you installed it. "pip" covers both a pip install and the Windows ' +
+      'server installer. The other two are "docker" and "electron", the desktop app',
+  });
+  if (variant === "id" || variant === "checkid") {
     legend.push(
       {
         term: "install_id",
@@ -119,8 +123,8 @@ export function buildPayloadLegend(variant, context) {
       {
         term: "is_new_install",
         meaning:
-          "whether this was a fresh install or an upgrade, so people who have used " +
-          "PixlStash for months are not counted as brand new",
+          "whether telemetry was enabled as part of a fresh install, so upgrades " +
+          "and people who opt in after using PixlStash are not counted as brand new",
       },
       { term: "install_type", meaning: "the same value as above" },
     );

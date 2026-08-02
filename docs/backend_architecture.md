@@ -589,6 +589,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/tagger-runs                                                           | tagger_runs     | Ingest a tagger evaluation run from PixlTagger             |
 | GET    | /api/v1/tagger-runs                                                           | tagger_runs     | List ingested tagger runs (newest first)                   |
 | GET    | /api/v1/tags                                                                  | tags            | List all tags                                              |
+| GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                               |
+| POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                          |
 | GET    | /version                                                                      | server          | Read Version                                               |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                     |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                  |
@@ -1006,7 +1008,7 @@ Selected milestones:
 
 | 0090 | `usertoken.public_id` — a stable, never-reused identity for a token (#666, see §12.2). Additive: add the column, backfill every row with `lower(hex(randomblob(16)))`, then add the unique index. Existing tokens keep their integer ids, hashes, foreign key and all three pre-existing indexes |
 
-Current head: `0090_add_usertoken_public_id`.
+Current head: `0094_add_telemetry_consent`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 
@@ -3048,7 +3050,7 @@ new-install cohort, which is the exact bias the flag exists to remove.
 
 ### 23.3 The consent flags
 
-Five booleans on `user`, added by migration `0090_add_telemetry_consent`, riding
+Five booleans on `user`, added by migration `0094_add_telemetry_consent`, riding
 the existing `/users/me/config` GET/PATCH pair like every other user setting:
 
 | Column | Category |

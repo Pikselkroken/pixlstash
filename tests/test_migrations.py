@@ -886,7 +886,8 @@ def test_the_migration_chain_has_exactly_one_head():
         heads = [line for line in result.stdout.splitlines() if "(head)" in line]
         assert len(heads) == 1, f"expected exactly one head, got: {heads}"
 
-def test_alembic_0090_adds_telemetry_consent_columns_defaulting_off():
+
+def test_alembic_0094_adds_telemetry_consent_columns_defaulting_off():
     """An existing install upgrading in must land with every category off.
 
     The columns are added nullable, so the pre-existing user row reads NULL for
@@ -898,15 +899,15 @@ def test_alembic_0090_adds_telemetry_consent_columns_defaulting_off():
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
 
-        # A real pre-0090 install: upgrade to the parent revision, then plant a
+        # A real pre-0094 install: upgrade to the parent revision, then plant a
         # user row the way an existing owner account would look.
         up = _run_alembic(
-            ["upgrade", "0089_add_dedupverdict_reopen_batch_id"],
+            ["upgrade", "0093_invalidate_stackcohesion_inputs"],
             db_url,
             _MIGRATIONS_DIR,
         )
         assert up.returncode == 0, (
-            f"upgrade to 0089 failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
+            f"upgrade to 0093 failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
         )
 
         expected = {
@@ -921,7 +922,7 @@ def test_alembic_0090_adds_telemetry_consent_columns_defaulting_off():
         try:
             # The 0001 baseline builds `user` with SQLModel.metadata.create_all,
             # so a fresh DB already carries every *current* model column. Drop
-            # the five back off to reproduce the shape a real pre-0090 install
+            # the five back off to reproduce the shape a real pre-0094 install
             # actually has on disk. Otherwise this asserts nothing.
             for column in sorted(expected):
                 conn.execute(f"ALTER TABLE user DROP COLUMN {column}")
