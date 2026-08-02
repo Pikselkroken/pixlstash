@@ -417,6 +417,44 @@ def test_requesting_a_scan_returns_immediately_with_progress():
         _teardown(temp_dir, server)
 
 
+def test_an_active_scan_coalesces_equivalent_requests_and_rejects_policy_changes():
+    temp_dir, client, server, _ids, _token, set_id = _env()
+    try:
+        payload = {
+            "policy": {"near_enabled": True},
+            "scope": {"scope_type": "set", "scope_id": str(set_id)},
+        }
+        first = client.post(SCAN_URL, json=payload)
+        assert first.status_code == 200, first.text
+        second = client.post(SCAN_URL, json=payload)
+        assert second.status_code == 200, second.text
+        assert second.json()["scan_id"] == first.json()["scan_id"]
+        assert second.json()["started_at"] == first.json()["started_at"]
+
+        changed = client.post(
+            SCAN_URL,
+            json={
+                "policy": {"near_enabled": True, "threshold": 0.8},
+                "scope": {"scope_type": "set", "scope_id": str(set_id)},
+            },
+        )
+        assert changed.status_code == 409, changed.text
+        detail = changed.json()["detail"]
+        assert detail["code"] == "dedup_scan_busy"
+        assert detail["active_scan"]["scan_id"] == first.json()["scan_id"]
+        assert detail["active_scan"]["threshold"] == 0.9
+        persisted = _run(
+            server,
+            lambda session: session.exec(
+                select(DedupScan).where(DedupScan.scope_key == f"set:{set_id}")
+            ).one(),
+        )
+        assert persisted.threshold == 0.9
+        assert persisted.tiers == '["exact", "near"]'
+    finally:
+        _teardown(temp_dir, server)
+
+
 # ── verdicts ──────────────────────────────────────────────────────────────────
 
 

@@ -14,13 +14,15 @@ import gc
 import json
 import os
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Character, Face, Picture
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from tests.authz_guard import no_spa_fallback  # noqa: F401
@@ -71,6 +73,37 @@ def _seed_pictures(server, total: int, hidden_every: int | None = None):
                 hidden_ids.add(pic.id)
         session.commit()
         return ids, hidden_ids
+
+    return server.vault.db.run_task(_insert, priority=DBPriority.IMMEDIATE)
+
+
+def _seed_character_pictures(server, total: int) -> tuple[int, list[int]]:
+    """Create one character with exactly *total* directly assigned pictures."""
+
+    def _insert(session):
+        character = Character(name=f"Small group {total}")
+        session.add(character)
+        session.flush()
+        ids: list[int] = []
+        for index in range(total):
+            picture = Picture(
+                file_path=f"character_{total}_{index}.jpg",
+                score=0,
+                imported_at=datetime.now(),
+            )
+            session.add(picture)
+            session.flush()
+            session.add(
+                Face(
+                    picture_id=int(picture.id),
+                    face_index=0,
+                    character_id=int(character.id),
+                    bbox=[0, 0, 16, 16],
+                )
+            )
+            ids.append(int(picture.id))
+        session.commit()
+        return int(character.id), ids
 
     return server.vault.db.run_task(_insert, priority=DBPriority.IMMEDIATE)
 
@@ -134,6 +167,84 @@ def test_stream_done_when_total_below_batch_limit():
         assert body["next_offset"] == 5
         _ = ids
     finally:
+        server.vault.close()
+        tmp.cleanup()
+        gc.collect()
+
+
+@pytest.mark.parametrize("total", [1, 3])
+def test_small_character_stream_emits_its_partial_final_batch(total):
+    tmp, client, server = _setup_server()
+    try:
+        character_id, ids = _seed_character_pictures(server, total)
+        count = client.get(
+            "/pictures/count",
+            params={"character_id": character_id, "stack_leaders_only": "true"},
+        )
+        assert count.status_code == 200, count.text
+        assert count.json()["count"] == total
+        response = client.get(
+            "/pictures/stream",
+            params={
+                "character_id": character_id,
+                "stack_leaders_only": "true",
+                "fields": "grid",
+                "offset": 0,
+                "batch_limit": 200,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["done"] is True
+        assert body["next_offset"] == total
+        assert sorted(picture["id"] for picture in body["pictures"]) == sorted(ids)
+    finally:
+        server.vault.close()
+        tmp.cleanup()
+        gc.collect()
+
+
+def test_small_character_grid_reads_bypass_a_long_writer_slice():
+    """A scan bucket on the writer queue cannot hold count/stream hostage."""
+    tmp, client, server = _setup_server()
+    release_writer = threading.Event()
+    writer_started = threading.Event()
+    writer_future = None
+    try:
+        character_id, ids = _seed_character_pictures(server, 1)
+
+        def long_low_slice(_session):
+            writer_started.set()
+            assert release_writer.wait(timeout=10)
+
+        writer_future = server.vault.db.submit_task(
+            long_low_slice, priority=DBPriority.LOW
+        )
+        assert writer_started.wait(timeout=2)
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            request = executor.submit(
+                client.get,
+                "/pictures/stream",
+                params={
+                    "character_id": character_id,
+                    "stack_leaders_only": "true",
+                    "fields": "grid",
+                    "offset": 0,
+                    "batch_limit": 200,
+                },
+            )
+            response = request.result(timeout=2)
+            assert response.status_code == 200, response.text
+            assert [row["id"] for row in response.json()["pictures"]] == ids
+            assert writer_future.done() is False
+        finally:
+            release_writer.set()
+            executor.shutdown(wait=True)
+    finally:
+        release_writer.set()
+        if writer_future is not None:
+            writer_future.result(timeout=2)
         server.vault.close()
         tmp.cleanup()
         gc.collect()

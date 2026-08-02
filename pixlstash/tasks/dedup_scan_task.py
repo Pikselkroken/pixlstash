@@ -22,9 +22,11 @@ rows rather than duplicating them.
 """
 
 import json
+import threading
 import time
 
 from datetime import datetime
+from typing import Optional
 
 from sqlmodel import Session, select
 
@@ -49,6 +51,12 @@ from pixlstash.tasks.base_task import BaseTask, TaskPriority
 
 logger = get_logger(__name__)
 
+EMBEDDING_COMPONENTS_PER_SLICE = 100
+
+
+class _DedupScanCancelled(RuntimeError):
+    """Internal control flow for a cooperative scan cancellation."""
+
 
 class DedupScanTask(BaseTask):
     """Execute the tiers requested by one :class:`DedupScan` row."""
@@ -66,22 +74,142 @@ class DedupScanTask(BaseTask):
         )
         self._db = database
         self._scan_id = int(scan_id)
+        self._cancel_requested = threading.Event()
+        self._progress_lock = threading.Lock()
+        # Task Manager progress counts cooperative scan phases, not pictures.
+        # Picture enumeration can reach the library total while near/embedding
+        # work is still running, so exposing scanned_pictures here would render
+        # a false "N / N" completion for an active task.
+        self._processed_count = 0
+        self._total_count = 2  # indexed exact setup + finalisation
 
     def _run_task(self):
         start = time.time()
         try:
-            summary = self._db.run_task(
-                DedupScanTask.run_scan_in_session,
+            initial = self._run_low_slice(
+                DedupScanTask._start_scan_slice,
                 self._scan_id,
-                priority=DBPriority.LOW,
             )
+            policy = TierPolicy(**initial["policy"])
+            scope = DedupScope(
+                scope_type=ScopeType(initial["scope_type"]),
+                scope_id=initial["scope_id"],
+            )
+            total_pictures = int(initial["total_pictures"])
+            found = int(initial["groups_found"])
+            # Initialise for every persisted tier combination. The public
+            # TierPolicy currently requires embedding => near, but task resume
+            # must not turn that API invariant into an unbound local if an old
+            # or manually repaired row contains exact+embedding only.
+            total_phases = 2 + int(policy.embedding_enabled)
+            self._set_task_progress(1, total_phases)
+
+            if policy.near_enabled:
+                buckets = self._run_low_slice(
+                    DedupScanTask._prepare_near_slice,
+                    self._scan_id,
+                    scope,
+                )
+                # exact setup + near setup + one phase per bucket + optional
+                # embedding + finalisation. With zero buckets this still leaves
+                # distinct setup/final phases and never reports terminal early.
+                total_phases = 3 + len(buckets) + int(policy.embedding_enabled)
+                self._set_task_progress(2, total_phases)
+                seen_pictures: set[int] = set()
+                pair_cache: dict[tuple[int, int], float] = {}
+                pair_cap_reported = False
+                for index, bucket in enumerate(buckets, start=1):
+                    result = self._run_low_slice(
+                        DedupScanTask._run_near_bucket_slice,
+                        self._scan_id,
+                        bucket,
+                        policy,
+                        index,
+                        len(buckets),
+                        total_pictures,
+                        int(initial["groups_found"]),
+                        pair_cache,
+                        seen_pictures,
+                        pair_cap_reported,
+                    )
+                    found = int(result["groups_found"])
+                    pair_cap_reported = bool(result["pair_cap_reported"])
+                    self._set_task_progress(2 + index, total_phases)
+
+            if policy.embedding_enabled:
+                in_scope = self._run_low_slice(
+                    DedupScanTask._embedding_scope_slice,
+                    scope,
+                )
+                forest = dedup_tier_service.dedup_sweep_service._LikenessForest()
+                cursor = (-1, -1)
+                while True:
+                    page = self._run_low_slice(
+                        DedupScanTask._embedding_edge_page_slice,
+                        policy.threshold,
+                        cursor,
+                        in_scope,
+                    )
+                    for picture_id_a, picture_id_b, likeness in page["edges"]:
+                        forest.add_edge(picture_id_a, picture_id_b, likeness)
+                    if page["done"]:
+                        break
+                    cursor = tuple(page["cursor"])
+
+                components = forest.components(policy.min_group_size)
+                for start_index in range(
+                    0, len(components), EMBEDDING_COMPONENTS_PER_SLICE
+                ):
+                    found += self._run_low_slice(
+                        DedupScanTask._persist_embedding_slice,
+                        self._scan_id,
+                        components[
+                            start_index : start_index
+                            + EMBEDDING_COMPONENTS_PER_SLICE
+                        ],
+                        policy,
+                    )
+                self._set_task_progress(total_phases - 1, total_phases)
+
+            summary = self._run_low_slice(
+                DedupScanTask._finish_scan_slice,
+                self._scan_id,
+                total_pictures,
+                found,
+                scope.key,
+            )
+            self._set_task_progress(self._total_count, self._total_count)
+        except _DedupScanCancelled:
+            # TaskRunner.stop() calls on_cancel() while the active slice still
+            # owns its request-local session. The slice is allowed to finish;
+            # only then do we publish the restartable state in a fresh, short
+            # callback. Never pass a Session across that boundary.
+            self._db.run_task(
+                DedupScanTask._mark_pending_after_cancel,
+                self._scan_id,
+                priority=DBPriority.IMMEDIATE,
+            )
+            summary = {
+                "scan_id": self._scan_id,
+                "status": SCAN_PENDING,
+                "cancelled": True,
+            }
+            logger.info(
+                "DedupScanTask scan_id=%s stopped at a slice boundary in %.2fs; "
+                "the durable scan is pending for restart",
+                self._scan_id,
+                time.time() - start,
+            )
+            return summary
         except Exception as exc:
             logger.error("DedupScanTask failed for scan_id=%s: %s", self._scan_id, exc)
+            # Failure bookkeeping must still run if cancellation happened at
+            # the same time as a genuine slice error.
             self._db.run_task(
                 DedupScanTask._mark_failed,
                 self._scan_id,
                 str(exc),
-                priority=DBPriority.LOW,
+                priority=DBPriority.IMMEDIATE,
             )
             raise
         logger.info(
@@ -91,6 +219,35 @@ class DedupScanTask(BaseTask):
             summary,
         )
         return summary
+
+    def _run_low_slice(self, func, *args):
+        """Run one cooperative DB slice and yield before submitting the next."""
+        if self._cancel_requested.is_set():
+            raise _DedupScanCancelled
+        result = self._db.run_task(func, *args, priority=DBPriority.LOW)
+        # Observe cancellation that arrived while the callback was executing.
+        # The callback and its request-local session are fully finished here,
+        # and no later scan slice will be submitted.
+        if self._cancel_requested.is_set() and func is not self._finish_scan_slice:
+            raise _DedupScanCancelled
+        return result
+
+    def on_cancel(self) -> None:
+        """Request a cooperative stop after the current database slice."""
+        self._cancel_requested.set()
+
+    def _set_task_progress(self, processed: int, total: int) -> None:
+        """Publish an atomic, phase-based Task Manager snapshot."""
+        with self._progress_lock:
+            self._total_count = max(1, int(total))
+            self._processed_count = min(
+                max(0, int(processed)), self._total_count
+            )
+
+    def task_progress(self) -> tuple[int, int]:
+        """Return ``(processed phases, total phases)`` for Task Manager."""
+        with self._progress_lock:
+            return self._processed_count, self._total_count
 
     @staticmethod
     def _policy_for(scan: DedupScan) -> TierPolicy:
@@ -119,6 +276,240 @@ class DedupScanTask(BaseTask):
         scan.updated_at = datetime.utcnow()
         session.add(scan)
         session.commit()
+
+    @staticmethod
+    def _mark_pending_after_cancel(session: Session, scan_id: int) -> None:
+        """Make an interrupted scan discoverable on the next planner run."""
+        scan = session.get(DedupScan, scan_id)
+        if scan is None:
+            logger.warning(
+                "[dedup-scan] cannot mark cancelled scan %s pending: the row is gone",
+                scan_id,
+            )
+            return
+        # A cancellation racing with the final slice must not regress a scan
+        # whose complete result has already committed.
+        if scan.status == SCAN_COMPLETE:
+            return
+        scan.status = SCAN_PENDING
+        scan.error = None
+        scan.finished_at = None
+        scan.updated_at = datetime.utcnow()
+        session.add(scan)
+        session.commit()
+
+    @staticmethod
+    def _start_scan_slice(session: Session, scan_id: int) -> dict:
+        """Initialise a scan and publish tier 1 in one bounded indexed slice."""
+        scan = session.get(DedupScan, scan_id)
+        if scan is None:
+            raise ValueError(f"DedupScan {scan_id} no longer exists")
+        policy = DedupScanTask._policy_for(scan)
+        scope = DedupScanTask._scope_for(scan)
+
+        dedup_tier_service.prune_stale_groups_in_session(session)
+        total_query = select(Picture.id).where(Picture.deleted.is_(False))
+        predicate = scope.picture_predicate()
+        if predicate is not None:
+            total_query = total_query.where(predicate)
+        total_pictures = len(session.exec(total_query).all())
+
+        scan.status = SCAN_RUNNING
+        scan.total_pictures = total_pictures
+        scan.scanned_pictures = 0
+        scan.scanned_buckets = 0
+        scan.total_buckets = 0
+        scan.groups_found = 0
+        scan.error = None
+        scan.finished_at = None
+        scan.updated_at = datetime.utcnow()
+        session.add(scan)
+        session.commit()
+
+        exact_groups = dedup_tier_service.find_exact_groups_in_session(session, scope)
+        found = dedup_tier_service.persist_groups_in_session(
+            session, exact_groups, scan_id
+        )
+        scan = session.get(DedupScan, scan_id)
+        scan.groups_found = found
+        scan.scanned_pictures = total_pictures if not policy.near_enabled else 0
+        scan.updated_at = datetime.utcnow()
+        session.add(scan)
+        session.commit()
+        return {
+            "policy": policy.as_dict(),
+            "scope_type": scope.scope_type.value,
+            "scope_id": scope.scope_id,
+            "total_pictures": total_pictures,
+            "groups_found": found,
+        }
+
+    @staticmethod
+    def _prepare_near_slice(
+        session: Session, scan_id: int, scope: DedupScope
+    ) -> list[dedup_tier_service.NearBucket]:
+        """Build bounded candidate buckets and publish their total."""
+        buckets = dedup_tier_service.build_near_buckets(session, scope)
+        scan = session.get(DedupScan, scan_id)
+        if scan is None:
+            raise ValueError(f"DedupScan {scan_id} no longer exists")
+        scan.total_buckets = len(buckets)
+        scan.updated_at = datetime.utcnow()
+        session.add(scan)
+        session.commit()
+        return buckets
+
+    @staticmethod
+    def _run_near_bucket_slice(
+        session: Session,
+        scan_id: int,
+        bucket: dedup_tier_service.NearBucket,
+        policy: TierPolicy,
+        index: int,
+        total_buckets: int,
+        total_pictures: int,
+        exact_found: int,
+        pair_cache: dict[tuple[int, int], float],
+        seen_pictures: set[int],
+        pair_cap_reported: bool,
+    ) -> dict:
+        """Compare and persist one capped bucket; all carried state is plain."""
+        touched: set[int] = set()
+        for a, b, similarity in dedup_tier_service.near_pairs_in_bucket(
+            session, bucket, policy.threshold
+        ):
+            key = (a, b)
+            if key not in pair_cache and len(pair_cache) >= (
+                dedup_tier_service.MAX_TRACKED_PAIRS
+            ):
+                if not pair_cap_reported:
+                    logger.warning(
+                        "[dedup-scan] scan %s reached the %d tracked-pair cap "
+                        "at bucket %d of %d; further cross-bucket chaining is "
+                        "dropped and some chains may be reported as separate "
+                        "groups. Narrow the scope or raise MAX_TRACKED_PAIRS.",
+                        scan_id,
+                        dedup_tier_service.MAX_TRACKED_PAIRS,
+                        index,
+                        total_buckets,
+                    )
+                    pair_cap_reported = True
+                continue
+            if similarity > pair_cache.get(key, 0.0):
+                pair_cache[key] = similarity
+                touched.update(key)
+        seen_pictures.update(bucket.picture_ids)
+
+        near_groups = 0
+        if pair_cache:
+            groups = dedup_tier_service.groups_from_pairs(
+                session,
+                [(a, b, sim) for (a, b), sim in pair_cache.items()],
+                policy,
+                DedupTier.NEAR,
+            )
+            near_groups = len(groups)
+            if touched:
+                changed = [
+                    group for group in groups if touched.intersection(group.picture_ids)
+                ]
+                dedup_tier_service.persist_groups_in_session(session, changed, scan_id)
+
+        found = exact_found + near_groups
+        scan = session.get(DedupScan, scan_id)
+        if scan is None:
+            raise ValueError(f"DedupScan {scan_id} no longer exists")
+        scan.scanned_buckets = index
+        scan.scanned_pictures = min(len(seen_pictures), total_pictures)
+        scan.groups_found = found
+        scan.updated_at = datetime.utcnow()
+        session.add(scan)
+        session.commit()
+        return {
+            "groups_found": found,
+            "pair_cap_reported": pair_cap_reported,
+        }
+
+    @staticmethod
+    def _embedding_scope_slice(
+        session: Session, scope: DedupScope
+    ) -> Optional[set[int]]:
+        """Return a plain live-id filter for a scoped embedding scan."""
+        predicate = scope.picture_predicate()
+        if predicate is None:
+            return None
+        return {
+            int(row)
+            for row in session.exec(
+                select(Picture.id).where(Picture.deleted.is_(False), predicate)
+            ).all()
+        }
+
+    @staticmethod
+    def _embedding_edge_page_slice(
+        session: Session,
+        threshold: float,
+        cursor: tuple[int, int],
+        in_scope: Optional[set[int]],
+    ) -> dict:
+        """Read one keyset page of embedding edges, returning plain tuples."""
+        page_size = dedup_tier_service.dedup_sweep_service.EDGE_PAGE_SIZE
+        rows = dedup_tier_service.dedup_sweep_service.likeness_edge_page_in_session(
+            session,
+            threshold,
+            after=cursor,
+            page_size=page_size,
+        )
+        edges = rows
+        if in_scope is not None:
+            edges = [
+                edge
+                for edge in rows
+                if edge[0] in in_scope and edge[1] in in_scope
+            ]
+        return {
+            "edges": edges,
+            "cursor": rows[-1][:2] if rows else cursor,
+            "done": len(rows) < page_size,
+        }
+
+    @staticmethod
+    def _persist_embedding_slice(
+        session: Session,
+        scan_id: int,
+        components: list[tuple[list[int], float, float]],
+        policy: TierPolicy,
+    ) -> int:
+        """Assemble and persist one bounded component batch."""
+        groups = dedup_tier_service.groups_from_components(
+            session, components, policy, DedupTier.EMBEDDING
+        )
+        return dedup_tier_service.persist_groups_in_session(session, groups, scan_id)
+
+    @staticmethod
+    def _finish_scan_slice(
+        session: Session,
+        scan_id: int,
+        total_pictures: int,
+        found: int,
+        scope_key: str,
+    ) -> dict:
+        scan = session.get(DedupScan, scan_id)
+        if scan is None:
+            raise ValueError(f"DedupScan {scan_id} no longer exists")
+        scan.status = SCAN_COMPLETE
+        scan.scanned_pictures = total_pictures
+        scan.groups_found = found
+        scan.finished_at = datetime.utcnow()
+        scan.updated_at = scan.finished_at
+        session.add(scan)
+        session.commit()
+        return {
+            "scan_id": scan_id,
+            "scope": scope_key,
+            "total_pictures": total_pictures,
+            "groups_found": found,
+        }
 
     @staticmethod
     def run_scan_in_session(session: Session, scan_id: int) -> dict:

@@ -2295,6 +2295,49 @@ tier 3 appends last. Restarting a scan is safe because persistence is an upsert.
 The finder `depends_on` `PIXEL_SHA` and `IMAGE_EMBEDDING` so a scan reports honest
 counts rather than a partially hashed library.
 
+**A commit is not a scheduling boundary; a queued callback is.** The database has
+one writer thread (§13), so the original task's per-bucket commits still held that
+thread for the entire scan: the callback did not return between buckets. A
+12,098-picture scan held it for 104 seconds, starving grid reads queued behind it.
+`DedupScanTask` now submits bounded work as separate `DBPriority.LOW` callbacks:
+indexed tier-1 setup, bucket construction, one capped near bucket at a time,
+keyset-paged embedding edges, bounded embedding-component persistence, and final
+status. Only plain Python ids, cursors, buckets, pairs and policy values survive
+between callbacks; no ORM row or `Session` crosses the boundary. An interactive
+callback already in the queue therefore runs before the next LOW scan slice.
+Shutdown uses the same boundary: `DedupScanTask.on_cancel()` records a stop
+request, lets the callback that currently owns its request-local session return,
+and submits no later scan slice. A short lifecycle callback moves a non-complete
+row back to `pending` (without discarding its counters), so the finder resumes it
+on the next start; cancellation racing with the final committed slice never
+regresses `complete`.
+
+The picture grid's ordinary count/list path is read-only and uses WAL's parallel
+read side. Character membership (including its optional project intersection)
+and the final `Picture.find` count/page therefore use
+`run_immediate_read_task`, each with its own request-local session. This matters
+for a one-picture character more than it first appears: the old handler made two
+sequential writer-queue calls (resolve membership, then load the page), allowing
+the scan to reacquire the writer for another capped bucket between them. A dense
+50,000-pair bucket could make a tiny grid look unavailable even though dedup
+counts, already on the read side, continued to answer.
+
+Task Manager progress is phase-based for this task (exact setup, bucket setup,
+each near bucket, embedding, finalisation), not `scanned_pictures / total_pictures`.
+Picture enumeration can reach the library total before the bucket and embedding
+work is done. While TaskRunner still owns the task, its snapshot retains at least
+one remaining phase; this prevents both the false `N / N` active row and the
+model-unloader's incorrect "All workers idle" decision mid-scan.
+
+**Active requests are idempotent and policy-safe.** `POST /dedup/scan` defines an
+equivalent request by canonical scope, enabled tiers and threshold. If that scan
+is already `pending` or `running`, the route returns its existing progress row
+unchanged: it does not reset timestamps or requeue the work. A different durable
+policy for the same active scope returns `409 dedup_scan_busy`, including the
+active progress/policy, and leaves the row untouched. This server-side guard and
+the client's keyed single-flight guard prevent a remount from perpetually
+restarting the same scan while still making policy disagreement explicit.
+
 **Only the groups a bucket could have changed are re-persisted.** Pairs are
 retained across buckets so a chain spanning two of them folds into one group, but
 each bucket tracks the picture ids its *new* pairs touched and rewrites only the
@@ -2306,8 +2349,8 @@ queues behind.
 **Honest scope of the performance claim.** §22.6's "10 groups and 10,000 perform
 identically" is a statement about the **queue page**, which reads exactly `limit`
 rows. It is *not* a statement about the scan: a scan is inherently proportional to
-the library, it holds the single DB writer while it runs, and its memory is bounded
-by the caps in §22.2 rather than being free.
+the library. Each bounded slice uses the single DB writer, then yields it before
+the next slice; scan memory is bounded by the caps in §22.2 rather than being free.
 
 ### 22.9 Verdicts and the metadata union
 

@@ -48,6 +48,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
@@ -69,6 +70,7 @@ from pixlstash.services.dedup_tier_service import (
     MIN_THRESHOLD,
     VERDICT_ORDER,
     DedupCursorError,
+    DedupScanBusyError,
     DedupScope,
     DedupTier,
     DedupVerdictKind,
@@ -2173,7 +2175,17 @@ def create_router(server) -> APIRouter:
         request_model = payload or DedupScanRequestModel()
         policy = _policy(request_model.policy)
         scope = _scope(request_model.scope)
-        return dedup_tier_service.request_scan(server.vault, policy, scope)
+        try:
+            return dedup_tier_service.request_scan(server.vault, policy, scope)
+        except DedupScanBusyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "dedup_scan_busy",
+                    "message": str(exc),
+                    "active_scan": jsonable_encoder(exc.active_scan),
+                },
+            ) from exc
 
     @router.post(
         "/dedup/verdicts/stack",

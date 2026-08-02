@@ -23,6 +23,7 @@ import gc
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta
 
 import pytest
@@ -31,8 +32,11 @@ from sqlmodel import select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember, PictureStack
 from pixlstash.db_models.dedup import (
+    SCAN_PENDING,
+    SCAN_RUNNING,
     VERDICT_KEEP_SEPARATE,
     DedupGroup,
+    DedupScan,
     DedupVerdict,
 )
 from pixlstash.db_models.picture_likeness import PictureLikeness
@@ -48,6 +52,10 @@ from pixlstash.services.dedup_tier_service import (
     ScopeType,
     TierPolicy,
 )
+from pixlstash.tasks import dedup_scan_task as dedup_scan_task_module
+from pixlstash.tasks.dedup_scan_task import DedupScanTask
+from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
+from pixlstash.task_runner import TaskRunner
 
 _BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -1137,15 +1145,263 @@ def test_a_scope_id_is_required_for_a_non_global_scope():
 # ── scan progress ─────────────────────────────────────────────────────────────
 
 
-def test_requesting_a_scan_creates_one_row_per_scope_and_reuses_it(server):
+def test_an_equivalent_active_scan_request_is_coalesced_without_restarting(server):
     first = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
     assert first["status"] == "pending"
     assert first["scope_key"] == "global"
-    second = _run(
-        server, tiers.request_scan_in_session, TierPolicy(near_enabled=True), None
-    )
+    second = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
     assert second["scan_id"] == first["scan_id"]
-    assert second["tiers"] == ["exact", "near"]
+    assert second["started_at"] == first["started_at"]
+    assert second["updated_at"] == first["updated_at"]
+
+
+def test_a_different_policy_cannot_overwrite_an_active_scan(server):
+    first = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
+    with pytest.raises(tiers.DedupScanBusyError) as raised:
+        _run(
+            server,
+            tiers.request_scan_in_session,
+            TierPolicy(near_enabled=True),
+            None,
+        )
+    assert raised.value.active_scan["scan_id"] == first["scan_id"]
+    assert raised.value.active_scan["tiers"] == ["exact"]
+    persisted = _run(server, tiers.scan_progress_in_session, None)
+    assert persisted["tiers"] == ["exact"]
+    assert persisted["status"] == "pending"
+
+
+def test_scan_slices_yield_the_writer_between_near_buckets(server, monkeypatch):
+    """An interactive callback queued after bucket 1 runs before bucket 2."""
+    _seed(
+        server,
+        [
+            {"perceptual_hash": PHASH_ZERO},
+            {"perceptual_hash": PHASH_ONE_BIT},
+        ],
+    )
+    progress = _run(
+        server,
+        tiers.request_scan_in_session,
+        TierPolicy(near_enabled=True),
+        None,
+    )
+    task = DedupScanTask(server.vault.db, progress["scan_id"])
+    order: list[str] = []
+    queued_interactive = threading.Event()
+    original_bucket_slice = DedupScanTask._run_near_bucket_slice
+
+    def marked_bucket_slice(session, *args):
+        order.append(f"bucket-{args[3]}")
+        return original_bucket_slice(session, *args)
+
+    monkeypatch.setattr(
+        DedupScanTask, "_run_near_bucket_slice", staticmethod(marked_bucket_slice)
+    )
+    original_run_low_slice = task._run_low_slice
+
+    def run_low_slice(func, *args):
+        result = original_run_low_slice(func, *args)
+        if func is marked_bucket_slice and not queued_interactive.is_set():
+            queued_interactive.set()
+            server.vault.db.submit_task(
+                lambda _session: order.append("interactive"),
+                priority=DBPriority.IMMEDIATE,
+            )
+        return result
+
+    monkeypatch.setattr(task, "_run_low_slice", run_low_slice)
+    task._run_task()
+    bucket_positions = [i for i, item in enumerate(order) if item.startswith("bucket-")]
+    assert len(bucket_positions) >= 2, order
+    assert bucket_positions[0] < order.index("interactive") < bucket_positions[1]
+
+
+def test_sliced_scan_preserves_cross_bucket_chaining_and_restart(server):
+    ids = _seed(
+        server,
+        [
+            {
+                "perceptual_hash": PHASH_ZERO,
+                "width": 100,
+                "height": 100,
+                "file_path": "/a/one.png",
+            },
+            {
+                "perceptual_hash": PHASH_ONE_BIT,
+                "width": 100,
+                "height": 100,
+                "file_path": "/b/two.png",
+            },
+            {
+                "perceptual_hash": PHASH_FOUR_BITS,
+                "width": 200,
+                "height": 200,
+                "file_path": "/b/three.png",
+            },
+        ],
+    )
+    progress = _run(
+        server,
+        tiers.request_scan_in_session,
+        TierPolicy(near_enabled=True),
+        None,
+    )
+
+    def mark_interrupted(session, scan_id):
+        scan = session.get(DedupScan, scan_id)
+        scan.status = SCAN_RUNNING
+        session.add(scan)
+        session.commit()
+
+    _run(server, mark_interrupted, progress["scan_id"])
+    _run(
+        server,
+        DedupScanTask._mark_pending_after_cancel,
+        progress["scan_id"],
+    )
+    pending = _run(server, DedupScanTask.find_pending_scan)
+    assert pending.id == progress["scan_id"]
+    assert pending.status == SCAN_PENDING
+    resumed_task = DedupScanFinder(server.vault.db).find_task()
+    assert resumed_task is not None
+    assert resumed_task.params["scan_id"] == progress["scan_id"]
+    DedupScanTask(server.vault.db, progress["scan_id"])._run_task()
+    rows = _run(server, lambda session: session.exec(select(DedupGroup)).all())
+    matching = [row for row in rows if row.tier == "near" and row.member_count == 3]
+    assert len(matching) == 1
+    members = _run(
+        server,
+        lambda session: session.exec(
+            select(tiers.DedupGroupMember.picture_id).where(
+                tiers.DedupGroupMember.group_id == matching[0].id
+            )
+        ).all(),
+    )
+    assert sorted(members) == sorted(ids)
+
+
+def test_task_runner_shutdown_stops_scan_after_current_slice():
+    """Shutdown lets one active callback finish but submits no later slice."""
+    slice_started = threading.Event()
+    release_slice = threading.Event()
+    calls: list[str] = []
+
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            calls.append(func.__name__)
+            if func.__name__ == "_start_scan_slice":
+                slice_started.set()
+                assert release_slice.wait(timeout=2)
+                return {
+                    "policy": TierPolicy(near_enabled=True).as_dict(),
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 100,
+                    "groups_found": 1,
+                }
+            if func.__name__ == "_mark_pending_after_cancel":
+                assert priority == DBPriority.IMMEDIATE
+                return None
+            raise AssertionError(f"shutdown submitted later slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=7)
+    runner = TaskRunner(name="dedup-shutdown-test", num_workers=1)
+    runner.start()
+    runner.submit(task)
+    assert slice_started.wait(timeout=1)
+
+    shutdown = threading.Thread(target=runner.stop)
+    shutdown.start()
+    # stop() must wait for the callback that currently owns the DB session.
+    shutdown.join(timeout=0.05)
+    assert shutdown.is_alive()
+
+    release_slice.set()
+    shutdown.join(timeout=1)
+    assert not shutdown.is_alive()
+    assert calls == ["_start_scan_slice", "_mark_pending_after_cancel"]
+    assert task.result == {
+        "scan_id": 7,
+        "status": SCAN_PENDING,
+        "cancelled": True,
+    }
+
+
+def test_legacy_exact_plus_embedding_scan_has_defined_phase_progress(monkeypatch):
+    """A persisted pre-validator tier combination must not unbind total_phases."""
+
+    class LegacyPolicy:
+        def __init__(self, **values):
+            self.near_enabled = bool(values.get("near_enabled"))
+            self.embedding_enabled = bool(values.get("embedding_enabled"))
+            self.threshold = float(values.get("threshold", 0.9))
+            self.min_group_size = int(values.get("min_group_size", 2))
+            self.max_group_size = int(values.get("max_group_size", 24))
+
+    monkeypatch.setattr(dedup_scan_task_module, "TierPolicy", LegacyPolicy)
+
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            if func.__name__ == "_start_scan_slice":
+                return {
+                    "policy": {
+                        "near_enabled": False,
+                        "embedding_enabled": True,
+                        "threshold": 0.9,
+                        "min_group_size": 2,
+                        "max_group_size": 24,
+                    },
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 1,
+                    "groups_found": 0,
+                }
+            if func.__name__ == "_embedding_scope_slice":
+                return None
+            if func.__name__ == "_embedding_edge_page_slice":
+                return {"edges": [], "cursor": (-1, -1), "done": True}
+            if func.__name__ == "_finish_scan_slice":
+                assert task.task_progress() == (2, 3)
+                return {
+                    "scan_id": 1,
+                    "scope": "global",
+                    "total_pictures": 1,
+                    "groups_found": 0,
+                }
+            raise AssertionError(f"unexpected slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=1)
+    assert task._run_task()["scan_id"] == 1
+    assert task.task_progress() == (3, 3)
+
+
+def test_near_scan_with_no_buckets_keeps_finalisation_remaining():
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            if func.__name__ == "_start_scan_slice":
+                return {
+                    "policy": TierPolicy(near_enabled=True).as_dict(),
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 0,
+                    "groups_found": 0,
+                }
+            if func.__name__ == "_prepare_near_slice":
+                return []
+            if func.__name__ == "_finish_scan_slice":
+                assert task.task_progress() == (2, 3)
+                return {
+                    "scan_id": 1,
+                    "scope": "global",
+                    "total_pictures": 0,
+                    "groups_found": 0,
+                }
+            raise AssertionError(f"unexpected slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=1)
+    task._run_task()
+    assert task.task_progress() == (3, 3)
 
 
 def test_scan_progress_for_an_unscanned_scope_is_idle_not_an_error(server):

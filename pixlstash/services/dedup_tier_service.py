@@ -96,6 +96,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture
 from pixlstash.db_models.dedup import (
     SCAN_PENDING,
+    SCAN_RUNNING,
     TIER_EMBEDDING,
     TIER_EXACT,
     TIER_NEAR,
@@ -126,6 +127,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from pixlstash.vault import Vault
 
 logger = get_logger(__name__)
+
+
+class DedupScanBusyError(RuntimeError):
+    """A scope already has an active scan under a different durable policy."""
+
+    def __init__(self, active_scan: dict[str, Any]):
+        self.active_scan = active_scan
+        super().__init__(
+            "A duplicate scan is already active for this scope with a different "
+            "tier policy. Wait for it to finish before requesting another scan."
+        )
 
 # --- Policy constants -------------------------------------------------------
 
@@ -1639,6 +1651,17 @@ def groups_from_pairs(
     for picture_id_a, picture_id_b, similarity in pairs:
         forest.add_edge(picture_id_a, picture_id_b, similarity)
     components = forest.components(policy.min_group_size)
+    return groups_from_components(session, components, policy, tier)
+
+
+def groups_from_components(
+    session: Session,
+    components: Iterable[tuple[list[int], float, float]],
+    policy: TierPolicy,
+    tier: DedupTier = DedupTier.NEAR,
+) -> list[DetectedGroup]:
+    """Assemble already-folded, plain-Python components into detected groups."""
+    components = list(components)
     candidates = load_candidates(
         session, [pid for member_ids, _, _ in components for pid in member_ids]
     )
@@ -2652,12 +2675,43 @@ def request_scan_in_session(
     row = session.exec(
         select(DedupScan).where(DedupScan.scope_key == scope.key)
     ).first()
+    requested_tiers = [tier.value for tier in policy.tiers]
+    if row is not None and row.status in (SCAN_PENDING, SCAN_RUNNING):
+        active = scan_progress(row)
+        # Scan rows durably define policy as scope + enabled tiers + threshold.
+        # min/max group size predate request persistence and are intentionally
+        # outside active-request equivalence until the schema stores them.
+        if active["tiers"] == requested_tiers and math.isclose(
+            float(active["threshold"]),
+            float(policy.threshold),
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            logger.info(
+                "[dedup-scan] coalesced equivalent active request for "
+                "scope=%s scan_id=%s",
+                scope.key,
+                row.id,
+            )
+            return active
+        logger.info(
+            "[dedup-scan] refused policy change for active scope=%s scan_id=%s "
+            "active_tiers=%s active_threshold=%.4f requested_tiers=%s "
+            "requested_threshold=%.4f",
+            scope.key,
+            row.id,
+            active["tiers"],
+            active["threshold"],
+            requested_tiers,
+            policy.threshold,
+        )
+        raise DedupScanBusyError(active)
     now = datetime.utcnow()
     if row is None:
         row = DedupScan(scope_key=scope.key)
     row.scope_type = scope.scope_type.value
     row.scope_id = scope.scope_id
-    row.tiers = json.dumps([tier.value for tier in policy.tiers])
+    row.tiers = json.dumps(requested_tiers)
     row.threshold = float(policy.threshold)
     row.status = SCAN_PENDING
     row.error = None
@@ -2931,6 +2985,7 @@ __all__ = [
     "VERDICT_STACKED",
     "CandidateMember",
     "DedupCursorError",
+    "DedupScanBusyError",
     "DedupScope",
     "DedupTier",
     "DedupVerdictKind",

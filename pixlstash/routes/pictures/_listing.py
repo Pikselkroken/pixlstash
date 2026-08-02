@@ -1032,7 +1032,7 @@ def select_pictures_for_listing(
                 ).all()
                 return list({face.picture_id for face in faces})
 
-            picture_ids = server.vault.db.run_task(
+            picture_ids = server.vault.db.run_immediate_read_task(
                 get_picture_ids_for_character, character_id
             )
             if not picture_ids:
@@ -1053,7 +1053,7 @@ def select_pictures_for_listing(
                         ).all()
                         return list(rows)
 
-                    picture_ids = server.vault.db.run_task(
+                    picture_ids = server.vault.db.run_immediate_read_task(
                         _get_project_unassigned_ids, picture_ids
                     )
                 else:
@@ -1072,7 +1072,7 @@ def select_pictures_for_listing(
                             ).all()
                             return list(rows)
 
-                        picture_ids = server.vault.db.run_task(
+                        picture_ids = server.vault.db.run_immediate_read_task(
                             _get_project_member_ids, picture_ids, proj_id_int
                         )
 
@@ -1131,7 +1131,7 @@ def select_pictures_for_listing(
                     union |= members_by_char.get(cid, set())
                 return list(union)
 
-            picture_ids = server.vault.db.run_task(
+            picture_ids = server.vault.db.run_immediate_read_task(
                 get_picture_ids_for_characters, character_id_list, character_mode
             )
             if not picture_ids:
@@ -1149,7 +1149,7 @@ def select_pictures_for_listing(
                         ).all()
                         return list(rows)
 
-                    picture_ids = server.vault.db.run_task(
+                    picture_ids = server.vault.db.run_immediate_read_task(
                         _get_project_unassigned_ids_multi, picture_ids
                     )
                 else:
@@ -1168,7 +1168,7 @@ def select_pictures_for_listing(
                             ).all()
                             return list(rows)
 
-                        picture_ids = server.vault.db.run_task(
+                        picture_ids = server.vault.db.run_immediate_read_task(
                             _get_project_member_ids_multi, picture_ids, proj_id_int
                         )
 
@@ -1235,7 +1235,7 @@ def select_pictures_for_listing(
                     )
 
         if count_only:
-            return server.vault.db.run_task(
+            return server.vault.db.run_immediate_read_task(
                 Picture.find,
                 count_only=True,
                 stack_leaders_only=stack_leaders_only,
@@ -1252,7 +1252,7 @@ def select_pictures_for_listing(
                 hidden_tags_filter=hidden_tags,
                 **query_params,
             )
-        pics = server.vault.db.run_task(
+        pics = server.vault.db.run_immediate_read_task(
             Picture.find,
             sort_mech=sort_mech,
             offset=offset,
