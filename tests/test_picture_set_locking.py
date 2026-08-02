@@ -1644,12 +1644,10 @@ def test_a_scrapheaped_member_of_an_unlocked_set_never_freezes_the_stack():
 
         assert _remove_members(client, stack_id, [live_a]).status_code == 200
         assert _stack_of(server, live_a) is None
-        assert _stack_of(server, live_b) == stack_id
-
-        resp = client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={})
-        assert resp.status_code == 200, resp.text
+        # Only one live member remains, so the stack dissolves immediately;
+        # the open set must not block that cleanup.
         assert _stack_of(server, live_b) is None
-        # The dissolve takes the scrapheaped row with it, as it always has.
+        # The dissolve takes the scrapheaped row with it too.
         assert _stack_of(server, heaped) is None
     finally:
         server.vault.close()

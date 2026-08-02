@@ -12,6 +12,7 @@ Revises: 0092_add_stackcohesion_nearest_edges
 
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0093_invalidate_stackcohesion_inputs"
@@ -23,7 +24,7 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 _TRIGGERS = {
     "trg_stackcohesion_picture_insert": """
-        CREATE TRIGGER trg_stackcohesion_picture_insert
+        CREATE TRIGGER IF NOT EXISTS trg_stackcohesion_picture_insert
         AFTER INSERT ON picture
         WHEN NEW.stack_id IS NOT NULL
         BEGIN
@@ -31,7 +32,7 @@ _TRIGGERS = {
         END
     """,
     "trg_stackcohesion_picture_update": """
-        CREATE TRIGGER trg_stackcohesion_picture_update
+        CREATE TRIGGER IF NOT EXISTS trg_stackcohesion_picture_update
         AFTER UPDATE OF stack_id, deleted, perceptual_hash ON picture
         BEGIN
             DELETE FROM stackcohesion
@@ -39,7 +40,7 @@ _TRIGGERS = {
         END
     """,
     "trg_stackcohesion_picture_delete": """
-        CREATE TRIGGER trg_stackcohesion_picture_delete
+        CREATE TRIGGER IF NOT EXISTS trg_stackcohesion_picture_delete
         AFTER DELETE ON picture
         WHEN OLD.stack_id IS NOT NULL
         BEGIN
@@ -50,9 +51,18 @@ _TRIGGERS = {
 
 
 def upgrade() -> None:
+    existing_tables = set(sa.inspect(op.get_bind()).get_table_names())
+    if "stackcohesion" not in existing_tables:
+        return
+
     # Rows written before invalidation existed cannot be trusted without the
     # old full rescan, so start cold once and let the finder refill them.
     op.execute("DELETE FROM stackcohesion")
+    if "picture" not in existing_tables:
+        # Partial databases used for recovery and migration tests may carry
+        # only the table being repaired. SQLite cannot create a trigger for a
+        # table that is absent, and there is no cohesion input to invalidate.
+        return
     for statement in _TRIGGERS.values():
         op.execute(statement)
 
