@@ -1,0 +1,416 @@
+/**
+ * Tests for the telemetry ingestion Worker.
+ *
+ * The endpoint takes unauthenticated writes from the public internet, so the
+ * rejection cases carry as much weight as the happy path: an unrecognised key,
+ * an oversized body, a bad UUID, and a rate-limited caller must all fail
+ * closed, and the response must never echo anything back.
+ *
+ * Run with: node --test
+ */
+
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import worker from "../src/index.js";
+import { validatePing, MAX_BODY_BYTES } from "../src/validate.js";
+import { rollActivity, daysBetween, weekStart, ACTIVITY_BITS } from "../src/activity.js";
+import {
+  buildAggregate,
+  hasResurrected,
+  activeInLifeWeek,
+  MIN_COHORT,
+} from "../src/aggregate.js";
+import { D1Stub, allowAll, denyAll, pingRequest } from "./d1-stub.js";
+
+const UUID = "9f2c1b7e-4d5a-4c81-b3e6-8a7d2f0e5c14";
+const UUID2 = "1b0d4e2a-77c3-4f19-9d6e-2c5a8b3f0e71";
+
+const VALID = { install_id: UUID, is_new_install: true, install_type: "pip" };
+
+function env(overrides = {}) {
+  return { DB: new D1Stub(), RATE_LIMITER: allowAll, ...overrides };
+}
+
+// ---------------------------------------------------------------------------
+// Validation: reject by default
+// ---------------------------------------------------------------------------
+
+describe("validatePing", () => {
+  it("accepts a well-formed ping", () => {
+    const result = validatePing({ ...VALID });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.install_id, UUID);
+  });
+
+  it("rejects an unrecognised key rather than ignoring it", () => {
+    const result = validatePing({ ...VALID, email: "someone@example.com" });
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /unrecognised key/);
+  });
+
+  it("rejects a missing key", () => {
+    const { install_type, ...partial } = VALID;
+    assert.equal(validatePing(partial).ok, false);
+  });
+
+  for (const bad of [
+    "not-a-uuid",
+    "9F2C1B7E-4D5A-4C81-B3E6-8A7D2F0E5C14", // uppercase is not canonical
+    "9f2c1b7e-4d5a-1c81-b3e6-8a7d2f0e5c14", // version 1, not 4
+    "9f2c1b7e-4d5a-4c81-c3e6-8a7d2f0e5c14", // bad variant nibble
+    "",
+    12345,
+  ]) {
+    it(`rejects install_id ${JSON.stringify(bad)}`, () => {
+      assert.equal(validatePing({ ...VALID, install_id: bad }).ok, false);
+    });
+  }
+
+  it("rejects a non-boolean is_new_install", () => {
+    assert.equal(validatePing({ ...VALID, is_new_install: "true" }).ok, false);
+  });
+
+  it("rejects an install_type outside the four buckets", () => {
+    assert.equal(validatePing({ ...VALID, install_type: "snap" }).ok, false);
+  });
+
+  it("rejects arrays and null", () => {
+    assert.equal(validatePing([VALID]).ok, false);
+    assert.equal(validatePing(null).ok, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The activity bitmap
+// ---------------------------------------------------------------------------
+
+describe("rollActivity", () => {
+  it("records today without rolling when no days have passed", () => {
+    assert.equal(rollActivity(0b1n, 0), 0b1n);
+  });
+
+  it("shifts by the elapsed days and sets today", () => {
+    assert.equal(rollActivity(0b1n, 1), 0b11n);
+    assert.equal(rollActivity(0b11n, 2), 0b1101n);
+  });
+
+  it("drops everything once the whole window has aged out", () => {
+    assert.equal(rollActivity((1n << 40n) | 1n, ACTIVITY_BITS), 1n);
+    assert.equal(rollActivity(0xffffn, ACTIVITY_BITS + 10), 1n);
+  });
+
+  it("never sets the sign bit, because SQLite INTEGER is signed", () => {
+    let bits = 1n;
+    for (let i = 0; i < 200; i++) bits = rollActivity(bits, 1);
+    assert.ok(bits <= (1n << BigInt(ACTIVITY_BITS)) - 1n);
+    assert.ok(bits > 0n, "must stay positive");
+  });
+
+  it("records without rolling backwards on a clock-skewed ping", () => {
+    // A ping dated before last_seen must not rewrite history.
+    assert.equal(rollActivity(0b110n, -5), 0b111n);
+  });
+});
+
+describe("date helpers", () => {
+  it("counts whole days between dates", () => {
+    assert.equal(daysBetween("2026-08-01", "2026-08-08"), 7);
+    assert.equal(daysBetween("2026-08-08", "2026-08-01"), -7);
+    assert.equal(daysBetween("2026-02-27", "2026-03-01"), 2); // 2026 is not a leap year
+  });
+
+  it("buckets dates into ISO weeks starting Monday", () => {
+    assert.equal(weekStart("2026-08-02"), "2026-07-27"); // a Sunday
+    assert.equal(weekStart("2026-07-27"), "2026-07-27"); // the Monday itself
+    assert.equal(weekStart("2026-07-31"), "2026-07-27");
+  });
+});
+
+describe("hasResurrected", () => {
+  it("is false for a continuously active install", () => {
+    assert.equal(hasResurrected((1n << 30n) - 1n), false);
+  });
+
+  it("is false for a gap that was never closed", () => {
+    // Active long ago, silent since: churned, not resurrected.
+    assert.equal(hasResurrected(1n << 40n), false);
+  });
+
+  it("is true for a long silence broken by a later ping", () => {
+    // Active 40 days ago, nothing until a ping today: a 39-day gap, closed.
+    assert.equal(hasResurrected((1n << 40n) | 1n), true);
+  });
+
+  it("is false when the gap is shorter than the threshold", () => {
+    // Active 10 days ago and today: a 9-day gap, below the 14-day threshold.
+    assert.equal(hasResurrected((1n << 10n) | 1n), false);
+  });
+});
+
+describe("activeInLifeWeek", () => {
+  const row = { first_seen: "2026-07-01", last_seen: "2026-07-20", activity: 1n };
+
+  it("returns null for a week that has not happened yet", () => {
+    assert.equal(activeInLifeWeek(row, 12), null);
+  });
+
+  it("finds the week containing the last ping", () => {
+    // last_seen is day 19 of life, which falls in life-week 2 (days 14-20).
+    assert.equal(activeInLifeWeek(row, 2), true);
+  });
+
+  it("reports a week with no pings as false, not null", () => {
+    assert.equal(activeInLifeWeek(row, 0), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Aggregation
+// ---------------------------------------------------------------------------
+
+function cohortRows(count, firstSeen, lastSeen, activity) {
+  return Array.from({ length: count }, (_, i) => ({
+    install_id: `id-${firstSeen}-${i}`,
+    first_seen: firstSeen,
+    last_seen: lastSeen,
+    activity,
+    is_new_install: 1,
+    install_type: "pip",
+  }));
+}
+
+describe("buildAggregate", () => {
+  it("suppresses a cohort below the minimum size rather than publishing it", () => {
+    const rows = cohortRows(MIN_COHORT - 1, "2026-07-01", "2026-07-20", 1n);
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.deepEqual(agg.cohort_retention, {});
+    assert.equal(agg.suppressed_cohorts, 1);
+  });
+
+  it("publishes a cohort at or above the minimum size", () => {
+    const rows = cohortRows(MIN_COHORT, "2026-07-01", "2026-07-20", 1n);
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.equal(Object.keys(agg.cohort_retention).length, 1);
+    assert.equal(agg.suppressed_cohorts, 0);
+  });
+
+  it("excludes upgrade-wave installs from cohorts", () => {
+    // Enough rows to clear the floor, but none of them are new installs.
+    const rows = cohortRows(MIN_COHORT + 5, "2026-07-01", "2026-07-20", 1n).map((r) => ({
+      ...r,
+      is_new_install: 0,
+    }));
+    const agg = buildAggregate(rows, "2026-07-20");
+    assert.deepEqual(agg.cohort_retention, {});
+    assert.equal(agg.suppressed_cohorts, 0, "not a suppressed cohort, simply not cohorted");
+  });
+
+  it("counts only recently-seen installs as active", () => {
+    const recent = cohortRows(3, "2026-01-01", "2026-07-20", 1n);
+    const stale = cohortRows(4, "2026-01-01", "2026-02-01", 1n);
+    const agg = buildAggregate([...recent, ...stale], "2026-07-20");
+    assert.equal(agg.active_installs, 3);
+  });
+
+  it("reports resurrection_rate as null when nothing is eligible yet", () => {
+    const rows = cohortRows(3, "2026-07-19", "2026-07-20", 1n);
+    const agg = buildAggregate(rows, "2026-07-20");
+    // Null, not 0: "we cannot say yet" and "nobody returned" are different.
+    assert.equal(agg.resurrection_rate, null);
+  });
+
+  it("publishes no identifiers", () => {
+    const rows = cohortRows(MIN_COHORT, "2026-07-01", "2026-07-20", 1n);
+    const serialised = JSON.stringify(buildAggregate(rows, "2026-07-20"));
+    assert.ok(!serialised.includes("id-"), "aggregate must not contain install ids");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The endpoint
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/ping", () => {
+  it("accepts a valid ping with 204 and an empty body", async () => {
+    const e = env();
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 204);
+    assert.equal(await res.text(), "");
+    assert.equal(e.DB.installs.size, 1);
+  });
+
+  it("records first_seen, the new-install flag, and a fresh bitmap", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    const row = e.DB.installs.get(UUID);
+    assert.equal(row.activity, 1);
+    assert.equal(row.is_new_install, 1);
+    assert.equal(row.install_type, "pip");
+    assert.equal(row.first_seen, row.last_seen);
+  });
+
+  it("is idempotent within a day", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    await worker.fetch(pingRequest(VALID), e);
+    assert.equal(e.DB.installs.size, 1);
+    assert.equal(e.DB.installs.get(UUID).activity, 1);
+  });
+
+  it("never lets a later ping rewrite first_seen or the new-install flag", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    const before = { ...e.DB.installs.get(UUID) };
+    await worker.fetch(pingRequest({ ...VALID, is_new_install: false }), e);
+    const after = e.DB.installs.get(UUID);
+    assert.equal(after.first_seen, before.first_seen);
+    assert.equal(after.is_new_install, before.is_new_install);
+  });
+
+  it("rejects an unrecognised key without storing anything", async () => {
+    const e = env();
+    const res = await worker.fetch(pingRequest({ ...VALID, extra: 1 }), e);
+    assert.equal(res.status, 400);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("rejects a body over the size cap", async () => {
+    const e = env();
+    const padded = JSON.stringify({ ...VALID, install_type: "pip" }).padEnd(
+      MAX_BODY_BYTES + 100,
+      " ",
+    );
+    const res = await worker.fetch(pingRequest(padded), e);
+    assert.equal(res.status, 413);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("caps the read even when content-length lies", async () => {
+    const e = env();
+    const padded = "x".repeat(MAX_BODY_BYTES + 500);
+    const res = await worker.fetch(pingRequest(padded, { "content-length": "10" }), e);
+    assert.equal(res.status, 413);
+  });
+
+  it("rejects malformed JSON", async () => {
+    const e = env();
+    const res = await worker.fetch(pingRequest("{not json"), e);
+    assert.equal(res.status, 400);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("refuses a rate-limited caller without writing", async () => {
+    const e = env({ RATE_LIMITER: denyAll });
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 429);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("rejects GET", async () => {
+    const e = env();
+    const res = await worker.fetch(new Request("https://t.pixlstash.dev/v1/ping"), e);
+    assert.equal(res.status, 405);
+  });
+
+  it("never reflects submitted input in the response", async () => {
+    const e = env();
+    const res = await worker.fetch(
+      pingRequest({ ...VALID, "<script>": "reflected-marker" }),
+      e,
+    );
+    const text = await res.text();
+    assert.ok(!text.includes("reflected-marker"));
+    assert.ok(!text.includes("<script>"));
+  });
+
+  it("404s an unknown path", async () => {
+    const e = env();
+    const res = await worker.fetch(new Request("https://t.pixlstash.dev/v1/other"), e);
+    assert.equal(res.status, 404);
+  });
+});
+
+describe("GET /v1/aggregates", () => {
+  const TOKEN = "s3cret-token-value";
+
+  async function seeded() {
+    const e = env({ AGGREGATES_TOKEN: TOKEN });
+    await worker.fetch(pingRequest(VALID), e);
+    await worker.fetch(pingRequest({ ...VALID, install_id: UUID2 }), e);
+    await worker.scheduled({}, e);
+    return e;
+  }
+
+  it("serves snapshots to a correct bearer token", async () => {
+    const e = await seeded();
+    const res = await worker.fetch(
+      new Request("https://t.pixlstash.dev/v1/aggregates", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      }),
+      e,
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.snapshots.length, 1);
+    assert.equal(body.snapshots[0].active_installs, 2);
+  });
+
+  it("refuses a missing token", async () => {
+    const e = await seeded();
+    const res = await worker.fetch(
+      new Request("https://t.pixlstash.dev/v1/aggregates"),
+      e,
+    );
+    assert.equal(res.status, 401);
+  });
+
+  it("refuses a wrong token", async () => {
+    const e = await seeded();
+    const res = await worker.fetch(
+      new Request("https://t.pixlstash.dev/v1/aggregates", {
+        headers: { authorization: "Bearer wrong" },
+      }),
+      e,
+    );
+    assert.equal(res.status, 401);
+  });
+
+  it("refuses when no token is configured, rather than serving openly", async () => {
+    const e = env();
+    await worker.scheduled({}, e);
+    const res = await worker.fetch(
+      new Request("https://t.pixlstash.dev/v1/aggregates", {
+        headers: { authorization: "Bearer anything" },
+      }),
+      e,
+    );
+    assert.equal(res.status, 503);
+  });
+});
+
+describe("scheduled", () => {
+  it("prunes rows past the retention window", async () => {
+    const e = env({ AGGREGATES_TOKEN: "t" });
+    e.DB.installs.set("old", {
+      install_id: "old",
+      first_seen: "2024-01-01",
+      last_seen: "2024-01-02",
+      activity: 1,
+      is_new_install: 1,
+      install_type: "pip",
+    });
+    await worker.fetch(pingRequest(VALID), e);
+    await worker.scheduled({}, e);
+    assert.equal(e.DB.installs.has("old"), false);
+    assert.equal(e.DB.installs.has(UUID), true);
+  });
+
+  it("writes one snapshot per day and overwrites on a re-run", async () => {
+    const e = env({ AGGREGATES_TOKEN: "t" });
+    await worker.fetch(pingRequest(VALID), e);
+    await worker.scheduled({}, e);
+    await worker.scheduled({}, e);
+    assert.equal(e.DB.snapshots.size, 1);
+  });
+});

@@ -1,0 +1,15 @@
+{
+  "name": "pixlstash-telemetry-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker that ingests anonymous install pings and publishes aggregate cohort numbers.",
+  "scripts": {
+    "test": "node --test test/",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.36.0"
+  }
+}
