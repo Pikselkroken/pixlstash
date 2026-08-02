@@ -1,10 +1,9 @@
 """Finder that keeps the mixed-stack cohesion cache current.
 
 Queues one :class:`~pixlstash.tasks.stack_cohesion_task.StackCohesionTask` per
-batch of stacks whose cached cohesion row is missing or stale, stale meaning
-the stack's live membership fingerprint no longer matches the cached one, which
-is the only staleness that exists here (a row whose fingerprint still matches is
-exact however old it is, because its inputs have not moved).
+batch of stacks whose cached cohesion row is missing. Database triggers remove
+the row in the same transaction whenever live membership or a perceptual hash
+moves, so a present row is exact and absence is the only stale state.
 
 Not a :class:`~pixlstash.tasks.base_task_finder.SimpleMissingFinder`: the unit
 of work is a **stack**, not a picture, so there are no picture ids to claim.
@@ -13,7 +12,6 @@ of work is a **stack**, not a picture, so there are no picture ids to claim.
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.stack_cohesion_task import StackCohesionTask
-from pixlstash.tasks.task_type import TaskType
 
 logger = get_logger(__name__)
 
@@ -36,12 +34,10 @@ class MissingStackCohesionFinder(BaseTaskFinder):
         return 1
 
     def depends_on(self) -> list:
-        # Cohesion is measured on ``picture.perceptual_hash``, which the image
-        # embedding worker writes. Running ahead of it would cache an edge list
-        # derived from members that simply have no hash yet, and every one of
-        # them would look stranded: the exact false positive the flag must not
-        # produce. Waiting means the first answer is the honest one.
-        return [TaskType.IMAGE_EMBEDDING]
+        # An unhashed member is truthfully cached as not comparable, and the
+        # invalidation trigger drops the row as soon as its hash arrives. Waiting
+        # for the whole embedding queue left the cache empty during imports.
+        return []
 
     def find_task(self):
         stack_ids = self._db.run_immediate_read_task(

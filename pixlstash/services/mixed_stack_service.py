@@ -24,7 +24,15 @@ which is a connected-components question. Three numbers fall out of it:
   ones with no edge at all. These are the "clear stranger" case D5 splits off;
 * **weakest edge**: the lowest similarity among the edges that survive at this
   threshold, matching the "confidence is the weakest link" rule the near tier
-  already reports per group.
+  already reports per group;
+* **each member's closest sibling**: how close that one member gets to anything
+  else in the stack, which is the column Compare needs when the question is
+  "which of these does not belong" rather than "which copy is better"
+  (:class:`MemberEdge`). Two numbers, because the threshold is a question about
+  the list and not about the picture: *strongest_edge* is the best edge that
+  survives the cut and is therefore absent for a stranded member, and
+  *nearest_edge* is the real distance, always. Both are folded out of the same
+  edge pass, so they cost no extra query on a page of rows.
 
 Measured on the owner's library at the time this shipped: **26** of the live
 stacks are not one cluster at the 0.90 default and **9** at the 0.65 floor,
@@ -67,6 +75,7 @@ from pixlstash.services.dedup_tier_service import (
     MIN_THRESHOLD,
     PHASH_BITS,
     PHASH_HEX_LEN,
+    _pill,
     _popcount64,
     load_stack_facts,
 )
@@ -89,14 +98,23 @@ MIN_STACK_MEMBERS = 2
 """A stack needs two live members before cohesion means anything."""
 
 MAX_CACHED_HAMMING = int((1.0 - MIN_THRESHOLD) * PHASH_BITS)
-"""Widest distance that can ever be an edge, so the cache is threshold-free.
+"""Widest distance that can ever be an EDGE, so the cached edge list is
+threshold-free.
 
 Every API threshold is at or above :data:`~pixlstash.services.dedup_tier_service.MIN_THRESHOLD`
 (0.65: the routes carry it as a pydantic ``ge=``, so a lower value is a 422
 before any handler runs), and ``max_hamming`` shrinks as the threshold rises.
 A pair further apart than this therefore cannot be an edge at *any* admissible
 threshold, so dropping it from the cache loses nothing and keeps the stored
-edge list small for a stack of near-identical frames."""
+edge list small for a stack of near-identical frames.
+
+**It prunes edges only, never the per-member closest sibling.** That claim,
+"loses nothing", is true of the question *is this pair an edge* and false of the
+question *how close does this member get to anything*, which is what the page
+has to answer about a member it is calling a stranger. Those distances are
+recorded separately and unconditionally (``nearest`` in :func:`_stack_edges`,
+``stackcohesion.nearest_edges``), one row per member rather than per pair, so
+the honest number survives at O(n) storage while the edge list stays pruned."""
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 200
@@ -185,6 +203,76 @@ def content_fingerprint(
 
 
 @dataclass(frozen=True)
+class MemberEdge:
+    """How close one member gets to any sibling in its own stack. Two answers.
+
+    The evidence column the Mixed stacks page needs and the duplicate queue does
+    not. Compare's other metrics answer *which copy is the better file*; on this
+    page the question is *which of these does not belong*, and the honest answer
+    is how close each member gets to its nearest sibling.
+
+    **Two fields, two jobs, and they must not be collapsed into one.**
+    *strongest_edge* is thresholded: it is the best edge that SURVIVES at the
+    row's threshold, so it is ``None`` for a stranded member *by construction*
+    and that ``None`` is what the stranded decision is made on. *nearest_edge*
+    is unconditional: the real distance to the real closest sibling, whatever it
+    is. One decides membership of the list; the other is always the truth. Using
+    the thresholded value for both is what made the page print an en dash and
+    claim a picture matched nothing, about members whose closest sibling was 89%
+    similar.
+
+    Attributes:
+        picture_id: The member.
+        strongest_edge: Highest similarity among this member's **surviving**
+            edges, or ``None`` when it has none. ``None`` covers three different
+            facts and the row's other fields say which: the member is in
+            ``stranded_picture_ids`` (it has a hash and still matches nothing
+            *at this threshold*), it is in ``unhashed_picture_ids`` (it could not
+            be compared at all), or the stack has a single member and there is no
+            sibling to match. Deliberately **not** a fourth vocabulary for the
+            unhashed case: that word already exists on the row and inventing a
+            second one is how two surfaces start disagreeing.
+        closest_picture_id: The sibling on the other end of that surviving edge,
+            so Compare can name it rather than only score it. ``None`` exactly
+            when *strongest_edge* is. Ties (two siblings at the same distance)
+            resolve to the lower picture id, so the payload is reproducible.
+        nearest_edge: Similarity to this member's closest sibling, **never
+            thresholded and never pruned at the cache's edge floor**. ``None``
+            only when there is genuinely nothing to compare against: this member
+            has no usable ``perceptual_hash``, or no other member of the stack
+            has one. It is therefore ``>= strongest_edge`` always, and exactly
+            equal whenever *strongest_edge* is not ``None`` (the closest pair is
+            the first to survive any cut).
+        nearest_picture_id: The sibling that distance was measured to, same tie
+            rule. ``None`` exactly when *nearest_edge* is.
+    """
+
+    picture_id: int
+    strongest_edge: Optional[float]
+    closest_picture_id: Optional[int]
+    nearest_edge: Optional[float] = None
+    nearest_picture_id: Optional[int] = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """The wire shape of one member's edge evidence."""
+        return {
+            "picture_id": self.picture_id,
+            "strongest_edge": (
+                round(float(self.strongest_edge), 6)
+                if self.strongest_edge is not None
+                else None
+            ),
+            "closest_picture_id": self.closest_picture_id,
+            "nearest_edge": (
+                round(float(self.nearest_edge), 6)
+                if self.nearest_edge is not None
+                else None
+            ),
+            "nearest_picture_id": self.nearest_picture_id,
+        }
+
+
+@dataclass(frozen=True)
 class CohesionReport:
     """One stack's cohesion at one threshold.
 
@@ -206,6 +294,10 @@ class CohesionReport:
             can carry no edge, so without this they would be indistinguishable
             from a genuinely stranded member; they are reported separately so
             the list can say "not comparable yet" rather than "does not belong".
+        member_edges: One :class:`MemberEdge` per member, canonical stack order,
+            so the payload is parallel to *member_ids*. Folded out of the same
+            edge list the components come from, so it costs no extra query on a
+            page of rows.
     """
 
     stack_id: int
@@ -216,6 +308,7 @@ class CohesionReport:
     stranded_picture_ids: tuple[int, ...]
     weakest_edge: Optional[float]
     unhashed_picture_ids: tuple[int, ...]
+    member_edges: tuple[MemberEdge, ...] = ()
 
     @property
     def member_count(self) -> int:
@@ -296,15 +389,195 @@ class CohesionReport:
                 else None
             ),
             "unhashed_picture_ids": list(self.unhashed_picture_ids),
+            "member_edges": [edge.as_dict() for edge in self.member_edges],
             "suggested_action": self.suggested_action,
+            "why": build_mixed_stack_evidence(self),
         }
+
+
+def _plural(count: int, singular: str, plural: str) -> str:
+    """``"1 picture"`` / ``"3 pictures"``, so no pill ever says "1 pictures"."""
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _percent(similarity: float) -> int:
+    """One similarity as whole percent, the same rounding every pill uses."""
+    return int(round(float(similarity) * 100))
+
+
+def _stranger_pill_text(count: int, percents: list[int]) -> str:
+    """``"1 picture is only 89% like the rest"``: the strangers, by number.
+
+    The pill this replaced said *matches nothing else*, which is a false
+    statement about a member whose closest sibling is 7 bits away out of 64. It
+    matches nothing **at this threshold**, and the number is the fact the user
+    actually needs in order to disagree with the cut.
+
+    A range when the strangers differ, because one number would have to be
+    either the best or the worst of them and both would misdescribe the others.
+    The value quoted is each member's *closest* sibling, so "only 89% like the
+    rest" is the strongest thing that can be said for it, never an average
+    dressed up as a bound.
+
+    Args:
+        count: How many strangers the pill is about; always ``len(percents)``
+            unless a caller lost an edge, which is why it is passed rather than
+            inferred.
+        percents: Their closest-sibling similarities, as whole percent.
+    """
+    low, high = min(percents), max(percents)
+    span = f"{high}%" if low == high else f"{low}-{high}%"
+    return (
+        f"{_plural(count, 'picture', 'pictures')} "
+        f"{'is' if count == 1 else 'are'} only {span} like the rest"
+    )
+
+
+def build_mixed_stack_evidence(report: "CohesionReport") -> list[dict[str, Any]]:
+    """The row-level why-pills for one mixed stack, in the shipped pill shape.
+
+    Deliberately the **same** ``[{text, against}]`` contract
+    :func:`~pixlstash.services.dedup_tier_service.build_group_evidence` produces
+    and ``WhyPillModel`` serialises, so the queue row's shipped pill component
+    renders this list with no second code path. Only the content differs, because
+    the question differs: a duplicate group's pills argue about whether these
+    pictures are the same picture, and a mixed stack's argue about how little
+    holds an existing stack together.
+
+    ``against`` keeps its shipped meaning, *this argues against these pictures
+    belonging in one stack*: the structure and the strangers are red, the thread
+    that does hold is olive.
+
+    Three things get said, in the order the eye needs them:
+
+    * **the strangers**, members with no edge at this threshold, named by *how
+      unlike the rest they actually are* (``1 picture is only 89% like the
+      rest``), which is the strong case D5 marks on a tile;
+    * **the component structure**, ``2 groups (2 + 1)``, the definition of the
+      row and the one fact a count of strangers cannot convey (two clusters of
+      three strand nobody at all);
+    * **the weakest surviving edge**, the thinnest thread still holding the
+      stack together, the same weakest-link reading a duplicate group's
+      ``confidence`` carries, or the flat statement that there is no thread.
+
+    **A stranger is described by its number, never as matching nothing.** The
+    two are not the same claim: "matches nothing else" is unfalsifiable and, for
+    a member 7 bits from its neighbour at a 6-bit cut, simply untrue. The pill
+    quotes :attr:`MemberEdge.nearest_edge`, which is measured regardless of the
+    threshold, so the user can see the cut is what made the stranger and move it
+    if they disagree.
+
+    **An unhashed member is subtracted from the stranger count and reported on
+    its own.** A member with no usable ``perceptual_hash`` can carry no edge, so
+    :func:`_fold_components` necessarily lists it as stranded; describing a
+    picture nothing has compared yet as unlike anything is the one false
+    positive this feature cannot afford. Its pill is not ``against``, because it
+    argues for waiting rather than for breaking the stack up. **When fewer than
+    two members can be compared at all**, that is the whole story of the row:
+    every component is then an artefact of the missing hashes, so the structure
+    and weakest-edge pills are suppressed rather than made to describe an
+    arithmetic accident.
+
+    Args:
+        report: The stack's cohesion at the threshold the row was computed at.
+
+    Returns:
+        ``[{"text": str, "against": bool}, ...]``, ready to serialise as
+        ``WhyPillModel``. Never empty for a mixed stack, and always empty below
+        :data:`MIN_STACK_MEMBERS`.
+    """
+    pills: list[dict[str, Any]] = []
+    if report.member_count < MIN_STACK_MEMBERS:
+        # A lone member is in ``stranded_picture_ids`` by construction (it has
+        # no edge, because it has no sibling), so any pill about how it compares
+        # to the rest would be an accusation made of arithmetic. Cohesion is
+        # undefined below two members, so the row says nothing.
+        return pills
+
+    unhashed = set(report.unhashed_picture_ids)
+    strangers = [pid for pid in report.stranded_picture_ids if pid not in unhashed]
+
+    if report.member_count - len(unhashed) < MIN_STACK_MEMBERS:
+        # Fewer than two members carry a usable hash, so no pair in this stack
+        # has ever been compared. Every component is a singleton for that reason
+        # alone and every member is "stranded" by arithmetic; reporting the
+        # structure would dress an absence of data up as a verdict.
+        return [_pill("Nothing here can be compared yet")]
+
+    if strangers:
+        edges_by_picture = {edge.picture_id: edge for edge in report.member_edges}
+        percents = [
+            _percent(edges_by_picture[pid].nearest_edge)
+            for pid in strangers
+            if pid in edges_by_picture
+            and edges_by_picture[pid].nearest_edge is not None
+        ]
+        if percents:
+            pills.append(
+                _pill(_stranger_pill_text(len(strangers), percents), against=True)
+            )
+        else:
+            # Unreachable from cohesion_for_stacks: two or more members are
+            # comparable here (checked above), so every hashed member has a
+            # measured closest sibling. A report assembled without member_edges
+            # would land here, and the pill must still avoid the "matches
+            # nothing" claim it cannot support.
+            logger.warning(
+                "[mixed-stacks] stack %s has %d stranded member(s) with no "
+                "measured closest sibling although %d member(s) are comparable; "
+                "the why-pill cannot name a similarity and falls back to the "
+                "threshold-relative wording",
+                report.stack_id,
+                len(strangers),
+                report.member_count - len(unhashed),
+            )
+            pills.append(
+                _pill(
+                    f"{_plural(len(strangers), 'picture', 'pictures')} "
+                    f"{'does' if len(strangers) == 1 else 'do'} not match the rest",
+                    against=True,
+                )
+            )
+
+    sizes = [len(component) for component in report.components]
+    if report.component_count > 1:
+        pills.append(
+            _pill(
+                f"{report.component_count} groups "
+                f"({' + '.join(str(size) for size in sizes)})",
+                against=True,
+            )
+        )
+    else:
+        # Not reachable from the list (a cohesive stack is not listed), but the
+        # builder is called from as_dict() and must stay truthful if a caller
+        # scores a stack that turns out to hang together.
+        pills.append(_pill(f"All {report.member_count} match each other"))
+
+    if report.weakest_edge is not None:
+        pills.append(_pill(f"Weakest match {_percent(report.weakest_edge)}%"))
+    else:
+        pills.append(_pill("No two pictures match", against=True))
+
+    if unhashed:
+        pills.append(
+            _pill(f"{_plural(len(unhashed), 'picture', 'pictures')} not comparable yet")
+        )
+
+    return pills
 
 
 def _fold_components(
     member_ids: tuple[int, ...],
     edges: list[tuple[int, int, int]],
+    nearest: list[tuple[int, int, int]],
     threshold: float,
-) -> tuple[tuple[tuple[int, ...], ...], tuple[int, ...], Optional[float]]:
+) -> tuple[
+    tuple[tuple[int, ...], ...],
+    tuple[int, ...],
+    Optional[float],
+    tuple[MemberEdge, ...],
+]:
     """Fold *edges* into connected components over *member_ids*.
 
     Reuses the shipped union-find (``dedup_sweep_service._LikenessForest``, the
@@ -319,18 +592,30 @@ def _fold_components(
         member_ids: Every live member of the stack.
         edges: ``(picture_id_a, picture_id_b, hamming)`` for pairs at or below
             :data:`MAX_CACHED_HAMMING`.
+        nearest: ``(picture_id, closest_picture_id, hamming)`` per member with a
+            comparable sibling, unthresholded and unpruned. Passed through to
+            :attr:`MemberEdge.nearest_edge` untouched: this fold must not filter
+            it, because a member's closeness is exactly the fact that survives
+            being stranded.
         threshold: Similarity cut; ``max_hamming = int((1 - threshold) * 64)``,
             identical to ``near_pairs_in_bucket``.
 
+    The per-member strongest edge falls out of the same pass: the loop already
+    visits every surviving edge, so the evidence column costs one dict update
+    per edge and **no extra query**, which is what keeps a page of rows off the
+    N+1 path.
+
     Returns:
-        ``(components, stranded_picture_ids, weakest_edge)``. Components are
-        largest first (ties by lowest member id) and each is sorted by id.
+        ``(components, stranded_picture_ids, weakest_edge, member_edges)``.
+        Components are largest first (ties by lowest member id) and each is
+        sorted by id; *member_edges* is parallel to *member_ids*.
     """
     max_hamming = int((1.0 - float(threshold)) * PHASH_BITS)
     live = set(member_ids)
     forest = dedup_sweep_service._LikenessForest()
     weakest: Optional[float] = None
     connected: set[int] = set()
+    strongest: dict[int, tuple[float, int]] = {}
     for picture_id_a, picture_id_b, hamming in edges:
         if hamming > max_hamming:
             continue
@@ -351,23 +636,96 @@ def _fold_components(
         connected.add(picture_id_a)
         connected.add(picture_id_b)
         weakest = similarity if weakest is None else min(weakest, similarity)
+        for picture_id, sibling in (
+            (picture_id_a, picture_id_b),
+            (picture_id_b, picture_id_a),
+        ):
+            best = strongest.get(picture_id)
+            # Ties resolve to the lower sibling id so two equally-close siblings
+            # never make the payload flip between requests.
+            if best is None or (similarity, -sibling) > (best[0], -best[1]):
+                strongest[picture_id] = (similarity, sibling)
 
     groups = [tuple(members) for members, _low, _high in forest.components(1)]
     stranded = tuple(sorted(pid for pid in live if pid not in connected))
     groups.extend((pid,) for pid in stranded)
     groups.sort(key=lambda component: (-len(component), component[0]))
-    return tuple(groups), stranded, weakest
+    closest = {
+        int(picture_id): (int(sibling), int(hamming))
+        for picture_id, sibling, hamming in nearest
+        if int(picture_id) in live and int(sibling) in live
+    }
+    member_edges = tuple(
+        MemberEdge(
+            picture_id=picture_id,
+            strongest_edge=strongest[picture_id][0]
+            if picture_id in strongest
+            else None,
+            closest_picture_id=strongest[picture_id][1]
+            if picture_id in strongest
+            else None,
+            nearest_edge=(
+                1.0 - float(closest[picture_id][1]) / PHASH_BITS
+                if picture_id in closest
+                else None
+            ),
+            nearest_picture_id=(
+                closest[picture_id][0] if picture_id in closest else None
+            ),
+        )
+        for picture_id in member_ids
+    )
+    return tuple(groups), stranded, weakest, member_edges
+
+
+def _absorb_nearest(
+    best_distance: np.ndarray,
+    best_sibling: np.ndarray,
+    slots: np.ndarray,
+    distances: np.ndarray,
+    siblings: np.ndarray,
+) -> None:
+    """Keep the closest sibling seen so far for each slot, in place.
+
+    Vectorised so the unconditional pass adds no Python-level loop to the
+    O(n^2) comparison. Ties resolve to the **lower sibling id**, the same rule
+    the surviving-edge pass uses, so the two numbers on a member agree about
+    which sibling they mean and neither flips between requests.
+
+    Args:
+        best_distance: Per-slot running minimum, modified in place.
+        best_sibling: Per-slot winner, modified in place. Its sentinel must be
+            larger than any picture id so the first candidate always wins.
+        slots: Row indices this batch of candidates is about.
+        distances: Candidate Hamming distance per slot.
+        siblings: Candidate sibling picture id per slot.
+    """
+    better = (distances < best_distance[slots]) | (
+        (distances == best_distance[slots]) & (siblings < best_sibling[slots])
+    )
+    chosen = slots[better]
+    best_distance[chosen] = distances[better]
+    best_sibling[chosen] = siblings[better]
 
 
 def _stack_edges(
     hashes_by_picture: dict[int, int], member_ids: tuple[int, ...]
-) -> list[tuple[int, int, int]]:
-    """Every within-stack pair at or below :data:`MAX_CACHED_HAMMING`.
+) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+    """The stack's near pairs, and every member's closest sibling.
 
     The comparison is the tier-2 one: XOR the two 64-bit dHashes and popcount
     the result with :func:`~pixlstash.services.dedup_tier_service._popcount64`,
     vectorised over the stack's upper triangle. Stacks are small, so the whole
     O(n^2) is a handful of numpy rows.
+
+    **Two answers out of one pass, because they answer different questions.**
+    The edge list is pruned at :data:`MAX_CACHED_HAMMING`, which loses nothing
+    when the question is *is this pair an edge*. The per-member closest sibling
+    is **not** pruned and not thresholded, because the question there is *how
+    close does this member get to anything*, and a member whose nearest sibling
+    is 32 bits away has a real answer (50%) that the prune would throw away
+    exactly when the page most needs it. It is one row per member beside an
+    O(n^2) edge list, so keeping it is O(n) storage and no extra scan.
 
     Args:
         hashes_by_picture: ``{picture_id: dhash}`` for the members that have a
@@ -375,22 +733,45 @@ def _stack_edges(
         member_ids: The stack's members, canonical order.
 
     Returns:
-        ``(a, b, hamming)`` with ``a < b``, sorted, distance ascending last.
+        ``(edges, nearest)``. *edges* is ``(a, b, hamming)`` with ``a < b``,
+        sorted, for pairs at or below :data:`MAX_CACHED_HAMMING`. *nearest* is
+        ``(picture_id, closest_picture_id, hamming)`` sorted by picture id, one
+        entry per member that has a comparable sibling, at any distance. Both
+        are empty when fewer than two members can be compared at all.
     """
     usable = [pid for pid in member_ids if pid in hashes_by_picture]
     if len(usable) < 2:
-        return []
+        # Nothing to compare against, which is a different fact from "far from
+        # everything" and is reported as such (``unhashed_picture_ids`` and the
+        # "nothing here can be compared yet" pill), never as a distance.
+        return [], []
     ids = np.array(usable, dtype=np.int64)
     values = np.array([hashes_by_picture[pid] for pid in usable], dtype=np.uint64)
     edges: list[tuple[int, int, int]] = []
+    best_distance = np.full(len(usable), PHASH_BITS + 1, dtype=np.int64)
+    best_sibling = np.full(len(usable), np.iinfo(np.int64).max, dtype=np.int64)
     for offset in range(1, len(usable)):
-        distances = _popcount64(values[:-offset] ^ values[offset:])
+        distances = _popcount64(values[:-offset] ^ values[offset:]).astype(np.int64)
+        left_slots = np.arange(len(usable) - offset)
+        right_slots = left_slots + offset
+        _absorb_nearest(
+            best_distance, best_sibling, left_slots, distances, ids[right_slots]
+        )
+        _absorb_nearest(
+            best_distance, best_sibling, right_slots, distances, ids[left_slots]
+        )
         for index in np.nonzero(distances <= MAX_CACHED_HAMMING)[0]:
             left = int(ids[index])
             right = int(ids[index + offset])
             edges.append((min(left, right), max(left, right), int(distances[index])))
     edges.sort()
-    return edges
+    # Every slot saw at least one candidate (there are two or more usable
+    # members), so no sentinel can survive to be serialised as a distance.
+    nearest = sorted(
+        (int(ids[slot]), int(best_sibling[slot]), int(best_distance[slot]))
+        for slot in range(len(usable))
+    )
+    return edges, nearest
 
 
 def _load_perceptual_hashes(
@@ -444,6 +825,7 @@ class _CachedEdges:
     membership_fingerprint: str
     content_fingerprint: str
     edges: list[tuple[int, int, int]]
+    nearest: list[tuple[int, int, int]]
     unhashed_picture_ids: tuple[int, ...]
 
 
@@ -478,12 +860,10 @@ def _edges_for_stacks(
 ) -> dict[int, _CachedEdges]:
     """Edge sets for every stack in *stack_ids*, reading the cache where valid.
 
-    A stack whose cached :func:`content_fingerprint` still matches is exact
-    however old the row is, because every input it was derived from is
-    unchanged; anything else is recomputed here, in the same batch. What the
-    cache buys is therefore the O(n^2) comparison, not the reads, the reads
-    happen either way, because the fingerprint is the only honest staleness
-    test and it needs the hashes.
+    A cache row is exact however old it is: database triggers delete it in the
+    same transaction whenever live membership, deletion state, or a perceptual
+    hash changes. Missing rows are recomputed here in one batch. A hit therefore
+    avoids both the O(n^2) comparison and all picture/hash reads.
 
     This function never writes. The cache is owned by
     :class:`~pixlstash.tasks.stack_cohesion_task.StackCohesionTask`, so a read
@@ -493,8 +873,6 @@ def _edges_for_stacks(
     wanted = sorted({int(sid) for sid in stack_ids})
     if not wanted:
         return {}
-    facts, hashes, unusable = _resolve_stack_inputs(session, wanted)
-
     cached: dict[int, StackCohesion] = {}
     for start in range(0, len(wanted), ID_CHUNK):
         chunk = wanted[start : start + ID_CHUNK]
@@ -503,25 +881,42 @@ def _edges_for_stacks(
         ).all():
             cached[int(row.stack_id)] = row
 
+    # Database triggers delete a row whenever live membership, deletion state,
+    # or a perceptual hash changes. Presence therefore means validity; rereading
+    # every member hash to validate a hit would retain the expensive rescan the
+    # cache exists to remove.
+    missing = [stack_id for stack_id in wanted if stack_id not in cached]
+    facts, hashes, unusable = (
+        _resolve_stack_inputs(session, missing) if missing else ({}, {}, set())
+    )
+
     result: dict[int, _CachedEdges] = {}
     recomputed = 0
     for stack_id in wanted:
-        stack_facts = facts.get(stack_id)
-        if stack_facts is None:
-            continue
-        members = stack_facts.member_ids
-        content = content_fingerprint(members, hashes)
         row = cached.get(stack_id)
-        if row is not None and row.content_fingerprint == content:
+        if row is not None:
+            members = tuple(int(pid) for pid in json.loads(row.member_ids or "[]"))
+            content = str(row.content_fingerprint)
             edges = [
                 (int(a), int(b), int(distance))
                 for a, b, distance in json.loads(row.edges or "[]")
+            ]
+            nearest = [
+                (int(picture_id), int(sibling), int(distance))
+                for picture_id, sibling, distance in json.loads(
+                    row.nearest_edges or "[]"
+                )
             ]
             unhashed = tuple(
                 int(pid) for pid in json.loads(row.unhashed_picture_ids or "[]")
             )
         else:
-            edges = _stack_edges(hashes, members)
+            stack_facts = facts.get(stack_id)
+            if stack_facts is None:
+                continue
+            members = stack_facts.member_ids
+            content = content_fingerprint(members, hashes)
+            edges, nearest = _stack_edges(hashes, members)
             unhashed = tuple(pid for pid in members if pid in unusable)
             recomputed += 1
         result[stack_id] = _CachedEdges(
@@ -529,6 +924,7 @@ def _edges_for_stacks(
             membership_fingerprint=membership_fingerprint(members),
             content_fingerprint=content,
             edges=edges,
+            nearest=nearest,
             unhashed_picture_ids=unhashed,
         )
     if recomputed:
@@ -560,8 +956,8 @@ def cohesion_for_stacks(
     """
     reports: dict[int, CohesionReport] = {}
     for stack_id, entry in _edges_for_stacks(session, stack_ids).items():
-        components, stranded, weakest = _fold_components(
-            entry.member_ids, entry.edges, threshold
+        components, stranded, weakest, member_edges = _fold_components(
+            entry.member_ids, entry.edges, entry.nearest, threshold
         )
         reports[stack_id] = CohesionReport(
             stack_id=stack_id,
@@ -572,6 +968,7 @@ def cohesion_for_stacks(
             stranded_picture_ids=stranded,
             weakest_edge=weakest,
             unhashed_picture_ids=entry.unhashed_picture_ids,
+            member_edges=member_edges,
         )
     return reports
 
@@ -582,17 +979,15 @@ def live_stack_ids_in_session(session: Session) -> list[int]:
     One member is not a stack in any sense cohesion can speak about, and a
     soft-deleted member is not in the stack in any sense the user can see.
     """
+    from sqlalchemy import func
+
     rows = session.exec(
-        select(Picture.stack_id).where(
-            Picture.stack_id.is_not(None), Picture.deleted.is_(False)
-        )
+        select(Picture.stack_id)
+        .where(Picture.stack_id.is_not(None), Picture.deleted.is_(False))
+        .group_by(Picture.stack_id)
+        .having(func.count(Picture.id) >= MIN_STACK_MEMBERS)
     ).all()
-    counts: dict[int, int] = defaultdict(int)
-    for stack_id in rows:
-        counts[int(stack_id)] += 1
-    return sorted(
-        stack_id for stack_id, count in counts.items() if count >= MIN_STACK_MEMBERS
-    )
+    return sorted(int(stack_id) for stack_id in rows)
 
 
 # --- The Keep dismissal -----------------------------------------------------
@@ -931,7 +1326,9 @@ def _apply_removal(
     )
     return {
         "stack_id": stack_id,
-        "split_picture_ids": sorted(leaving),
+        # On dissolve this includes soft-deleted members too: they were detached,
+        # and the receipt promises every picture that left the stack.
+        "split_picture_ids": sorted(leaving_set),
         "remaining_picture_ids": sorted(remaining),
         "stack_dissolved": not remaining,
         "batch_id": batch_id,
@@ -949,22 +1346,26 @@ def split_stranded_in_session(
     source: str = "external",
     origin_client_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Split the stranded member(s) off *stack_id*, as one undoable operation.
+    """Split the marked member(s) off *stack_id*, as one undoable operation.
+
+    The name is historical: the *default* selection is the stranded set, and
+    that is all this did until the Mixed stacks page grew per-member marking.
+    An explicit list is now bounded by the stack's live membership rather than
+    by cohesion; see the reversal note on the ``picture_ids`` branch below.
 
     Args:
         session: Pre-opened session; this commits once.
         stack_id: The stack to split.
-        picture_ids: The members to split off. Omit to use the stranded set the
-            server computes at *threshold*, the same set the list showed. An
-            explicit list is what the client should send, so the split matches
-            the row the user was looking at rather than a set recomputed behind
-            them; it must be a **subset of the stranded set** at *threshold*,
-            because this route splits stranded members off a mixed stack and
-            nothing else. ``DELETE /stacks/{stack_id}/members`` is the general
-            remove-from-stack primitive.
-        threshold: The similarity the stranded set is computed at. Read on every
-            request: when *picture_ids* is omitted it selects the targets, and
-            when it is supplied it bounds them.
+        picture_ids: The members to split off, which is what the client should
+            send: the marks the user made on the row, so the split matches what
+            they were looking at rather than a set recomputed behind them. Every
+            id must be a **live member of this stack**; a picture belonging to
+            another stack or to none, and a soft-deleted member, are both a 400.
+            Omit it and the stranded set at *threshold* is used instead, which
+            is the row's opening marking.
+        threshold: The similarity the stranded set is computed at. Read **only**
+            when *picture_ids* is omitted; an explicit list is bounded by the
+            stack's live membership, not by cohesion.
         batch_id: Operation-log batch; minted server-side when absent.
         actor / source / origin_client_id: Origin discipline (§21), read from
             the request in the handler and passed down explicitly.
@@ -973,9 +1374,10 @@ def split_stranded_in_session(
         HTTPException: ``423`` when a locked picture set freezes any member of
             the stack. Checked first, before the stranded set is computed, so a
             frozen stack answers "locked" rather than "nothing to split".
-        MixedStackError: The stack has no live members, the request names none
-            of them, no member is stranded at *threshold*, or *picture_ids*
-            names a member that is not stranded.
+        MixedStackError: The stack has no live members, *picture_ids* is empty,
+            *picture_ids* names something that is not a live member of this
+            stack, or *picture_ids* was omitted and no member is stranded at
+            *threshold*.
     """
     stack_id = int(stack_id)
     # First, before any cohesion work: a locked stack is refused whole, and the
@@ -983,11 +1385,11 @@ def split_stranded_in_session(
     enforce_stack_detach_not_locked(
         session, stack_id, "split pictures out of a locked stack"
     )
-    report = cohesion_for_stacks(session, [stack_id], threshold).get(stack_id)
-    if report is None:
-        raise MixedStackError(f"stack {stack_id} has no live members")
-    stranded = list(report.stranded_picture_ids)
     if picture_ids is None:
+        report = cohesion_for_stacks(session, [stack_id], threshold).get(stack_id)
+        if report is None:
+            raise MixedStackError(f"stack {stack_id} has no live members")
+        stranded = list(report.stranded_picture_ids)
         if not stranded:
             raise MixedStackError(
                 f"no member of stack {stack_id} is stranded at threshold "
@@ -995,40 +1397,70 @@ def split_stranded_in_session(
             )
         targets = stranded
     else:
+        # The client sends explicit marks. Membership is the only bound in this
+        # branch, so avoid computing cohesion that is discarded while the write
+        # transaction is held.
+        facts = load_stack_facts(session, [stack_id]).get(stack_id)
+        if facts is None:
+            raise MixedStackError(f"stack {stack_id} has no live members")
         targets = sorted({int(pid) for pid in picture_ids})
         if not targets:
             raise MixedStackError("picture_ids was empty; nothing to split off")
-        # This route splits STRANDED members off a MIXED stack, which is what it
-        # is named, documented and listed for. Taking an arbitrary id list made
-        # it an unconstrained remove-from-stack primitive that would happily
-        # break up a perfectly cohesive stack the Mixed stacks page would never
-        # show. Constraining the explicit list to the stranded set keeps the
-        # reason it exists (act on exactly the ids the row displayed, never a
-        # set recomputed behind the user's back) while removing the ability to
-        # act on anything the row did not display. A named id that is no longer
-        # stranded means the stack moved under the client, and the honest answer
-        # is to refuse and let it re-read the row.
+        # WIDENED 2026-08-02, deliberately reversing security-review finding F7
+        # (2026-08-01). F7 bound an explicit list to a SUBSET of the stranded
+        # set at *threshold*, on the reasoning that an arbitrary list "would let
+        # it break up a cohesive stack this page would never list". That
+        # protected the route's NAME, not the user's intent, and the intent has
+        # since changed: the Mixed stacks page is being rebuilt so the user
+        # marks which members are strangers, starting from the engine's marks
+        # and adjusting them. Once the user can mark, their marks ARE the input
+        # and "stranded" is only the opening position, so a bound that refuses
+        # any mark the engine did not make would refuse the feature. The engine
+        # keeps the default (omit ``picture_ids`` and the stranded set is used);
+        # it stops being a veto.
         #
-        # The bound is deliberately THRESHOLD-RELATIVE, and that is not a hole
-        # left open by accident. A caller passing a high threshold widens the
-        # stranded set (``max_hamming`` shrinks), so it can name more members.
-        # That is the same widening ``GET /dedup/mixed-stacks?threshold=…``
-        # would show it: at whatever threshold the caller passes, this splits
-        # exactly what that list reports as stranded, which is the contract D5
-        # asks for ("bind to the threshold, never a constant"). Tightening it to
-        # some fixed threshold would make the route disagree with its own list.
-        # The route is OWNER_ONLY and ``DELETE /stacks/{stack_id}/members``
-        # already gives the same principal an unrestricted remove, so nothing
-        # here is a privilege boundary; what the bound buys is that the route
-        # does what its name and its page say it does.
-        not_stranded = [pid for pid in targets if pid not in set(stranded)]
-        if not_stranded:
+        # What replaces it is the real safety property, and it is not nothing:
+        # every id must be a LIVE MEMBER OF THIS STACK. A foreign picture is
+        # refused, a soft-deleted member is refused (the caller cannot see those
+        # and must not move them blind), and the locked-set guard above still
+        # refuses the whole stack. F7 itself was rated LOW because "it is not a
+        # privilege boundary: the route is OWNER_ONLY and DELETE /stacks/
+        # {stack_id}/members gives the same principal an unrestricted remove",
+        # so widening grants this principal no capability it lacked; it removes
+        # a constraint that only ever cost the user a round trip through a
+        # second endpoint.
+        live_members = set(facts.member_ids)
+        outside = [pid for pid in targets if pid not in live_members]
+        if outside:
+            # Name the soft-deleted case for what it is rather than reporting a
+            # scrapheaped member as "not a member": the client cannot see those
+            # rows, so "unknown picture" would send it hunting for a bug that is
+            # not there. One extra query, on the refusal path only.
+            scrapheaped = {
+                int(picture_id)
+                for picture_id in session.exec(
+                    select(Picture.id).where(
+                        Picture.id.in_(outside),
+                        Picture.stack_id == stack_id,
+                        Picture.deleted.is_(True),
+                    )
+                ).all()
+            }
+            foreign = [pid for pid in outside if pid not in scrapheaped]
+            reasons = []
+            if foreign:
+                reasons.append(
+                    f"picture(s) {foreign} are not members of stack {stack_id}"
+                )
+            if scrapheaped:
+                reasons.append(
+                    f"picture(s) {sorted(scrapheaped)} are in the Scrapheap, so "
+                    "they are not live members and are not on the row you "
+                    "marked; restore them first if you meant to move them"
+                )
             raise MixedStackError(
-                f"picture(s) {not_stranded} are not stranded in stack "
-                f"{stack_id} at threshold {threshold}; this route splits off "
-                "stranded members only, so re-read the row and send the ids it "
-                "reports in stranded_picture_ids (use DELETE /stacks/"
-                f"{stack_id}/members to remove an arbitrary member)"
+                "; ".join(reasons)
+                + f". Split moves live members of stack {stack_id} and nothing else"
             )
     return _apply_removal(
         session,
@@ -1086,36 +1518,24 @@ def unstack_in_session(
 def stale_cohesion_stack_ids_in_session(session: Session, limit: int) -> list[int]:
     """Up to *limit* live stacks whose cached cohesion row is missing or stale.
 
-    The finder's query. Staleness is decided on the :func:`content_fingerprint`,
-    not on a timestamp: a row whose fingerprint still matches is exact however
-    old it is, and one whose fingerprint has moved is wrong however fresh it is.
-    Because that fingerprint covers the members' perceptual hashes as well as
-    their ids, a hash arriving after the cache did (the embedding worker filling
-    a ``NULL``) re-queues the stack instead of freezing its members as stranded.
+    The finder's query. Database triggers delete the derived row whenever an
+    input changes, including a hash arriving after an unhashed row was cached.
+    Presence is therefore validity and absence is the only stale state; the
+    finder never needs to reread every member hash merely to validate a hit.
     """
     stack_ids = live_stack_ids_in_session(session)
     if not stack_ids:
         return []
-    facts, hashes, _unusable = _resolve_stack_inputs(session, stack_ids)
-    cached: dict[int, str] = {}
+    cached: set[int] = set()
     for start in range(0, len(stack_ids), ID_CHUNK):
         chunk = stack_ids[start : start + ID_CHUNK]
-        for row in session.exec(
-            select(StackCohesion.stack_id, StackCohesion.content_fingerprint).where(
-                StackCohesion.stack_id.in_(chunk)
-            )
-        ).all():
-            cached[int(row[0])] = str(row[1])
-    stale: list[int] = []
-    for stack_id in stack_ids:
-        stack_facts = facts.get(stack_id)
-        if stack_facts is None:
-            continue
-        if cached.get(stack_id) != content_fingerprint(stack_facts.member_ids, hashes):
-            stale.append(stack_id)
-            if len(stale) >= limit:
-                break
-    return stale
+        cached.update(
+            int(stack_id)
+            for stack_id in session.exec(
+                select(StackCohesion.stack_id).where(StackCohesion.stack_id.in_(chunk))
+            ).all()
+        )
+    return [stack_id for stack_id in stack_ids if stack_id not in cached][:limit]
 
 
 def refresh_cohesion_in_session(
@@ -1166,8 +1586,13 @@ def refresh_cohesion_in_session(
         row.unhashed_picture_ids = json.dumps(
             [pid for pid in members if pid in unusable]
         )
-        row.edges = json.dumps(
-            [[a, b, distance] for a, b, distance in _stack_edges(hashes, members)]
+        edges, nearest = _stack_edges(hashes, members)
+        row.edges = json.dumps([[a, b, distance] for a, b, distance in edges])
+        row.nearest_edges = json.dumps(
+            [
+                [picture_id, sibling, distance]
+                for picture_id, sibling, distance in nearest
+            ]
         )
         row.computed_at = datetime.utcnow()
         session.add(row)
@@ -1285,9 +1710,11 @@ __all__ = [
     "MAX_CACHED_HAMMING",
     "MAX_PAGE_SIZE",
     "MIN_STACK_MEMBERS",
+    "MemberEdge",
     "MixedStackError",
     "OP_TYPE_SPLIT",
     "OP_TYPE_UNSTACK",
+    "build_mixed_stack_evidence",
     "cohesion_for_stacks",
     "content_fingerprint",
     "dismiss_stack",

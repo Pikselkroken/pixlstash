@@ -9,6 +9,10 @@ directions, because over-listing is its own regression:
 * the list is bound to the threshold, not to a constant, the same stack is
   mixed at 0.90 and one clean cluster at 0.65;
 * a ``Keep`` drops a stack off the list and a membership change re-raises it;
+* split moves **the members the user marked**, which may be any live member of
+  the stack, and refuses everything that is not one (another stack's picture, a
+  picture in no stack, a soft-deleted member) as well as the whole stack when a
+  locked set freezes it;
 * split and unstack are each **one** operation, so a single undo puts every
   picture back in its original stack at its original position;
 * every new route is ``OWNER_ONLY`` at the central gate, a resource-scoped
@@ -27,11 +31,20 @@ name             hex                         popcount vs ``_H_ZERO``
 ``_H_ZERO``      ``0000000000000000``        0
 ``_H_NEAR``      ``0000000000000001``        1   (edge at every threshold)
 ``_H_MID``       ``00000000000003ff``        10  (edge at 0.65 only)
+``_H_ALMOST``    ``000000000000007f``        7   (ONE bit outside the 0.90 cut,
+                                             so 89% similar and stranded: the
+                                             case the page used to describe as
+                                             matching nothing)
 ``_H_FAR``       ``ffffffff00000000``        32  (edge at no threshold)
 ``_H_OTHER``     ``00000000ffffffff``        32  (edge at no threshold, and
                                              64 from ``_H_FAR``, so the two
                                              strangers are strangers to each
                                              other as well)
+``_H_FAR_NEAR``  ``ffffffff00000001``        33  (1 bit from ``_H_FAR``, so
+                                             the two of them are a second
+                                             tight cluster with no edge to
+                                             the first: the *soft* case,
+                                             mixed with nobody stranded)
 ===============  ==========================  ===============================
 """
 
@@ -39,9 +52,11 @@ import gc
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
@@ -60,8 +75,13 @@ UNDO_URL = f"{API}/operations/undo"
 _H_ZERO = "0000000000000000"
 _H_NEAR = "0000000000000001"
 _H_MID = "00000000000003ff"
+_H_ALMOST = "000000000000007f"
 _H_FAR = "ffffffff00000000"
 _H_OTHER = "00000000ffffffff"
+_H_FAR_NEAR = "ffffffff00000001"
+
+_TIGHT = 1.0 - 1.0 / 64.0
+"""Similarity of a one-bit pair, the edge every fixture cluster is built from."""
 
 # The SPA catch-all answers unmatched GETs with 200, so a wrong URL could make a
 # positive assertion vacuous. See tests/authz_guard.py.
@@ -194,6 +214,113 @@ def _teardown(temp_dir, server):
 
 def _rows_by_stack(body) -> dict:
     return {row["stack_id"]: row for row in body["stacks"]}
+
+
+def _edges_by_picture(row) -> dict:
+    """``{picture_id: (strongest_edge, closest_picture_id)}`` from one row."""
+    return {
+        entry["picture_id"]: (entry["strongest_edge"], entry["closest_picture_id"])
+        for entry in row["member_edges"]
+    }
+
+
+def _nearest_by_picture(row) -> dict:
+    """``{picture_id: (nearest_edge, nearest_picture_id)}`` from one row.
+
+    The *unconditional* half of the evidence: what ``_edges_by_picture`` reports
+    is thresholded and is ``None`` for a stranded member by construction, which
+    is precisely why it cannot be the number the page shows.
+    """
+    return {
+        entry["picture_id"]: (entry["nearest_edge"], entry["nearest_picture_id"])
+        for entry in row["member_edges"]
+    }
+
+
+def _hamming(left: str, right: str) -> int:
+    """Bits differing between two hex dHashes, computed the slow honest way.
+
+    Deliberately **not** the service's SWAR popcount: a test that reuses the
+    implementation it is checking can only confirm the code is self-consistent.
+    """
+    return bin(int(left, 16) ^ int(right, 16)).count("1")
+
+
+def _brute_force_cohesion(hashes: list[str], threshold: float) -> tuple[list, list]:
+    """An independent components fold over *hashes*, by breadth-first search.
+
+    The oracle for "the stranded decision did not move". It answers the same
+    question as ``_fold_components`` from the same inputs with none of the same
+    code: no union-find, no numpy, no cached edge list and no pruning constant.
+
+    Returns:
+        ``(component_sizes_largest_first, stranded_indices)`` over the positions
+        of *hashes*.
+    """
+    max_hamming = int((1.0 - threshold) * 64)
+    neighbours = {index: set() for index in range(len(hashes))}
+    for left in range(len(hashes)):
+        for right in range(left + 1, len(hashes)):
+            if _hamming(hashes[left], hashes[right]) <= max_hamming:
+                neighbours[left].add(right)
+                neighbours[right].add(left)
+    seen: set[int] = set()
+    components: list[list[int]] = []
+    for start in range(len(hashes)):
+        if start in seen:
+            continue
+        queue, group = [start], []
+        seen.add(start)
+        while queue:
+            node = queue.pop()
+            group.append(node)
+            for peer in neighbours[node]:
+                if peer not in seen:
+                    seen.add(peer)
+                    queue.append(peer)
+        components.append(sorted(group))
+    components.sort(key=lambda group: (-len(group), group[0]))
+    stranded = sorted(index for index in range(len(hashes)) if not neighbours[index])
+    return [len(group) for group in components], stranded
+
+
+def _pill_texts(row) -> list[tuple[str, bool]]:
+    """``[(text, against), ...]`` from one row's ``why``."""
+    return [(pill["text"], pill["against"]) for pill in row["why"]]
+
+
+def _clear_hash(server, picture_id: int) -> None:
+    """Blank one picture's ``perceptual_hash``, as an unfinished import has."""
+
+    def clear(session):
+        picture = session.get(Picture, picture_id)
+        picture.perceptual_hash = None
+        session.add(picture)
+        session.commit()
+
+    _run(server, clear)
+
+
+@contextmanager
+def _counted_queries(server):
+    """Count every statement the engine executes inside the block.
+
+    The N+1 guard for the page: per-member edges are folded out of an edge list
+    the page already loads, so a page of six rows must cost the same number of
+    statements as a page of one. Counting is the only honest way to assert that;
+    an eyeball on the code is what lets an N+1 back in.
+    """
+    counter = {"n": 0}
+    engine = server.vault.db._engine
+
+    def _count(_conn, _cursor, _statement, _parameters, _context, _executemany):
+        counter["n"] += 1
+
+    event.listen(engine, "before_cursor_execute", _count)
+    try:
+        yield counter
+    finally:
+        event.remove(engine, "before_cursor_execute", _count)
 
 
 # ── authorization, both directions ───────────────────────────────────────────
@@ -394,6 +521,505 @@ def test_a_member_without_a_perceptual_hash_is_reported_not_stranded():
         _teardown(temp_dir, server)
 
 
+# ── per-member evidence, and the row's why-pills ─────────────────────────────
+
+
+def test_member_edges_report_a_real_edge_and_a_stranger_s_absence():
+    """Both directions of the evidence column, on one row.
+
+    Compare's other metrics answer "which copy is the better file"; this column
+    answers "which of these does not belong". The two members of the tight pair
+    must report the edge they really have, and the stranger must report none,
+    because that absence is the whole evidence the page offers.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert [entry["picture_id"] for entry in row["member_edges"]] == row[
+            "member_ids"
+        ], "member_edges must be parallel to member_ids, canonical order"
+
+        edges = _edges_by_picture(row)
+        # The cohesive direction: each of the pair names the other, at the real
+        # one-bit similarity, not at the threshold and not at 1.0.
+        assert edges[picture_ids[0]] == (pytest.approx(_TIGHT), picture_ids[1])
+        assert edges[picture_ids[1]] == (pytest.approx(_TIGHT), picture_ids[0])
+        # The stranded direction: no qualifying edge, and no sibling to name.
+        assert edges[picture_ids[2]] == (None, None)
+        assert row["stranded_picture_ids"] == [picture_ids[2]]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_cohesive_stack_reports_every_member_s_strongest_edge():
+    """A stack that is never listed still scores, and every member has an edge.
+
+    Read through the service, because the list deliberately excludes cohesive
+    stacks: Compare opens on stacks the queue folded in too, and a column that
+    only worked for mixed stacks would be blank exactly where the user is
+    checking a suspicion. The duplicate-hash pair reports a perfect 1.0, and the
+    leader's tie between two equally close siblings resolves to the lower id so
+    the payload is reproducible.
+    """
+    temp_dir, _client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["cohesive"]
+
+        def score(session):
+            return mixed_stack_service.cohesion_for_stacks(session, [stack_id], 0.90)
+
+        report = _run(server, score)[stack_id]
+        assert not report.is_mixed
+        edges = {edge.picture_id: edge for edge in report.member_edges}
+        assert [edge.picture_id for edge in report.member_edges] == list(
+            report.member_ids
+        )
+        # Members 1 and 2 carry the same hash, so their edge is exact.
+        assert edges[picture_ids[1]].strongest_edge == pytest.approx(1.0)
+        assert edges[picture_ids[1]].closest_picture_id == picture_ids[2]
+        assert edges[picture_ids[2]].strongest_edge == pytest.approx(1.0)
+        assert edges[picture_ids[2]].closest_picture_id == picture_ids[1]
+        # The leader is one bit from both; the tie resolves to the lower id.
+        assert edges[picture_ids[0]].strongest_edge == pytest.approx(_TIGHT)
+        assert edges[picture_ids[0]].closest_picture_id == picture_ids[1]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_member_edges_follow_the_threshold_rather_than_a_constant():
+    """The same pair: an edge at 0.65, none at 0.90.
+
+    The evidence column is only true for the threshold the row was read at, so
+    it has to move with the slider exactly as the list does.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["threshold"]
+
+        tight = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())
+        assert _edges_by_picture(tight[stack_id]) == {
+            picture_ids[0]: (None, None),
+            picture_ids[1]: (None, None),
+        }
+
+        def score(session):
+            return mixed_stack_service.cohesion_for_stacks(session, [stack_id], 0.65)
+
+        # At 0.65 the ten-bit pair connects, so the stack is no longer listed at
+        # all and its members each name the other.
+        loose = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.65}).json())
+        assert stack_id not in loose
+        edges = {
+            edge.picture_id: edge for edge in _run(server, score)[stack_id].member_edges
+        }
+        assert edges[picture_ids[0]].strongest_edge == pytest.approx(1.0 - 10.0 / 64.0)
+        assert edges[picture_ids[0]].closest_picture_id == picture_ids[1]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_single_member_stack_reports_no_edge_and_is_not_listed():
+    """One member has no sibling, so its `null` is arithmetic, not a verdict.
+
+    Nothing on the page can reach this (the list floors at two live members),
+    but Compare and the split route score whatever stack they are handed, so the
+    shape has to be defined rather than crash or claim strandedness.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, picture_ids = _make_stack(server, [_H_ZERO])
+
+        def score(session):
+            return mixed_stack_service.cohesion_for_stacks(session, [stack_id], 0.90)
+
+        report = _run(server, score)[stack_id]
+        assert [
+            (edge.picture_id, edge.strongest_edge, edge.closest_picture_id)
+            for edge in report.member_edges
+        ] == [(picture_ids[0], None, None)]
+        assert report.weakest_edge is None
+        # The lone member is "stranded" by arithmetic (no sibling to have an
+        # edge to), so the pills must refuse to turn that into an accusation.
+        assert report.stranded_picture_ids == (picture_ids[0],)
+        assert report.as_dict()["why"] == []
+        assert stack_id not in _rows_by_stack(
+            client.get(MIXED_URL, params={"threshold": 0.90}).json()
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_member_without_a_hash_reports_no_edge_without_being_a_stranger():
+    """`null` here means "not comparable", and the row already has that word.
+
+    The member is unavoidably in ``stranded_picture_ids`` (it can carry no
+    edge), so the pills are what have to tell the two apart: no "matches nothing
+    else", and an explicit "not comparable yet".
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        _clear_hash(server, picture_ids[2])
+
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["unhashed_picture_ids"] == [picture_ids[2]]
+        assert _edges_by_picture(row)[picture_ids[2]] == (None, None)
+        # The other direction of the fix: an unhashed member reports NO figure.
+        # This is the one absence that survives, and it has to, because there is
+        # genuinely nothing to measure, not a small number to print.
+        assert _nearest_by_picture(row)[picture_ids[2]] == (None, None)
+
+        texts = _pill_texts(row)
+        assert ("1 picture not comparable yet", False) in texts
+        assert not [text for text, _against in texts if "matches nothing else" in text]
+        assert not [text for text, _against in texts if "like the rest" in text], (
+            "a picture nothing has compared yet must never be described by how "
+            f"unlike the others it is: {texts}"
+        )
+        assert ("2 groups (2 + 1)", True) in texts
+        assert ("Weakest match 98%", False) in texts
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_stranded_member_reports_the_real_similarity_it_just_missed():
+    """The reported bug, at the boundary: 7 bits out of 64 where the cut is 6.
+
+    ``strongest_edge`` is ``None`` here by construction, and that is correct: it
+    is the best edge that SURVIVES at this threshold and none does. What was
+    wrong was making it the only number, so the page printed an en dash and
+    said the picture matched nothing about a member 89% like its neighbour.
+    ``nearest_edge`` is the unconditional answer and must be there.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, picture_ids = _make_stack(server, [_H_ZERO, _H_ALMOST])
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        # The decision is unchanged: 7 bits is outside the 6-bit cut.
+        assert row["stranded_picture_ids"] == sorted(picture_ids)
+        assert row["component_sizes"] == [1, 1]
+        assert row["weakest_edge"] is None
+        assert _edges_by_picture(row) == {
+            picture_ids[0]: (None, None),
+            picture_ids[1]: (None, None),
+        }
+
+        nearest = _nearest_by_picture(row)
+        assert nearest[picture_ids[0]] == (
+            pytest.approx(1.0 - 7.0 / 64.0),
+            picture_ids[1],
+        )
+        assert nearest[picture_ids[1]] == (
+            pytest.approx(1.0 - 7.0 / 64.0),
+            picture_ids[0],
+        )
+        assert _pill_texts(row)[0] == ("2 pictures are only 89% like the rest", True)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_strangers_similarity_survives_the_cached_edge_lists_floor():
+    """The other half of the bug: distances the edge cache never stored.
+
+    The cached edge list is pruned at ``MAX_CACHED_HAMMING`` (22 bits), which is
+    right for edges and wrong for closeness: a member whose nearest sibling is
+    32 bits away has a real answer, 50%, and the prune used to throw it away
+    before anything could show it. Read through a **warm** cache, because that
+    is the path where the number went missing.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, picture_ids = stacks["mixed"]
+        MissingStackCohesionFinder(database=server.vault.db).find_task().run()
+
+        def cached(session):
+            row = session.exec(
+                select(StackCohesion).where(StackCohesion.stack_id == stack_id)
+            ).first()
+            return json.loads(row.edges), json.loads(row.nearest_edges)
+
+        edges, nearest_rows = _run(server, cached)
+        far_pair = {picture_ids[0], picture_ids[2]}
+        assert not [pair for pair in edges if set(pair[:2]) == far_pair], (
+            "the 32-bit pair is beyond the cache floor and must stay pruned "
+            f"from the edge list; keeping it would be O(n^2) storage: {edges}"
+        )
+        assert [row for row in nearest_rows if row[0] == picture_ids[2]] == [
+            [picture_ids[2], picture_ids[0], 32]
+        ], "the stranger's real distance is stored per member, unpruned"
+
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["stranded_picture_ids"] == [picture_ids[2]]
+        assert _nearest_by_picture(row)[picture_ids[2]] == (
+            pytest.approx(0.5),
+            picture_ids[0],
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_every_cached_row_carries_a_closest_sibling_for_every_member():
+    """The writer can never produce the empty column the page used to show.
+
+    Cache validity is now presence: database triggers drop a stack's derived row
+    whenever an input moves, so a present row is trusted without rereading a
+    hash, and `0093_invalidate_stackcohesion_inputs` starts cold so no row
+    written before this column existed survives the upgrade. What that leaves to
+    check here is the other half: every row the writer produces covers every
+    comparable member, or a trusted row would serve a gap.
+    """
+    temp_dir, _client, server, stacks, _token = _env()
+    try:
+        MissingStackCohesionFinder(database=server.vault.db).find_task().run()
+
+        def cached(session):
+            return {
+                int(row.stack_id): (
+                    json.loads(row.member_ids),
+                    json.loads(row.unhashed_picture_ids),
+                    json.loads(row.nearest_edges),
+                )
+                for row in session.exec(select(StackCohesion)).all()
+            }
+
+        rows = _run(server, cached)
+        assert set(rows) == {entry[0] for entry in stacks.values()}
+        for stack_id, (member_ids, unhashed, nearest) in rows.items():
+            comparable = [pid for pid in member_ids if pid not in unhashed]
+            expected = set(comparable) if len(comparable) > 1 else set()
+            assert {entry[0] for entry in nearest} == expected, (
+                f"stack {stack_id} cached a closest sibling for "
+                f"{[entry[0] for entry in nearest]}, but {sorted(expected)} "
+                "are comparable; a member missing from this list is a member "
+                "the page can only show an en dash for"
+            )
+            for _picture_id, sibling, distance in nearest:
+                assert sibling in member_ids
+                assert 0 <= distance <= 64
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_stack_nothing_can_be_compared_in_says_exactly_that():
+    """Its own wording, because none of the other pills would be true.
+
+    Two members, neither hashed: every "component" is a singleton because of the
+    missing hashes alone. Reporting the structure or a weakest edge here would
+    turn an absence of data into a verdict about the pictures, which is the
+    false positive this feature cannot afford.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, picture_ids = _make_stack(server, [_H_ZERO, _H_NEAR])
+        for picture_id in picture_ids:
+            _clear_hash(server, picture_id)
+
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["unhashed_picture_ids"] == sorted(picture_ids)
+        assert _pill_texts(row) == [("Nothing here can be compared yet", False)]
+        assert _nearest_by_picture(row) == {
+            picture_ids[0]: (None, None),
+            picture_ids[1]: (None, None),
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_member_with_nothing_hashed_to_compare_against_reports_no_figure():
+    """One hashed member and one not: comparable, but to nothing.
+
+    The remaining `null` case, and it must not be confused with the 89% one: the
+    hashed member is not far from its sibling, it has no sibling to be far from.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, picture_ids = _make_stack(server, [_H_ZERO, _H_FAR])
+        _clear_hash(server, picture_ids[1])
+
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert _nearest_by_picture(row) == {
+            picture_ids[0]: (None, None),
+            picture_ids[1]: (None, None),
+        }
+        assert _pill_texts(row) == [("Nothing here can be compared yet", False)]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_stranded_decision_is_unchanged_at_every_threshold():
+    """The regression that would matter most, checked against an oracle.
+
+    This change is about what the page KNOWS and SAYS, never about where the cut
+    is. So the components, the stranded set and the weakest edge are checked at
+    every threshold against a brute-force fold that shares no code with the
+    service: no union-find, no numpy, no cached edge list, no pruning constant.
+    If the new unconditional number ever leaked into the decision, this is what
+    catches it.
+
+    The same sweep pins the two-field invariant: the unconditional number is
+    never *worse* than the thresholded one, and is exactly equal whenever the
+    thresholded one exists, because the closest pair is the first to survive any
+    cut.
+    """
+    temp_dir, _client, server, _stacks, _token = _env()
+    try:
+        hashes = [_H_ZERO, _H_NEAR, _H_ALMOST, _H_MID, _H_FAR, _H_FAR_NEAR, _H_OTHER]
+        stack_id, picture_ids = _make_stack(server, hashes)
+        # Warm the cache, so the sweep covers the cached read path too: it is
+        # the pruned one, and the prune is what this change touches.
+        MissingStackCohesionFinder(database=server.vault.db).find_task().run()
+
+        for threshold in (0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.99):
+
+            def score(session, threshold=threshold):
+                return mixed_stack_service.cohesion_for_stacks(
+                    session, [stack_id], threshold
+                )
+
+            report = _run(server, score)[stack_id]
+            sizes, stranded = _brute_force_cohesion(hashes, threshold)
+            assert [len(group) for group in report.components] == sizes, (
+                f"components moved at threshold {threshold}"
+            )
+            assert list(report.stranded_picture_ids) == sorted(
+                picture_ids[index] for index in stranded
+            ), f"the stranded set moved at threshold {threshold}"
+
+            surviving = [
+                1.0 - _hamming(hashes[left], hashes[right]) / 64.0
+                for left in range(len(hashes))
+                for right in range(left + 1, len(hashes))
+                if _hamming(hashes[left], hashes[right]) <= int((1.0 - threshold) * 64)
+            ]
+            assert report.weakest_edge == (
+                pytest.approx(min(surviving)) if surviving else None
+            ), f"the weakest edge moved at threshold {threshold}"
+
+            for edge in report.member_edges:
+                assert edge.nearest_edge is not None, (
+                    "every member of this stack has a hashed sibling, so every "
+                    "one of them has a measured closest match"
+                )
+                if edge.strongest_edge is None:
+                    assert edge.nearest_edge <= threshold
+                else:
+                    assert edge.nearest_edge == pytest.approx(edge.strongest_edge)
+                    assert edge.nearest_picture_id == edge.closest_picture_id
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_why_pills_name_the_strong_case():
+    """One stranger: the red pill the page exists for, in the shipped shape."""
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        stack_id, _picture_ids = stacks["mixed"]
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert _pill_texts(row) == [
+            # The stranger is 32 bits from the nearest member of the pair, so
+            # the pill names 50% rather than claiming it matches nothing: the
+            # number is the fact the user needs in order to disagree with the
+            # cut, and "matches nothing else" is not a statement about a
+            # picture at all, only about a threshold.
+            ("1 picture is only 50% like the rest", True),
+            ("2 groups (2 + 1)", True),
+            ("Weakest match 98%", False),
+        ]
+        # Same contract as a duplicate group's `why`, so the shipped pill
+        # component renders it with no second code path.
+        assert all(set(pill) == {"text", "against"} for pill in row["why"])
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_why_pills_name_the_soft_case_without_calling_anyone_a_stranger():
+    """Two tight pairs that do not match each other strand nobody.
+
+    D5's soft case: legitimate often enough that marking it would train the user
+    to ignore the colour, so it must surface in words. The structure pill is the
+    only thing that can carry it, and the stranger pill must be absent.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, _picture_ids = _make_stack(
+            server, [_H_ZERO, _H_NEAR, _H_FAR, _H_FAR_NEAR]
+        )
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["stranded_picture_ids"] == []
+        assert row["component_sizes"] == [2, 2]
+        assert _pill_texts(row) == [
+            ("2 groups (2 + 2)", True),
+            ("Weakest match 98%", False),
+        ]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_why_pills_say_so_when_no_two_pictures_match_at_all():
+    """No surviving edge is the extreme of the same scale, not missing data."""
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, _picture_ids = _make_stack(server, [_H_ZERO, _H_FAR])
+        row = _rows_by_stack(client.get(MIXED_URL, params={"threshold": 0.90}).json())[
+            stack_id
+        ]
+        assert row["weakest_edge"] is None
+        assert _pill_texts(row) == [
+            ("2 pictures are only 50% like the rest", True),
+            ("2 groups (1 + 1)", True),
+            ("No two pictures match", True),
+        ]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_page_costs_the_same_number_of_queries_however_many_rows_it_has():
+    """The anti-N+1 guard, arithmetically.
+
+    Per-member edges are folded out of an edge list the page already loads, so
+    adding rows must add no statements at all. Measured rather than reasoned
+    about: this is exactly the kind of column that becomes a per-row lookup the
+    first time someone needs one more field on it.
+    """
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        with _counted_queries(server) as counter:
+            first = client.get(MIXED_URL, params={"threshold": 0.90})
+        assert first.status_code == 200
+        one_row = counter["n"]
+        assert len(first.json()["stacks"]) == 2
+
+        for _ in range(6):
+            _make_stack(server, [_H_ZERO, _H_NEAR, _H_FAR])
+        with _counted_queries(server) as counter:
+            wider = client.get(MIXED_URL, params={"threshold": 0.90})
+        assert wider.status_code == 200
+        assert len(wider.json()["stacks"]) == 8
+        assert counter["n"] == one_row, (
+            "the mixed-stacks page must cost a constant number of statements; "
+            f"2 rows took {one_row} and 8 rows took {counter['n']}"
+        )
+    finally:
+        _teardown(temp_dir, server)
+
+
 # ── the Keep dismissal ───────────────────────────────────────────────────────
 
 
@@ -517,12 +1143,12 @@ def test_split_removes_the_stranded_member_and_is_undoable_in_one_step():
         _teardown(temp_dir, server)
 
 
-def test_split_honours_an_explicit_picture_id_list():
-    """The client sends the ids the row showed, so the split matches the row.
+def test_split_honours_an_explicit_picture_id_list(monkeypatch):
+    """The client sends the ids the user marked, so the split matches the row.
 
     A four-member stack with a tight pair and **two** mutual strangers: the row
-    reports both as stranded, the client names only one, and exactly that one
-    leaves. The explicit list narrows the server's own set, it never widens it.
+    opens with both marked, the user keeps one of them, and exactly that one
+    leaves.
     """
     temp_dir, client, server, stacks, _token = _env()
     try:
@@ -531,6 +1157,13 @@ def test_split_honours_an_explicit_picture_id_list():
         )
         row = _rows_by_stack(client.get(MIXED_URL).json())[stack_id]
         assert row["stranded_picture_ids"] == sorted(picture_ids[2:])
+
+        def should_not_score(*_args, **_kwargs):
+            raise AssertionError("an explicit split must not compute cohesion")
+
+        monkeypatch.setattr(
+            mixed_stack_service, "cohesion_for_stacks", should_not_score
+        )
 
         response = client.post(
             _split_url(stack_id), json={"picture_ids": [picture_ids[2]]}
@@ -544,43 +1177,118 @@ def test_split_honours_an_explicit_picture_id_list():
         _teardown(temp_dir, server)
 
 
-def test_split_refuses_a_member_that_is_not_stranded():
-    """This route splits STRANDED members off a MIXED stack, and only that.
+def test_split_accepts_any_live_member_the_user_marked():
+    """The user's marks are the input; the engine's marks are only the default.
 
-    Taking an arbitrary id list made it an unconstrained remove-from-stack
-    primitive: it would break the leader off a perfectly cohesive stack that
-    this page would never list, which is neither what the route is named nor
-    what its own description promises. `DELETE /stacks/{id}/members` is the
-    general primitive; this one is bounded by what the row displayed.
+    This deliberately reverses security-review finding F7 (2026-08-01), which
+    had required an explicit ``picture_ids`` to be a subset of the stranded set
+    at ``threshold``. The Mixed stacks page now lets the user mark which members
+    are strangers, starting from the engine's marks and adjusting them, so a
+    bound that refuses any mark the engine did not make refuses the feature.
+    F7 was rated LOW on the grounds that this is not a privilege boundary (the
+    route is ``OWNER_ONLY`` and ``DELETE /stacks/{id}/members`` already gives
+    the same principal an unrestricted remove), so nothing is granted here that
+    the caller could not already do.
+
+    Both cases F7 named are asserted to work, and asserted to actually move the
+    picture rather than merely answer 200.
     """
     temp_dir, client, server, stacks, _token = _env()
     try:
-        # (1) A cohesive stack has no stranded member at all, so no id is legal.
+        # (1) The case F7 was written about: the leader of a perfectly cohesive
+        # stack, which this page would never list and the engine never strands.
         cohesive_id, cohesive_pics = stacks["cohesive"]
-        before = _stack_state(server, cohesive_pics)
         response = client.post(
             _split_url(cohesive_id), json={"picture_ids": [cohesive_pics[0]]}
         )
-        assert response.status_code == 400, response.text
-        assert "stranded" in response.json()["detail"]
-        assert _stack_state(server, cohesive_pics) == before
-
-        # (2) On a genuinely mixed stack, only the stranded member may be named:
-        # the majority cluster is not something this route may break up.
-        mixed_id, mixed_pics = stacks["mixed"]
-        before = _stack_state(server, mixed_pics)
-        response = client.post(
-            _split_url(mixed_id), json={"picture_ids": [mixed_pics[0]]}
+        assert response.status_code == 200, response.text
+        assert response.json()["split_picture_ids"] == [cohesive_pics[0]]
+        assert response.json()["stack_dissolved"] is False
+        after = _stack_state(server, cohesive_pics)
+        assert after[cohesive_pics[0]] == (None, None), (
+            "a marked member must actually leave the stack, not just be answered 200"
         )
-        assert response.status_code == 400, response.text
-        assert _stack_state(server, mixed_pics) == before
+        assert after[cohesive_pics[1]][0] == cohesive_id
+        assert after[cohesive_pics[2]][0] == cohesive_id
 
-        # ...and the stranded one still is (over-blocking is its own regression).
+        # (2) A member of the majority cluster of a genuinely mixed stack: the
+        # row lists it, the engine does not strand it, the user marked it.
+        mixed_id, mixed_pics = _make_stack(server, [_H_ZERO, _H_NEAR, _H_NEAR, _H_FAR])
+        row = _rows_by_stack(client.get(MIXED_URL).json())[mixed_id]
+        assert row["stranded_picture_ids"] == [mixed_pics[3]]
         response = client.post(
-            _split_url(mixed_id), json={"picture_ids": [mixed_pics[2]]}
+            _split_url(mixed_id), json={"picture_ids": [mixed_pics[1]]}
         )
         assert response.status_code == 200, response.text
-        assert response.json()["split_picture_ids"] == [mixed_pics[2]]
+        assert response.json()["split_picture_ids"] == [mixed_pics[1]]
+        assert _stack_state(server, mixed_pics)[mixed_pics[1]] == (None, None)
+        # ...and the stranded member the user did NOT mark stayed put, so the
+        # explicit list still replaces the engine's set rather than adding to it.
+        assert _stack_state(server, mixed_pics)[mixed_pics[3]][0] == mixed_id
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_split_refuses_an_id_that_is_not_a_live_member_of_this_stack():
+    """The bound that replaced F7: live membership of the stack in the path.
+
+    Weaker than the stranded-subset rule and stronger than nothing. Three
+    refusals, each writing nothing:
+
+    * a picture id that does not exist at all;
+    * a real picture that belongs to a **different** stack, which is the id a
+      client with a stale row is actually likely to send;
+    * a **soft-deleted** member of this very stack. The caller cannot see those
+      rows on the row it marked, so moving one blind is not something a mark can
+      mean, and the refusal says "Scrapheap" rather than "not a member" so a
+      client is not sent hunting for a bug that is not there.
+    """
+    temp_dir, client, server, stacks, _token = _env()
+    try:
+        mixed_id, mixed_pics = stacks["mixed"]
+        other_id, other_pics = stacks["cohesive"]
+        before = _stack_state(server, mixed_pics + other_pics)
+
+        # (1) No such picture.
+        response = client.post(_split_url(mixed_id), json={"picture_ids": [999999]})
+        assert response.status_code == 400, response.text
+        assert "not members of stack" in response.json()["detail"]
+
+        # (2) A live picture, but a member of another stack.
+        response = client.post(
+            _split_url(mixed_id), json={"picture_ids": [other_pics[0]]}
+        )
+        assert response.status_code == 400, response.text
+        assert str(other_pics[0]) in response.json()["detail"]
+
+        # (3) A member of THIS stack that is in the Scrapheap.
+        def scrapheap(session):
+            picture = session.get(Picture, mixed_pics[1])
+            picture.deleted = True
+            session.add(picture)
+            session.commit()
+
+        _run(server, scrapheap)
+        response = client.post(
+            _split_url(mixed_id), json={"picture_ids": [mixed_pics[1]]}
+        )
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert "Scrapheap" in detail, detail
+        assert str(mixed_pics[1]) in detail, detail
+
+        # Nothing above wrote anything, including to the scrapheaped row.
+        assert _stack_state(server, mixed_pics + other_pics) == before
+
+        # Over-blocking guard: a live member of the named stack still splits.
+        # Asserted on the three-member stack so the answer is a plain removal
+        # rather than the dissolve a two-live-member stack would give.
+        response = client.post(
+            _split_url(other_id), json={"picture_ids": [other_pics[0]]}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["split_picture_ids"] == [other_pics[0]]
+        assert response.json()["stack_dissolved"] is False
     finally:
         _teardown(temp_dir, server)
 
@@ -608,6 +1316,34 @@ def test_split_that_would_leave_one_member_dissolves_the_stack_and_says_so():
         assert client.post(UNDO_URL, json={}).status_code == 200
         assert _stack_state(server, picture_ids) == before
         assert _run(server, stack_row) is not None
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_dissolve_receipt_includes_a_scrapheaped_member_that_was_detached():
+    """The receipt lists every row moved, including invisible stack members."""
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        stack_id, picture_ids = _make_stack(server, [_H_ZERO, _H_NEAR, _H_FAR])
+
+        def scrapheap(session):
+            picture = session.get(Picture, picture_ids[2])
+            picture.deleted = True
+            session.add(picture)
+            session.commit()
+
+        _run(server, scrapheap)
+        response = client.post(
+            _split_url(stack_id), json={"picture_ids": [picture_ids[0]]}
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["stack_dissolved"] is True
+        assert payload["split_picture_ids"] == sorted(picture_ids)
+        assert all(
+            state == (None, None)
+            for state in _stack_state(server, picture_ids).values()
+        )
     finally:
         _teardown(temp_dir, server)
 
@@ -724,6 +1460,24 @@ def test_the_cache_is_keyed_on_its_inputs_and_the_finder_refreshes_it():
             "the list must recompute a stale stack inline rather than serve the "
             "cached (now wrong) answer"
         )
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_warm_list_does_not_reread_picture_hashes(monkeypatch):
+    """A cache hit folds stored edges; validating it must not rescan pictures."""
+    temp_dir, client, server, _stacks, _token = _env()
+    try:
+        MissingStackCohesionFinder(database=server.vault.db).find_task().run()
+
+        def should_not_read(*_args, **_kwargs):
+            raise AssertionError("a warm cohesion list reread picture hashes")
+
+        monkeypatch.setattr(
+            mixed_stack_service, "_load_perceptual_hashes", should_not_read
+        )
+        response = client.get(MIXED_URL, params={"threshold": 0.65})
+        assert response.status_code == 200, response.text
     finally:
         _teardown(temp_dir, server)
 
@@ -904,6 +1658,10 @@ def test_a_locked_member_marks_the_row_and_refuses_split_and_unstack():
         for response in (
             client.post(_split_url(stack_id), json={"threshold": 0.90}),
             client.post(_split_url(stack_id), json={"picture_ids": [picture_ids[2]]}),
+            # A live but NOT stranded member: the id the widened contract newly
+            # accepts. The lock guard runs before any of that and still refuses
+            # the whole stack, which is the hole the widening must not open.
+            client.post(_split_url(stack_id), json={"picture_ids": [picture_ids[1]]}),
             client.post(_unstack_url(stack_id), json={}),
         ):
             assert response.status_code == 423, response.text

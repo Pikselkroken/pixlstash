@@ -1236,7 +1236,7 @@ or graft its rows into an existing one.
 | `POST /dedup/verdicts/stack` | Stacks the included members behind the cover and applies the metadata union. |
 | `POST /dedup/verdicts/keep-separate` | Records that the group is not duplicates. Changes **no** picture row. |
 | `POST /dedup/verdicts/reopen` | Returns a decided group to the queue. Clearing a `stacked` verdict whose stack still stands **dissolves that stack** (restoring the recorded pre-verdict stack state, folded stacks included) and records one undoable `dedup.reopen` operation — the response's `batch_id` is its undo handle and `unstacked_picture_ids` names what moved. A picture-neutral clear (keep-separate, or a stack already dissolved by hand) records nothing and returns `batch_id: null`, so clients must gate any receipt/narration on `batch_id`, exactly as for keep-separate. The metadata union is never reverted here. |
-| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the stranded member(s) off a mixed stack. Send `picture_ids`, the `stranded_picture_ids` the row showed, so the split matches what the user was looking at; omit it and the server recomputes the stranded set at `threshold`. An explicit list must be a **subset of the stranded set** (a `400` otherwise): this route is not a general remove-from-stack primitive, `DELETE /stacks/{stack_id}/members` is. Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
+| `POST /dedup/mixed-stacks/{stack_id}/split` | Splits the marked member(s) off a mixed stack. Send `picture_ids`, the ids the user marked on the row (they start from `stranded_picture_ids` and are the user's to adjust); omit it and the server uses the stranded set it computes at `threshold`, the same opening marking. Every id must be a **live member of the stack in the path** — a picture in another stack or in none is a `400`, and so is a soft-deleted member, whose `detail` names the Scrapheap rather than claiming the id is not a member. (Widened 2026-08-02, deliberately reversing the subset-of-stranded bound that security finding F7 added the day before; see `docs/design/mixed-stacks-and-stack-units.md` B7.) Records one undoable `dedup.split_stack` operation; `batch_id` is always present. |
 | `POST /dedup/mixed-stacks/{stack_id}/unstack` | Dissolves a mixed stack entirely. Records one undoable `dedup.unstack` operation; `batch_id` is always present. |
 
 **A locked picture set refuses the whole stack on every route that detaches a
@@ -1267,7 +1267,18 @@ mistake), `suggested_action` (`split` / `unstack`), `membership_fingerprint`,
 `kept`, `leader_picture_id`, `leader_thumbnail_version`, and `stackable` /
 `blocked_by_sets` (the same pair `GET /dedup/stacks/{stack_id}/members` reports,
 rolled up over the whole stack: `false` means a locked picture set freezes a
-member, so split and unstack will both answer `423`). The envelope adds
+member, so split and unstack will both answer `423`).
+
+Each row also carries `member_edges`, one entry per member parallel to
+`member_ids`, holding **two numbers that are not interchangeable**:
+`strongest_edge` / `closest_picture_id` is thresholded, so it is `null` for a
+stranded member by construction and is what the stranded verdict is made on;
+`nearest_edge` / `nearest_picture_id` is unconditional, how close that member
+really gets to its closest sibling whatever the threshold says. **Bind the
+number a user sees to `nearest_edge`**, which is `null` only when there is
+nothing comparable to measure against (the member is in `unhashed_picture_ids`,
+or no other member is hashed), so a dash means *not comparable*, never *unlike
+everything*. The envelope adds
 `total`, `kept_total`, `live_stack_count` and `next_offset` (plain offset paging;
 this list is tens of rows, not thousands).
 

@@ -1122,13 +1122,24 @@ def create_router(server) -> APIRouter:
             for pic in pictures:
                 if pic.stack_id == stack_id:
                     pic.stack_id = None
+                    # Clear the position with the stack id. A detached picture
+                    # that keeps `stack_position = 2` carries meaningless state
+                    # that later sorting can still read, and the dissolve branch
+                    # below and the mixed-stack split path both already leave
+                    # `(None, None)`; this branch was the odd one out.
+                    pic.stack_position = None
                     session.add(pic)
 
             remaining = session.exec(
                 select(Picture).where(Picture.stack_id == stack_id)
             ).all()
 
-            if len(remaining) <= 1:
+            # A stack is a visible relationship between LIVE pictures. A hidden
+            # scrapheaped row must not keep a one-live-member stack alive: the
+            # grid would render the survivor as unstacked while its database row
+            # still said otherwise. Dissolve all rows, deleted ones included.
+            live_remaining = [pic for pic in remaining if not pic.deleted]
+            if len(live_remaining) <= 1:
                 for pic in remaining:
                     pic.stack_id = None
                     pic.stack_position = None
@@ -1149,6 +1160,14 @@ def create_router(server) -> APIRouter:
         # reversible: when one or fewer members remain the stack row is deleted
         # and the survivor is unstacked too, and that survivor is not in the
         # requested picture_ids.
+        #
+        # ...and the expansion has to include the SOFT-DELETED members, because
+        # both branches above mutate them: `_compact_stack_positions_in_session`
+        # renumbers every row pointing at the stack, deleted ones included, and
+        # the dissolve branch clears their `stack_id` outright. Left out of the
+        # snapshot, those changes are simply not undoable. `mixed_stack_service.
+        # _apply_removal` passes `include_deleted=True` for exactly this hazard;
+        # this route now agrees with its sibling.
         stack, _operation = operation_log_service.run_recorded_metadata_task(
             server.vault,
             remove_members,
@@ -1157,6 +1176,7 @@ def create_router(server) -> APIRouter:
             op_type="stacks.dissolve",
             picture_ids=picture_ids,
             expand_stacks=True,
+            expand_stacks_include_deleted=True,
             summary=f"Unstacked {len(picture_ids)} picture(s)",
             **operation_log_service.request_context(request),
         )

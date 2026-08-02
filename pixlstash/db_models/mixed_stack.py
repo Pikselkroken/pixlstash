@@ -43,13 +43,11 @@ class StackCohesion(SQLModel, table=True):
     row threshold-independent: the list endpoint folds components out of these
     edges at whatever threshold it was asked for, without touching ``picture``.
 
-    **The fingerprint is the cache key, not ``computed_at``.** A row whose
-    :attr:`content_fingerprint` no longer matches is stale by definition and is
-    recomputed; a row that still matches is exact, however old it is, because
-    its inputs have not moved. That also makes the row safe against SQLite rowid
-    recycling: a new stack that reuses a deleted stack's id has different
-    contents and therefore a different fingerprint, so it can never read the
-    dead stack's cached edges.
+    **Validity is event-driven, not timestamp-driven.** Database triggers delete
+    the row whenever membership, deletion state, or a perceptual hash changes.
+    A present row is therefore exact however old it is, and a cache hit need not
+    reread ``picture`` merely to prove that nothing moved. The content
+    fingerprint remains an audit key for what the writer derived.
 
     **Its key is deliberately NOT the dismissal's key.** A ``Keep`` is keyed on
     *membership* (D5: adding a member re-raises the stack, and only that), but
@@ -77,6 +75,16 @@ class StackCohesion(SQLModel, table=True):
             belong".
         edges: JSON ``[[picture_id_a, picture_id_b, hamming], ...]`` with
             ``a < b``, every pair at or below the widest admissible distance.
+        nearest_edges: JSON ``[[picture_id, closest_picture_id, hamming], ...]``,
+            one entry per member that has at least one comparable sibling: that
+            member's **closest** sibling, at whatever distance it really is.
+            Deliberately **not** filtered by the edge floor :attr:`edges` is
+            pruned at. A pair further apart than that floor cannot be an edge at
+            any admissible threshold, which is why dropping it from
+            :attr:`edges` loses nothing; but it is still the honest answer to
+            "how close does this member get?", and pruning it is what made a
+            stranded member's closeness unreportable. One row per member, so the
+            storage is O(n) beside an O(n^2) edge list.
         computed_at: When the edges were last derived. Diagnostics only, the
             fingerprint decides staleness.
     """
@@ -102,6 +110,10 @@ class StackCohesion(SQLModel, table=True):
         default="[]", sa_column=Column("unhashed_picture_ids", String, nullable=False)
     )
     edges: str = Field(default="[]", sa_column=Column("edges", String, nullable=False))
+    nearest_edges: str = Field(
+        default="[]",
+        sa_column=Column("nearest_edges", String, nullable=False, server_default="[]"),
+    )
     computed_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column("computed_at", DateTime, nullable=False),

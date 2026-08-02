@@ -2598,6 +2598,48 @@ cluster at the queue's similarity threshold.
   (`unhashed_picture_ids`). It can carry no edge, so it would otherwise be
   indistinguishable from a genuine stranger; "not yet comparable" is a
   different fact from "does not belong".
+- **`member_edges` carries TWO numbers per member, and they must not be
+  collapsed.** `{picture_id, strongest_edge, closest_picture_id, nearest_edge,
+  nearest_picture_id}` per member, parallel to `member_ids`. `strongest_edge` is
+  **thresholded**: the best edge that survives at the row's threshold, so it is
+  `null` for a stranded member *by construction*, and that is what the stranded
+  decision is made on. `nearest_edge` is **unconditional**: how close the member
+  really gets to its closest sibling, whatever the threshold, so it is present
+  for a stranded member too. One decides membership of the list; the other is
+  always the truth. `nearest_edge >= strongest_edge` always, and equal whenever
+  the latter is not `null` (the closest pair is the first to survive any cut).
+  **Bind any visible number to `nearest_edge`.** Serving only the thresholded
+  one was a real bug: on the owner's library, of 65 members flagged as matching
+  nothing at 0.90, 12 had a sibling 85-90% similar and 61 had one at 50% or
+  better; the UI printed an en dash and the row said the picture matched
+  nothing. `nearest_edge` is `null` only when there is genuinely nothing to
+  compare against (this member is in `unhashed_picture_ids`, or no other member
+  is hashed), so a dash now means *not comparable*, never *unlike everything*.
+  Both are folded out of the same edge pass as `components`, in
+  `_fold_components`, so a page of rows costs the same number of statements as a
+  single row
+  (`tests/test_dedup_mixed_stacks.py::test_the_page_costs_the_same_number_of_queries_however_many_rows_it_has`
+  counts them).
+- **`why` reuses the duplicate queue's pill contract exactly.**
+  `build_mixed_stack_evidence` returns the same `[{text, against}]` list
+  `build_group_evidence` does and `WhyPillModel` serialises, so the shipped row
+  component renders it with no second code path; only the content differs. It
+  names the strangers **by how unlike the rest they measure**
+  (`1 picture is only 89% like the rest`, a range when they differ), the
+  component structure (`2 groups (2 + 1)`, the one fact a stranger count cannot
+  convey, since two clusters of three strand nobody), and the weakest surviving
+  edge (`Weakest match 97%`, or `No two pictures match`). **A stranger is never
+  described as matching nothing**: at a 6-bit cut a member 7 bits from its
+  neighbour is outside the cluster, not unlike everything, and the number is
+  what lets the user disagree with the cut instead of with the page.
+  **An unhashed member is subtracted from the stranger count and gets its own
+  non-`against` pill** (`1 picture not comparable yet`): `_fold_components`
+  necessarily lists it as stranded, and describing a picture nothing has
+  compared yet as unlike anything is the one false positive this feature cannot
+  afford. **When fewer than two members can be compared at all** the row's only
+  pill is `Nothing here can be compared yet`: every component is then an
+  artefact of the missing hashes, so reporting structure would dress an absence
+  of data up as a verdict.
 
 **The cache is the threshold-independent half.** `stackcohesion` stores the
 within-stack near-pair edge list: every pair at or below
@@ -2605,32 +2647,45 @@ within-stack near-pair edge list: every pair at or below
 distance that can be an edge at *any* admissible threshold. Folding components
 out of a cached edge list is microseconds, so a threshold change costs nothing.
 
-**Two fingerprints, deliberately not one.** `content_fingerprint` (the cache
-key) digests the stack's `(member id, perceptual hash)` pairs, every input the
-edges are derived from. `membership_fingerprint` (the `Keep` key) digests the
-member ids alone, because D5 is explicit that *adding a member* is what
-re-raises a kept stack. Keying the cache on membership alone was the bug this
-split closes: a hash can move without membership moving (the embedding worker
-filling a `NULL`, a reference-folder file replaced under an unchanged picture
-row), and the cache would then keep serving edges derived from hashes that no
-longer exist: freezing a member as "stranded" forever, which is precisely the
-false positive the flag must never produce. Both fingerprints also make their
-tables safe against SQLite rowid recycling: a new stack reusing a deleted
-stack's id has different contents, hence a different fingerprint, hence no hit.
+**That prune covers edges only.** "A pair further apart than 22 bits cannot be
+an edge at any admissible threshold, so dropping it loses nothing" is true of
+the question *is this pair an edge* and false of the question *how close does
+this member get to anything*, which is what the page has to answer about a
+member it is calling a stranger. `stackcohesion.nearest_edges` therefore records
+each member's closest sibling separately, `[[picture_id, closest_picture_id,
+hamming], ...]`, never thresholded and never pruned. It is one row per member
+beside an O(n^2) edge list, so the honest number survives at O(n) storage, and
+it is folded out of the same upper-triangle pass, so it costs no extra query.
 
-Because the staleness test needs the hashes, the reads happen on every path;
-what the cache buys is the O(n²) comparison, which is the part that grows with
-stack size. That is stated in `_edges_for_stacks` rather than implied.
+**Widening the derived row needs a cold start, in the migration.** Validity is
+presence (below), so a row written before a new field existed would be *trusted*
+and the page would serve a silently empty column, which is worse than a slow
+one. The migration that widens the row therefore clears the table and lets the
+finder refill it: `0093` does exactly that (`DELETE FROM stackcohesion`) for
+`nearest_edges`. The other half is enforced in tests: every row the writer
+produces covers every comparable member
+(`tests/test_dedup_mixed_stacks.py::test_every_cached_row_carries_a_closest_sibling_for_every_member`).
+
+**Two fingerprints, deliberately not one.** `content_fingerprint` records the
+stack's `(member id, perceptual hash)` pairs, every input the edges were derived
+from. `membership_fingerprint` (the `Keep` key) digests the member ids alone,
+because D5 is explicit that *adding a member* is what re-raises a kept stack.
+
+**Cache validity is event-driven.** SQLite triggers delete the derived row in
+the same transaction whenever `stack_id`, `deleted`, or `perceptual_hash`
+changes (and on picture insert/delete). Presence therefore means validity: a
+warm list folds stored edges without touching `picture`, while a changed stack
+is a cache miss and is recomputed from current rows. This is the mechanism that
+makes a threshold change a fold rather than a library rescan.
 
 `MissingStackCohesionFinder` / `StackCohesionTask` (`TaskType.STACK_COHESION`,
 registered with the `WorkPlanner`) are the **only writers** of that table, so a
-GET can never turn into a writer; the finder `depends_on` `IMAGE_EMBEDDING`,
-because running ahead of the worker that writes `perceptual_hash` would cache an
-edge list in which every member looks stranded. The list endpoint recomputes any
-stack whose cache row is missing or stale **inline and batched** (two queries for
-the whole page, the same anti-N+1 rule `load_stack_facts` follows), so an
-un-warmed cache costs one request's arithmetic, never a wrong answer. A whole
-160-stack library recomputes in ~0.04 s.
+GET can never turn into a writer. The finder's former `IMAGE_EMBEDDING`
+dependency was deliberately removed: an unhashed member is cached and reported as not
+comparable, and the trigger drops that row when its hash arrives. The list
+endpoint recomputes missing rows **inline and batched**, so a cold cache costs
+one request's arithmetic, never a wrong answer; the worker then warms later
+requests without being starved behind an import backlog.
 
 **The `Keep` dismissal** (`mixedstackdismissal`) is keyed on stack id **plus**
 the same membership fingerprint, so adding a member later produces a fingerprint
@@ -2727,15 +2782,31 @@ the scrapheaped stack, plus the unlocked twin). Those tests seed
 is stack-atomic, so seeding through it makes every sibling a member and the test
 can no longer tell a whole-stack guard from a per-named-id one.
 
-**`split` splits *stranded* members, and only those.** An explicit `picture_ids`
-must be a subset of the stranded set at `threshold`; anything else is a `400`.
-Accepting an arbitrary list made the route an unconstrained remove-from-stack
-primitive that would break the leader off a perfectly cohesive stack the Mixed
-stacks page would never show, i.e. a second, unframed copy of
-`DELETE /stacks/{stack_id}/members` with a different name. The subset rule keeps
-the reason the explicit list exists (act on exactly the ids the row displayed,
-never a set recomputed behind the user) while removing the ability to act on
-anything the row did not display.
+**`split` splits the members the user marked, bounded by live membership of the
+stack in the path** (widened 2026-08-02). Every id in an explicit `picture_ids`
+must be a live member of that stack; a picture in another stack or in none is a
+`400`, and so is a soft-deleted member, which is refused with a message naming
+the Scrapheap rather than claiming the id is not a member. Omit `picture_ids`
+and the stranded set at `threshold` is used, which is the row's opening marking.
+
+This deliberately **reverses security-review finding F7** (2026-08-01), which
+had required the explicit list to be a subset of the stranded set at
+`threshold`. F7's reasoning was that an arbitrary list "would let it break up a
+cohesive stack this page would never list" — a defence of the endpoint's name
+rather than of the user's data. The Mixed stacks page is being rebuilt so the
+user marks which members are strangers, starting from the engine's marks and
+adjusting them; once the user can mark, their marks are the input and
+"stranded" is only the opening position, so the subset bound would refuse the
+feature. The reviewer rated F7 LOW on the explicit ground that it "is not a
+privilege boundary: the route is `OWNER_ONLY` and
+`DELETE /stacks/{stack_id}/members` gives the same principal an unrestricted
+remove", so nothing here grants a capability the principal lacked. The
+locked-set `423` guard is unchanged and still refuses the whole stack before
+any id is examined, and `tests/test_dedup_mixed_stacks.py` pins the widened
+contract in both directions (a non-stranded live member is accepted **and
+actually leaves**; a foreign id, another stack's member, and a scrapheaped
+member are each refused with nothing written; the locked stack still answers
+`423` for a newly-legal id).
 
 All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
 (§16.1); the rationale and the both-direction test coverage are in

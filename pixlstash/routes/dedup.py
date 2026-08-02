@@ -1411,6 +1411,78 @@ class AutoStackResponse(BaseModel):
 # ── Mixed stacks (design D5 / B5) ────────────────────────────────────────────
 
 
+class MemberEdgeModel(BaseModel):
+    """How close one member gets to its nearest sibling in the same stack.
+
+    The evidence column this page needs and the duplicate queue does not.
+    Compare's other metrics answer *which copy is the better file*; here the
+    question is *which of these does not belong*.
+
+    **Two numbers, and they answer different questions.** `strongest_edge` is
+    thresholded, so it is `null` for a stranded member by construction and is
+    what the stranded verdict is made on. `nearest_edge` is unconditional: how
+    close this member really gets to its closest sibling, whatever the
+    threshold. Show `nearest_edge` to a user; decide with `strongest_edge`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int = Field(
+        description="The member this row is about. Example: `11`.", examples=[11]
+    )
+    strongest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Highest similarity between this member and any other member of the "
+            "same stack, counting only edges that survive at the row's "
+            "`threshold`. `null` means this member has no qualifying edge at "
+            "all, and the row says which of three things that is: the id is in "
+            "`stranded_picture_ids` (it was compared and no edge of its survives "
+            "this `threshold`; `nearest_edge` says how close it got), it is "
+            "in `unhashed_picture_ids` (it could not be compared yet, so read it "
+            "as *not comparable*, never as *does not belong*), or the stack has "
+            "a single member and there is no sibling to match. Example: "
+            "`0.984375`."
+        ),
+        examples=[0.984375],
+    )
+    closest_picture_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "The member on the other end of that surviving edge, so a client "
+            "can name the nearest sibling rather than only score it. Ties "
+            "resolve to the lower picture id. `null` exactly when "
+            "`strongest_edge` is. Example: `8`."
+        ),
+        examples=[8],
+    )
+    nearest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Similarity between this member and its closest sibling in the same "
+            "stack, **measured regardless of the `threshold`** and regardless of "
+            "the distance at which the server stops caching pairs. This is the "
+            "number to put in front of a user: a stranded member has no "
+            "`strongest_edge` by definition, and printing a dash there told "
+            "people a picture matched nothing when its closest sibling was 89% "
+            "similar. `null` only when there is genuinely nothing to compare "
+            "against - this member has no usable `perceptual_hash`, or no other "
+            "member of the stack has one - so a dash now means *not comparable*, "
+            "never *unlike everything*. Always `>=` `strongest_edge`, and equal "
+            "to it whenever that is not `null`. Example: `0.890625`."
+        ),
+        examples=[0.890625],
+    )
+    nearest_picture_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "The sibling `nearest_edge` was measured to, same tie rule (lower "
+            "picture id). `null` exactly when `nearest_edge` is. Example: `8`."
+        ),
+        examples=[8],
+    )
+
+
 class MixedStackModel(BaseModel):
     """One live stack whose members do not form a single connected cluster."""
 
@@ -1459,7 +1531,7 @@ class MixedStackModel(BaseModel):
         description=(
             "Size of each cluster, largest first. `[10, 2]` is a stack with one "
             "big burst and a stray pair; `[1, 1]` is a two-picture stack whose "
-            "members match nothing at all. Example: `[10, 1, 1]`."
+            "members do not match each other. Example: `[10, 1, 1]`."
         ),
         examples=[[10, 1, 1]],
     )
@@ -1507,6 +1579,37 @@ class MixedStackModel(BaseModel):
             "mistake. Normally empty. Example: `[]`."
         ),
         examples=[[]],
+    )
+    member_edges: list[MemberEdgeModel] = Field(
+        default_factory=list,
+        description=(
+            "One entry per member, in the same canonical order as `member_ids`: "
+            "each member's strongest edge at this `threshold` (the verdict) and "
+            "its closest sibling regardless of threshold (the truth). This is "
+            "Compare's per-member evidence column; bind the visible number to "
+            "`nearest_edge`. Folded out of the same edge pass as `components`, "
+            "so it adds no request cost."
+        ),
+    )
+    why: list[WhyPillModel] = Field(
+        default_factory=list,
+        description=(
+            "Row-level evidence in the same `[{text, against}]` shape a "
+            "duplicate group carries, so the shipped pill component renders it "
+            "unchanged. Only the content differs: the strangers named by how "
+            "unlike the rest they measure (`1 picture is only 89% like the "
+            "rest`), the component structure (`2 groups (2 + 1)`), and the "
+            "weakest surviving edge (`Weakest match 97%`), plus `1 picture not "
+            "comparable yet` when a member has no hash. A stranger is never "
+            "described as matching nothing: at a 6-bit cut a member 7 bits from "
+            "its neighbour is out of the cluster, not unlike everything. "
+            "`against` keeps its meaning - true argues against these pictures "
+            "belonging in one stack - so an unhashed member is *not* `against`: "
+            "it argues for waiting, not for breaking the stack up, and it is "
+            "subtracted from the stranger count for the same reason. When fewer "
+            "than two members can be compared at all the only pill is `Nothing "
+            "here can be compared yet`."
+        ),
     )
     suggested_action: str = Field(
         description=(
@@ -1617,19 +1720,25 @@ class MixedStacksResponse(BaseModel):
 
 
 class MixedStackSplitRequestModel(BaseModel):
-    """Split the stranded member(s) off one mixed stack."""
+    """Split the marked member(s) off one mixed stack."""
 
     model_config = ConfigDict(extra="forbid")
 
     picture_ids: Optional[list[int]] = Field(
         default=None,
         description=(
-            "The members to split off. **Send the ids the row showed** "
-            "(`stranded_picture_ids`), so the split matches what the user was "
-            "looking at even if the stack changed since. Omit it and the server "
-            "recomputes the stranded set at `threshold` instead. Ids that are "
-            "not live members of this stack are ignored; if none of them are, "
-            "the request is a 400. Example: `[11]`."
+            "The members to split off: **the ids the user marked on the row**, "
+            "so the split matches what they were looking at even if the stack "
+            "changed since. The row's marks start from "
+            "`stranded_picture_ids` and the user adjusts them, so this list is "
+            "*not* required to match that set. Omit it and the server uses the "
+            "whole stranded set it computes at `threshold`, which is the same "
+            "opening marking.\n\n"
+            "**Every id must be a live member of this stack.** An id belonging "
+            "to another stack or to none is a `400`, and so is a soft-deleted "
+            "(scrapheaped) member: those are not on the row, the client cannot "
+            "see them, and moving one blind is not something a mark can mean. "
+            "Restore it first if you meant it. Example: `[11]`."
         ),
         examples=[[11]],
     )
@@ -1639,7 +1748,9 @@ class MixedStackSplitRequestModel(BaseModel):
         le=MAX_THRESHOLD,
         description=(
             "Only read when `picture_ids` is omitted: the similarity at which "
-            "the stranded set is recomputed. Example: `0.9`."
+            "the stranded set is computed, i.e. the marking the row opens with. "
+            "An explicit list is bounded by the stack's live membership, not by "
+            "cohesion, so this value does not narrow it. Example: `0.9`."
         ),
         examples=[0.9],
     )
@@ -2351,11 +2462,13 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/dedup/mixed-stacks/{stack_id}/split",
-        summary="Split the stranded member(s) off a mixed stack",
+        summary="Split the marked member(s) off a mixed stack",
         description=(
-            "Removes the pictures that match nothing else in the stack, leaving "
-            "the cluster that does hang together. The removed pictures become "
-            "loose; nothing is deleted and no file moves.\n\n"
+            "Removes the marked pictures from the stack, leaving the cluster "
+            "that does hang together. By default those are the members with no "
+            "edge to any sibling at the given `threshold`. The removed pictures "
+            "become loose; nothing is "
+            "deleted and no file moves.\n\n"
             "Recorded as **one** operation, so a single `Ctrl+Z` puts every "
             "picture back in its original stack at its original position - the "
             "same undo contract the dedup verdicts carry. The response's "
@@ -2364,11 +2477,23 @@ def create_router(server) -> APIRouter:
             "If the split would leave a stack of one, the last member is freed "
             "too and the stack row goes; the response says so in "
             "`stack_dissolved` rather than leaving the client to infer it.\n\n"
-            "**Stranded members only.** An explicit `picture_ids` must be a "
-            "subset of the stranded set at `threshold`. This is not a general "
-            "remove-from-stack primitive - `DELETE /stacks/{stack_id}/members` "
-            "is - and taking an arbitrary list here would let it break up a "
-            "cohesive stack this page would never list.\n\n"
+            "**Live members of this stack only.** `picture_ids` carries the "
+            "marks the user made on the row, which start from "
+            "`stranded_picture_ids` and are theirs to adjust, so an id the "
+            "engine did not strand is accepted. What is refused is an id that "
+            "is not a live member of this stack: a picture in another stack or "
+            "in none, and a soft-deleted member, are each a `400`. Omit "
+            "`picture_ids` and the stranded set at `threshold` is used, the "
+            "same marking the row opens with.\n\n"
+            "*(This bound was narrower for one day: a security review of "
+            "2026-08-01 (F7) required the list to be a subset of the stranded "
+            "set. It was widened deliberately on 2026-08-02, because a page "
+            "where the user marks the strangers cannot have the engine's marks "
+            "as a veto. F7 was rated LOW on its own reasoning that this is not "
+            "a privilege boundary - the route is `OWNER_ONLY` and `DELETE "
+            "/stacks/{stack_id}/members` already gives the same principal an "
+            "unrestricted remove - so the widening grants no new capability.)*"
+            "\n\n"
             "**A locked picture set refuses the whole stack** (`423`), never "
             "just the frozen member: a locked set freezes a stack's siblings "
             "*through* the stack, so detaching one severs a freeze the lock is "
@@ -2379,10 +2504,12 @@ def create_router(server) -> APIRouter:
         responses={
             400: {
                 "description": (
-                    "The stack has no live members, the request named none of "
-                    "them, `picture_ids` named a member that is not stranded "
-                    "at `threshold`, or `picture_ids` was omitted and no "
-                    "member is stranded - so there is nothing to split."
+                    "The stack has no live members, `picture_ids` was empty, "
+                    "`picture_ids` named something that is not a live member of "
+                    "this stack (a foreign picture, or a soft-deleted member - "
+                    "`detail` says which), or `picture_ids` was omitted and no "
+                    "member is stranded at `threshold`, so there is nothing to "
+                    "split."
                 )
             },
             423: {
