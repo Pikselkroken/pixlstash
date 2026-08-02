@@ -2,7 +2,7 @@
 
 Covers the three-lens (CSO/Principal/CEO) decided design landing before Step 5:
 
-* ``LOCAL_OWNER_ONLY`` (13 filesystem/folder routes) — loopback / RFC1918 LAN /
+* ``LOCAL_OWNER_ONLY`` (13 filesystem/folder routes + the library switch) — loopback / RFC1918 LAN /
   **Tailscale CGNAT ``100.64.0.0/10``** all count as local; a genuinely remote
   owner is 403'd with a message NAMING ``allow_remote_host_ops`` unless that
   dedicated flag is set, which then admits the remote owner.
@@ -148,12 +148,21 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_13_local_5_loopback():
+def test_host_capability_tier_split_is_14_local_5_loopback():
     """The loopback tier is the 4 host-shell GUI-spawn routes plus the e2e test
-    hook; the 13 filesystem/folder routes stay LOCAL_OWNER_ONLY. 18 routes carry a
-    locality tier = 13 local + 5 loopback (was 17 = 13 + 4 before the test hook
-    was declared; 16 = 13 + 3 before CSO Condition 1 folded in
-    server-config/open). Arithmetic, not judgement."""
+    hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 19 routes carry a
+    locality tier = 14 local + 5 loopback.
+
+    History, so a future change to this number arrives with its reason: 16 = 13 +
+    3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
+    ``server-config/open``; 18 = 13 + 5 when the e2e test hook was declared; 19 =
+    14 + 5 from 2026-08-01, when ``POST /libraries/active`` joined the local tier.
+    That last one is **not** a filesystem route and does not take a host path: it
+    is local-only because switching library is the pivot that would otherwise let
+    one stolen owner token reach every registered library, and because it resets
+    every connected client (plan §11 q4).
+
+    Arithmetic, not judgement."""
     loopback = {
         key
         for key, rp in ROUTE_POLICIES.items()
@@ -166,7 +175,7 @@ def test_host_capability_tier_split_is_13_local_5_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 5, sorted(loopback)
-    assert len(local) == 13, sorted(local)
+    assert len(local) == 14, sorted(local)
 
 
 # ===========================================================================

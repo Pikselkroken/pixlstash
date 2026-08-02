@@ -234,6 +234,38 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOOPBACK,
         justification="§16.3.1 RED LINE: opens the server config path in the host file browser (_open_in_os → os.startfile/open/xdg-open — same host-GUI spawn as pictures/open-location and reference-folders/open); loopback-only, allow_remote_host_ops can NOT loosen it",
     ),
+    # ── libraries.py (the hub/vault split; multi-library plan §11 q3/q4) ─────
+    ("GET", "/api/v1/libraries"): RoutePolicy(
+        _OWNER,
+        # Library-independent: returns the registry, not library content, and
+        # cannot reach another library's data. It must keep answering while a
+        # token is being refused or a switch is in flight, or the tab could not
+        # explain either.
+        library_independent=True,
+        justification=(
+            "Registry read. OWNER_ONLY rather than LOCAL_OWNER_ONLY (CSO ruling "
+            "2026-08-01, plan §11 q3) so the Settings tab renders for any owner; "
+            "the host information it would otherwise leak (folder paths, the CLI "
+            "hint) is omitted for a non-local caller by the handler instead of "
+            "the whole route being denied. Returns no per-object data."
+        ),
+    ),
+    ("POST", "/api/v1/libraries/active"): RoutePolicy(
+        _LOCAL,
+        library_independent=True,
+        justification=(
+            "§16.3 locality tier, but NOT for the usual reason: this route takes "
+            "a registry uuid, never a caller-supplied host path, so it is not the "
+            "path-authority class. It is local-only because (1) owner tokens are "
+            "library-scoped and switching is the pivot that would otherwise turn "
+            "one stolen token into access to every registered library, and (2) it "
+            "resets every connected client's session and takes the outgoing "
+            "library's share links offline, i.e. authority over other principals' "
+            "state. CSO ruling 2026-08-01, plan §11 q4. Loopback/LAN/Tailscale "
+            "all pass, so a phone on Tailscale is unaffected; a genuinely remote "
+            "owner needs allow_remote_host_ops."
+        ),
+    ),
     # ── filesystem.py (§16.3 host-capability; Step-3 → LOCAL_OWNER_ONLY) ─────
     ("GET", "/api/v1/filesystem/browse"): RoutePolicy(
         _LOCAL,

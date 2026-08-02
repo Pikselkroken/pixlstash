@@ -200,7 +200,11 @@ class TestTheDeclarationContract:
             for route, policy in ROUTE_POLICIES.items()
             if policy.library_independent
         }
-        assert independent == {("GET", "/api/v1/users/me/auth")}
+        assert independent == {
+            ("GET", "/api/v1/users/me/auth"),
+            ("GET", "/api/v1/libraries"),
+            ("POST", "/api/v1/libraries/active"),
+        }
 
     def test_token_management_is_never_library_independent(self):
         """The second clause of the rule, pinned down.

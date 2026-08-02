@@ -16,3 +16,7 @@ class EventType(Enum):
     RESTORE_STARTED = auto()
     RESTORE_COMPLETED = auto()
     RESTORE_FAILED = auto()
+    # The active library changed underneath every connected client. Their view
+    # now describes a library the server is no longer serving, and picture ids
+    # do not carry across, so the only honest response is a full reload.
+    LIBRARY_SWITCHED = auto()

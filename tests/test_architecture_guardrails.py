@@ -296,6 +296,10 @@ def test_event_types_fully_classified():
             EventType.CLEARED_TAGS.name,
             EventType.CHANGED_CHARACTERS.name,
             EventType.CHANGED_FACES.name,
+            # The active library was replaced underneath every client. Sent to
+            # all of them regardless of grid filters, because their picture ids
+            # now name different pictures.
+            EventType.LIBRARY_SWITCHED.name,
         }
     )
 

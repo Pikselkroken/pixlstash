@@ -71,6 +71,13 @@ class WsBroadcasterMixin:
                 EventType.CHANGED_CHARACTERS,
                 EventType.CHANGED_FACES,
                 EventType.CHANGED_DESCRIPTIONS,
+                # Broadcast to every client regardless of their grid filters:
+                # the library underneath them has been replaced, so their view
+                # describes a library the server no longer serves and their
+                # picture ids mean something else now. A filtered delivery would
+                # leave the clients that happen not to match looking at a stale
+                # library indefinitely.
+                EventType.LIBRARY_SWITCHED,
             )
             or event_type in _WS_SNAPSHOT_EVENT_TYPES
         )
