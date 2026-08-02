@@ -138,13 +138,35 @@ async function recordPing(db, ping, date) {
 async function handlePing(request, env) {
   if (request.method !== "POST") return fail(405, "method not allowed");
 
-  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  if (env.RATE_LIMITER) {
-    // The IP is used here and discarded. It is never written to D1, never
-    // logged, and never leaves this function.
-    const { success } = await env.RATE_LIMITER.limit({ key: ip });
-    if (!success) return fail(429, "rate limited");
+  // Require application/json, which is NOT a CORS-safelisted content type.
+  //
+  // Without this, a POST carrying text/plain is a "simple request": no
+  // preflight, so any website could make every one of its visitors silently
+  // POST a fabricated ping from their own IP. Per-IP rate limiting is no
+  // defence against that, because each visitor is a different IP.
+  //
+  // Requiring application/json forces a preflight for any cross-origin caller.
+  // This Worker returns no Access-Control-Allow-Origin, so the preflight fails
+  // and the browser never sends the request. Our own sender is server-side and
+  // sets this header already.
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    return fail(415, "content-type must be application/json");
   }
+
+  // Fails CLOSED when the binding is missing. A misconfigured deploy that
+  // silently dropped rate limiting would leave the one control that bounds
+  // write volume switched off, on the only unauthenticated write endpoint we
+  // operate, with nothing in the response to reveal it.
+  if (!env.RATE_LIMITER) {
+    console.error("RATE_LIMITER binding missing; refusing to accept pings.");
+    return fail(503, "temporarily unavailable");
+  }
+  // The IP is used here and discarded. It is never written to D1, never
+  // logged, and never leaves this function.
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await env.RATE_LIMITER.limit({ key: ip });
+  if (!success) return fail(429, "rate limited");
 
   const raw = await readCappedBody(request);
   if (raw === null) return fail(413, "payload too large");

@@ -307,6 +307,39 @@ describe("POST /v1/ping", () => {
     assert.equal(e.DB.installs.size, 0);
   });
 
+  it("rejects a content-type that would skip the CORS preflight", async () => {
+    const e = env();
+    // text/plain is CORS-safelisted, so a cross-origin POST carrying it is a
+    // "simple request" and is sent without a preflight. Any site could then
+    // make its visitors ping us from their own IPs, which per-IP rate limiting
+    // cannot bound.
+    for (const type of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""]) {
+      const res = await worker.fetch(
+        pingRequest(VALID, { "content-type": type }),
+        e,
+      );
+      assert.equal(res.status, 415, `content-type ${type || "(absent)"} must be refused`);
+    }
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("accepts application/json with parameters", async () => {
+    const e = env();
+    const res = await worker.fetch(
+      pingRequest(VALID, { "content-type": "application/json; charset=utf-8" }),
+      e,
+    );
+    assert.equal(res.status, 204);
+  });
+
+  it("fails closed when the rate limiter binding is missing", async () => {
+    const e = { DB: new D1Stub() };
+    const res = await worker.fetch(pingRequest(VALID), e);
+    // Never accept writes with the only volume control silently absent.
+    assert.equal(res.status, 503);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
   it("rejects GET", async () => {
     const e = env();
     const res = await worker.fetch(new Request("https://t.pixlstash.dev/v1/ping"), e);
