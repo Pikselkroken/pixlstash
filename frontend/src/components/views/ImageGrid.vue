@@ -1216,6 +1216,7 @@ import {
   startExport,
   getExportStatus,
   downloadExport,
+  listPicturesByIds,
 } from "../../api/pictures";
 import { addPictureTag, removePictureTag } from "../../api/tags";
 import {
@@ -3916,6 +3917,15 @@ async function runKeepCoverOnly() {
     // Raises "Kept the cover of N stacks · M pictures to the Scrapheap · Undo".
     operationStore.refresh();
     emit("refresh-sidebar");
+    // NO grid refetch here, deliberately. The surviving covers are no longer
+    // stacks and their badges have to go, but `debouncedFetchAllGridImages()`
+    // would rebuild the grid without the scrapheaped copies and take the
+    // ghosted tiles off the screen, and with them the one-click undo they
+    // advertise. The badge is reconciled instead by the server's own
+    // `fields: ["stack_count"]` announcement over the covers, which reaches
+    // THIS tab as well as any other and routes to `refreshStackFacets`
+    // (useGridRealtimeSync's stack-facet branch). One mechanism, so the undo
+    // and a second tab converge through exactly the same path.
     keepCoverOnlyOpen.value = false;
     keepCoverOnlyPreview.value = null;
     keepCoverOnlyTargetStackIds.value = [];
@@ -3924,10 +3934,9 @@ async function runKeepCoverOnly() {
       `Keep cover only failed for stacks [${stackIds.join(", ")}]`,
       err,
     );
-    noticeStore.error(
-      `Couldn't collapse those stacks. ${errorDetail(err)}`,
-      { key: "keep-cover-only" },
-    );
+    noticeStore.error(`Couldn't collapse those stacks. ${errorDetail(err)}`, {
+      key: "keep-cover-only",
+    });
   } finally {
     keepCoverOnlyBusy.value = false;
   }
@@ -4357,7 +4366,9 @@ const keepCoverOnlyStacks = computed(() =>
   }),
 );
 
-const keepCoverOnlyStackCount = computed(() => keepCoverOnlyStacks.value.length);
+const keepCoverOnlyStackCount = computed(
+  () => keepCoverOnlyStacks.value.length,
+);
 
 const keepCoverOnlyLockReason = computed(() =>
   buildKeepCoverOnlyLockReason({
@@ -5705,6 +5716,95 @@ async function refreshGridImage(imageId, options = {}) {
   fetchThumbnailsBatch(idx, idx + 1);
 }
 
+// ── Stack badges after a lifecycle change ───────────────────────────────────
+// How many ids one stack-facet read carries. The URL is a repeated `id=` list,
+// so a 2000-stack "Keep cover only" would otherwise build one unsendable query.
+const STACK_FACET_CHUNK = 200;
+
+/**
+ * Re-read the LIVE member count of every stack these pictures belong to and put
+ * it back on the mounted cards.
+ *
+ * This exists because `stack_count` is derived and listing-only: the server
+ * computes it per stack over live members (`_enrich_stack_counts`) and
+ * `GET /pictures/{id}/metadata` does not carry it at all, so `refreshGridImage`
+ * cannot repair a stack badge. That is why a "Keep cover only" left its cover
+ * rendering "5" with four of its members already in the Scrapheap.
+ *
+ * The read is per STACK, not per picture: a `fields=grid` listing represents
+ * each stack by the lowest-positioned member inside the id filter and reports
+ * that stack's count, so one row repairs every mounted member of it. That is
+ * what lets one call serve both directions: the covers after a collapse, and,
+ * from the restored copies' own ids, the same covers again after an undo.
+ *
+ * FIELDS ONLY: nothing is inserted, removed or reordered. That is the property
+ * that makes it safe inside a live ghost window, where
+ * `debouncedFetchAllGridImages()` is not: a refetch rebuilds the grid without
+ * the scrapheaped copies and takes the ghosted tiles off the screen, and with
+ * them the one-click undo they advertise.
+ *
+ * @param {Array<number|string>} pictureIds - any members of the stacks to fix.
+ * @returns {Promise<void>}
+ */
+async function refreshStackFacets(pictureIds) {
+  const wanted = [
+    ...new Set(
+      (Array.isArray(pictureIds) ? pictureIds : [])
+        .map((id) => getPictureId(id))
+        .filter((id) => id !== null),
+    ),
+  ];
+  if (!wanted.length) return;
+
+  const countByStackId = new Map();
+  for (let i = 0; i < wanted.length; i += STACK_FACET_CHUNK) {
+    const chunk = wanted.slice(i, i + STACK_FACET_CHUNK);
+    let rows;
+    try {
+      rows = await listPicturesByIds(chunk, {
+        fields: "grid",
+        baseUrl: props.backendUrl,
+      });
+    } catch (e) {
+      console.error(
+        `refreshStackFacets: could not re-read the stacks of pictures [${chunk.join(", ")}]; ` +
+          "their stack badges keep the count they were last told",
+        e,
+      );
+      continue;
+    }
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const stackId = getPictureStackId(row);
+      if (!stackId) continue;
+      const count = Number(row?.stack_count ?? row?.stackCount);
+      if (!Number.isFinite(count) || count <= 0) continue;
+      countByStackId.set(stackId, count);
+    }
+  }
+  if (!countByStackId.size) return;
+
+  let changed = false;
+  const source = Array.isArray(lastFetchedGridImages.value)
+    ? lastFetchedGridImages.value
+    : [];
+  const next = source.map((img) => {
+    const stackId = getPictureStackId(img);
+    if (!stackId || !countByStackId.has(stackId)) return img;
+    const count = countByStackId.get(stackId);
+    if (getStackBadgeCount(img) === count) return img;
+    changed = true;
+    // Both spellings. The fetched row carries `stack_count`; `collapseStackImages`
+    // writes the card's `stackCount`, which would otherwise win over the fresh
+    // value on the next rebuild.
+    return { ...img, stack_count: count, stackCount: count };
+  });
+  // No rebuild when nothing moved: the rebuild reassigns `allGridImages`, which
+  // several watchers read as "the grid changed under you".
+  if (!changed) return;
+  lastFetchedGridImages.value = next;
+  rebuildGridImagesFromLastFetch();
+}
+
 function getStackIndexFromItem(item) {
   if (!item) return null;
   if (typeof item.stackIndex === "number") return item.stackIndex;
@@ -7038,6 +7138,10 @@ defineExpose({
   removeImagesById,
   insertGridImagesById,
   refreshGridImage,
+  // The stack badge's own reconcile. Separate from refreshGridImage because
+  // `stack_count` is derived per stack and is absent from a card's /metadata
+  // read, so the per-card refresh cannot repair it.
+  refreshStackFacets,
   repositionImageByScore,
   repositionImageBySmartScore,
   refreshSmartScoreForImage,
@@ -8423,17 +8527,25 @@ function handleEmptyStateReset() {
   box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
   transition: box-shadow 0.18s;
 }
+/* No z-index on either hover rule. The glow is a box-shadow on the image
+   itself, so it paints without any change to the stacking order, and raising
+   the image above its own overlays is what hid the stack ribbon: the ribbon
+   sits over the picture, so an image that outranks it on hover erases it.
+   `.stack-hover-active` made that worse than a normal hover, because it fires
+   for every member of the hovered stack at once, so the ribbon vanished across
+   the whole group the moment the cursor entered any of it.
+
+   Lifting a hovered tile over its NEIGHBOURS is a separate job and is already
+   done one level up by `.image-card:hover`, so nothing is lost here. */
 .thumbnail-img:hover {
   box-shadow:
     1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
     inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-  z-index: 20;
 }
 .stack-hover-active .thumbnail-img {
   box-shadow:
     1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
     inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-  z-index: 20;
 }
 .thumbnail-card {
   width: 100%;
@@ -8454,6 +8566,31 @@ function handleEmptyStateReset() {
 }
 .compact-mode .thumbnail-img:hover {
   box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+}
+
+/* Justified mode: the tiles are a wall, not a set of cards, so they drop the
+   square grid's card framing. Two things break at a JUSTIFIED_ROW_GAP seam of
+   2px: the resting shadow (3px blur + 3px spread) paints ~6px past every edge,
+   so it lands on the neighbouring photos instead of the canvas and the tiles
+   read as overlapping; and the 8px radius cuts a notch at each corner, four of
+   which meet inside a 2px seam as a light diamond. Square corners and no
+   resting elevation - the seam alone does the separating, the same argument
+   compact mode already makes above. The state affordances stay, squared so they
+   trace the real tile edge, and hover keeps only the INSET accent glow, which
+   by construction cannot spill onto a neighbour. */
+.image-grid--justified .thumbnail-img,
+.image-grid--justified .thumbnail-placeholder {
+  border-radius: 0;
+  box-shadow: none;
+}
+.image-grid--justified .thumbnail-img:hover,
+.image-grid--justified .stack-hover-active .thumbnail-img {
+  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
+}
+.image-grid--justified .thumbnail-container::after,
+.image-grid--justified .selection-overlay,
+.image-grid--justified .image-card--ghost .thumbnail-container::before {
+  border-radius: 0;
 }
 .compact-sticky-label,
 .compact-group-label {
@@ -8571,11 +8708,25 @@ function handleEmptyStateReset() {
   pointer-events: none;
 }
 
+/* The ribbon that groups an expanded stack. It has one required position in the
+   tile's local stacking order and both neighbours matter:
+
+     .thumbnail-img            1   the picture, which the ribbon must cover
+     .stack-band-overlay       2   here
+     .stack-cover-flag        10   --z-raised
+     .thumbnail-badge         30   resolution, format
+
+   Above the picture, because a ribbon the picture paints over is not a grouping
+   mark. Below the labels, because they name individual pictures and the ribbon
+   is about the group; a colour band across a "Cover" chip would obscure the one
+   answer an expanded stack exists to give. A raw 2 rather than a token: this is
+   ordering INSIDE one tile between siblings that ship together, which is what
+   the ladder's own note reserves local numbers for. */
 .stack-band-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 10;
+  z-index: 2;
   border-radius: inherit;
 }
 

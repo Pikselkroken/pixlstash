@@ -8,6 +8,7 @@ function makeHarness(overrides = {}) {
   const grid = {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
+    refreshStackFacets: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),
@@ -404,6 +405,133 @@ describe("useGridRealtimeSync — card-content-only updates (detections)", () =>
   });
 });
 
+// The reported bug: "Keep cover only" collapsed a stack of five to its cover and
+// the surviving cover went on rendering a stack badge of five, forever. The
+// count is DERIVED per stack by the listing endpoint and is absent from the
+// /pictures/{id}/metadata read `refreshGridImage` performs, so the per-card
+// refresh every other branch uses cannot repair it, hence a branch, and a grid
+// method, of its own. Both directions are covered: the collapse announces the
+// covers, and the undo/redo announces the surviving members of every stack the
+// lifecycle move touched.
+describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
+  it("own-origin echo is NOT suppressed: the acting tab has no local count", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [1, 2],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("stack-facet-refresh");
+    // ONE batched read for the whole set, not one per card.
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([1, 2]);
+    // Never the per-card path: it would fetch /metadata, which carries no count.
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+    expect(h.reload).not.toHaveBeenCalled();
+  });
+
+  it("foreign-ui update converges the second tab", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [5],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([5]);
+    expect(h.grid.refreshGridImage).not.toHaveBeenCalled();
+  });
+
+  it("external update refreshes in place and raises no pill", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      origin_client_id: null,
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledWith([6]);
+    // A badge is card content, never a reposition: nothing may reshuffle the
+    // grid under the user for it.
+    expect(h.wsStore.addSortChangedExternalIds).not.toHaveBeenCalled();
+    expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
+  });
+
+  it("a large batch stays one read, never an escalated reload", () => {
+    const h = makeHarness();
+    const manyIds = Array.from({ length: 400 }, (_, i) => i + 1);
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: manyIds,
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    // The per-id cap exists to stop a fetch storm; there is no storm here, and
+    // a reload would drop the ghosted copies the undo window is holding.
+    expect(res.reason).toBe("stack-facet-refresh");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.refreshStackFacets).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers under an open overlay, like every other grid mutation", () => {
+    const h = makeHarness({ overlayOpen: true });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [7],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+    expect(res.action).toBe("targeted");
+    expect(res.reason).toBe("stack-facet-refresh-overlay-deferred");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("mixed fields follow the OLD path: a lifted score still needs its sort", () => {
+    const h = makeHarness({ selectedSort: "SMART_SCORE" });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [8],
+      change_kind: "updated",
+      fields: ["stack_count", "smart_score"],
+    });
+    expect(res.reason).toBe("foreign-ui-updated");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+
+  it("a removal is never swallowed by the branch", () => {
+    const h = makeHarness();
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: OTHER_ID,
+      picture_ids: [9],
+      change_kind: "removed",
+      fields: ["stack_count"],
+    });
+    // The copies of a collapse are `removed`, and a vanished card must still
+    // vanish; only the covers are `updated`.
+    expect(res.reason).toBe("foreign-ui-removed");
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+});
+
 describe("useGridRealtimeSync — pills deferred while the overlay is open", () => {
   it("external sort-affecting update defers to overlay close, raises no pill", () => {
     const h = makeHarness({ selectedSort: "SMART_SCORE", overlayOpen: true });
@@ -605,6 +733,7 @@ function makeCoalescingHarness(overrides = {}) {
   const grid = {
     insertGridImagesById: vi.fn(),
     refreshGridImage: vi.fn(),
+    refreshStackFacets: vi.fn(),
     repositionImageByScore: vi.fn(),
     repositionImageBySmartScore: vi.fn(),
     refreshSmartScoreForImage: vi.fn(),

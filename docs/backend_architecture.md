@@ -1826,6 +1826,8 @@ Both sites pass `expand_stacks=True, expand_stacks_include_deleted=True`. `norma
 
 The value is gated by `WsBroadcasterMixin.CHANGE_KINDS` (`pixlstash/ws/broadcaster.py`). That gate **drops** an unrecognised kind rather than raising, so a new value added at an emit site but not to the tuple fails *silently* and the SPA falls back to `"updated"` — the exact 404-ghost-card failure above. The frontend mirror is `resolveChangeKind` in `frontend/src/composables/useGridRealtimeSync.js`; the two allowlists are one contract and must move together.
 
+**A lifecycle move also changes the stacks it touched, and the survivors are invisible to all of the above** (added 2026-08-02). A card renders its stack's LIVE member count as its badge, so moving four members of a five-member stack changes what the fifth should draw. That fifth picture is not moved, has no facet diff, and therefore never reaches `picture_ids` at all: undoing a "Keep cover only" whose metadata union happened to be a no-op restored four copies and announced **nothing** about the cover, which went on rendering "stack of 1". `_restore` resolves them in its own session, after `delete_emptied_stacks` so a dissolved stack contributes no phantom survivor (`_stack_siblings_in_session`), and hands them to `_emit` as `lifecycle["stack_siblings"]`; `_emit` gives them one `updated` announcement carrying `fields: ["stack_count"]`. It is **additive**: the blanket no-`fields` `updated` still goes out for everything in `picture_ids`, so a facet change that may affect any view keeps its conservative treatment. `stack_count` is the field name because it is the derived, listing-only value the SPA re-reads (`_enrich_stack_counts`, `fields=grid`); it is absent from `GET /pictures/{id}/metadata`, so the client's per-card metadata refresh cannot repair a badge. The rule is general to any lifecycle move, not specific to keep-cover-only. Both directions are pinned in `tests/test_ws_broadcaster.py` and `tests/test_keep_cover_only.py`.
+
 No new routes and no migration: the existing undo/redo endpoints carry all of it, and `operation` is generic over `op_type`.
 
 ### 21.1.1 Import sees the Scrapheap, and offers a restore rather than a second copy
@@ -2813,10 +2815,37 @@ soft-deleted to the Scrapheap.
   member including the already-scrapheaped ones. The op type is
   `stack.keep_cover_only`; `squash` is kept out of identifiers because in git it
   means *merge without losing content*, which is the opposite of what this does.
-- **Announcements.** `removed` over the moved copies and `updated` over the
-  covers that gained metadata (plus `CHANGED_TAGS`), each carrying
+- **Announcements: two about the covers, and the load-bearing one is the stack.**
+  `removed` over the moved copies, and `updated` over the covers, each carrying
   `origin_client_id` read from `request_context` in the handler (§21 origin
-  discipline).
+  discipline). The two `change_kind`s are never merged: telling the grid a
+  scrapheaped picture was merely updated leaves a 404-clickable card behind.
+
+  The covers get **two** `updated` events, deliberately:
+
+  * one **unconditional** (gated only on something having moved) carrying
+    `fields: ["stack_count"]`. What always changes for a cover is its stack: it
+    led a stack of five and now leads nothing live, and a card renders that
+    number as its badge. This announcement was gated on
+    `tags_added or scores_lifted` until 2026-08-02, which tests the wrong
+    property; a collapse whose union found nothing new said nothing at all
+    about the cover, so every view went on drawing a stack of five around a
+    picture that was alone (the owner's report);
+  * one for the metadata union, with **no** `fields`, emitted only when the
+    union did something (plus `CHANGED_TAGS`). Kept separate because narrowing
+    it to `stack_count` would tell a client sorting by score that the change
+    cannot affect its order, which is false.
+
+  `stack_count` is the field name because it is the **derived, listing-only**
+  value the client re-reads: computed per stack over live members by
+  `_enrich_stack_counts` in the `fields=grid` projection and absent from
+  `GET /pictures/{id}/metadata`, so the SPA's per-card metadata refresh cannot
+  repair a badge. The SPA routes it to a targeted stack read of its own.
+
+  **The undo and the redo announce it back**, from `operation_log_service._emit`
+  (see §21.1): the surviving members carry no facet diff, so they are not in the
+  operation's picture list at all and are resolved separately as
+  `lifecycle["stack_siblings"]`.
 
 - **The request is bounded, and the bound is on the request.**
   `MAX_SELECTION_IDS` (2000) is checked on the **raw** list length before

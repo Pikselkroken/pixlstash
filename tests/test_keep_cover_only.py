@@ -666,6 +666,178 @@ def test_an_unknown_stack_id_is_reported_outside_the_bucket_arithmetic():
         _teardown(temp_dir, server)
 
 
+# ── what the collapse announces ──────────────────────────────────────────────
+
+
+def _capture_events(server) -> list[tuple]:
+    """Record every ``vault.notify`` call, in order."""
+    emitted: list[tuple] = []
+    original = server.vault.notify
+
+    def record(event_type, data=None):
+        emitted.append((event_type, data))
+        return original(event_type, data)
+
+    server.vault.notify = record
+    return emitted
+
+
+def _stack_facet_events(emitted) -> list[dict]:
+    return [
+        data
+        for _event, data in emitted
+        if isinstance(data, dict) and data.get("fields") == ["stack_count"]
+    ]
+
+
+def test_the_covers_stack_change_is_announced_even_when_the_union_added_nothing():
+    """The cover's STACK always changes; its metadata only sometimes does.
+
+    The announcement used to be gated on ``tags_added or scores_lifted``, which
+    tests the wrong property: a collapse whose union found nothing new said
+    nothing at all about the cover, so every view kept drawing it as a stack of
+    three around a picture that was now on its own (the owner's report). The two
+    halves stay separate ``change_kind``s, the copies ``removed`` and the covers
+    ``updated``, because merging them would tell the grid a scrapheaped picture
+    was merely updated and leave a 404-clickable card behind.
+    """
+    temp_dir, client, server = _env()
+    try:
+        # Identical tags and scores on every member: the union has nothing to do.
+        stack_id, pics = _make_stack(
+            server,
+            [
+                {"tags": ["a"], "score": 4},
+                {"tags": ["a"], "score": 4},
+                {"tags": ["a"], "score": 4},
+            ],
+        )
+        emitted = _capture_events(server)
+
+        body = client.post(COLLAPSE_URL, json={"stack_ids": [stack_id]}).json()
+        assert body["tags_added"] == 0 and body["scores_lifted"] == 0
+        assert body["pictures_moved"] == 2
+
+        removed = [
+            data
+            for _event, data in emitted
+            if isinstance(data, dict) and data.get("change_kind") == "removed"
+        ]
+        assert removed, "the copies must still be announced as removed"
+        assert removed[0]["picture_ids"] == sorted(pics[1:])
+        # No `fields` on the removal: a vanished card is not a field change.
+        assert not removed[0].get("fields")
+
+        stack_events = _stack_facet_events(emitted)
+        assert len(stack_events) == 1, emitted
+        assert stack_events[0]["picture_ids"] == [pics[0]]
+        assert stack_events[0]["change_kind"] == "updated"
+        # And the two are separate events, never one merged announcement.
+        assert stack_events[0] is not removed[0]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_union_that_did_something_keeps_its_own_unnarrowed_announcement():
+    """The stack event is additive, not a replacement.
+
+    Declaring ``fields=["stack_count"]`` on a cover that also gained a tag and a
+    score would tell every client the change cannot affect its sort, which is
+    false under a score sort. So the union keeps its own ``fields``-less event
+    and the stack change rides beside it.
+    """
+    temp_dir, client, server = _env()
+    try:
+        stack_id, pics = _make_stack(
+            server,
+            [{"tags": ["a"], "score": 1}, {"tags": ["b"], "score": 5}],
+        )
+        emitted = _capture_events(server)
+
+        body = client.post(COLLAPSE_URL, json={"stack_ids": [stack_id]}).json()
+        assert body["tags_added"] > 0 and body["scores_lifted"] > 0
+
+        cover_events = [
+            data
+            for _event, data in emitted
+            if isinstance(data, dict)
+            and data.get("picture_ids") == [pics[0]]
+            and data.get("change_kind") == "updated"
+        ]
+        assert len(cover_events) == 2, cover_events
+        assert [ev.get("fields") for ev in cover_events].count(None) == 1
+        assert [ev.get("fields") for ev in cover_events].count(["stack_count"]) == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_collapse_that_moved_nothing_announces_nothing_about_the_covers():
+    """No move, no stack change: a skipped stack's cover still leads its stack."""
+    temp_dir, client, server = _env()
+    try:
+        # A single-member stack is skipped outright, so nothing moves.
+        stack_id, pics = _make_stack(server, [{}])
+        emitted = _capture_events(server)
+
+        body = client.post(COLLAPSE_URL, json={"stack_ids": [stack_id]}).json()
+        assert body["pictures_moved"] == 0
+        assert body["stacks_collapsed"] == 0
+        assert not _stack_facet_events(emitted)
+        assert pics
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_undo_announces_the_covers_stack_change_back():
+    """The reverse direction, which is the whole reason the undo window exists.
+
+    After the undo the cover leads a stack of three again, and the only thing
+    that says so is the ``stack_count`` announcement over the pictures the undo
+    did NOT move: the copies come back as ``restored``, the cover was never
+    scrapheaped and so appears in neither lifecycle list.
+    """
+    temp_dir, client, server = _env()
+    try:
+        stack_id, pics = _make_stack(server, [{}, {}, {}])
+        body = client.post(COLLAPSE_URL, json={"stack_ids": [stack_id]}).json()
+        batch_id = body["batch_id"]
+        assert batch_id
+
+        emitted = _capture_events(server)
+        assert (
+            client.post(f"{API}/operations/batches/{batch_id}/undo").status_code == 200
+        )
+
+        restored = [
+            data
+            for _event, data in emitted
+            if isinstance(data, dict) and data.get("change_kind") == "restored"
+        ]
+        assert restored, "the copies must come back as restored"
+        assert sorted(restored[0]["picture_ids"]) == sorted(pics[1:])
+
+        stack_events = _stack_facet_events(emitted)
+        assert len(stack_events) == 1, emitted
+        assert stack_events[0]["picture_ids"] == [pics[0]]
+        assert stack_events[0]["change_kind"] == "updated"
+
+        # And back again. A fix that only works one way is half a fix, and redo
+        # re-collapses the stack the undo just put back.
+        emitted.clear()
+        assert client.post(f"{API}/operations/redo").status_code == 200
+        assert _stack_facet_events(emitted) == [
+            {
+                "picture_ids": [pics[0]],
+                "origin_client_id": None,
+                "change_kind": "updated",
+                "source": "ui",
+                "fields": ["stack_count"],
+            }
+        ]
+    finally:
+        _teardown(temp_dir, server)
+
+
 # ── authorization, both directions ───────────────────────────────────────────
 
 

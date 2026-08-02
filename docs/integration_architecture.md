@@ -356,11 +356,42 @@ Shapes and rules the frontend depends on:
   does not accept, deliberately inverting the app's dialog convention because
   users arrive with `Enter` under their finger from the queue's verdict keys.
 
+**The collapse announces two things, and the second one was missing** (fixed
+2026-08-02). The copies leave, and the covers' **stack membership** changes: a
+cover that led a stack of five now leads nothing live, and a card renders that
+number as its stack badge.
+
+- The copies are `removed`, the covers are `updated`. **Never merged**: telling
+  the grid a scrapheaped picture was merely updated leaves a 404-clickable card.
+- The covers' announcement is **unconditional** (gated only on something having
+  moved) and carries `fields: ["stack_count"]`. It used to be gated on
+  `tags_added or scores_lifted`, which tests the wrong property: a collapse
+  whose metadata union found nothing new said nothing at all about the cover, so
+  every view went on drawing a stack of five around a picture that was alone.
+- The metadata union keeps its **own** `updated` event, with no `fields`,
+  emitted only when it did something. Two events, because narrowing the union's
+  announcement to `stack_count` would tell a client sorting by score that the
+  change cannot affect its order, which is false.
+- **`stack_count` is the field name because it is the derived, listing-only
+  value the client re-reads.** The server computes it per stack over LIVE
+  members in the `fields=grid` projection (`_enrich_stack_counts`) and
+  `GET /pictures/{id}/metadata` does not carry it at all, so the per-card
+  metadata refresh the SPA uses for every other `updated` event cannot repair a
+  badge. See §8.2 for the branch that consumes it.
+- **The undo and the redo announce it back**, from
+  `operation_log_service._emit`. The surviving members carry no facet diff and
+  are therefore not even in the operation's picture list, so they are resolved
+  separately (`lifecycle["stack_siblings"]`, computed in the restore's own
+  session after `delete_emptied_stacks`) and get the same
+  `fields: ["stack_count"]` announcement. That rule is general, not
+  keep-cover-only's: any lifecycle move changes the live count of every stack it
+  touched.
+
 **The frontend consumer (shipped).** `api/stacks.js` owns both URLs
 (`previewKeepCoverOnly` / `keepCoverOnly`); the copy and the two selection
 computations are pure functions in `utils/keepCoverOnly.js`;
 `KeepCoverOnlyDialog.vue` renders the consent and `ImageGrid.vue` owns the
-preview, the run and the ghosting. Four points where the wiring is load-bearing:
+preview, the run and the ghosting. Five points where the wiring is load-bearing:
 
 - **One computed, two renderings.** `picturesMoving` is `null` until the preview
   lands and drives both the headline block and the confirm label, so the two
@@ -377,6 +408,15 @@ preview, the run and the ghosting. Four points where the wiring is load-bearing:
   rows become the receipt's second sentence via
   `useOperationStore.noteNextReceipt(opType, note)`: the same pill as the move,
   never a competing notice.
+- **The badge is reconciled off the WebSocket, in every tab including the acting
+  one, never by a refetch.** `runKeepCoverOnly` deliberately does not call
+  `debouncedFetchAllGridImages()`: a refetch rebuilds the grid without the
+  scrapheaped copies and takes the ghosted tiles, and with them the one-click
+  undo they advertise, off the screen. The `stack_count` announcement above
+  drives `ImageGrid.refreshStackFacets`, which patches fields only. That is also
+  why the acting tab's own echo is not suppressed for this field: it has no
+  optimistic local copy of a count only the server can compute, and an undo has
+  no local grid op at all.
 
 ---
 
@@ -518,7 +558,7 @@ The backend's [EventType](../pixlstash/event_types.py) enum names are **not** se
 | `source` | `"ui"` \| `"external"` | Coarse origin class. `"ui"` = an attributable owner action through the SPA; `"external"` = work that originated outside the UI (watch/reference folders, external API writes, background ML finishers, externally-run ComfyUI). Defaults to `"external"`. |
 | `origin_client_id` | `string` \| `null` | The `X-Client-Id` of the originating tab, or `null` for background/external work. **The primary signal** — a tab recognises the echo of its own change by matching this against its own id. |
 | `picture_ids` | `number[]` | Affected picture ids. |
-| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). |
+| `fields` | `string[]` (optional) | Columns that changed (e.g. `["smart_score"]`); drives the silent-vs-sort-changed decision. Omitted for edits that may affect any view (user edits, imports). Two values are **not** columns and name a routing class instead: `detections` (card content) and `stack_count` (the stack's live member count, derived by the listing endpoint and re-read by its own targeted call). See §8.2. |
 | `change_kind` | `"added"` \| `"updated"` \| `"removed"` \| `"restored"` (optional) | Set at the emit site where cheap (`removed` on deletes is free; `added` is implicit for `picture_imported`). **Omitted entirely when unset** — the SPA infers `added` for `picture_imported` and falls back to `updated` otherwise. `"restored"` is a scrapheap comeback (undo of a move, or `POST /pictures/scrapheap/restore`): the card returns, but the picture is **not** new to the vault, so the sidebar must not raise its NEW marker for it. The value set is a closed allowlist on **both** ends — `WsBroadcasterMixin.CHANGE_KINDS` and `resolveChangeKind` — and each silently degrades an unknown kind (the backend drops the field, the SPA falls back to `updated`), so the two move together or not at all. |
 
 Per-type payload specifics (all carry the envelope fields above):
@@ -570,6 +610,26 @@ The picture-event policy lives in [`useGridRealtimeSync.js`](../frontend/src/com
    - `updated` with `pictureChangeAffectsView(fields) === true` (would reorder the grid) → the sibling **"Sort order changed externally — click to refresh"** pill, instead of reshuffling under the user;
    - `updated` with known fields that are **invisible** to the current sort/filter → **ignored** (e.g. a background `smart_score` recompute under a date sort) to avoid a per-card `/metadata` + thumbnail **refetch storm** for values that aren't even displayed.
 4. **Unrecognised shape** (e.g. a bulk sort/filter-defining change) → a rare, **logged** full-reload fallback.
+
+Two field classes are decided **before** the origin dispatch, because for both
+of them the origin makes no difference to what has to happen:
+
+- **Card-content fields** (`detections`) → a targeted per-card
+  `refreshGridImage`, never a pill and never a reshuffle.
+- **Stack facets** (`stack_count`) → **one batched** `refreshStackFacets(ids)`
+  read for the whole event, never a pill, never a reshuffle, and never the
+  per-card path: `stack_count` is derived per stack by the listing endpoint and
+  is absent from `GET /pictures/{id}/metadata`, so `refreshGridImage` cannot
+  repair a stack badge. Uniform across origins for the same reason `restored`
+  is: the acting tab has no optimistic local copy of a server-computed count,
+  and an undo (Ctrl+Z, the toolbar, the lightbox) has no local grid op at all.
+  There is no `MAX_TARGETED_UPDATE` escalation here, deliberately: one read is
+  not a fetch storm, and the reload it would escalate to is precisely what must
+  not happen while a ghost window is open.
+
+Both require **every** named field to be in the class. Mixed fields fall through
+to the ordinary dispatch, so a cover that also gained a score still gets the
+sort treatment its own (separate) announcement carries.
 
 **The grid is not the only destination.** `useUpdatesSocket` routes each `pictures_changed` frame to every store that holds a snapshot of a server read, and each destination owns its own decision, the grid's table above is *not* shared. The other subscriber is the **Duplicates queue** (`useDedupStore.applyPictureEvent`), whose rows are groups rather than cards:
 

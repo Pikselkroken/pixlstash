@@ -1363,6 +1363,52 @@ def _batch_members_in_session(
     )
 
 
+def _stack_siblings_in_session(session: Session, moved: set[int]) -> list[int]:
+    """Live members of the stacks *moved* touched, excluding *moved* itself.
+
+    A card renders its stack's LIVE member count as its badge, so a scrapheap
+    move changes what every **surviving** member of that stack should draw. The
+    survivors are exactly the pictures a restore does *not* touch, so they carry
+    no facet diff and never reach ``touched``: undoing a "Keep cover only" whose
+    metadata union happened to be a no-op restored four copies and announced
+    nothing whatsoever about the cover they belong to, which went on rendering
+    "stack of 1".
+
+    Read AFTER the restore's writes, so ``deleted`` is already the new truth.
+
+    Args:
+        session: The restore's own session.
+        moved: Pictures this restore scrapheaped or brought back.
+
+    Returns:
+        Sorted picture ids, empty when nothing moved or nothing was stacked.
+    """
+    if not moved:
+        return []
+    stack_ids = {
+        int(stack_id)
+        for stack_id in session.exec(
+            select(Picture.stack_id).where(
+                Picture.id.in_(moved),
+                Picture.stack_id.is_not(None),
+            )
+        ).all()
+        if stack_id is not None
+    }
+    if not stack_ids:
+        return []
+    live = {
+        int(picture_id)
+        for picture_id in session.exec(
+            select(Picture.id).where(
+                Picture.stack_id.in_(stack_ids),
+                Picture.deleted.is_(False),
+            )
+        ).all()
+    }
+    return sorted(live - moved)
+
+
 def _restore(
     session: Session,
     operations: list[Operation],
@@ -1430,6 +1476,10 @@ def _restore(
     lifecycle = {
         "scrapheaped": sorted(scrapheaped),
         "restored": sorted(restored),
+        # Computed here, not in `_emit`: it needs the session, and it needs to
+        # run after `delete_emptied_stacks` so a stack the restore dissolved
+        # contributes no phantom survivors.
+        "stack_siblings": _stack_siblings_in_session(session, scrapheaped | restored),
     }
     return sorted(touched), facets, lifecycle
 
@@ -1457,11 +1507,22 @@ def _emit(
     ``added`` means "this picture is new to the vault": the SPA's sidebar reads
     ``added`` as a fresh import and raises its NEW marker on the affected
     counts, which is a lie for a picture that has been in the library all along.
+
+    A lifecycle move also changes the **live member count of every stack it
+    touched**, and the members that did not move render that count as their
+    stack badge. Those survivors carry no facet diff, so they are not even in
+    ``picture_ids``: undoing a "Keep cover only" put four copies back and left
+    the cover still drawn as a stack of one. ``lifecycle["stack_siblings"]``
+    names them (resolved in :func:`_stack_siblings_in_session`, which has the
+    session), and they get an announcement of their own with
+    ``fields=["stack_count"]``: the derived, listing-only value the SPA
+    re-reads, since it is absent from ``GET /pictures/{id}/metadata``.
     """
     if not picture_ids:
         return
     scrapheaped = list((lifecycle or {}).get("scrapheaped") or [])
     restored = list((lifecycle or {}).get("restored") or [])
+    stack_siblings = list((lifecycle or {}).get("stack_siblings") or [])
     moved = set(scrapheaped) | set(restored)
     updated = [picture_id for picture_id in picture_ids if picture_id not in moved]
 
@@ -1473,23 +1534,29 @@ def _emit(
     if not events:
         events = [EventType.CHANGED_PICTURES]
 
-    def _notify(event: EventType, ids: list[int], change_kind: str) -> None:
+    def _notify(
+        event: EventType,
+        ids: list[int],
+        change_kind: str,
+        fields: Optional[list[str]] = None,
+    ) -> None:
         if not ids:
             return
-        vault.notify(
-            event,
-            {
-                "picture_ids": ids,
-                "origin_client_id": origin_client_id,
-                "change_kind": change_kind,
-                "source": "ui",
-            },
-        )
+        data = {
+            "picture_ids": ids,
+            "origin_client_id": origin_client_id,
+            "change_kind": change_kind,
+            "source": "ui",
+        }
+        if fields:
+            data["fields"] = list(fields)
+        vault.notify(event, data)
 
     for event in events:
         _notify(event, updated, "updated")
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
     _notify(EventType.CHANGED_PICTURES, restored, "restored")
+    _notify(EventType.CHANGED_PICTURES, stack_siblings, "updated", ["stack_count"])
 
 
 def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operation:

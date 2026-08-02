@@ -976,7 +976,35 @@ def keep_cover_only(
                 "source": source,
             },
         )
+    if covers and moved:
+        # The cover's STACK is what always changes here: it led a stack of five
+        # and now leads nothing live, and a card renders that count as its stack
+        # badge. So this announcement is unconditional, gated only on something
+        # having actually moved, and it is deliberately separate from the
+        # metadata-union one below: a collapse whose union added nothing used to
+        # say nothing at all about the cover, which left every view rendering a
+        # stack of five around a picture that was on its own.
+        #
+        # ``stack_count`` is the field name because that is the derived,
+        # listing-only value the client re-reads; it is computed per stack over
+        # LIVE members by ``_enrich_stack_counts`` and is absent from
+        # ``GET /pictures/{id}/metadata``, so a per-card metadata refresh cannot
+        # repair the badge. The SPA routes this field to its own targeted
+        # stack-badge read (``useGridRealtimeSync``'s stack-facet branch).
+        vault.notify(
+            EventType.CHANGED_PICTURES,
+            {
+                "picture_ids": sorted(int(pid) for pid in covers),
+                "origin_client_id": origin_client_id,
+                "change_kind": "updated",
+                "fields": ["stack_count"],
+                "source": source,
+            },
+        )
     if covers and (result.get("tags_added") or result.get("scores_lifted")):
+        # The union's own announcement, carrying no ``fields`` because a tag or
+        # score change may affect any view. Kept separate from the stack one
+        # above so neither narrows the other.
         vault.notify(
             EventType.CHANGED_PICTURES,
             {

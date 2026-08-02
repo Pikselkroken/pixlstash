@@ -54,6 +54,21 @@ const SERVER_COMPUTED_SORT_FIELDS = new Set([
 // way for every tab regardless of who started it.
 const CARD_CONTENT_FIELDS = new Set(["detections"]);
 
+// Stack membership. `stack_count` is the number of LIVE members a card's stack
+// badge renders, and it is the one facet neither of the branches above can
+// repair: it is derived per stack by the listing endpoint rather than stored on
+// the picture, so it is absent from the `/pictures/{id}/metadata` read that
+// `refreshGridImage` performs. A "Keep cover only" that moves four of five
+// members changes exactly this and nothing else about the cover, which is how a
+// collapsed stack kept rendering "5" around a picture that was on its own.
+//
+// It is never a sort or filter field, so it must never raise a pill or reshuffle
+// the grid; and it is handled uniformly for EVERY origin, this tab's own echo
+// included, for the same reason `restored` is: the acting tab has no optimistic
+// local copy of a count only the server can compute, and an undo (Ctrl+Z, the
+// toolbar, the lightbox) has no local grid op at all to have applied it.
+const STACK_FACET_FIELDS = new Set(["stack_count"]);
+
 function asPictureIds(payload) {
   return Array.isArray(payload?.picture_ids) ? payload.picture_ids : [];
 }
@@ -105,7 +120,7 @@ function createSyncScheduler() {
 /**
  * @param {Object} deps
  * @param {() => string|null} deps.getMyClientId   Active tab's client id.
- * @param {Object} deps.grid                        Imperative grid API (the ImageGrid template-ref's exposed methods, or spies in tests). Expected: insertGridImagesById, refreshGridImage, repositionImageByScore, repositionImageBySmartScore, removeImagesById, isImagesLoading.
+ * @param {Object} deps.grid                        Imperative grid API (the ImageGrid template-ref's exposed methods, or spies in tests). Expected: insertGridImagesById, refreshGridImage, refreshStackFacets, repositionImageByScore, repositionImageBySmartScore, removeImagesById, isImagesLoading.
  * @param {Object} deps.wsStore                     useWsStore instance (pill ids + setters).
  * @param {(fields: string[]) => boolean} deps.pictureChangeAffectsView
  * @param {() => string} deps.getSelectedSort       Active sort key (e.g. "SMART_SCORE", "DATE_TAKEN").
@@ -324,6 +339,16 @@ export function useGridRealtimeSync(deps) {
   function fieldsAreCardContentOnly(fields) {
     if (!Array.isArray(fields) || !fields.length) return false;
     return fields.every((field) => CARD_CONTENT_FIELDS.has(field));
+  }
+
+  // True when every changed field is a stack facet (and there is at least one).
+  // Mixed fields deliberately fall through to the ordinary dispatch: a cover
+  // that also gained a score needs the sort treatment its own announcement
+  // carries, which is why the backend emits the stack change as an event of its
+  // own rather than widening the metadata one.
+  function fieldsAreStackFacetsOnly(fields) {
+    if (!Array.isArray(fields) || !fields.length) return false;
+    return fields.every((field) => STACK_FACET_FIELDS.has(field));
   }
 
   // Reconcile a single card under the active sort. The WS event never carries
@@ -570,6 +595,28 @@ export function useGridRealtimeSync(deps) {
       }
       for (const id of pictureIds) grid.refreshGridImage?.(id);
       return { action: TARGETED, reason: "card-content-refresh" };
+    }
+
+    // Stack-membership-only update (a collapse, or the undo/redo of one): the
+    // named pictures' cards render a new live member count and nothing else
+    // moves. One batched read repairs every mounted member of the affected
+    // stacks, so there is no per-id fetch loop to cap here. Uniform across
+    // origins, never a pill, never a reshuffle.
+    if (
+      changeKind === "updated" &&
+      fieldsAreStackFacetsOnly(fields) &&
+      pictureIds.length
+    ) {
+      if (deferWhileOverlayOpen()) {
+        // §9.1: nothing mutates the grid under the frozen filmstrip.
+        // closeOverlay() reconciles.
+        return {
+          action: TARGETED,
+          reason: "stack-facet-refresh-overlay-deferred",
+        };
+      }
+      grid.refreshStackFacets?.(pictureIds);
+      return { action: TARGETED, reason: "stack-facet-refresh" };
     }
 
     if (originClientId && myClientId && originClientId === myClientId) {

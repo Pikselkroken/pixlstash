@@ -120,6 +120,7 @@ export function useUpdatesSocket({
     insertGridImagesById: (ids) =>
       gridContainer.value?.insertGridImagesById?.(ids),
     refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
+    refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
