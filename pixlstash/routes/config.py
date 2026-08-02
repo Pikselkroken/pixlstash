@@ -24,7 +24,8 @@ from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
     changed_penalised_tags,
     invalidate_all_anomaly_scores,
-    invalidate_for_penalised_tag_change,
+    apply_pending_invalidations,
+    record_pending_invalidation,
 )
 from pixlstash.utils.service.user_settings_utils import (
     apply_user_config_patch,
@@ -420,7 +421,14 @@ def create_router(server) -> APIRouter:
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
 
-        def update_user(session: Session, user_id: int):
+        def preview_patch(session: Session, user_id: int):
+            """Validate the patch and work out which tag weights would change.
+
+            Runs against a detached copy and commits nothing, so the diff is
+            known *before* anything is written. That ordering is what lets the
+            invalidation be recorded durably first; see the comment on the write
+            below.
+            """
             user = session.get(User, user_id)
             if user is None:
                 raise HTTPException(status_code=404, detail="User not found")
@@ -428,62 +436,83 @@ def create_router(server) -> APIRouter:
             old_penalised_tags = _resolved_penalised_tags(
                 user.smart_score_penalised_tags
             )
+            probe = User(**user.model_dump())
+            try:
+                would_update = apply_user_config_patch(probe, patch_data)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not would_update:
+                return set()
+            # Diff the *resolved* weight tables, not the raw JSON strings: a
+            # reordered or reformatted payload with identical weights must not
+            # trigger a re-score.
+            return changed_penalised_tags(
+                old_penalised_tags,
+                _resolved_penalised_tags(probe.smart_score_penalised_tags),
+            )
+
+        def update_user(session: Session, user_id: int):
+            user = session.get(User, user_id)
+            if user is None:
+                raise HTTPException(status_code=404, detail="User not found")
             try:
                 updated = apply_user_config_patch(user, patch_data)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-            changed_tags: set[str] = set()
             if updated:
                 session.add(user)
-                new_penalised_tags = _resolved_penalised_tags(
-                    user.smart_score_penalised_tags
-                )
-                # Diff the *resolved* weight tables, not the raw JSON strings: a reordered
-                # or reformatted payload with identical weights must not trigger a
-                # re-score.
-                changed_tags = changed_penalised_tags(
-                    old_penalised_tags, new_penalised_tags
-                )
                 session.commit()
                 session.refresh(user)
-            return user, updated, changed_tags
+            return user, updated
+
+        changed_tags = server.hub_engine.run_immediate_read_task(preview_patch, user_id)
+
+        # Record the invalidation in the vault BEFORE committing the setting to
+        # the hub. The two live in different databases and SQLite has no
+        # transaction spanning both, so one of them has to go first, and this
+        # order is the one that fails safe. Crash after the record and before the
+        # setting: the record is applied against unchanged weights and the scores
+        # recompute to the values they already had, costing work and nothing
+        # else. The other order would leave the setting saved with no record that
+        # a recompute is owed, and a stale smart score is a plausible number, so
+        # nothing would ever notice.
+        if changed_tags:
+            server.vault.db.run_task(
+                lambda session: (
+                    record_pending_invalidation(session, changed_tags),
+                    session.commit(),
+                ),
+                priority=DBPriority.IMMEDIATE,
+            )
 
         # The hub owns the user row. The five library-scoped fields (§5) still
         # ride along here rather than in the vault's library_settings row; see
         # the note in pixlstash/hub/schema.py.
-        user, updated, changed_tags = server.hub_engine.run_task(
+        user, updated = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
 
         if changed_tags:
-            # Scoped, not library-wide: only pictures carrying one of the
-            # re-weighted tags can have moved, and a blanket reset would
-            # re-score the whole library on every settings edit.
+            # Apply the recorded invalidation now, so the user sees the effect
+            # immediately. Consuming the record and NULLing the scores share one
+            # vault transaction, so that half cannot tear.
             #
-            # This used to run inside the config write's transaction so the two
-            # landed atomically. That is no longer possible: the setting lives
-            # in the hub and the pictures live in the vault, and SQLite has no
-            # cross-database transaction. The window is therefore real, and the
-            # failure it leaves is stale smart scores rather than lost data. It
-            # is logged loudly with the tag list so it can be repaired by
-            # re-saving the setting, instead of failing silently and leaving
-            # scores wrong forever.
-            def _invalidate(session: Session):
-                invalidate_for_penalised_tag_change(session, changed_tags)
-                session.commit()
-
+            # A failure here is not the end of the story: the record is already
+            # durable, and PendingScoreInvalidationFinder drains it on its next
+            # sweep. Logged rather than raised for exactly that reason, because
+            # the setting is saved and the repair is already scheduled.
             try:
-                server.vault.db.run_task(_invalidate, priority=DBPriority.IMMEDIATE)
+                server.vault.db.run_task(
+                    apply_pending_invalidations, priority=DBPriority.IMMEDIATE
+                )
             except Exception:
                 logger.exception(
-                    "Penalised tags changed (%s) but invalidating the affected "
-                    "smart scores failed. The setting is saved; scores for "
-                    "pictures carrying those tags are stale until they are "
-                    "recomputed. Re-save the setting to retry.",
+                    "Penalised tags changed (%s) and the invalidation is "
+                    "recorded, but applying it now failed. Scores for pictures "
+                    "carrying those tags stay stale until the pending-"
+                    "invalidation finder drains the record.",
                     ", ".join(sorted(changed_tags)),
                 )
-                raise
 
         if changed_tags:
             # The NULL-reset already committed atomically above; just nudge the scheduler

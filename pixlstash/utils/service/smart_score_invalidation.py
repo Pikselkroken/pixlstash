@@ -25,6 +25,7 @@ and the stored score stands — over-invalidating here would re-score the whole 
 every routine re-tag, which is a serious throughput regression on a small box.
 """
 
+import json
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -505,3 +506,101 @@ def invalidate_on_anomaly_change(
         registry=registry,
         origin_client_id=origin_client_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Durable pending invalidations (hub/vault split)
+# ---------------------------------------------------------------------------
+
+
+def record_pending_invalidation(session: "Session", changed_tags: Iterable[str]) -> int:
+    """Record that *changed_tags* are owed a score invalidation. Does not commit.
+
+    Written to the vault **before** the setting that caused it is committed to
+    the hub, which is what makes the pair safe without a cross-database
+    transaction. See
+    :class:`~pixlstash.db_models.pending_score_invalidation.PendingScoreInvalidation`
+    for why the ordering is that way round.
+
+    Args:
+        session: Active vault session. The caller owns the transaction.
+        changed_tags: Lowercase tag names whose weight changed.
+
+    Returns:
+        The number of tags recorded, or 0 when there was nothing to record.
+    """
+    from pixlstash.db_models.pending_score_invalidation import PendingScoreInvalidation
+
+    tags = sorted({str(t).strip().lower() for t in changed_tags if t})
+    if not tags:
+        return 0
+
+    session.add(PendingScoreInvalidation(tags=json.dumps(tags)))
+    logger.info(
+        "Recorded a pending smart-score invalidation for %d tag(s): %s",
+        len(tags),
+        ", ".join(tags),
+    )
+    return len(tags)
+
+
+def apply_pending_invalidations(session: "Session") -> int:
+    """Apply and clear every recorded pending invalidation. Commits.
+
+    Consuming the record and NULLing the scores happen in one vault transaction,
+    so that half cannot tear: either the scores are invalidated and the row is
+    gone, or neither happened and the row is retried.
+
+    A row whose application fails keeps its place with an incremented
+    ``attempts`` count and a logged error, so a permanently failing entry is
+    visible rather than retried forever in silence.
+
+    Args:
+        session: Active vault session.
+
+    Returns:
+        The number of cached scores cleared.
+    """
+    from pixlstash.db_models.pending_score_invalidation import PendingScoreInvalidation
+
+    pending = session.exec(select(PendingScoreInvalidation)).all()
+    if not pending:
+        return 0
+
+    cleared = 0
+    for row in pending:
+        try:
+            tags = json.loads(row.tags)
+        except (TypeError, ValueError) as exc:
+            logger.error(
+                "Pending invalidation %s holds unreadable tags (%r): %s. Dropping "
+                "it; re-save the penalised-tag setting to rebuild it.",
+                row.id,
+                row.tags,
+                exc,
+            )
+            session.delete(row)
+            continue
+
+        try:
+            cleared += invalidate_for_penalised_tag_change(session, tags)
+            session.delete(row)
+        except Exception:
+            row.attempts = (row.attempts or 0) + 1
+            session.add(row)
+            logger.exception(
+                "Could not apply pending smart-score invalidation %s for tags %s "
+                "(attempt %d). Scores for pictures carrying those tags stay stale "
+                "until this succeeds.",
+                row.id,
+                ", ".join(tags),
+                row.attempts,
+            )
+
+    session.commit()
+    if cleared:
+        logger.info(
+            "Applied pending smart-score invalidations; %d cached score(s) cleared",
+            cleared,
+        )
+    return cleared

@@ -219,6 +219,20 @@ class Vault:
         self._planner_work_finders[TaskType.SMART_SCORE] = MissingSmartScoreFinder(
             vault=self
         )
+        # Repairs the one window the hub/vault split opened: a penalised-tag
+        # weight change commits its setting to the hub and its score
+        # invalidation to the vault, and those cannot share a transaction. The
+        # settings handler records the invalidation durably first and applies it
+        # inline; this finder is what completes it if the process died in
+        # between. Registered here, like the finders above, because it needs the
+        # Vault rather than just the database.
+        from pixlstash.tasks.pending_score_invalidation_finder import (
+            PendingScoreInvalidationFinder,
+        )
+
+        self._planner_work_finders[TaskType.PENDING_SCORE_INVALIDATION] = (
+            PendingScoreInvalidationFinder(vault=self)
+        )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
             task_finders=self._planner_work_finders,
