@@ -26,6 +26,24 @@ const RETENTION_DAYS = 400;
 /** Aggregate snapshots served by one GET, newest first. */
 const AGGREGATE_PAGE = 90;
 
+/**
+ * Hard ceiling on stored installs, and on new installs created per UTC day.
+ *
+ * PixlStash currently sees single-digit real installs a day, so both are
+ * generous by orders of magnitude. They exist to bound an attacker, not to
+ * shape normal growth: without them a distributed flood can grow the table
+ * until the aggregation pass exhausts the Worker's 128 MB isolate, long before
+ * D1's storage limit is reached.
+ *
+ * Raising these is a deliberate decision, not a reflex: MAX_TOTAL_INSTALLS is
+ * what bounds the aggregation pass's memory.
+ */
+const MAX_TOTAL_INSTALLS = 250_000;
+const MAX_NEW_INSTALLS_PER_DAY = 5_000;
+
+/** Rows read per query when the aggregation pass walks the table. */
+const AGGREGATE_SCAN_PAGE = 10_000;
+
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   // Nothing here is cacheable or embeddable, and none of it should be sniffed.
@@ -79,9 +97,104 @@ async function readCappedBody(request) {
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return null;
 
-  const buffer = await request.arrayBuffer();
-  if (buffer.byteLength > MAX_BODY_BYTES) return null;
-  return new TextDecoder().decode(buffer);
+  if (!request.body) return "";
+
+  // Read incrementally and abort the moment the cap is passed, rather than
+  // materialising the whole body first. Content-Length is attacker-controlled
+  // and absent entirely on a chunked request, so buffering first would let one
+  // crafted request allocate up to Cloudflare's 100 MB body limit inside a
+  // 128 MB isolate.
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
+
+/**
+ * Read a counter row, treating a stale day as zero.
+ *
+ * @returns {Promise<{value: number, day: string|null}>}
+ */
+async function readCounter(db, name) {
+  const row = await db
+    .prepare("SELECT value, day FROM counter WHERE name = ?")
+    .bind(name)
+    .first();
+  return { value: Number(row?.value ?? 0), day: row?.day ?? null };
+}
+
+/**
+ * True if another install may be created right now.
+ *
+ * Fails CLOSED on a counter read error: refusing a ping loses one datapoint,
+ * whereas assuming headroom is how the cap gets bypassed by making the counter
+ * table unreadable.
+ */
+async function canCreateInstall(db, date) {
+  try {
+    const total = await readCounter(db, "total_installs");
+    if (total.value >= MAX_TOTAL_INSTALLS) {
+      console.error(
+        `install ceiling reached (${total.value}); refusing new installs`,
+      );
+      return false;
+    }
+    const today = await readCounter(db, "new_installs_today");
+    // A counter from an earlier day is stale, so today's count is zero.
+    const createdToday = today.day === date ? today.value : 0;
+    if (createdToday >= MAX_NEW_INSTALLS_PER_DAY) {
+      console.error(
+        `daily new-install cap reached (${createdToday}); refusing until tomorrow`,
+      );
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.error(`counter read failed (${error}); refusing new install`);
+    return false;
+  }
+}
+
+/** Bump both growth counters after a successful insert. */
+async function bumpInstallCounters(db, date) {
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO counter (name, value, day) VALUES ('total_installs', 1, NULL)
+         ON CONFLICT(name) DO UPDATE SET value = counter.value + 1`,
+      ),
+    db
+      .prepare(
+        // Resets to 1 when the stored day is not today, which is what makes the
+        // daily cap a daily cap rather than a lifetime one.
+        `INSERT INTO counter (name, value, day) VALUES ('new_installs_today', 1, ?1)
+         ON CONFLICT(name) DO UPDATE SET
+           value = CASE WHEN counter.day = ?1 THEN counter.value + 1 ELSE 1 END,
+           day = ?1`,
+      )
+      .bind(date),
+  ]);
 }
 
 /**
@@ -96,6 +209,7 @@ async function readCappedBody(request) {
  * @param {D1Database} db
  * @param {{install_id: string, is_new_install: boolean, install_type: string}} ping
  * @param {string} date
+ * @returns {Promise<"created"|"updated"|"capped">}
  */
 async function recordPing(db, ping, date) {
   const existing = await db
@@ -104,6 +218,12 @@ async function recordPing(db, ping, date) {
     .first();
 
   if (!existing) {
+    // Growth caps apply to INSERT only, never to UPDATE. Capping updates would
+    // hand an attacker a denial-of-service against real installs: flood until
+    // the cap trips, and every genuine install stops being counted.
+    const allowed = await canCreateInstall(db, date);
+    if (!allowed) return "capped";
+
     await db
       .prepare(
         `INSERT INTO install
@@ -113,7 +233,8 @@ async function recordPing(db, ping, date) {
       )
       .bind(ping.install_id, date, date, ping.is_new_install ? 1 : 0, ping.install_type)
       .run();
-    return;
+    await bumpInstallCounters(db, date);
+    return "created";
   }
 
   const elapsed = daysBetween(existing.last_seen, date);
@@ -133,6 +254,7 @@ async function recordPing(db, ping, date) {
       ping.install_id,
     )
     .run();
+  return "updated";
 }
 
 async function handlePing(request, env) {
@@ -181,7 +303,21 @@ async function handlePing(request, env) {
   const result = validatePing(parsed);
   if (!result.ok) return fail(400, result.reason);
 
-  await recordPing(env.DB, result.value, today());
+  let outcome;
+  try {
+    outcome = await recordPing(env.DB, result.value, today());
+  } catch (error) {
+    // A storage failure must produce a clean refusal, not an unhandled throw
+    // that Cloudflare renders as a default 500 page. The client never retries,
+    // so the cost is one lost datapoint.
+    console.error(`recordPing failed (${error})`);
+    return fail(503, "temporarily unavailable");
+  }
+  if (outcome === "capped") {
+    // Deliberately indistinguishable from ordinary rate limiting: telling a
+    // prober which cap they hit tells them how close they are to exhausting it.
+    return fail(429, "rate limited");
+  }
 
   // 204 with no body: nothing is echoed, and there is nothing for a prober to
   // read back out.
@@ -237,11 +373,25 @@ export default {
       .run();
     console.log(`pruned ${pruned.meta?.changes ?? 0} rows older than ${cutoff}`);
 
-    const { results } = await env.DB.prepare(
-      "SELECT install_id, first_seen, last_seen, activity, is_new_install, install_type FROM install",
-    ).all();
+    // Keyset-paged rather than one unbounded SELECT. MAX_TOTAL_INSTALLS bounds
+    // how much this can accumulate; without both the cap and the paging, a
+    // grown table takes the daily aggregation down instead of reporting on it.
+    const rows = [];
+    let cursor = "";
+    for (;;) {
+      const { results } = await env.DB.prepare(
+        `SELECT install_id, first_seen, last_seen, activity, is_new_install, install_type
+           FROM install WHERE install_id > ? ORDER BY install_id LIMIT ?`,
+      )
+        .bind(cursor, AGGREGATE_SCAN_PAGE)
+        .all();
+      const page = results ?? [];
+      rows.push(...page);
+      if (page.length < AGGREGATE_SCAN_PAGE) break;
+      cursor = page[page.length - 1].install_id;
+    }
 
-    const aggregate = buildAggregate(results ?? [], date);
+    const aggregate = buildAggregate(rows, date);
     await env.DB.prepare(
       `INSERT INTO aggregate_snapshot (snapshot_date, payload) VALUES (?, ?)
        ON CONFLICT(snapshot_date) DO UPDATE SET payload = excluded.payload`,

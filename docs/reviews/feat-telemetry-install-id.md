@@ -78,7 +78,7 @@ response would reveal it. CWE-703.
 **Verification:** `fails closed when the rate limiter binding is missing` asserts
 503 and an empty table.
 
-### 3. MEDIUM — Unbounded row growth in D1 (OPEN, needs a decision)
+### 3. MEDIUM — Unbounded row growth in D1 (FIXED)
 
 **Location:** `website/telemetry-worker/src/index.js`, `recordPing`
 
@@ -94,11 +94,20 @@ ceiling above which inserts are refused and an alert fires. Existing installs
 must keep updating when the cap is hit, so the cap applies to INSERT only, never
 UPDATE, or an attacker could deny service to real installs.
 
-**Why not fixed here:** it needs a threshold chosen against expected growth,
-which is a product decision, and the aggregation pass needs a paging strategy to
-match. Both belong with the independent reviewer.
+**Fixed:** an O(1) `counter` table now backs a total ceiling
+(`MAX_TOTAL_INSTALLS = 250,000`) and a daily new-install cap
+(`MAX_NEW_INSTALLS_PER_DAY = 5,000`), applied to INSERT only. A refusal is
+reported as 429, deliberately indistinguishable from ordinary rate limiting, so
+a prober cannot tell how close they are to exhausting a cap. Counter reads fail
+closed. The aggregation pass is now keyset-paged in 10,000-row batches.
 
-### 4. LOW — Oversized body is buffered before the cap is enforced (OPEN)
+**Verification:** seven tests, including that updates from existing installs
+still succeed once the ceiling is hit (capping updates would let an attacker
+silence every real install), that a stale daily counter is ignored, that a
+repeat ping does not double-count, and that the scan walks a table spanning
+multiple pages.
+
+### 4. LOW — Oversized body is buffered before the cap is enforced (FIXED)
 
 **Location:** `readCappedBody`
 
@@ -108,13 +117,11 @@ the whole body before the length check. Cloudflare caps request bodies at 100 MB
 on the free plan and a Worker has 128 MB of memory, so a single crafted request
 can plausibly OOM the isolate.
 
-**Recommended fix:** read through `request.body.getReader()` and abort once
-`MAX_BODY_BYTES` is exceeded, rather than materialising the buffer.
+**Fixed:** the body is now read incrementally through
+`request.body.getReader()` and the read is cancelled the moment the cap is
+passed, so nothing beyond 512 bytes is ever allocated.
 
-**Residual:** low. Cloudflare kills the isolate and the next request gets a fresh
-one; there is no data-integrity impact.
-
-### 5. LOW — The collector persists unvalidated remote data (OPEN)
+### 5. LOW — The collector persists unvalidated remote data (FIXED)
 
 **Location:** `pixlstash-metrics/scripts/collect_metrics.py`, `fetch_install_cohorts`
 
@@ -129,9 +136,16 @@ charset and a length cap; cohort values get nothing. The Worker is ours, so this
 is defence-in-depth rather than a live hole, but the whole point of that rule is
 that it does not depend on the source being trustworthy.
 
-**Recommended fix:** bound the values the same way: numerics in range, cohort
-keys matching an ISO-date pattern, and a cap on the number of cohort entries and
-retention cells.
+**Fixed:** `_bound_cohort_snapshot` now bounds every value before it is
+persisted. Counts must be non-negative integers in range, percentages must be in
+[0, 100], install-type keys must be one of the four known buckets, cohort keys
+must match `^\d{4}-\d{2}-\d{2}$`, and both the cohort count and the retention
+cells per cohort are capped. Anything else becomes `None`, which
+`_apply_fallbacks` then carries forward rather than writing a bad value.
+
+**Verification:** exercised against a hostile snapshot containing a negative
+count, a `10**12` count, a 5000% rate, a non-bucket key, a `../../etc/passwd`
+cohort key and an out-of-range cell. All rejected; valid values preserved.
 
 ### 6. INFO — Poisoning above the suppression floor remains possible
 
@@ -179,13 +193,11 @@ independent reviewer does not have to rediscover it.
 
 1. **The independent adversarial review has not happened.** This document is by
    the author. Nothing here ships until someone else has tried to refute it.
-2. **Finding 3 (unbounded row growth)** needs a decision and a fix before the
-   endpoint is public.
-3. **The deploy workflow does not exist yet.** The Cloudflare API token it will
+2. **The deploy workflow does not exist yet.** The Cloudflare API token it will
    need is the first Cloudflare *write* credential in this repo, and it must be
    scoped to Workers + D1 edit on the one zone, never an account-wide key. That
    workflow is itself in scope for the review that has not happened.
-4. **The D1 region is a one-shot, irreversible decision.** Rows are a persistent
+3. **The D1 region is a one-shot, irreversible decision.** Rows are a persistent
    identifier tied to dates, so they are personal data under GDPR. Use the
    **jurisdiction** constraint, which is binding, not the `--location` hint,
    which Cloudflare documents as best-effort. Neither can be changed after
@@ -200,7 +212,6 @@ independent reviewer does not have to rediscover it.
 
 ## Hardening that can wait
 
-- Findings 4 and 5.
 - Consider whether `install_type` should be write-once like `first_seen`. Today
   a ping can change it, which is correct for a genuine pip-to-docker migration
   but also means anyone holding an install ID could flip that field. Guessing a

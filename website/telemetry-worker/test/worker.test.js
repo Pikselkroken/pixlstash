@@ -364,6 +364,119 @@ describe("POST /v1/ping", () => {
   });
 });
 
+describe("growth caps", () => {
+  function idFor(n) {
+    const hex = n.toString(16).padStart(12, "0");
+    return `9f2c1b7e-4d5a-4c81-b3e6-${hex}`;
+  }
+
+  it("refuses a new install once the total ceiling is reached", async () => {
+    const e = env();
+    e.DB.counters.set("total_installs", { value: 250_000, day: null });
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+
+    // Reported as ordinary rate limiting: telling a prober which cap they hit
+    // tells them how close they are to exhausting it.
+    assert.equal(res.status, 429);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("refuses once the daily new-install cap is reached", async () => {
+    const e = env();
+    e.DB.counters.set("new_installs_today", {
+      value: 5_000,
+      day: new Date().toISOString().slice(0, 10),
+    });
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 429);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("ignores a daily counter left over from a previous day", async () => {
+    const e = env();
+    e.DB.counters.set("new_installs_today", { value: 5_000, day: "2020-01-01" });
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 204);
+    assert.equal(e.DB.installs.size, 1);
+  });
+
+  it("still accepts updates from existing installs when the cap is hit", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    // Capping updates would hand an attacker a denial of service against real
+    // installs: flood until the cap trips and every genuine install goes dark.
+    e.DB.counters.set("total_installs", { value: 250_000, day: null });
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 204);
+    assert.equal(e.DB.installs.size, 1);
+  });
+
+  it("fails closed when the counters cannot be read", async () => {
+    const e = env();
+    const realPrepare = e.DB.prepare.bind(e.DB);
+    e.DB.prepare = (sql) => {
+      if (sql.includes("FROM counter")) {
+        return {
+          bind: () => ({
+            first: async () => {
+              throw new Error("counter table unreadable");
+            },
+          }),
+        };
+      }
+      return realPrepare(sql);
+    };
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+    // Assuming headroom is how the cap gets bypassed by breaking the counter.
+    assert.equal(res.status, 429);
+    assert.equal(e.DB.installs.size, 0);
+  });
+
+  it("returns a clean refusal when storage fails outright", async () => {
+    const e = env();
+    e.DB.prepare = () => {
+      throw new Error("D1 unavailable");
+    };
+
+    const res = await worker.fetch(pingRequest(VALID), e);
+    // Not an unhandled throw rendered as Cloudflare's default 500 page.
+    assert.equal(res.status, 503);
+  });
+
+  it("counts creations without double-counting a repeat ping", async () => {
+    const e = env();
+    await worker.fetch(pingRequest(VALID), e);
+    await worker.fetch(pingRequest(VALID), e);
+
+    assert.equal(e.DB.counters.get("total_installs").value, 1);
+  });
+
+  it("walks every row when the table spans multiple scan pages", async () => {
+    const e = env({ AGGREGATES_TOKEN: "t" });
+    // More rows than one page, to prove the keyset cursor advances rather than
+    // re-reading or truncating.
+    for (let i = 0; i < 25; i++) {
+      e.DB.installs.set(idFor(i), {
+        install_id: idFor(i),
+        first_seen: "2026-07-01",
+        last_seen: new Date().toISOString().slice(0, 10),
+        activity: 1,
+        is_new_install: 1,
+        install_type: "pip",
+      });
+    }
+    await worker.scheduled({}, e);
+
+    const snapshot = JSON.parse([...e.DB.snapshots.values()][0]);
+    assert.equal(snapshot.active_installs, 25);
+  });
+});
+
 describe("GET /v1/aggregates", () => {
   const TOKEN = "s3cret-token-value";
 

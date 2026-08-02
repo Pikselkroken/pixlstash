@@ -13,10 +13,18 @@ export class D1Stub {
   constructor() {
     this.installs = new Map();
     this.snapshots = new Map();
+    this.counters = new Map();
   }
 
   prepare(sql) {
     return new StubStatement(this, sql.replace(/\s+/g, " ").trim());
+  }
+
+  /** D1 runs a batch as a sequential transaction; sequential is enough here. */
+  async batch(statements) {
+    const results = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
   }
 }
 
@@ -36,12 +44,22 @@ class StubStatement {
     if (this.sql.startsWith("SELECT first_seen, last_seen, activity FROM install")) {
       return this.db.installs.get(this.args[0]) ?? null;
     }
+    if (this.sql.startsWith("SELECT value, day FROM counter")) {
+      return this.db.counters.get(this.args[0]) ?? null;
+    }
     throw new Error(`D1Stub: unrecognised first() statement: ${this.sql}`);
   }
 
   async all() {
     if (this.sql.startsWith("SELECT install_id, first_seen")) {
-      return { results: [...this.db.installs.values()] };
+      // Mirrors the keyset paging the Worker uses, so a paging bug shows up
+      // here rather than only against real D1.
+      const [cursor, limit] = this.args;
+      const page = [...this.db.installs.values()]
+        .sort((a, b) => (a.install_id < b.install_id ? -1 : 1))
+        .filter((row) => row.install_id > (cursor ?? ""))
+        .slice(0, limit ?? 10000);
+      return { results: page };
     }
     if (this.sql.startsWith("SELECT snapshot_date, payload FROM aggregate_snapshot")) {
       const rows = [...this.db.snapshots.entries()]
@@ -87,6 +105,20 @@ class StubStatement {
     }
     if (this.sql.startsWith("INSERT INTO aggregate_snapshot")) {
       this.db.snapshots.set(this.args[0], this.args[1]);
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO counter")) {
+      const isDaily = this.sql.includes("new_installs_today");
+      const name = isDaily ? "new_installs_today" : "total_installs";
+      const day = isDaily ? this.args[0] : null;
+      const existing = this.db.counters.get(name);
+      if (!existing) {
+        this.db.counters.set(name, { value: 1, day });
+      } else if (isDaily && existing.day !== day) {
+        this.db.counters.set(name, { value: 1, day });
+      } else {
+        this.db.counters.set(name, { value: existing.value + 1, day: day ?? existing.day });
+      }
       return { meta: { changes: 1 } };
     }
     throw new Error(`D1Stub: unrecognised run() statement: ${this.sql}`);

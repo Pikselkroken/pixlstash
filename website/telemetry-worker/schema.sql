@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS install (
 CREATE INDEX IF NOT EXISTS idx_install_first_seen ON install (first_seen);
 CREATE INDEX IF NOT EXISTS idx_install_last_seen  ON install (last_seen);
 
+-- O(1) growth counters, so the insert path never runs COUNT(*) over the table
+-- it is trying to protect. Two rows: `total_installs`, and `new_installs_today`
+-- whose `day` is compared against the current UTC date before it is trusted.
+CREATE TABLE IF NOT EXISTS counter (
+  name  TEXT    PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0,
+  day   TEXT
+);
+
 CREATE TABLE IF NOT EXISTS aggregate_snapshot (
   snapshot_date TEXT PRIMARY KEY,
   -- JSON blob of the day's published aggregate. Immutable once written: a
