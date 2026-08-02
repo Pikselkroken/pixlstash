@@ -877,14 +877,24 @@ class Picture(SQLModel, table=True):
                 # *any* member of the stack satisfies the ComfyUI filter, not
                 # only when the leader row itself satisfies it.
                 member_where = " OR ".join(comfyui_member_parts)
+                # NOTE: the whole disjunction is wrapped in an extra outer pair of
+                # parentheses.  ``text()`` is opaque, so SQLAlchemy adds none of its
+                # own, and SQL ``AND`` binds tighter than ``OR``: without the wrapper
+                # this clause renders as ``... AND deleted = 0 AND <leader condition>
+                # AND self_match OR member_match``, which parses as ``(everything AND
+                # self) OR member``.  The stack-member branch then escapes every other
+                # predicate (the deleted filter, the stack-leader collapse, and any id
+                # or project scope narrowing) and returns each member of a matching
+                # stack as its own row.  Same trap, same fix, as the
+                # ``tags_confidence_above_filter`` branch in predicate_filter.py.
                 comfyui_sql = (
-                    f"({self_where})"
+                    f"(({self_where})"
                     f" OR (picture.stack_id IS NOT NULL"
                     f" AND EXISTS ("
                     f"SELECT 1 FROM picture AS _m"
                     f" WHERE _m.stack_id = picture.stack_id"
                     f" AND ({member_where})"
-                    f"))"
+                    f")))"
                 )
                 query = query.where(text(comfyui_sql).bindparams(**comfyui_bind_params))
             else:
