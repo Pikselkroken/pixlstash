@@ -7,6 +7,7 @@ import AccountSection from "./AccountSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComputeSection from "./ComputeSection.vue";
+import PrivacySection from "./PrivacySection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
 import SmartScoreSection from "./SmartScoreSection.vue";
@@ -94,6 +95,12 @@ const navItems = computed(() =>
       id: "snapshots",
       icon: "camera-outline",
       label: "Snapshots",
+      show: !isReadOnly.value,
+    },
+    {
+      id: "privacy",
+      icon: "shield-lock-outline",
+      label: "Privacy",
       show: !isReadOnly.value,
     },
     {
@@ -226,6 +233,13 @@ watch(
         class="settings-pane"
       >
         <SnapshotsSection :open="dialogOpen" />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'privacy'"
+        class="settings-pane"
+      >
+        <PrivacySection :open="dialogOpen && settingsTab === 'privacy'" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"

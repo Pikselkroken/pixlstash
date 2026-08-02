@@ -65,7 +65,7 @@ install.
 You can turn the update check off again at any time in Settings → Behaviour; once
 disabled, no further checks are made.
 
-## The anonymous install ID (stored locally, sent nowhere)
+## The anonymous install ID (stored locally, off by default)
 
 PixlStash generates a random identifier for your installation the first time it
 starts, and stores it in a file called `install-id.json` next to your
@@ -86,6 +86,14 @@ Two things about how the identifier is made:
 
 Settings has a **Recreate ID** button. It replaces the identifier with a new
 random one; the old one is overwritten and nothing on disk links the two.
+
+**About your IP address.** If you do turn the install ID on, the request that
+carries it reaches a server, and any server can see the address a request came
+from. We do not log it and we do not retain it. It is used for one thing, for the
+moment the request is being handled: refusing floods of traffic from a single
+source, so that fabricated data cannot swamp the counts. It is never written to
+storage, never attached to your install ID, and never leaves the code that
+handles the request.
 
 Alongside it, Settings carries four telemetry choices: install ID, feature usage
 and outcomes, error and crash reports, and hardware and environment profile.

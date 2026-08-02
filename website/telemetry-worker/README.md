@@ -25,6 +25,11 @@ a library switch cannot change or duplicate an installation's identity.
 versions, or any other request metadata. The client IP is read once as a
 rate-limit key and discarded inside the request handler.
 
+The user-facing wording in `PRIVACY.md` is therefore "we never log or retain it",
+not "we never request it". The Worker does read `CF-Connecting-IP`, and an
+absolute that the code does not honour literally is the first thing a hostile
+reader attacks.
+
 ### Choosing the D1 region, which is a one-shot decision
 
 D1's physical location is fixed at creation and **cannot be changed afterwards**.
