@@ -105,11 +105,16 @@ Settings has a **Recreate ID** button. It replaces the identifier with a new
 random one; the old one is overwritten, is never sent again, and nothing on disk
 links the two.
 
-**About your IP address.** Any server can see the address a request arrives from,
-and ours is no exception. We do not log it and we do not retain it. It is used
-for one thing, only while the request is being handled: refusing floods from a
-single source, so that fabricated data cannot swamp the counts. It is never
-written to storage and never attached to your install ID.
+**About your IP address.** As with any request to any website, the server that
+answers it and its content-delivery provider (Cloudflare) see the address it came
+from, and Cloudflare logs it under its own retention. That is outside our
+control and true of every request to any site.
+
+What is in our control: **we never write your IP address into our own store, and
+it is never attached to your install ID.** Our code reads it for one purpose,
+only while the request is being handled, which is refusing floods from a single
+source so fabricated data cannot swamp the counts. Nothing links the address a
+request came from to the identifier it carried.
 
 We store your install ID, the dates we first and last heard from it, and a
 compact record of which days it was active. Nothing else. That record is deleted

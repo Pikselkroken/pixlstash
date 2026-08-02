@@ -12,7 +12,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import worker from "../src/index.js";
+import worker, {
+  MAX_NEW_INSTALLS_PER_DAY,
+  MAX_TOTAL_INSTALLS,
+} from "../src/index.js";
 import { validatePing, MAX_BODY_BYTES } from "../src/validate.js";
 import { rollActivity, daysBetween, weekStart, ACTIVITY_BITS } from "../src/activity.js";
 import {
@@ -401,7 +404,7 @@ describe("growth caps", () => {
 
   it("refuses a new install once the total ceiling is reached", async () => {
     const e = env();
-    e.DB.counters.set("total_installs", { value: 250_000, day: null });
+    e.DB.counters.set("total_installs", { value: MAX_TOTAL_INSTALLS, day: null });
 
     const res = await worker.fetch(pingRequest(VALID), e);
 
@@ -414,7 +417,7 @@ describe("growth caps", () => {
   it("refuses once the daily new-install cap is reached", async () => {
     const e = env();
     e.DB.counters.set("new_installs_today", {
-      value: 5_000,
+      value: MAX_NEW_INSTALLS_PER_DAY,
       day: new Date().toISOString().slice(0, 10),
     });
 
@@ -425,7 +428,10 @@ describe("growth caps", () => {
 
   it("ignores a daily counter left over from a previous day", async () => {
     const e = env();
-    e.DB.counters.set("new_installs_today", { value: 5_000, day: "2020-01-01" });
+    e.DB.counters.set("new_installs_today", {
+      value: MAX_NEW_INSTALLS_PER_DAY,
+      day: "2020-01-01",
+    });
 
     const res = await worker.fetch(pingRequest(VALID), e);
     assert.equal(res.status, 204);
@@ -437,7 +443,7 @@ describe("growth caps", () => {
     await worker.fetch(pingRequest(VALID), e);
     // Capping updates would hand an attacker a denial of service against real
     // installs: flood until the cap trips and every genuine install goes dark.
-    e.DB.counters.set("total_installs", { value: 250_000, day: null });
+    e.DB.counters.set("total_installs", { value: MAX_TOTAL_INSTALLS, day: null });
 
     const res = await worker.fetch(pingRequest(VALID), e);
     assert.equal(res.status, 204);
@@ -475,6 +481,27 @@ describe("growth caps", () => {
     const res = await worker.fetch(pingRequest(VALID), e);
     // Not an unhandled throw rendered as Cloudflare's default 500 page.
     assert.equal(res.status, 503);
+  });
+
+  it("frees headroom when the prune removes rows", async () => {
+    const e = env({ AGGREGATES_TOKEN: "t" });
+    // The counter used to be a LIFETIME tally the prune never decremented, so
+    // reaching the ceiling once refused every genuine new install for ever.
+    e.DB.installs.set("stale", {
+      install_id: "stale",
+      first_seen: "2024-01-01",
+      last_seen: "2024-01-02",
+      activity: 1n,
+      is_new_install: 1,
+      install_type: "pip",
+    });
+    e.DB.counters.set("total_installs", { value: MAX_TOTAL_INSTALLS, day: null });
+
+    await worker.scheduled({}, e);
+
+    assert.equal(e.DB.counters.get("total_installs").value, 0, "prune must free headroom");
+    const res = await worker.fetch(pingRequest(VALID), e);
+    assert.equal(res.status, 204, "a genuine new install must be accepted again");
   });
 
   it("counts creations without double-counting a repeat ping", async () => {

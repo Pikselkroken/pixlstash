@@ -115,65 +115,117 @@ export function hasResurrected(activity) {
  * @returns {object} JSON-safe aggregate. Contains counts and percentages only:
  *   no ids, no dates finer than a week, nothing per-install.
  */
-export function buildAggregate(rows, today) {
-  const active = rows.filter(
-    (r) => daysBetween(r.last_seen, today) <= ACTIVE_WINDOW_DAYS,
-  );
+export function createAccumulator() {
+  return {
+    active: 0,
+    byType: { docker: 0, pip: 0, electron: 0, other: 0 },
+    newLast7d: 0,
+    resurrectionEligible: 0,
+    resurrected: 0,
+    // cohortWeek -> { size, cells: [{answerable, active}, ...] }
+    cohorts: new Map(),
+  };
+}
 
-  const byType = {};
-  for (const type of ["docker", "pip", "electron", "other"]) byType[type] = 0;
-  for (const row of active) {
-    if (byType[row.install_type] === undefined) byType[row.install_type] = 0;
-    byType[row.install_type] += 1;
+/**
+ * Fold one install row into the accumulator.
+ *
+ * Memory scales with the number of COHORTS (bounded by the retention window),
+ * never with the number of rows. That is what lets the ingestion ceiling be a
+ * storage question rather than a "will the daily job OOM" question.
+ *
+ * @param {object} state From createAccumulator.
+ * @param {object} row One install row.
+ * @param {string} today UTC date.
+ */
+export function accumulateRow(state, row, today) {
+  if (daysBetween(row.last_seen, today) <= ACTIVE_WINDOW_DAYS) {
+    state.active += 1;
+    if (state.byType[row.install_type] === undefined) {
+      state.byType[row.install_type] = 0;
+    }
+    state.byType[row.install_type] += 1;
   }
 
-  // Cohorts are install-weeks, and only genuinely new installs are cohorted.
-  // Mixing the upgrade wave in would put users who have been around for months
-  // into "week 1" and make early retention meaningless.
-  const cohorts = new Map();
-  for (const row of rows) {
-    if (!row.is_new_install) continue;
-    const key = weekStart(row.first_seen);
-    if (!cohorts.has(key)) cohorts.set(key, []);
-    cohorts.get(key).push(row);
+  if (daysBetween(row.first_seen, today) >= RESURRECTION_GAP_DAYS) {
+    state.resurrectionEligible += 1;
+    if (hasResurrected(row.activity)) state.resurrected += 1;
   }
 
+  if (!row.is_new_install) return;
+
+  if (daysBetween(row.first_seen, today) < 7) state.newLast7d += 1;
+
+  // Only genuinely new installs are cohorted. Mixing the upgrade wave in would
+  // put users who have been around for months into "week 1".
+  const key = weekStart(row.first_seen);
+  let cohort = state.cohorts.get(key);
+  if (!cohort) {
+    cohort = { size: 0, cells: [] };
+    state.cohorts.set(key, cohort);
+  }
+  cohort.size += 1;
+
+  const maxWeek = Math.ceil(ACTIVITY_BITS / 7);
+  for (let week = 0; week < maxWeek; week++) {
+    const answer = activeInLifeWeek(row, week);
+    if (answer === null) continue;
+    if (!cohort.cells[week]) cohort.cells[week] = { answerable: 0, active: 0 };
+    cohort.cells[week].answerable += 1;
+    if (answer) cohort.cells[week].active += 1;
+  }
+}
+
+/**
+ * Turn an accumulator into the day's publishable aggregate.
+ *
+ * @param {object} state
+ * @param {string} today
+ * @returns {object} Counts and percentages only: no ids, no dates finer than a
+ *   week, nothing per-install.
+ */
+export function finalizeAggregate(state, today) {
   const retention = {};
-  for (const [cohortWeek, members] of cohorts) {
-    if (members.length < MIN_COHORT) continue; // suppressed, not zero
+  let suppressed = 0;
+  for (const [cohortWeek, cohort] of state.cohorts) {
+    if (cohort.size < MIN_COHORT) {
+      suppressed += 1;
+      continue;
+    }
     const cells = [];
-    for (let week = 0; week < Math.ceil(ACTIVITY_BITS / 7); week++) {
-      const answers = members.map((m) => activeInLifeWeek(m, week));
-      const answerable = answers.filter((a) => a !== null);
-      if (answerable.length < MIN_COHORT) break;
-      const activeCount = answerable.filter(Boolean).length;
-      cells.push(Math.round((activeCount / answerable.length) * 1000) / 10);
+    for (const cell of cohort.cells) {
+      if (!cell || cell.answerable < MIN_COHORT) break;
+      cells.push(Math.round((cell.active / cell.answerable) * 1000) / 10);
     }
     if (cells.length) retention[cohortWeek] = cells;
   }
 
-  const eligible = rows.filter(
-    (r) => daysBetween(r.first_seen, today) >= RESURRECTION_GAP_DAYS,
-  );
-  const resurrected = eligible.filter((r) => hasResurrected(r.activity));
-
   return {
     date: today,
-    active_installs: active.length,
-    active_installs_by_type: byType,
-    new_installs_last_7d: rows.filter(
-      (r) => r.is_new_install && daysBetween(r.first_seen, today) < 7,
-    ).length,
+    active_installs: state.active,
+    active_installs_by_type: state.byType,
+    new_installs_last_7d: state.newLast7d,
     // Null rather than 0 when there is nothing to divide by: a rate of "0%"
     // and "we cannot say yet" are different claims and must not look alike.
-    resurrection_rate: eligible.length
-      ? Math.round((resurrected.length / eligible.length) * 1000) / 10
+    resurrection_rate: state.resurrectionEligible
+      ? Math.round((state.resurrected / state.resurrectionEligible) * 1000) / 10
       : null,
     cohort_retention: retention,
     // Consumers need to know a suppressed cell is suppressed, not empty.
     min_cohort_size: MIN_COHORT,
-    suppressed_cohorts: [...cohorts.values()].filter(
-      (m) => m.length < MIN_COHORT,
-    ).length,
+    suppressed_cohorts: suppressed,
   };
+}
+
+/**
+ * Convenience wrapper for callers that already hold every row.
+ *
+ * @param {Array<object>} rows
+ * @param {string} today
+ * @returns {object}
+ */
+export function buildAggregate(rows, today) {
+  const state = createAccumulator();
+  for (const row of rows) accumulateRow(state, row, today);
+  return finalizeAggregate(state, today);
 }

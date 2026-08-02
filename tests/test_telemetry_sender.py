@@ -264,33 +264,78 @@ def _server(tmp_path):
     return Server(cfg)
 
 
-def test_dispatch_resolves_a_real_install_type(tmp_path, monkeypatch):
+def test_dispatch_resolves_a_real_install_type(tmp_path):
     from unittest import mock
 
     from pixlstash.server import Server
 
     server = _server(tmp_path)
     try:
-        server._user.telemetry_send_install_id = True
-        with mock.patch("pixlstash.server.maybe_send_in_background") as dispatch:
+        with mock.patch("pixlstash.server.start_periodic_sender") as dispatch:
             server._maybe_send_telemetry_ping()
 
-        assert dispatch.called, "consent is on, so a ping must be dispatched"
-        _, install_type = dispatch.call_args[0][:2]
+        assert dispatch.called
+        _, install_type, consent_check = dispatch.call_args[0][:3]
         assert install_type in Server.INSTALL_TYPES
+        # Consent is passed as a callable, not a captured boolean.
+        assert callable(consent_check)
     finally:
         server.__exit__(None, None, None)
 
 
-def test_dispatch_is_skipped_when_consent_is_off(tmp_path):
+def test_consent_is_re_read_rather_than_captured(tmp_path):
     from unittest import mock
 
     server = _server(tmp_path)
     try:
-        server._user.telemetry_send_install_id = False
-        with mock.patch("pixlstash.server.maybe_send_in_background") as dispatch:
+        with mock.patch("pixlstash.server.start_periodic_sender") as dispatch:
             server._maybe_send_telemetry_ping()
+        consent_check = dispatch.call_args[0][2]
 
-        assert not dispatch.called
+        server.auth.user.telemetry_send_install_id = True
+        assert consent_check() is True
+        # Opting out must take effect on the next cycle, not the next restart.
+        server.auth.user.telemetry_send_install_id = False
+        assert consent_check() is False
     finally:
         server.__exit__(None, None, None)
+
+
+def test_the_loop_stops_sending_once_consent_is_withdrawn(config_path, monkeypatch):
+    # pytest re-sets PYTEST_CURRENT_TEST for the call phase, so the autouse
+    # fixture is not enough to leave the suppressed path here.
+    monkeypatch.setattr(sender.os, "environ", {})
+    sent = []
+    monkeypatch.setattr(
+        sender, "send_install_ping", lambda *a, **k: sent.append(a) or True
+    )
+    monkeypatch.setattr(sender, "is_due", lambda *a, **k: True)
+    consent = {"on": True}
+
+    sender.run_periodic_sender(
+        config_path, "pip", lambda: consent["on"], interval=0, max_cycles=1
+    )
+    assert len(sent) == 1
+
+    consent["on"] = False
+    sender.run_periodic_sender(
+        config_path, "pip", lambda: consent["on"], interval=0, max_cycles=3
+    )
+    assert len(sent) == 1, "no further sends after opting out"
+
+
+def test_the_loop_survives_a_failing_consent_check(config_path, monkeypatch):
+    monkeypatch.setattr(sender.os, "environ", {})
+    monkeypatch.setattr(sender, "is_due", lambda *a, **k: True)
+
+    def _boom():
+        raise RuntimeError("db gone")
+
+    # Must not take the daemon thread down.
+    sender.run_periodic_sender(config_path, "pip", _boom, interval=0, max_cycles=2)
+
+
+def test_the_loop_is_not_started_in_a_suppressed_environment(config_path, monkeypatch):
+    monkeypatch.setattr(sender.os, "environ", {"PIXLSTASH_DEMO_MODE": "1"})
+
+    assert sender.start_periodic_sender(config_path, "pip", lambda: True) is None

@@ -41,6 +41,9 @@ class StubStatement {
   }
 
   async first() {
+    if (this.sql.startsWith("SELECT COUNT(*) AS n FROM install")) {
+      return { n: this.db.installs.size };
+    }
     if (this.sql.startsWith("SELECT first_seen, last_seen, activity FROM install")) {
       return this.db.installs.get(this.args[0]) ?? null;
     }
@@ -105,6 +108,10 @@ class StubStatement {
     }
     if (this.sql.startsWith("INSERT INTO aggregate_snapshot")) {
       this.db.snapshots.set(this.args[0], this.args[1]);
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("INSERT INTO counter") && this.sql.includes("excluded.value")) {
+      this.db.counters.set("total_installs", { value: this.args[0], day: null });
       return { meta: { changes: 1 } };
     }
     if (this.sql.startsWith("INSERT INTO counter")) {

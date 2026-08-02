@@ -16,7 +16,11 @@
  * or anything else from the request.
  */
 
-import { buildAggregate } from "./aggregate.js";
+import {
+  accumulateRow,
+  createAccumulator,
+  finalizeAggregate,
+} from "./aggregate.js";
 import { daysBetween, rollActivity } from "./activity.js";
 import { MAX_BODY_BYTES, validatePing } from "./validate.js";
 
@@ -27,19 +31,24 @@ const RETENTION_DAYS = 400;
 const AGGREGATE_PAGE = 90;
 
 /**
- * Hard ceiling on stored installs, and on new installs created per UTC day.
+ * Ceilings on stored installs and on new installs per UTC day.
  *
- * PixlStash currently sees single-digit real installs a day, so both are
- * generous by orders of magnitude. They exist to bound an attacker, not to
- * shape normal growth: without them a distributed flood can grow the table
- * until the aggregation pass exhausts the Worker's 128 MB isolate, long before
- * D1's storage limit is reached.
+ * These are NOT a precision limit. The counter column is SQLite INTEGER, a
+ * signed 64-bit value, so it could hold 9.2e18. They are a deliberate abuse
+ * bound.
  *
- * Raising these is a deliberate decision, not a reflex: MAX_TOTAL_INSTALLS is
- * what bounds the aggregation pass's memory.
+ * The earlier value of 250,000 was justified as "what bounds the aggregation
+ * pass's memory", which was both wrong and self-defeating: the daily job now
+ * folds rows into fixed-size counters (see aggregate.js) so its memory scales
+ * with the number of cohorts, not the number of rows. With that gone, the real
+ * constraint is D1 storage, and the ceiling can be an order of magnitude
+ * higher while still refusing an obvious flood.
+ *
+ * The daily cap is the control that actually matters: it bounds how fast an
+ * attacker can consume the ceiling, and unlike the ceiling it resets.
  */
-const MAX_TOTAL_INSTALLS = 250_000;
-const MAX_NEW_INSTALLS_PER_DAY = 5_000;
+export const MAX_TOTAL_INSTALLS = 5_000_000;
+export const MAX_NEW_INSTALLS_PER_DAY = 5_000;
 
 /** Rows read per query when the aggregation pass walks the table. */
 const AGGREGATE_SCAN_PAGE = 10_000;
@@ -174,6 +183,29 @@ async function canCreateInstall(db, date) {
     console.error(`counter read failed (${error}); refusing new install`);
     return false;
   }
+}
+
+/**
+ * Recompute `total_installs` from the actual row count.
+ *
+ * Without this the counter is a LIFETIME tally: the prune deletes rows and
+ * never decrements it, so reaching the ceiling once refuses every genuine new
+ * install for ever, with no way back and a 429 that is deliberately
+ * indistinguishable from rate limiting. Reconciling daily, right after the
+ * prune, makes the ceiling mean "rows currently stored" and makes pruning
+ * restore headroom.
+ */
+async function reconcileTotalInstalls(db) {
+  const row = await db.prepare("SELECT COUNT(*) AS n FROM install").first();
+  const actual = Number(row?.n ?? 0);
+  await db
+    .prepare(
+      `INSERT INTO counter (name, value, day) VALUES ('total_installs', ?, NULL)
+       ON CONFLICT(name) DO UPDATE SET value = excluded.value`,
+    )
+    .bind(actual)
+    .run();
+  return actual;
 }
 
 /** Bump both growth counters after a successful insert. */
@@ -369,6 +401,11 @@ export default {
    */
   async scheduled(event, env) {
     const date = today();
+    // The prune is destructive and the snapshot is not recomputable ("compute
+    // daily, never backfill"), so a failure after the delete would lose the day
+    // permanently. Wrapping keeps the failure visible without leaving the
+    // Worker in a half-run state that looks like success.
+    try {
 
     const cutoff = new Date(Date.parse(`${date}T00:00:00Z`) - RETENTION_DAYS * 86400000)
       .toISOString()
@@ -378,10 +415,14 @@ export default {
       .run();
     console.log(`pruned ${pruned.meta?.changes ?? 0} rows older than ${cutoff}`);
 
-    // Keyset-paged rather than one unbounded SELECT. MAX_TOTAL_INSTALLS bounds
-    // how much this can accumulate; without both the cap and the paging, a
-    // grown table takes the daily aggregation down instead of reporting on it.
-    const rows = [];
+    // Reconcile BEFORE aggregating, so the ceiling reflects what the prune just
+    // left behind rather than everything ever created.
+    const stored = await reconcileTotalInstalls(env.DB);
+    console.log(`reconciled total_installs to ${stored}`);
+
+    // Keyset-paged and folded incrementally: no page is retained after it has
+    // been accumulated, so the daily job's memory is independent of table size.
+    const state = createAccumulator();
     let cursor = "";
     for (;;) {
       const { results } = await env.DB.prepare(
@@ -391,22 +432,26 @@ export default {
         .bind(cursor, AGGREGATE_SCAN_PAGE)
         .all();
       const page = results ?? [];
-      rows.push(...page);
+      for (const row of page) accumulateRow(state, row, date);
       if (page.length < AGGREGATE_SCAN_PAGE) break;
       cursor = page[page.length - 1].install_id;
     }
 
-    const aggregate = buildAggregate(rows, date);
+    const aggregate = finalizeAggregate(state, date);
     await env.DB.prepare(
       `INSERT INTO aggregate_snapshot (snapshot_date, payload) VALUES (?, ?)
        ON CONFLICT(snapshot_date) DO UPDATE SET payload = excluded.payload`,
     )
       .bind(date, JSON.stringify(aggregate))
       .run();
-    console.log(
-      `snapshot ${date}: ${aggregate.active_installs} active, ` +
-        `${Object.keys(aggregate.cohort_retention).length} published cohorts, ` +
-        `${aggregate.suppressed_cohorts} suppressed`,
-    );
+      console.log(
+        `snapshot ${date}: ${aggregate.active_installs} active, ` +
+          `${Object.keys(aggregate.cohort_retention).length} published cohorts, ` +
+          `${aggregate.suppressed_cohorts} suppressed`,
+      );
+    } catch (error) {
+      console.error(`scheduled run failed after pruning (${error})`);
+      throw error;
+    }
   },
 };

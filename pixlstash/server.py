@@ -44,7 +44,7 @@ from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.services import scrapheap_service
 from pixlstash.startup_checks import StartupChecks
-from pixlstash.telemetry import ensure_install_identity, maybe_send_in_background
+from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -521,6 +521,7 @@ class Server(
         # background PictureImportTask id.
         self.staging_sessions = {}
         self._shutdown_on_lifespan = False
+        self._telemetry_thread = None
 
     def _maybe_send_telemetry_ping(self) -> None:
         """Send the daily install ping, if the owner has turned it on.
@@ -532,17 +533,31 @@ class Server(
         Docker installs ping daily because they are persistent services, and
         that is only true if the ping comes from here.
 
+        Runs a daily loop rather than firing once: a container that stays up
+        for six weeks would otherwise ping once, and Docker installs pinging
+        daily is the assumption the whole retention design rests on.
+
         Never raises and never blocks startup: it hands off to a daemon thread
         and returns. A failure to report is not worth degrading the server for.
         """
         try:
-            user = getattr(self, "_user", None)
-            if user is None or not getattr(user, "telemetry_send_install_id", False):
+            if self._telemetry_thread is not None:
                 return
-            maybe_send_in_background(
+
+            def consent_is_on() -> bool:
+                """Re-read consent from the live user row on every cycle.
+
+                A boolean captured at startup keeps transmitting after the user
+                has opted out, and the window between opting out and the next
+                restart is exactly when honouring it matters.
+                """
+                user = self.auth.user or getattr(self, "_user", None)
+                return bool(getattr(user, "telemetry_send_install_id", False))
+
+            self._telemetry_thread = start_periodic_sender(
                 self._server_config_path,
                 Server.detect_install_type(),
-                consent_enabled=True,
+                consent_is_on,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             # Deliberately NOT a bare `except Exception`. A broad catch here

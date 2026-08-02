@@ -45,6 +45,11 @@ SEND_INTERVAL_SECONDS = 24 * 60 * 60
 #: Short and unretried. The measurement is not worth holding a thread open.
 REQUEST_TIMEOUT_SECONDS = 10
 
+#: How often the loop wakes to ask whether a ping is due. Well under a day, so a
+#: long-running container sends promptly after the 24h window opens rather than
+#: waiting for the next restart. ``is_due`` enforces the actual spacing.
+CHECK_INTERVAL_SECONDS = 60 * 60
+
 #: Environment markers that suppress sending outright. Our own CI, test runs and
 #: the public demo would otherwise manufacture installs that do not exist and
 #: pollute exactly the cohorts this exists to measure.
@@ -217,6 +222,83 @@ def maybe_send_in_background(
         target=send_install_ping,
         args=(server_config_path, install_type),
         name="telemetry-ping",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def run_periodic_sender(
+    server_config_path: str,
+    install_type: str,
+    consent_check,
+    *,
+    interval: float = CHECK_INTERVAL_SECONDS,
+    stop_event: threading.Event | None = None,
+    max_cycles: int | None = None,
+) -> None:
+    """Loop until stopped, sending at most one ping a day.
+
+    Startup-only dispatch was not enough: a Docker container that stays up for
+    six weeks would ping once, which is precisely the population the retention
+    design assumes reports daily.
+
+    ``consent_check`` is a callable re-evaluated on every cycle rather than a
+    boolean captured once. A cached value keeps transmitting after the user has
+    opted out, and the window between opt-out and the next restart is exactly
+    when honouring it matters.
+
+    Args:
+        server_config_path: Locates the install ID and the send-state marker.
+        install_type: One of docker, pip, electron, other.
+        consent_check: Zero-arg callable returning the CURRENT consent state.
+        interval: Seconds between checks.
+        stop_event: Set to end the loop.
+        max_cycles: Stop after this many cycles. Tests only.
+    """
+    stopper = stop_event or threading.Event()
+    cycles = 0
+    while not stopper.is_set():
+        try:
+            if (
+                consent_check()
+                and not suppressed_reason()
+                and is_due(server_config_path)
+            ):
+                send_install_ping(server_config_path, install_type)
+        except Exception as exc:
+            # The loop must outlive any single failure, including a consent
+            # check that raises. Never let telemetry take a thread down.
+            logger.warning("Telemetry cycle failed (%s); continuing.", exc)
+
+        cycles += 1
+        if max_cycles is not None and cycles >= max_cycles:
+            return
+        stopper.wait(interval)
+
+
+def start_periodic_sender(
+    server_config_path: str,
+    install_type: str,
+    consent_check,
+    *,
+    interval: float = CHECK_INTERVAL_SECONDS,
+) -> threading.Thread | None:
+    """Start the daily send loop on a daemon thread.
+
+    Returns None when this environment suppresses sending outright, so a demo
+    or CI process never even starts the thread.
+    """
+    reason = suppressed_reason()
+    if reason:
+        logger.debug("Telemetry loop not started, suppressed by %s.", reason)
+        return None
+
+    thread = threading.Thread(
+        target=run_periodic_sender,
+        args=(server_config_path, install_type, consent_check),
+        kwargs={"interval": interval},
+        name="telemetry-ping-loop",
         daemon=True,
     )
     thread.start()
