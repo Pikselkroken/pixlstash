@@ -18,7 +18,11 @@ from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import config_service, scrapheap_service
+from pixlstash.services import (
+    config_service,
+    library_settings_service,
+    scrapheap_service,
+)
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.utils.service.smart_score_invalidation import (
@@ -52,6 +56,21 @@ def _resolved_penalised_tags(raw) -> dict:
 def create_router(server) -> APIRouter:
     router = APIRouter()
     hw_monitor = config_service.HardwareMonitor()
+
+    def _config_payload(user) -> dict:
+        """Serialise the user's config, with the library-owned settings merged in.
+
+        The client sees one flat config object exactly as before. Behind it,
+        ``similarity_character`` comes from the *active library* rather than from
+        the user row: it is a character id in that vault, so the same number in
+        another library is a different person (see
+        pixlstash/db_models/library_settings.py).
+        """
+        payload = serialize_user_config(user)
+        payload["similarity_character"] = (
+            library_settings_service.get_similarity_character(server.vault.db)
+        )
+        return payload
 
     def _ensure_secure_when_required(request: Request):
         server.auth.ensure_secure_when_required(request)
@@ -391,7 +410,7 @@ def create_router(server) -> APIRouter:
     def get_me_config(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        return serialize_user_config(user)
+        return _config_payload(user)
 
     @router.get(
         "/users/me/penalised-tags",
@@ -402,7 +421,7 @@ def create_router(server) -> APIRouter:
     def get_me_penalised_tags(request: Request):
         _ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
-        config = serialize_user_config(user)
+        config = _config_payload(user)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
     @router.patch(
@@ -466,6 +485,24 @@ def create_router(server) -> APIRouter:
             return user, updated
 
         changed_tags = server.hub_engine.run_immediate_read_task(preview_patch, user_id)
+
+        # ``similarity_character`` belongs to the active library, not to the
+        # user: it is a row id in that vault's character table, so the same
+        # number in another library is a different person (see
+        # pixlstash/db_models/library_settings.py). Split it out before the hub
+        # write so the hub never becomes a second, stale home for it. The config
+        # API stays one flat object; only the storage is split.
+        if "similarity_character" in patch_data:
+            raw_character = patch_data.pop("similarity_character")
+            if raw_character in ("", None, "null"):
+                character_id = None
+            elif isinstance(raw_character, str) and raw_character.isdigit():
+                character_id = int(raw_character)
+            else:
+                character_id = raw_character
+            library_settings_service.set_similarity_character(
+                server.vault.db, character_id
+            )
 
         # Record the invalidation in the vault BEFORE committing the setting to
         # the hub. The two live in different databases and SQLite has no
@@ -563,7 +600,7 @@ def create_router(server) -> APIRouter:
         return {
             "status": "success",
             "updated": updated,
-            "config": serialize_user_config(user),
+            "config": _config_payload(user),
         }
 
     @router.post(

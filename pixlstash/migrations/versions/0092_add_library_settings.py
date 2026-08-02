@@ -1,10 +1,16 @@
 """Add the vault's ``library_settings`` row and move library-scoped settings into it.
 
-The hub/vault split sorts the old ``user`` row into three destinations
-(multi-library plan §5): identity and per-user preferences go to the hub,
-machine settings go to the hub, and the handful of settings that are genuinely
-properties of *this library* stay here. This migration creates their new home
-and copies them across.
+The hub/vault split sorts the old ``user`` row by destination (multi-library
+plan §5). Identity, preferences and machine settings go to the hub. What stays
+here is what would be *wrong* in another library rather than merely unhelpful.
+
+Enumerated and decided 2026-08-02: exactly one setting qualifies.
+``similarity_character`` is a row id in this vault's character table, so a
+per-user copy silently names a different person after a library switch. Hidden
+tags, the tag filter and the penalised-tag weights name library vocabulary but
+are the user's own working preferences, and the owner wants the same defects
+penalised everywhere, so they stay in the hub. ``stack_strictness`` has no
+remaining consumer and is left where it is.
 
 ``library_uuid`` is the library's fingerprint, written by PixlStash for a
 library it owns. It answers "is the folder at this path the same library I
@@ -44,10 +50,6 @@ def upgrade() -> None:
             "library_settings",
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("library_uuid", sa.String(), nullable=True),
-            sa.Column("stack_strictness", sa.Float(), nullable=True),
-            sa.Column("smart_score_penalised_tags", sa.String(), nullable=True),
-            sa.Column("hidden_tags", sa.String(), nullable=True),
-            sa.Column("apply_tag_filter", sa.Boolean(), nullable=True),
             sa.Column("similarity_character", sa.Integer(), nullable=True),
         )
 
@@ -58,13 +60,7 @@ def upgrade() -> None:
         return
 
     user_cols = {col["name"] for col in inspector.get_columns("user")}
-    wanted = [
-        "stack_strictness",
-        "smart_score_penalised_tags",
-        "hidden_tags",
-        "apply_tag_filter",
-        "similarity_character",
-    ]
+    wanted = ["similarity_character"]
     available = [name for name in wanted if name in user_cols]
 
     row = None
