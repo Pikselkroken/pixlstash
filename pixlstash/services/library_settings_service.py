@@ -12,12 +12,16 @@ without one rather than as an expected branch.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from typing import Optional
 
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models.library_settings import LibrarySettings
+from pixlstash.utils.service.smart_score_invalidation import invalidate_all_smart_scores
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -69,3 +73,100 @@ def set_similarity_character(vault_db, character_id: Optional[int]) -> None:
             session.commit()
 
     vault_db.run_task(_write, priority=DBPriority.IMMEDIATE)
+
+
+# ---------------------------------------------------------------------------
+# Settings fingerprint (hub -> library)
+# ---------------------------------------------------------------------------
+
+
+def compute_settings_fingerprint(salt: str, penalised_tags: dict) -> str:
+    """Return an opaque, keyed hash of the score-affecting settings.
+
+    **Deliberately one-way and keyed, because the inputs are personal.** The
+    penalised-tag table says what someone considers a defect, and hidden tags say
+    what they keep off their own screen; both are information about the person,
+    not about the pictures. A library folder is made to be copied, moved and
+    handed to other people, so nothing derived from those settings may be
+    recoverable from it. A tag vocabulary is small and guessable, so a plain hash
+    would fall to a dictionary attack; the salt lives in the hub and never
+    travels with the library, which is what makes the stored value meaningless on
+    its own.
+
+    Args:
+        salt: The library's ``settings_salt`` from the hub.
+        penalised_tags: The resolved ``{tag: weight}`` table.
+
+    Returns:
+        A hex digest. Equality is the only thing callers may infer from it.
+    """
+    canonical = json.dumps(
+        {str(tag): float(weight) for tag, weight in sorted(penalised_tags.items())},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hmac.new(
+        salt.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def reconcile_settings_fingerprint(vault_db, salt: str, penalised_tags: dict) -> bool:
+    """Invalidate this library's cached scores if the weights changed while it slept.
+
+    A penalised-tag weight change invalidates cached smart scores in the library
+    that is *open at the time*. A library that was closed then never learns, and
+    nothing revisits its scores, because NULL is the only signal that a recompute
+    is owed. This closes that gap at the one moment the answer is knowable: when
+    the library is opened.
+
+    On a mismatch it invalidates **every** cached score in the library rather
+    than the pictures carrying the changed tags. That is the price of storing no
+    settings detail: with only a keyed hash there is no way to compute a narrow
+    diff, and privacy is worth more here than the extra recompute, which runs in
+    the background and re-runs no AI models.
+
+    Args:
+        vault_db: The library's database.
+        salt: The library's ``settings_salt`` from the hub.
+        penalised_tags: The owner's current resolved ``{tag: weight}`` table.
+
+    Returns:
+        True when the fingerprint had changed and an invalidation was recorded.
+    """
+    if not salt:
+        # No salt means an unkeyed hash, which would be recoverable from the
+        # library. Skip rather than write something weaker than promised.
+        logger.warning(
+            "No settings salt for this library; skipping the fingerprint check. "
+            "Scores stay as they are."
+        )
+        return False
+
+    expected = compute_settings_fingerprint(salt, penalised_tags or {})
+
+    def _reconcile(session: Session) -> bool:
+        settings = _row(session)
+        if settings.settings_fingerprint == expected:
+            return False
+
+        first_time = settings.settings_fingerprint is None
+        settings.settings_fingerprint = expected
+        session.add(settings)
+
+        if first_time:
+            # Nothing to repair: this library has simply never recorded one.
+            session.commit()
+            return False
+
+        invalidate_all_smart_scores(session)
+        session.commit()
+        return True
+
+    changed = vault_db.run_task(_reconcile, priority=DBPriority.IMMEDIATE)
+    if changed:
+        logger.info(
+            "The penalised-tag weights changed while this library was closed; "
+            "its cached smart scores have been invalidated and will be "
+            "recomputed in the background."
+        )
+    return changed

@@ -513,6 +513,31 @@ def invalidate_on_anomaly_change(
 # ---------------------------------------------------------------------------
 
 
+def invalidate_all_smart_scores(session: "Session") -> int:
+    """NULL every cached smart score in this library. Does not commit.
+
+    The blunt instrument, for the one case where a narrow diff is not available:
+    the owner's penalty weights changed while this library was closed, and the
+    library stores only a keyed hash of those weights, never the weights
+    themselves (see
+    :func:`pixlstash.services.library_settings_service.reconcile_settings_fingerprint`).
+    Knowing *that* something changed without knowing *what* leaves no way to
+    scope it.
+
+    Cheaper than it sounds: recomputing a smart score reads tags and quality
+    metrics and runs no AI models, and it happens in background batches.
+
+    Returns:
+        The number of cached scores cleared.
+    """
+    result = session.exec(
+        update(Picture).where(Picture.smart_score.is_not(None)).values(smart_score=None)
+    )
+    cleared = int(getattr(result, "rowcount", 0) or 0)
+    logger.info("Invalidated %d cached smart score(s) library-wide", cleared)
+    return cleared
+
+
 def record_pending_invalidation(session: "Session", changed_tags: Iterable[str]) -> int:
     """Record that *changed_tags* are owed a score invalidation. Does not commit.
 

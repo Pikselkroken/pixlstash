@@ -196,6 +196,9 @@ class LibrarySwitchService:
             # the vault (see AuthService.vault_db).
             self._server.auth.vault_db = incoming.db
             self._server.apply_user_settings_to_vault(incoming)
+            # The library being opened may have missed a weights change while it
+            # was closed; this is the moment that is knowable.
+            self._server.reconcile_library_settings(incoming, target)
             incoming.start()
 
             self._server.library_registry.set_active(target.id)

@@ -51,6 +51,7 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("library_uuid", sa.String(), nullable=True),
             sa.Column("similarity_character", sa.Integer(), nullable=True),
+            sa.Column("settings_fingerprint", sa.String(), nullable=True),
         )
 
     # One row, ever. Seeded from the existing user row where there is one, so an

@@ -16,6 +16,7 @@ cannot interleave their way past them.
 from __future__ import annotations
 
 import os
+import secrets
 import sqlite3
 import uuid as uuid_module
 from dataclasses import dataclass
@@ -32,8 +33,8 @@ VAULT_FILENAME = "vault.db"
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
-    "id, uuid, vault_uuid, name, path, created_at, attached_at, detached_at, "
-    "attached, is_active, notes"
+    "id, uuid, vault_uuid, settings_salt, name, path, created_at, attached_at, "
+    "detached_at, attached, is_active, notes"
 )
 
 # Tables every PixlStash vault has. ``alembic_version`` proves it went through
@@ -84,6 +85,7 @@ class Library:
     attached_at: str
     is_active: bool
     vault_uuid: Optional[str] = None
+    settings_salt: Optional[str] = None
     attached: bool = True
     detached_at: Optional[str] = None
     notes: Optional[str] = None
@@ -544,12 +546,17 @@ class LibraryRegistry:
         try:
             with self._hub.transaction() as conn:
                 cursor = conn.execute(
-                    "INSERT INTO library (uuid, vault_uuid, name, path, "
-                    "created_at, attached_at, is_active) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO library (uuid, vault_uuid, settings_salt, name, "
+                    "path, created_at, attached_at, is_active) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         library_uuid,
                         fingerprint,
+                        # Keys the settings fingerprint this library stores. Minted
+                        # here and never written into the library, which is what
+                        # keeps that fingerprint meaningless to anyone holding only
+                        # the folder (see hub/schema.py).
+                        secrets.token_hex(16),
                         cleaned,
                         resolved_path,
                         now,
@@ -654,6 +661,7 @@ class LibraryRegistry:
             id=int(row["id"]),
             uuid=row["uuid"],
             vault_uuid=row["vault_uuid"],
+            settings_salt=row["settings_salt"],
             name=row["name"],
             path=row["path"],
             created_at=row["created_at"],

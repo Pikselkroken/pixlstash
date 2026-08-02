@@ -42,7 +42,9 @@ from pixlstash.openapi_custom import (
 from pixlstash.ssl_setup import SslSetupMixin
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
-from pixlstash.services import scrapheap_service
+from pixlstash.services import library_settings_service, scrapheap_service
+from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
 from pixlstash.hub.bootstrap import bootstrap_hub
 from pixlstash.hub.registry import LibraryRegistry
@@ -436,6 +438,7 @@ class Server(
         # No-op for every other install type (env var unset).
         self.auth.seed_desktop_session()
         self.apply_user_settings_to_vault(self.vault)
+        self.reconcile_library_settings(self.vault)
         self.vault.start()
 
         # Owns replacing the vault when the active library changes, and the
@@ -550,6 +553,44 @@ class Server(
                 parsed = {}
             filled = get_tagger_plugin_manager().fill_defaults(parsed)
             vault.set_tagger_settings(filled)
+
+    def reconcile_library_settings(self, vault: Vault, library=None) -> None:
+        """Repair scores this library missed while it was closed.
+
+        Changing the penalised-tag weights invalidates cached smart scores in
+        whichever library is open at the time. A library that was closed then
+        never finds out, and nothing revisits it, because a NULL score is the
+        only signal that a recompute is owed. Opening the library is the one
+        moment that question is answerable, so it is asked here.
+
+        The comparison is against a keyed hash: the library stores no settings,
+        only a fingerprint, and the key lives in the hub. Penalised and hidden
+        tags say what someone collects and what they hide, and a library folder
+        is made to be copied and handed to other people.
+        """
+        # The library is passed explicitly by the switch path, which reconciles
+        # *before* it marks the target active: reading "the active library" there
+        # would return the one being closed, and key the fingerprint with the
+        # wrong salt.
+        library = library or self.library_registry.active_library()
+        if library is None:
+            return
+        try:
+            penalised = smart_score_penalised_tags(
+                getattr(self._user, "smart_score_penalised_tags", None),
+                DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+            )
+            library_settings_service.reconcile_settings_fingerprint(
+                vault.db, library.settings_salt, penalised
+            )
+        except Exception:
+            # A failed reconcile leaves scores as they were, which is the state
+            # the library was already in. Never worth failing a startup or a
+            # switch over.
+            logger.exception(
+                "Could not reconcile the settings fingerprint for library %s",
+                library.name,
+            )
 
     def build_vault(self, image_root: str) -> Vault:
         """Construct (but do not start) a Vault over *image_root*.

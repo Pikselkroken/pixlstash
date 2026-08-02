@@ -49,17 +49,20 @@ CURRENT_SCHEMA_VERSION = 1
 # A column the model declares but this table lacks would fail every
 # ``SELECT user.*``.
 #
-# The five library-scoped columns at the end (similarity_character,
-# stack_strictness, smart_score_penalised_tags, hidden_tags, apply_tag_filter)
-# belong to the vault's ``library_settings`` table by §5.
+# The five columns at the end were the §5 "library-scoped" candidates. Decided
+# individually 2026-08-02, after establishing what each one actually is:
 #
-# **Interim, 2026-08-01:** migration 0092 creates that row and seeds it, but
-# nothing reads it yet, so these columns are still the live source for both
-# reads and writes. That is deliberate and consistent (one home, no split
-# brain), not an oversight: the alternative during the move was preferences
-# written to one database and read from the other. Wiring ``library_settings``
-# and dropping these five columns is the follow-up, and until then a library's
-# tag filters and stack strictness are per-user rather than per-library.
+# * ``similarity_character`` MOVED to the vault's ``library_settings``. It is a
+#   row id in one vault's character table, so a per-user copy silently names a
+#   different person after a switch. The column stays here, unused and NULL,
+#   only because the shared ``User`` model declares it.
+# * ``hidden_tags``, ``apply_tag_filter``, ``smart_score_penalised_tags`` stay
+#   here by decision: they name library vocabulary but are the owner's own
+#   working preferences, and the same person wants the same defects penalised
+#   and the same clutter hidden wherever they are. They are also personal
+#   information, which is a second reason to keep them out of a folder designed
+#   to be copied and shared (see ``settings_salt`` below).
+# * ``stack_strictness`` has no remaining consumer; left alone pending deletion.
 _V1_USER = """
 CREATE TABLE IF NOT EXISTS user (
     id                          INTEGER PRIMARY KEY,
@@ -178,6 +181,17 @@ _V1_USER_TOKEN_INDEXES = (
 # ``attached`` is what makes ``detach`` non-destructive. Detaching clears the
 # flag instead of deleting the row, so the uuid and the tokens stamped with it
 # survive and come back when the same folder is attached again.
+# ``settings_salt`` keys the settings fingerprint the vault stores (see
+# ``library_settings`` in the vault). The fingerprint answers "have the owner's
+# score-affecting settings changed since this library was last opened?" without
+# the library holding any of those settings. The salt is what makes that safe:
+# penalised tags and hidden tags are personal information (they say what someone
+# collects and what they hide), a tag vocabulary is small and guessable, so an
+# unsalted hash of them sitting in a *portable* library folder would be
+# recoverable by dictionary attack. Keyed by a per-library random value that
+# never leaves the hub, the fingerprint is an opaque blob to anyone holding only
+# the library.
+#
 # ``vault_uuid`` is the fingerprint observed inside the library itself (the
 # vault's ``library_settings`` row). It is *not* an identity: it is never
 # referenced by a token and never trusted for authorization, because a library
@@ -188,8 +202,9 @@ _V1_USER_TOKEN_INDEXES = (
 _V1_LIBRARY = """
 CREATE TABLE IF NOT EXISTS library (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    uuid        TEXT NOT NULL UNIQUE,
-    vault_uuid  TEXT,
+    uuid           TEXT NOT NULL UNIQUE,
+    vault_uuid     TEXT,
+    settings_salt  TEXT,
     name        TEXT NOT NULL,
     path        TEXT NOT NULL,
     created_at  TEXT NOT NULL,

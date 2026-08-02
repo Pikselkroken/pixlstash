@@ -34,6 +34,21 @@ class LibrarySettings(SQLModel, table=True):
             library folder can arrive from anyone, so a value found here must
             not be able to claim an identity that tokens on this machine already
             carry.
+        settings_fingerprint: An opaque, keyed hash of the owner's
+            score-affecting settings as they were when this library was last
+            opened. Compared on open to answer "did the penalty weights change
+            while this library was closed?", which is the one question a dormant
+            library cannot otherwise answer, since a weight change only
+            invalidates the *active* library's cached scores.
+
+            **It holds no settings, only a hash, and the key is not here.**
+            Penalised tags and hidden tags are personal information: they say
+            what someone collects and what they hide. A library folder is
+            designed to be copied, moved and handed to other people, and a tag
+            vocabulary is small and guessable, so even an unsalted hash would be
+            recoverable from it by dictionary attack. The hash is therefore keyed
+            by a per-library random salt that lives in the hub and never travels
+            with the library.
         similarity_character: The character the grid sorts "most like" against.
             A row id **in this vault's** character table, which is exactly why it
             cannot live in the hub: character 7 in one library and character 7 in
@@ -49,4 +64,7 @@ class LibrarySettings(SQLModel, table=True):
     )
     similarity_character: Optional[int] = Field(
         default=None, sa_column=Column(Integer, nullable=True)
+    )
+    settings_fingerprint: Optional[str] = Field(
+        default=None, sa_column=Column(String, nullable=True)
     )
