@@ -875,7 +875,7 @@
                    about the tile, and hiding it until hover is what made stacks
                    invisible while browsing. -->
               <StackEdgeTicks
-                v-if="shouldShowStackBadge(img)"
+                v-if="shouldShowStackBadge(img) && stackDeckEdgesFit"
                 :count="getStackBadgeCount(img)"
               />
               <!-- Once a stack is expanded its members look like any other
@@ -5059,6 +5059,17 @@ const {
 // the invariant the spacer/fetch arithmetic depends on.
 const justifiedInfoRowExtra = computed(() =>
   gridStore.compactMode ? 0 : THUMBNAIL_INFO_ROW_HEIGHT,
+);
+
+// A collapsed stack's deck edges (StackEdgeTicks) peek OUTSIDE the cover, up and
+// to the right in `--space-1` steps, so they need room around the tile. Only the
+// square grid has it: 4px of `.thumbnail-card` padding plus the 4px grid gap.
+// Justified packs the cover to its exact box behind a 2px seam, and compact
+// removes both the padding and the gap. In either, the peek lands on the
+// NEIGHBOURING photo instead of on the canvas. The permanent stack count badge
+// rides the same guard as the ticks, so those modes still declare the stack.
+const stackDeckEdgesFit = computed(
+  () => !isJustifiedMode.value && !gridStore.compactMode,
 );
 
 function _justifiedItemGeometry(img, localIdx) {
