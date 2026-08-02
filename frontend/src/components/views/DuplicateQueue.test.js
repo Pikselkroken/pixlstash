@@ -474,6 +474,33 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
     wrapper.unmount();
   });
 
+  it("shows decided candidates individually and removes stack expansion", async () => {
+    const decidedGroup = {
+      ...deckGroup("decided-deck", 12),
+      verdict: "stacked",
+      decided_at: "2026-08-02T12:00:00",
+    };
+    const { wrapper } = await decidedQueue({ groups: [decidedGroup], total: 1 });
+
+    const row = wrapper.findComponent({ name: "DedupGroupRow" });
+    expect(row.props("collapseStacks")).toBe(false);
+    expect(row.findAll(".gthumb")).toHaveLength(2);
+    expect(row.findComponent({ name: "StackBadge" }).exists()).toBe(false);
+
+    listStackMembers.mockClear();
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(listStackMembers).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="dedup-announcement"]').text(),
+    ).toContain("already shown");
+
+    const compare = wrapper.findComponent({ name: "DedupCompareDialog" });
+    expect(compare.props("collapseStacks")).toBe(false);
+    expect(compare.props("readOnly")).toBe(true);
+    wrapper.unmount();
+  });
+
   it("narrows the page from the menu and says so", async () => {
     const { wrapper } = await decidedQueue();
     await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");

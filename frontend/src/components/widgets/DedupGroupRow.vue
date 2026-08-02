@@ -385,6 +385,9 @@ const props = defineProps({
   // A decided row swaps its verdict buttons for the verdict and a Clear.
   verdict: { type: String, default: "" },
   decidedAt: { type: String, default: "" },
+  // Decided is a history surface: show every candidate from the group rather
+  // than replacing the pictures the user decided on with one current deck.
+  collapseStacks: { type: Boolean, default: true },
   coverId: { type: [Number, String], default: null },
   excludedIds: { type: Array, default: () => [] },
   // False for a row outside the read-ahead window: the thumbnails are the
@@ -470,7 +473,9 @@ const decidedTitle = computed(() => {
  * `group.candidates`, which is what makes the thing on screen the thing the
  * backend moves.
  */
-const units = computed(() => groupUnits(props.group));
+const units = computed(() =>
+  groupUnits(props.group, { collapseStacks: props.collapseStacks }),
+);
 
 /** The group's composition, for the header and the row's accessible name. */
 const composition = computed(() => unitCompositionLabel(units.value));
@@ -736,6 +741,11 @@ function thumbLabel(unit, i) {
  * @returns {string}
  */
 function thumbTitle(unit, i) {
+  if (props.verdict) {
+    return props.focused
+      ? "Double-click, or press C, to compare this decided group"
+      : "Double-click to compare this decided group";
+  }
   const noun = unit.kind === "deck" ? "stack" : "picture";
   if (isLockedOut(unit)) {
     // The single-sourced "why is this read-only / how do I unlock" sentence, so
@@ -898,6 +908,7 @@ function smartTextOf(unit) {
  */
 function onPick(unit) {
   emit("focus");
+  if (props.verdict) return;
   // A unit that is not in the stack cannot lead it. Focusing the row still
   // happens, so the click is not a dead press.
   if (isLockedOut(unit)) return;
@@ -915,6 +926,7 @@ function onPick(unit) {
  */
 function onToggle(unit) {
   emit("focus");
+  if (props.verdict) return;
   emit("toggle-excluded", unit.coverPictureId);
 }
 

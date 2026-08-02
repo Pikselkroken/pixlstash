@@ -90,6 +90,7 @@
 import { computed } from "vue";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { API_BASE_URL } from "../../utils/apiClient";
 
 const props = defineProps({
   /** Members in the stack, including any not rendered in this strip. */
@@ -169,7 +170,10 @@ function memberTitle(id) {
  * @returns {string}
  */
 function thumbUrl(member) {
-  return pictureThumbnailUrl(member.id, { version: member.thumbnail_version });
+  return pictureThumbnailUrl(member.id, {
+    version: member.thumbnail_version,
+    baseUrl: API_BASE_URL,
+  });
 }
 
 /**

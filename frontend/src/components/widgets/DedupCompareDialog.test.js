@@ -934,6 +934,13 @@ describe("DedupCompareDialog: one card per unit", () => {
     expect(cards[1].find(".dc-index").text()).toBe("2");
   });
 
+  it("compares every original candidate individually when collapsing is off", async () => {
+    const wrapper = await mountDeck({ collapseStacks: false, readOnly: true });
+    expect(wrapper.findAll(".dc-card")).toHaveLength(3);
+    expect(wrapper.findAll(".dc-expand")).toHaveLength(0);
+    expect(listStackMembersMock).not.toHaveBeenCalled();
+  });
+
   it("shows the LEADER's numbers on the deck, labelled as the leader's", async () => {
     // The leader is not one of the group's candidates, which is the common
     // case, so its row is fetched. An aggregate, or the matched member's

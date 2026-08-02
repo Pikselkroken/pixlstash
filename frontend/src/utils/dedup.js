@@ -290,10 +290,15 @@ function looseUnit(candidate) {
  * for one picture is a `picture`, not a one-deep deck.
  *
  * @param {Object} group - a queue group.
+ * @param {Object} [options]
+ * @param {boolean} [options.collapseStacks=true] - false for read-only history
+ *   surfaces that need to show every candidate the original group contained,
+ *   even though those pictures now share a stack.
  * @returns {Array<DedupUnit>}
  */
-export function groupUnits(group) {
+export function groupUnits(group, { collapseStacks = true } = {}) {
   const candidates = group?.candidates ?? [];
+  if (!collapseStacks) return candidates.map(looseUnit);
   const stacks = group?.stacks ?? {};
   const units = [];
   const byStack = new Map();

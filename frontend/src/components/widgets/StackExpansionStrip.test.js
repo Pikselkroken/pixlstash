@@ -11,7 +11,10 @@ import { mount } from "@vue/test-utils";
 // string for `<img src>`.
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id, options = {}) =>
-    `/pictures/thumbnails/${id}.webp?v=${options.version ?? ""}`,
+    `${options.baseUrl ?? ""}/pictures/thumbnails/${id}.webp?v=${options.version ?? ""}`,
+}));
+vi.mock("../../utils/apiClient", () => ({
+  API_BASE_URL: "http://backend.test/api/v1",
 }));
 
 import StackExpansionStrip from "./StackExpansionStrip.vue";
@@ -57,6 +60,15 @@ describe("StackExpansionStrip — what it says", () => {
     expect(thumbs).toHaveLength(3);
     expect(thumbs[0].find("img").attributes("src")).toContain("/7.webp");
     expect(thumbs[2].find("img").attributes("src")).toContain("/9.webp");
+  });
+
+  it("loads thumbnails from the backend API origin", () => {
+    const src = mountStrip()
+      .find('[data-testid="stack-member"] img')
+      .attributes("src");
+    expect(src).toBe(
+      "http://backend.test/api/v1/pictures/thumbnails/7.webp?v=2",
+    );
   });
 });
 

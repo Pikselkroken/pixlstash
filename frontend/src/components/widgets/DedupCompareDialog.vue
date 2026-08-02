@@ -120,6 +120,8 @@ const props = defineProps({
    * `{ id, kind, confidence, why: [{label, against}], candidates: [...] }`.
    */
   group: { type: Object, default: null },
+  /** False on Decided: compare the original candidates, not their current deck. */
+  collapseStacks: { type: Boolean, default: true },
   /**
    * `mode: "mixed"` only: the one `MixedStackModel` row under comparison. Its
    * `member_ids` are the cards, in canonical stack order.
@@ -258,10 +260,14 @@ function memberUnit(member) {
  * row, the store and the keyboard model read, so the strip, the digits, the
  * floor and the request can never disagree about what a card is.
  *
- * In `mixed` mode there is nothing to collapse: every card is one member.
+ * In `mixed` mode there is nothing to collapse: every card is one member. The
+ * Decided caller also opts out of collapsing because it is reviewing the
+ * original candidates, not preparing another unit-level verdict.
  */
 const units = computed(() =>
-  isMixed.value ? mixedMembers.value.map(memberUnit) : groupUnits(props.group),
+  isMixed.value
+    ? mixedMembers.value.map(memberUnit)
+    : groupUnits(props.group, { collapseStacks: props.collapseStacks }),
 );
 
 /**

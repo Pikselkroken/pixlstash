@@ -604,6 +604,26 @@ describe("DedupGroupRow: the deck", () => {
     expect(wrapper.findAll(".gthumb")).toHaveLength(3);
   });
 
+  it("shows every original candidate individually on a decided row", async () => {
+    const wrapper = mountRow({
+      group: stackedGroup(),
+      verdict: "stacked",
+      collapseStacks: false,
+      coverId: 503,
+    });
+    expect(wrapper.findAll(".gthumb")).toHaveLength(3);
+    expect(wrapper.findComponent({ name: "StackBadge" }).exists()).toBe(false);
+    expect(wrapper.attributes("aria-label")).toBe("Group 1, 3 pictures");
+    await wrapper.find(".gthumb").trigger("click");
+    await wrapper.find(".gthumb").trigger("contextmenu");
+    expect(wrapper.emitted("focus")).toHaveLength(2);
+    expect(wrapper.emitted("set-cover")).toBeUndefined();
+    expect(wrapper.emitted("toggle-excluded")).toBeUndefined();
+    expect(wrapper.find(".gthumb").attributes("title")).toContain(
+      "compare this decided group",
+    );
+  });
+
   // The deck's face is the stack's LEADER, which this group never names as a
   // candidate: a tile showing one picture while meaning another is exactly the
   // mismatch the deck exists to remove.

@@ -453,6 +453,7 @@
           :bulk-keys="bulkKeysActive"
           :verdict="store.showingDecided ? entry.group.verdict || '' : ''"
           :decided-at="entry.group.decided_at || ''"
+          :collapse-stacks="!store.showingDecided"
           :cover-id="store.coverIdFor(entry.group)"
           :excluded-ids="store.excludedFor(entry.group.signature)"
           :load-thumbnails="entry.loadThumbnails"
@@ -572,6 +573,7 @@
       :open="compareOpen"
       :mode="store.showingMixed ? 'mixed' : 'group'"
       :group="store.focusedGroup"
+      :collapse-stacks="!store.showingDecided"
       :mixed-stack="mixedFocusedRow"
       :marked-ids="mixedFocusedRow ? mixedMarksFor(mixedFocusedRow) : EMPTY_IDS"
       :primary-label="mixedPlan.label"
@@ -585,7 +587,7 @@
           : []
       "
       :busy="store.busy || store.mixedBusyStackId !== null"
-      :read-only="readOnly"
+      :read-only="readOnly || store.showingDecided"
       @close="closeCompare"
       @set-cover="
         store.focusedGroup &&
@@ -863,6 +865,7 @@ const {
   toggle: toggleExpansion,
   toggleForGroup: toggleExpansionForGroup,
   retry: retryExpansion,
+  collapse: collapseExpansion,
   keepOnlyOn: keepExpansionOnFocusedRow,
 } = useDedupRowExpansion();
 
@@ -880,6 +883,10 @@ function onToggleExpansion(group, stackId) {
  * @param {Object} group
  */
 function onExpansionKey(group) {
+  if (store.showingDecided) {
+    announcement.value = "Every picture in this decided group is already shown.";
+    return;
+  }
   const result = toggleExpansionForGroup(group);
   if (!result) {
     // Not a dead key: a group of loose pictures has nothing folded away, and
@@ -1942,6 +1949,7 @@ function onSizeCommitted() {
  * page straight back.
  */
 function onToggleDecided() {
+  collapseExpansion();
   store.toggleDecided();
   rootEl.value?.focus?.();
 }

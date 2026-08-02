@@ -1687,6 +1687,14 @@ the user leaves the stacked filter. Stack membership events normally refresh
 only the deck count; under this sort they reload (or defer under the lightbox)
 because the same edit advances `PictureStack.updated_at` and can reorder decks.
 
+**Decided groups show their original candidates, not collapsed decks.** Decks
+remain load-bearing in the active review queue because a verdict moves an
+existing stack as one unit. Decided is read-only history, so both its row and
+Compare Group pass `collapseStacks=false` and show the pictures the decision
+was made over individually. Active-queue deck expansion remains lazy; its
+thumbnail URLs must include `API_BASE_URL`, just like the deck face itself,
+because the SPA and image API may run on different origins.
+
 **The queue-clear screen is the only route to the stacks**, and it goes to the
 **place, not to the action**: a `router.push` to `/` with
 `?stack_state=stacked`, landing in All Pictures with nothing selected and
