@@ -1021,6 +1021,38 @@ def test_a_group_with_two_live_members_left_keeps_its_place_in_the_queue(server)
     assert stored == 3, "the payload's count is live even while the stored one lags"
 
 
+def test_large_group_evidence_tracks_the_live_member_count(server):
+    """The warning and header must never report two different group sizes.
+
+    The evidence is stored at scan time, but the queue filters scrapheaped
+    members live. A group that shrinks back under the policy limit must lose
+    its stale size warning rather than saying both "2 pictures" and "3
+    pictures" in the same row.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "large", "size_bytes": 100},
+            {"pixel_sha": "large", "size_bytes": 100},
+            {"pixel_sha": "large", "size_bytes": 100},
+        ],
+    )
+    policy = TierPolicy(max_group_size=2)
+    _scan(server, policy)
+
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, policy)
+    assert page[0]["member_count"] == 3
+    assert any("(3 pictures)" in pill["text"] for pill in page[0]["why"])
+
+    _soft_delete(server, ids[2])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, policy)
+    assert page[0]["member_count"] == 2
+    assert not any(
+        pill["text"].startswith("Unusually large group")
+        for pill in page[0]["why"]
+    )
+
+
 def test_a_thinned_group_still_lists_on_the_decided_page(server):
     """The way back must survive the scrapheap.
 

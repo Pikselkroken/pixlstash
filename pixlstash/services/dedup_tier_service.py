@@ -873,6 +873,39 @@ def _pill(text: str, against: bool = False) -> dict[str, Any]:
     return {"text": text, "against": bool(against)}
 
 
+_LARGE_GROUP_EVIDENCE_PREFIX = "Unusually large group ("
+
+
+def _refresh_group_size_evidence(
+    evidence: list[Any], member_count: int, max_group_size: int
+) -> list[Any]:
+    """Make the size warning describe the live members in the payload.
+
+    Evidence is stored when the scan finds a group, while queue candidates are
+    filtered live when the page is read. A member moved to the Scrapheap can
+    therefore shrink a row without rewriting its stored evidence. Remove the
+    scan-time size warning and add it back only when the live row still exceeds
+    the policy limit, using the same count the response reports.
+    """
+    refreshed = []
+    for pill in evidence:
+        if isinstance(pill, dict):
+            text = pill.get("text", pill.get("label", ""))
+        else:
+            text = pill
+        if str(text).startswith(_LARGE_GROUP_EVIDENCE_PREFIX):
+            continue
+        refreshed.append(pill)
+    if member_count > max_group_size:
+        refreshed.append(
+            _pill(
+                f"Unusually large group ({member_count} pictures)",
+                against=True,
+            )
+        )
+    return refreshed
+
+
 def _humanise_gap(seconds: float) -> str:
     if seconds < 2:
         return f"{seconds:.1f}s apart"
@@ -2526,7 +2559,11 @@ def page_queue_in_session(
                 # and made the row claim a picture that is in the Scrapheap.
                 "member_count": len(members),
                 "cover_picture_id": cover_id,
-                "why": json.loads(row.evidence) if row.evidence else [],
+                "why": _refresh_group_size_evidence(
+                    json.loads(row.evidence) if row.evidence else [],
+                    len(members),
+                    policy.max_group_size,
+                ),
                 "created_at": row.created_at,
                 "verdict": verdict.verdict if verdict else None,
                 "decided_at": verdict.decided_at if verdict else None,

@@ -77,7 +77,9 @@ const pills = computed(() => {
             ? 'why-pill--neg'
             : 'why-pill--pos'
       "
-      :title="pill.against ? 'Argues against stacking' : 'Supports stacking'"
+      :title="`${labelOf(pill)}. ${
+        pill.against ? 'Argues against stacking.' : 'Supports stacking.'
+      }`"
     >
       <v-icon class="why-pill__ico" size="12">{{
         pill.against ? "mdi-close" : "mdi-check"
@@ -95,6 +97,7 @@ const pills = computed(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  max-width: 100%;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -113,6 +116,9 @@ const pills = computed(() => {
      the border, and the glyph, which is where a 12px label cannot go. */
   color: rgb(var(--v-theme-on-surface));
   white-space: nowrap;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 /* Supports stacking. */
@@ -149,5 +155,14 @@ const pills = computed(() => {
 
 .why-pill__ico {
   flex-shrink: 0;
+}
+
+/* The info column is deliberately narrow so the pictures keep the row's room.
+   A long server reason must end inside that column instead of painting under
+   the first thumbnail. Its full wording remains in the pill's tooltip. */
+.why-pill__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

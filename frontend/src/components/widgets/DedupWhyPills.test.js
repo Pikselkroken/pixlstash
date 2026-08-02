@@ -66,8 +66,12 @@ describe("DedupWhyPills", () => {
   it("states the for/against split in words as well as colour", () => {
     // WCAG 1.4.1: colour alone must not carry the meaning.
     const pills = mountPills().findAll(".why-pill");
-    expect(pills[0].attributes("title")).toBe("Argues against stacking");
-    expect(pills[1].attributes("title")).toBe("Supports stacking");
+    expect(pills[0].attributes("title")).toBe(
+      "Different capture time. Argues against stacking.",
+    );
+    expect(pills[1].attributes("title")).toBe(
+      "Same size. Supports stacking.",
+    );
   });
 
   it("renders nothing when a group has no evidence", () => {
