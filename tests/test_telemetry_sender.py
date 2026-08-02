@@ -240,3 +240,57 @@ def test_state_file_sits_beside_the_config_not_in_the_library(config_path):
 
     assert os.path.dirname(state) == os.path.dirname(os.path.abspath(config_path))
     assert state.endswith(sender.SEND_STATE_FILENAME)
+
+
+# ---------------------------------------------------------------------------
+# The dispatch call site
+#
+# These exist because an independent review found that the only call site
+# invoked a method that does not exist (Server.install_type vs
+# detect_install_type), and a broad `except Exception` logged the AttributeError
+# as a warning. Every sender unit test passed while the feature had never once
+# transmitted. Testing the helper is not testing the wiring.
+# ---------------------------------------------------------------------------
+
+
+def _server(tmp_path):
+    import json as _json
+
+    from pixlstash.server import Server
+
+    cfg = str(tmp_path / "server-config.json")
+    with open(cfg, "w", encoding="utf-8") as handle:
+        _json.dump({"port": 8000}, handle)
+    return Server(cfg)
+
+
+def test_dispatch_resolves_a_real_install_type(tmp_path, monkeypatch):
+    from unittest import mock
+
+    from pixlstash.server import Server
+
+    server = _server(tmp_path)
+    try:
+        server._user.telemetry_send_install_id = True
+        with mock.patch("pixlstash.server.maybe_send_in_background") as dispatch:
+            server._maybe_send_telemetry_ping()
+
+        assert dispatch.called, "consent is on, so a ping must be dispatched"
+        _, install_type = dispatch.call_args[0][:2]
+        assert install_type in Server.INSTALL_TYPES
+    finally:
+        server.__exit__(None, None, None)
+
+
+def test_dispatch_is_skipped_when_consent_is_off(tmp_path):
+    from unittest import mock
+
+    server = _server(tmp_path)
+    try:
+        server._user.telemetry_send_install_id = False
+        with mock.patch("pixlstash.server.maybe_send_in_background") as dispatch:
+            server._maybe_send_telemetry_ping()
+
+        assert not dispatch.called
+    finally:
+        server.__exit__(None, None, None)

@@ -249,7 +249,12 @@ async function recordPing(db, ping, date) {
     )
     .bind(
       elapsed > 0 ? date : existing.last_seen,
-      Number(activity),
+      // Bound as a BigInt, NOT Number(). float64 has 53 bits of mantissa, so
+      // narrowing here silently discarded the low bits once an install passed
+      // ~53 days of history: the whole activity record collapsed, and a fully
+      // active install exceeded INT64_MAX. Those are exactly the long-lived
+      // installs the retention curve is about.
+      activity,
       ping.install_type,
       ping.install_id,
     )

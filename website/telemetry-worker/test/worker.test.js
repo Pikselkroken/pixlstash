@@ -244,7 +244,7 @@ describe("POST /v1/ping", () => {
     const e = env();
     await worker.fetch(pingRequest(VALID), e);
     const row = e.DB.installs.get(UUID);
-    assert.equal(row.activity, 1);
+    assert.equal(BigInt(row.activity), 1n);
     assert.equal(row.is_new_install, 1);
     assert.equal(row.install_type, "pip");
     assert.equal(row.first_seen, row.last_seen);
@@ -255,7 +255,7 @@ describe("POST /v1/ping", () => {
     await worker.fetch(pingRequest(VALID), e);
     await worker.fetch(pingRequest(VALID), e);
     assert.equal(e.DB.installs.size, 1);
-    assert.equal(e.DB.installs.get(UUID).activity, 1);
+    assert.equal(BigInt(e.DB.installs.get(UUID).activity), 1n);
   });
 
   it("never lets a later ping rewrite first_seen or the new-install flag", async () => {
@@ -361,6 +361,35 @@ describe("POST /v1/ping", () => {
     const e = env();
     const res = await worker.fetch(new Request("https://t.pixlstash.dev/v1/other"), e);
     assert.equal(res.status, 404);
+  });
+});
+
+describe("activity bitmap durability", () => {
+  it("survives past 53 days without collapsing", async () => {
+    const e = env();
+    // float64 has a 53-bit mantissa. Narrowing the bitmap through Number()
+    // silently erased the whole history once an install crossed that, which is
+    // precisely the long-lived install the retention curve exists to measure.
+    let bits = 1n;
+    for (let day = 1; day <= 62; day++) {
+      bits = rollActivity(bits, 1);
+    }
+    const popcount = bits.toString(2).split("1").length - 1;
+    assert.equal(popcount, 63, "63 consecutive daily pings must set 63 bits");
+    assert.ok(bits > BigInt(Number.MAX_SAFE_INTEGER), "must exceed 2^53");
+    assert.ok(bits <= (1n << 63n) - 1n, "must stay inside signed INT64");
+
+    // And the value the Worker actually binds must still be a BigInt.
+    await worker.fetch(pingRequest(VALID), e);
+    const row = e.DB.installs.get(UUID);
+    row.activity = bits;
+    row.last_seen = "2020-01-01";
+    await worker.fetch(pingRequest(VALID), e);
+    assert.equal(
+      typeof e.DB.installs.get(UUID).activity,
+      "bigint",
+      "activity must be bound as a BigInt, never narrowed to a Number",
+    );
   });
 });
 

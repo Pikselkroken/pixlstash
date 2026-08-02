@@ -541,10 +541,14 @@ class Server(
                 return
             maybe_send_in_background(
                 self._server_config_path,
-                Server.install_type(),
+                Server.detect_install_type(),
                 consent_enabled=True,
             )
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Deliberately NOT a bare `except Exception`. A broad catch here
+            # swallowed an AttributeError from a wrong method name, so the ping
+            # silently never sent while the UI reported consent as honoured.
+            # A programming error must surface, not be logged as a warning.
             logger.warning(
                 "Could not dispatch the telemetry ping (%s); continuing. This "
                 "affects reporting only, never the running server.",
