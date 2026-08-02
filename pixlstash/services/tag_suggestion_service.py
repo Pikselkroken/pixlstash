@@ -43,6 +43,7 @@ from pixlstash.utils.service.label_ledger import (
     clear_human_label,
     record_human_label,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -183,9 +184,12 @@ def get_picture_exts(vault: "Vault", ids: list[int | None]) -> dict[int, str]:
         return {}
 
     def _fetch(session: Session) -> dict[int, str]:
+        picture_scope = scope_id_subquery(
+            session, wanted, name="_pixlstash_review_picture_ext_ids"
+        )
         rows = session.exec(
             select(Picture.id, Picture.format, Picture.file_path).where(
-                Picture.id.in_(wanted)
+                Picture.id.in_(picture_scope)
             )
         ).all()
         out: dict[int, str] = {}
@@ -227,6 +231,9 @@ def get_tagger_confidences(
         return {}
 
     def _fetch(session: Session) -> dict[tuple[int, str], float]:
+        prediction_scope = scope_id_subquery(
+            session, pids, name="_pixlstash_review_prediction_picture_ids"
+        )
         rows = session.exec(
             select(
                 TagPrediction.picture_id,
@@ -234,7 +241,7 @@ def get_tagger_confidences(
                 TagPrediction.confidence,
                 TagPrediction.predicted_at,
             ).where(
-                TagPrediction.picture_id.in_(pids),
+                TagPrediction.picture_id.in_(prediction_scope),
                 TagPrediction.tag.in_(tagset),
             )
         ).all()
