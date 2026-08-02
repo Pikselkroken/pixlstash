@@ -209,6 +209,7 @@ jobs:
           tests/test_authz_gate_step3.py
           tests/test_authz_gate_step4.py
           tests/test_authz_host_capability_16_3.py
+          tests/test_authz_library_pin.py
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
           tests/test_character_face_assignment.py
@@ -231,11 +232,19 @@ jobs:
           tests/test_find_orphaned_files.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_hub_bootstrap.py
+          tests/test_hub_engine.py
+          tests/test_hub_registry.py
+          tests/test_identity_storage_guardrail.py
           tests/test_image_embedding_worker.py
           tests/test_impossible_clear_authz.py
           tests/test_invalid_image_endless_retry.py
           tests/test_ip_locality_fail_closed.py
           tests/test_label_ledger.py
+          tests/test_libraries_routes.py
+          tests/test_library_backup.py
+          tests/test_library_switch.py
+          tests/test_share_link_library_pin.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
@@ -243,6 +252,7 @@ jobs:
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
+          tests/test_pending_score_invalidation.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
           tests/test_picture_set_locking.py
@@ -253,8 +263,8 @@ jobs:
           tests/test_read_token_security.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
-          tests/test_score_agreement_stats.py
           tests/test_scope_table.py
+          tests/test_score_agreement_stats.py
           tests/test_scrapheap_retention.py
           tests/test_server.py
           tests/test_smart_score_consistency.py

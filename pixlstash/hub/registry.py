@@ -222,6 +222,11 @@ class LibraryRegistry:
         """Bind the registry to *hub*; the caller owns the hub's lifetime."""
         self._hub = hub
 
+    @property
+    def hub_path(self) -> str:
+        """Filesystem path of the hub this registry reads."""
+        return self._hub.path
+
     def list_libraries(self, *, include_detached: bool = False) -> list[Library]:
         """Return the attached libraries, active first, then by name.
 

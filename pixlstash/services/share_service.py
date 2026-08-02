@@ -46,6 +46,32 @@ def validate_picture_share_token(
     return matched_token
 
 
+def share_token_is_for_active_library(auth: "AuthService", matched_token) -> bool:
+    """Whether a share token may be served right now.
+
+    ``/share/`` is auth-excluded and resolves its own token, so
+    ``request.state.matched_token`` is never set and the authz gate's library pin
+    never sees it. Without this check a link minted for library A, opened while
+    library B is active, would serve **B's** picture carrying the same numeric
+    id: the recipient gets content from a library they were never shown.
+
+    Returns True when there is no registry at all (a Vault built without a
+    Server, as in tests and CLI tools), because there is then no active library
+    to compare against and nothing to enforce.
+
+    Args:
+        auth: The auth service, which knows the active library.
+        matched_token: The already-validated share token.
+
+    Returns:
+        True when the token belongs to the library that is currently open.
+    """
+    active_uuid = auth.active_library_uuid()
+    if active_uuid is None:
+        return True
+    return getattr(matched_token, "library_uuid", None) == active_uuid
+
+
 def get_shared_picture(vault: "Vault", pic_id: int) -> "Picture | None":
     """Fetch a non-deleted picture by ID for share serving.
 

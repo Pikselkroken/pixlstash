@@ -95,6 +95,40 @@ def build_parser() -> argparse.ArgumentParser:
     detach_parser.add_argument("library", help="Library name or id from `list`.")
     detach_parser.set_defaults(handler=_cmd_detach)
 
+    relocate_parser = subparsers.add_parser(
+        "relocate",
+        help="Point a library at a folder that has moved, keeping its share links.",
+    )
+    relocate_parser.add_argument("library", help="Library name or id from `list`.")
+    relocate_parser.add_argument("folder", help="Where the library now lives.")
+    relocate_parser.set_defaults(handler=_cmd_relocate)
+
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Write a library and the hub to a single archive.",
+        description=(
+            "Writes a consistent copy even while the library is open. The "
+            "archive contains your credentials, so it is written owner-readable "
+            "only; pictures in reference folders are outside the library and are "
+            "not included."
+        ),
+    )
+    backup_parser.add_argument("library", help="Library name or id from `list`.")
+    backup_parser.add_argument(
+        "destination", help="Output file, or a folder to write a dated name into."
+    )
+    backup_parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="Skip the image files. A catalogue is worth nothing without them.",
+    )
+    backup_parser.add_argument(
+        "--no-compress",
+        action="store_true",
+        help="Write a plain .tar. Faster for large image sets, which barely compress.",
+    )
+    backup_parser.set_defaults(handler=_cmd_backup)
+
     rename_parser = subparsers.add_parser("rename", help="Change a library's name.")
     rename_parser.add_argument("library", help="Library name or id from `list`.")
     rename_parser.add_argument("new_name", help="The new display name.")
@@ -202,6 +236,69 @@ def _cmd_detach(registry: LibraryRegistry, args: argparse.Namespace) -> int:
         f'Add it back at any time with:  pixlstash-cli libraries attach "{library.path}"'
     )
     return EXIT_OK
+
+
+def _cmd_relocate(registry: LibraryRegistry, args: argparse.Namespace) -> int:
+    """Move a registration to a new folder, keeping its identity."""
+    library = registry.relocate(args.library, args.folder)
+    print(f'Library "{library.name}" now lives at {library.path}')
+    print("Its share links and API tokens keep working.")
+    return EXIT_OK
+
+
+def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
+    """Archive a library together with the hub."""
+    # Local import: pulls in tar/zstd and the backup service, which `list`,
+    # `attach` and `detach` have no use for.
+    from pixlstash.services.library_backup_service import BackupError, create_backup
+
+    library = registry.get(args.library)
+    try:
+        result = create_backup(
+            library,
+            args.destination,
+            registry.hub_path,
+            metadata_only=args.metadata_only,
+            compress=not args.no_compress,
+            tool_version=_tool_version(),
+        )
+    except BackupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+
+    megabytes = result.byte_size / (1024 * 1024)
+    print(f'Backed up "{library.name}" to {result.path} ({megabytes:.1f} MB)')
+    print(f"{result.picture_count} picture(s) catalogued.")
+    if result.metadata_only:
+        print(
+            "This is a metadata-only archive: it holds the database, not your "
+            "images. It can only restore a library whose picture files still exist."
+        )
+    if result.has_external_folders:
+        # Said at the top of the output, with the count, because users assume
+        # otherwise: reference folders live outside the library by definition.
+        print(
+            f"note: this library references {len(result.reference_folders)} "
+            "external folder(s), which are NOT in the archive:",
+            file=sys.stderr,
+        )
+        for folder in result.reference_folders:
+            print(f"  {folder}", file=sys.stderr)
+    print(
+        "The archive contains your login and tokens, so it is readable only by "
+        "you. Keep it somewhere private."
+    )
+    return EXIT_OK
+
+
+def _tool_version() -> str:
+    """Return the installed PixlStash version, or 'unknown'."""
+    try:
+        from importlib.metadata import version
+
+        return version("pixlstash")
+    except Exception:
+        return "unknown"
 
 
 def _cmd_rename(registry: LibraryRegistry, args: argparse.Namespace) -> int:
