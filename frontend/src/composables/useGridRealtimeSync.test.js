@@ -467,6 +467,42 @@ describe("useGridRealtimeSync: stack-facet updates (stack_count)", () => {
     expect(h.wsStore.addPendingExternalImportIds).not.toHaveBeenCalled();
   });
 
+  it("reloads when stack membership changes the active stack-time order", () => {
+    const h = makeHarness({ selectedSort: "STACK_UPDATED_AT" });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "ui",
+      origin_client_id: MY_ID,
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+
+    expect(res.action).toBe("reload");
+    expect(res.reason).toBe("stack-time-sort-changed");
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.grid.refreshStackFacets).not.toHaveBeenCalled();
+  });
+
+  it("defers a stack-time reorder while the lightbox is open", () => {
+    const h = makeHarness({
+      selectedSort: "STACK_UPDATED_AT",
+      overlayOpen: true,
+    });
+    const res = h.sync.handleMessage({
+      type: "pictures_changed",
+      source: "external",
+      picture_ids: [6],
+      change_kind: "updated",
+      fields: ["stack_count"],
+    });
+
+    expect(res.action).toBe("deferred");
+    expect(res.reason).toBe("stack-time-sort-changed-overlay-deferred");
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.grid.markOverlayDeferredRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("a large batch stays one read, never an escalated reload", () => {
     const h = makeHarness();
     const manyIds = Array.from({ length: 400 }, (_, i) => i + 1);

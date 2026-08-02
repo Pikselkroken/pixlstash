@@ -628,15 +628,16 @@ def test_the_decided_page_lists_the_verdict_and_clears_via_reopen():
         _teardown(temp_dir, server)
 
 
-def test_the_decided_page_orders_by_decision_time_newest_first():
-    """The Decided flip is "review what I decided": most recent decision on top.
+def test_the_decided_page_orders_by_recent_activity_first():
+    """The Decided flip puts the most recently active decision on top.
 
     It used to reuse the queue's `(confidence DESC, id ASC)` ordering, which is
     meaningless for a review list (every exact group ties at 1.0, so the list
     came out in group-id order regardless of when anything was decided — the
     user's "very weird" report, 2026-07-30). Both directions are asserted: the
-    decided page follows `decided_at` descending across both verdict kinds, and
-    the OPEN queue keeps its confidence ordering.
+    Initially that is `decided_at` across both verdict kinds; a later stack
+    change has its own explicit regression below. The OPEN queue keeps its
+    confidence ordering.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -685,6 +686,67 @@ def test_the_decided_page_orders_by_decision_time_newest_first():
         )
         decided = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
         assert [g["signature"] for g in decided] == [second, third, first]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_decided_compare_groups_follow_the_latest_stack_change():
+    """A changed stack returns to the top of the Decided comparison sequence.
+
+    The cursor must use that same activity stamp, or page two would repeat or
+    skip a group even when page one appears correctly sorted.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        stacked_signature, separate_signature = _signatures(client)
+
+        stacked = client.post(STACK_URL, json={"signature": stacked_signature})
+        assert stacked.status_code == 200, stacked.text
+        kept = client.post(
+            KEEP_SEPARATE_URL, json={"signature": separate_signature}
+        )
+        assert kept.status_code == 200, kept.text
+
+        initial = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
+        assert [group["signature"] for group in initial] == [
+            separate_signature,
+            stacked_signature,
+        ]
+
+        def touch_stack_after_latest_decision(session):
+            latest_decision = session.exec(
+                select(DedupVerdict.decided_at).where(
+                    DedupVerdict.signature == separate_signature
+                )
+            ).one()
+            stack = session.get(PictureStack, stacked.json()["stack_id"])
+            stack.updated_at = latest_decision + timedelta(seconds=1)
+            session.add(stack)
+            session.commit()
+
+        _run(server, touch_stack_after_latest_decision)
+
+        first_page = client.get(
+            GROUPS_URL, params={"decided": True, "limit": 1}
+        ).json()
+        assert [group["signature"] for group in first_page["groups"]] == [
+            stacked_signature
+        ]
+        assert first_page["next_cursor"]
+
+        second_page = client.get(
+            GROUPS_URL,
+            params={
+                "decided": True,
+                "limit": 1,
+                "cursor": first_page["next_cursor"],
+            },
+        ).json()
+        assert [group["signature"] for group in second_page["groups"]] == [
+            separate_signature
+        ]
     finally:
         _teardown(temp_dir, server)
 

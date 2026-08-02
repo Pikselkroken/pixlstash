@@ -62,6 +62,7 @@ class SortMechanism:
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
+        STACK_UPDATED_AT = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -87,6 +88,10 @@ class SortMechanism:
         Keys.TEXT_CONTENT: {
             "field": None,  # Special case, requires Quality join
             "description": "Text Content",
+        },
+        Keys.STACK_UPDATED_AT: {
+            "field": None,  # Special case, orders through PictureStack
+            "description": "Recently changed stacks",
         },
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
@@ -1015,6 +1020,20 @@ class Picture(SQLModel, table=True):
                     query = query.order_by(cls.text_score.desc(), cls.id.desc())
                 else:
                     query = query.order_by(cls.text_score.asc(), cls.id.asc())
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                # A stack-level sort: every member shares the stack timestamp,
+                # while the collapsed grid contributes one leader row. Keep
+                # loose pictures after real stacks if a client deep-links this
+                # mechanism outside the stacked-only view where the UI offers
+                # it. The PK join is one-to-one and cannot duplicate pictures.
+                query = query.outerjoin(PictureStack, PictureStack.id == cls.stack_id)
+                query = query.order_by(
+                    cls.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
+                    cls.id.desc() if sort_mech.descending else cls.id.asc(),
+                )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
@@ -1293,6 +1312,19 @@ class Picture(SQLModel, table=True):
                     if sort_mech.descending
                     else Picture.text_score.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                query = query.outerjoin(
+                    PictureStack, PictureStack.id == Picture.stack_id
+                )
+                query = query.order_by(
+                    Picture.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
+                    Picture.id.desc()
+                    if sort_mech.descending
+                    else Picture.id.asc(),
                 )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to

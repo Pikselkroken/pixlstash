@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import itertools
 import time
+from datetime import datetime
 
 import pytest
 from sqlalchemy import event, func, or_
@@ -40,7 +41,7 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import Session, SQLModel, create_engine, exists, insert, select
 
 # Importing the models registers them on SQLModel.metadata.
-from pixlstash.db_models import Picture, PictureStack
+from pixlstash.db_models import Picture, PictureStack, SortMechanism
 
 _file_names = itertools.count()
 
@@ -72,6 +73,14 @@ def _new_stack(session) -> int:
     return stack.id
 
 
+def _new_stack_at(session, updated_at) -> int:
+    stack = PictureStack(created_at=updated_at, updated_at=updated_at)
+    session.add(stack)
+    session.commit()
+    session.refresh(stack)
+    return stack.id
+
+
 def _add_picture(session, **kwargs) -> Picture:
     kwargs.setdefault("file_path", f"pic_{next(_file_names)}.jpg")
     pic = Picture(**kwargs)
@@ -79,6 +88,55 @@ def _add_picture(session, **kwargs) -> Picture:
     session.commit()
     session.refresh(pic)
     return pic
+
+
+def test_stack_leaders_sort_by_the_stack_updated_time(session):
+    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0))
+    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0))
+    older_cover = _add_picture(session, stack_id=older, stack_position=0)
+    _add_picture(session, stack_id=older, stack_position=1)
+    newer_cover = _add_picture(session, stack_id=newer, stack_position=0)
+    _add_picture(session, stack_id=newer, stack_position=1)
+
+    recent_first = Picture.find(
+        session,
+        stack_leaders_only=True,
+        stack_state="stacked",
+        sort_mech=SortMechanism(
+            SortMechanism.Keys.STACK_UPDATED_AT, descending=True
+        ),
+    )
+    oldest_first = Picture.find(
+        session,
+        stack_leaders_only=True,
+        stack_state="stacked",
+        sort_mech=SortMechanism(
+            SortMechanism.Keys.STACK_UPDATED_AT, descending=False
+        ),
+    )
+
+    assert [pic.id for pic in recent_first] == [newer_cover.id, older_cover.id]
+    assert [pic.id for pic in oldest_first] == [older_cover.id, newer_cover.id]
+
+
+def test_unassigned_stack_leaders_support_recently_changed_sort(session):
+    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0))
+    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0))
+    older_cover = _add_picture(session, stack_id=older, stack_position=0)
+    _add_picture(session, stack_id=older, stack_position=1)
+    newer_cover = _add_picture(session, stack_id=newer, stack_position=0)
+    _add_picture(session, stack_id=newer, stack_position=1)
+
+    found = Picture.find_unassigned(
+        session,
+        stack_leaders_only=True,
+        stack_state="stacked",
+        sort_mech=SortMechanism(
+            SortMechanism.Keys.STACK_UPDATED_AT, descending=True
+        ),
+    )
+
+    assert [pic.id for pic in found] == [newer_cover.id, older_cover.id]
 
 
 def _legacy_scoped_leader_ids(

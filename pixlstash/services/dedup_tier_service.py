@@ -93,7 +93,7 @@ import numpy as np
 from sqlalchemy import case, func
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, PictureStack
 from pixlstash.db_models.dedup import (
     SCAN_PENDING,
     SCAN_RUNNING,
@@ -1968,24 +1968,24 @@ def _keyset_predicate(cursor: str):
 DECIDED_CURSOR_KIND = "d"
 """Kind marker inside a decided-page cursor.
 
-The decided page orders by decision time, not confidence, so its cursor encodes
-a different keyset. The marker makes the two cursor families mutually
+The decided page orders by its latest relevant activity, not confidence, so its
+cursor encodes a different keyset. The marker makes the two cursor families mutually
 unreadable: a queue cursor replayed onto the decided page (or vice versa) is a
 400, never a silently wrong resume position.
 """
 
 
-def encode_decided_cursor(decided_at: Optional[datetime], group_id: int) -> str:
+def encode_decided_cursor(activity_at: Optional[datetime], group_id: int) -> str:
     """Encode the keyset position of the last delivered *decided* row.
 
-    The decided page's order is ``(decided_at DESC, id DESC)`` with the
+    The decided page's order is ``(activity_at DESC, id DESC)`` with the
     verdict-less tail last (see :func:`page_queue_in_session`), so the position
-    after a row is that pair. ``decided_at`` is written as an exact ISO string
+    after a row is that pair. ``activity_at`` is written as an exact ISO string
     (microseconds included) so the ``=`` tie-break branch round-trips reliably;
     an empty timestamp field marks a row from the verdict-less tail. Opaque by
     intent, like the queue cursor.
     """
-    stamp = decided_at.isoformat() if decided_at is not None else ""
+    stamp = activity_at.isoformat() if activity_at is not None else ""
     raw = f"{CURSOR_VERSION}|{DECIDED_CURSOR_KIND}|{stamp}|{int(group_id)}"
     return base64.urlsafe_b64encode(raw.encode("ascii")).decode("ascii").rstrip("=")
 
@@ -2013,8 +2013,19 @@ def decode_decided_cursor(cursor: str) -> tuple[Optional[datetime], int]:
         raise DedupCursorError(f"malformed decided cursor {cursor!r}: {exc}") from exc
 
 
+def _decided_activity_at():
+    """Timestamp used to order a row on the Decided page.
+
+    A stacked verdict follows its live stack's ``updated_at`` so later changes
+    to that stack bring its Compare Group back to the top. Keep-separate rows
+    have no stack and continue to use the decision stamp. ``COALESCE`` also
+    falls back safely if an old stacked verdict references a missing stack.
+    """
+    return func.coalesce(PictureStack.updated_at, DedupVerdict.decided_at)
+
+
 def _decided_keyset_predicate(cursor: str):
-    """The ``WHERE`` that resumes ``(decided_at DESC, id DESC, NULL tail)``.
+    """The ``WHERE`` that resumes ``(activity_at DESC, id DESC, NULL tail)``.
 
     Mirrors :func:`_keyset_predicate` for the decided ordering. A cursor from
     inside the timestamped run resumes at older stamps, the id tie-break within
@@ -2022,13 +2033,14 @@ def _decided_keyset_predicate(cursor: str):
     sorts after every real stamp); a cursor from inside that tail resumes on id
     alone.
     """
-    decided_at, group_id = decode_decided_cursor(cursor)
-    if decided_at is None:
-        return DedupVerdict.decided_at.is_(None) & (DedupGroup.id < group_id)
+    activity_at, group_id = decode_decided_cursor(cursor)
+    activity = _decided_activity_at()
+    if activity_at is None:
+        return activity.is_(None) & (DedupGroup.id < group_id)
     return (
-        (DedupVerdict.decided_at < decided_at)
-        | ((DedupVerdict.decided_at == decided_at) & (DedupGroup.id < group_id))
-        | (DedupVerdict.decided_at.is_(None))
+        (activity < activity_at)
+        | ((activity == activity_at) & (DedupGroup.id < group_id))
+        | (activity.is_(None))
     )
 
 
@@ -2230,12 +2242,12 @@ def page_queue_in_session(
 ) -> tuple[list[dict[str, Any]], int, Optional[str]]:
     """One page of the queue, confidence descending. Never loads the whole list.
 
-    The **decided** page (``decided=True``) instead orders by the live verdict's
-    ``decided_at`` descending (id descending on ties): it is a
-    "review what I just decided" list, so the most recent decision sits on top
-    — the queue's confidence ordering is meaningless there. Its cursor is a
-    separate family encoding that keyset; the two cursor kinds reject each
-    other.
+    The **decided** page (``decided=True``) instead orders by recent activity
+    (id descending on ties): a stacked verdict uses its stack's ``updated_at``;
+    other verdicts use ``decided_at``. This makes Compare Group's decided
+    sequence follow recently changed stacks while leaving each group's member
+    order alone. Its cursor is a separate family encoding that keyset; the two
+    cursor kinds reject each other.
 
     Exactly ``limit`` group rows are read, then one candidate load for that
     page's members. 10 groups and 10,000 cost the same per page, which is the
@@ -2259,7 +2271,7 @@ def page_queue_in_session(
         limit: Page size, clamped to :data:`MAX_PAGE_SIZE`.
         cursor: Opaque keyset position from a previous page's ``next_cursor``.
         decided: ``False`` (default) pages the open queue; ``True`` pages the
-            decided listing, newest decision first.
+            decided listing, most recently changed first.
         verdicts: **Decided page only.** Restrict the listing to these live
             verdicts (:class:`DedupVerdictKind` values). ``None`` or empty is
             every verdict, which is the whole decided page. Ignored when
@@ -2299,13 +2311,18 @@ def page_queue_in_session(
     query = select(DedupGroup).where(DedupGroup.resolved.is_(decided))
     if decided:
         # The decided page is "review what I decided", so it orders by the
-        # decision stamp, most recent first — the queue's confidence ordering is
-        # meaningless there (user report, 2026-07-30). The live verdict is outer
-        # joined for the ORDER BY: a resolved group whose verdict row is missing
-        # or reopened (a stale edge state) sorts into a deterministic tail
-        # (SQLite puts NULLs last under DESC) rather than being hidden.
+        # stack's latest change when the verdict created a stack, and otherwise
+        # by the decision stamp. The live verdict is outer joined for the ORDER
+        # BY: a resolved group whose verdict row is missing or reopened (a stale
+        # edge state) sorts into a deterministic tail (SQLite puts NULLs last
+        # under DESC) rather than being hidden.
         # ``signature`` is unique on dedupverdict, so the join cannot fan out.
         query = query.join(DedupVerdict, _live_verdict_join_clause(), isouter=True)
+        query = query.join(
+            PictureStack,
+            PictureStack.id == DedupVerdict.stack_id,
+            isouter=True,
+        )
         if wanted:
             # The IN clause turns the outer join inner for this page: a row with
             # no live verdict matches no verdict the user asked for. It is still
@@ -2335,11 +2352,11 @@ def page_queue_in_session(
             _decided_keyset_predicate(cursor) if decided else _keyset_predicate(cursor)
         )
     if decided:
-        # Newest decision first; id DESC keeps a same-instant run (a bulk
-        # auto-stack) deterministic so cursor/offset seams cannot skip or
-        # repeat a row.
+        # Most recent activity first; id DESC keeps a same-instant run (a bulk
+        # auto-stack) deterministic so cursor/offset seams cannot skip or repeat
+        # a row.
         query = query.order_by(
-            DedupVerdict.decided_at.desc(),
+            _decided_activity_at().desc(),
             DedupGroup.id.desc(),
         ).limit(limit)
     else:
@@ -2378,25 +2395,35 @@ def page_queue_in_session(
     # A decided row says WHICH verdict resolved it, so the client can render
     # "Stacked" and "Kept separate" differently and offer the right way back.
     verdict_by_signature: dict[str, DedupVerdict] = {}
+    activity_by_signature: dict[str, Optional[datetime]] = {}
     if decided:
         verdict_rows = session.exec(
-            select(DedupVerdict).where(
+            select(DedupVerdict, PictureStack.updated_at)
+            .join(
+                PictureStack,
+                PictureStack.id == DedupVerdict.stack_id,
+                isouter=True,
+            )
+            .where(
                 DedupVerdict.signature.in_([row.signature for row in rows]),
                 DedupVerdict.reopened_at.is_(None),
             )
         ).all()
-        verdict_by_signature = {v.signature: v for v in verdict_rows}
+        for verdict, stack_updated_at in verdict_rows:
+            verdict_by_signature[verdict.signature] = verdict
+            activity_by_signature[verdict.signature] = (
+                stack_updated_at or verdict.decided_at
+            )
 
     # A short page is end-of-found; a full page may or may not be, and handing
     # back a cursor that yields one empty page is cheaper than the extra COUNT
     # that would be needed to know for certain. Each ordering mints its own
-    # cursor family; the decided one encodes the last row's decision stamp.
+    # cursor family; the decided one encodes the last row's activity stamp.
     if len(rows) != limit:
         next_cursor = None
     elif decided:
-        last_verdict = verdict_by_signature.get(rows[-1].signature)
         next_cursor = encode_decided_cursor(
-            last_verdict.decided_at if last_verdict is not None else None,
+            activity_by_signature.get(rows[-1].signature),
             int(rows[-1].id),
         )
     else:

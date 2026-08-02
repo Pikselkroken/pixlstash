@@ -1383,13 +1383,12 @@ def restore_verdicts_in_session(
             # carries the lifecycle. decided_at is RE-stamped on redo
             # (2026-07-30): it means "when this decision last became live", not
             # "when it was first made" — pressing redo is the user re-deciding
-            # now, and the Decided page sorts by decided_at descending, so
-            # restoring the old stamp would bury the just-redone verdict
-            # mid-list instead of putting it on top where the user looks for
-            # it. The original decision instant survives in the operation row's
-            # created_at, so no audit history is lost. (An undo leaves
-            # decided_at alone: the row is not live, and the stamp still names
-            # the decision the redo would restore.)
+            # now. The Decided page uses decided_at for keep-separate verdicts
+            # and as the fallback when a stacked verdict has no live stack
+            # timestamp. The original decision instant survives in the
+            # operation row's created_at, so no audit history is lost. (An undo
+            # leaves decided_at alone: the row is not live, and the stamp still
+            # names the decision the redo would restore.)
             row.reopened_at = reopened_at
             if is_redo:
                 row.decided_at = now

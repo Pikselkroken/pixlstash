@@ -62,12 +62,15 @@ const CARD_CONTENT_FIELDS = new Set(["detections"]);
 // members changes exactly this and nothing else about the cover, which is how a
 // collapsed stack kept rendering "5" around a picture that was on its own.
 //
-// It is never a sort or filter field, so it must never raise a pill or reshuffle
-// the grid; and it is handled uniformly for EVERY origin, this tab's own echo
-// included, for the same reason `restored` is: the acting tab has no optimistic
-// local copy of a count only the server can compute, and an undo (Ctrl+Z, the
-// toolbar, the lightbox) has no local grid op at all to have applied it.
+// Normally it is not a sort field, so it gets a targeted facet refresh for
+// every origin. The one exception is STACK_UPDATED_AT: the membership edit that
+// produced this event also advanced the stack timestamp, so that active sort
+// requires a grid reorder rather than a badge-only refresh.
 const STACK_FACET_FIELDS = new Set(["stack_count"]);
+
+function isStackUpdatedSortValue(value) {
+  return String(value || "").toUpperCase() === "STACK_UPDATED_AT";
+}
 
 function asPictureIds(payload) {
   return Array.isArray(payload?.picture_ids) ? payload.picture_ids : [];
@@ -607,6 +610,13 @@ export function useGridRealtimeSync(deps) {
       fieldsAreStackFacetsOnly(fields) &&
       pictureIds.length
     ) {
+      // Membership edits advance PictureStack.updated_at. Under the special
+      // stack-time sort that changes the order of the whole deck list, so a
+      // badge-only refresh would leave the rows in the old order. Re-read the
+      // collapsed grid (or defer it under the frozen lightbox) instead.
+      if (isStackUpdatedSortValue(getSelectedSort())) {
+        return reloadOrDefer("stack-time-sort-changed");
+      }
       if (deferWhileOverlayOpen()) {
         // §9.1: nothing mutates the grid under the frozen filmstrip.
         // closeOverlay() reconciles.

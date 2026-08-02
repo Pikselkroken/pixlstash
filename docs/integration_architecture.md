@@ -1068,16 +1068,17 @@ still lists (so its "clear decision" way back survives) but belongs to no
 verdict. Sending `verdict` **without** `decided` is a **400** — open-queue
 groups carry no verdict, so the filter could only silently empty the queue.
 
-**The decided page is ordered by `decided_at` descending** — most recent
-decision first (2026-07-30; the open queue keeps its confidence-descending
-order). A fresh verdict lands on top; a **redo** re-stamps `decided_at`, so a
-just-redone decision also sorts to the top rather than resurfacing at its old
-position. `next_cursor` works on both pages, but the two orderings mint
-**distinct cursor families** that reject each other with a 400 — never reuse a
-queue cursor on the decided page or across the flip.
+**The decided page is ordered by recent activity descending.** A stacked
+verdict uses its live `PictureStack.updated_at`, so editing that stack brings
+its group back to the top of Decided and the Compare Group sequence. Other
+verdicts use `decided_at` (2026-07-30; the open queue keeps its
+confidence-descending order). `next_cursor` encodes that same effective
+timestamp. Both pages mint **distinct cursor families** that reject each other
+with a 400 — never reuse a queue cursor on the decided page or across the flip.
 
-**`decided_at` is display-ready.** It is the stamp the ordering sorts by:
-"when this decision last became live" (a redo re-stamps it). Format is
+**`decided_at` is display-ready.** It means "when this decision last became
+live" (a redo re-stamps it), even though a stacked row may sort by the newer
+stack activity described above. Format is
 **naive-UTC ISO 8601** with microseconds and **no offset suffix**
 (`"2026-07-30T12:28:53.123456"`, no trailing `Z`) — the same convention as
 every other timestamp on this API (`created_at`, the operation log's stamps) —

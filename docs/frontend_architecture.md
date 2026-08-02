@@ -1680,6 +1680,13 @@ both grid query builders. Only Duplicates, which has a to-do count, earns a
 sidebar row. Since the Keep-cover-only lane it is also the one filter a URL may
 carry (`?stack_state=`, additive only; see §4.5).
 
+**Recently changed stacks is a stack-only sort.** The toolbar exposes
+`STACK_UPDATED_AT` only while `stackStateFilter === "stacked"`, marks it with a
+filter glyph whose tooltip explains that boundary, and falls back to Date when
+the user leaves the stacked filter. Stack membership events normally refresh
+only the deck count; under this sort they reload (or defer under the lightbox)
+because the same edit advances `PictureStack.updated_at` and can reorder decks.
+
 **The queue-clear screen is the only route to the stacks**, and it goes to the
 **place, not to the action**: a `router.push` to `/` with
 `?stack_state=stacked`, landing in All Pictures with nothing selected and

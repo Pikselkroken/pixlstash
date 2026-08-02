@@ -2570,11 +2570,12 @@ Every verdict — stack **and** keep-separate — records **exactly one**
   history is worth keeping) and sets its group `resolved=False`; on **redo** it
   clears `reopened_at` **and re-stamps `decided_at`** (2026-07-30): the stamp
   means "when this decision last became live", not "when it was first made" —
-  a redo is the user re-deciding now, and the Decided page orders by
-  `decided_at` descending, so restoring the old stamp would bury the
-  just-redone verdict mid-list. The original instant survives in the operation
-  row's `created_at`. "Live" is exactly `reopened_at IS NULL` (undo leaves
-  `decided_at` alone). One query covers a 2 700-group batch undo. Without this
+  a redo is the user re-deciding now. The Decided page uses this stamp for
+  keep-separate rows and as the fallback for stacked rows whose live stack has
+  no timestamp; normal stacked rows use `PictureStack.updated_at` so later
+  stack changes return to the top. The original decision instant survives in
+  the operation row's `created_at`. "Live" is exactly `reopened_at IS NULL`
+  (undo leaves `decided_at` alone). One query covers a 2 700-group batch undo. Without this
   the undo was half an undo: the pictures came back unstacked while the group
   stayed decided, invisible in the queue and in the counts, and it **survived a
   rescan** because `verdict_signatures_in_session` still saw a live verdict.
