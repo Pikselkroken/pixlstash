@@ -4,6 +4,7 @@ import { isReadOnly, logout } from "../../utils/apiClient";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AccountSection from "./AccountSection.vue";
+import LibrariesSection from "./LibrariesSection.vue";
 import AppearanceSection from "./AppearanceSection.vue";
 import BehaviourSection from "./BehaviourSection.vue";
 import ComputeSection from "./ComputeSection.vue";
@@ -60,6 +61,15 @@ const settingsTab = ref("appearance");
 // The left nav rail. Each entry: id, MDI icon, label, and a visibility flag.
 const navItems = computed(() =>
   [
+    {
+      // First in the rail, and the only entry that changes *what* the app is
+      // showing rather than how it looks or behaves. Grouping it with the
+      // appearance and behaviour panes below would bury it.
+      id: "libraries",
+      icon: "bookshelf",
+      label: "Libraries",
+      show: !isReadOnly.value,
+    },
     {
       id: "appearance",
       icon: "palette-outline",
@@ -169,6 +179,13 @@ watch(
            have multiple root nodes (e.g. AccountSection renders dialogs as
            siblings), and v-show cannot toggle a multi-root component. The
            wrapper guarantees one element to show/hide. -->
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'libraries'"
+        class="settings-pane"
+      >
+        <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
+      </div>
       <div v-show="settingsTab === 'appearance'" class="settings-pane">
         <AppearanceSection
           :sidebar-thumbnail-size="props.sidebarThumbnailSize"
