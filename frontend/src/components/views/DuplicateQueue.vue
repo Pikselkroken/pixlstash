@@ -786,6 +786,7 @@ const noticeStore = useNoticeStore();
 // made in setup, so Pinia removes it when the view unmounts.
 
 const UNDO_REDO_ACTIONS = new Set(["undo", "redo", "undoTo", "undoBatchById"]);
+const STACK_UNDO_ACTIONS = new Set(["undo", "undoTo", "undoBatchById"]);
 
 /**
  * The operations an undo/redo action is ABOUT to touch, read before the
@@ -814,13 +815,130 @@ function opsUndoActionTouches(name, args) {
   return [];
 }
 
+/**
+ * Capture semantic anchors before an undo can insert rows into the queue.
+ * A raw scrollTop is not sufficient: rows ahead of the viewport can return,
+ * changing the absolute pixel position while the same group should remain at
+ * the same place on screen.
+ */
+function stackUndoViewportSnapshot(touched) {
+  const list = listEl.value;
+  const top = Number(list?.scrollTop) || 0;
+  const topIndex = Math.max(
+    store.windowStart,
+    Math.floor(top / rowPitchPx.value),
+  );
+  const anchor = store.groups[topIndex - store.windowStart] ?? null;
+  return {
+    top,
+    topIndex,
+    anchorSignature: anchor?.signature ?? null,
+    anchorOffset: top - topIndex * rowPitchPx.value,
+    focusSignature: store.focusedGroup?.signature ?? null,
+    signatures: new Set(store.groups.map((group) => group.signature)),
+    targetIds: new Set(
+      touched
+        .flatMap((operation) => operation?.target_ids ?? [])
+        .map((id) => String(id)),
+    ),
+  };
+}
+
+/** Whether an operation-store action actually changed server state. */
+function undoActionSucceeded(name, result) {
+  if (name === "undoTo") return Number(result) > 0;
+  return result !== null && result !== undefined;
+}
+
+/**
+ * Reconcile a restored stack verdict without losing the reviewer's place.
+ * The store preserves the row/focus signatures; this final DOM pass preserves
+ * the anchor's intra-row offset and applies `nearest` semantics to the returned
+ * group, so it visibly pops back into its old context.
+ */
+async function reloadStackUndoInPlace(snapshot) {
+  store.invalidateScopeCounts();
+  await store.reloadWindowAround(snapshot.topIndex, {
+    focusSignature: snapshot.focusSignature,
+  });
+  await nextTick();
+
+  const list = listEl.value;
+  if (!list) {
+    store.refreshCounts();
+    return;
+  }
+
+  const anchorLocal = snapshot.anchorSignature
+    ? store.groups.findIndex(
+        (group) => group.signature === snapshot.anchorSignature,
+      )
+    : -1;
+  if (anchorLocal >= 0) {
+    const anchorIndex = store.windowStart + anchorLocal;
+    list.scrollTop = Math.max(
+      0,
+      anchorIndex * rowPitchPx.value + snapshot.anchorOffset,
+    );
+  } else {
+    // Honest degradation when the old anchor no longer belongs to the active
+    // lens: keep the old pixel place, clamped by the browser's scrollport.
+    list.scrollTop = snapshot.top;
+  }
+  onListScroll();
+  await nextTick();
+
+  const returned = store.groups
+    .map((group, local) => ({
+      group,
+      index: store.windowStart + local,
+    }))
+    .filter(({ group }) => {
+      if (snapshot.signatures.has(group.signature)) return false;
+      if (!snapshot.targetIds.size) return true;
+      return (group.candidates ?? []).some((candidate) =>
+        snapshot.targetIds.has(String(candidateId(candidate))),
+      );
+    })
+    .sort(
+      (a, b) =>
+        Math.abs(a.index - snapshot.topIndex) -
+        Math.abs(b.index - snapshot.topIndex),
+    );
+  const restored = returned[0];
+  if (restored) {
+    const top = restored.index * rowPitchPx.value;
+    const bottom = top + rowPitchPx.value;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
+    onListScroll();
+  }
+  store.refreshCounts();
+}
+
 operationStore.$onAction(({ name, args, after }) => {
   if (readOnly.value || !UNDO_REDO_ACTIONS.has(name)) return;
   const touched = opsUndoActionTouches(name, args);
   if (!touched.some((op) => String(op?.op_type || "").startsWith("dedup."))) {
     return;
   }
-  after(async () => {
+  const preserveStackUndo =
+    STACK_UNDO_ACTIONS.has(name) &&
+    !store.showingDecided &&
+    !store.showingMixed &&
+    touched.some((op) => op?.op_type === "dedup.stack");
+  const snapshot = preserveStackUndo
+    ? stackUndoViewportSnapshot(touched)
+    : null;
+  after(async (result) => {
+    if (snapshot) {
+      if (undoActionSucceeded(name, result)) {
+        await reloadStackUndoInPlace(snapshot);
+      }
+      return;
+    }
     // Same sequence as reopen(): the group is back in the server's unresolved
     // set, so the list, the per-scope caches and the badge all re-read.
     store.invalidateScopeCounts();

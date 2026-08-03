@@ -86,6 +86,9 @@ import { useOperationStore } from "./useOperationStore";
 /** How many groups one queue page holds. */
 export const QUEUE_PAGE_SIZE = 20;
 
+/** Rows retained ahead of an in-place undo reload's viewport anchor. */
+const WINDOW_RELOAD_CONTEXT = QUEUE_PAGE_SIZE;
+
 /**
  * How close to the tail the focus may walk before the next page is fetched.
  * Three rows is one Enter-Enter-Enter burst of headroom, which is what a user
@@ -1294,6 +1297,106 @@ export const useDedupStore = defineStore("dedup", () => {
     } finally {
       // Only the CURRENT rebuild owns the loading flag: a superseded one
       // finishing late must not clear (or appear to clear) the fresh one's.
+      if (epoch === windowEpoch) loading.value = false;
+    }
+  }
+
+  /**
+   * Re-read a bounded window around an absolute queue index without sending a
+   * reviewer back to the head of the queue.
+   *
+   * This is deliberately narrower than {@link loadFirstPage}: it is the
+   * reconciliation path for a successful undo that inserted a resolved group
+   * back into the ordered queue. The view owns the pixel/signature viewport
+   * anchor; this store owns replacing the server window while retaining the
+   * focused group and any still-present multi-selection.
+   *
+   * @param {number} anchorIndex - absolute row currently at the viewport edge.
+   * @param {Object} [options]
+   * @param {string|null} [options.focusSignature] - focused group before reload.
+   * @returns {Promise<void>}
+   */
+  async function reloadWindowAround(
+    anchorIndex,
+    { focusSignature = null } = {},
+  ) {
+    loading.value = true;
+    error.value = null;
+    windowEpoch += 1;
+    const epoch = windowEpoch;
+    cancelEndChase();
+
+    // Use the server's largest legal page. A bulk verdict can restore many
+    // adjacent groups ahead of the old anchor; the wide read keeps both that
+    // restored run and the group that held keyboard focus in one coherent
+    // window, while the component still mounts only its small virtual slice.
+    const pageSize = Math.max(
+      1,
+      Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE,
+    );
+    const before = Math.min(WINDOW_RELOAD_CONTEXT, pageSize - 1);
+    const requestedIndex = Math.max(0, Math.floor(Number(anchorIndex) || 0));
+    const offset = Math.max(0, requestedIndex - before);
+    const selectedBefore = new Set(selectedSignatures.value);
+
+    try {
+      const data = await listGroups({
+        ...policyArgs.value,
+        scopeType: scopeType.value,
+        scopeId: scopeId.value,
+        decided: showingDecided.value,
+        verdicts: verdictArgs.value,
+        offset,
+        limit: pageSize,
+      });
+      if (epoch !== windowEpoch) return;
+
+      adoptVerdictCounts(data);
+      groups.value = Array.isArray(data?.groups) ? data.groups : [];
+      windowStart.value = offset;
+      total.value = Number(data?.total) || groups.value.length;
+      nextOffset.value = offset + groups.value.length;
+      nextCursor.value = cursorFrom(data);
+      hasMore.value =
+        nextCursor.value !== null || nextOffset.value < total.value;
+      scan.value = normalizeScan(data?.scan);
+
+      const heldSignatures = new Set(groups.value.map((g) => g.signature));
+      selectedSignatures.value = new Set(
+        [...selectedBefore].filter((signature) =>
+          heldSignatures.has(signature),
+        ),
+      );
+      selectionAnchor = null;
+
+      const focusedLocal = focusSignature
+        ? groups.value.findIndex((g) => g.signature === focusSignature)
+        : -1;
+      if (focusedLocal >= 0) {
+        focusIndex.value = offset + focusedLocal;
+      } else if (groups.value.length) {
+        focusIndex.value = Math.max(
+          offset,
+          Math.min(offset + groups.value.length - 1, requestedIndex),
+        );
+      } else {
+        focusIndex.value = -1;
+      }
+    } catch (err) {
+      // The undo itself has already succeeded. A failed reconciliation must
+      // leave the still-usable local window, focus and selection in place;
+      // clearing them would turn a transient read failure into a second UI
+      // failure and lose the reviewer's context anyway.
+      if (epoch !== windowEpoch) {
+        console.warn(
+          "[dedup] discarding a superseded anchored reload's failure",
+          err,
+        );
+        return;
+      }
+      error.value = err;
+      console.warn("[dedup] failed to reload the duplicate queue in place", err);
+    } finally {
       if (epoch === windowEpoch) loading.value = false;
     }
   }
@@ -3031,6 +3134,7 @@ export const useDedupStore = defineStore("dedup", () => {
     openQueue,
     clearScope,
     loadFirstPage,
+    reloadWindowAround,
     loadMore,
     loadPrevious,
     windowStart,

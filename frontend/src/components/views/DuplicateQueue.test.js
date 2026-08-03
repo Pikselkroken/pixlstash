@@ -984,12 +984,12 @@ describe("DuplicateQueue — the shell chrome", () => {
 
 describe("DuplicateQueue — undo puts the queue back", () => {
   /** Drive the queue's operation-store subscription as Pinia would. */
-  async function runUndoAction(name, args = []) {
+  async function runUndoAction(name, args = [], result = {}) {
     const afters = [];
     for (const listener of __actionListeners) {
       listener({ name, args, after: (cb) => afters.push(cb) });
     }
-    for (const cb of afters) await cb();
+    for (const cb of afters) await cb(result);
   }
 
   // The regression this pins: undoing a stack verdict reopened the group
@@ -1021,6 +1021,78 @@ describe("DuplicateQueue — undo puts the queue back", () => {
     expect(listGroups).toHaveBeenCalledTimes(1);
     expect(listGroups.mock.calls[0][0].offset).toBe(0);
     expect(store.groups.map((g) => g.signature)).toContain("g9");
+    wrapper.unmount();
+  });
+
+  it("restores a stacked group inside the virtual window without losing the viewport or focus", async () => {
+    const first = Array.from({ length: 200 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(first, { total: 240 });
+    const list = wrapper.find(".qlist");
+    Object.defineProperty(list.element, "clientHeight", {
+      configurable: true,
+      value: 6 * PITCH,
+    });
+
+    // Work far enough down the queue that a first-page reload cannot preserve
+    // context. The focused row is the one that slid into the stacked row's old
+    // place; two still-open rows are multi-selected around it.
+    store.setFocus(174);
+    store.toggleSelected(173);
+    store.setFocus(174);
+    await flushPromises();
+    expect(store.focusedGroup.signature).toBe("g175");
+    list.element.scrollTop = 170 * PITCH + 7;
+    list.element.dispatchEvent(new window.Event("scroll"));
+
+    __operationStoreMock.nextUndo = {
+      id: 9,
+      op_type: "dedup.stack",
+      batch_id: "b1",
+      target_ids: [9900, 9901],
+    };
+    const restored = group("g99-restored");
+    // Requested at offset 150: the old focus (g175) shifts down one when the
+    // restored group returns immediately before it.
+    const refreshed = [
+      ...Array.from({ length: 24 }, (_, i) => group(`g${151 + i}`)),
+      restored,
+      ...Array.from({ length: 66 }, (_, i) => group(`g${175 + i}`)),
+    ];
+    listGroups.mockClear();
+    listGroups.mockResolvedValue({
+      groups: refreshed,
+      total: 241,
+      offset: 150,
+      limit: 200,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+
+    await runUndoAction("undo");
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.calls[0][0]).toMatchObject({ offset: 150, limit: 200 });
+    expect(store.windowStart).toBe(150);
+    expect(store.focusedGroup.signature).toBe("g175");
+    expect(store.isSelected("g174")).toBe(true);
+    expect(store.isSelected("g175")).toBe(true);
+    expect(list.element.scrollTop).toBe(170 * PITCH + 7);
+    expect(wrapper.find('[data-testid="dedup-group-g99-restored"]').exists()).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it("does not reconcile the queue when a stack undo fails", async () => {
+    const { wrapper } = await mountQueue([group("g1"), group("g2")]);
+    __operationStoreMock.nextUndo = { id: 9, op_type: "dedup.stack" };
+    listGroups.mockClear();
+
+    await runUndoAction("undo", [], null);
+    await flushPromises();
+
+    expect(listGroups).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
