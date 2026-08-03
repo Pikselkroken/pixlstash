@@ -433,6 +433,9 @@ def create_router(server) -> APIRouter:
                 snapshot_id,
                 dry_run=dry_run,
                 allow_without_safety=allow_without_safety,
+                restore_request_lease=getattr(
+                    request.state, "restore_admission_lease", None
+                ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

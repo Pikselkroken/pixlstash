@@ -1,5 +1,6 @@
 """Tests for RestoreService — full and per-resource restore."""
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -3766,6 +3767,129 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
         .status_code
         == 401
     )
+
+
+def test_full_restore_drains_an_admitted_http_request_before_swap(
+    server, monkeypatch
+):
+    """The restore request excludes itself but waits for older API traffic."""
+    from fastapi.testclient import TestClient
+
+    restore_client = TestClient(server.api, raise_server_exceptions=True)
+    blocked_client = TestClient(server.api, raise_server_exceptions=True)
+    for client in (restore_client, blocked_client):
+        login = client.post(
+            "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+        )
+        assert login.status_code == 200, login.text
+
+    token_response = restore_client.post(
+        "/api/v1/users/me/token",
+        json={"description": "drain-test", "scope": "READ"},
+    )
+    assert token_response.status_code == 200, token_response.text
+    old_token = token_response.json()["token"]
+
+    _create_file(server, "restore-admission-drain.jpg")
+    _add_picture(server, filename="restore-admission-drain.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    admitted = threading.Event()
+    release_request = threading.Event()
+    close_started = threading.Event()
+    swap_started = threading.Event()
+    original_admitted = server.auth._auth_middleware_admitted
+    original_close = server.auth.close_auth_for_restore
+    original_swap = server.vault.restore_service._swap_database
+
+    async def _pause_after_admission(
+        request, call_next, allow_origins, allow_origin_regex
+    ):
+        if request.headers.get("x-pause-after-admission") == "yes":
+            admitted.set()
+            released = await asyncio.get_running_loop().run_in_executor(
+                None, release_request.wait, 10
+            )
+            assert released, "test did not release admitted request"
+        return await original_admitted(
+            request, call_next, allow_origins, allow_origin_regex
+        )
+
+    def _close_and_signal(restore_request_lease=None):
+        close_started.set()
+        return original_close(restore_request_lease)
+
+    def _swap_and_signal(live_db_path, new_db_path):
+        swap_started.set()
+        return original_swap(live_db_path, new_db_path)
+
+    monkeypatch.setattr(server.auth, "_auth_middleware_admitted", _pause_after_admission)
+    monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
+    monkeypatch.setattr(server.vault.restore_service, "_swap_database", _swap_and_signal)
+
+    blocked_outcome = {}
+    restore_outcome = {}
+
+    def _blocked_request():
+        blocked_outcome["response"] = blocked_client.get(
+            "/api/v1/session/context",
+            headers={"X-Pause-After-Admission": "yes"},
+        )
+
+    def _restore_request():
+        restore_outcome["response"] = restore_client.post(
+            f"/api/v1/snapshots/{cp.id}/restore",
+            json={"dry_run": False, "allow_without_safety": False},
+        )
+
+    blocked_thread = threading.Thread(target=_blocked_request, daemon=True)
+    restore_thread = threading.Thread(target=_restore_request, daemon=True)
+    blocked_thread.start()
+    assert admitted.wait(10), "request never acquired its admission lease"
+    restore_thread.start()
+    assert close_started.wait(20), "restore never began the admission drain"
+    assert server.auth.is_auth_closed_for_restore()
+    assert not swap_started.wait(0.2), "database swapped before prior request drained"
+    unavailable = TestClient(server.api).get("/api/v1/session/context")
+    assert unavailable.status_code == 503, unavailable.text
+
+    release_request.set()
+    blocked_thread.join(timeout=10)
+    restore_thread.join(timeout=30)
+    assert not blocked_thread.is_alive(), "admitted request did not finish"
+    assert not restore_thread.is_alive(), "restore did not finish after drain"
+    assert blocked_outcome["response"].status_code == 200
+    assert restore_outcome["response"].status_code == 200, restore_outcome[
+        "response"
+    ].text
+    assert swap_started.is_set()
+
+    # Both pre-restore credential forms require fresh authentication after the
+    # swap; neither can observe the restored database under its old identity.
+    assert restore_client.get("/api/v1/session/context").status_code == 401
+    assert (
+        TestClient(server.api)
+        .get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {old_token}"},
+        )
+        .status_code
+        == 401
+    )
+
+
+def test_restore_admission_drain_timeout_fails_closed(server, monkeypatch):
+    """An undrainable old request aborts without reopening authentication."""
+    lease = server.auth._acquire_restore_http_lease()
+    assert lease is not None
+    monkeypatch.setattr(server.auth, "_RESTORE_DRAIN_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(RuntimeError, match="Timed out draining"):
+            server.auth.close_auth_for_restore()
+        assert server.auth.is_auth_closed_for_restore()
+    finally:
+        server.auth._release_restore_http_lease(lease)
+        server.auth.reopen_auth_after_restore()
 
 
 def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(

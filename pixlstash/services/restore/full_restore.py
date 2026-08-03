@@ -61,6 +61,7 @@ class FullRestoreMixin:
         snapshot_id: int,
         dry_run: bool = False,
         allow_without_safety: bool = False,
+        restore_request_lease: int | None = None,
     ) -> RestoreReport:
         """Replace the live database with a snapshot snapshot.
 
@@ -89,6 +90,10 @@ class FullRestoreMixin:
                 explicitly acknowledged that there will be no rollback (e.g.
                 disk is full and they want to restore *because* the live DB
                 is broken).
+            restore_request_lease: Admission lease held by an authenticated
+                HTTP restore request. The barrier excludes it from the drain
+                after closing new admissions, avoiding a self-deadlock. Direct
+                service callers leave this as ``None``.
 
         Returns:
             A ``RestoreReport`` summarising the operation.
@@ -124,6 +129,7 @@ class FullRestoreMixin:
                     vault_root,
                     report,
                     allow_without_safety,
+                    restore_request_lease,
                 )
             finally:
                 self._active_job = None
@@ -137,6 +143,7 @@ class FullRestoreMixin:
         vault_root: str,
         report: "RestoreReport",
         allow_without_safety: bool,
+        restore_request_lease: int | None,
     ) -> "RestoreReport":
         """Inner implementation of full restore (called from restore_full).
 
@@ -169,6 +176,7 @@ class FullRestoreMixin:
                 report,
                 allow_without_safety,
                 abs_snapshot,
+                restore_request_lease,
             )
         except Exception as exc:
             self._emit_lifecycle(
@@ -185,6 +193,7 @@ class FullRestoreMixin:
         report: "RestoreReport",
         allow_without_safety: bool,
         abs_snapshot: str,
+        restore_request_lease: int | None,
     ) -> "RestoreReport":
         """The body of full restore steps 1-9 (separated so the lifecycle
         wrapper in ``_restore_full_inner`` stays narrow)."""
@@ -687,7 +696,7 @@ class FullRestoreMixin:
         # (or a process restart) may admit credentials again.
         auth_service = getattr(self._vault, "auth_service", None)
         if auth_service is not None:
-            auth_service.close_auth_for_restore()
+            auth_service.close_auth_for_restore(restore_request_lease)
 
         # Steps 4-8 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped

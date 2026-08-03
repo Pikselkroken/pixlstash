@@ -526,81 +526,95 @@ def create_router(server) -> APIRouter:
         if ws_auth is None or not ws_auth.is_owner:
             await websocket.close(code=1008)
             return
-        await websocket.accept()
-        user = server.vault.db.run_task(
-            lambda session: session.get(User, ws_auth.user_id),
-            priority=DBPriority.IMMEDIATE,
-        )
-
-        comfyui_url = getattr(user, "comfyui_url", None) if user else None
-        comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
-        client_id = (
-            websocket.query_params.get("clientId")
-            or websocket.query_params.get("client_id")
-            or f"pixlstash-{uuid.uuid4().hex[:8]}"
-        )
-        ws_base = (
-            comfyui_url.replace("https://", "wss://")
-            if comfyui_url.startswith("https://")
-            else comfyui_url.replace("http://", "ws://")
-        )
-        ws_url = f"{ws_base}/ws?clientId={quote(client_id)}"
-
-        async def forward_upstream(upstream):
-            try:
-                async for message in upstream:
-                    if isinstance(message, (bytes, bytearray)):
-                        await websocket.send_bytes(bytes(message))
-                    else:
-                        await websocket.send_text(message)
-            except asyncio.CancelledError:
-                raise
-            except WebSocketDisconnect:
-                logger.debug(
-                    "ComfyUI WebSocket client disconnected while forwarding upstream."
-                )
-            except Exception as exc:
-                logger.debug("ComfyUI WebSocket upstream forward failed: %s", exc)
-
-        async def forward_downstream(upstream):
-            try:
-                while True:
-                    message = await websocket.receive_text()
-                    if message:
-                        await upstream.send(message)
-            except asyncio.CancelledError:
-                raise
-            except WebSocketDisconnect:
-                logger.debug("ComfyUI WebSocket client disconnected normally.")
-            except Exception as exc:
-                logger.debug("ComfyUI WebSocket downstream receive failed: %s", exc)
-
+        admission_lease = server.auth.register_authenticated_websocket(websocket)
+        if admission_lease is None:
+            await websocket.close(code=1012)
+            return
         try:
-            async with websockets.connect(
-                ws_url, ping_interval=None, close_timeout=2
-            ) as upstream:
-                upstream_task = asyncio.create_task(forward_upstream(upstream))
-                downstream_task = asyncio.create_task(forward_downstream(upstream))
-                done, pending = await asyncio.wait(
-                    {upstream_task, downstream_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                for task in done:
-                    exc = task.exception()
-                    if exc:
-                        raise exc
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("ComfyUI progress proxy failed: %s", exc)
+            await websocket.accept()
+            user = server.vault.db.run_task(
+                lambda session: session.get(User, ws_auth.user_id),
+                priority=DBPriority.IMMEDIATE,
+            )
+
+            comfyui_url = getattr(user, "comfyui_url", None) if user else None
+            comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
+            client_id = (
+                websocket.query_params.get("clientId")
+                or websocket.query_params.get("client_id")
+                or f"pixlstash-{uuid.uuid4().hex[:8]}"
+            )
+            ws_base = (
+                comfyui_url.replace("https://", "wss://")
+                if comfyui_url.startswith("https://")
+                else comfyui_url.replace("http://", "ws://")
+            )
+            ws_url = f"{ws_base}/ws?clientId={quote(client_id)}"
+
+            async def forward_upstream(upstream):
+                try:
+                    async for message in upstream:
+                        if isinstance(message, (bytes, bytearray)):
+                            await websocket.send_bytes(bytes(message))
+                        else:
+                            await websocket.send_text(message)
+                except asyncio.CancelledError:
+                    raise
+                except WebSocketDisconnect:
+                    logger.debug(
+                        "ComfyUI WebSocket client disconnected while forwarding upstream."
+                    )
+                except Exception as exc:
+                    logger.debug("ComfyUI WebSocket upstream forward failed: %s", exc)
+
+            async def forward_downstream(upstream):
+                try:
+                    while True:
+                        message = await websocket.receive_text()
+                        if message:
+                            await upstream.send(message)
+                except asyncio.CancelledError:
+                    raise
+                except WebSocketDisconnect:
+                    logger.debug("ComfyUI WebSocket client disconnected normally.")
+                except Exception as exc:
+                    logger.debug("ComfyUI WebSocket downstream receive failed: %s", exc)
+
+            try:
+                async with websockets.connect(
+                    ws_url, ping_interval=None, close_timeout=2
+                ) as upstream:
+                    upstream_task = asyncio.create_task(forward_upstream(upstream))
+                    downstream_task = asyncio.create_task(forward_downstream(upstream))
+                    proxy_tasks = {upstream_task, downstream_task}
+                    try:
+                        done, _pending = await asyncio.wait(
+                            proxy_tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in done:
+                            exc = task.exception()
+                            if exc:
+                                raise exc
+                    finally:
+                        # The restore barrier cancels this owning handler after
+                        # closing the client socket. Always tear down both proxy
+                        # directions as part of that cancellation; otherwise an
+                        # orphaned upstream iterator could outlive cutover.
+                        for task in proxy_tasks:
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(*proxy_tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("ComfyUI progress proxy failed: %s", exc)
         finally:
             try:
                 await websocket.close()
             except Exception as exc:
                 logger.debug("Failed to close WebSocket cleanly: %s", exc)
+            server.auth.unregister_authenticated_websocket(admission_lease)
 
     @router.get(
         "/comfyui/workflows",

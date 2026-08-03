@@ -271,24 +271,29 @@ class WsBroadcasterMixin:
             if ws_auth is None:
                 await websocket.close(code=1008)
                 return
-            await websocket.accept()
-            # Always refresh _ws_loop so it tracks the currently-running event loop.
-            # In production (uvicorn) this is always the same loop; in tests each
-            # WebSocket session may run on a different loop than HTTP requests.
-            self._ws_loop = asyncio.get_running_loop()
-            # Only owner-level connections receive the global vault-activity
-            # stream. A resource-scoped / READ token may connect (authenticated)
-            # but is never sent events outside its grant — see
-            # ``_broadcast_ws_event``.
-            client = {
-                "ws": websocket,
-                "filters": {},
-                "owner": ws_auth.is_owner,
-                "client_id": None,
-            }
-            with self._ws_clients_lock:
-                self._ws_clients.append(client)
+            admission_lease = self.auth.register_authenticated_websocket(websocket)
+            if admission_lease is None:
+                await websocket.close(code=1012)
+                return
+            client = None
             try:
+                await websocket.accept()
+                # Always refresh _ws_loop so it tracks the currently-running event loop.
+                # In production (uvicorn) this is always the same loop; in tests each
+                # WebSocket session may run on a different loop than HTTP requests.
+                self._ws_loop = asyncio.get_running_loop()
+                # Only owner-level connections receive the global vault-activity
+                # stream. A resource-scoped / READ token may connect (authenticated)
+                # but is never sent events outside its grant — see
+                # ``_broadcast_ws_event``.
+                client = {
+                    "ws": websocket,
+                    "filters": {},
+                    "owner": ws_auth.is_owner,
+                    "client_id": None,
+                }
+                with self._ws_clients_lock:
+                    self._ws_clients.append(client)
                 while True:
                     message = await websocket.receive_text()
                     if not message:
@@ -318,5 +323,6 @@ class WsBroadcasterMixin:
                 logger.debug("WebSocket client disconnected normally.")
             finally:
                 with self._ws_clients_lock:
-                    if client in self._ws_clients:
+                    if client is not None and client in self._ws_clients:
                         self._ws_clients.remove(client)
+                self.auth.unregister_authenticated_websocket(admission_lease)
