@@ -103,6 +103,16 @@ jobs:
           npm ci
           npm test
 
+      - name: Test Electron shell
+        working-directory: electron
+        run: |
+          npm ci
+          npm test
+
+      - name: Install telemetry Worker dependencies
+        working-directory: website/telemetry-worker
+        run: npm ci
+
       - name: Install telemetry config renderer
         run: |
           sudo apt-get update
@@ -117,6 +127,10 @@ jobs:
           npm run build:config
           npx --yes wrangler@4.36.0 deploy --dry-run --config build/wrangler.toml --outdir build/worker
           npm test
+
+      - name: Validate telemetry Worker config and D1 binding
+        working-directory: website/telemetry-worker
+        run: npm run check:config
 
   # ---------------------------------------------------------------------------
   # The backend gate. Split across 8 runners instead of one job with 22
@@ -227,6 +241,7 @@ jobs:
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
           tests/test_character_face_assignment.py
+          tests/test_characters_api.py
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
@@ -255,6 +270,7 @@ jobs:
           tests/test_ip_locality_fail_closed.py
           tests/test_keep_cover_only.py
           tests/test_label_ledger.py
+          tests/test_likeness_and_face_search.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
@@ -268,10 +284,13 @@ jobs:
           tests/test_picture_sets.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
+          tests/test_project_membership_service.py
+          tests/test_projects_api.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
+          tests/test_reviews_api.py
           tests/test_score_agreement_stats.py
           tests/test_scope_table.py
           tests/test_scrapheap_retention.py
@@ -282,6 +301,8 @@ jobs:
           tests/test_ssl_generation.py
           tests/test_stack_leader_scope.py
           tests/test_stack_state_filter.py
+          tests/test_stacks_api.py
+          tests/test_stacks_membership.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
@@ -292,7 +313,9 @@ jobs:
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py
+          tests/test_workers_api.py
           tests/test_work_planner.py
+          tests/test_ws_broadcaster.py
 
   # ---------------------------------------------------------------------------
   # RELEASE-PREP ONLY — informational ordering sweep, sharded by contiguous
@@ -396,7 +419,7 @@ jobs:
   build:
     name: build
     if: always()
-    needs: [checks, backend, backend_release_sweep]
+    needs: [checks, backend, backend_release_sweep, e2e]
     runs-on: ubuntu-latest
     steps:
       # Each dependency is checked against what IT is allowed to report, not
@@ -425,15 +448,17 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           SWEEP_RESULT: ${{ needs.backend_release_sweep.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           set -euo pipefail
-          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT"
+          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT"
 
           failed=0
-          for job in checks backend; do
+          for job in checks backend e2e; do
             case "$job" in
               checks) result="$CHECKS_RESULT" ;;
               backend) result="$BACKEND_RESULT" ;;
+              e2e) result="$E2E_RESULT" ;;
             esac
             if [ "$result" != "success" ]; then
               echo "::error::Blocking job '$job' reported '$result' (must be 'success')."
@@ -457,8 +482,8 @@ jobs:
   e2e:
     # Playwright UI tests drive the real SPA against a backend booted on a
     # throwaway copy of the committed test-data/ fixture (browse-only: workers
-    # disabled, no ML models needed). Skips cleanly until the fixture is
-    # committed, so CI stays green in the meantime.
+    # disabled, no ML models needed). The fixture is committed release input:
+    # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
     steps:
       - name: Remove unused tools
@@ -472,15 +497,13 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: Detect e2e fixture
+      - name: Require committed e2e fixture
         id: fixture
         run: |
-          if [ -f test-data/images/vault.db ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::test-data/ fixture not committed — skipping Playwright e2e."
-          fi
+          set -euo pipefail
+          git ls-files --error-unmatch test-data/images/vault.db
+          test -f test-data/images/vault.db
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: steps.fixture.outputs.present == 'true'

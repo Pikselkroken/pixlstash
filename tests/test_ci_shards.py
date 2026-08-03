@@ -34,6 +34,7 @@ the gate's own algorithm would audit that algorithm with itself, so
 ``test_each_job_uses_the_sharding_mode_it_needs`` pins the mode per job.
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -111,6 +112,24 @@ MUST_BLOCK_ON_EVERY_PR = frozenset(
     }
 )
 
+# Release-critical suites changed across the RC branch. These are intentionally
+# stronger than ordinary classification: moving one back to DEFERRED would
+# leave face-search, membership authz, undo/reviews, stacks, worker routes or
+# WebSocket event contracts visible only in the informational sweep.
+RELEASE_CRITICAL_MUST_BLOCK = frozenset(
+    {
+        "test_characters_api.py",
+        "test_likeness_and_face_search.py",
+        "test_project_membership_service.py",
+        "test_projects_api.py",
+        "test_reviews_api.py",
+        "test_stacks_api.py",
+        "test_stacks_membership.py",
+        "test_workers_api.py",
+        "test_ws_broadcaster.py",
+    }
+)
+
 # Files that are deliberately NOT in the blocking gate yet. Every one of these
 # still runs in the informational `backend_release_sweep`, so the coverage is
 # visible; it just does not block a PR.
@@ -130,7 +149,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_api_coverage.py",
         "test_batch_apply_scores.py",
         "test_build_desktop_runtime.py",
-        "test_characters_api.py",
         "test_default_device_override.py",
         "test_detection_florence.py",
         "test_detection_model.py",
@@ -147,24 +165,18 @@ DEFERRED_FROM_GATE = frozenset(
         "test_impossible_filter.py",
         "test_insightface_model_pack.py",
         "test_justified_thumbnails.py",
-        "test_likeness_and_face_search.py",
         "test_near_neighbor.py",
         "test_person_tags.py",
         "test_predicate_filter.py",
-        "test_project_membership_service.py",
-        "test_projects_api.py",
         "test_quality_task_shutdown.py",
         "test_reference_folder_listing_count_parity.py",
         "test_reference_folder_sidecars.py",
-        "test_reviews_api.py",
         "test_rocm_device_check.py",
         "test_server_external_listener.py",
         "test_server_simple.py",
         "test_smart_score_invalidation.py",
         "test_snapshot_compression.py",
         "test_stack_position_invariant.py",
-        "test_stacks_api.py",
-        "test_stacks_membership.py",
         "test_startup_banner_encoding.py",
         "test_stats_api.py",
         "test_tag_health_api.py",
@@ -175,8 +187,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_tagger_plugin_registry.py",
         "test_tagger_runs_api.py",
         "test_user_settings_tagger_settings.py",
-        "test_workers_api.py",
-        "test_ws_broadcaster.py",
     }
 )
 
@@ -330,6 +340,115 @@ def test_security_suites_cannot_be_quietly_deferred(workflow):
         "survived five days undetected. Fix the suite or delete it; parking it "
         "is not an option."
     )
+
+
+def test_release_critical_suites_cannot_remain_informational(workflow):
+    """Changed RC contracts must block rather than live only in the sweep."""
+    gated = _gated_files(workflow)
+    missing_files = sorted(
+        name
+        for name in RELEASE_CRITICAL_MUST_BLOCK
+        if not (TESTS_DIR / name).is_file()
+    )
+    assert not missing_files, (
+        "RELEASE_CRITICAL_MUST_BLOCK names missing suites: "
+        f"{missing_files}"
+    )
+
+    ungated = sorted(
+        f"tests/{name}"
+        for name in RELEASE_CRITICAL_MUST_BLOCK
+        if f"tests/{name}" not in gated
+    )
+    assert not ungated, (
+        "These release-critical suites do not block the stable backend gate: "
+        f"{ungated}"
+    )
+
+    parked = sorted(RELEASE_CRITICAL_MUST_BLOCK & DEFERRED_FROM_GATE)
+    assert not parked, (
+        "These release-critical suites were parked in the informational sweep: "
+        f"{parked}"
+    )
+
+
+def test_stable_aggregate_requires_playwright_and_fixture_fails_closed(workflow):
+    """The stable check cannot pass when Playwright did not prove the RC UI."""
+    aggregate = workflow["jobs"]["build"]
+    needs = aggregate.get("needs", [])
+    assert "e2e" in needs, "The stable `build` aggregate must require e2e"
+    aggregate_steps = "\n".join(
+        step.get("run", "") for step in aggregate.get("steps", [])
+    )
+    assert "E2E_RESULT" in aggregate_steps
+    assert "e2e)" in aggregate_steps
+
+    e2e = workflow["jobs"]["e2e"]
+    fixture_steps = [
+        step for step in e2e.get("steps", []) if step.get("id") == "fixture"
+    ]
+    assert len(fixture_steps) == 1, "Expected one authoritative fixture check"
+    fixture_script = fixture_steps[0].get("run", "")
+    assert "git ls-files --error-unmatch test-data/images/vault.db" in fixture_script
+    assert "test -f test-data/images/vault.db" in fixture_script
+    assert "present=false" not in fixture_script
+    assert "skipping Playwright" not in fixture_script
+
+
+def test_cheap_electron_tests_are_in_the_stable_checks(workflow):
+    """Desktop shell logic runs without invoking packaging."""
+    steps = workflow["jobs"]["checks"].get("steps", [])
+    electron = [
+        step
+        for step in steps
+        if step.get("working-directory") == "electron"
+    ]
+    assert electron, "The stable checks job must run Electron unit tests"
+    commands = "\n".join(step.get("run", "") for step in electron)
+    assert "npm ci" in commands
+    assert "npm test" in commands
+    assert "electron-builder" not in commands
+    assert "npm run dist" not in commands
+
+
+def test_telemetry_worker_config_and_d1_contract_are_validated(workflow):
+    """CI checks both Worker behavior and Wrangler's deploy-time config."""
+    steps = workflow["jobs"]["checks"].get("steps", [])
+    telemetry = [
+        step
+        for step in steps
+        if step.get("working-directory") == "website/telemetry-worker"
+    ]
+    commands = "\n".join(step.get("run", "") for step in telemetry)
+    for required in ("npm ci", "npm test", "npm run check:config"):
+        assert required in commands, f"Telemetry CI is missing {required!r}"
+
+    worker_root = REPO_ROOT / "website/telemetry-worker"
+    package = json.loads(
+        (worker_root / "package.json").read_text(encoding="utf-8")
+    )
+    config_text = (REPO_ROOT / "website/telemetry-worker/wrangler.jsonc").read_text(
+        encoding="utf-8"
+    )
+    config = json.loads(
+        "\n".join(line.split("//", 1)[0] for line in config_text.splitlines())
+    )
+    scripts = package.get("scripts", {})
+    assert scripts.get("test") == "npm run test:unit && npm run test:d1"
+    assert scripts.get("test:d1") == "node --test test/d1-integration.test.js"
+    assert (worker_root / "test/d1-integration.test.js").is_file()
+    assert scripts.get("check:config", "").startswith(
+        "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run"
+    )
+    assert scripts.get("deploy") == (
+        "wrangler deploy --no-x-provision --no-x-auto-create"
+    )
+    d1_bindings = config.get("d1_databases", [])
+    assert any(binding.get("binding") == "DB" for binding in d1_bindings)
+    assert all("database_id" not in binding for binding in d1_bindings)
+    assert config.get("triggers", {}).get("crons") == ["*/5 * * * *"]
+    assert config.get("limits", {}).get("cpu_ms") == 30000
+    assert config.get("observability", {}).get("enabled") is True
 
 
 def test_deferred_files_still_run_in_the_informational_sweep(workflow):
