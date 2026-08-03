@@ -472,10 +472,7 @@ class AuthService:
                 )
 
         with self._restore_admission_condition:
-            while (
-                self._active_restore_http_leases
-                or self._active_restore_websockets
-            ):
+            while self._active_restore_http_leases or self._active_restore_websockets:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     http_count = len(self._active_restore_http_leases)
@@ -2227,13 +2224,10 @@ class AuthService:
         enter its handler after the database swap.
         """
         requires_restore_admission = any(
-            request.url.path.startswith(prefix)
-            for prefix in RESTORE_ADMISSION_PREFIXES
+            request.url.path.startswith(prefix) for prefix in RESTORE_ADMISSION_PREFIXES
         )
         lease = (
-            self._acquire_restore_http_lease()
-            if requires_restore_admission
-            else None
+            self._acquire_restore_http_lease() if requires_restore_admission else None
         )
         if requires_restore_admission and lease is None:
             return self._restore_unavailable_response()

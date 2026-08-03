@@ -3890,7 +3890,9 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
         return original_swap(live_db_path, new_db_path)
 
     monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
-    monkeypatch.setattr(server.vault.restore_service, "_swap_database", _swap_and_signal)
+    monkeypatch.setattr(
+        server.vault.restore_service, "_swap_database", _swap_and_signal
+    )
 
     share_outcome = {}
     restore_outcome = {}
@@ -3946,9 +3948,7 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
     assert TestClient(server.api).get(share_url).status_code == 404
 
 
-def test_full_restore_drains_an_admitted_http_request_before_swap(
-    server, monkeypatch
-):
+def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkeypatch):
     """The restore request excludes itself but waits for older API traffic."""
     from fastapi.testclient import TestClient
 
@@ -4000,9 +4000,13 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(
         swap_started.set()
         return original_swap(live_db_path, new_db_path)
 
-    monkeypatch.setattr(server.auth, "_auth_middleware_admitted", _pause_after_admission)
+    monkeypatch.setattr(
+        server.auth, "_auth_middleware_admitted", _pause_after_admission
+    )
     monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
-    monkeypatch.setattr(server.vault.restore_service, "_swap_database", _swap_and_signal)
+    monkeypatch.setattr(
+        server.vault.restore_service, "_swap_database", _swap_and_signal
+    )
 
     blocked_outcome = {}
     restore_outcome = {}

@@ -294,9 +294,7 @@ def test_privileged_workflow_actions_are_immutable():
                 f"Privileged workflow action must use an exact 40-character "
                 f"commit SHA, not a mutable tag: {path}: {action}"
             )
-            assert version_comment and _VERSION_COMMENT_RE.fullmatch(
-                version_comment
-            ), (
+            assert version_comment and _VERSION_COMMENT_RE.fullmatch(version_comment), (
                 f"Pinned action must retain a machine-readable version comment "
                 f"for updates: {path}: {action}"
             )
@@ -324,8 +322,7 @@ def test_privileged_workflow_checkouts_do_not_persist_credentials():
                 if not uses.startswith("actions/checkout@"):
                     continue
                 assert step.get("with", {}).get("persist-credentials") is False, (
-                    f"Set persist-credentials: false on checkout in "
-                    f"{path}:{job_name}"
+                    f"Set persist-credentials: false on checkout in {path}:{job_name}"
                 )
 
 
@@ -354,8 +351,8 @@ def test_electron_apple_signing_requires_validated_release_tag():
         "RELEASE_TAG": "${{ github.ref_name }}",
         "EXPECTED_VERSION": "${{ steps.version.outputs.version }}",
     }
-    assert 'validated_release_tag=false' in validation["run"]
-    assert 'validated_release_tag=true' in validation["run"]
+    assert "validated_release_tag=false" in validation["run"]
+    assert "validated_release_tag=true" in validation["run"]
     assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
     assert "^v[0-9]+" in validation["run"]
     assert '"v$EXPECTED_VERSION"' in validation["run"]
@@ -533,13 +530,10 @@ def test_release_critical_suites_cannot_remain_informational(workflow):
     """Changed RC contracts must block rather than live only in the sweep."""
     gated = _gated_files(workflow)
     missing_files = sorted(
-        name
-        for name in RELEASE_CRITICAL_MUST_BLOCK
-        if not (TESTS_DIR / name).is_file()
+        name for name in RELEASE_CRITICAL_MUST_BLOCK if not (TESTS_DIR / name).is_file()
     )
     assert not missing_files, (
-        "RELEASE_CRITICAL_MUST_BLOCK names missing suites: "
-        f"{missing_files}"
+        f"RELEASE_CRITICAL_MUST_BLOCK names missing suites: {missing_files}"
     )
 
     ungated = sorted(
@@ -548,8 +542,7 @@ def test_release_critical_suites_cannot_remain_informational(workflow):
         if f"tests/{name}" not in gated
     )
     assert not ungated, (
-        "These release-critical suites do not block the stable backend gate: "
-        f"{ungated}"
+        f"These release-critical suites do not block the stable backend gate: {ungated}"
     )
 
     parked = sorted(RELEASE_CRITICAL_MUST_BLOCK & DEFERRED_FROM_GATE)
@@ -585,11 +578,7 @@ def test_stable_aggregate_requires_playwright_and_fixture_fails_closed(workflow)
 def test_cheap_electron_tests_are_in_the_stable_checks(workflow):
     """Desktop shell logic runs without invoking packaging."""
     steps = workflow["jobs"]["checks"].get("steps", [])
-    electron = [
-        step
-        for step in steps
-        if step.get("working-directory") == "electron"
-    ]
+    electron = [step for step in steps if step.get("working-directory") == "electron"]
     assert electron, "The stable checks job must run Electron unit tests"
     commands = "\n".join(step.get("run", "") for step in electron)
     assert "npm ci" in commands
@@ -611,9 +600,7 @@ def test_telemetry_worker_config_and_d1_contract_are_validated(workflow):
         assert required in commands, f"Telemetry CI is missing {required!r}"
 
     worker_root = REPO_ROOT / "website/telemetry-worker"
-    package = json.loads(
-        (worker_root / "package.json").read_text(encoding="utf-8")
-    )
+    package = json.loads((worker_root / "package.json").read_text(encoding="utf-8"))
     config_text = (REPO_ROOT / "website/telemetry-worker/wrangler.jsonc").read_text(
         encoding="utf-8"
     )
