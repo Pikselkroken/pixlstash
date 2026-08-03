@@ -446,7 +446,7 @@ def register_routes(router, server):
                 if changed:
                     updated_ids.append(int(pic.id))
             if updated_ids:
-                session.commit()
+                session.flush()
             missing_ids = [pid for pid in ids if pid not in found_ids]
             return updated_ids, missing_ids
 
@@ -624,7 +624,7 @@ def register_routes(router, server):
                 )
 
             if updated_ids or reset_triggered:
-                session.commit()
+                session.flush()
 
             return (
                 sorted(updated_ids),
@@ -1000,7 +1000,7 @@ def register_routes(router, server):
                         )
                         session.exec(delete(Tag).where(Tag.picture_id == pid))
                         session.add_all([Tag(picture_id=pid, tag=t) for t in new_tags])
-                        session.commit()
+                        session.flush()
 
                     operation_log_service.run_recorded_metadata_task(
                         server.vault,
@@ -1041,7 +1041,7 @@ def register_routes(router, server):
                 for field_name, field_value in fields.items():
                     setattr(pic_db, field_name, field_value)
                 session.add(pic_db)
-                session.commit()
+                session.flush()
                 session.refresh(pic_db)
                 return pic_db
 
@@ -1140,7 +1140,7 @@ def register_routes(router, server):
             # member is not left behind a (now lower-ranked) deleted leader.
             for stack_id in affected_stack_ids:
                 normalize_stack_positions(session, stack_id)
-            session.commit()
+            session.flush()
             return restored_count
 
         def _scrapheaped_targets(session: Session):
@@ -1411,7 +1411,7 @@ def register_routes(router, server):
             # must not keep stack_position 0, or the whole stack disappears from
             # the grid (no-op when the picture is not stacked).
             normalize_stack_positions(session, pic.stack_id)
-            session.commit()
+            session.flush()
             return True
 
         # The soft-delete is a recorded, reversible operation: the `deleted`
@@ -1525,7 +1525,7 @@ def register_routes(router, server):
                 newly_deleted.append(pid)
             for stack_id in affected_stacks:
                 normalize_stack_positions(session, stack_id)
-            session.commit()
+            session.flush()
             return newly_deleted, sorted(locked)
 
         # One bulk action, one operation row, one batch id — so the client can

@@ -868,7 +868,7 @@ def create_router(server) -> APIRouter:
                     orphan_stack = session.get(PictureStack, orphan_stack_id)
                     if orphan_stack is not None:
                         session.delete(orphan_stack)
-                session.commit()
+                session.flush()
             elif existing_stack_ids:
                 stack_id = existing_stack_ids.pop()
                 stack = session.get(PictureStack, stack_id)
@@ -877,7 +877,7 @@ def create_router(server) -> APIRouter:
             else:
                 stack = PictureStack(name=name)
                 session.add(stack)
-                session.commit()
+                session.flush()
                 session.refresh(stack)
 
             existing_positions = []
@@ -908,7 +908,7 @@ def create_router(server) -> APIRouter:
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)
-            session.commit()
+            session.flush()
             if stack.id is None:
                 raise HTTPException(status_code=500, detail="Failed to create stack")
             return stack.id
@@ -1155,7 +1155,7 @@ def create_router(server) -> APIRouter:
                     pic.stack_position = None
                     session.add(pic)
                 session.delete(stack)
-                session.commit()
+                session.flush()
                 return None
 
             # Compact to close gaps left by the removed pictures.
@@ -1163,7 +1163,7 @@ def create_router(server) -> APIRouter:
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)
-            session.commit()
+            session.flush()
             return stack
 
         # Expanding to the whole stack is what makes the dissolve branch

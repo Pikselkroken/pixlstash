@@ -1640,7 +1640,7 @@ def create_router(server) -> APIRouter:
                 remove_project_ids=[],
             )
             session.add(picture_set)
-            session.commit()
+            session.flush()
             return added_any
 
         # Set membership is stack-atomic, so the snapshot expands to the whole
@@ -1718,7 +1718,7 @@ def create_router(server) -> APIRouter:
                 return False
             for m in members:
                 session.delete(m)
-            session.commit()
+            session.flush()
             return True
 
         # Stack-atomic like the add above: the removal takes the whole stack out,
@@ -1803,7 +1803,7 @@ def create_router(server) -> APIRouter:
                 ensure_project_ids=picture_set_project_ids(session, set_id),
                 remove_project_ids=[],
             )
-            session.commit()
+            session.flush()
             return added
 
         added, _operation = operation_log_service.run_recorded_metadata_task(
@@ -1889,7 +1889,7 @@ def create_router(server) -> APIRouter:
                 ensure_project_ids=picture_set_project_ids(session, set_id),
                 remove_project_ids=[],
             )
-            session.commit()
+            session.flush()
             return added
 
         def _current_members(session):

@@ -285,7 +285,7 @@ def create_router(server) -> APIRouter:
             for face in unique_faces:
                 face.character_id = character_id
                 session.add(face)
-            session.commit()
+            session.flush()
             for face in unique_faces:
                 session.refresh(face)
             character = session.get(Character, character_id)
@@ -304,7 +304,7 @@ def create_router(server) -> APIRouter:
                         ensure_project_ids=project_ids,
                         remove_project_ids=[],
                     )
-                    session.commit()
+                    session.flush()
             faces_payload = [
                 {
                     "id": face.id,
@@ -421,7 +421,7 @@ def create_router(server) -> APIRouter:
                     if face and face.character_id == character_id:
                         face.character_id = None
                         session.add(face)
-            session.commit()
+            session.flush()
             session.refresh(face)
             return faces
 

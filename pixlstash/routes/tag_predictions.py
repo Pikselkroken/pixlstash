@@ -173,6 +173,7 @@ def create_router(server) -> APIRouter:
                 tag,
                 server.vault.interactive_rescore_registry,
                 origin_client_id,
+                commit=False,
             )
 
         # Recorded so Ctrl+Z can revert it (§21.2). The op captures BOTH the Tag
@@ -227,6 +228,7 @@ def create_router(server) -> APIRouter:
                 tag,
                 server.vault.interactive_rescore_registry,
                 origin_client_id,
+                commit=False,
             )
 
         # Recorded so Ctrl+Z can revert it (§21.2). "Removed tag" is what the user
