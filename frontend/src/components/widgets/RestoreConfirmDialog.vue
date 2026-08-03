@@ -17,7 +17,11 @@ import { computed, ref, watch } from "vue";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
-import { reloadAfterFullRestore } from "../../utils/fullRestoreTransition";
+import {
+  beginFullRestoreRequest,
+  endFullRestoreRequest,
+  reloadAfterFullRestore,
+} from "../../utils/fullRestoreTransition";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -173,6 +177,10 @@ async function handleRestore(opts = {}) {
   const closeOnDispatch = isFullVaultRestore.value;
   if (closeOnDispatch) {
     dialogOpen.value = false;
+    // Lets the updates socket preserve this tab's request/response-driven
+    // transition while every other tab reloads from the pre-drain STARTED
+    // event. Cleared in finally for failures where the page stays alive.
+    beginFullRestoreRequest();
   }
 
   try {
@@ -222,6 +230,7 @@ async function handleRestore(opts = {}) {
       restoreError.value = message;
     }
   } finally {
+    if (closeOnDispatch) endFullRestoreRequest();
     restoring.value = false;
   }
 }
