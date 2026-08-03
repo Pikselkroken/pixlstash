@@ -12,6 +12,7 @@ import {
   deleteCharacter,
   getCharacterMembership,
   addCharacterFaces,
+  addCharacterFaceAssignments,
   removeCharacterFaces,
   getReferencePictures,
 } from "./characters";
@@ -101,6 +102,18 @@ describe("api/characters", () => {
     await addCharacterFaces(2, [7], { baseUrl: "/be" });
     expect(apiClient.post).toHaveBeenCalledWith("/be/characters/2/faces", {
       picture_ids: [7],
+    });
+  });
+
+  it("posts exact reviewed face assignments without legacy id fields", async () => {
+    apiClient.post.mockResolvedValue({ data: { status: "success" } });
+    await addCharacterFaceAssignments(
+      2,
+      [{ picture_id: 7, face_id: 11 }],
+      { baseUrl: "/be" },
+    );
+    expect(apiClient.post).toHaveBeenCalledWith("/be/characters/2/faces", {
+      face_assignments: [{ picture_id: 7, face_id: 11 }],
     });
   });
 

@@ -1,11 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 
+const { sessionResetHandlers } = vi.hoisted(() => ({
+  sessionResetHandlers: new Set(),
+}));
+
 // The store reads `isReadOnly` off the apiClient singleton and talks to the
 // backend only through `api/operations`. Both are mocked so no HTTP happens and
 // every branch (read-only, 409, batch coalescing) can be driven directly.
 vi.mock("../utils/apiClient", () => ({
-  onSessionReset: () => () => {},
+  onSessionReset: (handler) => {
+    sessionResetHandlers.add(handler);
+    return () => sessionResetHandlers.delete(handler);
+  },
   sessionContext: { value: null },
   apiClient: { get: vi.fn(), post: vi.fn() },
   isReadOnly: { value: false },
@@ -48,6 +55,18 @@ import { useWsStore } from "./useWsStore";
 const MY_CLIENT = "client-me";
 const OTHER_CLIENT = "client-them";
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function transitionSession() {
+  for (const handler of sessionResetHandlers) handler();
+}
+
 function op(overrides = {}) {
   return {
     id: 1,
@@ -89,6 +108,7 @@ async function primed(rows) {
 beforeEach(() => {
   vi.useFakeTimers();
   setActivePinia(createPinia());
+  sessionResetHandlers.clear();
   readOnly.value = false;
   for (const fn of [
     listOperations,
@@ -470,7 +490,10 @@ describe("useOperationStore — undo and redo", () => {
 
     await store.undoBatchById("b1");
 
-    expect(undoBatch).toHaveBeenCalledWith("b1");
+    expect(undoBatch).toHaveBeenCalledWith(
+      "b1",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(store.receipt).toMatchObject({ mode: "undone" });
   });
 });
@@ -513,7 +536,10 @@ describe("useOperationStore — undoTo walks the stack", () => {
     await store.undoTo(12);
 
     expect(undoOperation).toHaveBeenCalledTimes(1);
-    expect(undoOperation).toHaveBeenCalledWith(13);
+    expect(undoOperation).toHaveBeenCalledWith(
+      13,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("ignores a step that is not on the stack", async () => {
@@ -703,6 +729,58 @@ describe("useOperationStore — reset", () => {
     expect(store.canUndo).toBe(false);
     expect(store.canRedo).toBe(false);
     expect(store.loaded).toBe(false);
+  });
+
+  it("discards history reads that settle after the session changes", async () => {
+    const store = useOperationStore();
+    const rows = deferred();
+    const state = deferred();
+    listOperations.mockReturnValueOnce(rows.promise);
+    getUndoState.mockReturnValueOnce(state.promise);
+
+    const refreshing = store.refresh();
+    transitionSession();
+    rows.resolve([op({ id: 99 })]);
+    state.resolve({ can_undo: true, next_undo: op({ id: 99 }) });
+    await refreshing;
+
+    expect(store.operations).toEqual([]);
+    expect(store.loaded).toBe(false);
+    expect(store.canUndo).toBe(false);
+  });
+
+  it("does not raise a receipt when an undo settles in a later session", async () => {
+    const store = await primed([op({ id: 10 })]);
+    const undoResult = deferred();
+    undoLastOperation.mockReturnValueOnce(undoResult.promise);
+
+    const undoing = store.undo();
+    transitionSession();
+    undoResult.resolve({ operations: [op({ id: 10 })] });
+    await undoing;
+
+    expect(store.busy).toBe(false);
+    expect(store.receipt).toBeNull();
+    expect(store.operations).toEqual([]);
+  });
+
+  it("does not raise a receipt when the session changes during post-undo refresh", async () => {
+    const store = await primed([op({ id: 10 })]);
+    undoLastOperation.mockResolvedValue({ operations: [op({ id: 10 })] });
+    const rows = deferred();
+    const state = deferred();
+    listOperations.mockReturnValueOnce(rows.promise);
+    getUndoState.mockReturnValueOnce(state.promise);
+
+    const undoing = store.undo();
+    await Promise.resolve();
+    transitionSession();
+    rows.resolve([]);
+    state.resolve({ can_undo: false, can_redo: false });
+    await undoing;
+
+    expect(store.receipt).toBeNull();
+    expect(store.operations).toEqual([]);
   });
 });
 

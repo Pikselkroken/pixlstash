@@ -396,6 +396,7 @@ const promptRef = ref(null);
 const generateRef = ref(null);
 /** The element focus returns to on close — never document.body. */
 let returnFocusEl = null;
+let loadGeneration = 0;
 
 watch(seedMode, (v) => sessionStorage.setItem(SEED_MODE_KEY, v));
 watch(seed, (v) => sessionStorage.setItem(SEED_KEY, String(v)));
@@ -670,9 +671,14 @@ watch(recipeState, (state) => {
 });
 
 watch(
-  () => props.open,
-  (isOpen) => {
-    if (isOpen) void onOpen();
+  [() => props.open, () => props.image?.id],
+  ([isOpen]) => {
+    if (isOpen) {
+      void onOpen();
+    } else {
+      // Invalidate every async loader from the just-closed dialog.
+      loadGeneration += 1;
+    }
   },
   { immediate: true },
 );
@@ -682,6 +688,9 @@ function setModeRef(el, index) {
 }
 
 async function onOpen() {
+  const generation = (loadGeneration += 1);
+  const imageId = props.image?.id;
+  const backendUrl = props.backendUrl;
   returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   submitError.value = "";
   submitting.value = false;
@@ -694,7 +703,12 @@ async function onOpen() {
   // Nothing is preselected until the check resolves: a mode that flips out
   // from under the user mid-interaction is worse than a moment of no default.
   selectedMode.value = "";
-  await Promise.all([loadTemplates(), loadRecipe(), loadDescription()]);
+  await Promise.all([
+    loadTemplates(generation, imageId, backendUrl),
+    loadRecipe(generation, imageId, backendUrl),
+    loadDescription(generation, imageId, backendUrl),
+  ]);
+  if (!isCurrentLoad(generation, imageId)) return;
   // Fixed defaults to the seed the original run used — flagged as "same as
   // original" until edited — rather than whatever a previous dialog pinned.
   if (originalSeed.value != null) seed.value = originalSeed.value;
@@ -705,6 +719,14 @@ async function onOpen() {
   );
   await nextTick();
   focusInitial();
+}
+
+function isCurrentLoad(generation, imageId) {
+  return (
+    generation === loadGeneration &&
+    props.open &&
+    String(props.image?.id ?? "") === String(imageId ?? "")
+  );
 }
 
 /**
@@ -723,12 +745,13 @@ function normaliseDescription(value) {
  * "this image has no description yet" for pictures that plainly have one.
  * Only runs when the prop didn't already provide a usable description.
  */
-async function loadDescription() {
-  if (description.value || !props.image?.id) return;
+async function loadDescription(generation, imageId, backendUrl) {
+  if (description.value || !imageId) return;
   try {
-    const data = await getPictureMetadata(props.image.id, {
-      baseUrl: props.backendUrl,
+    const data = await getPictureMetadata(imageId, {
+      baseUrl: backendUrl,
     });
+    if (!isCurrentLoad(generation, imageId)) return;
     const fetched = normaliseDescription(data?.description);
     if (!fetched) return;
     description.value = fetched;
@@ -768,40 +791,46 @@ function focusInitial() {
   generateRef.value?.$el?.focus?.();
 }
 
-async function loadTemplates() {
+async function loadTemplates(generation, imageId, backendUrl) {
   templatesLoading.value = true;
   try {
-    const data = await listWorkflows({ baseUrl: props.backendUrl });
+    const data = await listWorkflows({ baseUrl: backendUrl });
+    if (!isCurrentLoad(generation, imageId)) return;
     const all = Array.isArray(data?.workflows) ? data.workflows : [];
     templates.value = all.filter((w) => w?.valid && w?.workflow_type === "i2i");
     if (!templates.value.some((w) => w.name === selectedWorkflow.value)) {
       selectedWorkflow.value = templates.value[0]?.name || "";
     }
   } catch (err) {
+    if (!isCurrentLoad(generation, imageId)) return;
     templates.value = [];
     console.error("Failed to list ComfyUI workflows for remix:", err);
   } finally {
-    templatesLoading.value = false;
+    if (isCurrentLoad(generation, imageId)) templatesLoading.value = false;
   }
 }
 
-async function loadRecipe() {
-  if (!props.image?.id) return;
+async function loadRecipe(generation, imageId, backendUrl) {
+  if (!imageId) return;
   recipeLoading.value = true;
   recipeError.value = "";
   try {
-    recipe.value = await getPictureRecipe(props.image.id, {
-      baseUrl: props.backendUrl,
+    const nextRecipe = await getPictureRecipe(imageId, {
+      baseUrl: backendUrl,
     });
+    if (!isCurrentLoad(generation, imageId)) return;
+    recipe.value = nextRecipe;
   } catch (err) {
+    if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = null;
     recipeError.value =
       err?.response?.data?.detail ||
       "Could not check this image for an embedded workflow.";
     console.error("Failed to read remix recipe:", err);
   } finally {
-    recipeLoading.value = false;
+    if (isCurrentLoad(generation, imageId)) recipeLoading.value = false;
   }
+  if (!isCurrentLoad(generation, imageId)) return;
   resetRecipeDisclosure();
 }
 
@@ -821,7 +850,10 @@ async function recheckRecipe() {
   if (recipeLoading.value) return;
   // Cleared first so an unchanged outcome still re-announces.
   liveMessage.value = "";
-  await loadRecipe();
+  const generation = loadGeneration;
+  const imageId = props.image?.id;
+  await loadRecipe(generation, imageId, props.backendUrl);
+  if (!isCurrentLoad(generation, imageId)) return;
   await nextTick();
   if (recipeState.value === "unreachable") {
     liveMessage.value = "Still could not reach ComfyUI. Generate stays disabled.";

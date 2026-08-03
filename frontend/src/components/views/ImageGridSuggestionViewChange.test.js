@@ -276,6 +276,12 @@ describe("completing the person suggestion search", () => {
     await wrapper.vm.handleAssignFaceSearchResults();
 
     expect(suggestionRequestCount).toBe(2);
+    const assignment = apiPost.mock.calls.find(([url]) =>
+      String(url ?? "").includes("/characters/9/faces"),
+    );
+    expect(assignment?.[1]).toEqual({
+      face_assignments: [{ picture_id: 101, face_id: 201 }],
+    });
     expect(wrapper.vm.searchResultsActive).toBe(false);
     expect(useSelectionStore().selectedCharacter).toBe(42);
     const gridUrls = apiGet.mock.calls.map(([url]) => String(url ?? ""));

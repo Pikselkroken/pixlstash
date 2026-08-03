@@ -410,6 +410,18 @@
       Opening duplicate queue.
     </div>
 
+    <div
+      v-else-if="store.error && !store.hasGroups"
+      class="dq-state"
+      role="alert"
+    >
+      Could not confirm the duplicate queue. Nothing has been marked clear.
+      <button type="button" class="qdecided" @click="store.loadFirstPage()">
+        <v-icon size="15">mdi-refresh</v-icon>
+        Try again
+      </button>
+    </div>
+
     <div v-else-if="store.hasGroups" class="queue">
       <!-- The bulk-scope statement: while ≥2 groups are selected, a verdict on
            any of them takes all of them. The only thing left on a second bar,
@@ -502,6 +514,10 @@
          trusted. -->
     <div v-else-if="store.loadingMore" class="dq-state" role="status">
       Loading the next groups.
+    </div>
+
+    <div v-else-if="!store.countsLoaded" class="dq-state" role="status">
+      Confirming whether the queue is clear.
     </div>
 
     <!-- The empty DECIDED page keeps its own copy and, crucially, its own way
@@ -1618,6 +1634,14 @@ async function onStack(group) {
   if (targets.length > 1) {
     const pictures = targets.reduce((n, g) => n + store.stackSizeFor(g), 0);
     const result = await store.stack(group);
+    if (result?.failed) {
+      const sentence = result.uncertain
+        ? `The server outcome became uncertain after ${result.completed} of ${result.requested} confirmed stacks. The queue was reloaded from the server before you retry.`
+        : `Stacked ${result.completed} of ${result.requested} groups. The remaining groups stayed in the queue.`;
+      announcement.value = sentence;
+      noticeStore.error(sentence);
+      return;
+    }
     if (result) {
       announcement.value = `Stacked ${targets.length} groups (${pictures} pictures). One undo reverses them all.`;
       reportPartialStack(result, pictures);
@@ -1718,6 +1742,14 @@ async function onKeepSeparate(group) {
     reportVerdictFailure("record that decision", store.error);
     return;
   }
+  if (result.failed) {
+    const sentence = result.uncertain
+      ? `The server outcome became uncertain after ${result.completed} of ${result.requested} confirmed decisions. The queue was reloaded from the server before you retry.`
+      : `Kept ${result.completed} of ${result.requested} groups separate. The remaining groups stayed selected in the queue.`;
+    announcement.value = sentence;
+    noticeStore.error(sentence);
+    return;
+  }
   const sentence =
     targets.length > 1
       ? `Kept ${targets.length} groups (${size} pictures) separate. Change your mind under Decided.`
@@ -1777,6 +1809,13 @@ async function onClearDecision(group) {
  * @param {*} [err] - the rejection, for its `detail`.
  */
 function reportVerdictFailure(what, err, group = null) {
+  if (Number(err?.response?.status) >= 500) {
+    announcement.value = `Could not confirm whether the server completed the request. The queue was reloaded before retry is offered.`;
+    noticeStore.error(
+      `The outcome is uncertain. The queue was reloaded from the server; check the current row before retrying.`,
+    );
+    return;
+  }
   const detail = serverDetail(err);
   const because = detail ? ` ${detail}` : "";
   announcement.value = `Could not ${what}.${because} The group is still in the queue, so nothing was lost.`;

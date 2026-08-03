@@ -548,6 +548,16 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
 });
 
 describe("DuplicateQueue — when a verdict does not land", () => {
+  it("never renders Queue clear when the queue state failed to load", async () => {
+    const { wrapper, store } = await mountQueue([]);
+    store.error = new Error("network down");
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain("Could not confirm the duplicate queue");
+    expect(wrapper.text()).not.toContain("Queue clear");
+    wrapper.unmount();
+  });
+
   // A failed verdict leaves the row where it was, which on a queue whose whole
   // promise is auto-advance reads as a dead keypress.
   it("raises a notice rather than swallowing the failure", async () => {

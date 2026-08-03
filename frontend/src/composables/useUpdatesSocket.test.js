@@ -13,12 +13,14 @@ import { setActivePinia, createPinia } from "pinia";
 
 // Hoisted with the `vi.mock` factories that close over them: the factories run
 // before the module body, so a plain `const` here would still be uninitialised.
-const { applyPictureEvent, handleMessage, isReadOnly } = vi.hoisted(() => ({
+const { applyPictureEvent, handleMessage, isReadOnly, reloadAfterFullRestore } =
+  vi.hoisted(() => ({
   applyPictureEvent: vi.fn(() => ({ action: "ignored", reason: "test" })),
   handleMessage: vi.fn(() => ({ action: "ignored", reason: "test" })),
   // Only ever read as `.value`, so a bare box stands in for the real ref
   // without dragging Vue into the hoisted block.
   isReadOnly: { value: false },
+  reloadAfterFullRestore: vi.fn(),
 }));
 
 vi.mock("../stores/useDedupStore", () => ({
@@ -28,6 +30,8 @@ vi.mock("../stores/useDedupStore", () => ({
 vi.mock("./useGridRealtimeSync", () => ({
   useGridRealtimeSync: () => ({ handleMessage, flushNow: vi.fn() }),
 }));
+
+vi.mock("../utils/fullRestoreTransition", () => ({ reloadAfterFullRestore }));
 
 vi.mock("../utils/apiClient", async (importOriginal) => {
   const actual = await importOriginal();
@@ -40,10 +44,12 @@ import { useUpdatesSocket } from "./useUpdatesSocket";
 let socket = null;
 /** The component the composable is mounted in, unmounted after each case. */
 let host = null;
+let socketCount = 0;
 
 class FakeWebSocket {
   static OPEN = 1;
   constructor(url) {
+    socketCount += 1;
     this.url = url;
     this.readyState = 1;
     this.onopen = null;
@@ -52,7 +58,9 @@ class FakeWebSocket {
     socket = this;
   }
   send() {}
-  close() {}
+  close() {
+    this.onclose?.();
+  }
 }
 
 /** Deliver one server frame, exactly as the browser would. */
@@ -63,9 +71,11 @@ function receive(payload) {
 beforeEach(() => {
   setActivePinia(createPinia());
   socket = null;
+  socketCount = 0;
   isReadOnly.value = false;
   applyPictureEvent.mockClear();
   handleMessage.mockClear();
+  reloadAfterFullRestore.mockClear();
   vi.stubGlobal("WebSocket", FakeWebSocket);
 });
 
@@ -150,5 +160,35 @@ describe("useUpdatesSocket: routing to the duplicate queue", () => {
       source: "ui",
     });
     expect(applyPictureEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUpdatesSocket: connection lifecycle", () => {
+  it("does not reconnect after an intentional disconnect", async () => {
+    vi.useFakeTimers();
+    connect();
+    expect(socketCount).toBe(1);
+
+    host.unmount();
+    host = null;
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(socketCount).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("reconnects after an unexpected close", async () => {
+    vi.useFakeTimers();
+    connect();
+    socket.onclose();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(socketCount).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("hard reloads a full restore without incremental store reads", () => {
+    connect();
+    receive({ type: "restore_completed", resource_type: "full" });
+    expect(reloadAfterFullRestore).toHaveBeenCalledTimes(1);
   });
 });

@@ -10,6 +10,7 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
+import { reloadAfterFullRestore } from "../utils/fullRestoreTransition";
 
 const BACKEND_URL = API_BASE_URL;
 
@@ -49,6 +50,7 @@ export function useUpdatesSocket({
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
+  let reconnectEnabled = false;
   let gridWsCoalesceTimer = null;
 
   // --- WebSocket ---
@@ -172,6 +174,7 @@ export function useUpdatesSocket({
   });
 
   function connectUpdatesSocket() {
+    reconnectEnabled = true;
     if (updatesSocket) return;
     const url = buildUpdatesSocketUrl();
     if (!url) return;
@@ -306,11 +309,21 @@ export function useUpdatesSocket({
       } else if (payload?.type === "restore_started" && !isReadOnly.value) {
         snapshotsStore.onRestoreStarted(payload);
       } else if (payload?.type === "restore_completed" && !isReadOnly.value) {
+        if (payload?.resource_type === "full") {
+          disconnectUpdatesSocket();
+          reloadAfterFullRestore();
+          return;
+        }
         snapshotsStore.onRestoreCompleted();
         gridStore.wsUpdateKey = Date.now();
         gridStore.refreshGridVersion();
         refreshSidebar();
       } else if (payload?.type === "restore_failed" && !isReadOnly.value) {
+        if (payload?.resource_type === "full") {
+          disconnectUpdatesSocket();
+          reloadAfterFullRestore();
+          return;
+        }
         snapshotsStore.onRestoreFailed(payload);
         gridStore.wsUpdateKey = Date.now();
         gridStore.refreshGridVersion();
@@ -319,7 +332,8 @@ export function useUpdatesSocket({
     };
 
     ws.onclose = () => {
-      updatesSocket = null;
+      if (updatesSocket === ws) updatesSocket = null;
+      if (!reconnectEnabled) return;
       if (updatesReconnectTimer) {
         clearTimeout(updatesReconnectTimer);
       }
@@ -331,6 +345,7 @@ export function useUpdatesSocket({
   }
 
   function disconnectUpdatesSocket() {
+    reconnectEnabled = false;
     if (updatesReconnectTimer) {
       clearTimeout(updatesReconnectTimer);
       updatesReconnectTimer = null;

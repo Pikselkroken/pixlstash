@@ -1768,7 +1768,32 @@ describe("useDedupStore — multi-select", () => {
     const result = await store.keepSeparate(store.groups[0]);
     expect(result).toBeTruthy();
     expect(keepGroupSeparate).toHaveBeenCalledTimes(2);
+    const batchIds = keepGroupSeparate.mock.calls.map(
+      ([, options]) => options.batchId,
+    );
+    expect(batchIds[0]).toMatch(/^cli-/);
+    expect(batchIds[1]).toBe(batchIds[0]);
     expect(store.selectionCount).toBe(0);
+  });
+
+  it("reports a truthful partial Keep Separate result", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
+    store.toggleSelected(0);
+    store.selectRange(2);
+    keepGroupSeparate
+      .mockResolvedValueOnce({ verdict: "keep_separate", batch_id: "b1" })
+      .mockRejectedValueOnce({ response: { status: 409 } });
+
+    const result = await store.keepSeparate(store.groups[0]);
+
+    expect(result).toMatchObject({
+      failed: true,
+      uncertain: false,
+      completed: 1,
+      requested: 3,
+    });
+    expect(store.groups.map((g) => g.signature)).toEqual(["g2", "g3"]);
+    expect(store.selectionCount).toBe(2);
   });
 
   it("a verdict on a group outside the selection stays single", async () => {
@@ -1812,7 +1837,12 @@ describe("useDedupStore — multi-select", () => {
 
     rejectSecond(new Error("locked"));
     const result = await pending;
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      failed: true,
+      uncertain: false,
+      completed: 1,
+      requested: 3,
+    });
     // g1 landed; g2 failed and g3 was never attempted. Both remain selected.
     expect(stackGroup).toHaveBeenCalledTimes(2);
     expect(store.groups.map((g) => g.signature)).toEqual(["g2", "g3"]);
@@ -1968,6 +1998,48 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
 });
 
 describe("useDedupStore — scans and bulk auto-stack", () => {
+  it("reloads a populated queue once when a scan becomes terminal", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 1,
+        total_pictures: 2,
+      };
+      servePage([group("g1")], { scan: running });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: running,
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      await Promise.resolve();
+
+      getCounts.mockResolvedValue({
+        unresolved_groups: 2,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete", scanned_pictures: 2, total_pictures: 2 },
+      });
+      listGroups.mockResolvedValueOnce({
+        groups: [group("g1"), group("g2")],
+        total: 2,
+        scan: { status: "complete", scanned_pictures: 2, total_pictures: 2 },
+      });
+      await vi.advanceTimersByTimeAsync(2100);
+
+      expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2"]);
+      expect(listGroups).toHaveBeenCalledTimes(2);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a pending person scan queued with unknown totals", async () => {
     vi.useFakeTimers();
     try {

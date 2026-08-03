@@ -2497,7 +2497,23 @@ function setCategoryCount(id, value, shouldFlash) {
 }
 
 // --- Sidebar & Character Data ---
+let sidebarCountEpoch = 0;
+
+function sidebarCountRequestKey() {
+  return JSON.stringify({
+    mode: projectViewMode.value,
+    projectId: selectedProjectId.value,
+    characters: characters.value.map((char) => [char.id, char.project_id]),
+    projects: projects.value.map((project) => project.id),
+  });
+}
+
 async function fetchSidebarData() {
+  const requestEpoch = (sidebarCountEpoch += 1);
+  const requestKey = sidebarCountRequestKey();
+  const isCurrentRequest = () =>
+    requestEpoch === sidebarCountEpoch &&
+    requestKey === sidebarCountRequestKey();
   const shouldFlash = flashCountsNextFetch.value;
   // Fetch total image count for END key logic
   try {
@@ -2505,7 +2521,8 @@ async function fetchSidebarData() {
     const data = await getCharacterSummary(ALL_PICTURES_ID, undefined, {
       baseUrl: props.backendUrl,
     });
-    setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
+    if (isCurrentRequest())
+      setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching all images summary:", e);
   }
@@ -2525,7 +2542,8 @@ async function fetchSidebarData() {
       unassignedParams,
       { baseUrl: props.backendUrl },
     );
-    setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
+    if (isCurrentRequest())
+      setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching unassigned images summary:", e);
   }
@@ -2533,7 +2551,8 @@ async function fetchSidebarData() {
     const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined, {
       baseUrl: props.backendUrl,
     });
-    setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
+    if (isCurrentRequest())
+      setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
@@ -2552,7 +2571,8 @@ async function fetchSidebarData() {
           characterSummaryParams ?? undefined,
           { baseUrl: props.backendUrl },
         );
-        setCategoryCount(char.id, data.image_count, shouldFlash);
+        if (isCurrentRequest())
+          setCategoryCount(char.id, data.image_count, shouldFlash);
       } catch (e) {
         console.warn("Error fetching character images summary:", e);
       }
@@ -2564,13 +2584,14 @@ async function fetchSidebarData() {
       getProjectSummary("UNASSIGNED", undefined, {
         baseUrl: props.backendUrl,
       }).then((body) => {
-        projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
+        if (isCurrentRequest())
+          projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
       }),
       ...projects.value.map((p) =>
         getProjectSummary(p.id, undefined, {
           baseUrl: props.backendUrl,
         }).then((body) => {
-          projectCounts.value[p.id] = body.image_count;
+          if (isCurrentRequest()) projectCounts.value[p.id] = body.image_count;
         }),
       ),
     ];
@@ -2578,7 +2599,7 @@ async function fetchSidebarData() {
   } catch (e) {
     console.warn("Error fetching project counts:", e);
   }
-  flashCountsNextFetch.value = false;
+  if (isCurrentRequest()) flashCountsNextFetch.value = false;
 }
 
 async function fetchCharacters() {
@@ -3059,6 +3080,19 @@ async function onProjectDrop(projectId, event) {
     emit("images-moved", { imageIds });
   } catch (e) {
     console.error("Failed to assign pictures to project:", e);
+    if (Number(e?.response?.status) >= 500) {
+      noticeStore.error(
+        "The project assignment outcome is uncertain. Counts and the current view are reloading before you retry.",
+        { key: "images-project-uncertain" },
+      );
+      await fetchSidebarData();
+      emit("images-moved", { imageIds, uncertain: true });
+      return;
+    }
+    noticeStore.error(
+      `Couldn't assign those pictures to the project. ${noticeDetail(e)}`,
+      { key: "images-project-assign" },
+    );
   }
 }
 

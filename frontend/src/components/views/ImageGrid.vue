@@ -1234,6 +1234,7 @@ import {
   getCharacter,
   listCharacters,
   addCharacterFaces,
+  addCharacterFaceAssignments,
   addCharacterFacesByFaceId,
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
@@ -7720,7 +7721,23 @@ function handleSuggestPicturesForCharacter(character) {
   // so it must not be the one that gets dropped. Fetching here as well is safe:
   // the two calls share a fetch key and the second de-dups against the first.
   nextTick(() => {
-    fetchAllGridImages({ force: true }).then(() => updateVisibleThumbnails());
+    void (async () => {
+      const outcome = await fetchAllGridImages({ force: true });
+      if (
+        faceSearchCharacter.value?.id === id &&
+        outcome?.error?.gridFetchPhase === "character-face-search-request"
+      ) {
+        const failure = outcome.error;
+        clearCharacterFaceSearch();
+        await fetchAllGridImages({ force: true });
+        noticeStore.error(
+          `Couldn't load suggestions for ${character.name ?? "this person"}. ${errorDetail(failure)}`,
+          { key: "character-face-search-load" },
+        );
+        return;
+      }
+      updateVisibleThumbnails();
+    })();
   });
 }
 
@@ -7765,20 +7782,37 @@ const faceSearchAssignIds = computed(() =>
 /**
  * Assign the suggested (or selected) pictures to the searched person.
  *
- * Sends picture ids rather than the matches' `face_id`s on purpose: the
- * assignment endpoint expands stacks and re-picks the best face per picture
- * against the same reference faces this search used, so a stacked suggestion
- * moves as a unit. The write is recorded in the operation log, so refreshing it
- * raises the receipt that carries Undo — which is what lets this skip a
- * confirmation dialog.
+ * Sends the exact picture/face pairs the search returned. A suggestion is an
+ * explicit reviewed winner; rescoring it during assignment can attach a
+ * different face if detections or references changed in between.
  */
 async function handleAssignFaceSearchResults() {
   const character = faceSearchCharacter.value;
   const ids = faceSearchAssignIds.value;
   if (!character || !ids.length || faceSearchAssignBusy.value) return;
+  const wanted = new Set(ids.map(String));
+  const byPicture = new Map();
+  for (const match of faceSearchMatches.value) {
+    if (!wanted.has(String(match?.picture_id))) continue;
+    if (match?.picture_id == null || match?.face_id == null) continue;
+    byPicture.set(String(match.picture_id), {
+      picture_id: match.picture_id,
+      face_id: match.face_id,
+    });
+  }
+  const assignments = [...byPicture.values()];
+  if (assignments.length !== wanted.size) {
+    noticeStore.warning(
+      "Some selected suggestions no longer have a reviewed face match. Refresh suggestions before assigning.",
+      { key: "character-face-search-stale-selection" },
+    );
+    return;
+  }
   faceSearchAssignBusy.value = true;
   try {
-    await addCharacterFaces(character.id, ids, { baseUrl: props.backendUrl });
+    await addCharacterFaceAssignments(character.id, assignments, {
+      baseUrl: props.backendUrl,
+    });
     selectedImageIds.value = [];
     clearFaceSelection();
     lastSelectedImageId.value = null;
@@ -7803,6 +7837,18 @@ async function handleAssignFaceSearchResults() {
     operationStore.refresh();
     emit("refresh-sidebar");
   } catch (e) {
+    const status = Number(e?.response?.status);
+    if (status >= 500 || status === 422) {
+      faceSearchRanked.value = null;
+      await fetchAllGridImages({ force: true });
+    }
+    if (status >= 500) {
+      noticeStore.error(
+        `The assignment outcome is uncertain. Suggestions were reloaded from the server before you retry.`,
+        { key: "character-face-search-assign-uncertain" },
+      );
+      return;
+    }
     noticeStore.error(
       `Couldn't assign those pictures to ${character.name}. ${errorDetail(e)}`,
       { scope: "character-face-search-assign" },

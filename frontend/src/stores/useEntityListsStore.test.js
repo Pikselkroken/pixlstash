@@ -184,6 +184,28 @@ describe("useEntityListsStore", () => {
     expect(store.characters).toEqual([]);
   });
 
+  it("queues one authoritative refresh when invalidated during a read", async () => {
+    const store = useEntityListsStore();
+    const oldRead = deferred();
+    const authoritativeRead = deferred();
+    listCharacters
+      .mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(authoritativeRead.promise);
+
+    const reading = store.refresh("characters");
+    const firstInvalidation = store.invalidate(["characters"]);
+    const secondInvalidation = store.invalidate(["characters"]);
+    oldRead.resolve([{ id: 1, name: "Before mutation" }]);
+    await reading;
+
+    expect(listCharacters).toHaveBeenCalledTimes(2);
+    authoritativeRead.resolve([{ id: 2, name: "After mutation" }]);
+    await Promise.all([firstInvalidation, secondInvalidation]);
+
+    expect(listCharacters).toHaveBeenCalledTimes(2);
+    expect(store.characters).toEqual([{ id: 2, name: "After mutation" }]);
+  });
+
   it("refetches only the kind a local mutation touched", async () => {
     const store = useEntityListsStore();
     await store.invalidate();

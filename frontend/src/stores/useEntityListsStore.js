@@ -75,6 +75,11 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   // `scopeCountsInFlight`).
   const inFlight = new Map();
 
+  // An invalidation is stronger than an ordinary cache read: when it arrives
+  // during an in-flight read, that response may predate the mutation/event.
+  // Remember one trailing read per kind so the final cache is authoritative.
+  const trailingInvalidations = new Map();
+
   // Bumped by reset(). A response tagged with a stale epoch is dropped instead
   // of being written into the cache — otherwise a list fetched under the
   // previous credential could land after a logout and render to the next one.
@@ -213,7 +218,24 @@ export const useEntityListsStore = defineStore("entityLists", () => {
    */
   function invalidate(kinds = ENTITY_KINDS, options = {}) {
     const targets = Array.isArray(kinds) ? kinds : [kinds];
-    return Promise.all(targets.map((kind) => refresh(kind, options)));
+    return Promise.all(
+      targets.map((kind) => {
+        const existing = inFlight.get(kind);
+        if (!existing) return refresh(kind, options);
+
+        trailingInvalidations.set(kind, options);
+        return existing.then(() => {
+          // Another invalidation callback may already have started the shared
+          // trailing read. Join it instead of creating a third request.
+          const successor = inFlight.get(kind);
+          if (successor) return successor;
+          const trailing = trailingInvalidations.get(kind);
+          if (!trailing) return lists.value[kind] ?? [];
+          trailingInvalidations.delete(kind);
+          return refresh(kind, trailing);
+        });
+      }),
+    );
   }
 
   /**
@@ -226,6 +248,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   function reset() {
     epoch += 1;
     inFlight.clear();
+    trailingInvalidations.clear();
     lists.value = emptyLists();
     fetchedAt.value = zeroed();
     pending.value = falsed();

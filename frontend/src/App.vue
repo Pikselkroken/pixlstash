@@ -23,6 +23,7 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import { useNoticeStore } from "./stores/useNoticeStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -68,6 +69,7 @@ const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const operationStore = useOperationStore();
+const noticeStore = useNoticeStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -192,8 +194,15 @@ const {
 });
 
 async function handleTelemetryDecision(patch) {
-  telemetryConsentOpen.value = false;
-  await userPrefsStore.saveTelemetry(patch);
+  const saved = await userPrefsStore.saveTelemetry(patch);
+  if (saved) {
+    telemetryConsentOpen.value = false;
+    return;
+  }
+  noticeStore.error(
+    "Couldn’t save your privacy choices. The dialog is still open so you can retry.",
+    { key: "telemetry-consent-save" },
+  );
 }
 
 const { fetchConfig } = useAppConfig({

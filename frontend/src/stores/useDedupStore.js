@@ -2172,7 +2172,12 @@ export const useDedupStore = defineStore("dedup", () => {
         if (!last) {
           commitStackedGroups(stackedTargets);
           if (recorded) narrateVerdictOperation();
-          return null;
+          return {
+            failed: true,
+            uncertain: isAmbiguousMutationError(error.value),
+            completed: stackedTargets.length,
+            requested: targets.length,
+          };
         }
         stackedTargets.push(target);
         if (last.batch_id) recorded = true;
@@ -2209,6 +2214,9 @@ export const useDedupStore = defineStore("dedup", () => {
     } catch (err) {
       error.value = err;
       console.warn(`[dedup] failed to stack group ${group.signature}`, err);
+      if (isAmbiguousMutationError(err)) {
+        await reconcileAfterUncertainMutation(err);
+      }
       return null;
     } finally {
       busy.value = false;
@@ -2289,39 +2297,54 @@ export const useDedupStore = defineStore("dedup", () => {
    * @param {Object} group
    * @returns {Promise<Object|null>} the verdict response, or null on failure.
    */
-  async function keepSeparate(group) {
+  async function keepSeparate(group, { batchId } = {}) {
     if (showingDecided.value) return null;
     const targets = verdictTargets(group);
     if (targets.length > 1) {
+      const gestureId = batchId || newOperationBatchId();
       let last = null;
+      let recorded = false;
+      const completed = [];
       for (const target of targets) {
-        last = await keepSeparateOne(target);
-        if (!last) return null;
+        last = await keepSeparateOne(target, {
+          batchId: gestureId,
+          deferCommit: true,
+        });
+        if (!last) {
+          commitSeparatedGroups(completed);
+          if (recorded) narrateVerdictOperation();
+          return {
+            failed: true,
+            uncertain: isAmbiguousMutationError(error.value),
+            completed: completed.length,
+            requested: targets.length,
+          };
+        }
+        completed.push(target);
+        if (last.batch_id) recorded = true;
       }
+      commitSeparatedGroups(completed);
       clearSelection();
       // A backend that has made keep-separate undoable mirrors the stack
       // response and carries a batch_id; an older one returns null there and
       // the gesture stays receipt-less, exactly as before.
-      if (last?.batch_id) narrateVerdictOperation();
-      return last;
+      if (recorded) narrateVerdictOperation();
+      return { ...last, completed: completed.length, requested: targets.length };
     }
-    const result = await keepSeparateOne(group);
+    const result = await keepSeparateOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
     return result;
   }
 
-  async function keepSeparateOne(group) {
+  async function keepSeparateOne(
+    group,
+    { batchId, deferCommit = false } = {},
+  ) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
-      const result = await keepGroupSeparate(group.signature);
-      separatedCount.value += 1;
-      removeGroup(group.signature);
-      openCount.value = Math.max(0, openCount.value - 1);
-      invalidateScopeCounts();
-      // This verdict raises no WebSocket event at all, so this refetch is the
-      // only thing that will ever correct the tick above.
-      reconcileCounts();
+      const result = await keepGroupSeparate(group.signature, { batchId });
+      if (!deferCommit) commitSeparatedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
@@ -2329,10 +2352,60 @@ export const useDedupStore = defineStore("dedup", () => {
         `[dedup] failed to keep group ${group.signature} separate`,
         err,
       );
+      if (isAmbiguousMutationError(err)) {
+        await reconcileAfterUncertainMutation(err);
+      }
       return null;
     } finally {
       busy.value = false;
     }
+  }
+
+  function commitSeparatedGroups(separatedGroups) {
+    const signatures = new Set(
+      separatedGroups.map((group) => group?.signature).filter(Boolean),
+    );
+    if (!signatures.size) return;
+    const removed = groups.value.filter((group) =>
+      signatures.has(group.signature),
+    ).length;
+    groups.value = groups.value.filter(
+      (group) => !signatures.has(group.signature),
+    );
+    selectedSignatures.value = new Set(
+      [...selectedSignatures.value].filter(
+        (signature) => !signatures.has(signature),
+      ),
+    );
+    separatedCount.value += signatures.size;
+    if (removed) {
+      if (nextCursor.value === null) {
+        nextOffset.value = Math.max(0, nextOffset.value - removed);
+      }
+      total.value = Math.max(0, total.value - removed);
+      openCount.value = Math.max(0, openCount.value - removed);
+    }
+    invalidateScopeCounts();
+    reconcileCounts();
+    if (!groups.value.length) {
+      focusIndex.value = -1;
+      if (hasMore.value) loadMore();
+      else if (windowStart.value > 0) loadPrevious();
+    } else if (focusIndex.value >= windowStart.value + groups.value.length) {
+      setFocus(windowStart.value + groups.value.length - 1);
+    }
+  }
+
+  function isAmbiguousMutationError(err) {
+    return Number(err?.response?.status) >= 500;
+  }
+
+  async function reconcileAfterUncertainMutation(mutationError) {
+    // A 5xx can arrive after the transaction committed. Re-read before a retry
+    // so the user never submits the same verdict against a stale row.
+    await loadFirstPage();
+    await refreshCounts();
+    error.value = mutationError;
   }
 
   /**
@@ -2549,6 +2622,7 @@ export const useDedupStore = defineStore("dedup", () => {
     const pending = (async () => {
       try {
         const data = await startScan(request);
+        error.value = null;
         scan.value = normalizeScan(data);
         startScanPoll();
         return data;
@@ -2560,6 +2634,7 @@ export const useDedupStore = defineStore("dedup", () => {
           startScanPoll();
           return active;
         }
+        error.value = err;
         console.warn("[dedup] failed to start a duplicate scan", err);
         return null;
       }
@@ -2599,9 +2674,12 @@ export const useDedupStore = defineStore("dedup", () => {
       if (scanPollTickGeneration === generation) return;
       scanPollTickGeneration = generation;
       try {
+        const wasScanning = isScanning.value;
         await refreshCounts();
         if (generation !== scanPollGeneration) return;
-        if (!groups.value.length) await loadFirstPage();
+        if (!groups.value.length || (wasScanning && !isScanning.value)) {
+          await loadFirstPage();
+        }
         if (generation !== scanPollGeneration) return;
         if (!isScanning.value) {
           const deferred = deferredScanRequest;

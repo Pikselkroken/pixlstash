@@ -272,6 +272,26 @@ export const useOperationStore = defineStore("operation", () => {
   let inFlight = false;
   let refetchQueued = false;
 
+  // Every request belongs to exactly one authentication epoch. Reset aborts
+  // the transport where possible and the epoch check remains the backstop for
+  // mocks/transports that settle after abort.
+  let sessionEpoch = 0;
+  const activeRequests = new Set();
+
+  function beginRequest() {
+    const request = { epoch: sessionEpoch, controller: new AbortController() };
+    activeRequests.add(request);
+    return request;
+  }
+
+  function finishRequest(request) {
+    activeRequests.delete(request);
+  }
+
+  function requestIsCurrent(request) {
+    return request.epoch === sessionEpoch && !request.controller.signal.aborted;
+  }
+
   // Trailing-edge debounce for WS-driven re-reads, and whether anything in the
   // current window came from this client (and may therefore narrate itself).
   let wsDebounceTimer = null;
@@ -646,11 +666,13 @@ export const useOperationStore = defineStore("operation", () => {
       return;
     }
     inFlight = true;
+    const request = beginRequest();
     try {
       const [rows, state] = await Promise.all([
-        listOperations({ limit: HISTORY_LIMIT }),
-        getUndoState(),
+        listOperations({ limit: HISTORY_LIMIT, signal: request.controller.signal }),
+        getUndoState({ signal: request.controller.signal }),
       ]);
+      if (!requestIsCurrent(request)) return;
       operations.value = Array.isArray(rows) ? rows : [];
       canUndo.value = Boolean(state?.can_undo);
       canRedo.value = Boolean(state?.can_redo);
@@ -665,6 +687,7 @@ export const useOperationStore = defineStore("operation", () => {
       loaded.value = true;
       if (narrate) narrateNewest(previous, newest);
     } catch (e) {
+      if (!requestIsCurrent(request)) return;
       // The stack is an affordance over a server that stays correct either
       // way, so a failed read must never break the toolbar — log and keep the
       // last known state rather than clearing it into a dead control.
@@ -673,10 +696,13 @@ export const useOperationStore = defineStore("operation", () => {
         e,
       );
     } finally {
-      inFlight = false;
-      if (refetchQueued) {
-        refetchQueued = false;
-        refresh({ narrate });
+      finishRequest(request);
+      if (requestIsCurrent(request)) {
+        inFlight = false;
+        if (refetchQueued) {
+          refetchQueued = false;
+          refresh({ narrate });
+        }
       }
     }
   }
@@ -809,28 +835,35 @@ export const useOperationStore = defineStore("operation", () => {
     }
     const target = nextUndo.value;
     busy.value = true;
+    const request = beginRequest();
     try {
-      const result = await undoLastOperation();
+      const result = await undoLastOperation({ signal: request.controller.signal });
+      if (!requestIsCurrent(request)) return null;
       // Before the receipt: the raise below would otherwise read as "a pill
       // that is not this set's" and collapse the very tiles the undo just
       // brought back.
       applyLifecycleToGhosts(result);
       await refresh({ narrate: false });
+      if (!requestIsCurrent(request)) return null;
       const reverted = target ?? result?.operations?.[0] ?? null;
       if (reverted) showReceipt(buildReceipt(reverted, "undone"));
       return result;
     } catch (e) {
+      if (!requestIsCurrent(request)) return null;
       queuedUndos = 0;
       reportFailure("undo", e);
       await refresh({ narrate: false });
       return null;
     } finally {
-      busy.value = false;
-      if (queuedUndos > 0 && canUndo.value) {
-        queuedUndos -= 1;
-        undo();
-      } else {
-        queuedUndos = 0;
+      finishRequest(request);
+      if (requestIsCurrent(request)) {
+        busy.value = false;
+        if (queuedUndos > 0 && canUndo.value) {
+          queuedUndos -= 1;
+          undo();
+        } else {
+          queuedUndos = 0;
+        }
       }
     }
   }
@@ -847,9 +880,12 @@ export const useOperationStore = defineStore("operation", () => {
     }
     const target = nextRedo.value;
     busy.value = true;
+    const request = beginRequest();
     try {
-      const result = await redoOperation();
+      const result = await redoOperation({ signal: request.controller.signal });
+      if (!requestIsCurrent(request)) return null;
       await refresh({ narrate: false });
+      if (!requestIsCurrent(request)) return null;
       // Redoing a move puts the pictures back in the Scrapheap. Their tiles are
       // on screen again (the undo reinstated them), so they ghost again for the
       // new receipt's window rather than vanishing — the same offer, both ways.
@@ -861,11 +897,13 @@ export const useOperationStore = defineStore("operation", () => {
       if (replayed) showReceipt(buildReceipt(replayed, "did"));
       return result;
     } catch (e) {
+      if (!requestIsCurrent(request)) return null;
       reportFailure("redo", e);
       await refresh({ narrate: false });
       return null;
     } finally {
-      busy.value = false;
+      finishRequest(request);
+      if (requestIsCurrent(request)) busy.value = false;
     }
   }
 
@@ -897,6 +935,7 @@ export const useOperationStore = defineStore("operation", () => {
       .sort((a, b) => b - a);
 
     busy.value = true;
+    const request = beginRequest();
     let reverted = 0;
     // One POST per step: a 20-step walk on a slow link would otherwise look
     // like the app froze, with the popover shut and both buttons greyed until
@@ -917,7 +956,10 @@ export const useOperationStore = defineStore("operation", () => {
     try {
       while (pending.length) {
         const id = pending.shift();
-        const result = await undoOperation(id);
+        const result = await undoOperation(id, {
+          signal: request.controller.signal,
+        });
+        if (!requestIsCurrent(request)) return reverted;
         applyLifecycleToGhosts(result);
         const done = new Set((result?.operations ?? []).map((op) => op?.id));
         done.add(id);
@@ -927,15 +969,18 @@ export const useOperationStore = defineStore("operation", () => {
         }
       }
       await refresh({ narrate: false });
+      if (!requestIsCurrent(request)) return reverted;
       if (oldest) showReceipt(buildReceipt(oldest, "undone", steps));
       return reverted;
     } catch (e) {
+      if (!requestIsCurrent(request)) return reverted;
       reportFailure("undo", e);
       await refresh({ narrate: false });
       return reverted;
     } finally {
-      busy.value = false;
-      if (progressKey) {
+      finishRequest(request);
+      if (requestIsCurrent(request)) busy.value = false;
+      if (progressKey && requestIsCurrent(request)) {
         try {
           useNoticeStore().dismissByKey(progressKey);
         } catch (e) {
@@ -959,24 +1004,37 @@ export const useOperationStore = defineStore("operation", () => {
     const target =
       operations.value.find((op) => op?.batch_id === batchId) ?? null;
     busy.value = true;
+    const request = beginRequest();
     try {
-      const result = await undoBatch(batchId);
+      const result = await undoBatch(batchId, {
+        signal: request.controller.signal,
+      });
+      if (!requestIsCurrent(request)) return null;
       applyLifecycleToGhosts(result);
       await refresh({ narrate: false });
+      if (!requestIsCurrent(request)) return null;
       const reverted = target ?? result?.operations?.[0] ?? null;
       if (reverted) showReceipt(buildReceipt(reverted, "undone"));
       return result;
     } catch (e) {
+      if (!requestIsCurrent(request)) return null;
       reportFailure("undo", e);
       await refresh({ narrate: false });
       return null;
     } finally {
-      busy.value = false;
+      finishRequest(request);
+      if (requestIsCurrent(request)) busy.value = false;
     }
   }
 
   /** Drop every trace of the previous session (logout / vault switch). */
   function reset() {
+    sessionEpoch += 1;
+    for (const request of activeRequests) request.controller.abort();
+    activeRequests.clear();
+    inFlight = false;
+    refetchQueued = false;
+    busy.value = false;
     dismissReceipt();
     resetGhostSet();
     collapsingPictureIds.value = [];
@@ -985,6 +1043,11 @@ export const useOperationStore = defineStore("operation", () => {
     wsNarrate = false;
     queuedUndos = 0;
     pendingReceiptNote = null;
+    try {
+      useNoticeStore().dismissByKey("operation-undo-progress");
+    } catch (e) {
+      console.warn("useOperationStore: could not retire stale undo progress", e);
+    }
     operations.value = [];
     canUndo.value = false;
     canRedo.value = false;
