@@ -43,6 +43,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureProjectMember
 from pixlstash.routes._helpers import picture_referenced_by_project
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 __all__ = [
     "ProjectMembershipReconcileResult",
@@ -128,7 +129,12 @@ def reconcile_entity_project_change(
     if not pic_id_list:
         return result
 
-    for pic in session.exec(select(Picture).where(Picture.id.in_(pic_id_list))).all():
+    picture_scope = scope_id_subquery(
+        session, pic_id_list, name="_pixlstash_entity_project_picture_ids"
+    )
+    for pic in session.exec(
+        select(Picture).where(Picture.id.in_(picture_scope))
+    ).all():
         if pic.id is None:
             continue
 

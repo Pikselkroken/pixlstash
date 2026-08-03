@@ -1,3 +1,7 @@
+# [1.8.4]
+
+- Fix issue #694 (Database Query Error): Sometimes a query failed due to too many bound variables in a SQL statement.
+
 # [1.8.3] [Security:Moderate]
 
 If you have given a share link to anyone, please update. Once you have, your existing links are safe again and keep working. Reissue a link only if you would rather the person you gave it to had never been able to see the information described below.

@@ -33,12 +33,25 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Picture, PictureSet, PictureSetMember
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
 # 423 Locked — semantically exact for "the resource is frozen"; distinct from the
 # 403 (token scope) and 409 (name conflict) codes already used on these routes.
 LOCKED_STATUS_CODE = 423
+
+def _picture_stack_ids(session: Session, picture_ids) -> dict[int, int | None]:
+    """Return picture-to-stack mappings without exceeding SQLite bind limits."""
+    scope = scope_id_subquery(
+        session, picture_ids, name="_pixlstash_lock_stack_picture_ids"
+    )
+    return {
+        int(pid): (int(sid) if sid is not None else None)
+        for pid, sid in session.exec(
+            select(Picture.id, Picture.stack_id).where(Picture.id.in_(scope))
+        ).all()
+    }
 
 
 def _locked_sets_by_picture(
@@ -62,11 +75,14 @@ def _locked_sets_by_picture(
     expanded = expand_picture_ids_to_stacks(session, ids)
     if not expanded:
         return {}
+    scope = scope_id_subquery(
+        session, expanded, name="_pixlstash_locked_picture_ids"
+    )
     rows = session.exec(
         select(PictureSetMember.picture_id, PictureSet.id, PictureSet.name)
         .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
         .where(
-            PictureSetMember.picture_id.in_(expanded),
+            PictureSetMember.picture_id.in_(scope),
             PictureSet.locked.is_(True),
         )
     ).all()
@@ -110,14 +126,7 @@ def locked_sets_for_pictures(session: Session, picture_ids) -> dict[int, list[di
 
     # A locked-set member freezes its whole stack, so roll each frozen picture's
     # sets up to its stack, then hand them to every input id on that stack.
-    stack_by_picture = {
-        int(pid): (int(sid) if sid is not None else None)
-        for pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(
-                Picture.id.in_(sorted(set(ids) | set(detail)))
-            )
-        ).all()
-    }
+    stack_by_picture = _picture_stack_ids(session, set(ids) | set(detail))
     sets_by_stack: dict[int, dict[int, str]] = {}
     for frozen_id, pairs in detail.items():
         stack_id = stack_by_picture.get(frozen_id)
@@ -166,17 +175,10 @@ def locked_picture_ids(session: Session, picture_ids) -> set[int]:
         return set()
     # An input id is frozen if it is itself a locked-set member, or shares a stack
     # with one. Map both the inputs and the locked members to their stack ids.
-    stack_by_id = {
-        int(pid): (int(sid) if sid is not None else None)
-        for pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(Picture.id.in_(ids))
-        ).all()
-    }
+    stack_by_id = _picture_stack_ids(session, ids)
     locked_stack_ids = {
         int(sid)
-        for _pid, sid in session.exec(
-            select(Picture.id, Picture.stack_id).where(Picture.id.in_(locked_expanded))
-        ).all()
+        for sid in _picture_stack_ids(session, locked_expanded).values()
         if sid is not None
     }
     frozen: set[int] = set()
@@ -350,11 +352,14 @@ def enforce_stack_membership_not_locked(
         # A single-member stack has no sibling to inherit membership from.
         return
 
+    member_scope = scope_id_subquery(
+        session, members, name="_pixlstash_stack_lock_members"
+    )
     rows = session.exec(
         select(PictureSetMember.set_id, PictureSetMember.picture_id, PictureSet.name)
         .join(PictureSet, PictureSet.id == PictureSetMember.set_id)
         .where(
-            PictureSetMember.picture_id.in_(sorted(members)),
+            PictureSetMember.picture_id.in_(member_scope),
             PictureSet.locked.is_(True),
         )
     ).all()

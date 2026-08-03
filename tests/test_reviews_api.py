@@ -14,7 +14,7 @@ from PIL import Image
 import numpy as np
 from sqlmodel import select
 
-from pixlstash.db_models import Picture, PictureSetMember, PictureStack, Tag
+from pixlstash.db_models import Picture, PictureSetMember, PictureStack, Review, Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
@@ -909,6 +909,77 @@ def test_preview_review_survives_large_scope():
         _teardown(temp_dir, server)
 
 
+def test_full_pair_card_page_survives_sqlite_variable_ceiling():
+    """A 500-card pair page may reference 1000 distinct pictures."""
+    import sqlite3
+
+    from sqlalchemy import event as sa_event
+    from sqlalchemy import insert as sa_insert
+
+    temp_dir, client, server = _setup()
+    try:
+        card_count = 500
+
+        def seed(session):
+            review = Review(tag=TAG, scanned=1000, found=card_count)
+            session.add(review)
+            session.flush()
+            review_id = int(review.id)
+            session.execute(
+                sa_insert(Picture),
+                [
+                    {
+                        "id": picture_id,
+                        "deleted": False,
+                        "file_path": f"/x/{picture_id}.png",
+                        "format": "png",
+                    }
+                    for picture_id in range(1, card_count * 2 + 1)
+                ],
+            )
+            session.execute(
+                sa_insert(TagSuggestion),
+                [
+                    {
+                        "picture_id": picture_id,
+                        "twin_picture_id": picture_id + card_count,
+                        "tag": TAG,
+                        "direction": "remove",
+                        "source": "near_neighbor",
+                        "score": 0.9,
+                        "twin_sim": 0.9,
+                        "review_id": review_id,
+                        "status": "PENDING",
+                    }
+                    for picture_id in range(1, card_count + 1)
+                ],
+            )
+            session.commit()
+            return review_id
+
+        review_id = server.vault.db.run_task(seed)
+        engine = server.vault.db._engine
+
+        def _set_limit(dbapi_conn, _record):
+            dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+
+        sa_event.listen(engine, "connect", _set_limit)
+        engine.dispose()
+
+        response = client.get(
+            f"{API}/reviews/{review_id}/suggestions", params={"limit": card_count}
+        )
+        assert response.status_code == 200, response.text
+        cards = response.json()
+        assert len(cards) == card_count
+        assert len(
+            {card["picture_id"] for card in cards}
+            | {card["twin_picture_id"] for card in cards}
+        ) == card_count * 2
+    finally:
+        _teardown(temp_dir, server)
+
+
 # ---------------------------------------------------------------------------
 # Security: /reviews is an owner-only, vault-wide curation surface. Every
 # write/preview endpoint must reject a resource-scoped READ token (403) while
@@ -1272,7 +1343,9 @@ def test_scoped_token_cannot_read_review_suggestions():
         headers = {"Authorization": f"Bearer {token}"}
         scoped_resp = bearer.get(f"{API}/reviews/{rid}/suggestions", headers=headers)
         assert scoped_resp.status_code == 403, scoped_resp.text
-        assert scoped_resp.json()["detail"] == "Not available to this token"
+        assert scoped_resp.json()["detail"] == (
+            "Owner-level (full, unscoped) access required"
+        )
 
         # Owner side: the queue is served in full. These are exactly the fields
         # the gate exists to withhold — the twin's id and the neighbourhood ids.
