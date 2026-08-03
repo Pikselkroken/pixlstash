@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 import shutil
 import tempfile
@@ -14,11 +15,13 @@ from sqlmodel import delete, select
 
 from pixlstash.db_models import (
     Character,
+    CharacterProjectMember,
     DeletedFileLog,
     Face,
     Picture,
     PictureSet,
     PictureSetMember,
+    PictureSetProjectMember,
     Project,
     ReferenceFolder,
 )
@@ -66,6 +69,8 @@ def clean_db(server):
         session.exec(delete(PictureLikenessQueue))
         session.exec(delete(PictureLikenessFrontier))
         session.exec(delete(PictureProjectMember))
+        session.exec(delete(CharacterProjectMember))
+        session.exec(delete(PictureSetProjectMember))
         session.exec(delete(PictureSetMember))
         session.exec(delete(Face))
         session.exec(delete(Tag))
@@ -494,6 +499,157 @@ def test_restore_resource_character(server):
         lambda s: s.get(Character, char_id)
     )
     assert restored.name == "Alice"
+
+
+def test_restore_existing_character_replaces_project_memberships_exactly(server):
+    """A root character restore reinstates allowed joins and removes live-only ones."""
+    from pixlstash.services.project_membership_service import set_character_projects
+
+    def _setup(session):
+        allowed = Project(name="character-allowed")
+        denied = Project(name="character-denied")
+        session.add(allowed)
+        session.add(denied)
+        session.flush()
+        character = Character(name="snapshot-character")
+        session.add(character)
+        session.flush()
+        set_character_projects(session, character, [allowed.id])
+        session.commit()
+        return character.id, allowed.id, denied.id
+
+    char_id, allowed_id, denied_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _diverge(session):
+        character = session.get(Character, char_id)
+        character.name = "live-character"
+        set_character_projects(session, character, [denied_id])
+        session.commit()
+
+    server.vault.db.run_task(_diverge)
+    report = server.vault.restore_service.restore_resource(cp.id, "character", char_id)
+    assert not report.errors
+
+    restored, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(Character, char_id),
+            sorted(
+                session.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == char_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    assert restored.name == "snapshot-character"
+    assert restored.project_id == allowed_id
+    assert project_ids == [allowed_id]
+    assert denied_id not in project_ids
+
+
+def test_restore_existing_picture_set_replaces_project_memberships_exactly(server):
+    """A root set restore reinstates allowed joins and removes live-only ones."""
+    from pixlstash.services.project_membership_service import set_picture_set_projects
+
+    def _setup(session):
+        allowed = Project(name="set-allowed")
+        denied = Project(name="set-denied")
+        session.add(allowed)
+        session.add(denied)
+        session.flush()
+        picture_set = PictureSet(name="snapshot-set")
+        session.add(picture_set)
+        session.flush()
+        set_picture_set_projects(session, picture_set, [allowed.id])
+        session.commit()
+        return picture_set.id, allowed.id, denied.id
+
+    set_id, allowed_id, denied_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _diverge(session):
+        picture_set = session.get(PictureSet, set_id)
+        picture_set.name = "live-set"
+        set_picture_set_projects(session, picture_set, [denied_id])
+        session.commit()
+
+    server.vault.db.run_task(_diverge)
+    report = server.vault.restore_service.restore_resource(cp.id, "picture_set", set_id)
+    assert not report.errors
+
+    restored, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(PictureSet, set_id),
+            sorted(
+                session.exec(
+                    select(PictureSetProjectMember.project_id).where(
+                        PictureSetProjectMember.set_id == set_id
+                    )
+                ).all()
+            ),
+        )
+    )
+    assert restored.name == "snapshot-set"
+    assert restored.project_id == allowed_id
+    assert project_ids == [allowed_id]
+    assert denied_id not in project_ids
+
+
+def test_root_entity_membership_projects_are_restore_dependencies(server):
+    """A deleted project referenced only by the root join is preflighted."""
+    from pixlstash.services.project_membership_service import set_character_projects
+    from pixlstash.services.restore_service import MissingDependenciesError
+
+    def _setup(session):
+        project = Project(name="root-membership-dependency")
+        session.add(project)
+        session.flush()
+        character = Character(name="root-with-project")
+        session.add(character)
+        session.flush()
+        set_character_projects(session, character, [project.id])
+        session.commit()
+        return character.id, project.id
+
+    char_id, project_id = server.vault.db.run_task(_setup)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    def _delete_project(session):
+        session.exec(
+            delete(CharacterProjectMember).where(
+                CharacterProjectMember.character_id == char_id
+            )
+        )
+        session.exec(delete(Project).where(Project.id == project_id))
+        session.commit()
+
+    server.vault.db.run_task(_delete_project)
+
+    with pytest.raises(MissingDependenciesError) as exc_info:
+        server.vault.restore_service.restore_resource(cp.id, "character", char_id)
+    assert exc_info.value.missing == {"projects": [project_id]}
+
+    report = server.vault.restore_service.restore_resource(
+        cp.id,
+        "character",
+        char_id,
+        confirm_restore_dependencies=True,
+    )
+    assert not report.errors
+    project, project_ids = server.vault.db.run_immediate_read_task(
+        lambda session: (
+            session.get(Project, project_id),
+            session.exec(
+                select(CharacterProjectMember.project_id).where(
+                    CharacterProjectMember.character_id == char_id
+                )
+            ).all(),
+        )
+    )
+    assert project is not None
+    assert project_ids == [project_id]
 
 
 # ---------------------------------------------------------------------------
@@ -3524,3 +3680,126 @@ def test_restoring_a_snapshot_clears_guest_sessions_and_scores(server):
     restored = _get_picture(server, pic.id)
     assert restored is not None
     assert restored.description == "keep"
+
+
+def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monkeypatch):
+    """Old cookies/tokens receive 503 between the DB swap and token deletion."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    token_response = owner.post(
+        "/api/v1/users/me/token",
+        json={"description": "pre-restore", "scope": "READ"},
+    )
+    assert token_response.status_code == 200, token_response.text
+    token = token_response.json()["token"]
+
+    _create_file(server, "restore-auth-gate.jpg")
+    _add_picture(server, filename="restore-auth-gate.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    service = server.vault.restore_service
+    original_swap = service._swap_database
+    original_clear = service._clear_api_tokens
+    entered_queue_gap = threading.Event()
+    release_token_clear = threading.Event()
+
+    def _assert_gate_then_swap(live_db_path, new_db_path):
+        assert server.auth.is_auth_closed_for_restore()
+        return original_swap(live_db_path, new_db_path)
+
+    def _blocked_token_clear(session):
+        entered_queue_gap.set()
+        assert release_token_clear.wait(10), "test did not release token clear"
+        return original_clear(session)
+
+    monkeypatch.setattr(service, "_swap_database", _assert_gate_then_swap)
+    monkeypatch.setattr(service, "_clear_api_tokens", _blocked_token_clear)
+
+    outcome = {}
+
+    def _restore():
+        try:
+            outcome["report"] = service.restore_full(cp.id)
+        except BaseException as exc:  # surface worker-thread assertion failures
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=_restore, daemon=True)
+    thread.start()
+    assert entered_queue_gap.wait(10), "restore never reached token-clear queue gap"
+    try:
+        assert server.auth.is_auth_closed_for_restore()
+
+        class _PreRestoreWebSocket:
+            cookies = {"session_id": owner.cookies.get("session_id")}
+            headers = {"authorization": f"Bearer {token}"}
+            query_params = {}
+
+        assert server.auth.authenticate_websocket(_PreRestoreWebSocket()) is None
+        cookie_response = owner.get("/api/v1/session/context")
+        token_response = TestClient(server.api).get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cookie_response.status_code == 503, cookie_response.text
+        assert token_response.status_code == 503, token_response.text
+        assert cookie_response.headers["Retry-After"] == "5"
+    finally:
+        release_token_clear.set()
+        thread.join(timeout=20)
+
+    assert not thread.is_alive(), "restore thread did not finish"
+    assert "error" not in outcome, outcome.get("error")
+    assert not outcome["report"].errors
+    assert not server.auth.is_auth_closed_for_restore()
+    assert owner.get("/api/v1/session/context").status_code == 401
+    assert (
+        TestClient(server.api)
+        .get(
+            "/api/v1/session/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        .status_code
+        == 401
+    )
+
+
+def test_full_restore_reset_failure_is_not_success_and_keeps_auth_closed(
+    server, monkeypatch
+):
+    """A failed in-memory reset propagates and never reopens authentication."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _create_file(server, "restore-auth-reset-failure.jpg")
+    _add_picture(server, filename="restore-auth-reset-failure.jpg")
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    original_reset = server.auth.reset_after_restore
+
+    def _fail_reset():
+        raise RuntimeError("deterministic auth reset failure")
+
+    monkeypatch.setattr(server.auth, "reset_after_restore", _fail_reset)
+    try:
+        with pytest.raises(
+            RuntimeError, match="authentication state could not be reset"
+        ):
+            server.vault.restore_service.restore_full(cp.id)
+        assert server.auth.is_auth_closed_for_restore()
+        response = owner.get("/api/v1/session/context")
+        assert response.status_code == 503, response.text
+    finally:
+        # Restore the module-scoped server fixture to a safe, usable state for
+        # any subsequently selected tests. Production recovery is a restart.
+        monkeypatch.setattr(server.auth, "reset_after_restore", original_reset)
+        original_reset()
+        server.auth.reopen_auth_after_restore()

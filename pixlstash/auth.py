@@ -340,6 +340,14 @@ class AuthService:
         # this before reading and re-checks it before writing, see
         # _token_from_value. Guarded by _token_cache_lock.
         self._token_cache_epoch: int = 0
+        # A full restore replaces the database file underneath this service.
+        # From immediately before that cutover until the restored database has
+        # been cleaned and every in-memory credential cache has been rebuilt,
+        # no request may authenticate against either side of the swap.  The
+        # restore path closes this gate before submitting the swap control task
+        # and only reopens it after reset_after_restore() succeeds.
+        self._restore_auth_gate_lock = threading.Lock()
+        self._restore_auth_gate_closed = False
         # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
         # Entries expire after _GUEST_SESSION_INACTIVE_TTL (30 days) and are pruned lazily
         # in record_guest_activity().  When the cache reaches _guest_max_tracked_sessions
@@ -354,6 +362,31 @@ class AuthService:
         )  # 4 hours — min age to evict under cap
         self._guest_max_tracked_sessions: int = int(
             self._server_config.get("guest_max_stored_sessions", 1000)
+        )
+
+    def close_auth_for_restore(self) -> None:
+        """Reject credential-bearing traffic until restore finalisation succeeds."""
+        with self._restore_auth_gate_lock:
+            self._restore_auth_gate_closed = True
+
+    def reopen_auth_after_restore(self) -> None:
+        """Re-enable authentication after a fully successful restore."""
+        with self._restore_auth_gate_lock:
+            self._restore_auth_gate_closed = False
+
+    def is_auth_closed_for_restore(self) -> bool:
+        """Return whether authentication is fail-closed for a database restore."""
+        with self._restore_auth_gate_lock:
+            return self._restore_auth_gate_closed
+
+    @staticmethod
+    def _restore_unavailable_response() -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Authentication is temporarily unavailable during restore."
+            },
+            headers={"Retry-After": "5"},
         )
 
     def record_guest_activity(self, session_id: str) -> None:
@@ -1284,6 +1317,12 @@ class AuthService:
             cookie session or an ALL-scope token with no resource restriction —
             or ``None`` if the connection is unauthenticated.
         """
+        # WebSocket handshakes bypass HTTP middleware. Keep them behind the
+        # same restore gate so a pre-swap cookie or cached bearer token cannot
+        # authenticate in the queue gap after the database has been replaced.
+        if self.is_auth_closed_for_restore():
+            return None
+
         # Cookie session — full owner (the browser SPA sends this on the
         # handshake, same-origin).
         session_id = websocket.cookies.get("session_id")
@@ -2054,6 +2093,16 @@ class AuthService:
     async def auth_middleware(
         self, request: Request, call_next, allow_origins, allow_origin_regex
     ):
+        # Check before both the public-path exemption and credential lookup.
+        # Login/check-session are authentication traffic too: allowing them to
+        # read the swapped-in owner row before cleanup/reset completes would
+        # reopen a second credential path during the restore window.
+        if (
+            any(request.url.path.startswith(prefix) for prefix in AUTH_API_PREFIXES)
+            and self.is_auth_closed_for_restore()
+        ):
+            return self._restore_unavailable_response()
+
         if request.method == "OPTIONS":
             return await call_next(request)
 

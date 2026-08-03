@@ -72,10 +72,10 @@ class FullRestoreMixin:
            re-open it.
         5. Clear every API token (see ``_clear_api_tokens``) — a restore always
            leaves the vault with no tokens, whatever the snapshot held.
-        6. Reset the in-memory authentication state the swap invalidated (see
+        6. Delete rows whose files are missing and perform post-swap cleanup.
+        7. Reset the in-memory authentication state the swap invalidated (see
            ``_reset_auth_state``); clients sign in again afterwards.
-        7. Delete rows whose files are missing.
-        8. NULL-reset derived columns so the WorkPlanner regenerates them.
+        8. Reopen authentication only after every finalisation step succeeds.
         9. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
 
         Args:
@@ -678,7 +678,18 @@ class FullRestoreMixin:
                     reinserted_deleted,
                 )
 
-        # Steps 4-6 wrapped in try/finally so the planner always restarts —
+        # Close authentication before the database cutover.  The swap and
+        # token deletion are separate writer-queue jobs; without this gate, an
+        # old cookie or cached token can authenticate in the gap between them.
+        # The gate deliberately stays closed after any swap/finalisation
+        # failure.  At that point the process cannot prove its in-memory auth
+        # state matches the live database, so only a successful recovery/reset
+        # (or a process restart) may admit credentials again.
+        auth_service = getattr(self._vault, "auth_service", None)
+        if auth_service is not None:
+            auth_service.close_auth_for_restore()
+
+        # Steps 4-8 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped
         # would silently halt every background worker (daily snapshots,
         # missing-file detection, embedding generation, ...) until restart.
@@ -690,12 +701,13 @@ class FullRestoreMixin:
             # swap has finished and released ``exclusive_engine_access``; this
             # writer task opens its session on the re-created engine.
             db.run_task(self._clear_api_tokens, priority=0)
-            # Then drop the in-memory authentication state the swap invalidated.
-            # Ordered after the token clear on purpose: once the swapped-in
-            # database holds no token rows, a request arriving in the gap cannot
-            # re-populate the cache with a restored token.
-            self._reset_auth_state()
             db.run_task(_post_restore_cleanup, priority=0)
+            # Rebuild process-local auth state only after the restored database
+            # is in its final form. A reset failure is fatal and intentionally
+            # leaves the gate closed; reporting success would be fail-open.
+            self._reset_auth_state()
+            if auth_service is not None:
+                auth_service.reopen_auth_after_restore()
         finally:
             if planner is not None:
                 planner.start()
@@ -735,15 +747,16 @@ class FullRestoreMixin:
         ``run_control_task(_do_swap)`` has returned, so the swap has finished
         and released ``exclusive_engine_access()`` and the engine has been
         re-created; and after ``_clear_api_tokens``, so the swapped-in database
-        already holds no token rows and a request landing in the gap cannot
-        re-populate the cache from one. ``reset_after_restore`` re-reads the
+        already holds no token rows. The restore authentication gate has been
+        closed since before the swap, so no request can repopulate the cache in
+        the queue gap. ``reset_after_restore`` re-reads the
         owner row through the ordinary writer queue, which is exactly why it
         must not be called from inside the swap — doing so would take the
         writer queue while the engine lock is held and hang the request path.
 
-        Failure is logged, not raised: the restore itself has already
-        succeeded by this point, and aborting it here would leave the caller
-        believing the swap did not happen.
+        Failure is raised: although the database swap has happened, restore
+        finalisation has not succeeded and authentication remains fail-closed.
+        The caller must never receive a successful restore report in that state.
         """
         auth_service = getattr(self._vault, "auth_service", None)
         if auth_service is None:
@@ -757,14 +770,17 @@ class FullRestoreMixin:
         try:
             auth_service.reset_after_restore()
         except Exception as exc:
-            logger.error(
+            logger.critical(
                 "RestoreService: failed to reset in-memory authentication "
-                "state after the restore. Sessions and cached tokens from "
-                "before the swap may still authenticate until the server is "
-                "restarted: %s",
+                "state after the restore; authentication remains disabled "
+                "until recovery or process restart: %s",
                 exc,
                 exc_info=True,
             )
+            raise RuntimeError(
+                "Database restore completed its swap but authentication state "
+                "could not be reset; authentication remains disabled."
+            ) from exc
 
     @staticmethod
     def _clear_api_tokens(session: Session) -> None:

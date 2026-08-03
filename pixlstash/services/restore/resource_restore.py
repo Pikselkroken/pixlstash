@@ -585,6 +585,12 @@ class ResourceRestoreMixin:
         }
         set_ids = {m.set_id for m in snap_rows.get("picture_set_members", [])}
         proj_ids = {m.project_id for m in snap_rows.get("picture_project_members", [])}
+        # Root entity memberships are authoritative snapshot collections too.
+        # Their projects must participate in dependency preflight before the
+        # live join rows are replaced, otherwise the exact replacement can fail
+        # late (or be silently narrowed) when a referenced project was deleted.
+        proj_ids.update(snap_rows.get("character_project_ids", []))
+        proj_ids.update(snap_rows.get("picture_set_project_ids", []))
 
         def _with_project_ids(row, membership_model, id_column, entity_id):
             if row is None:
@@ -792,6 +798,8 @@ class ResourceRestoreMixin:
             "tags": [],
             "picture_set_members": [],
             "picture_project_members": [],
+            "character_project_ids": [],
+            "picture_set_project_ids": [],
             "character": None,
             "picture_set": None,
             "project": None,
@@ -820,12 +828,30 @@ class ResourceRestoreMixin:
         if resource_type == "picture_set":
             ps = snap_session.get(PictureSet, resource_id)
             rows["picture_set"] = ps
+            rows["picture_set_project_ids"] = sorted(
+                int(project_id)
+                for project_id in snap_session.exec(
+                    select(PictureSetProjectMember.project_id).where(
+                        PictureSetProjectMember.set_id == resource_id
+                    )
+                ).all()
+                if project_id is not None
+            )
         elif resource_type == "project":
             proj = snap_session.get(Project, resource_id)
             rows["project"] = proj
         elif resource_type == "character":
             char = snap_session.get(Character, resource_id)
             rows["character"] = char
+            rows["character_project_ids"] = sorted(
+                int(project_id)
+                for project_id in snap_session.exec(
+                    select(CharacterProjectMember.project_id).where(
+                        CharacterProjectMember.character_id == resource_id
+                    )
+                ).all()
+                if project_id is not None
+            )
 
         return rows
 
@@ -861,6 +887,39 @@ class ResourceRestoreMixin:
             _merge(snap_rows["picture_set"])
         if snap_rows.get("character"):
             _merge(snap_rows["character"])
+
+        # Character/PictureSet project membership is a snapshot-owned
+        # collection for root restores, just like a picture's Face/Tag rows.
+        # Use the canonical write-both helpers so the join rows are replaced
+        # exactly and the legacy scalar project_id is re-derived consistently.
+        from pixlstash.services.project_membership_service import (
+            set_character_projects,
+            set_picture_set_projects,
+        )
+
+        root_character = snap_rows.get("character")
+        if root_character is not None:
+            merged_character = session.get(Character, root_character.id)
+            if merged_character is None:
+                session.flush()
+                merged_character = session.get(Character, root_character.id)
+            set_character_projects(
+                session,
+                merged_character,
+                snap_rows.get("character_project_ids", []),
+            )
+
+        root_picture_set = snap_rows.get("picture_set")
+        if root_picture_set is not None:
+            merged_picture_set = session.get(PictureSet, root_picture_set.id)
+            if merged_picture_set is None:
+                session.flush()
+                merged_picture_set = session.get(PictureSet, root_picture_set.id)
+            set_picture_set_projects(
+                session,
+                merged_picture_set,
+                snap_rows.get("picture_set_project_ids", []),
+            )
 
         # Scrapheap rows carry the snapshot's ORIGINAL ``deleted_at``. Merging
         # that verbatim hands the retention auto-purge an already-expired
