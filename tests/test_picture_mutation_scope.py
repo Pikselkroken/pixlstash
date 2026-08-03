@@ -411,6 +411,25 @@ def test_assign_face_picture_ids_branch_denied(env, monkeypatch):
     assert r.status_code == 403, r.text
 
 
+def test_assign_face_denied_when_a_stack_sibling_is_out_of_scope(env, monkeypatch):
+    """Stack-atomic assignment must authorize the whole expanded mutation."""
+    server, client, picture_ids, character_id = env
+    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+    _scope_to(monkeypatch, [characters_faces_module], None)
+    stacked = client.post(
+        f"{API}/stacks", json={"picture_ids": [in_scope, out_of_scope]}
+    )
+    assert stacked.status_code == 200, stacked.text
+
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
+    response = client.post(
+        f"{API}/characters/{character_id}/faces",
+        json={"picture_ids": [in_scope]},
+    )
+
+    assert response.status_code == 403, response.text
+
+
 def test_assign_face_face_ids_branch_denied(env, monkeypatch):
     """The face_ids alternate branch must resolve face -> picture and deny."""
     server, client, picture_ids, character_id = env
