@@ -44,8 +44,8 @@ vi.mock("../../api/dedup", () => ({
   // The lazy half of the stack contract: a row's expansion reads its members
   // only when the user opens one.
   listStackMembers: vi.fn(),
-  // The third page (design D5). The queue reads this list on open even when
-  // the page is never shown, because the flagged deck badge is built from it.
+  // The third page (design D5). Its potentially expensive list stays lazy
+  // until the user opens the page.
   listMixedStacks: vi.fn(),
   splitMixedStack: vi.fn(),
   unstackMixedStack: vi.fn(),
@@ -2630,19 +2630,30 @@ async function openMixedPage(wrapper, store) {
 }
 
 describe("DuplicateQueue: the Mixed stacks page", () => {
-  // The count rides on the page toggle and never on the sidebar badge, which
-  // has to keep meaning "groups to review".
-  it("offers the third page from the header, carrying its own count", async () => {
+  // The list is deliberately lazy because its first read can score the whole
+  // library. Its entry cannot depend on that unread list, though: the first
+  // press is what requests it, then the returned rows and count appear here.
+  it("offers the third page cold and loads it on the first press", async () => {
     listMixedStacks.mockResolvedValue(
       mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })]),
     );
-    const { wrapper, store } = await mountQueue([group("g1")]);
-    await store.loadMixedStacks();
-    await wrapper.vm.$nextTick();
+    const { wrapper } = await mountQueue([group("g1")]);
+
     const toggle = wrapper.find('[data-testid="mixed-toggle"]');
     expect(toggle.exists()).toBe(true);
     expect(toggle.text()).toContain("Mixed stacks");
-    expect(toggle.text()).toContain("2");
+    expect(listMixedStacks).not.toHaveBeenCalled();
+
+    await toggle.trigger("click");
+    await flushPromises();
+
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-testid="mixed-stacks"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(2);
+    expect(wrapper.find(".qtitle").text()).toBe("2 mixed stacks");
+    expect(wrapper.find('[data-testid="mixed-toggle"]').text()).toContain(
+      "Back to review",
+    );
   });
 
   // Ranked worst first by the server, and printed in that order with no

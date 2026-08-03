@@ -86,7 +86,7 @@
              that badge means "groups to review", and it is the one number in
              the app that has to stay trusted. -->
         <button
-          v-if="!store.showingDecided && mixedToggleVisible"
+          v-if="!store.showingDecided"
           type="button"
           class="qdecided"
           :class="{ 'qdecided--on': store.showingMixed }"
@@ -1079,19 +1079,6 @@ const mixedToggleTitle = computed(() => {
     ? `Mixed stacks: ${n.toLocaleString()} ${n === 1 ? "stack holds" : "stacks hold"} pictures that don't all match`
     : "Mixed stacks: stacks whose pictures don't all match";
 });
-
-/**
- * Whether the toggle is offered at all.
- *
- * Withheld until the list has been read once, and then only when there is
- * something on it or the user is standing on the page. A control that opens an
- * empty page it never had to open is a control that costs a press to learn
- * nothing; the empty state exists for the case where the last row is drained
- * while the page is open, which is a different moment.
- */
-const mixedToggleVisible = computed(
-  () => store.showingMixed || (store.mixedLoaded && store.mixedTotal > 0),
-);
 
 /** The row pitch a given picture height implies, before anything is measured. */
 function estimatedPitch() {
