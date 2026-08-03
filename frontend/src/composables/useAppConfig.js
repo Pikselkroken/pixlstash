@@ -26,12 +26,12 @@ import { useSidebarStore } from "../stores/useSidebarStore";
  * @param {object} hooks
  * @param {Function} hooks.onThumbnailSizeChanged - re-measure the column
  *   ceiling after a thumbnail-size change (a layout concern App.vue owns).
- * @param {Function} hooks.onUpdateCheckUndecided - the user has never
- *   answered the update-check question, so App.vue should ask.
+ * @param {Function} hooks.onTelemetryConsentRequired - the user has never
+ *   answered the telemetry question, so App.vue should ask.
  */
 export function useAppConfig({
   onThumbnailSizeChanged,
-  onUpdateCheckUndecided,
+  onTelemetryConsentRequired,
 } = {}) {
   const userPrefsStore = useUserPrefsStore();
   const gridStore = useGridStore();
@@ -244,8 +244,11 @@ export function useAppConfig({
       const cfu = cfg?.check_for_updates;
       userPrefsStore.checkForUpdates =
         cfu === true ? true : cfu === false ? false : null;
-      if (userPrefsStore.checkForUpdates === null) {
-        onUpdateCheckUndecided?.();
+      userPrefsStore.hydrateTelemetry(cfg);
+      if (!userPrefsStore.telemetryConsentPrompted) {
+        await onTelemetryConsentRequired?.({
+          isUpgrade: userPrefsStore.checkForUpdates !== null,
+        });
       }
     } catch (e) {
       console.error("Failed to fetch user config:", e);

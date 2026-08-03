@@ -64,6 +64,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
         from pixlstash.tasks.missing_pixel_sha_finder import MissingPixelShaFinder
         from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
+        from pixlstash.tasks.missing_stack_cohesion_finder import (
+            MissingStackCohesionFinder,
+        )
 
         from pixlstash.utils.path_mapper import PathMapper
 
@@ -134,6 +137,9 @@ class WorkPlanner:
                 database=database,
             ),
             TaskType.DEDUP_SCAN: DedupScanFinder(
+                database=database,
+            ),
+            TaskType.STACK_COHESION: MissingStackCohesionFinder(
                 database=database,
             ),
         }
@@ -303,6 +309,12 @@ class WorkPlanner:
                     with self._lock:
                         self._finder_exhausted[finder_name] = True
                     break
+                # A finder may block in database or filesystem work long enough
+                # for stop()'s bounded join to return. Do not submit the task it
+                # found after shutdown has begun and the runner may already be
+                # stopped by Vault.stop().
+                if self._stop.is_set():
+                    return submitted_any
 
                 task_id = getattr(task, "id", None)
                 with self._lock:
@@ -325,6 +337,12 @@ class WorkPlanner:
                         )
                         if task_id:
                             self._finder_by_task_id.pop(task_id, None)
+                    # Close the remaining race between the stop check above and
+                    # TaskRunner.submit(). A stopped runner is expected during
+                    # vault teardown; any submission failure while still live
+                    # remains a real error and is re-raised.
+                    if self._stop.is_set():
+                        return submitted_any
                     raise
 
                 if submitted_task_id and submitted_task_id != task_id:

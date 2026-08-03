@@ -3,7 +3,7 @@
     class="grow"
     :class="{ 'grow--focus': focused, 'grow--selected': selected }"
     role="group"
-    :aria-label="`Group ${index + 1}, ${group.candidates.length} pictures`"
+    :aria-label="`Group ${index + 1}, ${composition}`"
     :aria-current="focused ? 'true' : undefined"
     :aria-selected="selected ? 'true' : undefined"
     :data-testid="`dedup-group-${group.signature}`"
@@ -16,7 +16,11 @@
         <v-icon v-if="focused" class="gcaret" size="18">mdi-menu-right</v-icon>
         <b>Group {{ index + 1 }}</b>
         <span class="gn-sep" aria-hidden="true">|</span>
-        <span>{{ group.candidates.length }} pictures</span>
+        <!-- The COMPOSITION, not a picture count: `Stack of 5 + 1 picture`.
+             The size never leaves the header, because the verdict button is
+             allowed to shed it under width pressure and this is then the only
+             place the group's true depth is stated. -->
+        <span>{{ composition }}</span>
       </div>
       <DedupConfidencePill :group="group" />
       <!-- The evidence stays on every row; the focused row is already marked
@@ -28,100 +32,63 @@
 
     <!-- Thumbnails at grid scale, edge to edge, carrying no metadata: only the
          cover label and the index, and the index only while the row is focused
-         because that is the only row `1`-`9` can address. -->
-    <div class="gstrip" :style="stripStyle">
-      <button
-        v-for="(candidate, i) in group.candidates"
-        :key="idOf(candidate)"
-        type="button"
-        class="gthumb"
-        :class="{
-          'gthumb--cover':
-            idOf(candidate) === coverId &&
-            !isOut(idOf(candidate)) &&
-            !isLockedOut(candidate),
-          'gthumb--out': isOut(idOf(candidate)) && !isLockedOut(candidate),
-          'gthumb--locked': isLockedOut(candidate),
-        }"
-        :tabindex="focused ? 0 : -1"
-        :aria-pressed="idOf(candidate) === coverId"
-        :aria-label="thumbLabel(candidate, i)"
-        :title="thumbTitle(candidate, i)"
-        @click.stop="onPick(candidate)"
-        @contextmenu.prevent.stop="onToggle(candidate)"
-      >
-        <!-- The IMG sizes its own box: the stored width/height are the raw
-             file dimensions and ignore EXIF rotation, so a portrait phone
-             shot reports landscape numbers. The browser decodes the rotated
-             pixels, so height-fixed + width-auto is the only shape that is
-             always true. The placeholder uses the metadata as an estimate;
-             the image corrects it on load. -->
-        <img
-          v-if="loadThumbnails"
-          class="gt"
-          :src="thumbUrl(candidate)"
-          alt=""
-          loading="lazy"
-          decoding="async"
+         because that is the only row `1`-`9` can address.
+
+         ONE TILE PER UNIT, not per picture. A deck occupies one slot however
+         many of its members the group named, because a stack verdict moves the
+         whole stack: a strip that drew them apart was offering per-picture
+         gestures the backend folds back together.
+
+         The strip itself is `DedupPictureStrip`, shared with the Mixed stacks
+         row: the sizing math, the panorama ceiling, the placeholder estimate,
+         the roving tab stop, the corner columns and the chip recipes are one
+         implementation, so the two rows cannot drift apart. -->
+    <DedupPictureStrip
+      :tiles="tiles"
+      :thumb-height="thumbHeight"
+      :focused="focused"
+      :load-thumbnails="loadThumbnails"
+      @pick="onPick($event.unit)"
+      @toggle="onToggle($event.unit)"
+    >
+      <template #behind="{ tile }">
+        <StackEdgeTicks
+          v-if="tile.unit.kind === 'deck'"
+          :count="tile.unit.depth"
         />
+      </template>
+      <template #top-right="{ tile }">
+        <!-- The badge is the EXPANSION trigger (D4). It used to repeat the
+             tile's own set-cover gesture, which made it a second control doing
+             the first one's job; the count is the natural handle for "show me
+             what is in there". -->
+        <StackBadge
+          v-if="tile.unit.kind === 'deck'"
+          :count="tile.unit.depth"
+          :tabindex="focused ? 0 : -1"
+          :expanded="isExpanded(tile.unit)"
+          :flagged="isFlagged(tile.unit)"
+          :dense="denseBadges"
+          :action-title="expandTitle(tile.unit)"
+          @activate="onExpand(tile.unit)"
+        />
+        <!-- Hover-only, DISPLAY-ONLY (pointer-events stays off, see the strip's
+             CSS): the tile keeps owning click=cover, right-click=exclude,
+             double-click=compare. aria-hidden, because the same facts live in
+             Compare's meta grid, the queue's readable surface for them. -->
         <span
-          v-else
-          class="gt gt--placeholder"
-          :style="thumbBoxStyle(candidate)"
+          v-if="loadThumbnails && tile.unit.face"
+          class="gstars"
           aria-hidden="true"
-        ></span>
-        <span v-if="focused" class="gnum">{{ i + 1 }}</span>
-        <span
-          v-if="
-            idOf(candidate) === coverId &&
-            !isOut(idOf(candidate)) &&
-            !isLockedOut(candidate)
-          "
-          class="gcv"
-          >Cover</span
         >
-        <!-- Hover-only score overlays (owner request): the grid's own
-             StarRatingOverlay top-right, the smart score bottom-right, both
-             revealed by the grid's exact hover recipe and DISPLAY-ONLY here
-             (pointer-events stays off, see the CSS) — the thumbnail keeps
-             owning click=cover, right-click=exclude, double-click=compare.
-             aria-hidden: the same facts live in Compare's meta grid, which
-             is the queue's readable surface for them. -->
-        <span v-if="loadThumbnails" class="gstars" aria-hidden="true">
           <StarRatingOverlay
-            :score="Number(candidate.score) || 0"
+            :score="Number(tile.unit.face.score) || 0"
             :icon-size="14"
             :compact="true"
           />
         </span>
-        <span
-          v-if="loadThumbnails && smartTextOf(candidate)"
-          class="gsmart"
-          aria-hidden="true"
-          :title="`Smart score ${smartTextOf(candidate)}`"
-        >
-          <v-icon size="12">mdi-brain</v-icon>
-          {{ smartTextOf(candidate) }}
-        </span>
-        <v-icon
-          v-if="isOut(idOf(candidate)) && !isLockedOut(candidate)"
-          class="gx"
-          size="20"
-          >mdi-minus-circle-outline</v-icon
-        >
-        <!-- The server's exclusion, not the user's, so it gets its own marker
-             and its own corner: the two can appear in the same strip and must
-             never be read as the same walk-back-able state. Same chip as
-             ReviewBinaryCard's .rs-thumb-lock, so the app has one lock chip. -->
-        <span
-          v-if="isLockedOut(candidate)"
-          class="glock"
-          :class="{ 'glock--flash': flashIds.includes(idOf(candidate)) }"
-        >
-          <v-icon size="12">mdi-lock-outline</v-icon>
-        </span>
-      </button>
-    </div>
+      </template>
+    </DedupPictureStrip>
 
     <div v-if="verdict" class="gact">
       <!-- A decided row states its verdict and offers the one way back.
@@ -180,9 +147,25 @@
         @click.stop="emit('stack')"
       >
         <v-icon size="16">mdi-layers-plus</v-icon>
-        <span>{{
-          bulk ? `Stack ${selectionCount} groups` : `Stack ${stackSize}`
-        }}</span>
+        <!-- The button NAMES ITS OUTCOME (`Stack 3` / `Add 1 to stack of 4` /
+             `Merge 2 stacks`), because expansion is opt-in: a user working at
+             speed with Enter never opens one, so this is the last text before
+             committing. Under width pressure it sheds the size and then the
+             destination, in CSS both ways: the fold is a container query, not
+             a measurement, exactly as the toolbar's overflow works. The
+             degrading classes are applied ONLY when there is something to shed,
+             so a label with one form is never hidden with nothing to replace
+             it. -->
+        <span v-if="bulk">Stack {{ selectionCount }} groups</span>
+        <template v-else>
+          <span :class="verdictLabel.degrades ? 'gsl gsl--full' : null">{{
+            verdictLabel.full
+          }}</span>
+          <template v-if="verdictLabel.degrades">
+            <span class="gsl gsl--mid">{{ verdictLabel.mid }}</span>
+            <span class="gsl gsl--short">{{ verdictLabel.short }}</span>
+          </template>
+        </template>
         <kbd v-if="showsVerdictKeys" aria-hidden="true">Enter</kbd>
       </button>
       <button
@@ -211,9 +194,113 @@
         @click.stop="emit('compare')"
       >
         <v-icon size="15">mdi-compare-horizontal</v-icon>
-        <span>Compare all {{ group.candidates.length }}</span>
+        <span>Compare all {{ units.length }}</span>
         <kbd v-if="focused" aria-hidden="true">C</kbd>
       </button>
+    </div>
+
+    <!-- ── The expansion: what is inside a deck (D4) ──────────────────────
+         A full-width band BELOW the row's three columns, never inline in
+         `.gstrip`: that strip is already an `overflow-x` scroller, and
+         nesting a second horizontal scroller on the same axis is ambiguous
+         on a trackpad and on touch. Exploding a deck into the strip would
+         also destroy the unit reading the row exists to create.
+
+         The queue owns the "at most one open, on the focused row" rule,
+         because its scroll spacers are sized from a single uniform row
+         pitch and a variable-height row breaks that arithmetic.
+
+         READ-ONLY here, deliberately: `StackExpansionStrip` can emit
+         `unstack` and `set-cover`, and both would rewrite the user's
+         library from inside a panel they opened in order to LOOK.
+         Promotion lives in Compare, where the consequence sentence has
+         room to be read. -->
+    <div
+      v-if="expandedUnit"
+      class="gexp"
+      data-testid="dedup-row-expansion"
+      @click.stop
+    >
+      <!-- ── The way from a flagged deck to its Mixed stacks row (D5) ────
+           The badge is already spoken for: pressing it is the disclosure,
+           and a second corner control would double-mark a corner that has
+           no room for one. So the shortcut lives HERE, in the band that
+           press opens, where there is width for a sentence saying what the
+           flag means.
+
+           It also costs the COLLAPSED row no height, which matters: the
+           queue sizes both scroll spacers from one uniform row pitch, so a
+           line that appeared on some rows and not others would put a
+           per-row variable into that arithmetic. The band is already
+           excluded from that sample.
+
+           Read-only, like the rest of the band: it changes the PAGE, not
+           the library. -->
+      <div v-if="expansionFlagged" class="gexp-flag">
+        <v-icon size="14">mdi-alert-outline</v-icon>
+        <span>These pictures don't all match at the current threshold.</span>
+        <AppButton
+          variant="ghost"
+          size="sm"
+          icon-left="format-list-bulleted"
+          :tabindex="focused ? 0 : -1"
+          title="Open this stack's row on the Mixed stacks page. Your place in the queue is kept."
+          @click.stop="emit('show-mixed', expandedUnit.stackId)"
+          >Review this stack</AppButton
+        >
+      </div>
+      <div v-if="expansionLoading" class="gexp-state" role="status">
+        <v-icon size="16" class="mdi-spin">mdi-loading</v-icon>
+        Reading the pictures in this stack
+      </div>
+      <!-- The verdict is still live while the read fails: the band is
+           disclosure, and a failure to disclose must not read as a failure
+           to decide. -->
+      <div
+        v-else-if="expansionFailed"
+        class="gexp-state gexp-state--error"
+        role="alert"
+      >
+        <v-icon size="16">mdi-alert-outline</v-icon>
+        <span
+          >Could not read the pictures in this stack. The verdict buttons still
+          work.</span
+        >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          :tabindex="focused ? 0 : -1"
+          @click.stop="emit('retry-expansion')"
+          >Try again</AppButton
+        >
+      </div>
+      <!-- ── The way from a flagged deck to its Mixed stacks row (D5) ────
+           The badge is already spoken for: pressing it is the disclosure,
+           and a second corner control would double-mark a corner that has
+           no room for one. So the shortcut lives HERE, in the band the
+           press opens, where there is width for a sentence saying what the
+           flag means. It also costs the row no height in its collapsed
+           state, which matters: the queue sizes both scroll spacers from
+           one uniform row pitch, so a line that appeared on some rows and
+           not others would put a per-row variable into that arithmetic.
+
+           Read-only, like the rest of the band: it changes the PAGE, not
+           the library. -->
+      <!-- The row's own height-driven recipe, not the strip's 128x96
+           default: the queue runs a 112-406px size slider, and a band that
+           ignored it would contradict the tiles directly above it. Height
+           only: the width follows the decoded image, because stored
+           dimensions ignore EXIF rotation. -->
+      <StackExpansionStrip
+        v-else
+        :count="expandedUnit.depth"
+        :members="expansionMembers"
+        :cover-id="expansionCoverId"
+        :reason="expansionReason"
+        :thumb-height="thumbHeight"
+        read-only
+        :show-unstack="false"
+      />
     </div>
   </div>
 </template>
@@ -244,35 +331,34 @@
 // the treatment exists to remove.
 
 import { computed } from "vue";
+import AppButton from "./AppButton.vue";
 import DedupConfidencePill from "./DedupConfidencePill.vue";
+import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { API_BASE_URL } from "../../utils/apiClient";
 import {
-  candidateId,
   candidateSmartScore,
-  candidateStackable,
-  candidateBlockedBySets,
-  lockedCandidateIds,
+  groupUnits,
+  isUnitExcluded,
+  includedUnits,
+  unitForPictureId,
+  unitCompositionLabel,
+  stackVerdictLabel,
+  DENSE_STACK_BADGE_BELOW_PX,
 } from "../../utils/dedup";
 import { buildLockReason } from "../../stores/useLockedSetsStore";
 import { formatUserDate } from "../../utils/utils";
 import StarRatingOverlay from "./StarRatingOverlay.vue";
+import StackBadge from "./StackBadge.vue";
+import StackEdgeTicks from "./StackEdgeTicks.vue";
+import StackExpansionStrip from "./StackExpansionStrip.vue";
 import {
   DEFAULT_THUMBNAIL_SIZE_LEVEL,
   stripHeightForSizeLevel,
 } from "../../utils/thumbnailSizes";
 import { MIN_STACK_MEMBERS } from "../../stores/useDedupStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
-
-/** A candidate's picture id. The server calls the field `picture_id`. */
-const idOf = candidateId;
-
-/**
- * The widest shape a thumbnail may keep before it is cropped, as a ratio. A
- * ceiling, not a crop: only a beyond-panoramic picture reaches it.
- */
-const MAX_THUMB_RATIO = 2.4;
 
 /**
  * Below this height the info column, not the strip, sets the row height, and
@@ -299,6 +385,9 @@ const props = defineProps({
   // A decided row swaps its verdict buttons for the verdict and a Clear.
   verdict: { type: String, default: "" },
   decidedAt: { type: String, default: "" },
+  // Decided is a history surface: show every candidate from the group rather
+  // than replacing the pictures the user decided on with one current deck.
+  collapseStacks: { type: Boolean, default: true },
   coverId: { type: [Number, String], default: null },
   excludedIds: { type: Array, default: () => [] },
   // False for a row outside the read-ahead window: the thumbnails are the
@@ -319,6 +408,25 @@ const props = defineProps({
   // Picture ids to flash the lock chip on: the sighted counterpart to the
   // announcement when a Stack was refused. The queue sets it and clears it.
   flashIds: { type: Array, default: () => [] },
+  // ── The expansion band (D4) ────────────────────────────────────────────
+  // The stack whose members are showing under this row, or null. The QUEUE
+  // owns this state, not the row: at most one expansion exists in the whole
+  // queue and it lives on the focused row, because `DuplicateQueue` sizes
+  // both scroll spacers from a single uniform row pitch and a second
+  // variable-height row breaks that arithmetic.
+  expandedStackId: { type: [Number, String], default: null },
+  // `[{ id, thumbnail_version }]` in stack order, fetched lazily by the queue.
+  expansionMembers: { type: Array, default: () => [] },
+  expansionLoading: { type: Boolean, default: false },
+  expansionFailed: { type: Boolean, default: false },
+  // ── The mixed-stack flag (D5) ──────────────────────────────────────────
+  // Stack ids (as strings) whose members do not all match at the current
+  // threshold, the STRONG case only. Read straight through to the deck's
+  // badge, which turns its icon slot into the mark. It is a standing fact
+  // about the stack and NEVER gates a verdict: a mixed stack is one a user may
+  // legitimately want to add to, and a warning that blocked would be the third
+  // control this feature offered that it could not honour.
+  flaggedStackIds: { type: Object, default: () => new Set() },
 });
 
 const emit = defineEmits([
@@ -329,6 +437,9 @@ const emit = defineEmits([
   "set-cover",
   "toggle-excluded",
   "clear-decision",
+  "toggle-expansion",
+  "retry-expansion",
+  "show-mixed",
 ]);
 
 const userPrefsStore = useUserPrefsStore();
@@ -356,52 +467,62 @@ const decidedTitle = computed(() => {
 });
 
 /**
- * The candidates a locked picture set keeps out of the stack.
+ * The row's UNITS: the things a stack verdict can move independently.
  *
- * The server's decision, served per candidate on the queue page. It is not a
- * user exclusion and `X` cannot walk it back, which is why it is tracked
- * separately from `excludedIds` all the way down to the marker.
+ * Every loop, count, index and label below is over these rather than over
+ * `group.candidates`, which is what makes the thing on screen the thing the
+ * backend moves.
  */
-const lockedIds = computed(() => lockedCandidateIds(props.group));
+const units = computed(() =>
+  groupUnits(props.group, { collapseStacks: props.collapseStacks }),
+);
+
+/** The group's composition, for the header and the row's accessible name. */
+const composition = computed(() => unitCompositionLabel(units.value));
+
+/** The units a locked picture set keeps out of the stack. */
+const lockedUnits = computed(() =>
+  units.value.filter((unit) => !unit.stackable),
+);
+
+/** The units the Stack button would collect. */
+const includedUnitList = computed(() =>
+  includedUnits(units.value, props.excludedIds),
+);
+
+/** What the Stack button is about to do, at three widths. */
+const verdictLabel = computed(() => stackVerdictLabel(includedUnitList.value));
 
 /**
- * Whether a locked set keeps this candidate out.
- * @param {Object} candidate
+ * Whether a locked set keeps this unit out.
+ *
+ * Unit-level, because a locked set freezes a whole stack: one frozen member
+ * blocks its entire deck, including siblings the group never named.
+ *
+ * @param {Object} unit
  * @returns {boolean}
  */
-function isLockedOut(candidate) {
-  return !candidateStackable(candidate);
+function isLockedOut(unit) {
+  return !unit.stackable;
 }
-
-/** Every id the stack would leave out, the user's and the server's together. */
-const outIds = computed(() => {
-  const merged = new Set(props.excludedIds);
-  for (const id of lockedIds.value) merged.add(id);
-  return merged;
-});
-
-const stackSize = computed(
-  () => props.group.candidates.length - outIds.value.size,
-);
 
 /**
  * True when no legal stack exists at all: a locked set leaves fewer than two
- * members that may be stacked together. The row still offers Keep separate,
+ * units that may be stacked together. The row still offers Keep separate,
  * which is a real decision about a real duplicate pair and the only one left.
  */
 const noLegalStack = computed(
-  () => lockedIds.value.length > 0 && stackSize.value < MIN_STACK_MEMBERS,
+  () =>
+    lockedUnits.value.length > 0 &&
+    includedUnitList.value.length < MIN_STACK_MEMBERS,
 );
 
 /** Why Stack is unavailable, naming the sets so the fix is discoverable. */
 const lockedStackReason = computed(() => {
   const names = [
     ...new Set(
-      (props.group.candidates ?? [])
-        .filter((candidate) => !candidateStackable(candidate))
-        .flatMap((candidate) =>
-          candidateBlockedBySets(candidate).map((entry) => entry.name),
-        )
+      lockedUnits.value
+        .flatMap((unit) => unit.blockedBySets.map((entry) => entry.name))
         .filter(Boolean),
     ),
   ];
@@ -427,43 +548,102 @@ const showsVerdictKeys = computed(
  * stack. The row has to say so before the gesture rather than after it, or the
  * tooltip is promising an action that will not happen.
  */
-const atStackFloor = computed(() => stackSize.value <= MIN_STACK_MEMBERS);
+const atStackFloor = computed(
+  () => includedUnitList.value.length <= MIN_STACK_MEMBERS,
+);
 
 /**
- * Whether a candidate is currently left out of the stack.
- * @param {number|string} id
+ * Whether a unit is currently left out of the stack.
+ * @param {Object} unit
  * @returns {boolean}
  */
-function isOut(id) {
-  return props.excludedIds.includes(id);
+function isOut(unit) {
+  return isUnitExcluded(unit, props.excludedIds);
 }
 
 /**
- * The thumbnail URL for one candidate.
- * @param {Object} candidate
+ * Whether a unit is the group's cover.
+ *
+ * A deck answers to its leader as well as to its matched members, because the
+ * cover choice resolves to the leader and the leader is frequently not in the
+ * group at all.
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isCover(unit) {
+  return unitForPictureId([unit], props.coverId) === unit;
+}
+
+/**
+ * Whether a refused Stack named a picture of this unit, for the lock flash.
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isFlashing(unit) {
+  return unit.pictureIds.some((id) => props.flashIds.includes(id));
+}
+
+/**
+ * The thumbnail URL for one unit's face.
+ *
+ * A deck's face is its stack's LEADER, which the payload names and versions
+ * separately precisely because it is usually not one of the group's candidates.
+ *
+ * @param {Object} unit
  * @returns {string}
  */
-function thumbUrl(candidate) {
+function thumbUrl(unit) {
   // baseUrl is load-bearing: the SPA and the backend are different origins in
   // the dev server, the demo and Electron, so a relative /pictures/... 404s.
-  return pictureThumbnailUrl(idOf(candidate), {
-    version: candidate.thumbnail_version,
+  return pictureThumbnailUrl(unit.coverPictureId, {
+    version: unit.thumbnailVersion,
     baseUrl: API_BASE_URL,
   });
 }
 
 /**
- * The strip's measurements as CSS variables, so ONE number drives the box, the
- * unknown-shape fallback and the panorama ceiling together. Sizing the box in
- * CSS and the placeholder in JS from two copies of the height is how a row
- * starts jumping as its images decode.
+ * The strip's tiles: one per unit, in strip order.
+ *
+ * The strip draws chips and borders from data rather than from a second copy of
+ * the row's logic, so the two rows that mount it get the same treatment for the
+ * same facts. Each tile keeps a handle on its `unit` so the row's own handlers
+ * and the badge slot can address it without a second lookup.
  */
-const stripStyle = computed(() => ({
-  "--gthumb-h": `${props.thumbHeight}px`,
-  "--gthumb-max-w": `${Math.round(props.thumbHeight * MAX_THUMB_RATIO)}px`,
-  // The unknown-shape fallback is a 4:3 box at the strip's height.
-  "--gthumb-fallback-w": `${Math.round((props.thumbHeight * 4) / 3)}px`,
-}));
+const tiles = computed(() =>
+  units.value.map((unit, i) => {
+    const locked = isLockedOut(unit);
+    const out = isOut(unit) && !locked;
+    const cover = isCover(unit) && !out && !locked;
+    const smart = smartTextOf(unit);
+    return {
+      key: unit.key,
+      unit,
+      src: thumbUrl(unit),
+      // A deck whose leader is not a group candidate has no dimensions to
+      // estimate a placeholder from, and falls through to the strip's 4:3 box.
+      box: unit.face
+        ? { width: unit.face.width, height: unit.face.height }
+        : null,
+      ariaLabel: thumbLabel(unit, i),
+      title: thumbTitle(unit, i),
+      pressed: isCover(unit),
+      cover,
+      out,
+      locked,
+      lockFlash: isFlashing(unit),
+      cornerLabel: cover ? "Cover" : "",
+      centreIcon: out ? "mdi-minus-circle-outline" : "",
+      // The smart score is drawn from the unit's FACE, so a deck shows it only
+      // when its leader is one of the group's candidates: the alternative is
+      // labelling the leader's picture with a matched member's number, which is
+      // exactly the mismatch the deck exists to remove.
+      chip: smart
+        ? { icon: "mdi-brain", text: smart, title: `Smart score ${smart}` }
+        : null,
+    };
+  }),
+);
 
 /** How many why-pills the info column has room for at this size. */
 const whyLimit = computed(() =>
@@ -471,86 +651,220 @@ const whyLimit = computed(() =>
 );
 
 /**
- * The PLACEHOLDER's estimated shape, from stored dimensions. Only an
- * estimate: stored width/height ignore EXIF rotation, so the real image may
- * arrive with the axes swapped — it then sizes the box itself.
+ * Whether the deck badges run their dense rule at this thumbnail size.
  *
- * @param {Object} candidate
- * @returns {Object|null} an inline width, or null when the shape is unknown.
+ * Row-level, not per-badge: the strip's height is one number for the whole
+ * row, so a badge that inverted on one tile and not the next would be reading
+ * the size differently from its neighbour.
  */
-function thumbBoxStyle(candidate) {
-  const w = Number(candidate.width);
-  const h = Number(candidate.height);
-  if (!w || !h) return null;
-  const ratio = Math.min(MAX_THUMB_RATIO, Math.max(0.45, w / h));
-  return { width: `${Math.round(props.thumbHeight * ratio)}px` };
+const denseBadges = computed(
+  () => props.thumbHeight < DENSE_STACK_BADGE_BELOW_PX,
+);
+
+/**
+ * Whether this deck's stack does not hang together at the current threshold.
+ *
+ * A loose picture is never flagged: it belongs to no stack, so there is
+ * nothing about it that could be mixed.
+ *
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isFlagged(unit) {
+  if (unit.kind !== "deck" || unit.stackId === null) return false;
+  return props.flaggedStackIds?.has?.(String(unit.stackId)) === true;
 }
 
 /**
- * What a thumbnail button is called.
+ * The locked sets freezing a unit, by name.
+ * @param {Object} unit
+ * @returns {Array<string>}
+ */
+function lockNamesOf(unit) {
+  return [
+    ...new Set(unit.blockedBySets.map((entry) => entry.name).filter(Boolean)),
+  ];
+}
+
+/**
+ * What a tile is called.
  *
  * The image itself is decorative here (the row deliberately carries no
- * metadata), so without this every candidate reaches a screen reader as the
- * same unlabelled control repeated N times.
+ * metadata), so without this every tile reaches a screen reader as the same
+ * unlabelled control repeated N times.
  *
- * @param {Object} candidate
- * @param {number} i - the candidate's zero-based position.
+ * **A deck's name states the stack's true size**, and how many of it the group
+ * actually matched when those differ. On a real library one stack-touching
+ * group in three names only ONE member of a stack, so the tile shows a picture
+ * that stands for four; that sentence is the whole disclosure until the count
+ * badge is pressed, and there is no visual substitute for it; the corner has
+ * no budget for a second numeral (the spec's dropped "1 of 4 matched" marker).
+ *
+ * @param {Object} unit
+ * @param {number} i - the unit's zero-based position, which is what `1`-`9`
+ *   addresses.
  * @returns {string}
  */
-function thumbLabel(candidate, i) {
-  const parts = [`Picture ${i + 1} of ${props.group.candidates.length}`];
-  if (isLockedOut(candidate)) {
+function thumbLabel(unit, i) {
+  const position = `${i + 1} of ${units.value.length}`;
+  const parts =
+    unit.kind === "deck"
+      ? [
+          `Item ${position}`,
+          unit.matchedCount < unit.depth
+            ? `a stack of ${unit.depth} pictures, ${unit.matchedCount} of them matched`
+            : `a stack of ${unit.depth} pictures`,
+        ]
+      : [`Picture ${position}`];
+  if (isLockedOut(unit)) {
     // Named, not just "locked": the set is the thing the user has to unlock,
     // and a screen reader gets no tooltip to fall back on.
-    const names = candidateBlockedBySets(candidate)
-      .map((entry) => entry.name)
-      .filter(Boolean);
+    const names = lockNamesOf(unit);
     parts.push(
       names.length
         ? `frozen by the locked set ${names.join(", ")}, cannot be stacked`
         : "frozen by a locked set, cannot be stacked",
     );
-  } else if (isOut(idOf(candidate))) parts.push("not in the stack");
-  else if (idOf(candidate) === props.coverId) parts.push("cover");
+  } else if (isOut(unit)) parts.push("not in the stack");
+  else if (isCover(unit)) parts.push("cover");
   return parts.join(", ");
 }
 
 /**
- * The tooltip for a thumbnail, naming the key as well as the mouse gesture.
+ * The tooltip for a tile, naming the key as well as the mouse gesture.
  *
  * Only the focused row answers to `1`-`9` and `X`, so only the focused row
  * claims they work.
  *
- * @param {Object} candidate
+ * @param {Object} unit
  * @param {number} i
  * @returns {string}
  */
-function thumbTitle(candidate, i) {
-  if (isLockedOut(candidate)) {
+function thumbTitle(unit, i) {
+  if (props.verdict) {
+    return props.focused
+      ? "Double-click, or press C, to compare this decided group"
+      : "Double-click to compare this decided group";
+  }
+  const noun = unit.kind === "deck" ? "stack" : "picture";
+  if (isLockedOut(unit)) {
     // The single-sourced "why is this read-only / how do I unlock" sentence, so
     // the queue never re-words what the grid and the overlay already say.
-    const names = candidateBlockedBySets(candidate)
-      .map((entry) => entry.name)
-      .filter(Boolean);
-    const reason = buildLockReason(names);
+    const reason = buildLockReason(lockNamesOf(unit));
     return reason
       ? `${reason} It stays out of the stack.`
-      : "This picture is in a locked set, so it stays out of the stack.";
+      : `This ${noun} is in a locked set, so it stays out of the stack.`;
   }
-  if (isOut(idOf(candidate))) {
+  if (isOut(unit)) {
     return props.focused
-      ? "Right-click, or press X, to put this picture back in the stack"
-      : "Right-click to put this picture back in the stack";
+      ? `Right-click, or press X, to put this ${noun} back in the stack`
+      : `Right-click to put this ${noun} back in the stack`;
   }
+  const cover =
+    unit.kind === "deck"
+      ? "to keep this stack's cover"
+      : "to make this the cover";
   // At the floor the exclusion gesture is refused, so it must not be offered.
   if (atStackFloor.value) {
+    const floor =
+      "A stack needs at least two items in this row, so this one cannot be left out.";
     return props.focused
-      ? `Click, or press ${i + 1}, to make this the cover. A stack needs at least two pictures, so this one cannot be left out.`
-      : "Click to make this the cover. A stack needs at least two pictures, so this one cannot be left out.";
+      ? `Click, or press ${i + 1}, ${cover}. ${floor}`
+      : `Click ${cover}. ${floor}`;
   }
   return props.focused
-    ? `Click, or press ${i + 1}, to make this the cover. Right-click, or press X, to leave it out of the stack.`
-    : "Click to make this the cover, right-click to leave it out";
+    ? `Click, or press ${i + 1}, ${cover}. Right-click, or press X, to leave this ${noun} out.`
+    : `Click ${cover}, right-click to leave it out`;
+}
+
+// ── The expansion band ─────────────────────────────────────────────────────
+// Disclosure, not a mode: opening one changes nothing else about the row. The
+// verdicts stay live, the other units keep their numbers, their cover and their
+// exclusion state, and an `Enter` pressed straight after opening does exactly
+// what it would have done anyway.
+
+/** The deck whose members are on screen, or null. */
+const expandedUnit = computed(() => {
+  if (props.expandedStackId === null || props.expandedStackId === undefined) {
+    return null;
+  }
+  return (
+    units.value.find(
+      (unit) =>
+        unit.kind === "deck" &&
+        String(unit.stackId) === String(props.expandedStackId),
+    ) ?? null
+  );
+});
+
+/** What the band's header says about the group's reach into this stack. */
+const expansionReason = computed(() => {
+  const unit = expandedUnit.value;
+  if (!unit) return "";
+  return unit.matchedCount === 1
+    ? "1 of them is in this group"
+    : `${unit.matchedCount} of them are in this group`;
+});
+
+/**
+ * Which member the strip flags as the cover: the group's own cover when it is
+ * one of these pictures, the stack's leader otherwise. A promotion made in
+ * Compare therefore still reads as the cover here.
+ */
+const expansionCoverId = computed(() => {
+  const unit = expandedUnit.value;
+  if (!unit) return null;
+  if (props.coverId != null) {
+    const ids = props.expansionMembers.map((member) => member.id);
+    if (ids.includes(props.coverId)) return props.coverId;
+  }
+  return unit.coverPictureId;
+});
+
+/** Whether the open band belongs to a stack that does not hang together. */
+const expansionFlagged = computed(
+  () => expandedUnit.value !== null && isFlagged(expandedUnit.value),
+);
+
+/**
+ * Whether this unit's members are the ones on screen.
+ * @param {Object} unit
+ * @returns {boolean}
+ */
+function isExpanded(unit) {
+  return expandedUnit.value === unit;
+}
+
+/**
+ * What the count badge promises, and where it puts it.
+ *
+ * Only the focused row answers to `E`, so only the focused row claims it works.
+ *
+ * @param {Object} unit
+ * @returns {string}
+ */
+function expandTitle(unit) {
+  if (isExpanded(unit)) {
+    return props.focused
+      ? "Hide the pictures in this stack, or press E"
+      : "Hide the pictures in this stack";
+  }
+  const what = `Show the ${unit.depth} pictures in this stack, below the row`;
+  return props.focused ? `${what}, or press E` : what;
+}
+
+/**
+ * The badge opens the deck in place.
+ *
+ * It focuses the row first, because the expansion may only live on the focused
+ * row: pressing a badge on another row moves the cursor there rather than
+ * leaving two rows disagreeing about which one the keyboard acts on.
+ *
+ * @param {Object} unit
+ */
+function onExpand(unit) {
+  emit("focus");
+  emit("toggle-expansion", unit.stackId);
 }
 
 /**
@@ -567,36 +881,53 @@ function onRowMouseDown(event) {
 }
 
 /**
- * A candidate's smart score for the hover chip: the metadata panel's own
- * two-decimal precision, empty when the backend served none (NULL) or the
- * computation failed (-1.0) — no chip either way.
- * @param {Object} candidate
+ * A unit's smart score for the hover chip: the metadata panel's own two-decimal
+ * precision, empty when the backend served none (NULL), when the computation
+ * failed (-1.0), or when the unit is a deck whose leader is not in the group,
+ * no chip in any of those cases.
+ * @param {Object} unit
  * @returns {string}
  */
-function smartTextOf(candidate) {
-  const value = candidateSmartScore(candidate);
+function smartTextOf(unit) {
+  const value = unit.face ? candidateSmartScore(unit.face) : null;
   return value === null ? "" : value.toFixed(2);
 }
 
 /**
- * Clicking a thumbnail focuses the row and makes that picture the cover.
- * @param {Object} candidate
+ * Clicking a tile focuses the row and makes that unit the cover.
+ *
+ * On a deck the cover resolves to the stack's LEADER, the picture the tile is
+ * already showing: because that is the only picture the server can lead the
+ * resulting stack with, and picking a matched member instead would re-curate a
+ * stack the user already made.
+ *
+ * The tile alone: the deck's count badge is the expansion trigger (D4), not a
+ * second way to press the tile it sits on.
+ *
+ * @param {Object} unit
  */
-function onPick(candidate) {
+function onPick(unit) {
   emit("focus");
-  // A picture that is not in the stack cannot lead it. Focusing the row still
+  if (props.verdict) return;
+  // A unit that is not in the stack cannot lead it. Focusing the row still
   // happens, so the click is not a dead press.
-  if (isLockedOut(candidate)) return;
-  emit("set-cover", idOf(candidate));
+  if (isLockedOut(unit)) return;
+  emit("set-cover", unit.coverPictureId);
 }
 
 /**
- * Right-clicking a thumbnail focuses the row and toggles the exclusion.
- * @param {Object} candidate
+ * Right-clicking a tile focuses the row and toggles the WHOLE unit's exclusion.
+ *
+ * The store resolves the picture to its unit and takes the deck out entire:
+ * per-picture exclusion was a silent no-op, because the backend folds every
+ * member of any stack the group touches back in.
+ *
+ * @param {Object} unit
  */
-function onToggle(candidate) {
+function onToggle(unit) {
   emit("focus");
-  emit("toggle-excluded", idOf(candidate));
+  if (props.verdict) return;
+  emit("toggle-excluded", unit.coverPictureId);
 }
 
 /**
@@ -644,6 +975,12 @@ function onDblClick(event) {
      of the room it needed). */
   padding: var(--space-3) var(--space-4);
   padding-left: var(--space-5);
+  /* The row is the query container for its own verdict label, so that label
+     degrades on the width it actually has rather than on the viewport's. Same
+     mechanism as the toolbar's overflow fold: CSS both ways, no measurement.
+     Inline-size only: the row's HEIGHT must stay content-driven, because
+     DuplicateQueue samples its scroll pitch from it. */
+  container: grow / inline-size;
   border-radius: var(--radius-md);
   border: 1px solid rgb(var(--v-theme-divider));
   background: rgb(var(--v-theme-surface));
@@ -757,204 +1094,60 @@ function onDblClick(event) {
   white-space: nowrap;
 }
 
-.gstrip {
+/* ── The expansion band ────────────────────────────────────────────────────
+   Its own grid row, spanning all three columns: the band belongs to the row,
+   not to any one of its columns, and `1 / -1` is what keeps it out of the
+   picture strip's `overflow-x` scroller. A reading surface, so it does not
+   take the row's pointer affordance. */
+.gexp {
+  grid-column: 1 / -1;
+  min-width: 0;
+  cursor: default;
+}
+
+/* The Compare band's own state recipe (`.dc-expansion-state`), so the two
+   surfaces that can show a stack's members report a slow or failed read the
+   same way. */
+.gexp-state {
   display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-gutter: stable;
-  padding-bottom: var(--space-1);
-}
-
-.gthumb {
-  position: relative;
-  flex: 0 0 auto;
-  /* Width comes from the child: the decoded image (always the true, EXIF-
-     corrected shape) or the placeholder's metadata estimate. */
-  width: auto;
-  min-width: 44px;
-  /* Set by the strip from the queue's size control. */
-  height: var(--gthumb-h);
-  padding: 0;
-  border: 1px solid transparent;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-md);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  overflow: hidden;
-  cursor: pointer;
+  background: rgb(var(--v-theme-surface));
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 
-.gthumb:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
+/* The hue is on the glyph and the border; the text stays `on-surface`, because
+   `on-<x>` is only ever correct on a solid `<x>` fill. */
+.gexp-state--error {
+  border-color: rgb(var(--v-theme-warning));
+  color: rgb(var(--v-theme-on-surface));
 }
 
-.gthumb--cover {
-  border-color: rgb(var(--v-theme-accent));
+.gexp-state--error .v-icon {
+  color: rgb(var(--v-theme-warning));
 }
 
-/* An excluded candidate stays visible and stays clickable: it is a choice the
-   user can walk back, not a deletion. */
-.gthumb--out {
-  opacity: 0.4;
-}
-
-.gt {
-  display: block;
-  width: auto;
-  height: 100%;
-  /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. Scaled
-     with the height so the widest allowed shape stays the same 2.4:1. */
-  max-width: var(--gthumb-max-w);
-  object-fit: cover;
-}
-
-/* The unknown-shape fallback: a 4:3 box at the strip's height. */
-.gt--placeholder {
-  width: var(--gthumb-fallback-w);
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-.gnum,
-.gcv {
-  position: absolute;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.gnum {
-  top: var(--space-2);
-  left: var(--space-2);
-  min-width: var(--badge-size);
-  text-align: center;
-}
-
-.gcv {
-  bottom: var(--space-2);
-  left: var(--space-2);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-}
-
-.gx {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-/* A locked-out candidate is dimmed like a user exclusion, but it is NOT a
-   choice the user can walk back, so it does not take the pointer affordance.
-   Double-click still opens Compare: looking at it is always allowed. */
-.gthumb--locked {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* The server's exclusion marker. Same chip as ReviewBinaryCard's
-   .rs-thumb-lock (one lock chip in the app), on the spacing scale rather than
-   that card's 3px one-off, and in the top-left corner because .gx owns the
-   middle and the two can appear in the same strip. Neutral at rest: the amber
-   is spent only on a refused press, or a page of frozen rows becomes a
-   warning field and the colour stops meaning anything. */
-.glock {
-  position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
+/* The flag's sentence and its way to the Mixed stacks page. A line, not a
+   card: the band below it already carries the border, and a second boxed
+   surface inside the same disclosure would read as two panels. The hue is on
+   the glyph only; the text is `on-surface`, because `on-warning` is correct
+   only on a solid warning fill. */
+.gexp-flag {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  pointer-events: none;
+  gap: var(--space-3);
+  padding: 0 var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
-/* The sighted counterpart to the announcement, on the exact thumbnail that
-   blocked the press. Same recipe as ReviewDecisionBar's rs-lock-flash. */
-.glock--flash {
-  animation: g-lock-flash var(--dur-2) var(--ease-standard);
-}
-
-@keyframes g-lock-flash {
-  50% {
-    background: color-mix(
-      in srgb,
-      rgb(var(--v-theme-warning)) 26%,
-      transparent
-    );
-    color: rgb(var(--v-theme-warning));
-  }
-}
-
-/* Not a no-op: the refusal still has to be visible, so the animation collapses
-   to its own end state rather than disappearing. */
-@media (prefers-reduced-motion: reduce) {
-  .glock--flash {
-    animation: none;
-    background: color-mix(
-      in srgb,
-      rgb(var(--v-theme-warning)) 26%,
-      transparent
-    );
-    color: rgb(var(--v-theme-warning));
-  }
-}
-
-/* ── Hover-only score overlays ─────────────────────────────────────────────
-   The grid's exact reveal recipe (opacity on the overlay, 0.15s ease, shown
-   on the thumb's hover; the grid has no focus-triggered display and neither
-   does this — matched deliberately, hover means hover). Display-only:
-   pointer-events stays OFF at all times, unlike the grid where hover arms
-   the stars for clicking — here the thumbnail owns click=cover,
-   right-click=exclude and double-click=compare, and an interactive star
-   would swallow the cover click on the very pixels a hover invites. An
-   excluded thumb's 0.4 opacity dims these with everything else in it. */
-.gstars,
-.gsmart {
-  position: absolute;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.gthumb:hover .gstars,
-.gthumb:hover .gsmart {
-  opacity: 1;
-}
-
-/* Stars top-right: the grid's badge corner. */
-.gstars {
-  top: var(--space-2);
-  right: var(--space-2);
-}
-
-/* The smart score chip, bottom-right. The grid has NO thumbnail smart-score
-   overlay to reuse (it shows the number in the info row under the card), so
-   this mirrors the closest shipped recipes instead: this strip's own
-   photo-chip treatment (.gnum/.gcv — --scrim-photo fill, --radius-sm,
-   --text-2xs on on-dark-surface), the sort menu's mdi-brain iconography and
-   the metadata panel's two-decimal precision. */
-.gsmart {
-  bottom: var(--space-2);
-  right: var(--space-2);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
+.gexp-flag .v-icon {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-warning));
 }
 
 /* The verdict column: one action per line, never wrapping under the strip. */
@@ -997,8 +1190,43 @@ function onDblClick(event) {
 }
 
 .gbtn:disabled {
-  opacity: 0.38;
+  opacity: var(--opacity-disabled);
   cursor: default;
+}
+
+/* ── The Stack label's degrade ladder ──────────────────────────────────────
+   `Add 1 to stack of 4` → `Add 1 to stack` → `Add 1`. All three forms are in
+   the DOM and a container query picks one, which is the shipped toolbar fold
+   pattern (no ResizeObserver, no JS measurement). The classes are applied only
+   when there IS something to shed, so a one-form label (`Stack 3`,
+   `Merge 2 stacks`) is never hidden with no replacement in flow.
+
+   The widths are the point at which the three-column row starts squeezing the
+   picture strip rather than the verdict column, measured against the row's own
+   inline size: the strip is the column that must keep its room. */
+.gsl--mid,
+.gsl--short {
+  display: none;
+}
+
+@container grow (max-width: 880px) {
+  .gsl--full {
+    display: none;
+  }
+
+  .gsl--mid {
+    display: inline;
+  }
+}
+
+@container grow (max-width: 720px) {
+  .gsl--mid {
+    display: none;
+  }
+
+  .gsl--short {
+    display: inline;
+  }
 }
 
 /* The primary verdict fills only on the focused row, so the eye lands on the

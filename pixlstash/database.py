@@ -592,6 +592,12 @@ def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
         if has_version:
             try:
                 command.upgrade(config, "head")
+                # Alembic is running on our already-open, security-validated
+                # SQLAlchemy connection. Introspection above may have started
+                # an implicit SQLAlchemy 2.x transaction before Alembic enters
+                # its own context; without this explicit commit, upgrades of an
+                # existing vault can be rolled back when the connection closes.
+                connection.commit()
                 return
             except CommandError as exc:
                 msg = str(exc)
@@ -621,10 +627,12 @@ def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
             )
             command.stamp(config, "0001_baseline")
             command.upgrade(config, "head")
+            connection.commit()
             return
 
     try:
         command.upgrade(config, "head")
+        connection.commit()
     except CommandError as exc:
         msg = str(exc)
         if "Can't locate revision identified by" in msg:

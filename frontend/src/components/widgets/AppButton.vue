@@ -90,9 +90,19 @@ watch(
   },
 );
 
-defineExpose({
-  focus: () => rootEl.value?.focus(),
-});
+/**
+ * Put the keyboard on this button.
+ *
+ * Exposed for the dialogs that have to place initial focus deliberately rather
+ * than let the browser pick. `KeepCoverOnlyDialog` focuses its Cancel on open,
+ * because the user arrives from the duplicate queue with Enter under their
+ * finger. Reaching through `$el` would work, but it hides that intent.
+ */
+function focus() {
+  rootEl.value?.focus();
+}
+
+defineExpose({ focus });
 </script>
 
 <style scoped>
@@ -140,7 +150,15 @@ defineExpose({
   box-shadow: var(--focus-ring);
 }
 
-.app-btn:disabled {
+/* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the
+   attribute, is how this app marks a control that is blocked FOR A REASON
+   (UndoControl, ActionReceipt, ReviewDecisionBar): the button keeps its place
+   in the tab order, so the `aria-describedby` reason it points at stays
+   reachable by keyboard. It still has to LOOK disabled, which is why it shares
+   this fade and why every variant's hover below excludes it: a control that
+   lights up under the pointer promises a press that will not land. */
+.app-btn:disabled,
+.app-btn[aria-disabled="true"] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
@@ -164,7 +182,7 @@ defineExpose({
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
 }
-.app-btn--primary:not(:disabled):hover {
+.app-btn--primary:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -173,7 +191,7 @@ defineExpose({
   background: rgb(var(--v-theme-primary));
   color: rgb(var(--v-theme-on-primary));
 }
-.app-btn--primary_green:not(:disabled):hover {
+.app-btn--primary_green:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -182,18 +200,22 @@ defineExpose({
   background: rgb(var(--v-theme-cancel-button));
   color: rgb(var(--v-theme-cancel-button-text));
 }
-.app-btn--secondary:not(:disabled):hover {
+.app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
-/* Danger — destructive. `on-error`, not a hardcoded #fff: white holds 4.86:1 on
-   the light `error` fill but only 3.68:1 on the brighter dark-theme one, so the
-   authored pair flips to the warm near-black there (4.68:1). */
+/* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author
+   `error: #b54538` with `on-error: #f7f1ea`, the warm near-white, at 4.83:1;
+   main.js says "(same value in both themes)" on that very line. The comment
+   here previously claimed the pair flipped to the warm near-black in dark,
+   which was never true of `error` (it is true of `warning`, whose fill IS
+   brighter in dark). Recorded because a stale contrast note is the kind of
+   thing that gets "corrected" by changing the value instead of the note. */
 .app-btn--danger {
   background: rgb(var(--v-theme-error));
   color: rgb(var(--v-theme-on-error));
 }
-.app-btn--danger:not(:disabled):hover {
+.app-btn--danger:not(:disabled):not([aria-disabled="true"]):hover {
   filter: brightness(1.08);
 }
 
@@ -202,7 +224,7 @@ defineExpose({
   background: transparent;
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
-.app-btn--ghost:not(:disabled):hover {
+.app-btn--ghost:not(:disabled):not([aria-disabled="true"]):hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
 }

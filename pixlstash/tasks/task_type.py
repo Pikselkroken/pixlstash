@@ -30,6 +30,7 @@ class TaskType(str, Enum):
     THUMBNAIL_GENERATION = "ThumbnailGenerationTask"
     PIXEL_SHA = "PixelShaTask"
     DEDUP_SCAN = "DedupScanTask"
+    STACK_COHESION = "StackCohesionTask"
 
     @staticmethod
     def all():

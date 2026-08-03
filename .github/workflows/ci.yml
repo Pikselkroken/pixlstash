@@ -103,6 +103,10 @@ jobs:
           npm ci
           npm test
 
+      - name: Test telemetry Worker
+        working-directory: website/telemetry-worker
+        run: npm test
+
   # ---------------------------------------------------------------------------
   # The backend gate. Split across 8 runners instead of one job with 22
   # sequential steps.
@@ -218,9 +222,11 @@ jobs:
           tests/test_comfyui_api_prompt_extraction.py
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
+          tests/test_comfyui_stack_filter.py
           tests/test_comfyui_submit_prompt.py
           tests/test_comfyui_workflow_extraction.py
           tests/test_database_engine_config.py
+          tests/test_dedup_mixed_stacks.py
           tests/test_dedup_sweep_api.py
           tests/test_dedup_sweep_service.py
           tests/test_dedup_tier_service.py
@@ -237,9 +243,11 @@ jobs:
           tests/test_hub_registry.py
           tests/test_identity_storage_guardrail.py
           tests/test_image_embedding_worker.py
+          tests/test_import_scrapheap_match.py
           tests/test_impossible_clear_authz.py
           tests/test_invalid_image_endless_retry.py
           tests/test_ip_locality_fail_closed.py
+          tests/test_keep_cover_only.py
           tests/test_label_ledger.py
           tests/test_libraries_routes.py
           tests/test_library_backup.py
@@ -273,11 +281,15 @@ jobs:
           tests/test_snapshots.py
           tests/test_snapshots_auth.py
           tests/test_ssl_generation.py
+          tests/test_stack_leader_scope.py
           tests/test_stack_state_filter.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
           tests/test_token_identity.py
+          tests/test_telemetry_install_id.py
+          tests/test_telemetry_install_id_authz.py
+          tests/test_telemetry_sender.py
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py

@@ -120,6 +120,15 @@
                   }}</v-icon>
                   <span class="tbm-toggle-label">{{ opt.label }}</span>
                   <span
+                    v-if="opt.value === STACK_UPDATED_AT_SORT_KEY"
+                    class="tbm-toggle-filter-badge"
+                    title="Only available when viewing stacks"
+                    aria-label="Only available when viewing stacks"
+                    role="img"
+                  >
+                    <v-icon size="14">mdi-filter-outline</v-icon>
+                  </span>
+                  <span
                     v-if="
                       gbSortMenuModel === opt.value &&
                       (opt.value === SIMILARITY_SORT_KEY_GB ||
@@ -670,6 +679,7 @@ function openDuplicatesFromNotice() {
 }
 
 const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
+const STACK_UPDATED_AT_SORT_KEY = "STACK_UPDATED_AT";
 
 // The Likeness Groups sort order is gone from the menu in 1.9. It was a lens,
 // not a task: it never told you how many duplicates you had, offered no verdict,
@@ -681,12 +691,6 @@ const LIKENESS_GROUPS_SORT_KEY = "LIKENESS_GROUPS";
 // The backend still serves the mechanism, so a deep link or a saved preference
 // that names it keeps working; it simply has no menu row any more, and the
 // migration notice below points at where it went.
-const filteredSortOptions = computed(() =>
-  (sortStore.sortOptions ?? []).filter(
-    (opt) => opt.value !== LIKENESS_GROUPS_SORT_KEY,
-  ),
-);
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Pinia stores (replaces gridBarState and toolbarState provide/inject)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -697,6 +701,36 @@ const exportStore = useExportStore();
 const searchStore = useSearchStore();
 const reviewSessionsStore = useReviewSessionsStore();
 const projectStore = useProjectStore();
+
+// Stack time belongs to the stack-deck lens, not to loose pictures. Keep it
+// visibly special while that lens is active and absent everywhere else. A
+// persisted/deep-linked stack-time sort also falls back safely when the user
+// leaves the stacked view, so a hidden menu choice can never remain active.
+const filteredSortOptions = computed(() =>
+  (sortStore.sortOptions ?? []).filter((opt) => {
+    if (opt.value === LIKENESS_GROUPS_SORT_KEY) return false;
+    if (opt.value === STACK_UPDATED_AT_SORT_KEY) {
+      return filterStore.stackStateFilter === "stacked";
+    }
+    return true;
+  }),
+);
+
+watch(
+  [
+    () => filterStore.stackStateFilter,
+    () => sortStore.selectedSort,
+  ],
+  ([stackState, selectedSort]) => {
+    if (
+      stackState !== "stacked" &&
+      String(selectedSort || "").toUpperCase() === STACK_UPDATED_AT_SORT_KEY
+    ) {
+      sortStore.selectedSort = "DATE";
+    }
+  },
+  { immediate: true },
+);
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────
@@ -834,6 +868,7 @@ const GB_SORT_ICON_MAP = {
   TEXT_CONTENT: "mdi-text-recognition",
   CHARACTER_LIKENESS: "mdi-account-search",
   LIKENESS_GROUPS: "mdi-layers",
+  STACK_UPDATED_AT: "mdi-layers-edit",
 };
 
 function gbGetSortIcon(value) {
@@ -1303,7 +1338,9 @@ const gbCollapseAllStacksDisabled = computed(
 
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
 .gb-sort-panel {
-  width: 320px;
+  /* Two tracks need enough room for the stack-only label plus its availability
+     glyph without ellipsis. The viewport cap preserves the narrow layout. */
+  width: 460px;
   max-width: 92vw;
 }
 
@@ -1522,6 +1559,18 @@ const gbCollapseAllStacksDisabled = computed(
   white-space: nowrap;
   font-size: var(--text-base);
   flex-shrink: 1;
+}
+
+/* Stack time is conditional on the stacked lens. The small filter glyph makes
+   that narrower availability visible without turning the row into warning
+   copy; the native title gives mouse users the precise rule, while aria-label
+   gives the same explanation to assistive technology. */
+.tbm-toggle-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: rgb(var(--v-theme-primary));
 }
 
 /* ── Responsive: progressive label dropping via container queries ─────────── */

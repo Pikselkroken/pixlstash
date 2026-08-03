@@ -55,6 +55,7 @@ from pixlstash.services.library_switch_service import LibrarySwitchService
 from pixlstash.services.library_generation_coordinator import (
     LibraryGenerationCoordinator,
 )
+from pixlstash.telemetry import ensure_install_identity, start_periodic_sender
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -94,6 +95,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_mapper import PathMapper
@@ -329,6 +331,13 @@ class Server(
         self._server_config_path = server_config_path
         self.path_mapper = PathMapper(path_map)
 
+        # Before init_server_config, deliberately: ensure_install_identity reads
+        # the presence of the server config to decide whether this is a fresh
+        # install or an existing one upgrading in. Once init_server_config has
+        # run, that file always exists and the distinction is gone. The ID is
+        # written locally and transmitted by nothing in this release.
+        ensure_install_identity(server_config_path)
+
         self._server_config = self.init_server_config(server_config_path)
         self._startup_check_report = StartupChecks(
             server_config=self._server_config,
@@ -530,6 +539,68 @@ class Server(
         # background PictureImportTask id.
         self.staging_sessions = {}
         self._shutdown_on_lifespan = False
+        self._telemetry_thread = None
+
+    def _maybe_send_telemetry_ping(self) -> None:
+        """Send the daily install ping, if the owner has turned it on.
+
+        Runs from the server process rather than the browser on purpose: the
+        update check in ``useVersionCheck.js`` is frontend-only and
+        localStorage-gated, so a headless install would otherwise only ever
+        report when somebody opened the web UI. The retention design assumes
+        Docker installs ping daily because they are persistent services, and
+        that is only true if the ping comes from here.
+
+        Runs a daily loop rather than firing once: a container that stays up
+        for six weeks would otherwise ping once, and Docker installs pinging
+        daily is the assumption the whole retention design rests on.
+
+        Never raises and never blocks startup: it hands off to a daemon thread
+        and returns. A failure to report is not worth degrading the server for.
+        """
+        try:
+            if self._telemetry_thread is not None:
+                return
+
+            def consent_is_on() -> bool:
+                """Re-read consent from the live user row on every cycle.
+
+                A boolean captured at startup keeps transmitting after the user
+                has opted out, and the window between opting out and the next
+                restart is exactly when honouring it matters.
+                """
+                # `auth.user` and `_user` are detached startup snapshots. The
+                # config PATCH writes through a fresh ORM session, so reading
+                # either cached object here misses both opt-ins and opt-outs
+                # until the process restarts. An hourly DB read is negligible
+                # and makes persisted consent the single source of truth.
+                user = self.auth.get_user()
+                return bool(getattr(user, "telemetry_send_install_id", False))
+
+            self._telemetry_thread = start_periodic_sender(
+                self._server_config_path,
+                Server.detect_install_type(),
+                consent_is_on,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            # Deliberately NOT a bare `except Exception`. A broad catch here
+            # swallowed an AttributeError from a wrong method name, so the ping
+            # silently never sent while the UI reported consent as honoured.
+            # A programming error must surface, not be logged as a warning.
+            logger.warning(
+                "Could not dispatch the telemetry ping (%s); continuing. This "
+                "affects reporting only, never the running server.",
+                exc,
+            )
+
+    @property
+    def server_config_path(self) -> str:
+        """Path to the server-only config file this server was started with.
+
+        Read-only. The telemetry install ID is stored beside this file, so it
+        follows a custom ``--server-config`` location.
+        """
+        return self._server_config_path
 
     def __enter__(self):
         # Allow use as a context manager for robust cleanup
@@ -778,6 +849,7 @@ class Server(
         # after vault.start() (non-blocking) and reports progress via
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
+        self._maybe_send_telemetry_ping()
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
             # The desktop window uses the ephemeral loopback HTTP port (env), not
             # the configured host/port — those describe the optional external
@@ -1227,6 +1299,12 @@ class Server(
             create_config_router(self),
             prefix=API_V1_PREFIX,
             include_in_schema=False,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_telemetry_router(self),
+            prefix=API_V1_PREFIX,
+            tags=["telemetry"],
             dependencies=gate,
         )
         self.api.include_router(

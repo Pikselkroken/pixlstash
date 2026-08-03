@@ -1,0 +1,39 @@
+name = "pixlstash-telemetry"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Routed on its own hostname rather than a path under pixlstash.dev. Two
+# reasons: the marketing site stays a pure static GitHub Pages origin with no
+# compute in front of it, and anyone who wants to null-route telemetry can do so
+# without breaking the website. For a self-hosted audience that second property
+# is worth more than the DNS record it costs.
+routes = [
+  { pattern = "t.pixlstash.dev/v1/*", zone_name = "pixlstash.dev" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pixlstash-telemetry"
+# Filled in by `wrangler d1 create pixlstash-telemetry`. Not a secret, but it is
+# environment-specific, so it is set at deploy time rather than committed.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Per-IP flood control. The IP is used as the limiter key and discarded: it is
+# never written to D1, never logged, and never leaves the request handler.
+# 20/minute is far above a legitimate client, which pings once a day.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+# 03:00 UTC, after the day has closed everywhere, and 20 hours before the
+# metrics repo's 23:00 collection so a snapshot is always ready to be pulled.
+[triggers]
+crons = ["0 3 * * *"]
+
+# AGGREGATES_TOKEN is a secret and is NOT declared here. Set it with
+# `wrangler secret put AGGREGATES_TOKEN`. The same value goes into the
+# pixlstash-metrics repo as the TELEMETRY_AGGREGATE_TOKEN secret.

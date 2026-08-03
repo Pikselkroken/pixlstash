@@ -160,6 +160,57 @@ describe("ActionReceipt — states", () => {
     );
   });
 
+  // What an action deliberately left alone rides the SAME pill as what it did,
+  // as a second sentence, rather than a notice competing with it. Keep cover
+  // only is the first consumer: it skips a whole stack when a locked set or a
+  // character link would otherwise lose data.
+  it("carries the action's second sentence on the same pill", async () => {
+    const store = useOperationStore();
+    const wrapper = mount(ActionReceipt, globalOpts);
+    store.noteNextReceipt(
+      "stack.keep_cover_only",
+      "2 stacks skipped: held by a locked picture set.",
+    );
+    store.showReceipt(
+      store.buildReceipt(
+        op({
+          op_type: "stack.keep_cover_only",
+          summary: "Kept the cover of 3 stacks · 414 pictures to the Scrapheap",
+          target_count: 1,
+        }),
+        "did",
+      ),
+    );
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".r-text").text()).toBe(
+      "Kept the cover of 3 stacks · 414 pictures to the Scrapheap. " +
+        "2 stacks skipped: held by a locked picture set.",
+    );
+  });
+
+  // Once the work is taken back the note describes nothing that still stands.
+  it("drops the second sentence when the pill flips to undone", async () => {
+    const store = useOperationStore();
+    const wrapper = mount(ActionReceipt, globalOpts);
+    store.noteNextReceipt("stack.keep_cover_only", "2 stacks skipped.");
+    store.showReceipt(
+      store.buildReceipt(
+        op({
+          op_type: "stack.keep_cover_only",
+          summary: "Kept the cover of 3 stacks",
+          target_count: 1,
+        }),
+        "undone",
+      ),
+    );
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".r-text").text()).toBe(
+      "Undone: Kept the cover of 3 stacks",
+    );
+  });
+
   it("states the limit instead of a dead button when the action is one-way", async () => {
     const { wrapper } = mountWith(op({ undoable: false }), "blocked");
     await wrapper.vm.$nextTick();

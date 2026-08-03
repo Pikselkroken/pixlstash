@@ -46,6 +46,7 @@ from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     fetch_scope_allowed_set_ids,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.serialization_utils import safe_model_dict
 
 from ._helpers import (
@@ -365,10 +366,13 @@ def register_routes(router, server):
             # Stacks are atomic for project membership: applying a change to any
             # stacked picture applies it to every member of its stack.
             target_ids = expand_picture_ids_to_stacks(session, ids)
+            target_scope = scope_id_subquery(
+                session, target_ids, name="_pixlstash_project_picture_ids"
+            )
 
             pics = session.exec(
                 select(Picture)
-                .where(Picture.id.in_(target_ids))
+                .where(Picture.id.in_(target_scope))
                 .where(Picture.deleted.is_(False))
             ).all()
             updated_ids: list[int] = []

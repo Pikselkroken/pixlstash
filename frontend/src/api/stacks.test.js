@@ -11,6 +11,8 @@ import {
   createStack,
   setStackOrder,
   removeStackMembers,
+  previewKeepCoverOnly,
+  keepCoverOnly,
 } from "./stacks";
 
 beforeEach(() => {
@@ -80,5 +82,61 @@ describe("api/stacks", () => {
     expect(apiClient.delete).toHaveBeenCalledWith("/stacks/9/members", {
       data: { picture_ids: [3, 4] },
     });
+  });
+});
+
+describe("api/stacks: keep cover only", () => {
+  it("previews against the dry-run sub-resource and returns the report", async () => {
+    apiClient.post.mockResolvedValue({ data: { pictures_moving: 414 } });
+    const report = await previewKeepCoverOnly({ stackIds: [12, 19] });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/stacks/keep-cover-only/preview",
+      { stack_ids: [12, 19] },
+    );
+    expect(report.pictures_moving).toBe(414);
+  });
+
+  // The server refuses a body with neither list. Sending `[]` for the half the
+  // caller did not name would turn "I named stacks" into "I named stacks and no
+  // pictures", which is a different request shape for no reason.
+  it("omits the id list the caller did not name", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await previewKeepCoverOnly({ pictureIds: [101, 102] });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/stacks/keep-cover-only/preview",
+      { picture_ids: [101, 102] },
+    );
+  });
+
+  it("unions both id lists when the caller names both", async () => {
+    apiClient.post.mockResolvedValue({ data: {} });
+    await keepCoverOnly({ stackIds: [12], pictureIds: [101] });
+    expect(apiClient.post).toHaveBeenCalledWith("/stacks/keep-cover-only", {
+      stack_ids: [12],
+      picture_ids: [101],
+    });
+  });
+
+  it("carries a batch id only when one was minted", async () => {
+    apiClient.post.mockResolvedValue({ data: { status: "success" } });
+    await keepCoverOnly({ stackIds: [12], batchId: "cli-abc" });
+    expect(apiClient.post).toHaveBeenCalledWith("/stacks/keep-cover-only", {
+      stack_ids: [12],
+      batch_id: "cli-abc",
+    });
+
+    apiClient.post.mockClear();
+    await keepCoverOnly({ stackIds: [12] });
+    expect(apiClient.post).toHaveBeenCalledWith("/stacks/keep-cover-only", {
+      stack_ids: [12],
+    });
+  });
+
+  it("returns the response body rather than the axios envelope", async () => {
+    apiClient.post.mockResolvedValue({
+      data: { status: "success", pictures_moved: 414 },
+    });
+    const result = await keepCoverOnly({ stackIds: [12] });
+    expect(result).toEqual({ status: "success", pictures_moved: 414 });
   });
 });

@@ -25,7 +25,7 @@ import pytest
 from PIL import Image
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from pixlstash.db_models import (
     DeletedFileLog,
@@ -2992,48 +2992,28 @@ def test_listing_marks_a_stack_sibling_freeze_as_locked(server, tmp_path):
     assert _run_purge_sweep(server) is None, "...and the sweep must skip both"
 
 
-def test_locked_lookup_is_chunked_for_a_large_scrapheap(server, monkeypatch):
-    """N-2 — the lock lookup must never issue one huge ``IN (...)``.
+def test_locked_lookup_survives_a_large_scrapheap_scope(server):
+    """N-2 — the lock lookup works at SQLite's historical 999-var ceiling."""
+    engine = server.vault.db._engine
 
-    ``SQLITE_LIMIT_VARIABLE_NUMBER`` is 999 on SQLite builds older than 3.32.
-    There, an unchunked lookup over a large scrapheap raises; the finder catches
-    it and returns no work, so auto-purge would silently stop altogether.
+    def _set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
 
-    This asserts the batching DIRECTLY rather than by running a big query,
-    because the assertion has to hold on every build — this test host reports a
-    limit of 250000, so an unchunked query would pass here and the regression
-    would only ever appear on a user's older SQLite.
-    """
-    assert scrapheap_service.LOCK_QUERY_CHUNK <= 999, (
-        "the chunk must stay under the 999-variable limit of SQLite < 3.32"
-    )
-
-    batch_sizes: list[int] = []
-    real = scrapheap_service.locked_picture_ids
-
-    def _spy(session, picture_ids):
-        ids = list(picture_ids)
-        batch_sizes.append(len(ids))
-        return real(session, ids)
-
-    monkeypatch.setattr(scrapheap_service, "locked_picture_ids", _spy)
-
-    over_limit = list(range(1, scrapheap_service.LOCK_QUERY_CHUNK * 2 + 50))
-    assert (
-        scrapheap_service.locked_scrapheap_picture_ids(server.vault, over_limit)
-        == set()
-    )
-    assert len(batch_sizes) == 3, (
-        f"{len(over_limit)} ids must be split into 3 batches, got {batch_sizes}"
-    )
-    assert max(batch_sizes) <= scrapheap_service.LOCK_QUERY_CHUNK, (
-        f"a batch exceeded the chunk size: {batch_sizes}"
-    )
-    assert sum(batch_sizes) == len(over_limit), "every id must still be looked up"
+    event.listen(engine, "connect", _set_limit)
+    engine.dispose()
+    try:
+        absent_ids = list(range(10_000_000, 10_001_001))
+        assert (
+            scrapheap_service.locked_scrapheap_picture_ids(server.vault, absent_ids)
+            == set()
+        )
+    finally:
+        event.remove(engine, "connect", _set_limit)
+        engine.dispose()
 
 
-def test_sweep_still_finds_work_in_a_large_scrapheap(server, tmp_path):
-    """The other direction: chunking must not make the finder miss anything."""
+def test_sweep_still_finds_due_work(server, tmp_path):
+    """The lock lookup must not make the finder miss due work."""
     client = _client(server)
     pic_id, _ = _make_reference_picture(
         server, str(tmp_path / "refs"), "amongmany.png", allow_delete=True
@@ -3045,16 +3025,10 @@ def test_sweep_still_finds_work_in_a_large_scrapheap(server, tmp_path):
         pic_id,
         datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400),
     )
-    # Force multiple chunks even for a small scrapheap.
-    monkey = scrapheap_service.LOCK_QUERY_CHUNK
-    try:
-        scrapheap_service.LOCK_QUERY_CHUNK = 1
-        due = scrapheap_service.find_due_retention_picture_ids(
-            server.vault, datetime.now(timezone.utc), 30, None, 100
-        )
-    finally:
-        scrapheap_service.LOCK_QUERY_CHUNK = monkey
-    assert due == [pic_id], f"chunked lookup must not drop due candidates: {due}"
+    due = scrapheap_service.find_due_retention_picture_ids(
+        server.vault, datetime.now(timezone.utc), 30, None, 100
+    )
+    assert due == [pic_id], f"lock lookup must not drop due candidates: {due}"
 
 
 def test_listing_purge_at_is_null_when_retention_is_never(server, tmp_path):

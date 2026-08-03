@@ -113,6 +113,21 @@ const selectionStore = useSelectionStore();
 const sortStore = useSortStore();
 const projectStore = useProjectStore();
 const userPrefsStore = useUserPrefsStore();
+
+const telemetryIndicatorTitle = computed(() => {
+  const active = [];
+  if (userPrefsStore.checkForUpdates) active.push("update checks");
+  if (userPrefsStore.telemetrySendInstallId)
+    active.push("an anonymous install ID");
+  if (userPrefsStore.telemetrySendFeatureUsage) active.push("feature usage");
+  if (userPrefsStore.telemetrySendErrorReports) active.push("error reports");
+  if (userPrefsStore.telemetrySendHardwareProfile)
+    active.push("a hardware profile");
+  if (!active.length) return "Telemetry is off";
+  if (active.length === 1) return `Sending ${active[0]}`;
+  const last = active.pop();
+  return `Sending ${active.join(", ")} and ${last}`;
+});
 const gridStore = useGridStore();
 const filterStore = useFilterStore();
 const viewStore = useViewStore();
@@ -3959,7 +3974,17 @@ defineExpose({
           />
         </a>
         <div v-if="!sidebarStore.effectiveDocked" class="sidebar-brand-text">
-          <WordmarkLogo class="sidebar-brand-title" />
+          <div class="sidebar-brand-title-row">
+            <WordmarkLogo class="sidebar-brand-title" />
+            <button
+              v-if="userPrefsStore.telemetryActive"
+              type="button"
+              class="sidebar-telemetry-dot"
+              :title="telemetryIndicatorTitle"
+              :aria-label="`${telemetryIndicatorTitle}. Open privacy settings.`"
+              @click="openSettingsDialog('privacy')"
+            ></button>
+          </div>
           <div
             v-if="updateAvailable && !updateDismissed"
             class="sidebar-update-wrapper"
@@ -7825,6 +7850,28 @@ defineExpose({
 .sidebar.sidebar-docked {
   width: calc(var(--sidebar-thumb-size) + 20px);
   overflow: hidden;
+}
+
+.sidebar-brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sidebar-telemetry-dot {
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-telemetry-dot:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar.sidebar-docked .sidebar-brand {

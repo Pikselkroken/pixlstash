@@ -16,6 +16,7 @@ from .entity_project import (  # noqa: F401
 )
 from .detection import Detection  # noqa: F401
 from .face import Face  # noqa: F401
+from .mixed_stack import MixedStackDismissal, StackCohesion  # noqa: F401
 from .operation import (  # noqa: F401
     Operation,
     STATUS_APPLIED,

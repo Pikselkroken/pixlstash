@@ -12,6 +12,7 @@ import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
+import { getInstallId } from "./api/telemetry";
 import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
@@ -49,6 +50,7 @@ import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
 import PhotosImportDialog from "./components/io/PhotosImportDialog.vue";
 import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue";
+import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import DuplicateQueue from "./components/views/DuplicateQueue.vue";
 import ReviewSessionsOverlay from "./components/views/ReviewSessionsOverlay.vue";
@@ -114,9 +116,12 @@ const gridWrapperRef = ref(null);
 
 // --- Local UI state ---
 const shortcutsDialogOpen = ref(false);
-const updateCheckDialogOpen = ref(false);
+const telemetryConsentOpen = ref(false);
+const telemetryConsentIsUpgrade = ref(false);
+const telemetryInstallIsNew = ref(false);
 const photosDialogOpen = ref(false);
 const installType = ref("pip");
+const appVersion = ref("");
 const dockerVariant = ref("gpu");
 const loading = ref(null);
 const error = ref(null);
@@ -199,10 +204,25 @@ const {
   pushAppRoute,
 });
 
+async function handleTelemetryDecision(patch) {
+  telemetryConsentOpen.value = false;
+  await userPrefsStore.saveTelemetry(patch);
+}
+
 const { fetchConfig } = useAppConfig({
   onThumbnailSizeChanged: () => updateMaxColumns(),
-  onUpdateCheckUndecided: () => {
-    updateCheckDialogOpen.value = true;
+  onTelemetryConsentRequired: async ({ isUpgrade }) => {
+    telemetryConsentIsUpgrade.value = isUpgrade;
+    try {
+      const identity = await getInstallId();
+      telemetryInstallIsNew.value = identity?.is_new_install === true;
+    } catch (e) {
+      telemetryInstallIsNew.value = false;
+      console.error("Failed to read install classification:", e);
+    }
+    nextTick(() => {
+      telemetryConsentOpen.value = true;
+    });
   },
 });
 
@@ -357,6 +377,9 @@ onMounted(async () => {
     .then((data) => {
       if (typeof data?.install_type === "string") {
         installType.value = data.install_type;
+      }
+      if (typeof data?.version === "string") {
+        appVersion.value = data.version;
       }
       if (typeof data?.docker_variant === "string") {
         dockerVariant.value = data.docker_variant;
@@ -520,50 +543,15 @@ defineExpose({
           ></div>
         </Transition>
 
-        <!-- Update-check consent dialog -->
-        <v-dialog v-model="updateCheckDialogOpen" max-width="420" persistent>
-          <v-card class="update-check-dialog">
-            <v-card-title class="update-check-title"
-              >Get notified about new versions?</v-card-title
-            >
-            <v-card-text class="update-check-body">
-              PixlStash can check once a day and show a notice in the sidebar
-              when a newer version is out, including security fixes you'll want
-              to install promptly. It only ever sends your current version and
-              install type (e.g. pip or docker), anonymously. You can turn this
-              off any time in Settings → Behaviour.
-              <br />
-              <span class="update-check-note"
-                >This check is served by our CDN (Cloudflare). We only ever see
-                aggregate counts and never anything that identifies you
-                personally.</span
-              >
-            </v-card-text>
-            <v-card-actions class="update-check-actions">
-              <v-btn
-                variant="tonal"
-                @click="
-                  () => {
-                    updateCheckDialogOpen = false;
-                    handleUpdateCheckForUpdates(false);
-                  }
-                "
-                >Not now</v-btn
-              >
-              <v-btn
-                color="primary"
-                variant="elevated"
-                @click="
-                  () => {
-                    updateCheckDialogOpen = false;
-                    handleUpdateCheckForUpdates(true);
-                  }
-                "
-                >Notify me</v-btn
-              >
-            </v-card-actions>
-          </v-card>
-        </v-dialog>
+        <TelemetryConsentDialog
+          :open="telemetryConsentOpen"
+          :is-upgrade="telemetryConsentIsUpgrade"
+          :update-checks-enabled="userPrefsStore.checkForUpdates === true"
+          :version="appVersion"
+          :install-type="installType"
+          :is-new-install="telemetryInstallIsNew"
+          @decide="handleTelemetryDecision"
+        />
         <PhotosImportDialog
           v-model:open="photosDialogOpen"
           :default-project-id="sidebarRef?.currentProjectId ?? null"

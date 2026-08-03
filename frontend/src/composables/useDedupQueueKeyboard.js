@@ -20,10 +20,17 @@
 //                         self-healing)
 //   K                     keep the focused group separate
 //   C                     open Compare on the focused group
-//   1 - 9                 point at that candidate and make it the cover
-//   X                     leave the candidate under the cursor out of the stack
+//   E                     open (or close) the focused group's stack in place:
+//                         a full-width band of that deck's members below the
+//                         row. A read gesture, so it stays live in a read-only
+//                         session, and a DISCLOSURE rather than a mode, the
+//                         verdict keys keep working unchanged while it is open
+//   1 - 9                 point at that UNIT (a loose picture or a whole deck)
+//                         and make it the cover; on a deck that resolves to the
+//                         stack's leader
+//   X                     leave the UNIT under the cursor out of the stack
 //                         (refused, and said out loud, once only two are left:
-//                         a stack needs two members and the server refuses one)
+//                         a stack needs two units and the server refuses one)
 //   Ctrl+Z / Cmd+Z        undo, through the shared operation store
 //   Escape                close Compare, otherwise hand control back to the
 //                         queue (`onEscape`)
@@ -45,7 +52,7 @@
 //   * the key is an auto-repeat (a held `Enter` must not empty the queue),
 //   * a modifier other than the undo pair is down (that is a browser shortcut).
 
-import { candidateId } from "../utils/dedup";
+import { groupUnits } from "../utils/dedup";
 
 /** Keys that move the focus down one group. `j` is deliberately UNCLAIMED
  * (amendment #3): its old synonym role lost the letter to nothing, so the
@@ -138,6 +145,10 @@ function isActivatableTarget(event) {
  * @param {function(Object): void} [deps.onExclusionRefused] - called with the
  *   group when `X` was refused because the stack floor was reached. The view
  *   narrates it; this handler has no opinion on how.
+ * @param {function(Object): void} [deps.toggleExpansion] - what `E` runs, with
+ *   the focused group. The band's state belongs to the view (only it knows
+ *   which row is on screen and what its scroll spacers assume); the KEY lives
+ *   here, so the queue keeps exactly one keyboard owner.
  * @param {function(): number} [deps.pageRows] - how many rows `PageUp` and
  *   `PageDown` move. The viewport's row capacity, which only the view can
  *   measure; the fallback is a conservative screenful.
@@ -145,6 +156,22 @@ function isActivatableTarget(event) {
  *   `{ isOpen, open, close, flip, to, togglePixels }`. The zoom's state lives
  *   in the dialog; the KEYS live here, so the queue keeps exactly one
  *   keyboard owner. Omitted (the default no-op) in tests that predate it.
+ * @param {function(Object): Array<Object>} [deps.unitsOf] - what `1`-`9`
+ *   addresses on a row, defaulting to the duplicate group's units. The MIXED
+ *   stacks queue is the second caller: its rows are stacks and its addressable
+ *   things are that stack's members, so the digits point at a different list
+ *   while meaning exactly the same thing (the item under the cursor). Each
+ *   entry needs a `coverPictureId` and a `stackable` flag.
+ * @param {function(Object): (number|string)} [deps.signatureOf] - how a row
+ *   names itself to `setCover`, defaulting to `group.signature`. A mixed row is
+ *   keyed on its stack id instead.
+ * @param {function(Object): void} [deps.onStackSynonym] - what `S` does when it
+ *   is NOT a synonym of the primary. `S` is Stack in the review queue, and a
+ *   user trained there reads it as Stack on any dedup surface; on the Mixed
+ *   stacks queue the primary is Split, which is the OPPOSITE act. So the key is
+ *   still claimed (it must never fall through to the shell, and it must never
+ *   run the primary by accident) and this hook answers it out loud. Absent, `S`
+ *   keeps its shipped synonym role.
  * @returns {function(KeyboardEvent): void}
  */
 /**
@@ -173,9 +200,13 @@ export function createDedupKeyHandler({
   isBlocked = () => false,
   onEscape = () => {},
   onExclusionRefused = () => {},
+  toggleExpansion = () => {},
   selectAll = null,
   pageRows = () => DEFAULT_PAGE_ROWS,
   zoom = NO_ZOOM,
+  unitsOf = groupUnits,
+  signatureOf = (group) => group?.signature,
+  onStackSynonym = null,
 }) {
   /**
    * A page move in rows, never zero: a viewport too short to hold one row must
@@ -209,14 +240,21 @@ export function createDedupKeyHandler({
       return true;
     }
     if (/^[1-9]$/.test(key)) {
-      // Claimed before the candidate is looked up, so `5` on a group of two is
+      // Claimed before the unit is looked up, so `5` on a group of two is
       // a no-op for the queue rather than an unclaimed key that falls through
       // to the app shell. Every other key this handler recognises behaves that
       // way; a digit that only sometimes did was the odd one out.
       claim(event);
-      const candidate = group.candidates?.[Number(key) - 1];
-      if (!candidate) return true;
-      store.setCover(group.signature, candidateId(candidate));
+      // Digits address UNITS, matching the strip: a deck occupies one slot and
+      // one index however many of its members the group named, so the number
+      // under a tile is the number that selects it. On the Mixed stacks queue
+      // `unitsOf` points them at the stack's members instead, which is the same
+      // rule applied to a different row.
+      const unit = unitsOf(group)[Number(key) - 1];
+      // A locked unit cannot lead a stack it is not in, exactly as a click on
+      // it does not set the cover.
+      if (!unit || !unit.stackable) return true;
+      store.setCover(signatureOf(group), unit.coverPictureId);
       return true;
     }
     return false;
@@ -333,6 +371,14 @@ export function createDedupKeyHandler({
       // reading IS Stack, so the slip is now self-healing.
       if (key === "enter" || key === "s") {
         claim(event);
+        // Claimed either way; what S MEANS is the surface's call. See
+        // `onStackSynonym`: on a queue whose primary is not Stack, running the
+        // primary off a key the user pressed meaning Stack would do the
+        // opposite of what they asked.
+        if (key === "s" && onStackSynonym) {
+          onStackSynonym(group);
+          return;
+        }
         zoom.close();
         store.stack(group);
         return;
@@ -416,11 +462,26 @@ export function createDedupKeyHandler({
       return;
     }
 
+    // Like `C`, and above the read-only guard for the same reason: opening a
+    // deck in place is looking, not deciding. Deliberately NOT offered inside
+    // Compare, which has its own expansion on its own `Contains` control,
+    // one key would then mean two different bands on one screen.
+    if (key === "e") {
+      claim(event);
+      toggleExpansion(group);
+      return;
+    }
+
     if (isReadOnly() || store.busy) return;
 
-    // S is a synonym of Enter (amendment #3, see the compare branch's note).
+    // S is a synonym of Enter (amendment #3, see the compare branch's note),
+    // unless the surface says otherwise (`onStackSynonym`).
     if (key === "enter" || key === "s") {
       claim(event);
+      if (key === "s" && onStackSynonym) {
+        onStackSynonym(group);
+        return;
+      }
       store.stack(group);
       return;
     }

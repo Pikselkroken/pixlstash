@@ -12,11 +12,13 @@ import gc
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import uuid
 
 import numpy as np
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlmodel import delete, select
 
 from pixlstash.db_models import (
@@ -31,6 +33,10 @@ from pixlstash.db_models import (
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.db_models.tag_suggestion import TagSuggestion
 from pixlstash.server import Server
+from pixlstash.services.set_lock_service import (
+    locked_picture_ids,
+    locked_sets_for_pictures,
+)
 from pixlstash.utils.near_neighbor import EMBEDDING_DIM
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
@@ -109,9 +115,90 @@ def _add_member(client, set_id, pic_id):
     assert resp.status_code == 200, resp.text
 
 
+def _add_member_directly(server, set_id, pic_id):
+    """Insert ONE ``PictureSetMember`` row, without touching the stack.
+
+    Deliberately bypasses ``POST /picture_sets/{id}/members/{picture_id}``: sets
+    are stack-atomic, so that route expands to every member of the picture's
+    stack and a "set whose only member is this picture" is unreachable through
+    it for anything stacked. The through-stack-only state (a picture that
+    *shares a stack with* a locked-set member without being one) is exactly what
+    the detach guards exist for, so the tests that assert on it have to seed it
+    the same way :func:`_seed_stack_directly` seeds ``stack_id``.
+    """
+
+    def insert(session):
+        session.add(PictureSetMember(set_id=set_id, picture_id=int(pic_id)))
+        session.commit()
+
+    server.vault.db.run_task(insert)
+
+
 def _set_locked(client, set_id, locked):
     resp = client.patch(f"/picture_sets/{set_id}", json={"locked": locked})
     assert resp.status_code == 200, resp.text
+
+
+def _force_variable_limit(server, limit=999):
+    """Lower every new vault connection to SQLite's historical bind limit."""
+    engine = server.vault.db._engine
+
+    def set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+
+    event.listen(engine, "connect", set_limit)
+    engine.dispose()
+
+
+def test_large_lock_lookups_survive_sqlite_variable_ceiling():
+    """Regression for #694: reference scans can submit over 100k picture ids."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_ids = _first_n_pictures(server, 1001)
+        _seed_stack_directly(server, picture_ids[:2])
+        set_id = _create_set(client, "LargeLookupFreeze")
+        _add_member(client, set_id, picture_ids[0])
+        _add_member(client, set_id, picture_ids[2])
+        _set_locked(client, set_id, True)
+        _force_variable_limit(server)
+
+        frozen, detail = server.vault.db.run_task(
+            lambda session: (
+                locked_picture_ids(session, picture_ids),
+                locked_sets_for_pictures(session, picture_ids),
+            )
+        )
+
+        assert frozen == set(picture_ids[:3])
+        assert set(detail) == set(picture_ids[:3])
+        assert {item["id"] for item in detail[picture_ids[1]]} == {set_id}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_large_project_and_stack_routes_survive_sqlite_variable_ceiling():
+    """Expanded bulk mutations must not rebind the full id list downstream."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_ids = _first_n_pictures(server, 1001)
+        _force_variable_limit(server)
+
+        project_response = client.patch(
+            "/pictures/project",
+            json={"picture_ids": picture_ids, "project_id": None, "mode": "set"},
+        )
+        assert project_response.status_code == 200, project_response.text
+        assert project_response.json()["missing_ids"] == []
+
+        stack_response = client.post("/stacks", json={"picture_ids": picture_ids})
+        assert stack_response.status_code == 200, stack_response.text
+        assert set(stack_response.json()["picture_ids"]) == set(picture_ids)
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
 
 
 def _seed_tag(server, pic_id, tag):
@@ -1139,12 +1226,7 @@ def test_finders_exclude_stack_sibling_of_locked_member():
         # member_pic and sibling_pic share a stack; only member_pic is in the set.
         _seed_stack_directly(server, [member_pic, sibling_pic])
         set_id = _create_set(client, "LoopFreeze")
-
-        def add_member_only(session):
-            session.add(PictureSetMember(set_id=set_id, picture_id=member_pic))
-            session.commit()
-
-        server.vault.db.run_task(add_member_only)
+        _add_member_directly(server, set_id, member_pic)
         _set_locked(client, set_id, True)
 
         # Every picture carries pending work for both finders.
@@ -1330,6 +1412,311 @@ def test_image_plugin_output_propagation_skips_locked_set():
 
         assert _set_member_ids(server, locked_id) == {source_pic}
         assert _set_member_ids(server, open_id) == {source_pic, output_pic}
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Detaching a stack member: one contract, three routes
+#
+# A locked set freezes a stack's siblings THROUGH the stack (every picture-level
+# guard runs on the stack-expanded id list), so detaching a member severs a
+# freeze the lock exists to hold. Left unguarded, that is not a missing check but
+# a lock ESCAPE: unstack, then delete, and a picture that answered 423 a moment
+# ago is soft-deleted. `POST /dedup/mixed-stacks/{id}/split`, `POST
+# /dedup/mixed-stacks/{id}/unstack` and the older `DELETE /stacks/{id}/members`
+# all detach members, so all three carry the same whole-stack 423.
+# ---------------------------------------------------------------------------
+
+_API = "/api/v1"
+
+
+def _stack_of(server, picture_id):
+    return server.vault.db.run_immediate_read_task(
+        lambda s: s.get(Picture, picture_id).stack_id
+    )
+
+
+def _remove_members(client, stack_id, picture_ids):
+    """``DELETE /stacks/{id}/members``; needs ``request`` for a JSON body."""
+    return client.request(
+        "DELETE",
+        f"{_API}/stacks/{stack_id}/members",
+        json={"picture_ids": picture_ids},
+    )
+
+
+def test_locked_set_refuses_every_route_that_detaches_a_stack_member():
+    """Negative direction, whole-stack, on all three detach routes.
+
+    The picture named in each request (``sibling``) is deliberately NOT itself a
+    member of the locked set: it is frozen only because it shares a stack with
+    one. That is the case a per-member check would wave through, and it is the
+    case that escalates.
+
+    The membership is seeded row-by-row for that reason. ``POST
+    /picture_sets/{id}/members/{picture_id}`` is stack-atomic, so adding the
+    frozen picture through the API would pull the sibling into the set too and
+    the test would pass against a per-named-id guard, which is the exact
+    narrowing that would reintroduce the bug. The asserted membership below is
+    the guard against that regression re-entering the test.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        frozen, sibling = _first_n_pictures(server, 2)
+        stack_id = _seed_stack_directly(server, [frozen, sibling])
+        set_id = _create_set(client, "DetachFreeze")
+        _add_member_directly(server, set_id, frozen)
+        _set_locked(client, set_id, True)
+        assert _set_member_ids(server, set_id) == {frozen}, (
+            "the sibling must NOT be a member: the whole point is that it is "
+            "frozen only THROUGH the stack"
+        )
+
+        responses = {
+            "remove_members": _remove_members(client, stack_id, [sibling]),
+            "split": client.post(
+                f"/dedup/mixed-stacks/{stack_id}/split",
+                json={"picture_ids": [sibling]},
+            ),
+            "unstack": client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={}),
+        }
+        for name, resp in responses.items():
+            assert resp.status_code == 423, (name, resp.status_code, resp.text)
+            detail = resp.json()["detail"]
+            assert detail["code"] == "pictures_locked", (name, detail)
+            assert [s["id"] for s in detail["sets"]] == [set_id], (name, detail)
+
+        # Fail-closed, not fail-late: neither member moved and the stack stands.
+        assert _stack_of(server, frozen) == stack_id
+        assert _stack_of(server, sibling) == stack_id
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_unlocked_stacks_still_split_unstack_and_lose_members():
+    """Positive direction: over-blocking is its own regression.
+
+    One fresh stack per route, because two of the three dissolve it. The
+    pictures carry no perceptual hash, so every member is stranded and the
+    mixed-stack routes have something to act on.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        pics = _first_n_pictures(server, 6)
+        remove_stack = _seed_stack_directly(server, pics[0:2])
+        split_stack = _seed_stack_directly(server, pics[2:4])
+        unstack_stack = _seed_stack_directly(server, pics[4:6])
+
+        resp = _remove_members(client, remove_stack, [pics[0]])
+        assert resp.status_code == 200, resp.text
+        assert _stack_of(server, pics[0]) is None
+
+        resp = client.post(f"/dedup/mixed-stacks/{split_stack}/split", json={})
+        assert resp.status_code == 200, resp.text
+        assert _stack_of(server, pics[2]) is None
+        assert _stack_of(server, pics[3]) is None
+
+        resp = client.post(f"/dedup/mixed-stacks/{unstack_stack}/unstack", json={})
+        assert resp.status_code == 200, resp.text
+        assert _stack_of(server, pics[4]) is None
+        assert _stack_of(server, pics[5]) is None
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_detaching_cannot_be_used_to_escape_a_locked_set():
+    """Regression for the two-call lock escape, proved to fail at the FIRST call.
+
+    Before the guard: ``DELETE /pictures/{sibling}`` answered 423 because the
+    freeze reached it through the stack; ``POST .../unstack`` then returned 200,
+    severed the stack, and the same delete returned 200. Two calls turned a hard
+    freeze into a soft delete. The chain must now break on step one, and the
+    freeze must still be intact afterwards.
+
+    Seeded row-by-row (see
+    :func:`test_locked_set_refuses_every_route_that_detaches_a_stack_member`):
+    only ``frozen`` is a member, so the sibling's 423 can come from nothing but
+    the stack, which is the state this regression is named for.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        frozen, sibling = _first_n_pictures(server, 2)
+        stack_id = _seed_stack_directly(server, [frozen, sibling])
+        set_id = _create_set(client, "EscapeFreeze")
+        _add_member_directly(server, set_id, frozen)
+        _set_locked(client, set_id, True)
+        assert _set_member_ids(server, set_id) == {frozen}
+
+        # Baseline: the freeze reaches the sibling through the stack.
+        assert client.delete(f"/pictures/{sibling}").status_code == 423
+
+        # Step 1 of the escape, by each of the three routes that used to work.
+        assert (
+            client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={}).status_code
+            == 423
+        )
+        assert (
+            client.post(
+                f"/dedup/mixed-stacks/{stack_id}/split", json={"picture_ids": [sibling]}
+            ).status_code
+            == 423
+        )
+        assert _remove_members(client, stack_id, [sibling]).status_code == 423
+
+        # Step 2 is therefore never reached: the freeze is exactly as it was.
+        assert _stack_of(server, sibling) == stack_id
+        assert client.delete(f"/pictures/{sibling}").status_code == 423
+        assert client.delete(f"/pictures/{frozen}").status_code == 423
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: s.get(Picture, sibling).deleted
+            )
+            is False
+        )
+
+        # Unlocking is the only way through, and it still works.
+        _set_locked(client, set_id, False)
+        assert (
+            client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={}).status_code
+            == 200
+        )
+        assert _stack_of(server, sibling) is None
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def _scrapheap_directly(server, picture_id):
+    """Soft-delete *picture_id* straight in the DB.
+
+    ``DELETE /pictures/{id}`` refuses a locked-set member (that is the lock
+    working), so the only way to reach "a scrapheaped picture that is a member
+    of a set locked afterwards" is to write it. That state is reachable in a
+    real vault by scrapheaping first and locking second.
+    """
+
+    def scrapheap(session):
+        picture = session.get(Picture, int(picture_id))
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(scrapheap)
+
+
+def test_a_scrapheaped_locked_member_still_freezes_its_stack_against_detach():
+    """The soft-deleted arm of ``_stack_member_ids``, on all three routes.
+
+    ``_stack_member_ids`` is deliberately unfiltered on ``deleted``, and this is
+    the state that makes that load-bearing: the stack's ONLY locked-set member
+    is scrapheaped, and no live member is a member of anything. Filter the
+    deleted rows out of that helper and every route below flips from 423 to
+    200 with the rest of the suite still green.
+
+    It also pins the one place the stack rule and the picture-level rule
+    deliberately differ, so a later "consistency" edit cannot quietly merge
+    them:
+
+    * **Picture level** - the live siblings are NOT frozen. A scrapheaped
+      member projects no freeze onto them (``expand_picture_ids_to_stacks``
+      drops deleted co-members, and ``locked_picture_id_subquery`` filters
+      ``deleted`` on the stack-derived arm), so their label data is editable
+      and ``DELETE /pictures/{sibling}`` succeeds. Nothing is frozen through
+      this stack, so there is nothing for a detach to sever.
+    * **Stack level** - the stack still refuses to break up, because the
+      scrapheaped row is *itself* a member of the locked set and every detach
+      route dissolves the stack (taking the scrapheaped rows with it) rather
+      than leaving a stack of one. Detaching it is a deferred escape: restore
+      it afterwards and it comes back loose, so the freeze it would have
+      projected over its siblings never returns.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        frozen, live_a, live_b = _first_n_pictures(server, 3)
+        stack_id = _seed_stack_directly(server, [frozen, live_a, live_b])
+        set_id = _create_set(client, "ScrapheapFreeze")
+        _add_member_directly(server, set_id, frozen)
+        _scrapheap_directly(server, frozen)
+        _set_locked(client, set_id, True)
+        assert _set_member_ids(server, set_id) == {frozen}
+
+        # The state under test: no LIVE member of this stack is in any set.
+        assert client.delete(f"/pictures/{live_a}").status_code == 200
+        client.post("/pictures/scrapheap/restore", json={"picture_ids": [live_a]})
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda s: s.get(Picture, live_a).deleted
+            )
+            is False
+        )
+
+        # Yet all three detach routes still refuse the whole stack.
+        responses = {
+            "remove_members": _remove_members(client, stack_id, [live_a]),
+            "split": client.post(
+                f"/dedup/mixed-stacks/{stack_id}/split",
+                json={"picture_ids": [live_a]},
+            ),
+            "unstack": client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={}),
+        }
+        for name, resp in responses.items():
+            assert resp.status_code == 423, (name, resp.status_code, resp.text)
+            detail = resp.json()["detail"]
+            assert detail["code"] == "pictures_locked", (name, detail)
+            assert [s["id"] for s in detail["sets"]] == [set_id], (name, detail)
+            # The scrapheaped row is named as the frozen one, which is the only
+            # evidence that the guard read a deleted member row at all.
+            assert detail["picture_ids"] == [frozen], (name, detail)
+
+        # Fail-closed: nothing moved.
+        for pid in (frozen, live_a, live_b):
+            assert _stack_of(server, pid) == stack_id
+
+        # Unlocking is still the way through.
+        _set_locked(client, set_id, False)
+        assert (
+            client.post(f"/dedup/mixed-stacks/{stack_id}/unstack", json={}).status_code
+            == 200
+        )
+        assert _stack_of(server, live_a) is None
+        assert _stack_of(server, frozen) is None
+    finally:
+        server.vault.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_a_scrapheaped_member_of_an_unlocked_set_never_freezes_the_stack():
+    """Over-blocking regression for the arm above.
+
+    Same shape, one difference: the set holding the scrapheaped member is not
+    locked. A guard that read "has a scrapheaped member" rather than "has a
+    scrapheaped member of a LOCKED set" would refuse this too, and the whole
+    Mixed stacks page would stop working on any stack with a scrapheap entry.
+    """
+    temp_dir, client, server = _setup()
+    try:
+        heaped, live_a, live_b = _first_n_pictures(server, 3)
+        stack_id = _seed_stack_directly(server, [heaped, live_a, live_b])
+        set_id = _create_set(client, "OpenScrapheap")
+        _add_member_directly(server, set_id, heaped)
+        _scrapheap_directly(server, heaped)
+
+        assert _remove_members(client, stack_id, [live_a]).status_code == 200
+        assert _stack_of(server, live_a) is None
+        # Only one live member remains, so the stack dissolves immediately;
+        # the open set must not block that cleanup.
+        assert _stack_of(server, live_b) is None
+        # The dissolve takes the scrapheaped row with it too.
+        assert _stack_of(server, heaped) is None
     finally:
         server.vault.close()
         temp_dir.cleanup()

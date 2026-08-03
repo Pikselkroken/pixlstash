@@ -147,7 +147,7 @@ test.describe.serial('duplicates queue (§21)', () => {
     await expect(duplicates.focusedRow.locator('.gthumb--out')).toHaveCount(1)
     expect(await duplicates.focusedStackSize()).toBe(SEED_COPIES)
     await expect(duplicates.announcement).toContainText(
-      'A stack needs at least two pictures',
+      'A stack needs at least two',
     )
   })
 

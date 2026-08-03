@@ -17,7 +17,7 @@ from pixlstash.db_models import (
     Tag,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services import scrapheap_service
+from pixlstash.services import import_dedup_service, scrapheap_service
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import (
     normalize_hidden_tags,
@@ -109,8 +109,18 @@ def _create_picture_imports(
 ):
     """
     Given a list of (img_bytes, ext), create Picture objects for new images,
-    skipping duplicates based on pixel_sha hash.
-    Returns (shas, existing_map, new_pictures)
+    skipping content already in the vault (live OR scrapheaped) by pixel_sha.
+    Returns (shas, existing_map, scrapheaped_map, new_pictures)
+
+    **A scrapheaped match is skipped too, and reported separately.** This call
+    site used to ask ``Picture.find(..., pixel_shas=shas)``, whose
+    ``include_deleted`` defaults to False, so a soft-deleted picture was
+    invisible here and its file imported again as a brand-new second row. The
+    lookup now goes through :mod:`pixlstash.services.import_dedup_service`,
+    which sees soft-deleted rows *for this query only*, ``Picture.find``'s
+    default is unchanged, so no listing, search, count or dedup query gains
+    deleted rows. See that module for the full rationale and for why a
+    permanently purged file is correctly NOT a match.
 
     Args:
         server: The server instance.
@@ -118,6 +128,11 @@ def _create_picture_imports(
         dest_folder: Destination folder for images.
         progress_callback: Optional callable invoked after each image is written
             to disk. Receives no arguments. Used for incremental progress tracking.
+
+    Returns:
+        ``(shas, existing_map, scrapheaped_map, new_pictures)``. The two maps are
+        ``pixel_sha -> ShaMatch`` and are disjoint; a sha in neither is new and
+        has a freshly created ``Picture`` in ``new_pictures``.
     """
 
     def create_sha(img_bytes):
@@ -128,16 +143,14 @@ def _create_picture_imports(
             executor.map(create_sha, (img_bytes for img_bytes, *_ in uploaded_files))
         )
 
-    existing_pictures = server.vault.db.run_immediate_read_task(
-        lambda session: Picture.find(session, pixel_shas=shas, include_unimported=True)
+    existing_map, scrapheaped_map = server.vault.db.run_immediate_read_task(
+        import_dedup_service.partition_by_pixel_sha_in_session, shas
     )
-
-    existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
 
     importable = [
         (entry, sha)
         for (entry, sha) in zip(uploaded_files, shas)
-        if sha not in existing_map
+        if sha not in existing_map and sha not in scrapheaped_map
     ]
 
     if importable:
@@ -159,7 +172,7 @@ def _create_picture_imports(
     else:
         new_pictures = []
 
-    return shas, existing_map, new_pictures
+    return shas, existing_map, scrapheaped_map, new_pictures
 
 
 def _normalise_sidecar_stem(filename: str) -> str:

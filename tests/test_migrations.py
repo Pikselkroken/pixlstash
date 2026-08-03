@@ -38,7 +38,14 @@ def test_alembic_upgrade_head_fresh_db():
         assert os.path.isfile(db_path), "Database file was not created"
 
 
-def test_alembic_downgrade_one_step():
+def test_alembic_downgrade_merge_and_reupgrade():
+    """The two feature lanes can be unmerged and merged again cleanly.
+
+    A relative ``-1`` is intentionally ambiguous at an Alembic mergepoint:
+    there are two equally valid parents. Name the multi-library parent
+    explicitly, then prove the telemetry parent remains stamped alongside it
+    and that upgrading back to the merged head succeeds.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
@@ -48,9 +55,29 @@ def test_alembic_downgrade_one_step():
             f"alembic upgrade head failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
         )
 
-        down = _run_alembic(["downgrade", "-1"], db_url, _MIGRATIONS_DIR)
+        down = _run_alembic(
+            ["downgrade", "0095_add_settings_fingerprint"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
         assert down.returncode == 0, (
-            f"alembic downgrade -1 failed:\nstdout: {down.stdout}\nstderr: {down.stderr}"
+            "alembic downgrade to the multi-library parent failed:\n"
+            f"stdout: {down.stdout}\nstderr: {down.stderr}"
+        )
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            revisions = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert revisions == {
+            "0094_add_telemetry_consent",
+            "0095_add_settings_fingerprint",
+        }
+
+        reup = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert reup.returncode == 0, (
+            f"alembic re-upgrade failed:\nstdout: {reup.stdout}\nstderr: {reup.stderr}"
         )
 
 
@@ -960,3 +987,91 @@ def test_the_migration_chain_has_exactly_one_head():
         )
         heads = [line for line in result.stdout.splitlines() if "(head)" in line]
         assert len(heads) == 1, f"expected exactly one head, got: {heads}"
+
+
+def test_alembic_0094_adds_telemetry_consent_columns_defaulting_off():
+    """An existing install upgrading in must land with every category off.
+
+    The columns are added nullable, so the pre-existing user row reads NULL for
+    all five; ``serialize_user_config`` maps NULL to the model default. This
+    asserts the DDL half of that: the columns exist, the row survives, and
+    nothing was written that could read as consent.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+
+        # A real pre-0094 install: upgrade to the parent revision, then plant a
+        # user row the way an existing owner account would look.
+        up = _run_alembic(
+            ["upgrade", "0093_invalidate_stackcohesion_inputs"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert up.returncode == 0, (
+            f"upgrade to 0093 failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
+        )
+
+        expected = {
+            "telemetry_send_install_id",
+            "telemetry_send_feature_usage",
+            "telemetry_send_error_reports",
+            "telemetry_send_hardware_profile",
+            "telemetry_consent_prompted",
+        }
+
+        conn = sqlite3.connect(db_path)
+        try:
+            # The 0001 baseline builds `user` with SQLModel.metadata.create_all,
+            # so a fresh DB already carries every *current* model column. Drop
+            # the five back off to reproduce the shape a real pre-0094 install
+            # actually has on disk. Otherwise this asserts nothing.
+            for column in sorted(expected):
+                conn.execute(f"ALTER TABLE user DROP COLUMN {column}")
+
+            # Fill every remaining NOT NULL column that has no default, derived
+            # from the live schema rather than hardcoded, so a future NOT NULL
+            # addition does not silently break this test's setup.
+            required = [
+                row[1]
+                for row in conn.execute("PRAGMA table_info(user)")
+                if row[3] and row[4] is None and not row[5]
+            ]
+            names = ["id", "username", "password_hash"] + [
+                name
+                for name in required
+                if name not in {"id", "username", "password_hash"}
+            ]
+            values = [1, "owner", "x"] + [0] * (len(names) - 3)
+            conn.execute(
+                "INSERT INTO user ({}) VALUES ({})".format(
+                    ", ".join(names), ", ".join("?" * len(names))
+                ),
+                values,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        head = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert head.returncode == 0, (
+            f"upgrade to head failed:\nstdout: {head.stdout}\nstderr: {head.stderr}"
+        )
+
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(user)")}
+            assert expected <= columns, (
+                f"missing telemetry columns: {expected - columns}"
+            )
+
+            row = conn.execute(
+                "SELECT {} FROM user WHERE id = 1".format(", ".join(sorted(expected)))
+            ).fetchone()
+            assert row is not None, "the existing user row did not survive the upgrade"
+            # NULL, never 1: nothing in the upgrade may look like an opt-in.
+            assert all(value is None for value in row), (
+                f"telemetry columns were pre-populated on upgrade: {row}"
+            )
+        finally:
+            conn.close()

@@ -179,6 +179,17 @@
   --rule-h: 24px;
   --rule-h-seam: 32px;
 
+  /* The leading status rail. A vertical stripe that carries a status hue beside
+     a block that must NOT be tinted itself. Its first consumer is the
+     Keep-cover-only confirm (keep-cover-only.md): the headline numeral stays
+     `on-surface`, because a 22px `error` figure would be the loudest object in
+     the app, and the rail carries the consequence instead. A rendered width
+     rather than a gap, so it cannot borrow from the spacing scale, the same
+     reasoning as `--countdown-h`, whose comment says naming it "is what stops
+     the next surface picking 3px". Three components already carry a raw 3px
+     rail. */
+  --rail-w: 3px;
+
   /* Contextual action bar / toolbar band — the full-width bar that holds a count
      + actions above the content area (selection bar, Trash restore/purge bar,
      overlay top bar). One height so these bands align. Desktop chrome compresses

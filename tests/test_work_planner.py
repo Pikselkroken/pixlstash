@@ -51,3 +51,40 @@ def test_inflight_decrements_when_task_completes_during_submit():
     assert submitted is True
     assert planner.inflight_count("TestFinder") == 0
     assert planner._finder_by_task_id == {}
+
+
+def test_stop_while_finder_is_working_skips_submission():
+    runner = _FastCompleteRunner()
+    finder = _OneShotFinder()
+    planner = WorkPlanner(task_runner=runner, task_finders=[finder])
+    submitted_tasks = []
+    runner.on_submit = submitted_tasks.append
+
+    real_find_task = finder.find_task
+
+    def find_then_stop():
+        task = real_find_task()
+        planner._stop.set()
+        return task
+
+    finder.find_task = find_then_stop
+
+    assert planner._run_finders_once() is False
+    assert submitted_tasks == []
+    assert planner.inflight_count("TestFinder") == 0
+
+
+def test_runner_stop_race_is_quiet_during_planner_shutdown():
+    finder = _OneShotFinder()
+    planner = None
+
+    class _StoppingRunner:
+        def submit(self, task):
+            planner._stop.set()
+            raise RuntimeError("TaskRunner test is stopped.")
+
+    planner = WorkPlanner(task_runner=_StoppingRunner(), task_finders=[finder])
+
+    assert planner._run_finders_once() is False
+    assert planner.inflight_count("TestFinder") == 0
+    assert planner._finder_by_task_id == {}

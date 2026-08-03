@@ -367,16 +367,39 @@ class PredicateFilter(BaseModel):
                 )
             )
 
-        if self.stack_state == "stacked":
-            preds.append(Picture.stack_id.is_not(None))
-        elif self.stack_state == "unstacked":
-            preds.append(Picture.stack_id.is_(None))
+        if self.stack_state in ("stacked", "unstacked"):
+            # Both halves ask "is this picture in a stack that is still a stack",
+            # not "does this row carry a stack_id". A soft-deleted picture keeps
+            # its stack_id so a Scrapheap restore can put it back, so a stack
+            # whose other members are all scrapheaped leaves one live picture
+            # still carrying one. Keying on the column alone served that survivor
+            # under `stacked` while the grid drew it as a plain picture, because
+            # `_enrich_stack_counts` counts live members and `StackBadge` hides
+            # below two. It also fell out of `unstacked`, so it appeared under
+            # neither. Collapsing a stack to its cover produces that state every
+            # time, which is how a rare inconsistency became a guaranteed one.
+            #
+            # Imported lazily for the same reason `live_groups_filter` below is:
+            # `db_models.picture` sits between this module and that one.
+            from pixlstash.services.stack_membership import in_a_live_stack
+
+            live_stack = in_a_live_stack()
+            preds.append(live_stack if self.stack_state == "stacked" else ~live_stack)
         elif self.stack_state == "unresolved":
             # A picture the duplicate detector grouped with others and nobody has
             # ruled on yet. Deliberately keyed on ``DedupGroup.resolved`` alone and
             # NOT on the caller's tier policy, so this matches what the sidebar
             # badge counts (see ``DedupGroup.resolved``); filtering by tier here
             # would show a count the grid could not account for.
+            #
+            # ``live_groups_filter`` is the OTHER half of what the badge counts,
+            # and leaving it out is what let a scrapheaped partner keep marking
+            # its survivor: the group had left the queue and the badge, but the
+            # grid still called the remaining picture unresolved. It is imported
+            # lazily for the same reason ``Picture.find`` imports this module
+            # lazily: ``db_models.picture`` sits between the two.
+            from pixlstash.services.dedup_tier_service import live_groups_filter
+
             preds.append(
                 exists(
                     select(DedupGroupMember.picture_id)
@@ -384,6 +407,7 @@ class PredicateFilter(BaseModel):
                     .where(
                         DedupGroupMember.picture_id == Picture.id,
                         DedupGroup.resolved.is_(False),
+                        live_groups_filter(),
                     )
                 )
             )

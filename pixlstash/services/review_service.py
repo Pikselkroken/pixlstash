@@ -780,9 +780,12 @@ def list_review_suggestions(
         """
         if not wanted:
             return {}, {}
+        card_scope = scope_id_subquery(
+            session, wanted, name="_pixlstash_review_card_picture_ids"
+        )
         rows = session.exec(
             select(Picture.id, Picture.stack_id, Picture.perceptual_hash).where(
-                Picture.id.in_(wanted)
+                Picture.id.in_(card_scope)
             )
         ).all()
         return (

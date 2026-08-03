@@ -158,6 +158,7 @@ def _fake_lifespan_server(config, password_set=True):
         auth=base.auth,
         _ws_loop=None,
         _shutdown_on_lifespan=False,
+        _maybe_send_telemetry_ping=lambda: None,
         vault=SimpleNamespace(start=lambda: None, close=lambda: None),
     )
 

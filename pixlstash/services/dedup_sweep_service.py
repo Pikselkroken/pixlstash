@@ -467,42 +467,68 @@ def stream_likeness_edges(
     deliberately blind to the scrapheap: resolution stacks pictures, and stacking
     something the user already threw away is not a cleanup.
     """
-    pic_a = aliased(Picture)
-    pic_b = aliased(Picture)
     last_a = -1
     last_b = -1
     while True:
-        statement = (
-            select(
-                PictureLikeness.picture_id_a,
-                PictureLikeness.picture_id_b,
-                PictureLikeness.likeness,
-            )
-            .join(pic_a, pic_a.id == PictureLikeness.picture_id_a)
-            .join(pic_b, pic_b.id == PictureLikeness.picture_id_b)
-            .where(
-                PictureLikeness.likeness >= likeness_threshold,
-                pic_a.deleted.is_(False),
-                pic_b.deleted.is_(False),
-                or_(
-                    PictureLikeness.picture_id_a > last_a,
-                    and_(
-                        PictureLikeness.picture_id_a == last_a,
-                        PictureLikeness.picture_id_b > last_b,
-                    ),
-                ),
-            )
-            .order_by(PictureLikeness.picture_id_a, PictureLikeness.picture_id_b)
-            .limit(page_size)
+        rows = likeness_edge_page_in_session(
+            session,
+            likeness_threshold,
+            after=(last_a, last_b),
+            page_size=page_size,
         )
-        rows = session.exec(statement).all()
         if not rows:
             return
         for row in rows:
-            yield int(row[0]), int(row[1]), float(row[2] or 0.0)
-        last_a, last_b = int(rows[-1][0]), int(rows[-1][1])
+            yield row
+        last_a, last_b = rows[-1][0], rows[-1][1]
         if len(rows) < page_size:
             return
+
+
+def likeness_edge_page_in_session(
+    session: Session,
+    likeness_threshold: float,
+    *,
+    after: tuple[int, int] = (-1, -1),
+    page_size: int = EDGE_PAGE_SIZE,
+) -> list[tuple[int, int, float]]:
+    """Return one keyset page of live likeness edges.
+
+    The streaming scan task calls this once per queued database slice so a large
+    edge table cannot monopolise the single writer thread.  The cursor and rows
+    are plain Python values: no ORM object or open session crosses the slice
+    boundary.
+    """
+    last_a, last_b = int(after[0]), int(after[1])
+    pic_a = aliased(Picture)
+    pic_b = aliased(Picture)
+    statement = (
+        select(
+            PictureLikeness.picture_id_a,
+            PictureLikeness.picture_id_b,
+            PictureLikeness.likeness,
+        )
+        .join(pic_a, pic_a.id == PictureLikeness.picture_id_a)
+        .join(pic_b, pic_b.id == PictureLikeness.picture_id_b)
+        .where(
+            PictureLikeness.likeness >= likeness_threshold,
+            pic_a.deleted.is_(False),
+            pic_b.deleted.is_(False),
+            or_(
+                PictureLikeness.picture_id_a > last_a,
+                and_(
+                    PictureLikeness.picture_id_a == last_a,
+                    PictureLikeness.picture_id_b > last_b,
+                ),
+            ),
+        )
+        .order_by(PictureLikeness.picture_id_a, PictureLikeness.picture_id_b)
+        .limit(max(1, int(page_size)))
+    )
+    return [
+        (int(row[0]), int(row[1]), float(row[2] or 0.0))
+        for row in session.exec(statement).all()
+    ]
 
 
 def plan_sweep_in_session(

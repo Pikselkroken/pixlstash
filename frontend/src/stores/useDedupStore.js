@@ -47,7 +47,7 @@
 // user's `1`-`9` and `X` choices.
 
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import {
   getPolicy,
   listGroups,
@@ -57,6 +57,10 @@ import {
   keepGroupSeparate,
   reopenGroup,
   autoStackExact,
+  listMixedStacks,
+  splitMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
   GLOBAL_SCOPE,
 } from "../api/dedup";
 import {
@@ -67,7 +71,14 @@ import {
 import {
   suggestedCoverId,
   candidateId,
-  lockedCandidateIds,
+  groupUnits,
+  unitForPictureId,
+  isUnitExcluded,
+  includedUnits,
+  flaggedStackIdSet,
+  isLockedRefusal,
+  lockedSets,
+  mixedStackEngineMarks,
 } from "../utils/dedup";
 import { newOperationBatchId } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
@@ -100,6 +111,18 @@ export const SELECT_ALL_MAX = 500;
  * `X` cannot walk a group into a state the Stack button is still offering.
  */
 export const MIN_STACK_MEMBERS = 2;
+
+/**
+ * How many mixed stacks one page of that list holds.
+ *
+ * Larger than the queue's page on purpose. The measured list is 9 rows at the
+ * 0.65 floor and 26 at the 0.90 default, so one page is normally the whole
+ * thing; and because the list is ranked stranded-members-first, one page also
+ * carries every stack the queue's warning chip flags. A second request to
+ * answer "is this deck flagged" would be a request that is nearly always
+ * empty. Clamped server-side to its own 200 ceiling.
+ */
+export const MIXED_STACK_PAGE_SIZE = 100;
 
 /**
  * The tier ids the server publishes, mapped to the copy the menu renders.
@@ -195,7 +218,11 @@ function storedSizeLevel() {
 
 /** The empty scan record, so consumers never branch on `null`. */
 const IDLE_SCAN = Object.freeze({
+  scanId: null,
+  scopeKey: null,
   status: "idle",
+  tiers: [],
+  threshold: null,
   scanned: 0,
   total: 0,
   percent: 100,
@@ -235,16 +262,27 @@ export function scopeKey(type, id) {
  */
 function normalizeScan(raw) {
   if (!raw) return { ...IDLE_SCAN };
+  const status = raw.status || "idle";
   const scanned = Number(raw.scanned_pictures) || 0;
   const total = Number(raw.total_pictures) || 0;
   const buckets = Number(raw.scanned_buckets) || 0;
   const totalBuckets = Number(raw.total_buckets) || 0;
-  let percent = 100;
-  if (total > 0) percent = Math.round((scanned / total) * 100);
-  else if (totalBuckets > 0)
+  // Status is the terminal truth. A fresh pending/running scan has no totals
+  // yet, which means "unknown", not "100%". Near scans can finish their
+  // picture enumeration before their candidate batches, so once the backend
+  // publishes bucket counters those are the authoritative progress slice.
+  let percent = RUNNING_STATUSES.has(status) ? 0 : 100;
+  if (totalBuckets > 0)
     percent = Math.round((buckets / totalBuckets) * 100);
+  else if (total > 0) percent = Math.round((scanned / total) * 100);
   return {
-    status: raw.status || "idle",
+    scanId: raw.scan_id ?? null,
+    scopeKey: raw.scope_key ?? null,
+    status,
+    tiers: Array.isArray(raw.tiers) ? [...raw.tiers] : [],
+    threshold: Number.isFinite(Number(raw.threshold))
+      ? Number(raw.threshold)
+      : null,
     scanned,
     total,
     percent: Math.max(0, Math.min(100, percent)),
@@ -252,6 +290,82 @@ function normalizeScan(raw) {
     totalBuckets,
     groupsFound: Number(raw.groups_found) || 0,
     error: raw.error ?? null,
+  };
+}
+
+/**
+ * Rewrite one loaded group as if the given pictures had never been in it.
+ *
+ * The queue's rows are a SNAPSHOT of a server read, and a soft-delete elsewhere
+ * (the grid, the lightbox, another tab) makes that snapshot wrong in three
+ * places at once, all of which this repairs:
+ *
+ *   * `candidates`, a tile whose thumbnail now 404s, which is the "empty
+ *     placeholder" in the report;
+ *   * `member_count`, the group's own size, which the server reports live;
+ *   * `stacks[id]`, a deck's DEPTH. A deck stands for the whole existing
+ *     stack, so a scrapheaped stack member leaves a hole in it even when the
+ *     group never named that member. Only the ids this group can attribute to a
+ *     stack (its matched members and the stack's leader) are subtracted; a
+ *     sibling outside the group is not knowable from the payload and its depth
+ *     corrects itself on the next page load.
+ *
+ * Returns a NEW group object when anything changed and `null` when the group is
+ * untouched, so the caller can leave unaffected rows at their existing object
+ * identity and not re-render them.
+ *
+ * @param {Object} group - a loaded queue group.
+ * @param {Set<number|string>} removed - the picture ids that went away.
+ * @returns {Object|null}
+ */
+export function groupWithoutPictures(group, removed) {
+  const candidates = group?.candidates ?? [];
+  const kept = candidates.filter((c) => !removed.has(candidateId(c)));
+  const stacks = group?.stacks ?? {};
+  let stacksChanged = false;
+  const nextStacks = {};
+  for (const [key, entry] of Object.entries(stacks)) {
+    const matched = Array.isArray(entry?.matched_picture_ids)
+      ? entry.matched_picture_ids
+      : [];
+    const keptMatched = matched.filter((id) => !removed.has(id));
+    const leaderId = entry?.leader_picture_id;
+    const leaderGone =
+      leaderId !== null && leaderId !== undefined && removed.has(leaderId);
+    if (keptMatched.length === matched.length && !leaderGone) {
+      nextStacks[key] = entry;
+      continue;
+    }
+    stacksChanged = true;
+    // The leader counts once: it is only an EXTRA loss when it was not already
+    // one of the matched members this group named.
+    const lost =
+      matched.length -
+      keptMatched.length +
+      (leaderGone && !matched.includes(leaderId) ? 1 : 0);
+    const served = Number(entry?.member_count);
+    nextStacks[key] = {
+      ...entry,
+      member_count: Number.isFinite(served)
+        ? Math.max(keptMatched.length, served - lost)
+        : keptMatched.length,
+      matched_picture_ids: keptMatched,
+      // Which member the stack promotes next is a fact only the server holds,
+      // the canonical order can promote one this group never named so the
+      // face falls back to the first surviving matched candidate. That is the
+      // degradation `finaliseDeck` already applies to a payload with no
+      // `stacks` block, and the true leader returns with the next page load.
+      ...(leaderGone
+        ? { leader_picture_id: null, leader_thumbnail_version: "" }
+        : {}),
+    };
+  }
+  if (kept.length === candidates.length && !stacksChanged) return null;
+  return {
+    ...group,
+    candidates: kept,
+    stacks: nextStacks,
+    member_count: kept.length,
   };
 }
 
@@ -270,6 +384,14 @@ export const useDedupStore = defineStore("dedup", () => {
   // --- Per-scope counts, for the context menus ----------------------------
   const scopeCounts = ref({});
   const scopeCountsInFlight = new Map();
+  // Concurrent mounts/router syncs for the same destination share the whole
+  // open operation. Without this, both could observe the same completed scan
+  // and enqueue two fresh passes before either response reached the store.
+  const openQueueInFlight = new Map();
+  // Explicit tier/threshold gestures can race a route open too. The backend is
+  // also idempotent for equivalent active scans; this client layer avoids the
+  // duplicate round trip in the first place.
+  const scanRequestInFlight = new Map();
 
   // --- The queue ----------------------------------------------------------
   const scopeType = ref(GLOBAL_SCOPE);
@@ -498,33 +620,113 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
+   * A group's units: the things a stack verdict can move independently.
+   *
+   * Recomputed per call rather than cached, because the group objects are
+   * replaced wholesale by every refetch and a cache keyed on a stale object
+   * identity is how the row starts disagreeing with the request.
+   *
+   * @param {Object} group
+   * @returns {Array<Object>}
+   */
+  function unitsFor(group) {
+    return group ? groupUnits(group) : [];
+  }
+
+  /**
+   * The best cover among the units that would end up in the stack.
+   *
+   * **A deck wins over the server's smart-score pick.** Otherwise the default
+   * action silently re-curates a stack the user already made: the verdict folds
+   * the whole stack in, so a loose picture as cover demotes that stack's chosen
+   * leader without anyone asking. The deepest deck wins a tie between two,
+   * because merging into the larger stack re-curates the fewest pictures.
+   *
+   * @param {Object} group
+   * @param {Array<Object>} units
+   * @param {Array<number|string>} excluded - the user's exclusions in force.
+   * @returns {number|string|null}
+   */
+  function pickCoverForUnits(group, units, excluded) {
+    const live = includedUnits(units, excluded);
+    const decks = live.filter((unit) => unit.kind === "deck");
+    if (decks.length) {
+      return decks.reduce((best, unit) =>
+        unit.depth > best.depth ? unit : best,
+      ).coverPictureId;
+    }
+    const candidates = live.flatMap((unit) => unit.candidates);
+    if (!candidates.length) return suggestedCoverId(group);
+    // The server's preselection stands while it is still in the running; the
+    // local formula is the fallback that keeps the label truthful when it is
+    // not (`suggestedCoverId` would otherwise hand back an excluded picture).
+    const served = group?.cover_picture_id;
+    if (
+      served !== undefined &&
+      served !== null &&
+      candidates.some((candidate) => candidateId(candidate) === served)
+    ) {
+      return served;
+    }
+    return suggestedCoverId({ candidates });
+  }
+
+  /**
    * The cover picture id in force for a group: the user's override when they
-   * made one, otherwise the server's preselection.
+   * made one, otherwise the preselection.
+   *
+   * **Two gestures arrive on this one channel, and the chosen ID is what tells
+   * them apart.** Both must work:
+   *
+   *   * *Choosing a UNIT.* Every deck-level gesture in the app, the row's
+   *     tile, the digits `1`-`9`, Compare's card and its zoom, and the
+   *     automatic move when the cover's unit is excluded: passes that unit's
+   *     `coverPictureId`, i.e. the stack's LEADER. It resolves to the leader,
+   *     because that is the picture the tile shows and the only one the server
+   *     can lead the resulting stack with.
+   *   * *Promoting a MEMBER.* Compare's expansion band passes a specific
+   *     picture of a deck, which is never the leader (the strip refuses a
+   *     click on the current cover). It is honoured verbatim: the whole point
+   *     of that band's two-step confirmation is that this stack's cover
+   *     changes across the library, and normalising it back to the leader made
+   *     the promotion a silent no-op for every member the group named; it
+   *     only ever "worked" for members the group did not name, which fell
+   *     through the unit lookup by accident.
+   *
+   * So a non-leader picture of a deck means the member, and anything else
+   * means the unit. A future gesture that means "this deck" must therefore
+   * keep passing `unit.coverPictureId`, never one of its matched members.
+   *
    * @param {Object} group
    * @returns {number|null}
    */
   function coverIdFor(group) {
     if (!group) return null;
+    const units = unitsFor(group);
     const chosen = coverChoices.value[group.signature];
-    const locked = lockedCandidateIds(group);
-    if (chosen !== undefined && !locked.includes(chosen)) return chosen;
-    // A locked-out candidate cannot lead a stack it is not in. The server would
-    // move the cover for us and report where it landed, but doing it here keeps
-    // the row's "Cover" label truthful before Stack is ever pressed.
-    if (!locked.length) return suggestedCoverId(group);
-    const stackable = (group.candidates ?? []).filter(
-      (candidate) => !locked.includes(candidateId(candidate)),
-    );
-    if (!stackable.length) return suggestedCoverId(group);
-    return suggestedCoverId({ ...group, candidates: stackable });
+    if (chosen !== undefined) {
+      const unit = unitForPictureId(units, chosen);
+      // A locked-out unit cannot lead a stack it is not in. The server would
+      // move the cover for us and report where it landed, but doing it here
+      // keeps the row's "Cover" label truthful before Stack is ever pressed.
+      if (unit?.stackable) {
+        return unit.kind === "deck" && chosen !== unit.coverPictureId
+          ? chosen
+          : unit.coverPictureId;
+      }
+      if (!unit) return chosen;
+    }
+    return pickCoverForUnits(group, units, []);
   }
 
   /**
    * The ids this group cannot stack, whatever the user asked for: the user's own
-   * exclusions plus every candidate a locked set freezes.
+   * exclusions plus every picture in every unit a locked set freezes.
    *
    * This is what the request sends as `excluded_picture_ids`, so the server never
-   * has to refuse a member the queue already knew was frozen.
+   * has to refuse a member the queue already knew was frozen. It is unit-level
+   * because a locked set freezes a whole stack: one frozen member takes its
+   * deck's whole visible membership out with it.
    *
    * @param {Object} group
    * @returns {Array<number>}
@@ -532,8 +734,26 @@ export const useDedupStore = defineStore("dedup", () => {
   function effectiveExcludedFor(group) {
     if (!group) return [];
     const merged = new Set(excludedFor(group.signature));
-    for (const id of lockedCandidateIds(group)) merged.add(id);
+    for (const unit of unitsFor(group)) {
+      if (unit.stackable) continue;
+      for (const id of unit.pictureIds) merged.add(id);
+    }
     return [...merged];
+  }
+
+  /**
+   * How many UNITS the Stack button would collect.
+   *
+   * The floor and the button's own count are both this number, not a picture
+   * count: the server folds a stack as one thing, so two units is the smallest
+   * group with a decision left in it even when they are 4 and 6 pictures deep.
+   *
+   * @param {Object} group
+   * @returns {number}
+   */
+  function includedUnitCountFor(group) {
+    if (!group) return 0;
+    return includedUnits(unitsFor(group), excludedFor(group.signature)).length;
   }
 
   /**
@@ -546,7 +766,14 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * How many of a group's candidates the Stack button would collect.
+   * How many of a group's CANDIDATES the Stack button would collect.
+   *
+   * A picture count over the group's own members, which the announcements use.
+   * It is deliberately not the button's number (that is
+   * {@link includedUnitCountFor}) and it under-reports whenever a deck folds in
+   * a stack member the group never named: which is why the receipt prefers the
+   * server's returned `picture_ids` over this estimate.
+   *
    * @param {Object} group
    * @returns {number}
    */
@@ -557,6 +784,11 @@ export const useDedupStore = defineStore("dedup", () => {
 
   /**
    * Choose a group's cover.
+   *
+   * The id carries the gesture: a unit's `coverPictureId` chooses that unit, a
+   * deck's non-leader member promotes that member. See {@link coverIdFor},
+   * which is where the two are told apart.
+   *
    * @param {string} signature
    * @param {number} pictureId
    */
@@ -565,49 +797,64 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
-   * Include or exclude one candidate.
+   * Include or exclude the UNIT one picture belongs to.
+   *
+   * **The gesture is unit-level, not picture-level.** Excluding one member of an
+   * existing stack was a silent no-op: the backend's `_stack_members` folds in
+   * every member of any stack the group touches, so the rest of that stack
+   * dragged the excluded picture straight back in. A deck therefore goes out
+   * whole, and any of its pictures, matched member or leader, addresses it.
    *
    * Two invariants ride on this, both because `X` is a one-key action with no
    * confirmation:
    *
-   *   * **A stack needs two members.** The server refuses a one-member stack
-   *     outright, so an exclusion that would leave a single included candidate
-   *     is refused here rather than turned into a guaranteed 400 on a Stack the
+   *   * **A stack needs two units.** The server refuses a one-member stack
+   *     outright, so an exclusion that would leave a single included unit is
+   *     refused here rather than turned into a guaranteed 400 on a Stack the
    *     row still offers. The floor is {@link MIN_STACK_MEMBERS} *included*
-   *     candidates, not one: a group of two therefore accepts no exclusion at
-   *     all, and the way to reject one of its members is Keep separate.
+   *     units, not pictures: a group of two units therefore accepts no
+   *     exclusion at all, and the way to reject one of them is Keep separate.
    *   * Excluding the cover would leave the stack with no cover, and the server
-   *     rejects a cover that is not an included member. The cover moves to the
-   *     best remaining included candidate instead, using the same formula that
-   *     preselected it.
+   *     rejects a cover that is not in the resulting stack. The cover moves to
+   *     the best remaining included unit instead, by the same rule that
+   *     preselected it, so it lands on a surviving deck's leader rather than
+   *     re-curating that stack.
    *
    * @param {Object} group
-   * @param {number} pictureId
+   * @param {number} pictureId - any picture of the unit to toggle.
    * @returns {boolean|string} `true` when the toggle was applied, `false` when
-   *   the floor refused it, and `"locked"` when the candidate is the server's
+   *   the floor refused it, and `"locked"` when the unit is the server's
    *   exclusion rather than the user's. Each refusal is narrated by the caller:
    *   a one-key action that silently does nothing is a key the user stops
    *   trusting, and the two refusals need different sentences.
    */
   function toggleExcluded(group, pictureId) {
     if (!group) return false;
-    // A locked-out candidate is the server's exclusion, not the user's, so `X`
+    const units = unitsFor(group);
+    const unit = unitForPictureId(units, pictureId);
+    if (!unit) return false;
+    // A locked-out unit is the server's exclusion, not the user's, so `X`
     // cannot walk it back. Refused here rather than optimistically re-included
     // and then dropped again by the request the row would go on to send.
-    if (lockedCandidateIds(group).includes(pictureId)) return "locked";
+    if (!unit.stackable) return "locked";
     const current = excludedFor(group.signature);
-    const isOut = current.includes(pictureId);
-    if (!isOut && stackSizeFor(group) <= MIN_STACK_MEMBERS) return false;
-    const next = isOut
-      ? current.filter((id) => id !== pictureId)
-      : [...current, pictureId];
+    const isOut = isUnitExcluded(unit, current);
+    if (!isOut && includedUnits(units, current).length <= MIN_STACK_MEMBERS) {
+      return false;
+    }
+    const coverBefore = coverIdFor(group);
+    const ids = new Set(current);
+    for (const id of unit.pictureIds) {
+      if (isOut) ids.delete(id);
+      else ids.add(id);
+    }
+    const next = [...ids];
     exclusions.value = { ...exclusions.value, [group.signature]: next };
-    if (!isOut && coverIdFor(group) === pictureId) {
-      const remaining = (group.candidates ?? []).filter(
-        (c) => !next.includes(candidateId(c)),
-      );
-      const replacement = suggestedCoverId({ candidates: remaining });
-      if (replacement !== null) setCover(group.signature, replacement);
+    if (!isOut && unitForPictureId(units, coverBefore) === unit) {
+      const replacement = pickCoverForUnits(group, units, next);
+      if (replacement !== null && replacement !== undefined) {
+        setCover(group.signature, replacement);
+      }
     }
     return true;
   }
@@ -622,7 +869,7 @@ export const useDedupStore = defineStore("dedup", () => {
    * @returns {boolean}
    */
   function isAtStackFloor(group) {
-    return Boolean(group) && stackSizeFor(group) <= MIN_STACK_MEMBERS;
+    return Boolean(group) && includedUnitCountFor(group) <= MIN_STACK_MEMBERS;
   }
 
   /**
@@ -807,7 +1054,7 @@ export const useDedupStore = defineStore("dedup", () => {
     }
   }
 
-  async function openQueue({
+  async function openQueueOnce({
     type = GLOBAL_SCOPE,
     id = null,
     label = "",
@@ -823,6 +1070,12 @@ export const useDedupStore = defineStore("dedup", () => {
     stackedCount.value = 0;
     separatedCount.value = 0;
     showingDecided.value = false;
+    // The third page is a place the user visits, like Decided: arriving at the
+    // destination starts on the queue. Its potentially cold all-stack list is
+    // left unloaded until the page is actually opened.
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
+    mixedLoaded.value = false;
     // The decided page is a place the user visits, not a lens they set, and so
     // is its verdict gate: arriving at the queue starts from every decision.
     // A link that carries one restores it below, through applyUrlFilters.
@@ -845,13 +1098,72 @@ export const useDedupStore = defineStore("dedup", () => {
     // its filter params — while the real navigation from the params was still
     // in flight, so the params were dropped for good.
     filtersRestored.value = true;
-    // Opening the queue IS the scan trigger (design contract: the queue opens
-    // over whatever has been found while the banner streams progress). The
-    // group cache only fills when a scan runs; without this the queue reads an
-    // empty cache forever and no tier or threshold setting can change that.
-    await triggerScan();
+    // A poll belongs to the old scope/policy. Stop it before adopting this
+    // destination; the active scan discovered below starts the right one.
+    stopScanPoll();
+    // Read the durable queue and its scan progress before requesting work, so
+    // rows already found render before a potentially long pass begins.
     await loadFirstPage();
+    const request = currentScanRequest();
+    if (RUNNING_STATUSES.has(scan.value.status) && scanHasPolicy(scan.value)) {
+      if (!scanMatchesRequest(scan.value, request)) {
+        // The backend refuses a different policy with 409 rather than mutating
+        // active work. Waiting here avoids that known-busy request; completion
+        // gets exactly one retry for the policy the user actually asked for.
+        deferScanUntilCurrentCompletes(request);
+      }
+      startScanPoll();
+    } else {
+      // `complete` is progress, not a freshness proof: pictures may have been
+      // imported since it finished. Ask the backend, which joins equivalent
+      // active work and starts completed/failed rows anew.
+      await triggerScan(request);
+    }
     refreshCounts();
+    // Do not prefetch the Mixed stacks page here. The first startup after a
+    // cohesion-cache migration is necessarily cold, and that endpoint ranks
+    // every live stack before paging. Launching it from the ordinary queue made
+    // an optional page occupy the serial database worker during startup. The
+    // page loads on showMixedStacks(); until then its warning chips are absent.
+  }
+
+  /**
+   * Point the queue at one destination, sharing concurrent equivalent opens.
+   *
+   * @param {Object} [options]
+   * @returns {Promise<void>}
+   */
+  function openQueue(options = {}) {
+    const normalized = {
+      type:
+        !options.type || options.type === "library"
+          ? GLOBAL_SCOPE
+          : options.type,
+      id: options.id ?? null,
+      label: options.label ?? "",
+      icon: options.icon ?? "",
+      filters: options.filters ?? null,
+    };
+    const key = JSON.stringify({
+      type: normalized.type,
+      id: normalized.id,
+      filters: normalized.filters
+        ? {
+            near: normalized.filters.near ?? null,
+            embedding: normalized.filters.embedding ?? null,
+            threshold: normalized.filters.threshold ?? null,
+            decided: normalized.filters.decided ?? null,
+            verdicts: normalized.filters.verdicts ?? null,
+          }
+        : null,
+    });
+    const joined = openQueueInFlight.get(key);
+    if (joined) return joined;
+    const request = openQueueOnce(normalized).finally(() => {
+      if (openQueueInFlight.get(key) === request) openQueueInFlight.delete(key);
+    });
+    openQueueInFlight.set(key, request);
+    return request;
   }
 
   /**
@@ -1334,6 +1646,11 @@ export const useDedupStore = defineStore("dedup", () => {
 
   async function toggleDecided() {
     showingDecided.value = !showingDecided.value;
+    // The three pages are one at a time. Unlike the Decided flip this costs
+    // nothing to leave: the mixed list stays loaded behind it, because the
+    // queue's chip reads the same flags.
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
     await loadFirstPage();
   }
 
@@ -1516,6 +1833,152 @@ export const useDedupStore = defineStore("dedup", () => {
     setFocus(Math.min(absolute, windowStart.value + groups.value.length - 1));
   }
 
+  // --- Live picture events -------------------------------------------------
+  //
+  // The queue rows are a snapshot of a server read, and nothing about a
+  // scrapheap move goes through this store: the user deletes from the grid, the
+  // lightbox or another tab, and the loaded row keeps drawing a candidate whose
+  // thumbnail now 404s: the owner's "empty placeholder", and a group of one
+  // still offering a Stack the server would refuse.
+  //
+  // The COUNTS were never the gap: `pictures_changed` already reaches
+  // `useSidebarRefresh`, which refreshes the badge on every removal and every
+  // restore. What was missing is the LIST, and it is repaired here rather than
+  // in the view so it works whichever route is mounted.
+  //
+  // The decision table below is deliberately narrow, and asymmetric on purpose:
+  //
+  //   * **A removal is applied surgically.** The event names exactly which
+  //     pictures went, so the affected rows can be rewritten and the ones that
+  //     drop below two units removed: the same rule `live_groups_filter`
+  //     applies server-side. `loadFirstPage` would be the easy answer and it is
+  //     the wrong one: it rebases the window on the queue's head, which throws
+  //     a user 250 rows into a triage back to row 1 for a change that touched
+  //     one row.
+  //   * **A restore is NOT inserted.** The group returns to the server's
+  //     unresolved set at a position in the confidence ordering the client
+  //     cannot compute, and there is no per-signature read to fetch it with.
+  //     The queue has never been a live insert surface (a scan's new groups
+  //     arrive by paging too), so the badge carries the change and the row
+  //     comes back with the next page: UNLESS the window is empty, where
+  //     "nothing left to review" would be an outright lie and there is nothing
+  //     on screen to disturb by rebuilding it.
+  //
+  // No coalescing window: a bulk scrapheap move broadcasts ONE event carrying
+  // every id, and the work is a map over the ≤ one page of rows that are
+  // actually loaded. This is the undo/redo subscription's counterpart, not a
+  // replacement: that one handles a dedup verdict coming back, which no
+  // picture event announces.
+
+  /**
+   * Rebuild the queue only when there is nothing on screen to disturb.
+   *
+   * @param {string} reason - for the returned descriptor.
+   * @returns {{action: string, reason: string}}
+   */
+  function refillIfEmpty(reason) {
+    if (showingDecided.value) {
+      // The decided page lists resolved groups whatever happened to their
+      // members, so nothing returns to it and nothing leaves it.
+      return { action: "ignored", reason: `${reason}-decided-page` };
+    }
+    if (groups.value.length || loading.value) {
+      return { action: "ignored", reason: `${reason}-mid-triage` };
+    }
+    // loadFirstPage owns its own error handling and never rejects.
+    loadFirstPage();
+    return { action: "reload", reason };
+  }
+
+  /**
+   * Take the given pictures out of every loaded group.
+   *
+   * @param {Array<number|string>} pictureIds
+   * @returns {{action: string, reason: string, dropped: Array<string>}}
+   */
+  function dropPictures(pictureIds) {
+    const removed = new Set(pictureIds);
+    const doomed = [];
+    let touched = 0;
+    groups.value = groups.value.map((group) => {
+      const rewritten = groupWithoutPictures(group, removed);
+      if (!rewritten) return group;
+      touched += 1;
+      // A group that no longer spans two stack UNITS poses no decision, the
+      // second HAVING clause of the server's live_groups_filter, applied to the
+      // rows already on screen. The decided page keeps its thinned rows for the
+      // same reason the server does: the verdict happened, and "clear this
+      // decision" is the only way back to it.
+      if (
+        !showingDecided.value &&
+        groupUnits(rewritten).length < MIN_STACK_MEMBERS
+      ) {
+        doomed.push(rewritten.signature);
+      }
+      return rewritten;
+    });
+    // Per-group choices can now name a picture that is gone: an exclusion would
+    // be sent to the server as an excluded id it cannot resolve, and a cover
+    // choice would survive `coverIdFor`'s unit lookup as a raw deleted id.
+    for (const group of groups.value) {
+      const signature = group?.signature;
+      if (signature === undefined || signature === null) continue;
+      const chosen = coverChoices.value[signature];
+      if (chosen !== undefined && removed.has(chosen)) {
+        const { [signature]: _gone, ...rest } = coverChoices.value;
+        coverChoices.value = rest;
+      }
+      const excluded = exclusions.value[signature];
+      if (!excluded) continue;
+      const kept = excluded.filter((id) => !removed.has(id));
+      if (kept.length !== excluded.length) {
+        exclusions.value = { ...exclusions.value, [signature]: kept };
+      }
+    }
+    // removeGroup is what already knows how to take a row out: it walks the
+    // focus, drops the selection, forgets the per-group choices, corrects the
+    // offset and refills an emptied window.
+    for (const signature of doomed) removeGroup(signature);
+    if (doomed.length) {
+      openCount.value = Math.max(0, openCount.value - doomed.length);
+      invalidateScopeCounts();
+    }
+    if (!touched) return { action: "ignored", reason: "removed-untouched" };
+    return { action: "targeted", reason: "removed", dropped: doomed };
+  }
+
+  /**
+   * Apply one live picture-mutation event to the loaded queue.
+   *
+   * Called for every `/ws/updates` picture event regardless of origin: unlike
+   * the grid, this store never applies a scrapheap move optimistically, so its
+   * own tab's echo is as new to it as another tab's.
+   *
+   * @param {Object} payload - a `/ws/updates` message.
+   * @returns {{action: string, reason: string}} the DECISION, for tests and
+   *   logging; callers ignore it.
+   */
+  function applyPictureEvent(payload) {
+    if (payload?.type !== "pictures_changed") {
+      return { action: "ignored", reason: "not-a-picture-change" };
+    }
+    const changeKind = payload?.change_kind;
+    const pictureIds = Array.isArray(payload?.picture_ids)
+      ? payload.picture_ids
+      : [];
+    if (changeKind === "removed") {
+      // A removal with no ids (a bulk purge that could not name them) is
+      // untargetable: there is no way to tell which rows it thinned, so the
+      // window is rebuilt only if it is empty, exactly like a restore.
+      if (!pictureIds.length) {
+        return refillIfEmpty("removed-untargetable-empty-ids");
+      }
+      return dropPictures(pictureIds);
+    }
+    if (changeKind === "restored") return refillIfEmpty("restored");
+    return { action: "ignored", reason: `change-kind-${changeKind ?? "none"}` };
+  }
+
   /**
    * Raise the standard action receipt for a verdict that recorded an
    * operation.
@@ -1591,19 +2054,31 @@ export const useDedupStore = defineStore("dedup", () => {
       // id, so the operation log coalesces the verdicts into one undo step.
       const gestureId = batchId || newOperationBatchId();
       let last = null;
+      let recorded = false;
+      const stackedTargets = [];
       const gestureSkipped = [];
       for (const target of targets) {
-        last = await stackOne(target, { batchId: gestureId });
+        last = await stackOne(target, {
+          batchId: gestureId,
+          deferCommit: true,
+        });
         // Stop on the first failure rather than half-applying silently; the
         // failed group and the rest stay selected and in the queue. A PARTIAL
         // success is not a failure: the group was decided, so the run carries
         // on and the skips are reported once for the whole gesture.
-        if (!last) return null;
+        if (!last) {
+          commitStackedGroups(stackedTargets);
+          if (recorded) narrateVerdictOperation();
+          return null;
+        }
+        stackedTargets.push(target);
+        if (last.batch_id) recorded = true;
         gestureSkipped.push(...(last.skipped ?? []));
       }
+      commitStackedGroups(stackedTargets);
       clearSelection();
       // One receipt per GESTURE, not per group: the batch is one undo step.
-      if (last?.batch_id) narrateVerdictOperation();
+      if (recorded) narrateVerdictOperation();
       return { ...last, gesture_skipped: gestureSkipped };
     }
     const result = await stackOne(group, { batchId });
@@ -1613,7 +2088,7 @@ export const useDedupStore = defineStore("dedup", () => {
       : result;
   }
 
-  async function stackOne(group, { batchId } = {}) {
+  async function stackOne(group, { batchId, deferCommit = false } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
@@ -1626,11 +2101,7 @@ export const useDedupStore = defineStore("dedup", () => {
         excludedPictureIds: effectiveExcludedFor(group),
         batchId,
       });
-      stackedCount.value += 1;
-      removeGroup(group.signature);
-      openCount.value = Math.max(0, openCount.value - 1);
-      invalidateScopeCounts();
-      reconcileCounts();
+      if (!deferCommit) commitStackedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
@@ -1639,6 +2110,68 @@ export const useDedupStore = defineStore("dedup", () => {
     } finally {
       busy.value = false;
     }
+  }
+
+  /**
+   * Apply one settled stack gesture to the visible queue in one assignment.
+   *
+   * Bulk requests stay sequential for the server's operation ordering, but a
+   * response is not permission to make the list jump while more selected rows
+   * are still being processed. Successful targets are therefore collected and
+   * committed together after the sequence settles. On a refusal, only the
+   * successes leave; the failed target and every unattempted target remain
+   * selected for an honest retry.
+   *
+   * @param {Object[]} stackedGroups
+   */
+  function commitStackedGroups(stackedGroups) {
+    const signatures = new Set(
+      stackedGroups.map((group) => group?.signature).filter(Boolean),
+    );
+    if (!signatures.size) return;
+    const firstLocal = groups.value.findIndex((group) =>
+      signatures.has(group.signature),
+    );
+    const removed = groups.value.filter((group) =>
+      signatures.has(group.signature),
+    ).length;
+    if (!removed) return;
+
+    groups.value = groups.value.filter(
+      (group) => !signatures.has(group.signature),
+    );
+    selectedSignatures.value = new Set(
+      [...selectedSignatures.value].filter(
+        (signature) => !signatures.has(signature),
+      ),
+    );
+    coverChoices.value = Object.fromEntries(
+      Object.entries(coverChoices.value).filter(
+        ([signature]) => !signatures.has(signature),
+      ),
+    );
+    exclusions.value = Object.fromEntries(
+      Object.entries(exclusions.value).filter(
+        ([signature]) => !signatures.has(signature),
+      ),
+    );
+    if (nextCursor.value === null) {
+      nextOffset.value = Math.max(0, nextOffset.value - removed);
+    }
+    total.value = Math.max(0, total.value - removed);
+    stackedCount.value += removed;
+    openCount.value = Math.max(0, openCount.value - removed);
+    invalidateScopeCounts();
+    reconcileCounts();
+
+    if (!groups.value.length) {
+      focusIndex.value = -1;
+      if (hasMore.value) loadMore();
+      else if (windowStart.value > 0) loadPrevious();
+      return;
+    }
+    const absolute = windowStart.value + Math.max(0, firstLocal);
+    setFocus(Math.min(absolute, windowStart.value + groups.value.length - 1));
   }
 
   /**
@@ -1839,24 +2372,101 @@ export const useDedupStore = defineStore("dedup", () => {
     if (loosened) await triggerScan();
     await loadFirstPage();
     refreshCounts();
+    // The mixed list IS a function of the threshold, but it is an optional page.
+    // Reload it only after it has actually been opened; otherwise a threshold
+    // change on the ordinary queue would reintroduce the cold all-stack scan.
+    if (mixedLoaded.value || showingMixed.value) await loadMixedStacks();
+  }
+
+  /** Snapshot the scope and policy a scan request must retain across a retry. */
+  function currentScanRequest() {
+    return {
+      policy: { ...policyArgs.value },
+      scopeType: scopeType.value,
+      scopeId: scopeId.value,
+    };
+  }
+
+  function scanRequestKey(request) {
+    return JSON.stringify({
+      scopeType: request.scopeType,
+      scopeId: request.scopeId ?? null,
+      nearEnabled: Boolean(request.policy?.nearEnabled),
+      embeddingEnabled: Boolean(request.policy?.embeddingEnabled),
+      threshold: Number(request.policy?.threshold),
+    });
+  }
+
+  function requestedTiers(request) {
+    const tiers = ["exact"];
+    if (request.policy?.nearEnabled) tiers.push("near");
+    if (request.policy?.embeddingEnabled) tiers.push("embedding");
+    return tiers;
+  }
+
+  function scanHasPolicy(active) {
+    return (
+      Array.isArray(active?.tiers) &&
+      active.tiers.length > 0 &&
+      Number.isFinite(active?.threshold)
+    );
+  }
+
+  function scanMatchesRequest(active, request) {
+    const wanted = requestedTiers(request);
+    return (
+      active.tiers.length === wanted.length &&
+      active.tiers.every((tier, index) => tier === wanted[index]) &&
+      Number(active.threshold) === Number(request.policy?.threshold)
+    );
+  }
+
+  let deferredScanRequest = null;
+
+  function deferScanUntilCurrentCompletes(request) {
+    deferredScanRequest = { request, retriesRemaining: 1 };
+  }
+
+  function busyScanFrom(err) {
+    const detail = err?.response?.data?.detail;
+    return detail?.code === "dedup_scan_busy" ? detail.active_scan : null;
   }
 
   /**
-   * Queue a scan for the current scope and adopt its progress.
-   * @returns {Promise<void>}
+   * Queue a scan for one captured scope/policy and adopt its progress.
+   * @returns {Promise<Object|null>}
    */
-  async function triggerScan() {
-    try {
-      const data = await startScan({
-        policy: policyArgs.value,
-        scopeType: scopeType.value,
-        scopeId: scopeId.value,
-      });
-      scan.value = normalizeScan(data);
-      startScanPoll();
-    } catch (err) {
-      console.warn("[dedup] failed to start a duplicate scan", err);
-    }
+  async function triggerScan(
+    request = currentScanRequest(),
+    { deferOnBusy = true } = {},
+  ) {
+    const key = scanRequestKey(request);
+    const joined = scanRequestInFlight.get(key);
+    if (joined) return joined;
+    const pending = (async () => {
+      try {
+        const data = await startScan(request);
+        scan.value = normalizeScan(data);
+        startScanPoll();
+        return data;
+      } catch (err) {
+        const active = busyScanFrom(err);
+        if (active) {
+          scan.value = normalizeScan(active);
+          if (deferOnBusy) deferScanUntilCurrentCompletes(request);
+          startScanPoll();
+          return active;
+        }
+        console.warn("[dedup] failed to start a duplicate scan", err);
+        return null;
+      }
+    })().finally(() => {
+      if (scanRequestInFlight.get(key) === pending) {
+        scanRequestInFlight.delete(key);
+      }
+    });
+    scanRequestInFlight.set(key, pending);
+    return pending;
   }
 
   // --- Scan progress polling ----------------------------------------------
@@ -1867,22 +2477,46 @@ export const useDedupStore = defineStore("dedup", () => {
   // surface on their own, and a triage already in progress is never yanked
   // back to the top.
   let scanPollTimer = null;
+  let scanPollGeneration = 0;
+  let scanPollTickGeneration = null;
 
-  function stopScanPoll() {
+  function stopScanPoll({ discardDeferred = true } = {}) {
+    scanPollGeneration += 1;
     if (scanPollTimer) {
       clearInterval(scanPollTimer);
       scanPollTimer = null;
     }
+    if (discardDeferred) deferredScanRequest = null;
   }
 
   function startScanPoll() {
     if (scanPollTimer || !isScanning.value) return;
+    const generation = ++scanPollGeneration;
     scanPollTimer = setInterval(async () => {
-      await refreshCounts();
-      if (!groups.value.length) await loadFirstPage();
-      if (!isScanning.value) stopScanPoll();
+      if (scanPollTickGeneration === generation) return;
+      scanPollTickGeneration = generation;
+      try {
+        await refreshCounts();
+        if (generation !== scanPollGeneration) return;
+        if (!groups.value.length) await loadFirstPage();
+        if (generation !== scanPollGeneration) return;
+        if (!isScanning.value) {
+          const deferred = deferredScanRequest;
+          deferredScanRequest = null;
+          stopScanPoll({ discardDeferred: false });
+          if (deferred?.retriesRemaining > 0) {
+            await triggerScan(deferred.request, { deferOnBusy: false });
+          }
+        }
+      } finally {
+        if (scanPollTickGeneration === generation) {
+          scanPollTickGeneration = null;
+        }
+      }
     }, 2000);
   }
+
+  onScopeDispose(stopScanPoll);
 
   /**
    * Preview the bulk auto-stack of the exact tier.
@@ -1931,6 +2565,417 @@ export const useDedupStore = defineStore("dedup", () => {
       return null;
     } finally {
       busy.value = false;
+    }
+  }
+
+  // ── Mixed stacks (design D5) ─────────────────────────────────────────────
+  // The third page of the Duplicates destination: live stacks whose members do
+  // not form one connected cluster at the CURRENT threshold. Not a sidebar
+  // destination (only a to-do count earns a row, and 9-26 items is not one)
+  // and not a grid filter value.
+  //
+  // Two rules shape the state below:
+  //
+  //   * **The list is bound to the threshold slider, never to a constant.** The
+  //     same stack is mixed at 0.90 and one clean cluster at 0.65, so
+  //     `setThreshold` reloads it and the page always states what it was
+  //     computed at.
+  //   * **The page is a PAGE, not a route.** Flipping to it leaves the queue's
+  //     window, focus and per-group choices exactly where they were, which is
+  //     what lets the two-way shortcut offer a return that restores them.
+
+  const showingMixed = ref(false);
+  const mixedStacks = ref([]);
+  const mixedTotal = ref(0);
+  const mixedKeptTotal = ref(0);
+  const mixedLiveStackCount = ref(0);
+  const mixedThreshold = ref(null);
+  const mixedNextOffset = ref(null);
+  const mixedLoading = ref(false);
+  const mixedLoaded = ref(false);
+  const mixedError = ref(null);
+  const mixedBusyStackId = ref(null);
+  /** The row the two-way shortcut arrived at, so the page can reveal it. */
+  const mixedFocusStackId = ref(null);
+
+  /** More rows exist than are held. */
+  const hasMoreMixed = computed(() => mixedNextOffset.value !== null);
+
+  /**
+   * The stack ids the queue's deck badges flag: the STRONG case only, a member
+   * joined to nothing else in its stack.
+   *
+   * Derived from the loaded page rather than from a second request, which the
+   * list's stranded-first ranking makes honest: every strong case is at the
+   * head of the list, so a page that holds the head holds all of them.
+   */
+  const flaggedStackIds = computed(() => flaggedStackIdSet(mixedStacks.value));
+
+  /**
+   * Whether one stack carries the queue's warning chip.
+   * @param {number|string} stackId
+   * @returns {boolean}
+   */
+  function isStackFlagged(stackId) {
+    if (stackId === null || stackId === undefined) return false;
+    return flaggedStackIds.value.has(String(stackId));
+  }
+
+  /**
+   * Load the mixed stacks at the current threshold, replacing what was there.
+   *
+   * Called when the page is shown, and on later threshold changes after that
+   * first load. A failure leaves the list empty and records the error: an empty
+   * list that claims "no mixed stacks" after a failed read would be a lie, so
+   * the view branches on `mixedError` before it renders the empty state.
+   *
+   * @returns {Promise<void>}
+   */
+  async function loadMixedStacks() {
+    mixedLoading.value = true;
+    mixedError.value = null;
+    try {
+      const data = await listMixedStacks({
+        threshold: Number.isFinite(threshold.value)
+          ? threshold.value
+          : undefined,
+        offset: 0,
+        limit: MIXED_STACK_PAGE_SIZE,
+      });
+      mixedStacks.value = Array.isArray(data?.stacks) ? data.stacks : [];
+      mixedTotal.value = Number(data?.total) || mixedStacks.value.length;
+      mixedKeptTotal.value = Number(data?.kept_total) || 0;
+      mixedLiveStackCount.value = Number(data?.live_stack_count) || 0;
+      // The server echoes what it computed at, so the page can state the
+      // threshold rather than assume the slider and the list agree.
+      mixedThreshold.value = Number.isFinite(Number(data?.threshold))
+        ? Number(data.threshold)
+        : threshold.value;
+      mixedNextOffset.value = normalisedNextOffset(data);
+      mixedLoaded.value = true;
+    } catch (err) {
+      mixedError.value = err;
+      mixedStacks.value = [];
+      mixedTotal.value = 0;
+      mixedKeptTotal.value = 0;
+      mixedNextOffset.value = null;
+      mixedLoaded.value = false;
+      console.warn("[dedup] failed to load the mixed stacks", err);
+    } finally {
+      mixedLoading.value = false;
+    }
+  }
+
+  /**
+   * A page's `next_offset`, normalised to null at the end of the list.
+   * @param {Object} [data]
+   * @returns {number|null}
+   */
+  function normalisedNextOffset(data) {
+    const raw = data?.next_offset;
+    // `Number(null)` is 0, which is finite: reading it as an offset would page
+    // the first page again, forever, on every server that says "no more" the
+    // way this one does.
+    if (raw === null || raw === undefined) return null;
+    const next = Number(raw);
+    return Number.isFinite(next) ? next : null;
+  }
+
+  /**
+   * Append the next page of mixed stacks.
+   *
+   * Plain offset paging, matching the route: the list is tens of rows and is
+   * not being decided out from under the client the way the queue is.
+   *
+   * @returns {Promise<void>}
+   */
+  async function loadMoreMixedStacks() {
+    if (mixedLoading.value || mixedNextOffset.value === null) return;
+    mixedLoading.value = true;
+    try {
+      const data = await listMixedStacks({
+        threshold: Number.isFinite(threshold.value)
+          ? threshold.value
+          : undefined,
+        offset: mixedNextOffset.value,
+        limit: MIXED_STACK_PAGE_SIZE,
+      });
+      const page = Array.isArray(data?.stacks) ? data.stacks : [];
+      // De-duped by stack id: an offset over a list that a split just shortened
+      // can re-serve a row the client already holds.
+      const held = new Set(mixedStacks.value.map((s) => String(s.stack_id)));
+      mixedStacks.value = [
+        ...mixedStacks.value,
+        ...page.filter((s) => !held.has(String(s.stack_id))),
+      ];
+      mixedTotal.value = Number(data?.total) || mixedTotal.value;
+      mixedNextOffset.value = page.length ? normalisedNextOffset(data) : null;
+    } catch (err) {
+      mixedError.value = err;
+      console.warn("[dedup] failed to load more mixed stacks", err);
+    } finally {
+      mixedLoading.value = false;
+    }
+  }
+
+  /**
+   * Show the Mixed stacks page, optionally revealing one stack's row.
+   *
+   * The queue's window, focus and per-group choices are untouched: this is a
+   * page of the same destination, not a route away, which is what lets the
+   * page offer a return that restores exactly what the user left.
+   *
+   * @param {number|string} [stackId] - the row to reveal.
+   * @returns {Promise<void>}
+   */
+  async function showMixedStacks(stackId = null) {
+    showingMixed.value = true;
+    mixedFocusStackId.value = stackId === null ? null : String(stackId);
+    if (!mixedLoaded.value && !mixedLoading.value) await loadMixedStacks();
+  }
+
+  /**
+   * Return to the review queue with its focus intact.
+   * @returns {void}
+   */
+  function hideMixedStacks() {
+    showingMixed.value = false;
+    mixedFocusStackId.value = null;
+  }
+
+  /**
+   * The absolute queue index of the first LOADED group that holds one stack,
+   * or -1.
+   *
+   * Deliberately over the loaded window only. The queue is paged and the
+   * client cannot know where an unloaded group sits, and a shortcut that
+   * scrolled to the wrong row would be worse than one that is not offered:
+   * the view hides the control when this answers -1.
+   *
+   * @param {number|string} stackId
+   * @returns {number}
+   */
+  function groupIndexForStack(stackId) {
+    if (stackId === null || stackId === undefined) return -1;
+    const wanted = String(stackId);
+    const local = groups.value.findIndex((group) =>
+      Object.keys(group?.stacks ?? {}).some((key) => String(key) === wanted),
+    );
+    return local < 0 ? -1 : local + windowStart.value;
+  }
+
+  /**
+   * Jump from a mixed-stack row back to a duplicate group the stack appears in.
+   *
+   * @param {number|string} stackId
+   * @returns {boolean} false when no loaded group holds it, so the caller can
+   *   decline rather than move the cursor somewhere arbitrary.
+   */
+  function showQueueForStack(stackId) {
+    const index = groupIndexForStack(stackId);
+    if (index < 0) return false;
+    hideMixedStacks();
+    setFocus(index);
+    return true;
+  }
+
+  /**
+   * Drop one row from the list and keep the totals honest.
+   * @param {number|string} stackId
+   * @param {Object} [options]
+   * @param {boolean} [options.kept=false] - the row left because it was kept.
+   */
+  function removeMixedStack(stackId, { kept = false } = {}) {
+    const wanted = String(stackId);
+    const before = mixedStacks.value.length;
+    mixedStacks.value = mixedStacks.value.filter(
+      (stack) => String(stack.stack_id) !== wanted,
+    );
+    if (mixedStacks.value.length === before) return;
+    mixedTotal.value = Math.max(0, mixedTotal.value - 1);
+    if (kept) mixedKeptTotal.value += 1;
+    if (mixedFocusStackId.value === wanted) mixedFocusStackId.value = null;
+  }
+
+  /**
+   * Record on the held row that a locked set freezes this stack.
+   *
+   * A 423 is fresher truth about the row than the page it was read from: the
+   * lock landed after the list was served, so the row is stale and its primary
+   * button is still offering an outcome the server will refuse again. Patching
+   * `stackable` / `blocked_by_sets` from the refusal locks the button and names
+   * the set in the same words a freshly-read page would have, with no reload
+   * and no second vocabulary for the same fact.
+   *
+   * The row is replaced rather than mutated so a row object shared with a
+   * previous render cannot be edited underneath it.
+   *
+   * @param {number|string} stackId
+   * @param {Array<Object>} sets - `[{id, name}]` from the refusal.
+   */
+  function markMixedStackLocked(stackId, sets) {
+    const wanted = String(stackId);
+    mixedStacks.value = mixedStacks.value.map((stack) =>
+      String(stack.stack_id) === wanted
+        ? { ...stack, stackable: false, blocked_by_sets: sets }
+        : stack,
+    );
+  }
+
+  /**
+   * The threshold the mixed LIST was computed at.
+   *
+   * Not the slider's live value. The two differ for exactly as long as a
+   * reload is in flight, and that is the window in which a write built from
+   * the rows on screen would be bounded by a threshold those rows were never
+   * computed at. The server echoes what it used; that echo is the answer.
+   *
+   * @returns {number|undefined} undefined when neither is known, which lets the
+   *   server pick its own default.
+   */
+  function listThreshold() {
+    if (Number.isFinite(mixedThreshold.value)) return mixedThreshold.value;
+    return Number.isFinite(threshold.value) ? threshold.value : undefined;
+  }
+
+  /**
+   * Run the row's primary action: take the marked members out of the stack.
+   *
+   * **One call for both outcomes.** The split route takes any live member of
+   * the stack, so an unstack is simply "every member leaves": the server
+   * dissolves a stack that would be left with fewer than two members either
+   * way, and reports which happened in `stack_dissolved`. Routing between two
+   * endpoints on a client-side prediction would only create a case where the
+   * prediction and the request disagree.
+   *
+   * The ids the ROW showed are sent, never recomputed server-side, so the split
+   * matches what the user marked even if the stack has changed since. One
+   * operation, so the standard receipt and a single Ctrl+Z cover it, narrated
+   * through the shared operation store exactly as a verdict is, gated on the
+   * response's `batch_id`.
+   *
+   * @param {Object} stack - the row.
+   * @param {Array<number>} [pictureIds] - the marks in force. Defaults to the
+   *   engine's own marks, which is what the row opens with.
+   * @returns {Promise<Object|null>} the action response, or null on failure.
+   */
+  async function resolveMixedStack(stack, pictureIds) {
+    const stackId = stack?.stack_id;
+    if (stackId === null || stackId === undefined) return null;
+    const ids =
+      Array.isArray(pictureIds) && pictureIds.length
+        ? [...pictureIds]
+        : mixedStackEngineMarks(stack);
+    if (!ids.length) return null;
+    mixedBusyStackId.value = stackId;
+    error.value = null;
+    try {
+      const result = await splitMixedStack(stackId, {
+        pictureIds: ids,
+        threshold: listThreshold(),
+        batchId: newOperationBatchId(),
+      });
+      removeMixedStack(stackId);
+      if (result?.batch_id) narrateVerdictOperation();
+      return result;
+    } catch (err) {
+      error.value = err;
+      // A locked picture set refuses the WHOLE stack with 423 and writes
+      // nothing, so the row stays exactly where it is (`removeMixedStack` is
+      // the success path's alone) and is marked with what the server named.
+      // Without the mark the button keeps offering an outcome that cannot
+      // happen, and the second press is refused for a reason nothing on screen
+      // states.
+      if (isLockedRefusal(err)) {
+        const sets = lockedSets(err);
+        markMixedStackLocked(stackId, sets);
+        console.warn(
+          "[dedup] mixed stack %s is frozen by %d locked set(s); nothing was changed",
+          stackId,
+          sets.length,
+          err,
+        );
+        return null;
+      }
+      // A 400 means the request no longer describes the stack: a marked member
+      // has left it, or been scrapheaped, since the list was read. The row is
+      // therefore STALE, and leaving it on screen unchanged is what made this
+      // present as a dead button. Re-read the list so the row either comes back
+      // correct or leaves, and let the caller say the stack changed. The reload
+      // is awaited so the caller narrates over the truth, not over the row that
+      // just failed.
+      if (Number(err?.response?.status) === 400) {
+        console.warn(
+          "[dedup] mixed stack %s no longer matches the row it was read from; re-reading the list",
+          stackId,
+          err,
+        );
+        await loadMixedStacks();
+        return null;
+      }
+      console.warn("[dedup] failed to resolve mixed stack %s", stackId, err);
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
+    }
+  }
+
+  /**
+   * Keep one stack as it is, so it stops being listed.
+   *
+   * Keep is what makes the list drainable: without it the legitimate-but-odd
+   * stacks sit there forever and the page becomes ignorable. It changes no
+   * picture, so it records no operation and is NOT undoable; `unkeepMixedStack`
+   * is the way back, and the caller offers it.
+   *
+   * @param {Object} stack
+   * @returns {Promise<Object|null>}
+   */
+  async function keepMixed(stack) {
+    const stackId = stack?.stack_id;
+    if (stackId === null || stackId === undefined) return null;
+    mixedBusyStackId.value = stackId;
+    error.value = null;
+    try {
+      const result = await keepMixedStack(stackId);
+      removeMixedStack(stackId, { kept: true });
+      return result;
+    } catch (err) {
+      error.value = err;
+      console.warn("[dedup] failed to keep mixed stack %s", stackId, err);
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
+    }
+  }
+
+  /**
+   * Clear every Keep on one stack, so it is listed again if it is still mixed.
+   *
+   * The list is reloaded rather than the row re-inserted from memory: the row
+   * has to come back at its ranked position, and only the server knows whether
+   * the stack is still mixed at the current threshold at all.
+   *
+   * @param {number|string} stackId
+   * @returns {Promise<Object|null>}
+   */
+  async function unkeepMixedStack(stackId) {
+    if (stackId === null || stackId === undefined) return null;
+    mixedBusyStackId.value = stackId;
+    try {
+      const result = await clearMixedStackKeep(stackId);
+      await loadMixedStacks();
+      return result;
+    } catch (err) {
+      error.value = err;
+      console.warn(
+        "[dedup] failed to clear the Keep on stack %s",
+        stackId,
+        err,
+      );
+      return null;
+    } finally {
+      mixedBusyStackId.value = null;
     }
   }
 
@@ -2015,6 +3060,7 @@ export const useDedupStore = defineStore("dedup", () => {
     focusNext,
     focusPrev,
     removeGroup,
+    applyPictureEvent,
     // per-group choices
     coverChoices,
     exclusions,
@@ -2022,6 +3068,8 @@ export const useDedupStore = defineStore("dedup", () => {
     excludedFor,
     effectiveExcludedFor,
     stackSizeFor,
+    unitsFor,
+    includedUnitCountFor,
     isAtStackFloor,
     setCover,
     toggleExcluded,
@@ -2033,5 +3081,29 @@ export const useDedupStore = defineStore("dedup", () => {
     stopScanPoll,
     previewAutoStack,
     runAutoStack,
+    // mixed stacks (the third page)
+    showingMixed,
+    mixedStacks,
+    mixedTotal,
+    mixedKeptTotal,
+    mixedLiveStackCount,
+    mixedThreshold,
+    mixedLoading,
+    mixedLoaded,
+    mixedError,
+    mixedBusyStackId,
+    mixedFocusStackId,
+    hasMoreMixed,
+    flaggedStackIds,
+    isStackFlagged,
+    loadMixedStacks,
+    loadMoreMixedStacks,
+    showMixedStacks,
+    hideMixedStacks,
+    groupIndexForStack,
+    showQueueForStack,
+    resolveMixedStack,
+    keepMixed,
+    unkeepMixedStack,
   };
 });

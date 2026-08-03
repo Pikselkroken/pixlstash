@@ -9,6 +9,7 @@ import { useSelectionStore } from "../stores/useSelectionStore";
 import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
+import { useDedupStore } from "../stores/useDedupStore";
 
 const BACKEND_URL = API_BASE_URL;
 
@@ -59,6 +60,7 @@ export function useUpdatesSocket({
   const searchStore = useSearchStore();
   const operationStore = useOperationStore();
   const snapshotsStore = useSnapshotsStore();
+  const dedupStore = useDedupStore();
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
@@ -133,6 +135,7 @@ export function useUpdatesSocket({
     insertGridImagesById: (ids) =>
       gridContainer.value?.insertGridImagesById?.(ids),
     refreshGridImage: (id) => gridContainer.value?.refreshGridImage?.(id),
+    refreshStackFacets: (ids) => gridContainer.value?.refreshStackFacets?.(ids),
     repositionImageByScore: (id, score) =>
       gridContainer.value?.repositionImageByScore?.(id, score),
     repositionImageBySmartScore: (id) =>
@@ -208,6 +211,18 @@ export function useUpdatesSocket({
       // narrate itself; an external one updates the stack silently.
       if (OPERATION_BEARING_EVENTS.has(payload?.type)) {
         operationStore.onPictureEvent(payload);
+      }
+      // The Duplicates queue holds a snapshot of a server read that a scrapheap
+      // move elsewhere invalidates: a soft-deleted picture must not stay in a
+      // loaded group, and a group left with one live unit must leave the queue.
+      // Routed here rather than through useGridRealtimeSync because it is a
+      // different destination with a different decision (rows are dropped, not
+      // cards), and here rather than in DuplicateQueue.vue because the store
+      // outlives the view. Origin is deliberately not consulted: this store
+      // never applies a scrapheap move optimistically, so its own tab's echo is
+      // as new to it as another tab's.
+      if (payload?.type === "pictures_changed" && !isReadOnly.value) {
+        dedupStore.applyPictureEvent(payload);
       }
       const isPictureChange =
         payload?.type === "pictures_changed" ||

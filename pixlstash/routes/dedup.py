@@ -10,6 +10,9 @@ Two surfaces live here, and every route is owner-only.
   re-hardcoding 0.90 and 0.65.
 * ``GET  /dedup/groups``            — one page of the queue, confidence
   descending, plus this scope's scan progress for the banner.
+* ``GET  /dedup/stacks/{stack_id}/members``: one page of an existing stack's
+  members, for the deck expansion strip. The lazy half of the queue's stack
+  contract: a queue row ships each stack's count and leader, never its members.
 * ``POST /dedup/counts``            — the sidebar badge, the per-tier counts, and
   as many scoped counts as the context menus need, in one request. Read-only
   despite the verb: the scope list does not fit in a URL.
@@ -41,24 +44,33 @@ outside it, which is the same reasoning that makes the tag-health board
 owner-only, and the verdict routes mutate stacks across arbitrary pictures.
 """
 
-import re
 from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service, dedup_tier_service
-from pixlstash.services import dedup_verdict_service, operation_log_service
+from pixlstash.services import dedup_verdict_service, mixed_stack_service
+from pixlstash.services import operation_log_service
+from pixlstash.services.mixed_stack_service import (
+    DEFAULT_PAGE_SIZE as MIXED_STACK_PAGE_SIZE,
+    MAX_PAGE_SIZE as MAX_MIXED_STACK_PAGE_SIZE,
+    MixedStackError,
+)
 from pixlstash.services.dedup_tier_service import (
     DEFAULT_PAGE_SIZE,
+    DEFAULT_STACK_MEMBER_PAGE_SIZE,
     DEFAULT_THRESHOLD,
     MAX_PAGE_SIZE,
+    MAX_STACK_MEMBER_PAGE_SIZE,
     MAX_THRESHOLD,
     MIN_THRESHOLD,
     VERDICT_ORDER,
     DedupCursorError,
+    DedupScanBusyError,
     DedupScope,
     DedupTier,
     DedupVerdictKind,
@@ -81,28 +93,17 @@ from pixlstash.services.dedup_sweep_service import (
     SweepPolicy,
     SweepVerdict,
 )
+from pixlstash.utils.request_origin import require_client_batch_id
 
 logger = get_logger(__name__)
 
-CLIENT_BATCH_ID_PREFIX = "cli-"
-MAX_BATCH_ID_LENGTH = 80
-CLIENT_BATCH_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{4,76}$")
-"""The shape a **client-supplied** operation batch id must have.
-
-Batch ids are namespaced so the log can tell who minted one: the server mints
-``srv-<uuid4hex>`` (:func:`operation_log_service.new_batch_id`) and a client may
-group its own gestures under ``cli-…``. Taken verbatim, a client could submit
-``srv-…`` and have its rows read as a server batch — and, worse, graft them into
-an existing batch so one Ctrl+Z reverses more than the user did.
-
-The pattern is duplicated here on purpose: the shared definition lands in
-``pixlstash/utils/request_origin.py`` with the ``X-Operation-Batch-Id`` header
-contract (branch ``feature/gesture-batch-id``), which is not on this branch.
-When that merges, both sites must import it from there instead. Note the
-difference in disposition: an unusable *header* is dropped and ignored, because a
-header is ambient; an unusable *body* field is a 400, because the client named it
-deliberately and silently ignoring it would mis-group its undo.
-"""
+# The client-supplied batch-id contract lives in
+# ``pixlstash/utils/request_origin.py``, alongside the ``X-Operation-Batch-Id``
+# header it shares a pattern with. This module used to carry its own copy while
+# that branch was unmerged; it has merged, so the copy is gone and there is
+# exactly one definition. Every route taking a body ``batch_id`` must call
+# ``require_client_batch_id``; a second copy is how ``POST
+# /stacks/keep-cover-only`` shipped storing the field verbatim.
 
 MAX_CURSOR_LENGTH = 128
 """Cap on the opaque queue cursor a client may send back.
@@ -710,6 +711,91 @@ class DedupCandidateModel(BaseModel):
     )
 
 
+class DedupStackModel(BaseModel):
+    """An existing stack the group touches, as the queue renders it: one deck.
+
+    A stack verdict moves whole **stacks**, so the queue draws each stack the
+    group touches as a single unit rather than as its individual members. The
+    unit stands for the **entire existing stack**, not just the members that
+    happen to be in the group: on a real library one stack-touching group in
+    three names only ONE member of a stack, so a client sizing the deck from
+    `candidates` would draw a 4-deep stack as a single picture and then silently
+    move all four.
+
+    Count and leader are **eager**; the members are **not**. Inlining every
+    member of every stack would put a 40-member stack's worth of tiles behind
+    one queue row. Fetch them from
+    `GET /dedup/stacks/{stack_id}/members` when the user opens the expansion.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The existing stack this deck stands for.",
+        examples=[12],
+    )
+    member_count: int = Field(
+        description=(
+            "The stack's **real live member count**, the deck's depth. This is "
+            "NOT the number of this stack's members that are in the group (see "
+            "`matched_picture_ids` for that), and it is routinely larger, so a "
+            "group's true picture total can exceed `candidates.length`. Counts "
+            "only non-scrapheaped members."
+        ),
+        examples=[4],
+    )
+    leader_picture_id: int = Field(
+        description=(
+            "The stack's leader (`stack_position` 0): the deck's face. It is "
+            "frequently NOT one of `matched_picture_ids`, and it is deliberately "
+            "the picture shown: a cover choice on a deck resolves to the leader, "
+            "so a tile showing one picture while meaning another is the mismatch "
+            "the deck exists to remove. Ranked exactly as the grid ranks a stack "
+            "leader, so the two surfaces always show the same face."
+        ),
+        examples=[501],
+    )
+    leader_thumbnail_version: str = Field(
+        description=(
+            "Cache-buster for the LEADER's thumbnail URL, same contract as a "
+            "candidate's `thumbnail_version`: append it as `?v=`. Present so the "
+            "deck's face renders from the queue payload alone, without expanding "
+            'the stack. `"0"` until the leader has been processed.'
+        ),
+        examples=["1024x768"],
+    )
+    matched_picture_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Which of this stack's members are actually in the group, always a "
+            "subset of the group's `candidates`, ascending. Its length over "
+            '`member_count` is the accessible name\'s "1 of 4 matched"; it is '
+            "deliberately not drawn on the tile, which has no corner budget for "
+            "it."
+        ),
+        examples=[[503]],
+    )
+    stackable: bool = Field(
+        default=True,
+        description=(
+            "The **unit-level** rollup of the members' own `stackable`: false "
+            "when ANY member of this deck is frozen by a locked picture set, "
+            "because a stack cannot be partially stacked: it moves as a unit or "
+            "not at all. Already accounts for a locked sibling **outside** the "
+            "group: a locked set freezes a whole stack, so a member the group "
+            "never names still blocks the deck."
+        ),
+    )
+    blocked_by_sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description=(
+            "Empty when `stackable`. Otherwise the union of the locked sets "
+            "freezing this deck's members, deduplicated and sorted by set id, "
+            "for the tooltip that says why the whole deck is out."
+        ),
+    )
+
+
 class DedupGroupModel(BaseModel):
     """One queue row: a group, its evidence, and its cover preselection."""
 
@@ -732,7 +818,14 @@ class DedupGroupModel(BaseModel):
             "queue is ordered by this, descending."
         )
     )
-    member_count: int = Field(description="How many pictures are in the group.")
+    member_count: int = Field(
+        description=(
+            "How many **live** pictures are in the group, matching `candidates` "
+            "exactly. A member that has been moved to the Scrapheap is not "
+            "counted and is not listed: a soft-deleted picture never appears in "
+            "the queue, in a group, or in any count."
+        )
+    )
     cover_picture_id: Optional[int] = Field(
         default=None,
         description=(
@@ -768,6 +861,144 @@ class DedupGroupModel(BaseModel):
     candidates: list[DedupCandidateModel] = Field(
         default_factory=list,
         description="Every member, cover first, with its own evidence.",
+    )
+    stacks: dict[str, DedupStackModel] = Field(
+        default_factory=dict,
+        description=(
+            "Every **existing stack** this group touches, keyed by stack id as a "
+            "string (the id is repeated as an integer inside each entry). Empty "
+            "when no member of the group is stacked.\n\n"
+            "This is the stack truth a `stack_id` on a candidate cannot carry. "
+            "Render each entry as ONE deck whose depth is `member_count`, in "
+            "place of that stack's individual candidates: the smallest thing a "
+            "stack verdict can move is a whole stack, so a row offering to "
+            "exclude one member of one, or to make one member the cover, is "
+            "offering a gesture the backend cannot honour. Group the row's "
+            "`candidates` by `stack_id`; a candidate with a null `stack_id` is "
+            "its own unit."
+        ),
+        examples=[
+            {
+                "12": {
+                    "stack_id": 12,
+                    "member_count": 4,
+                    "leader_picture_id": 501,
+                    "leader_thumbnail_version": "1024x768",
+                    "matched_picture_ids": [503],
+                    "stackable": True,
+                    "blocked_by_sets": [],
+                }
+            }
+        ],
+    )
+
+
+class DedupStackMemberModel(DedupCandidateModel):
+    """One member of an expanded deck, in canonical stack order.
+
+    Every field a queue candidate carries, so the expansion strip reuses the
+    row's tile unchanged, plus the member's place in its stack.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    position: int = Field(
+        description=(
+            "0-based place in the canonical stack order, so `0` is the leader. "
+            "It is the member's rank across the WHOLE stack, not within this "
+            "page, and it survives paging."
+        ),
+        examples=[0],
+    )
+    is_leader: bool = Field(
+        description=(
+            "True for the one member the stack leads with: the same picture "
+            "the deck shows as its face and the grid shows as the stack's "
+            "leader."
+        )
+    )
+
+
+class DedupStackMembersResponse(BaseModel):
+    """One page of an existing stack's members, for the deck expansion strip."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(description="The stack that was expanded.", examples=[12])
+    member_count: int = Field(
+        description=(
+            "The stack's real live member count, identical to the queue row's "
+            "`stacks[stack_id].member_count`, so the strip and the deck can "
+            "never disagree about the depth."
+        ),
+        examples=[4],
+    )
+    leader_picture_id: int = Field(
+        description="The stack's leader, echoed so the strip can mark it.",
+        examples=[501],
+    )
+    leader_thumbnail_version: str = Field(
+        description="The leader's thumbnail cache-buster; same contract as the queue's.",
+        examples=["1024x768"],
+    )
+    stackable: bool = Field(
+        description=(
+            "The unit-level rollup, computed over the **whole** stack rather "
+            "than this page, so page 2 can never report a different answer "
+            "from page 1. `false` means split, unstack and "
+            "`DELETE /stacks/{stack_id}/members` will all answer `423` and "
+            "write nothing, so offer the action disabled with "
+            "`blocked_by_sets` as the reason. Same pair, same meaning and the "
+            "same member rows as `GET /dedup/mixed-stacks`.\n\n"
+            "It is rolled up over **every** member row, scrapheaped ones "
+            "included, because that is what the server refuses on: a "
+            "scrapheaped picture that is itself in a locked set still freezes "
+            "its stack against being broken up. So this can be `false` while "
+            "every member on the page reports `stackable: true`; the frozen "
+            "row is in the Scrapheap and is not listed. The per-member flag "
+            "answers a narrower question (may *this picture* be put in a "
+            "dedup stack), and a scrapheaped locked member projects no freeze "
+            "onto its live siblings."
+        ),
+        examples=[True],
+    )
+    blocked_by_sets: list[LockedSetRefModel] = Field(
+        default_factory=list,
+        description=(
+            "Empty exactly when `stackable` is `true`; otherwise the locked "
+            "sets freezing the stack, `[{id, name}]` sorted by set id, so the "
+            "refusal can be named before the action is offered."
+        ),
+        examples=[[]],
+    )
+    offset: int = Field(
+        description="Echo of the requested offset.",
+        examples=[0],
+    )
+    limit: int = Field(
+        description="Effective page size after clamping.",
+        examples=[DEFAULT_STACK_MEMBER_PAGE_SIZE],
+    )
+    next_offset: Optional[int] = Field(
+        default=None,
+        description=(
+            "Pass as `offset` for the next page, or `null` at the end of the "
+            "stack. Plain offset paging is correct here, unlike the queue's "
+            "cursor: a stack's membership is not a live list being decided out "
+            "from under the client."
+        ),
+        examples=[None],
+    )
+    members: list[DedupStackMemberModel] = Field(
+        default_factory=list,
+        description=(
+            "This page of members, leader first, in canonical stack order. Each "
+            "carries `why: []`: evidence is a property of the duplicate group, "
+            "not of a stack the user already made, and the expanded members are "
+            "read-only in the queue row. May be shorter than `limit` before the "
+            "end of the stack if a member was scrapheaped mid-request; that is "
+            "logged server-side."
+        ),
     )
 
 
@@ -1179,6 +1410,475 @@ class AutoStackResponse(BaseModel):
     failed: int = Field(default=0, description="Groups that could not be resolved.")
 
 
+# ── Mixed stacks (design D5 / B5) ────────────────────────────────────────────
+
+
+class MemberEdgeModel(BaseModel):
+    """How close one member gets to its nearest sibling in the same stack.
+
+    The evidence column this page needs and the duplicate queue does not.
+    Compare's other metrics answer *which copy is the better file*; here the
+    question is *which of these does not belong*.
+
+    **Two numbers, and they answer different questions.** `strongest_edge` is
+    thresholded, so it is `null` for a stranded member by construction and is
+    what the stranded verdict is made on. `nearest_edge` is unconditional: how
+    close this member really gets to its closest sibling, whatever the
+    threshold. Show `nearest_edge` to a user; decide with `strongest_edge`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int = Field(
+        description="The member this row is about. Example: `11`.", examples=[11]
+    )
+    strongest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Highest similarity between this member and any other member of the "
+            "same stack, counting only edges that survive at the row's "
+            "`threshold`. `null` means this member has no qualifying edge at "
+            "all, and the row says which of three things that is: the id is in "
+            "`stranded_picture_ids` (it was compared and no edge of its survives "
+            "this `threshold`; `nearest_edge` says how close it got), it is "
+            "in `unhashed_picture_ids` (it could not be compared yet, so read it "
+            "as *not comparable*, never as *does not belong*), or the stack has "
+            "a single member and there is no sibling to match. Example: "
+            "`0.984375`."
+        ),
+        examples=[0.984375],
+    )
+    closest_picture_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "The member on the other end of that surviving edge, so a client "
+            "can name the nearest sibling rather than only score it. Ties "
+            "resolve to the lower picture id. `null` exactly when "
+            "`strongest_edge` is. Example: `8`."
+        ),
+        examples=[8],
+    )
+    nearest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Similarity between this member and its closest sibling in the same "
+            "stack, **measured regardless of the `threshold`** and regardless of "
+            "the distance at which the server stops caching pairs. This is the "
+            "number to put in front of a user: a stranded member has no "
+            "`strongest_edge` by definition, and printing a dash there told "
+            "people a picture matched nothing when its closest sibling was 89% "
+            "similar. `null` only when there is genuinely nothing to compare "
+            "against - this member has no usable `perceptual_hash`, or no other "
+            "member of the stack has one - so a dash now means *not comparable*, "
+            "never *unlike everything*. Always `>=` `strongest_edge`, and equal "
+            "to it whenever that is not `null`. Example: `0.890625`."
+        ),
+        examples=[0.890625],
+    )
+    nearest_picture_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "The sibling `nearest_edge` was measured to, same tie rule (lower "
+            "picture id). `null` exactly when `nearest_edge` is. Example: `8`."
+        ),
+        examples=[8],
+    )
+
+
+class MixedStackModel(BaseModel):
+    """One live stack whose members do not form a single connected cluster."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The stack. Example: `42`.",
+        examples=[42],
+    )
+    threshold: float = Field(
+        description=(
+            "The similarity the components were folded at. Echoed on every row "
+            "because the whole verdict is threshold-relative: this same stack "
+            "may be one clean cluster at `0.65`. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    member_count: int = Field(
+        description="Live members of the stack. Example: `12`.", examples=[12]
+    )
+    member_ids: list[int] = Field(
+        description=(
+            "Every live member, canonical stack order (leader first) - the same "
+            "order the deck and `GET /dedup/stacks/{stack_id}/members` use. "
+            "Example: `[7, 8, 9]`."
+        ),
+        examples=[[7, 8, 9]],
+    )
+    membership_fingerprint: str = Field(
+        description=(
+            "Digest of the sorted live member ids. This is the key a `Keep` "
+            "dismissal is stored against, so a client can tell whether a Keep "
+            "it just made still applies. Example: "
+            '`"6f1c9a2b4d8e70153c9a2b4d8e701534"`.'
+        ),
+        examples=["6f1c9a2b4d8e70153c9a2b4d8e701534"],
+    )
+    component_count: int = Field(
+        description=(
+            "Connected clusters at this threshold. Always at least `2` on this "
+            "list - `1` is a cohesive stack and is not listed. Example: `3`."
+        ),
+        examples=[3],
+    )
+    component_sizes: list[int] = Field(
+        description=(
+            "Size of each cluster, largest first. `[10, 2]` is a stack with one "
+            "big burst and a stray pair; `[1, 1]` is a two-picture stack whose "
+            "members do not match each other. Example: `[10, 1, 1]`."
+        ),
+        examples=[[10, 1, 1]],
+    )
+    components: list[list[int]] = Field(
+        description=(
+            "The clusters themselves, largest first, each sorted by picture id, "
+            "so a client can show which members hang together rather than only "
+            "how many do. Example: `[[7, 8, 9], [11]]`."
+        ),
+        examples=[[[7, 8, 9], [11]]],
+    )
+    largest_component_size: int = Field(
+        description=(
+            "Size of the biggest cluster - the stack that would survive a "
+            "split. Example: `10`."
+        ),
+        examples=[10],
+    )
+    stranded_picture_ids: list[int] = Field(
+        description=(
+            "Members joined to nothing else in the stack (no edge at all at "
+            "this threshold). These are the pictures `POST /dedup/mixed-stacks/"
+            "{stack_id}/split` removes when the request omits `picture_ids`, "
+            "and the strong case the design marks on a tile. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    weakest_edge: Optional[float] = Field(
+        default=None,
+        description=(
+            "Lowest similarity among the edges that survive at this threshold - "
+            "the same weakest-link reading `confidence` carries on a duplicate "
+            "group. `null` when no pair is close enough to be an edge at all, "
+            "i.e. every member is stranded, which is the extreme of the same "
+            "scale rather than missing information. Example: `0.90625`."
+        ),
+        examples=[0.90625],
+    )
+    unhashed_picture_ids: list[int] = Field(
+        description=(
+            "Members with no usable `perceptual_hash` yet (the embedding worker "
+            "has not reached them, or the file could not be hashed). They can "
+            "carry no edge, so they appear stranded without being unlike "
+            "anything - report them as *not yet comparable*, never as a "
+            "mistake. Normally empty. Example: `[]`."
+        ),
+        examples=[[]],
+    )
+    member_edges: list[MemberEdgeModel] = Field(
+        default_factory=list,
+        description=(
+            "One entry per member, in the same canonical order as `member_ids`: "
+            "each member's strongest edge at this `threshold` (the verdict) and "
+            "its closest sibling regardless of threshold (the truth). This is "
+            "Compare's per-member evidence column; bind the visible number to "
+            "`nearest_edge`. Folded out of the same edge pass as `components`, "
+            "so it adds no request cost."
+        ),
+    )
+    why: list[WhyPillModel] = Field(
+        default_factory=list,
+        description=(
+            "Row-level evidence in the same `[{text, against}]` shape a "
+            "duplicate group carries, so the shipped pill component renders it "
+            "unchanged. Only the content differs: the strangers named by how "
+            "unlike the rest they measure (`1 picture is only 89% like the "
+            "rest`), the component structure (`2 groups (2 + 1)`), and the "
+            "weakest surviving edge (`Weakest match 97%`), plus `1 picture not "
+            "comparable yet` when a member has no hash. A stranger is never "
+            "described as matching nothing: at a 6-bit cut a member 7 bits from "
+            "its neighbour is out of the cluster, not unlike everything. "
+            "`against` keeps its meaning - true argues against these pictures "
+            "belonging in one stack - so an unhashed member is *not* `against`: "
+            "it argues for waiting, not for breaking the stack up, and it is "
+            "subtracted from the stranger count for the same reason. When fewer "
+            "than two members can be compared at all the only pill is `Nothing "
+            "here can be compared yet`."
+        ),
+    )
+    suggested_action: str = Field(
+        description=(
+            "The outcome the primary button should name: `split` when a strict "
+            "majority cluster survives removing the stranded members, "
+            "`unstack` when there is no majority worth keeping. Example: "
+            '`"split"`.'
+        ),
+        examples=["split"],
+    )
+    kept: bool = Field(
+        description=(
+            "Whether a `Keep` dismissal covers this exact membership. Always "
+            "`false` unless the request asked for `include_kept=true`. Example: "
+            "`false`."
+        ),
+        examples=[False],
+    )
+    leader_picture_id: int = Field(
+        description=(
+            "The stack's leader (`stack_position` 0) - the picture the row's "
+            "thumbnail should show, matching the grid and the deck. Example: `7`."
+        ),
+        examples=[7],
+    )
+    leader_thumbnail_version: Optional[str] = Field(
+        default=None,
+        description=(
+            "Cache-buster for the leader's thumbnail, so the row renders from "
+            'this payload alone. Example: `"512x384"`.'
+        ),
+        examples=["512x384"],
+    )
+    stackable: bool = Field(
+        default=True,
+        description=(
+            "Whether this stack can be split or unstacked at all. `false` when "
+            "**any** member is frozen by a locked picture set: a locked set "
+            "freezes a stack's siblings *through* the stack, so detaching one "
+            "would sever the freeze and both actions refuse the whole stack "
+            "with `423`. Disable the row's primary button on `false` and show "
+            "`blocked_by_sets` as the reason, rather than letting the user "
+            "press it and read an error. Same pair, same meaning as on "
+            "`GET /dedup/stacks/{stack_id}/members`. Example: `true`."
+        ),
+        examples=[True],
+    )
+    blocked_by_sets: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "The locked picture sets freezing this stack, `[{id, name}]` "
+            "sorted by set id, so the row can name them. Empty exactly when "
+            "`stackable` is `true`. Example: `[]`."
+        ),
+        examples=[[]],
+    )
+
+
+class MixedStacksResponse(BaseModel):
+    """One page of the Mixed stacks list."""
+
+    model_config = ConfigDict(extra="allow")
+
+    threshold: float = Field(
+        description=(
+            "The threshold this page was computed at, echoed so a client can "
+            "confirm the list matches its slider. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    total: int = Field(
+        description=(
+            "Mixed stacks matching this request, i.e. what `stacks` pages "
+            "through. Excludes kept stacks unless `include_kept=true`. "
+            "Example: `26`."
+        ),
+        examples=[26],
+    )
+    kept_total: int = Field(
+        description=(
+            "How many mixed stacks carry a `Keep` at their current membership. "
+            "Counted whether or not they are included, so a client can offer "
+            '"N kept" without a second request. Example: `4`.'
+        ),
+        examples=[4],
+    )
+    live_stack_count: int = Field(
+        description=(
+            "Live stacks with two or more members - the denominator behind "
+            '"26 of 209". Example: `209`.'
+        ),
+        examples=[209],
+    )
+    offset: int = Field(description="Rows skipped. Example: `0`.", examples=[0])
+    limit: int = Field(description="Rows per page. Example: `20`.", examples=[20])
+    next_offset: Optional[int] = Field(
+        default=None,
+        description=("Offset of the next page, or `null` at the end. Example: `20`."),
+        examples=[20],
+    )
+    stacks: list[MixedStackModel] = Field(
+        description=(
+            "The page, ranked least-held-together first: stranded members "
+            "descending, then component count descending, then weakest edge "
+            "ascending (a stack with no edge at all sorts first)."
+        )
+    )
+
+
+class MixedStackSplitRequestModel(BaseModel):
+    """Split the marked member(s) off one mixed stack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    picture_ids: Optional[list[int]] = Field(
+        default=None,
+        description=(
+            "The members to split off: **the ids the user marked on the row**, "
+            "so the split matches what they were looking at even if the stack "
+            "changed since. The row's marks start from "
+            "`stranded_picture_ids` and the user adjusts them, so this list is "
+            "*not* required to match that set. Omit it and the server uses the "
+            "whole stranded set it computes at `threshold`, which is the same "
+            "opening marking.\n\n"
+            "**Every id must be a live member of this stack.** An id belonging "
+            "to another stack or to none is a `400`, and so is a soft-deleted "
+            "(scrapheaped) member: those are not on the row, the client cannot "
+            "see them, and moving one blind is not something a mark can mean. "
+            "Restore it first if you meant it. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    threshold: float = Field(
+        default=DEFAULT_THRESHOLD,
+        ge=MIN_THRESHOLD,
+        le=MAX_THRESHOLD,
+        description=(
+            "Only read when `picture_ids` is omitted: the similarity at which "
+            "the stranded set is computed, i.e. the marking the row opens with. "
+            "An explicit list is bounded by the stack's live membership, not by "
+            "cohesion, so this value does not narrow it. Example: `0.9`."
+        ),
+        examples=[0.9],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch to record under. Must be a client-namespaced "
+            "`cli-<4-76 chars of A-Z a-z 0-9 _ ->` id; omit it to have the "
+            "server mint an `srv-` one. Share one id across several calls to "
+            'make them reverse as a single `Ctrl+Z`. Example: `"cli-split-3"`.'
+        ),
+        examples=["cli-split-3"],
+    )
+
+
+class MixedStackUnstackRequestModel(BaseModel):
+    """Dissolve one mixed stack entirely."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Operation-log batch to record under. Must be a client-namespaced "
+            "`cli-…` id; omit it to have the server mint one. Example: "
+            '`"cli-unstack-9"`.'
+        ),
+        examples=["cli-unstack-9"],
+    )
+
+
+class MixedStackActionResponse(BaseModel):
+    """What a split or unstack did, for the receipt and the undo handle."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(
+        description="The stack that was acted on. Example: `42`.", examples=[42]
+    )
+    split_picture_ids: list[int] = Field(
+        description=(
+            "Pictures that left the stack and are now loose. For an unstack "
+            "this is every member. Example: `[11]`."
+        ),
+        examples=[[11]],
+    )
+    remaining_picture_ids: list[int] = Field(
+        description=(
+            "Pictures still in the stack afterwards. Empty when the stack was "
+            "dissolved. Example: `[7, 8, 9]`."
+        ),
+        examples=[[7, 8, 9]],
+    )
+    stack_dissolved: bool = Field(
+        description=(
+            "Whether the stack itself is gone. `true` for every unstack, and "
+            "for a split that would otherwise have left a stack of one - a "
+            "state the grid cannot render honestly, so the last member is freed "
+            "too rather than left in a one-picture stack (the same rule "
+            "`DELETE /stacks/{stack_id}/members` applies). Reported rather than "
+            "inferred. Example: `false`."
+        ),
+        examples=[False],
+    )
+    batch_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "The `POST /operations/batches/{batch_id}/undo` handle. One split "
+            "or unstack is exactly one operation, so a single `Ctrl+Z` puts "
+            "every picture back in its original stack at its original position "
+            "and recreates a dissolved stack under its original id. Example: "
+            '`"srv-1a2b3c"`.'
+        ),
+        examples=["srv-1a2b3c"],
+    )
+
+
+class MixedStackKeepResponse(BaseModel):
+    """The state of the `Keep` dismissal on one stack."""
+
+    model_config = ConfigDict(extra="allow")
+
+    stack_id: int = Field(description="The stack. Example: `42`.", examples=[42])
+    dismissed: bool = Field(
+        description=(
+            "`true` after a `Keep`, `false` after clearing it. Example: `true`."
+        ),
+        examples=[True],
+    )
+    created: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this call created a new dismissal (`false` means it was "
+            "already kept at this exact membership - pressing Keep twice is "
+            "idempotent). Absent when clearing. Example: `true`."
+        ),
+        examples=[True],
+    )
+    removed: Optional[int] = Field(
+        default=None,
+        description=(
+            "Dismissals deleted by a clear, across every membership the stack "
+            "was ever kept at. Absent when keeping. Example: `1`."
+        ),
+        examples=[1],
+    )
+    membership_fingerprint: Optional[str] = Field(
+        default=None,
+        description=(
+            "The membership the Keep was recorded against. Adding a member "
+            "later changes this, no dismissal matches, and the stack returns to "
+            "the list. Absent when clearing. Example: "
+            '`"6f1c9a2b4d8e70153c9a2b4d8e701534"`.'
+        ),
+        examples=["6f1c9a2b4d8e70153c9a2b4d8e701534"],
+    )
+    member_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Members at the time of the Keep, for the audit trail. Absent when "
+            "clearing. Example: `12`."
+        ),
+        examples=[12],
+    )
+
+
 def create_router(server) -> APIRouter:
     router = APIRouter()
 
@@ -1193,25 +1893,12 @@ def create_router(server) -> APIRouter:
     def _batch_id(value: Optional[str]) -> Optional[str]:
         """Accept only a client-namespaced batch id, 400 on anything else.
 
-        The server mints ``srv-…`` for a verdict that arrives without one; a
-        client that wants several verdicts to reverse together supplies its own
-        ``cli-…``. Accepting an arbitrary string let a client mint what reads as
-        a server batch, or graft its rows into someone else's batch so one undo
-        reverses more than the user did.
+        Thin alias for the shared
+        :func:`~pixlstash.utils.request_origin.require_client_batch_id` so the
+        call sites in this module read the same as they did; the rule itself has
+        exactly one implementation.
         """
-        if value is None:
-            return None
-        text = str(value)
-        if len(text) > MAX_BATCH_ID_LENGTH or not CLIENT_BATCH_ID_RE.fullmatch(text):
-            logger.info("[dedup] rejected client batch_id %r", text[:120])
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"batch_id must match {CLIENT_BATCH_ID_PREFIX}<4-76 chars of "
-                    "A-Z a-z 0-9 _ ->; omit it to have the server mint one"
-                ),
-            )
-        return text
+        return require_client_batch_id(value)
 
     def _scope(model: Optional[ScopeRequestModel]) -> DedupScope:
         """Build the service scope from a request model, 400 on a bad one."""
@@ -1386,6 +2073,71 @@ def create_router(server) -> APIRouter:
             logger.info("[dedup] rejected queue cursor: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get(
+        "/dedup/stacks/{stack_id}/members",
+        summary="One page of an existing stack's members",
+        description=(
+            "Returns the members of one existing stack, leader first, for the "
+            "Duplicates queue's deck expansion.\n\n"
+            "This is the **lazy half** of the queue's stack contract. A queue "
+            "row already carries each stack's real member count and its leader "
+            "in `groups[].stacks`, which is everything needed to draw the deck; "
+            "the members themselves are fetched only when the user opens an "
+            "expansion, because inlining them would put a 40-member stack's "
+            "worth of tiles behind a row that has room for none.\n\n"
+            "Members come back with exactly the fields a queue candidate "
+            "carries, so the strip reuses the row's tile unchanged, plus "
+            "`position` and `is_leader`. Paged with a plain `offset` (a stack's "
+            "membership is not a live list being decided out from under the "
+            "client, so the queue's keyset cursor buys nothing here); follow "
+            "`next_offset` and stop when it is `null`. Read-only: nothing here "
+            "reorders, promotes or unstacks anything."
+        ),
+        response_model=DedupStackMembersResponse,
+        responses={
+            404: {
+                "description": (
+                    "No live member carries this stack id: the stack was "
+                    "dissolved, scrapheaped, or never existed. Reported rather "
+                    "than answered with an empty stack that appears to exist."
+                )
+            }
+        },
+    )
+    def get_dedup_stack_members(
+        stack_id: int,
+        offset: int = Query(
+            default=0,
+            ge=0,
+            description=(
+                "Members to skip, in canonical stack order. Use the previous "
+                "page's `next_offset`."
+            ),
+        ),
+        limit: int = Query(
+            default=DEFAULT_STACK_MEMBER_PAGE_SIZE,
+            ge=1,
+            le=MAX_STACK_MEMBER_PAGE_SIZE,
+            description=(
+                f"Members per page, at most {MAX_STACK_MEMBER_PAGE_SIZE}. The "
+                "cap is what keeps a pathological stack from returning an "
+                "unbounded list."
+            ),
+        ),
+    ):
+        payload = dedup_tier_service.stack_members(
+            server.vault, stack_id, offset, limit
+        )
+        if payload is None:
+            logger.info(
+                "[dedup] stack %s has no live members; expansion refused", stack_id
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"stack {stack_id} has no live members",
+            )
+        return payload
+
     @router.post(
         "/dedup/counts",
         summary="Live duplicate counts, global and scoped",
@@ -1423,7 +2175,17 @@ def create_router(server) -> APIRouter:
         request_model = payload or DedupScanRequestModel()
         policy = _policy(request_model.policy)
         scope = _scope(request_model.scope)
-        return dedup_tier_service.request_scan(server.vault, policy, scope)
+        try:
+            return dedup_tier_service.request_scan(server.vault, policy, scope)
+        except DedupScanBusyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "dedup_scan_busy",
+                    "message": str(exc),
+                    "active_scan": jsonable_encoder(exc.active_scan),
+                },
+            ) from exc
 
     @router.post(
         "/dedup/verdicts/stack",
@@ -1630,5 +2392,275 @@ def create_router(server) -> APIRouter:
             operation_batch_id=request_model.operation_batch_id,
         )
         return report.as_dict()
+
+    # ── Mixed stacks (design D5 / B5) ───────────────────────────────────────
+
+    @router.get(
+        "/dedup/mixed-stacks",
+        summary="Live stacks whose members do not all match",
+        description=(
+            "Lists **mixed stacks**: live stacks whose members do not form one "
+            "connected cluster at the given similarity threshold, measured with "
+            "the same 64-bit dHash Hamming distance and the same "
+            "connected-components test the near tier uses.\n\n"
+            "**Components, not the worst pair.** A legitimate burst chains "
+            "A~B~C, so its ends can be far apart while every step is tight; "
+            "condemning it on the worst pair would flag exactly the stacks a "
+            "user most deliberately made. What is reported instead is whether "
+            "the members hang together at all: how many clusters there are, how "
+            "big each one is, which members are joined to nothing "
+            "(`stranded_picture_ids`), and the weakest edge that survives.\n\n"
+            "**Bound to the threshold, never to a constant.** The same stack is "
+            "mixed at `0.90` and one clean cluster at `0.65`; pass the queue's "
+            "own slider value and the list follows it.\n\n"
+            "Ranked by how little holds each stack together - stranded members "
+            "descending, then component count descending, then weakest edge "
+            "ascending - so the clearest mistakes are first.\n\n"
+            "Each row carries `stackable` / `blocked_by_sets`, the same pair "
+            "`GET /dedup/stacks/{stack_id}/members` reports: `false` means a "
+            "locked picture set freezes a member, so split and unstack will "
+            "both answer `423` and the row's button should say so instead of "
+            "offering the action. Read-only: nothing here splits, unstacks or "
+            "marks anything."
+        ),
+        response_model=MixedStacksResponse,
+    )
+    def get_mixed_stacks(
+        threshold: float = Query(
+            default=DEFAULT_THRESHOLD,
+            ge=MIN_THRESHOLD,
+            le=MAX_THRESHOLD,
+            description=(
+                "Similarity at which members must connect. The queue's own "
+                "threshold - pass the slider value, do not hardcode it. "
+                "Example: `0.9`."
+            ),
+            examples=[0.9],
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+            description=(
+                "Rows to skip; follow the previous page's `next_offset`. Plain "
+                "offset paging is correct here (unlike the queue's keyset "
+                "cursor): this list is tens of rows, not thousands, and is not "
+                "being decided out from under the client. Example: `0`."
+            ),
+            examples=[0],
+        ),
+        limit: int = Query(
+            default=MIXED_STACK_PAGE_SIZE,
+            ge=1,
+            le=MAX_MIXED_STACK_PAGE_SIZE,
+            description=(
+                f"Rows per page, at most {MAX_MIXED_STACK_PAGE_SIZE}. Example: `20`."
+            ),
+            examples=[20],
+        ),
+        include_kept: bool = Query(
+            default=False,
+            description=(
+                "Include stacks the user pressed **Keep** on, each marked "
+                "`kept: true`. Off by default, because the point of Keep is "
+                "that the row leaves the list; `kept_total` is reported either "
+                "way. Example: `false`."
+            ),
+            examples=[False],
+        ),
+    ):
+        return mixed_stack_service.list_mixed_stacks(
+            server.vault, threshold, offset, limit, include_kept
+        )
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/split",
+        summary="Split the marked member(s) off a mixed stack",
+        description=(
+            "Removes the marked pictures from the stack, leaving the cluster "
+            "that does hang together. By default those are the members with no "
+            "edge to any sibling at the given `threshold`. The removed pictures "
+            "become loose; nothing is "
+            "deleted and no file moves.\n\n"
+            "Recorded as **one** operation, so a single `Ctrl+Z` puts every "
+            "picture back in its original stack at its original position - the "
+            "same undo contract the dedup verdicts carry. The response's "
+            "`batch_id` is the `POST /operations/batches/{batch_id}/undo` "
+            "handle.\n\n"
+            "If the split would leave a stack of one, the last member is freed "
+            "too and the stack row goes; the response says so in "
+            "`stack_dissolved` rather than leaving the client to infer it.\n\n"
+            "**Live members of this stack only.** `picture_ids` carries the "
+            "marks the user made on the row, which start from "
+            "`stranded_picture_ids` and are theirs to adjust, so an id the "
+            "engine did not strand is accepted. What is refused is an id that "
+            "is not a live member of this stack: a picture in another stack or "
+            "in none, and a soft-deleted member, are each a `400`. Omit "
+            "`picture_ids` and the stranded set at `threshold` is used, the "
+            "same marking the row opens with.\n\n"
+            "*(This bound was narrower for one day: a security review of "
+            "2026-08-01 (F7) required the list to be a subset of the stranded "
+            "set. It was widened deliberately on 2026-08-02, because a page "
+            "where the user marks the strangers cannot have the engine's marks "
+            "as a veto. F7 was rated LOW on its own reasoning that this is not "
+            "a privilege boundary - the route is `OWNER_ONLY` and `DELETE "
+            "/stacks/{stack_id}/members` already gives the same principal an "
+            "unrestricted remove - so the widening grants no new capability.)*"
+            "\n\n"
+            "**A locked picture set refuses the whole stack** (`423`), never "
+            "just the frozen member: a locked set freezes a stack's siblings "
+            "*through* the stack, so detaching one severs a freeze the lock is "
+            "there to hold. Rows carry `stackable` and `blocked_by_sets` so "
+            "the button can say so before it is pressed."
+        ),
+        response_model=MixedStackActionResponse,
+        responses={
+            400: {
+                "description": (
+                    "The stack has no live members, `picture_ids` was empty, "
+                    "`picture_ids` named something that is not a live member of "
+                    "this stack (a foreign picture, or a soft-deleted member - "
+                    "`detail` says which), or `picture_ids` was omitted and no "
+                    "member is stranded at `threshold`, so there is nothing to "
+                    "split."
+                )
+            },
+            423: {
+                "description": (
+                    "A member of this stack is frozen by a locked picture set. "
+                    "Nothing was written; `detail` names the sets and the "
+                    "frozen picture ids."
+                )
+            },
+        },
+    )
+    def post_mixed_stack_split(
+        request: Request,
+        stack_id: int,
+        payload: Optional[MixedStackSplitRequestModel] = Body(default=None),
+    ):
+        # §21 origin discipline: actor / source / origin_client_id are read from
+        # the request HERE, on the request's own task, and passed down
+        # explicitly - the contextvar is dead on the DB worker thread.
+        request_model = payload or MixedStackSplitRequestModel()
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
+        try:
+            return mixed_stack_service.split_stranded(
+                server.vault,
+                stack_id,
+                request_model.picture_ids,
+                request_model.threshold,
+                _batch_id(request_model.batch_id) or header_batch_id,
+                **context,
+            )
+        except MixedStackError as exc:
+            logger.info("[mixed-stacks] split of stack %s rejected: %s", stack_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/unstack",
+        summary="Dissolve a mixed stack",
+        description=(
+            "Frees every member of the stack and drops the stack itself. The "
+            "outcome for a stack with no majority cluster - where there is no "
+            "coherent group left once the strangers go.\n\n"
+            "Recorded as **one** operation, so a single `Ctrl+Z` restacks every "
+            "picture at its original position and recreates the stack under its "
+            "original id. Nothing is deleted and no file moves: a stack is a "
+            "grouping row plus a cover pointer.\n\n"
+            "**A locked picture set refuses the stack** (`423`). Dissolving is "
+            "the most complete form of the detach a lock forbids: it severs "
+            "the through-stack freeze for every member at once, so a picture "
+            "the lock was protecting becomes deletable. Rows carry "
+            "`stackable` and `blocked_by_sets` so the button can say so before "
+            "it is pressed."
+        ),
+        response_model=MixedStackActionResponse,
+        responses={
+            400: {"description": "The stack has no live members."},
+            423: {
+                "description": (
+                    "A member of this stack is frozen by a locked picture set. "
+                    "Nothing was written; `detail` names the sets and the "
+                    "frozen picture ids."
+                )
+            },
+        },
+    )
+    def post_mixed_stack_unstack(
+        request: Request,
+        stack_id: int,
+        payload: Optional[MixedStackUnstackRequestModel] = Body(default=None),
+    ):
+        # §21 origin discipline, read in the handler - see post_mixed_stack_split.
+        request_model = payload or MixedStackUnstackRequestModel()
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
+        try:
+            return mixed_stack_service.unstack(
+                server.vault,
+                stack_id,
+                _batch_id(request_model.batch_id) or header_batch_id,
+                **context,
+            )
+        except MixedStackError as exc:
+            logger.info(
+                "[mixed-stacks] unstack of stack %s rejected: %s", stack_id, exc
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post(
+        "/dedup/mixed-stacks/{stack_id}/keep",
+        summary="Keep a mixed stack as it is",
+        description=(
+            "Records that this stack is fine and should stop being listed. "
+            "Durable and server-side.\n\n"
+            "**Keyed on the stack's membership, not just its id.** The "
+            "dismissal stores the `membership_fingerprint` of the members that "
+            "were approved, so adding a member later produces a fingerprint no "
+            "dismissal matches and the stack returns to the list - the user "
+            "approved *these* pictures together, not the stack forever. "
+            "Removing that member again restores the dismissal rather than "
+            "asking twice.\n\n"
+            "Idempotent: pressing Keep on an unchanged stack returns "
+            "`created: false` and writes nothing. This changes no picture, so "
+            "it is not an undoable operation - `DELETE` the same path to clear "
+            "it."
+        ),
+        response_model=MixedStackKeepResponse,
+        responses={
+            400: {"description": "The stack has no live members."},
+        },
+    )
+    def post_mixed_stack_keep(request: Request, stack_id: int):
+        # Only `actor` is used - the dismissal changes no picture facet, so
+        # there is no WS announcement and no operation-log row to originate.
+        context = operation_log_service.request_context(request)
+        try:
+            return mixed_stack_service.dismiss_stack(
+                server.vault, stack_id, context.get("actor")
+            )
+        except MixedStackError as exc:
+            logger.info("[mixed-stacks] keep of stack %s rejected: %s", stack_id, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete(
+        "/dedup/mixed-stacks/{stack_id}/keep",
+        summary="Undo a Keep",
+        description=(
+            "Clears every `Keep` on this stack, whatever membership each was "
+            "made at, so the stack is listed again if it is still mixed. The "
+            "way back from a mis-pressed Keep.\n\n"
+            "Every fingerprint is cleared rather than only the current one: a "
+            "dismissal made at an older membership would otherwise re-hide the "
+            "stack the moment an unrelated membership change was undone, and a "
+            "Keep the user has explicitly retracted must not come back on its "
+            "own. Idempotent - clearing a stack that was never kept returns "
+            "`removed: 0`."
+        ),
+        response_model=MixedStackKeepResponse,
+    )
+    def delete_mixed_stack_keep(stack_id: int):
+        return mixed_stack_service.undismiss_stack(server.vault, stack_id)
 
     return router

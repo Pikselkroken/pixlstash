@@ -62,6 +62,7 @@ class SortMechanism:
         IMAGE_SIZE = auto()
         SMART_SCORE = auto()
         TEXT_CONTENT = auto()
+        STACK_UPDATED_AT = auto()
 
     MECHANISMS = {
         Keys.DATE: {
@@ -87,6 +88,10 @@ class SortMechanism:
         Keys.TEXT_CONTENT: {
             "field": None,  # Special case, requires Quality join
             "description": "Text Content",
+        },
+        Keys.STACK_UPDATED_AT: {
+            "field": None,  # Special case, orders through PictureStack
+            "description": "Recently changed stacks",
         },
         Keys.CHARACTER_LIKENESS: {
             "field": "character_likeness",
@@ -855,22 +860,77 @@ class Picture(SQLModel, table=True):
                 # non-cover stack member showed 5 tiles for its 6 members and
                 # no stack at all (the owner's #670/#1746 report). Same rule
                 # as the project-scoped branch below, scoped to the id list.
-                sibling = aliased(cls)
+                #
+                # The rank is resolved ONCE, in a derived table, instead of per
+                # candidate row.  The first cut of this branch compared each row
+                # against an aliased picture and re-tested the whole id list
+                # inside that subquery, so it cost (id-list size x stacked
+                # fraction).  Measured on a 19,822-picture vault: a 6,641-id set
+                # view spent 102 ms on the COUNT(*) that every grid load runs,
+                # against 4.6 ms for the unscoped fast path below, and the same
+                # shape took seconds once most rows in scope were stacked.
+                # Ranking is the same operation for every member of a stack, so
+                # it belongs in a single pass: the same set view now costs 9.7 ms
+                # and returns the identical id set.  The EXISTS below still
+                # correlates, but only against that already-computed
+                # one-row-per-stack result, which SQLite materialises once and
+                # probes through an automatic index.
                 cur_pos = func.coalesce(cls.stack_position, 999999)
-                sib_pos = func.coalesce(sibling.stack_position, 999999)
-                has_higher_ranked_sibling = exists(
-                    select(sibling.id).where(
-                        sibling.stack_id == cls.stack_id,
-                        sibling.deleted.is_(False),
-                        sibling.id.in_(id_scope),
+                # One row per (stack, in-scope member), ranked by the SAME
+                # ordering the correlated form compared on: NULL positions sort
+                # last (999999), ties broken by ascending id.
+                ranked_members = (
+                    select(
+                        cls.stack_id.label("stack_id"),
+                        cls.id.label("member_id"),
+                        func.coalesce(cls.stack_position, 999999).label("member_pos"),
+                        func.row_number()
+                        .over(
+                            partition_by=cls.stack_id,
+                            order_by=(
+                                func.coalesce(cls.stack_position, 999999),
+                                cls.id,
+                            ),
+                        )
+                        .label("member_rank"),
+                    )
+                    .where(
+                        cls.stack_id.is_not(None),
+                        cls.deleted.is_(False),
+                        cls.id.in_(id_scope),
+                    )
+                    .subquery("scoped_stack_members")
+                )
+                # rank 1 is the highest-ranked in-scope member of each stack,
+                # exactly the row the correlated EXISTS was searching for.
+                scoped_leader = (
+                    select(
+                        ranked_members.c.stack_id,
+                        ranked_members.c.member_id,
+                        ranked_members.c.member_pos,
+                    )
+                    .where(ranked_members.c.member_rank == 1)
+                    .subquery("scoped_stack_leader")
+                )
+                # Testing the one leader row is equivalent to the old "does ANY
+                # sibling outrank me" test: if any member outranks this row,
+                # the best-ranked one does, and a row never outranks itself.
+                # A stack with no in-scope, non-deleted member at all (the trash
+                # view, where every candidate row is deleted) has no leader row,
+                # so nothing outranks the candidate and it is kept, exactly as
+                # the sibling EXISTS left it.
+                leader_outranks_candidate = exists(
+                    select(scoped_leader.c.member_id).where(
+                        scoped_leader.c.stack_id == cls.stack_id,
                         or_(
-                            sib_pos < cur_pos,
-                            (sib_pos == cur_pos) & (sibling.id < cls.id),
+                            scoped_leader.c.member_pos < cur_pos,
+                            (scoped_leader.c.member_pos == cur_pos)
+                            & (scoped_leader.c.member_id < cls.id),
                         ),
                     )
                 )
                 query = query.where(
-                    or_(cls.stack_id.is_(None), ~has_higher_ranked_sibling)
+                    or_(cls.stack_id.is_(None), ~leader_outranks_candidate)
                 )
             elif project_scope is _NO_PROJECT_SCOPE or isinstance(
                 project_scope, (list, tuple)
@@ -921,14 +981,24 @@ class Picture(SQLModel, table=True):
                 # *any* member of the stack satisfies the ComfyUI filter, not
                 # only when the leader row itself satisfies it.
                 member_where = " OR ".join(comfyui_member_parts)
+                # NOTE: the whole disjunction is wrapped in an extra outer pair of
+                # parentheses.  ``text()`` is opaque, so SQLAlchemy adds none of its
+                # own, and SQL ``AND`` binds tighter than ``OR``: without the wrapper
+                # this clause renders as ``... AND deleted = 0 AND <leader condition>
+                # AND self_match OR member_match``, which parses as ``(everything AND
+                # self) OR member``.  The stack-member branch then escapes every other
+                # predicate (the deleted filter, the stack-leader collapse, and any id
+                # or project scope narrowing) and returns each member of a matching
+                # stack as its own row.  Same trap, same fix, as the
+                # ``tags_confidence_above_filter`` branch in predicate_filter.py.
                 comfyui_sql = (
-                    f"({self_where})"
+                    f"(({self_where})"
                     f" OR (picture.stack_id IS NOT NULL"
                     f" AND EXISTS ("
                     f"SELECT 1 FROM picture AS _m"
                     f" WHERE _m.stack_id = picture.stack_id"
                     f" AND ({member_where})"
-                    f"))"
+                    f")))"
                 )
                 query = query.where(text(comfyui_sql).bindparams(**comfyui_bind_params))
             else:
@@ -950,6 +1020,20 @@ class Picture(SQLModel, table=True):
                     query = query.order_by(cls.text_score.desc(), cls.id.desc())
                 else:
                     query = query.order_by(cls.text_score.asc(), cls.id.asc())
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                # A stack-level sort: every member shares the stack timestamp,
+                # while the collapsed grid contributes one leader row. Keep
+                # loose pictures after real stacks if a client deep-links this
+                # mechanism outside the stacked-only view where the UI offers
+                # it. The PK join is one-to-one and cannot duplicate pictures.
+                query = query.outerjoin(PictureStack, PictureStack.id == cls.stack_id)
+                query = query.order_by(
+                    cls.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
+                    cls.id.desc() if sort_mech.descending else cls.id.asc(),
+                )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:
                 # Guest session: sort by the guest's own score, falling back to
                 # picture.score when no guest_score row exists for this picture.
@@ -1229,6 +1313,17 @@ class Picture(SQLModel, table=True):
                     Picture.text_score.desc()
                     if sort_mech.descending
                     else Picture.text_score.asc(),
+                    Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
+                )
+            elif sort_mech.key == SortMechanism.Keys.STACK_UPDATED_AT:
+                query = query.outerjoin(
+                    PictureStack, PictureStack.id == Picture.stack_id
+                )
+                query = query.order_by(
+                    Picture.stack_id.is_(None).asc(),
+                    PictureStack.updated_at.desc()
+                    if sort_mech.descending
+                    else PictureStack.updated_at.asc(),
                     Picture.id.desc() if sort_mech.descending else Picture.id.asc(),
                 )
             elif sort_mech.key == SortMechanism.Keys.SCORE and guest_session_id:

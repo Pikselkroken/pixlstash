@@ -224,6 +224,8 @@
             :selected-sort="props.selectedSort"
             :selected-group-name="props.selectedGroupName"
             :selected-multiple-stack-ids="props.selectedMultipleStackIds"
+            :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
+            :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
             :show-remove-from-stack="props.showRemoveFromStack"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
@@ -241,6 +243,7 @@
             @open-comfyui-panel="openComfyuiPanel()"
             @reverse-image-search="$emit('reverse-image-search')"
             @remove-from-group="$emit('remove-from-group')"
+            @keep-cover-only="$emit('keep-cover-only')"
             @delete-selected="$emit('delete-selected')"
           />
         </v-menu>
@@ -352,6 +355,10 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  // Forwarded straight to SelectionMenu: Keep cover only lives in the overflow
+  // only, never as a top-level pill button.
+  keepCoverOnlyStackCount: { type: Number, default: 0 },
+  keepCoverOnlyLockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -367,6 +374,7 @@ const emit = defineEmits([
   "clear-selection",
   "added-to-set",
   "remove-from-group",
+  "keep-cover-only",
   "delete-selected",
   "set-project",
   "add-to-character",

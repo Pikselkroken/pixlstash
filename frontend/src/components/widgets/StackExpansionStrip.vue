@@ -1,5 +1,5 @@
 <template>
-  <div class="sxstrip" data-testid="stack-expansion-strip">
+  <div class="sxstrip" :style="stripStyle" data-testid="stack-expansion-strip">
     <div class="sxhead">
       <v-icon class="sxico" size="18">mdi-image-multiple</v-icon>
       <span class="sxtitle">Stack of {{ count }}</span>
@@ -34,7 +34,7 @@
       </button>
 
       <button
-        v-if="!readOnly"
+        v-if="!readOnly && showUnstack"
         type="button"
         class="sxbtn"
         data-testid="stack-unstack"
@@ -62,19 +62,35 @@
 //
 // Presentational: it owns no stack state and reports both actions upward.
 //
-// NOT MOUNTED YET, deliberately. The strip has to span the full grid width above
-// the stack's members, and `ImageGrid` is virtualised on a uniform tile: its
-// spacer arithmetic and its `img.idx` keys both assume every child is one tile
-// tall. Wedging a spanning row in without teaching `useVirtualScroll` about
-// variable row heights desynchronises the scroll window, which is the failure
-// this grid's "never splice allGridImages" rule exists to prevent. The cover
-// marker, the half of this that a user actually loses when a stack expands,
-// ships separately as the per-tile flag in `ImageGrid`. Mounting the strip is a
-// change to the grid's layout arithmetic and belongs in its own change.
+// MOUNTED BY the two surfaces that show a duplicate group (design decision D4
+// in `docs/design/mixed-stacks-and-stack-units.md`), both full width and BELOW
+// their own strip of pictures:
+//
+//   * `DedupCompareDialog`, below the candidate strip and never inside a card,
+//     where a variable-height band would destroy the height registration the
+//     whole comparison depends on. That one allows promotion, behind a two-step
+//     confirmation that says the cover changes across the library.
+//   * `DedupGroupRow`, below the row's three columns and never inline in its
+//     `overflow-x` picture strip. That one passes `readOnly` and
+//     `showUnstack: false`: the queue row is a place to LOOK, and neither of
+//     this component's two actions can be honoured there without rewriting the
+//     library from inside a panel opened to inspect it.
+//
+// STILL NOT MOUNTED IN `ImageGrid`, deliberately. The strip has to span the full
+// grid width above the stack's members, and `ImageGrid` is virtualised on a
+// uniform tile: its spacer arithmetic and its `img.idx` keys both assume every
+// child is one tile tall. Wedging a spanning row in without teaching
+// `useVirtualScroll` about variable row heights desynchronises the scroll
+// window, which is the failure this grid's "never splice allGridImages" rule
+// exists to prevent. The cover marker, the half of this that a user actually
+// loses when a stack expands, ships separately as the per-tile flag in
+// `ImageGrid`. Mounting the strip there is a change to the grid's layout
+// arithmetic and belongs in its own change.
 
 import { computed } from "vue";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { API_BASE_URL } from "../../utils/apiClient";
 
 const props = defineProps({
   /** Members in the stack, including any not rendered in this strip. */
@@ -89,9 +105,38 @@ const props = defineProps({
   capturedLabel: { type: String, default: "" },
   /** A shared or guest view: the strip informs, it does not act. */
   readOnly: { type: Boolean, default: false },
+  /**
+   * The member thumbnails' HEIGHT in px. The caller owns it because the two
+   * surfaces that show a stack size their pictures differently (the queue runs
+   * a 112-406px size slider), and a strip hardcoded to one of them contradicts
+   * the other. Only the height: the width follows the decoded image, because
+   * stored dimensions ignore EXIF rotation and a fixed box would letterbox or
+   * crop every rotated portrait shot.
+   */
+  thumbHeight: { type: Number, default: 96 },
+  /**
+   * Whether the trailing Unstack action is offered. False for a caller that
+   * has no unstack pathway to honour: the Compare dialog's band, where the
+   * expansion is disclosure inside an undecided verdict, not a place to take a
+   * stack apart. Distinct from `readOnly`, which also freezes the cover.
+   */
+  showUnstack: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["unstack", "set-cover"]);
+
+/**
+ * How wide a member may get before it is cropped: 2.4:1, the same
+ * beyond-panoramic ceiling the queue's strip uses, scaled with the height so
+ * the widest allowed shape is the same at every size.
+ */
+const MAX_THUMB_RATIO = 2.4;
+
+/** The height-driven recipe, handed to the CSS as custom properties. */
+const stripStyle = computed(() => ({
+  "--sx-thumb-h": `${props.thumbHeight}px`,
+  "--sx-thumb-max-w": `${Math.round(props.thumbHeight * MAX_THUMB_RATIO)}px`,
+}));
 
 // Falls back to stack order, so a caller that has not lifted the cover into its
 // own state still gets exactly one flagged member rather than none.
@@ -125,7 +170,10 @@ function memberTitle(id) {
  * @returns {string}
  */
 function thumbUrl(member) {
-  return pictureThumbnailUrl(member.id, { version: member.thumbnail_version });
+  return pictureThumbnailUrl(member.id, {
+    version: member.thumbnail_version,
+    baseUrl: API_BASE_URL,
+  });
 }
 
 /**
@@ -188,13 +236,17 @@ function onPick(member) {
   padding-bottom: var(--space-1);
 }
 
-/* Matches the queue's group strip (DedupGroupRow) so a picture is the same size
-   whether the user is deciding on the stack or living with it. */
+/* The queue strip's recipe (DedupGroupRow's `.gthumb`), so a picture is the
+   same shape whether the user is deciding on the stack or living with it: the
+   HEIGHT is set by the caller and the WIDTH comes from the decoded image. Not a
+   preference: stored width/height ignore EXIF rotation, so a fixed box is
+   wrong for every rotated portrait shot. */
 .sxthumb {
   position: relative;
   flex: 0 0 auto;
-  width: 128px;
-  height: 96px;
+  width: auto;
+  min-width: 44px;
+  height: var(--sx-thumb-h, 96px);
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -226,8 +278,10 @@ function onPick(member) {
 
 .sxt {
   display: block;
-  width: 100%;
+  width: auto;
   height: 100%;
+  /* A ceiling, not a crop: only a beyond-panoramic shape gets clipped. */
+  max-width: var(--sx-thumb-max-w, 230px);
   object-fit: cover;
 }
 

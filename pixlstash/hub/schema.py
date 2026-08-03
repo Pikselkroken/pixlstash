@@ -104,6 +104,11 @@ CREATE TABLE IF NOT EXISTS user (
     max_vram_gb                 REAL,
     tagger_settings             TEXT,
     check_for_updates           INTEGER,
+    telemetry_send_install_id  INTEGER,
+    telemetry_send_feature_usage INTEGER,
+    telemetry_send_error_reports INTEGER,
+    telemetry_send_hardware_profile INTEGER,
+    telemetry_consent_prompted INTEGER,
     embed_watermark             INTEGER,
     watermark_image             BLOB,
 
@@ -285,6 +290,24 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "ALTER TABLE library ADD COLUMN identity_migration_state TEXT "
             "NOT NULL DEFAULT 'not_required'"
         )
+
+    # Telemetry consent landed on develop while the multi-library feature lane
+    # already had v2 developer hubs. Identity now lives in the hub, so mirror
+    # develop's nullable opt-in columns here as part of the same unreleased,
+    # guarded schema version. NULL is intentionally equivalent to the model's
+    # False default for an existing owner who has never been prompted.
+    user_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(user)").fetchall()
+    }
+    for column in (
+        "telemetry_send_install_id",
+        "telemetry_send_feature_usage",
+        "telemetry_send_error_reports",
+        "telemetry_send_hardware_profile",
+        "telemetry_consent_prompted",
+    ):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} INTEGER")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS identity_migration_operation ("
         "library_uuid TEXT PRIMARY KEY REFERENCES library(uuid), "
