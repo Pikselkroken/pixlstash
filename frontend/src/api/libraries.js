@@ -12,6 +12,11 @@
 
 import { apiClient } from "../utils/apiClient";
 
+// Public, deployment-independent fallback for remote owners. Unlike cli_hint
+// it contains no host path, interpreter path, or container name.
+export const LIBRARIES_DOCUMENTATION_URL =
+  "https://github.com/Pikselkroken/pixlstash#multiple-libraries";
+
 /** The registry of libraries this installation knows about. */
 const LIBRARIES_URL = "/libraries";
 
@@ -24,7 +29,9 @@ const ACTIVE_LIBRARY_URL = "/libraries/active";
  * `path` and `cli_hint` are present only when the caller is on the server's
  * machine, its LAN, or Tailscale. A remote session gets the names and which one
  * is active, and `can_manage: false`, so the UI can disable switching rather
- * than letting the call fail.
+ * than letting the call fail. Every library entry includes
+ * `active_share_links`, owner metadata used to warn before its resource-scoped
+ * links become inactive.
  *
  * @returns {Promise<Object>} `{ libraries, can_manage, in_docker, cli_hint }`.
  */

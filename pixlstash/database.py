@@ -541,7 +541,7 @@ def init_database(dbapi_conn, conn_record):
     cursor.close()
 
 
-def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
+def _run_migrations(connection, db_path: str, db_exists: bool) -> None:
     try:
         from alembic import command
         from alembic.config import Config
@@ -576,9 +576,13 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
     config = Config(str(alembic_ini))
     config.set_main_option("script_location", str(migrations_dir))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    # The registered-library opener has already validated this exact
+    # connection. Alembic must use it rather than reopening the path and giving
+    # a replacement database migration authority.
+    config.attributes["connection"] = connection
 
     if db_exists:
-        inspector = sa_inspect(engine)
+        inspector = sa_inspect(connection)
         table_names = [
             name
             for name in inspector.get_table_names()
@@ -603,8 +607,8 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
                             logger.warning(
                                 "Stamp failed due to missing revision; clearing alembic_version and retrying."
                             )
-                            with engine.begin() as conn:
-                                conn.exec_driver_sql("DELETE FROM alembic_version")
+                            connection.exec_driver_sql("DELETE FROM alembic_version")
+                            connection.commit()
                             command.stamp(config, "head")
                         else:
                             raise
@@ -635,8 +639,8 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
                     logger.warning(
                         "Stamp failed due to missing revision; clearing alembic_version and retrying."
                     )
-                    with engine.begin() as conn:
-                        conn.exec_driver_sql("DELETE FROM alembic_version")
+                    connection.exec_driver_sql("DELETE FROM alembic_version")
+                    connection.commit()
                     command.stamp(config, "head")
                 else:
                     raise
@@ -644,23 +648,30 @@ def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
         raise
 
 
-def _ensure_user_stack_strictness(engine) -> None:
-    inspector = sa_inspect(engine)
+def _ensure_user_stack_strictness(connection) -> None:
+    inspector = sa_inspect(connection)
     if "user" not in inspector.get_table_names():
         return
-    with engine.begin() as conn:
-        existing_cols = {
-            row[1] for row in conn.exec_driver_sql("PRAGMA table_info('user')")
-        }
-        if "stack_strictness" in existing_cols:
-            return
-        conn.exec_driver_sql(
-            "ALTER TABLE user ADD COLUMN stack_strictness FLOAT DEFAULT 0.92"
-        )
+    existing_cols = {
+        row[1] for row in connection.exec_driver_sql("PRAGMA table_info('user')")
+    }
+    if "stack_strictness" in existing_cols:
+        return
+    connection.exec_driver_sql(
+        "ALTER TABLE user ADD COLUMN stack_strictness FLOAT DEFAULT 0.92"
+    )
+    connection.commit()
 
 
 class VaultDatabase:
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        location_guard=None,
+        pre_migration_hook=None,
+        post_migration_hook=None,
+    ):
         self._db_path = db_path
         self.image_root = os.path.dirname(self._db_path)
         # In-memory, process-lifetime set of pictures whose image file cannot be
@@ -677,8 +688,23 @@ class VaultDatabase:
         )
         event.listen(self._engine, "connect", init_database)
 
-        _run_migrations(self._engine, self._db_path, db_exists)
-        _ensure_user_stack_strictness(self._engine)
+        try:
+            with self._engine.connect() as initial_connection:
+                if location_guard is not None:
+                    location_guard.verify_after_open()
+                if pre_migration_hook is not None:
+                    pre_migration_hook(initial_connection)
+                _run_migrations(initial_connection, self._db_path, db_exists)
+                if post_migration_hook is not None:
+                    post_migration_hook(initial_connection)
+                _ensure_user_stack_strictness(initial_connection)
+        except Exception:
+            self._engine.dispose()
+            self._engine = None
+            raise
+        finally:
+            if location_guard is not None:
+                location_guard.close()
 
         # Write queue and worker
         self._task_queue = queue.PriorityQueue()
@@ -690,6 +716,10 @@ class VaultDatabase:
         self._closed = False
         self._task_worker = threading.Thread(target=self._task_worker_loop, daemon=True)
         self._task_worker.start()
+
+    @property
+    def is_open(self) -> bool:
+        return not self._closed and self._engine is not None
 
     def close(self):
         """
@@ -711,7 +741,7 @@ class VaultDatabase:
                         logger.warning(
                             "VaultDatabase: worker thread did not stop cleanly before engine disposal."
                         )
-                    self._task_worker = None
+                self._task_worker = None
             except Exception as e:
                 logger.warning(
                     f"VaultDatabase: Exception during worker thread stop: {e}"

@@ -89,6 +89,10 @@ watch(
     nextTick(() => rootEl.value?.focus());
   },
 );
+
+defineExpose({
+  focus: () => rootEl.value?.focus(),
+});
 </script>
 
 <style scoped>

@@ -72,6 +72,14 @@ class AccessPolicy(str, Enum):
     (principal ruling 2026-07-21: closed-enum extension, Option A)."""
 
 
+class LibraryAccessMode(str, Enum):
+    """Whether a route reads the active vault or coordinates its replacement."""
+
+    ACTIVE_VAULT = "active_vault"
+    HUB_ONLY = "hub_only"
+    SWITCH_WRITER = "switch_writer"
+
+
 # The object-scoped policies whose enforcement resolves a single resource id from
 # the route (Step 4 work). Declared here so the startup validator can require an
 # ``id_param`` (or ``body_ids``) for each and reject a ``*_SCOPED`` declaration
@@ -163,12 +171,18 @@ class RoutePolicy:
     scope_aware: bool = False
     id_resolver: str | None = None
     library_independent: bool = False
+    library_access: LibraryAccessMode = LibraryAccessMode.ACTIVE_VAULT
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy, AccessPolicy):
             raise TypeError(
                 f"RoutePolicy.policy must be an AccessPolicy, got {self.policy!r}"
             )
+        if (
+            self.library_independent
+            and self.library_access is LibraryAccessMode.ACTIVE_VAULT
+        ):
+            object.__setattr__(self, "library_access", LibraryAccessMode.HUB_ONLY)
 
 
 def validate_policy_declarations(

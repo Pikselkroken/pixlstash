@@ -10,6 +10,9 @@ const els = {
   pick: document.getElementById('pick'),
   imported: document.getElementById('imported'),
   importedText: document.getElementById('importedText'),
+  legacyIdentityPanel: document.getElementById('legacyIdentityPanel'),
+  importLegacyIdentity: document.getElementById('importLegacyIdentity'),
+  legacyIdentitySource: document.getElementById('legacyIdentitySource'),
   computePanel: document.getElementById('computePanel'),
   computeOptions: document.getElementById('computeOptions'),
   installLocation: document.getElementById('installLocation'),
@@ -24,6 +27,7 @@ const els = {
 
 let gpu = { available: false };
 let busy = false;
+let detectedLegacyIdentitySource = null;
 
 function show(el) {
   el.classList.remove('hidden');
@@ -39,6 +43,26 @@ function showError(msg) {
 function selectedUseGpu() {
   const checked = els.computeOptions.querySelector('input[name="compute"]:checked');
   return checked ? checked.value === 'gpu' : false;
+}
+
+function updateLegacyIdentityVisibility() {
+  const matchesDetected =
+    detectedLegacyIdentitySource &&
+    els.folder.value.trim() === detectedLegacyIdentitySource;
+  if (matchesDetected) {
+    show(els.legacyIdentityPanel);
+    return;
+  }
+  els.importLegacyIdentity.checked = false;
+  updateLegacyIdentitySelected();
+  hide(els.legacyIdentityPanel);
+}
+
+function updateLegacyIdentitySelected() {
+  els.legacyIdentityPanel.classList.toggle(
+    'panel--selected',
+    els.importLegacyIdentity.checked,
+  );
 }
 
 // The install-location picker only matters when a GPU runtime will be downloaded,
@@ -97,9 +121,15 @@ async function init() {
   const p = await api.probeSetup();
   els.folder.value = p.defaults.imageRoot || '';
   if (p.importedFrom) {
-    els.importedText.textContent = `Imported your existing settings from ${p.importedFrom}.`;
+    els.importedText.textContent = `Found existing server settings at ${p.importedFrom}.`;
     show(els.imported);
   }
+  detectedLegacyIdentitySource = p.legacyIdentitySource || null;
+  if (detectedLegacyIdentitySource) {
+    els.legacyIdentitySource.textContent = detectedLegacyIdentitySource;
+  }
+  updateLegacyIdentityVisibility();
+  updateLegacyIdentitySelected();
   els.installPath.value = p.defaults.installLocation || '';
   gpu = p.gpu || { available: false };
   if (gpu.available) {
@@ -112,8 +142,13 @@ async function init() {
 els.pick.addEventListener('click', async () => {
   if (busy) return;
   const dir = await api.pickLibraryFolder(els.folder.value);
-  if (dir) els.folder.value = dir;
+  if (dir) {
+    els.folder.value = dir;
+    updateLegacyIdentityVisibility();
+  }
 });
+
+els.importLegacyIdentity.addEventListener('change', updateLegacyIdentitySelected);
 
 els.pickInstall.addEventListener('click', async () => {
   if (busy) return;
@@ -136,7 +171,14 @@ els.start.addEventListener('click', async () => {
   els.pickInstall.disabled = true;
   els.start.textContent = 'Setting up…';
   try {
-    await api.commitSetup({ imageRoot, useGpu, installLocation: els.installPath.value.trim() });
+    await api.commitSetup({
+      imageRoot,
+      useGpu,
+      installLocation: els.installPath.value.trim(),
+      importLegacyIdentity:
+        !els.legacyIdentityPanel.classList.contains('hidden') &&
+        els.importLegacyIdentity.checked,
+    });
     // Success → main process navigates this window to the library.
   } catch (e) {
     showError((e && e.message) || String(e));

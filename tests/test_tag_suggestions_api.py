@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import time
 
 from fastapi.testclient import TestClient
 
@@ -1185,16 +1186,55 @@ def _add_face(server, pic_id, character_id, face_index=0):
     from pixlstash.db_models import Face
 
     def ins(session):
-        session.add(
-            Face(
+        # The real upload pipeline may finish face detection before this
+        # fixture runs. Reuse its deterministic first face when present instead
+        # of racing it for the (picture, frame, face) unique key.
+        face = session.exec(
+            select(Face).where(
+                Face.picture_id == pic_id,
+                Face.frame_index == 0,
+                Face.face_index == face_index,
+            )
+        ).first()
+        if face is None:
+            face = Face(
                 picture_id=pic_id,
-                character_id=character_id,
+                frame_index=0,
                 face_index=face_index,
             )
-        )
+            session.add(face)
+        face.character_id = character_id
         session.commit()
 
     server.vault.db.run_task(ins)
+
+
+def _wait_for_task_runner_idle(server, timeout_s=60):
+    """Wait until import-triggered CPU/GPU work is quiescent across two polls."""
+    runner = server.vault._task_runner
+    deadline = time.time() + timeout_s
+    stable_polls = 0
+    while time.time() < deadline:
+        with runner._active_task_lock:
+            active = bool(runner._active_tasks)
+        idle = not active and runner._queue.empty() and runner._gpu_queue.empty()
+        stable_polls = stable_polls + 1 if idle else 0
+        if stable_polls >= 2:
+            return
+        time.sleep(0.1)
+    raise AssertionError("TaskRunner did not become idle before face fixture setup")
+
+
+def _clear_faces(server, picture_ids):
+    from sqlmodel import delete
+
+    from pixlstash.db_models import Face
+
+    def clear(session):
+        session.exec(delete(Face).where(Face.picture_id.in_(picture_ids)))
+        session.commit()
+
+    server.vault.db.run_task(clear)
 
 
 def test_filter_by_project_returns_only_in_project_suspects():
@@ -1249,6 +1289,12 @@ def test_filter_by_character_numeric_and_unassigned():
         char_pic = _upload_picture(client)  # has a face with character 7
         unassigned_pic = _upload_named(client)  # face, no character
         other_pic = _upload_named(client)  # no face at all
+        # Imports require the planner-backed face worker. Once all imports have
+        # been accepted, stop new finder work and drain tasks before replacing
+        # auto-detected faces with the exact filter fixture.
+        server.vault._work_planner.stop()
+        _wait_for_task_runner_idle(server)
+        _clear_faces(server, [char_pic, unassigned_pic, other_pic])
         for p in (char_pic, unassigned_pic, other_pic):
             _seed_suggestion(server, p, "malformed hand", "remove")
         # Create a character row so character_id=<id> resolves.

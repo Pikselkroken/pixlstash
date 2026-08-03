@@ -22,9 +22,12 @@ from pixlstash.services.library_backup_service import BackupError, create_backup
 def make_vault(folder, *, pictures=3, reference_folders=()):
     """Build a vault-shaped database with some images beside it."""
     os.makedirs(folder, exist_ok=True)
+    os.chmod(folder, 0o700)
     conn = sqlite3.connect(os.path.join(folder, "vault.db"))
     conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
-    conn.execute("INSERT INTO alembic_version VALUES ('0094_pending')")
+    conn.execute(
+        "INSERT INTO alembic_version VALUES ('0094_add_pending_score_invalidation')"
+    )
     conn.execute("CREATE TABLE picture (id INTEGER PRIMARY KEY, file_path TEXT)")
     for index in range(pictures):
         conn.execute("INSERT INTO picture (file_path) VALUES (?)", (f"{index}.png",))
@@ -96,26 +99,61 @@ class TestWhatIsInTheArchive:
         assert manifest["library_uuid"] == library.uuid
         assert manifest["library_name"] == "Family Photos"
         assert manifest["picture_count"] == 3
-        assert manifest["vault_revision"] == "0094_pending"
+        assert manifest["vault_revision"] == "0094_add_pending_score_invalidation"
         assert manifest["contains_hub"] is True
 
-    def test_the_live_database_files_are_not_copied_raw(
+    def test_a_prepositioned_writable_wal_sidecar_is_refused(
         self, registry, library, tmp_path
     ):
-        """Only the VACUUM INTO copy belongs in the archive.
-
-        A raw copy of an open database, or a stray -wal, would be inconsistent
-        and useless without the exact file it belongs to.
-        """
+        """Another account must not be able to choose SQLite's WAL contents."""
         open(os.path.join(library.path, "vault.db-wal"), "wb").write(b"junk")
+        os.chmod(os.path.join(library.path, "vault.db-wal"), 0o666)
+        destination = tmp_path / "out.tar.zst"
 
-        result = create_backup(
-            library, str(tmp_path / "out.tar.zst"), registry.hub_path
+        with pytest.raises(BackupError, match="group/world-writable"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+
+    def test_a_real_live_wal_is_captured_but_not_archived_raw(
+        self, registry, library, tmp_path
+    ):
+        vault_path = os.path.join(library.path, "vault.db")
+        writer = sqlite3.connect(vault_path)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "INSERT INTO picture (file_path) VALUES ('committed-in-wal.png')"
         )
+        with open(os.path.join(library.path, "committed-in-wal.png"), "wb") as image:
+            image.write(b"committed image")
+        writer.commit()
+        wal_path = vault_path + "-wal"
+        assert os.path.exists(wal_path)
+        os.chmod(wal_path, 0o600)
+        try:
+            result = create_backup(
+                library, str(tmp_path / "live-wal.tar.zst"), registry.hub_path
+            )
+        finally:
+            writer.close()
 
         entries = read_archive(result.path)
         assert not any("vault.db-wal" in name for name in entries)
         assert not any(name == "images/vault.db" for name in entries)
+        extracted = tmp_path / "live-wal-vault.db"
+        extracted.write_bytes(entries["vault.db"])
+        conn = sqlite3.connect(extracted)
+        try:
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM picture "
+                    "WHERE file_path='committed-in-wal.png'"
+                ).fetchone()[0]
+                == 1
+            )
+        finally:
+            conn.close()
 
     def test_metadata_only_skips_the_images(self, registry, library, tmp_path):
         result = create_backup(
@@ -140,6 +178,122 @@ class TestWhatIsInTheArchive:
 
 
 class TestConsistencyAndSafety:
+    def test_missing_internal_picture_refuses_to_publish(
+        self, registry, library, tmp_path
+    ):
+        os.remove(os.path.join(library.path, "1.png"))
+        destination = tmp_path / "missing.tar.zst"
+
+        with pytest.raises(BackupError, match="missing from the backup payload"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+
+    def test_picture_purged_between_collection_and_stream_refuses_to_publish(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        import pixlstash.services.library_backup_service as backup_module
+
+        destination = tmp_path / "purged-during-backup.tar.zst"
+        real_write = backup_module._write_archive
+
+        def purge_then_write(payload, output, compress):
+            os.remove(os.path.join(library.path, "1.png"))
+            return real_write(payload, output, compress)
+
+        monkeypatch.setattr(backup_module, "_write_archive", purge_then_write)
+        with pytest.raises(BackupError, match="Could not read backup payload"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+        assert not list(tmp_path.glob(".pixlstash-backup-*.tmp"))
+
+    def test_stream_failure_leaves_no_final_and_retry_succeeds(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        destination = tmp_path / "retryable.tar.zst"
+        real_add = tarfile.TarFile.add
+        calls = 0
+
+        def fail_midstream(tar, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected archive read failure")
+            return real_add(tar, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(tarfile.TarFile, "add", fail_midstream)
+            with pytest.raises(BackupError, match="injected archive read failure"):
+                create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+        assert not list(tmp_path.glob(".pixlstash-backup-*.tmp"))
+        assert create_backup(library, str(destination), registry.hub_path).path == str(
+            destination
+        )
+
+    def test_publication_fsync_failure_removes_final_and_allows_retry(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        import pixlstash.services.library_backup_service as backup_module
+
+        destination = tmp_path / "publication-fsync.tar.zst"
+        real_fsync_directory = backup_module._fsync_directory
+        failed = False
+
+        def fail_first(directory):
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise BackupError("injected directory fsync failure")
+            return real_fsync_directory(directory)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(backup_module, "_fsync_directory", fail_first)
+            with pytest.raises(BackupError, match="injected directory fsync"):
+                create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+        assert create_backup(library, str(destination), registry.hub_path).path == str(
+            destination
+        )
+
+    def test_temp_unlink_fsync_failure_does_not_misreport_committed_backup(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        import pixlstash.services.library_backup_service as backup_module
+
+        destination = tmp_path / "cleanup-fsync.tar.zst"
+        real_fsync_directory = backup_module._fsync_directory
+        calls = 0
+
+        def fail_second(directory):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise BackupError("injected cleanup fsync failure")
+            return real_fsync_directory(directory)
+
+        monkeypatch.setattr(backup_module, "_fsync_directory", fail_second)
+        result = create_backup(library, str(destination), registry.hub_path)
+
+        assert result.path == str(destination)
+        assert destination.exists()
+        assert read_archive(result.path)["vault.db"]
+
+    def test_symlinked_payload_is_refused(self, registry, library, tmp_path):
+        target = tmp_path / "outside.png"
+        target.write_bytes(b"outside")
+        os.remove(os.path.join(library.path, "1.png"))
+        os.symlink(target, os.path.join(library.path, "1.png"))
+        destination = tmp_path / "symlink-payload.tar.zst"
+
+        with pytest.raises(BackupError, match="symlinked library payload"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert not destination.exists()
+
     def test_the_archived_database_is_readable_and_complete(
         self, registry, library, tmp_path
     ):
@@ -175,6 +329,49 @@ class TestConsistencyAndSafety:
 
         assert stat.S_IMODE(os.stat(result.path).st_mode) == 0o600
 
+    def test_hub_path_swap_cannot_replace_the_validated_backup_source(
+        self, registry, library, tmp_path, monkeypatch
+    ):
+        import pixlstash.services.library_backup_service as backup_module
+
+        with registry._hub.transaction() as conn:
+            conn.execute("INSERT INTO user (username, is_admin) VALUES ('real', 1)")
+        decoy_path = str(tmp_path / "decoy-hub.db")
+        decoy = HubDatabase(decoy_path)
+        with decoy.transaction() as conn:
+            conn.execute("INSERT INTO user (username, is_admin) VALUES ('decoy', 1)")
+        decoy.close()
+        held_real = str(tmp_path / "held-real-hub.db")
+        held_decoy = str(tmp_path / "held-decoy-hub.db")
+        real_copy = backup_module._vacuum_connection_into
+        swapped = False
+
+        def swap_then_copy(source, destination, source_label):
+            nonlocal swapped
+            if source_label == registry.hub_path and not swapped:
+                swapped = True
+                os.rename(registry.hub_path, held_real)
+                os.rename(decoy_path, registry.hub_path)
+            return real_copy(source, destination, source_label)
+
+        monkeypatch.setattr(backup_module, "_vacuum_connection_into", swap_then_copy)
+        try:
+            result = create_backup(
+                library, str(tmp_path / "out.tar.zst"), registry.hub_path
+            )
+            extracted = tmp_path / "archived-hub.db"
+            extracted.write_bytes(read_archive(result.path)["hub.db"])
+            conn = sqlite3.connect(extracted)
+            try:
+                assert conn.execute("SELECT username FROM user").fetchone()[0] == "real"
+            finally:
+                conn.close()
+        finally:
+            if os.path.exists(registry.hub_path):
+                os.rename(registry.hub_path, held_decoy)
+            if os.path.exists(held_real):
+                os.rename(held_real, registry.hub_path)
+
     def test_an_unreadable_library_is_refused_with_a_usable_message(
         self, registry, library, tmp_path
     ):
@@ -184,6 +381,28 @@ class TestConsistencyAndSafety:
             create_backup(library, str(tmp_path / "out.tar.zst"), registry.hub_path)
 
         assert "not readable" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "hub_kind", ["missing", "symlink", "directory", "not-sqlite"]
+    )
+    def test_an_invalid_hub_fails_closed_without_an_archive(
+        self, registry, library, tmp_path, hub_kind
+    ):
+        hub_path = tmp_path / f"{hub_kind}.db"
+        if hub_kind == "symlink":
+            target = tmp_path / "real-target.db"
+            target.write_bytes(b"not the configured hub")
+            hub_path.symlink_to(target)
+        elif hub_kind == "directory":
+            hub_path.mkdir()
+        elif hub_kind == "not-sqlite":
+            hub_path.write_bytes(b"not sqlite")
+        destination = tmp_path / f"{hub_kind}.tar.zst"
+
+        with pytest.raises(BackupError, match="[Hh]ub"):
+            create_backup(library, str(destination), str(hub_path))
+
+        assert not destination.exists()
 
 
 class TestReferenceFolders:
@@ -225,6 +444,28 @@ class TestDestinationHandling:
         assert result.path.startswith(str(out))
         assert result.path.endswith(".tar.zst")
         assert "Family-Photos" in os.path.basename(result.path)
+
+    def test_existing_destination_is_never_overwritten(
+        self, registry, library, tmp_path
+    ):
+        destination = tmp_path / "existing.tar.zst"
+        destination.write_bytes(b"keep me")
+
+        with pytest.raises(BackupError, match="already exists"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert destination.read_bytes() == b"keep me"
+
+    def test_destination_symlink_is_refused(self, registry, library, tmp_path):
+        target = tmp_path / "target.tar.zst"
+        target.write_bytes(b"do not overwrite")
+        destination = tmp_path / "linked.tar.zst"
+        destination.symlink_to(target)
+
+        with pytest.raises(BackupError, match="symlink"):
+            create_backup(library, str(destination), registry.hub_path)
+
+        assert target.read_bytes() == b"do not overwrite"
 
 
 class TestTheCli:

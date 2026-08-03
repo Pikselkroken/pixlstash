@@ -10,14 +10,16 @@ owner. Switching is ``LOCAL_OWNER_ONLY``, because it is the pivot that turns one
 owner token into access to every registered library, and because it resets every
 connected client's session rather than only the caller's.
 
-**Host information is locality-conditioned.** A caller on the machine, the LAN
-or Tailscale sees the folder path and the exact CLI command; any other owner
-caller sees neither, so a remote session learns nothing about the host's
-filesystem layout. Both routes are library-independent: they return no library
-content, and neither can be used to reach a different library's data, so they
-keep answering while a token is refused or a switch is in flight.
+**Host information is locality-conditioned.** A password/cookie owner on the
+machine, the LAN or Tailscale sees the folder path and exact CLI command; any
+other owner sees neither unless ``allow_remote_host_ops`` is explicitly enabled.
+An ``ALL`` bearer token over Tailscale remains subject to the separate
+``require_local_for_write`` middleware, whose narrower ``is_local_ip`` predicate
+does not include Tailscale CGNAT. Both routes are library-independent: they
+return no library content and keep answering while a switch is in flight.
 """
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -54,6 +56,14 @@ class LibraryResponse(BaseModel):
             "than hidden."
         )
     )
+    active_share_links: int = Field(
+        default=0,
+        description=(
+            "How many resource-scoped share links belong to this library. "
+            "Owner metadata used to warn before switching away; it contains "
+            "no host path and is returned to local and remote owners alike."
+        ),
+    )
     path: Optional[str] = Field(
         default=None,
         description=(
@@ -74,7 +84,8 @@ class LibraryListResponse(BaseModel):
         description=(
             "Whether this caller may switch library. False for a remote session "
             "without allow_remote_host_ops, which is why the tab disables its "
-            "controls rather than letting the call fail."
+            "controls rather than letting the call fail. ALL bearer tokens may "
+            "still be denied earlier by require_local_for_write."
         )
     )
     in_docker: bool = Field(
@@ -130,23 +141,25 @@ def create_router(server) -> APIRouter:
             return True
         return bool(server.auth.allow_remote_host_ops)
 
+    def _count_share_links(library_uuid: str) -> int:
+        """Unexpired resource-scoped tokens pointing at *library_uuid*."""
+        row = server.hub.fetchone(
+            "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ? "
+            "AND resource_type IS NOT NULL "
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            (library_uuid, datetime.utcnow()),
+        )
+        return int(row[0]) if row else 0
+
     def _to_response(library, include_path: bool) -> LibraryResponse:
         return LibraryResponse(
             uuid=library.uuid,
             name=library.name,
             is_active=library.is_active,
             is_reachable=library.is_reachable,
+            active_share_links=_count_share_links(library.uuid),
             path=library.path if include_path else None,
         )
-
-    def _count_share_links(library_uuid: str) -> int:
-        """Resource-scoped tokens pointing at *library_uuid*."""
-        row = server.hub.fetchone(
-            "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ? "
-            "AND resource_type IS NOT NULL",
-            (library_uuid,),
-        )
-        return int(row[0]) if row else 0
 
     @router.get(
         "/libraries",
@@ -154,7 +167,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns every attached library and which one is active. Folder "
             "paths and the CLI hint are included only for a local, LAN or "
-            "Tailscale caller."
+            "Tailscale cookie owner, or when allow_remote_host_ops is enabled."
         ),
         tags=["libraries"],
         response_model=LibraryListResponse,

@@ -12,15 +12,18 @@ session must keep following the switch, which is the whole point of switching.
 
 import sqlite3
 import tempfile
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
 
-from pixlstash.authz.policy import AccessPolicy, RoutePolicy
+from pixlstash.authz.policy import AccessPolicy, LibraryAccessMode, RoutePolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.db_models import User, UserToken
 from pixlstash.server import Server
+from pixlstash.services.library_switch_service import SwitchState
 
 API = "/api/v1"
 
@@ -134,7 +137,98 @@ class TestPinnedRoutes:
             f"{API}/pictures", headers={"Authorization": f"Bearer {token}"}
         )
         assert response.status_code == 403
-        assert "not currently active" in response.json()["detail"]
+        assert "different library" in response.json()["detail"]
+
+    def test_library_mismatch_is_refused_before_any_guest_vault_lookup(
+        self, server, other_library, monkeypatch
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner, scope="READ")
+        _restamp_tokens(server, other_library)
+        with TestClient(server.api) as client:
+            vault_reads = []
+            real_read = server.vault.db.run_immediate_read_task
+
+            def observed_read(*args, **kwargs):
+                vault_reads.append(True)
+                return real_read(*args, **kwargs)
+
+            monkeypatch.setattr(
+                server.vault.db, "run_immediate_read_task", observed_read
+            )
+            response = client.get(
+                f"{API}/pictures",
+                headers={"Authorization": f"Bearer {token}"},
+                cookies={"guest_session": "plausible-cookie"},
+            )
+            assert response.status_code == 403
+            assert vault_reads == []
+
+    def test_writer_waits_for_request_paused_in_guest_lookup(
+        self, server, tmp_path, monkeypatch
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner, scope="READ")
+        original = server.library_registry.active_library()
+        target = server.library_registry.create(
+            str(tmp_path / "guest-pause"), "Guest pause"
+        )
+        lookup_entered = threading.Event()
+        release_lookup = threading.Event()
+        request_done = threading.Event()
+        switch_done = threading.Event()
+        errors = []
+        real_read = server.vault.db.run_immediate_read_task
+
+        def paused_guest_read(callback, *args, **kwargs):
+            if getattr(callback, "__name__", "") == "_lookup_by_token":
+                lookup_entered.set()
+                assert release_lookup.wait(timeout=10)
+            return real_read(callback, *args, **kwargs)
+
+        monkeypatch.setattr(
+            server.vault.db, "run_immediate_read_task", paused_guest_read
+        )
+
+        def request():
+            try:
+                TestClient(server.api).get(
+                    f"{API}/pictures",
+                    headers={"Authorization": f"Bearer {token}"},
+                    cookies={"guest_session": "plausible-cookie"},
+                )
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                request_done.set()
+
+        def switch():
+            try:
+                server.library_switch.switch_to(target.uuid)
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                switch_done.set()
+
+        request_thread = threading.Thread(target=request)
+        switch_thread = threading.Thread(target=switch)
+        request_thread.start()
+        assert lookup_entered.wait(timeout=10)
+        switch_thread.start()
+        deadline = time.monotonic() + 5
+        while server.library_coordinator.state is not SwitchState.SWITCHING:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not switch_done.is_set()
+        assert server.vault.image_root == original.path
+
+        release_lookup.set()
+        request_thread.join(timeout=10)
+        switch_thread.join(timeout=20)
+        assert request_done.is_set() and switch_done.is_set()
+        assert errors == []
+        assert server.vault.image_root == target.path
+        server.library_switch.switch_to(original.uuid)
 
     def test_a_token_with_no_stamp_at_all_is_refused(self, server):
         """Fails closed: an unstamped token is not treated as universal.
@@ -168,6 +262,27 @@ class TestPinnedRoutes:
 
         assert owner.get(f"{API}/pictures").status_code == 200
 
+    def test_session_created_from_token_keeps_its_library_pin(self, server, tmp_path):
+        """Exchanging a token for a cookie must not launder away its pin."""
+        password_owner = _owner_client(server)
+        token = _mint(password_owner)
+        token_session = TestClient(server.api)
+        response = token_session.post("/login", json={"token": token})
+        assert response.status_code == 200, response.text
+
+        original = server.library_registry.active_library()
+        other = server.library_registry.create(str(tmp_path / "session-pin"), "Pin B")
+        try:
+            server.library_switch.switch_to(other.uuid)
+            refused = token_session.get(f"{API}/pictures")
+            assert refused.status_code == 403
+            assert "different library" in refused.json()["detail"]
+            # A password-derived browser session follows the same switch.
+            assert password_owner.get(f"{API}/pictures").status_code == 200
+        finally:
+            server.library_switch.switch_to(original.uuid)
+            server.library_registry.detach(other.id)
+
 
 class TestLibraryIndependentRoutes:
     def test_auth_info_answers_even_for_a_non_active_library_token(
@@ -182,6 +297,32 @@ class TestLibraryIndependentRoutes:
             f"{API}/users/me/auth", headers={"Authorization": f"Bearer {token}"}
         )
         assert response.status_code == 200, response.text
+
+    def test_hub_only_auth_during_switch_never_enriches_from_guest_vault(
+        self, server, monkeypatch
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner, scope="READ")
+        vault_reads = []
+        real_read = server.vault.db.run_immediate_read_task
+
+        def observed_read(*args, **kwargs):
+            vault_reads.append(True)
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(server.vault.db, "run_immediate_read_task", observed_read)
+        server.library_coordinator.state = SwitchState.SWITCHING
+        try:
+            response = TestClient(server.api).get(
+                f"{API}/libraries",
+                headers={"Authorization": f"Bearer {token}"},
+                cookies={"guest_session": "plausible-cookie"},
+            )
+        finally:
+            server.library_coordinator.state = SwitchState.READY
+
+        assert response.status_code == 403
+        assert vault_reads == []
 
 
 class TestTheDeclarationContract:
@@ -205,6 +346,19 @@ class TestTheDeclarationContract:
             ("GET", "/api/v1/libraries"),
             ("POST", "/api/v1/libraries/active"),
         }
+
+    def test_every_route_has_a_typed_generation_access_mode(self):
+        assert ROUTE_POLICIES
+        for route, policy in ROUTE_POLICIES.items():
+            assert isinstance(policy.library_access, LibraryAccessMode), route
+
+    def test_only_the_switch_endpoint_has_writer_admission(self):
+        writers = {
+            route
+            for route, policy in ROUTE_POLICIES.items()
+            if policy.library_access is LibraryAccessMode.SWITCH_WRITER
+        }
+        assert writers == {("POST", "/api/v1/libraries/active")}
 
     def test_token_management_is_never_library_independent(self):
         """The second clause of the rule, pinned down.

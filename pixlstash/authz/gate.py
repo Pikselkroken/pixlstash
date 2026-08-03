@@ -71,6 +71,7 @@ from pixlstash.authz.policy import (
     SCOPED_POLICIES,
     AccessPolicy,
     RoutePolicy,
+    LibraryAccessMode,
     validate_policy_declarations,
 )
 from pixlstash.authz.registry import CONDITIONALLY_MOUNTED_ROUTES, ROUTE_POLICIES
@@ -461,6 +462,15 @@ class AuthzGate:
         # other check, including the pin, because during the swap there is no
         # settled answer to "which library is active".
         self._refuse_while_switching(request, route_policy)
+        if (
+            route_policy.library_access is LibraryAccessMode.ACTIVE_VAULT
+            and getattr(self._server, "library_coordinator", None) is not None
+            and getattr(request.state, "library_lease", None) is None
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Active-library request was not admitted safely.",
+            )
 
         # The library pin runs before every policy branch, so no access level
         # can sidestep it and a route added without thinking about libraries is
@@ -636,7 +646,7 @@ class AuthzGate:
         they remain answerable throughout, which is what lets a client ask what
         is going on instead of seeing everything fail.
         """
-        if route_policy.library_independent:
+        if route_policy.library_access is not LibraryAccessMode.ACTIVE_VAULT:
             return
 
         from pixlstash.services.library_switch_service import (
@@ -644,12 +654,17 @@ class AuthzGate:
             switching_state_of,
         )
 
-        if switching_state_of(self._server) is not SwitchState.SWITCHING:
+        state = switching_state_of(self._server)
+        if state is SwitchState.READY:
             return
 
         raise HTTPException(
             status_code=503,
-            detail="PixlStash is switching library. Try again in a moment.",
+            detail=(
+                "PixlStash has no verified open library. Restart the server."
+                if state is SwitchState.UNAVAILABLE
+                else "PixlStash is switching library. Try again in a moment."
+            ),
             headers={"Retry-After": "2"},
         )
 
@@ -673,8 +688,21 @@ class AuthzGate:
 
         matched_token = getattr(request.state, "matched_token", None)
         if matched_token is None:
-            # A cookie session, or an unauthenticated PUBLIC route.
-            return
+            # Password/browser sessions follow switches. A cookie session
+            # created from a token inherits that token's pin.
+            session_library = getattr(request.state, "session_library_uuid", None)
+            if session_library is None:
+                return
+            active_uuid = self._auth.active_library_uuid()
+            if active_uuid is None or session_library == active_uuid:
+                return
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "This session was created from a token for a library that "
+                    "is not currently active."
+                ),
+            )
 
         active_uuid = self._auth.active_library_uuid()
         if active_uuid is None:

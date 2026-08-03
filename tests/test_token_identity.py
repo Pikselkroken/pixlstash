@@ -62,7 +62,7 @@ def _create_token(client, **payload) -> dict:
 
 
 def _public_id_of(server, token_id: int):
-    return server.vault.db.run_immediate_read_task(
+    return server.hub_engine.run_immediate_read_task(
         lambda s: s.get(UserToken, token_id).public_id
     )
 
@@ -79,7 +79,7 @@ def _delete_token_row_out_of_band(server, token_id: int) -> None:
         session.delete(session.get(UserToken, token_id))
         session.commit()
 
-    server.vault.db.run_task(_do)
+    server.hub_engine.run_task(_do)
 
 
 def _add_picture(server, filename: str, description: str) -> Picture:
@@ -101,7 +101,7 @@ def _wipe_tokens(server) -> None:
             session.delete(token)
         session.commit()
 
-    server.vault.db.run_task(_do)
+    server.hub_engine.run_task(_do)
     server.auth._clear_all_sessions()
     server.auth._flush_token_cache()
 

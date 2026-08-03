@@ -8,6 +8,7 @@ import {
   watch,
 } from "vue";
 import { useTheme } from "vuetify";
+import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { useReviewRoute } from "./composables/useReviewRoute";
 import { API_BASE_URL, isReadOnly, sessionContext } from "./utils/apiClient";
@@ -22,6 +23,10 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "./stores/useLibrariesStore";
 import {
   ALL_PICTURES_ID,
   SCRAPHEAP_PICTURES_ID,
@@ -38,6 +43,7 @@ import { useSidebarRefresh } from "./composables/useSidebarRefresh";
 import { useViewportLayout } from "./composables/useViewportLayout";
 import { useAppEntityActions } from "./composables/useAppEntityActions";
 import { useSearchBarSync } from "./composables/useSearchBarSync";
+import { libraryDocumentTitle } from "./utils/libraryChrome";
 
 import SideBar from "./components/panels/SideBar.vue";
 import TitleBar from "./components/TitleBar.vue";
@@ -50,6 +56,8 @@ import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
+import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
+import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
 import { toPx } from "./utils/floatingBottom.js";
 const BACKEND_URL = API_BASE_URL;
@@ -66,6 +74,11 @@ const reviewSessionsStore = useReviewSessionsStore();
 const snapshotsStore = useSnapshotsStore();
 const tasksStore = useTasksStore();
 const operationStore = useOperationStore();
+const librariesStore = useLibrariesStore();
+const librarySwitchStore = useLibrarySwitchStore();
+const { activeLibrary } = storeToRefs(librariesStore);
+const { overlayOpen: librarySwitchOverlayOpen } =
+  storeToRefs(librarySwitchStore);
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -237,6 +250,18 @@ const activeCategoryLabel = computed(() => {
   return "All Pictures";
 });
 
+const activeLibraryName = computed(() =>
+  isReadOnly.value ? "" : (activeLibrary.value?.name ?? ""),
+);
+
+watch(
+  activeLibraryName,
+  (name) => {
+    document.title = libraryDocumentTitle(name, isReadOnly.value);
+  },
+  { immediate: true },
+);
+
 function onRestoreConfirmed() {
   gridStore.wsUpdateKey = Date.now();
   gridStore.refreshGridVersion();
@@ -342,6 +367,7 @@ onMounted(async () => {
   // Snapshots are owner-only (full unscoped access); READ / share sessions
   // would 403 on every fetch otherwise.
   if (!isReadOnly.value) {
+    await librariesStore.refresh();
     snapshotsStore.fetchSnapshots();
     // Seed the undo stack so the toolbar control is correctly enabled on the
     // first frame. This read establishes the "already seen" watermark, so the
@@ -416,19 +442,28 @@ defineExpose({
 });
 </script>
 <template>
-  <v-app>
+  <v-app :inert="librarySwitchOverlayOpen">
     <div ref="appViewportEl" class="app-viewport">
       <TitleBar
         :install-type="installType"
         :check-for-updates="userPrefsStore.checkForUpdates"
+        :active-library-name="activeLibraryName"
+        @open-libraries="openSettingsDialog('libraries')"
       />
       <!-- App-level status strip: spans the whole shell above BOTH rails and the
            grid. Thumbnail regeneration repaints grid tiles, sidebar thumbnails
            and the Tasks row alike, so it is not a property of the grid column;
            mounting it inside `.main-area` used to push the stats rail down while
            leaving the left rail alone. -->
-      <ThumbnailUpgradeBanner @view-progress="focusTasksTabPanel" />
-      <div class="file-manager">
+      <ThumbnailUpgradeBanner
+        :inert="librarySwitchOverlayOpen"
+        @view-progress="focusTasksTabPanel"
+      />
+      <div
+        class="file-manager"
+        :inert="librarySwitchOverlayOpen"
+        :aria-hidden="librarySwitchOverlayOpen ? 'true' : undefined"
+      >
         <!-- Auto-hide (unpinned): a thin strip at the left edge reveals the
              sidebar overlay on hover (or tap, on touch). -->
         <div
@@ -612,6 +647,7 @@ defineExpose({
       </div>
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
+        :inert="librarySwitchOverlayOpen"
         :backendUrl="BACKEND_URL"
         @close="reviewSessionsStore.overlayOpen = false"
       />
@@ -633,11 +669,14 @@ defineExpose({
       }"
       type="button"
       title="Keyboard shortcuts (F1)"
+      :disabled="librarySwitchOverlayOpen"
       @click="shortcutsDialogOpen = true"
     >
       <v-icon size="20">mdi-keyboard</v-icon><span>F1</span>
     </button>
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
+    <ConfirmDialog />
+    <LibrarySwitchOverlay />
   </v-app>
 </template>
 <style src="./App.css"></style>

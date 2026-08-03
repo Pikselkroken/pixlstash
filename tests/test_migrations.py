@@ -481,15 +481,28 @@ def _seed_pre_reset_rows(db_path):
             created_at="2026-01-01 00:00:00",
         )
         _insert_minimal_row(conn, "picture", id=1, file_path="seed.jpg")
+        guest_session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(guest_session)")
+        }
+        token_column = (
+            "token_id" if "token_id" in guest_session_columns else "token_public_id"
+        )
+        token_value = 1 if token_column == "token_id" else "seed-public-id"
         conn.execute(
-            "INSERT INTO guest_session "
-            "(session_id, token_id, created_at, last_active_at, cookie_token) "
-            "VALUES ('sess-1', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00', 'ck-1')"
+            f"INSERT INTO guest_session (session_id, {token_column}, created_at, "
+            "last_active_at, cookie_token) VALUES (?, ?, ?, ?, ?)",
+            (
+                "sess-1",
+                token_value,
+                "2026-01-01 00:00:00",
+                "2026-01-01 00:00:00",
+                "ck-1",
+            ),
         )
         conn.execute(
-            "INSERT INTO guest_score "
-            "(id, session_id, token_id, picture_id, score, scored_at) "
-            "VALUES (1, 'sess-1', 1, 1, 4, '2026-01-01 00:00:00')"
+            f"INSERT INTO guest_score (id, session_id, {token_column}, picture_id, "
+            "score, scored_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "sess-1", token_value, 1, 4, "2026-01-01 00:00:00"),
         )
         conn.commit()
 
@@ -665,6 +678,7 @@ def test_a_pre_splice_dev_database_is_recovered_by_stamping_back_to_0085():
 # ---------------------------------------------------------------------------
 
 _REVISION_BEFORE_PUBLIC_ID = "0089_add_dedupverdict_reopen_batch_id"
+_REVISION_PUBLIC_ID = "0090_add_usertoken_public_id"
 # The three indexes the table already carried. They are asserted after the
 # migration because dropping and re-creating the table (the ``AUTOINCREMENT``
 # route that was rejected in favour of this additive column) would have taken
@@ -680,6 +694,12 @@ _PRE_EXISTING_TOKEN_INDEXES = {
 def _usertoken_shape(db_path):
     """Return the rows, indexes and foreign keys of ``usertoken``."""
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        guest_session_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(guest_session)")
+        }
+        guest_token_column = (
+            "token_id" if "token_id" in guest_session_columns else "token_public_id"
+        )
         return {
             "rows": conn.execute(
                 "SELECT id, token_hash, public_id FROM usertoken ORDER BY id"
@@ -692,10 +712,10 @@ def _usertoken_shape(db_path):
                 "PRAGMA foreign_key_list(usertoken)"
             ).fetchall(),
             "guest_session": conn.execute(
-                "SELECT session_id, token_id FROM guest_session"
+                f"SELECT session_id, {guest_token_column} FROM guest_session"
             ).fetchall(),
             "guest_score": conn.execute(
-                "SELECT id, token_id FROM guest_score"
+                f"SELECT id, {guest_token_column} FROM guest_score"
             ).fetchall(),
         }
 
@@ -739,7 +759,7 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
                 )
             conn.commit()
 
-        result = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        result = _run_alembic(["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR)
         assert result.returncode == 0, (
             f"alembic upgrade head failed:\n"
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
@@ -775,8 +795,10 @@ def test_0090_backfills_public_id_without_disturbing_existing_tokens():
         ]
 
         # The guest rows still resolve against their token.
-        assert shape["guest_session"] == [("sess-1", 1)]
-        assert shape["guest_score"] == [(1, 1)]
+        expected_guest_token = shape["guest_session"][0][1]
+        assert expected_guest_token in (1, "seed-public-id")
+        assert shape["guest_session"] == [("sess-1", expected_guest_token)]
+        assert shape["guest_score"] == [(1, expected_guest_token)]
 
 
 def test_0090_public_id_uniqueness_is_enforced():
@@ -831,7 +853,10 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         db_url = f"sqlite:///{db_path}"
 
         assert (
-            _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR).returncode == 0
+            _run_alembic(
+                ["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+            ).returncode
+            == 0
         )
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
             conn.execute("PRAGMA foreign_keys = OFF")
@@ -859,7 +884,9 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         assert stamped.returncode == 0, (
             f"stamp back failed:\nstdout: {stamped.stdout}\nstderr: {stamped.stderr}"
         )
-        replayed = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        replayed = _run_alembic(
+            ["upgrade", _REVISION_PUBLIC_ID], db_url, _MIGRATIONS_DIR
+        )
         assert replayed.returncode == 0, (
             "re-running 0090 over an already-migrated database must be a no-op, "
             f"not an error:\nstdout: {replayed.stdout}\nstderr: {replayed.stderr}"
@@ -867,6 +894,54 @@ def test_0090_replay_does_not_reissue_existing_public_ids():
         assert _usertoken_shape(db_path)["rows"] == before, (
             "a replay must not reissue public ids to tokens that already have one"
         )
+
+
+def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
+    """The hub split removes stale integer token references from each vault."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "test_vault.db")
+        db_url = f"sqlite:///{db_path}"
+        before = _run_alembic(
+            ["upgrade", "0092_add_library_settings"], db_url, _MIGRATIONS_DIR
+        )
+        assert before.returncode == 0, before.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DROP TABLE guest_score")
+            conn.execute("DROP TABLE guest_session")
+            conn.execute(
+                "CREATE TABLE guest_session (session_id TEXT PRIMARY KEY, "
+                "token_id INTEGER NOT NULL, created_at TEXT NOT NULL, "
+                "last_active_at TEXT NOT NULL, cookie_token TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE guest_score (id INTEGER PRIMARY KEY, session_id TEXT "
+                "NOT NULL, token_id INTEGER NOT NULL, picture_id INTEGER NOT NULL, "
+                "score INTEGER NOT NULL, scored_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO guest_session VALUES "
+                "('legacy', 1, '2026-01-01', '2026-01-01', 'cookie')"
+            )
+            conn.execute(
+                "INSERT INTO guest_score VALUES (1, 'legacy', 1, 1, 4, '2026-01-01')"
+            )
+            conn.commit()
+
+        result = _run_alembic(
+            ["upgrade", "0093_guest_tables_reference_token_public_id"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert result.returncode == 0, result.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            for table in ("guest_session", "guest_score"):
+                columns = {
+                    row[1] for row in conn.execute(f"PRAGMA table_info({table})")
+                }
+                assert "token_public_id" in columns
+                assert "token_id" not in columns
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
 
 
 def test_the_migration_chain_has_exactly_one_head():

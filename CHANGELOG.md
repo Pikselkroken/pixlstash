@@ -1,3 +1,38 @@
+# [Unreleased]
+
+- Add multiple image libraries with switching from Settings → Libraries. Each
+  library keeps its own pictures, tags, scores and snapshots while your account
+  and preferences stay with the PixlStash installation.
+- API tokens and share links now belong to the library where they were created.
+  They stop serving or changing data while another library is active; create a
+  token in each library used by scripts or integrations.
+- Switching libraries now waits for work on the old library to stop, refuses a
+  replaced/fingerprint-mismatched vault before migration, and clears
+  library-specific caches before publication. After the new library is live it
+  closes update and ComfyUI connections so every open tab reloads without stale
+  picture ids. Overlapping switch requests fail promptly instead of deadlocking.
+- Library listings now report each library's active share-link count so Settings
+  can warn before switching away from links that will temporarily stop working.
+- Upgrading an existing pip/source/headless/Docker installation requires one
+  explicit preparation command **after installing the new version but before
+  its first normal startup**; startup never infers migration authority from a
+  config file or an existing vault. Pip: `pixlstash-cli --hub <config-dir>/hub.db
+  libraries prepare-legacy-identity <library-folder>`. Source checkout:
+  `python -m pixlstash.cli --hub <config-dir>/hub.db libraries
+  prepare-legacy-identity <library-folder>`. Docker Compose (with the normal
+  home volume mounted): `docker compose run --rm --entrypoint pixlstash-cli
+  pixlstash --hub /home/pixlstash/.config/pixlstash/hub.db libraries
+  prepare-legacy-identity /home/pixlstash/.config/pixlstash/images`. The desktop
+  app runs this preparer itself. Startup then moves owner credentials from the
+  portable library into the installation hub; securely removes portable owner,
+  token, guest-session, and guest-score rows and SQLite remnants from the live
+  vault and its historical snapshots; and asks guests to reopen their links.
+  New snapshots and restores are sanitized too. See [Multiple
+  libraries](README.md#multiple-libraries) for custom paths and all commands.
+- Add `pixlstash-cli libraries backup` for an owner-readable local archive of a
+  library plus its hub. Existing files and symlink destinations are refused and
+  never overwritten.
+
 # [1.9.0]
 
 Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as described under 1.8.1 below: create replacements from Settings, share your links again with their new values, and enter your public URL and ComfyUI URL again. If you already updated to 1.8.1 this has happened and your tokens are left alone.

@@ -43,7 +43,7 @@ only). The CI guardrail's audit allowlist burns to zero as this table fills.
 
 from __future__ import annotations
 
-from pixlstash.authz.policy import AccessPolicy, RoutePolicy
+from pixlstash.authz.policy import AccessPolicy, LibraryAccessMode, RoutePolicy
 
 # Short aliases keep the table scannable in one screen.
 _PUBLIC = AccessPolicy.PUBLIC
@@ -72,28 +72,43 @@ _LIST_AWARE = RoutePolicy(_LIST, scope_aware=True)
 ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── App-level / public (auth-excluded in AUTH_EXCLUDED_*) ───────────────
     ("GET", "/"): RoutePolicy(
-        _PUBLIC, justification="Frontend SPA index; auth-excluded; no owner data"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Frontend SPA index; auth-excluded; no owner data",
     ),
     ("GET", "/version"): RoutePolicy(
-        _PUBLIC, justification="Health/version probe; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Health/version probe; auth-excluded",
     ),
     ("GET", "/scalar"): RoutePolicy(
-        _PUBLIC, justification="API docs UI; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="API docs UI; auth-excluded",
     ),
     ("GET", "/favicon.ico"): RoutePolicy(
-        _PUBLIC, justification="Static favicon; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Static favicon; auth-excluded",
     ),
     ("GET", "/docs"): RoutePolicy(
-        _PUBLIC, justification="Swagger UI; auth-excluded (/docs/ prefix)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Swagger UI; auth-excluded (/docs/ prefix)",
     ),
     ("GET", "/docs/oauth2-redirect"): RoutePolicy(
-        _PUBLIC, justification="Swagger oauth2 redirect; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Swagger oauth2 redirect; auth-excluded",
     ),
     ("GET", "/openapi.json"): RoutePolicy(
-        _PUBLIC, justification="OpenAPI schema; auth-excluded"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="OpenAPI schema; auth-excluded",
     ),
     ("GET", "/{full_path:path}"): RoutePolicy(
         _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
         justification=(
             "Frontend SPA fallback serving the static shell/assets; returns no "
             "owner resource data. NEEDS REVIEW: this template is not statically "
@@ -103,25 +118,36 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         ),
     ),
     ("GET", "/api/v1/check-session"): RoutePolicy(
-        _PUBLIC, justification="Session status probe; auth-excluded (/check-session)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Session status probe; auth-excluded (/check-session)",
     ),
     ("GET", "/api/v1/login"): RoutePolicy(
-        _PUBLIC, justification="Registration-status probe; auth-excluded (/login)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Registration-status probe; auth-excluded (/login)",
     ),
     ("POST", "/api/v1/login"): RoutePolicy(
         _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
         justification="Password login / first-owner claim; auth-excluded (/login)",
     ),
     ("POST", "/api/v1/logout"): RoutePolicy(
-        _PUBLIC, justification="Logout; auth-excluded (/logout)"
+        _PUBLIC,
+        library_access=LibraryAccessMode.HUB_ONLY,
+        justification="Logout; auth-excluded (/logout)",
     ),
     ("GET", "/share/{token_slug}"): RoutePolicy(
         _PUBLIC,
         justification="Share-link landing; resolves its own token; auth-excluded (/share/ prefix)",
     ),
     # ── App-level authenticated, no per-object data ─────────────────────────
-    ("GET", "/api/v1/network/info"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/protected"): RoutePolicy(_ANY),
+    ("GET", "/api/v1/network/info"): RoutePolicy(
+        _ANY, library_access=LibraryAccessMode.HUB_ONLY
+    ),
+    ("GET", "/api/v1/protected"): RoutePolicy(
+        _ANY, library_access=LibraryAccessMode.HUB_ONLY
+    ),
     # ── config.py (user account + server-config) ────────────────────────────
     ("GET", "/api/v1/users/me/config"): RoutePolicy(
         _OWNER,
@@ -253,6 +279,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/libraries/active"): RoutePolicy(
         _LOCAL,
         library_independent=True,
+        library_access=LibraryAccessMode.SWITCH_WRITER,
         justification=(
             "§16.3 locality tier, but NOT for the usual reason: this route takes "
             "a registry uuid, never a caller-supplied host path, so it is not the "

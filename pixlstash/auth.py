@@ -288,6 +288,7 @@ class WebSocketAuth:
 
     user_id: int
     is_owner: bool
+    library_uuid: Optional[str] = None
 
 
 class AuthService:
@@ -331,6 +332,9 @@ class AuthService:
         # stale key resolves to the same token or to nothing (issue #666).
         self._sessions_by_token_public_id: dict[str, set[str]] = {}
         self._token_public_id_by_session: dict[str, str] = {}
+        # Token-derived cookie sessions keep the token's library pin. Password
+        # and ordinary browser/desktop sessions are absent and follow switches.
+        self._library_uuid_by_session: dict[str, str] = {}
         self._session_lock = threading.Lock()
         # The pre-authenticated Electron desktop owner session, if seeded (see
         # seed_desktop_session). It grants full owner access and is therefore
@@ -417,8 +421,17 @@ class AuthService:
                 del self._guest_sessions[sid]
             return sum(1 for ts in self._guest_sessions.values() if ts >= active_cutoff)
 
+    def clear_guest_session_tracking(self) -> None:
+        """Drop availability-only guest activity when the active library changes."""
+        with self._guest_sessions_lock:
+            self._guest_sessions = {}
+
     def _register_session(
-        self, session_id: str, user_id: int, token_public_id: Optional[str] = None
+        self,
+        session_id: str,
+        user_id: int,
+        token_public_id: Optional[str] = None,
+        token_library_uuid: Optional[str] = None,
     ) -> None:
         """Record an authenticated session and the token that created it.
 
@@ -440,12 +453,15 @@ class AuthService:
                     token_public_id, set()
                 ).add(session_id)
                 self._token_public_id_by_session[session_id] = token_public_id
+                if token_library_uuid is not None:
+                    self._library_uuid_by_session[session_id] = token_library_uuid
 
     def _forget_session(self, session_id: str) -> None:
         """Forget a single session and its token link (used by logout)."""
         with self._session_lock:
             self.active_session_ids.pop(session_id, None)
             token_public_id = self._token_public_id_by_session.pop(session_id, None)
+            self._library_uuid_by_session.pop(session_id, None)
             if token_public_id is not None:
                 sessions = self._sessions_by_token_public_id.get(token_public_id)
                 if sessions is not None:
@@ -466,6 +482,7 @@ class AuthService:
                     token_public_id, set()
                 ):
                     self._token_public_id_by_session.pop(session_id, None)
+                    self._library_uuid_by_session.pop(session_id, None)
                     if self.active_session_ids.pop(session_id, None) is not None:
                         dropped += 1
         return dropped
@@ -537,6 +554,7 @@ class AuthService:
             self.active_session_ids = {}
             self._sessions_by_token_public_id = {}
             self._token_public_id_by_session = {}
+            self._library_uuid_by_session = {}
 
     def reset_after_restore(self) -> None:
         """Drop every piece of in-memory authentication state after a restore.
@@ -1319,7 +1337,12 @@ class AuthService:
                 )
                 user_id = None
             if user_id is not None:
-                return WebSocketAuth(user_id=user_id, is_owner=True)
+                library_uuid = self._library_uuid_by_session.get(session_id)
+                if library_uuid not in (None, self.active_library_uuid()):
+                    return None
+                return WebSocketAuth(
+                    user_id=user_id, is_owner=True, library_uuid=library_uuid
+                )
 
         matched: Optional[UserToken] = None
         # Bearer token (non-browser clients can set this header).
@@ -1335,10 +1358,24 @@ class AuthService:
                     matched = candidate
 
         if matched is not None:
+            if getattr(matched, "library_uuid", None) != self.active_library_uuid():
+                return None
+            if (
+                is_unscoped_owner_token(matched)
+                and self._server_config.get("require_local_for_write", True)
+                and not is_local_ip(self._get_real_client_ip_ws(websocket))
+            ):
+                self._logger.warning(
+                    "Rejected owner-token WebSocket from non-local IP %s.",
+                    self._get_real_client_ip_ws(websocket),
+                )
+                return None
             user = self.get_user()
             if user is not None:
                 return WebSocketAuth(
-                    user_id=user.id, is_owner=is_unscoped_owner_token(matched)
+                    user_id=user.id,
+                    is_owner=is_unscoped_owner_token(matched),
+                    library_uuid=getattr(matched, "library_uuid", None),
                 )
         return None
 
@@ -1888,6 +1925,7 @@ class AuthService:
             )
 
         session_token_public_id: Optional[str] = None
+        session_library_uuid: Optional[str] = None
         if request.token:
             user = self.get_user()
             if not user:
@@ -1945,6 +1983,12 @@ class AuthService:
                 )
                 raise HTTPException(status_code=401, detail="Invalid token")
             session_token_public_id = matched_token.public_id
+            session_library_uuid = matched_token.library_uuid
+            if session_library_uuid != self.active_library_uuid():
+                raise HTTPException(
+                    status_code=403,
+                    detail="This token belongs to a library that is not currently active.",
+                )
 
             def update_token_last_used(session: Session, token_id: int):
                 db_token = session.get(UserToken, token_id)
@@ -2024,7 +2068,10 @@ class AuthService:
         if not user or user.id is None:
             raise HTTPException(status_code=500, detail="User not found")
         self._register_session(
-            session_id, user.id, token_public_id=session_token_public_id
+            session_id,
+            user.id,
+            token_public_id=session_token_public_id,
+            token_library_uuid=session_library_uuid,
         )
         if session_token_public_id is not None:
             self._confirm_session_token_still_exists(
@@ -2127,6 +2174,15 @@ class AuthService:
             if user_id is not None:
                 # Cookie session — full owner access, no scope restriction
                 request.state.auth_user_id = user_id
+                session_library_uuid = self._library_uuid_by_session.get(session_id)
+                if session_library_uuid is not None:
+                    request.state.session_library_uuid = session_library_uuid
+                    lease = getattr(request.state, "library_lease", None)
+                    if lease is not None and session_library_uuid != lease.library_uuid:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Token belongs to a different library"},
+                        )
             else:
                 # Try Bearer token, then fall back to ?token= query param
                 matched_token: Optional[UserToken] = None
@@ -2138,6 +2194,15 @@ class AuthService:
                     matched_token = self._token_from_query_param(request)
 
                 if matched_token is not None:
+                    lease = getattr(request.state, "library_lease", None)
+                    if (
+                        lease is not None
+                        and matched_token.library_uuid != lease.library_uuid
+                    ):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "Token belongs to a different library"},
+                        )
                     user = self.get_user()
                     user_id = user.id if user else None
                     if user_id:
@@ -2201,7 +2266,11 @@ class AuthService:
                             # cookie_token to get the real session_id; this ensures no
                             # user-supplied value is ever trusted directly from the cookie.
                             raw_gs = request.cookies.get("guest_session", "")
-                            if raw_gs and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs):
+                            if (
+                                lease is not None
+                                and raw_gs
+                                and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", raw_gs)
+                            ):
                                 from pixlstash.db_models.guest_session import (
                                     GuestSession,
                                 )
@@ -2226,9 +2295,7 @@ class AuthService:
                                 # in-memory and untouched by this change.
                                 # Reads the vault, not the hub: a guest session
                                 # belongs to one library.
-                                gs = self._guest_db.run_immediate_read_task(
-                                    _lookup_by_token
-                                )
+                                gs = lease.db.run_immediate_read_task(_lookup_by_token)
                                 if gs is not None:
                                     request.state.guest_session_id = gs.session_id
                                     self.record_guest_activity(gs.session_id)

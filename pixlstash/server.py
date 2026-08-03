@@ -46,9 +46,15 @@ from pixlstash.services import library_settings_service, scrapheap_service
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
 from pixlstash.startup_checks import StartupChecks
-from pixlstash.hub.bootstrap import bootstrap_hub
+from pixlstash.hub.bootstrap import (
+    bootstrap_hub,
+    registered_vault_path,
+)
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
+from pixlstash.services.library_generation_coordinator import (
+    LibraryGenerationCoordinator,
+)
 from pixlstash.vault import Vault
 from pixlstash.routes.config import create_router as create_config_router
 from pixlstash.routes.characters import create_router as create_characters_router
@@ -321,7 +327,6 @@ class Server(
         gc.collect()
 
         self._server_config_path = server_config_path
-
         self.path_mapper = PathMapper(path_map)
 
         self._server_config = self.init_server_config(server_config_path)
@@ -371,19 +376,20 @@ class Server(
         register_heif_opener()
 
         # The hub decides which library opens, not server config. On a first run
-        # it registers the configured image_root as library 1 and moves identity
-        # out of that vault, so an upgrading install sees the same folder under a
-        # name. From then on the registry's active row wins, and image_root from
-        # config is only the migration source. Must run before the Vault is
-        # built: it copies the vault's credentials into the hub and only then
-        # blanks them, and the vault's own migrations run the moment it opens.
+        # it registers configured image_root as library 1, but never treats the
+        # config or the vault's mere presence as identity-import authority. Only
+        # the desktop preparer's durable hub operation can authorize that copy.
+        # From then on the registry's active row wins.
         # The hub sits beside server-config.json rather than at a fixed platform
         # path, so it follows ``--server-config`` wherever it points. That is
         # what the plan specifies (the hub location *is* the config-dir decision,
         # issue #168), and it means a test or an alternate deployment gets its
         # own hub instead of reaching into the user's real one.
         hub_path = os.path.join(os.path.dirname(self._server_config_path), "hub.db")
-        self._hub_bootstrap = bootstrap_hub(self._server_config["image_root"], hub_path)
+        self._hub_bootstrap = bootstrap_hub(
+            self._server_config["image_root"],
+            hub_path,
+        )
         self.hub = self._hub_bootstrap.hub
         self.library_registry = LibraryRegistry(self.hub)
         if self._hub_bootstrap.migrated:
@@ -392,7 +398,17 @@ class Server(
                 self.hub.path,
             )
 
-        self.vault = self.build_vault(self._hub_bootstrap.image_root)
+        self.vault = self.build_vault(
+            registered_vault_path(
+                self.hub,
+                self._hub_bootstrap.library,
+                self._hub_bootstrap,
+            )
+        )
+        self._hub_bootstrap.library = (
+            self.library_registry.by_uuid(self._hub_bootstrap.library.uuid)
+            or self._hub_bootstrap.library
+        )
 
         self._ws_clients = []
         self._ws_clients_lock = threading.Lock()
@@ -443,6 +459,7 @@ class Server(
 
         # Owns replacing the vault when the active library changes, and the
         # state requests are refused in while that is happening.
+        self.library_coordinator = LibraryGenerationCoordinator(self)
         self.library_switch = LibrarySwitchService(self)
 
         self.api = FastAPI(
@@ -453,6 +470,7 @@ class Server(
             lifespan=self.lifespan,
             redoc_url=None,
         )
+
         # CORS: always allow localhost/127.0.0.1 on any port plus the machine's
         # own LAN IP (any port) so the Vite dev server works over LAN without
         # any extra configuration. Additional origins can be added via cors_origins.
@@ -495,6 +513,11 @@ class Server(
         # any undeclared/dead route). Consumes the same route walk as the CI
         # coverage-matrix guardrail so the two can never disagree.
         self.authz.enforce_startup(self.api)
+        from pixlstash.middleware.library_admission import LibraryAdmissionMiddleware
+
+        # Added last so Starlette makes it outermost: its lease begins before
+        # authentication and ends only after the final ASGI body frame.
+        self.api.add_middleware(LibraryAdmissionMiddleware, server=self)
 
         # Temporary storage for export tasks
         self.export_tasks = {}
@@ -512,12 +535,31 @@ class Server(
         # Allow use as a context manager for robust cleanup
         return self
 
+    def _close_active_vault(self) -> None:
+        """Close the vault and remove generation-bound temporary artifacts."""
+        vault = getattr(self, "vault", None)
+        if vault is None:
+            return
+        image_root = vault.image_root
+        try:
+            vault.close()
+        finally:
+            library_switch = getattr(self, "library_switch", None)
+            if library_switch is not None:
+                library_switch._clear_generation_retained_state(image_root)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if hasattr(self, "vault"):
+        if getattr(self, "vault", None) is not None:
             logger.info("Closing the vault and cleaning up resources")
-            self.vault.close()
+            self._close_active_vault()
         self._close_hub()
         gc.collect()
+
+    def request_fatal_shutdown(self) -> None:
+        """Ask every programmatic listener to exit after fatal vault loss."""
+        self._fatal_shutdown_requested = True
+        for listener in getattr(self, "_uvicorn_servers", ()):
+            listener.should_exit = True
 
     def apply_user_settings_to_vault(self, vault: Vault) -> None:
         """Push the owner's stored settings onto *vault*.
@@ -634,6 +676,12 @@ class Server(
         return library.uuid if library else None
 
     @property
+    def library_generation(self) -> int:
+        """Ephemeral context fence for async work spanning a library switch."""
+        service = getattr(self, "library_switch", None)
+        return service.generation if service is not None else 0
+
+    @property
     def hub_engine(self):
         """The database identity lives in, which is the hub and not the vault.
 
@@ -696,11 +744,16 @@ class Server(
             print(
                 f"[SSL] Running with SSL: keyfile={self._server_config.get('ssl_keyfile')}, certfile={self._server_config.get('ssl_certfile')}"
             )
+        # Keep the concrete listener handle so a fatal post-retirement switch
+        # failure can terminate the process just as it does in Electron's
+        # multi-listener path. ``uvicorn.run`` hides that handle.
+        listener = uvicorn.Server(uvicorn.Config(self.api, **uvicorn_kwargs))
+        self._uvicorn_servers = [listener]
         try:
-            uvicorn.run(self.api, **uvicorn_kwargs)
+            listener.run()
         finally:
-            if hasattr(self, "vault"):
-                self.vault.close()
+            if getattr(self, "vault", None) is not None:
+                self._close_active_vault()
             self._close_hub()
 
     @asynccontextmanager
@@ -781,7 +834,7 @@ class Server(
         if was_set_by_us:
             self._ws_loop = None
         if self._shutdown_on_lifespan and hasattr(self, "vault"):
-            self.vault.close()
+            self._close_active_vault()
 
     @staticmethod
     def init_server_config(server_config_path):

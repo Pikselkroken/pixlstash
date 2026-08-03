@@ -511,22 +511,46 @@ def create_router(server) -> APIRouter:
 
     @router.websocket("/ws/comfyui")
     async def comfyui_progress_proxy(websocket: WebSocket):
-        # The HTTP auth middleware does not cover WebSockets. Require an
-        # authenticated OWNER before accepting — running ComfyUI is an owner
-        # operation. Without this, an unauthenticated (or merely resource-
-        # scoped) client would get a WebSocket proxy to the internal ComfyUI
-        # service via the DEFAULT_COMFYUI_URL fallback. Also reject cross-site
-        # handshakes (CSWSH).
-        if not server.auth.is_websocket_origin_allowed(
-            websocket, server.allow_origins, server.allow_origin_regex
-        ):
-            await websocket.close(code=1008)
+        lease = server.library_coordinator.acquire_read()
+        if lease is None:
+            await websocket.close(code=1013, reason="Library unavailable")
             return
-        ws_auth = server.auth.authenticate_websocket(websocket)
-        if ws_auth is None or not ws_auth.is_owner:
-            await websocket.close(code=1008)
+        ws_client = None
+        ws_auth = None
+        try:
+            # The HTTP auth middleware does not cover WebSockets. Require an
+            # authenticated OWNER before accepting — running ComfyUI is an owner
+            # operation. Without this, an unauthenticated (or merely resource-
+            # scoped) client would get a WebSocket proxy to the internal ComfyUI
+            # service via the DEFAULT_COMFYUI_URL fallback. Also reject cross-site
+            # handshakes (CSWSH).
+            if not server.auth.is_websocket_origin_allowed(
+                websocket, server.allow_origins, server.allow_origin_regex
+            ):
+                await websocket.close(code=1008)
+                return
+            ws_auth = server.auth.authenticate_websocket(websocket)
+            if ws_auth is None or not ws_auth.is_owner:
+                await websocket.close(code=1008)
+                return
+            await websocket.accept()
+            # The proxy is library-bound even though its upstream URL is a machine
+            # setting: an in-flight workflow and its eventual picture ids belong to
+            # the old vault. Register it in the same lifecycle set as /ws/updates so
+            # a switch terminates both sides instead of leaving a stale proxy alive.
+            candidate = {
+                "ws": websocket,
+                "loop": asyncio.get_running_loop(),
+                "owner": True,
+                "broadcast": False,
+            }
+            with server._ws_clients_lock:
+                server._ws_clients.append(candidate)
+            ws_client = candidate
+        finally:
+            server.library_coordinator.release_read(lease)
+        if ws_client is None or ws_auth is None:
             return
-        await websocket.accept()
         # comfyui_url is a machine setting, so it lives in the hub.
         user = server.hub_engine.run_task(
             lambda session: session.get(User, ws_auth.user_id),
@@ -598,6 +622,9 @@ def create_router(server) -> APIRouter:
         except Exception as exc:
             logger.warning("ComfyUI progress proxy failed: %s", exc)
         finally:
+            with server._ws_clients_lock:
+                if ws_client is not None and ws_client in server._ws_clients:
+                    server._ws_clients.remove(ws_client)
             try:
                 await websocket.close()
             except Exception as exc:
@@ -815,6 +842,7 @@ def create_router(server) -> APIRouter:
             )
             prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
             if prompt_id:
+                origin_lease = request.state.library_lease
                 worker = threading.Thread(
                     target=_process_comfyui_outputs,
                     args=(
@@ -825,6 +853,10 @@ def create_router(server) -> APIRouter:
                         stack_id,
                         pic_id,
                     ),
+                    kwargs={
+                        "origin_generation": origin_lease.generation,
+                        "origin_library_uuid": origin_lease.library_uuid,
+                    },
                     daemon=True,
                 )
                 worker.start()
@@ -926,6 +958,7 @@ def create_router(server) -> APIRouter:
         )
         prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
         if prompt_id:
+            origin_lease = request.state.library_lease
             worker = threading.Thread(
                 target=_process_comfyui_outputs,
                 args=(
@@ -936,7 +969,11 @@ def create_router(server) -> APIRouter:
                     None,
                     source_picture_id,
                 ),
-                kwargs={"view_context": view_context},
+                kwargs={
+                    "view_context": view_context,
+                    "origin_generation": origin_lease.generation,
+                    "origin_library_uuid": origin_lease.library_uuid,
+                },
                 daemon=True,
             )
             worker.start()
@@ -1240,6 +1277,7 @@ def create_router(server) -> APIRouter:
         )
         prompt_id = response_payload.get("prompt_id") or response_payload.get("id")
         if prompt_id:
+            origin_lease = request.state.library_lease
             worker = threading.Thread(
                 target=_process_comfyui_outputs,
                 args=(
@@ -1250,6 +1288,10 @@ def create_router(server) -> APIRouter:
                     stack_id,
                     pic_id,
                 ),
+                kwargs={
+                    "origin_generation": origin_lease.generation,
+                    "origin_library_uuid": origin_lease.library_uuid,
+                },
                 daemon=True,
             )
             worker.start()

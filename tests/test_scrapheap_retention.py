@@ -1362,6 +1362,18 @@ def test_a_confirmation_expires(server, tmp_path, monkeypatch):
         assert os.path.isfile(path)
 
 
+def test_a_confirmation_is_bound_to_library_generation():
+    """The same numeric picture id in another vault is never authorised."""
+    confirmations = scrapheap_service.ScrapheapDeleteConfirmations()
+    token = confirmations.issue([1], 1, library_uuid="library-a", generation=7)
+
+    accepted, _reason = confirmations.redeem(
+        token, [1], library_uuid="library-b", generation=8
+    )
+
+    assert accepted is False
+
+
 def test_the_auto_purge_needs_no_confirmation(server, tmp_path):
     """The confirmation gates the HTTP endpoint, not the unattended sweep."""
     client = _client(server)

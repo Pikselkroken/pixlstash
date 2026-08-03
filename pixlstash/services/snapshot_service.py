@@ -20,6 +20,7 @@ from pixlstash.database import DBPriority, _compute_picture_metadata_hash
 from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.portable_identity import sanitize_vault_file
 from pixlstash.utils.snapshot_compression import (
     COMPRESSED_SUFFIX,
     compress_snapshot,
@@ -135,7 +136,10 @@ class SnapshotService:
             try:
                 self._vacuum_into(tmp_sqlite)
                 self._prepare_snapshot_for_archive(tmp_sqlite)
+                sanitize_vault_file(tmp_sqlite)
                 byte_size = compress_snapshot(tmp_sqlite, abs_snapshot)
+                if os.name != "nt":
+                    os.chmod(abs_snapshot, 0o600)
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 

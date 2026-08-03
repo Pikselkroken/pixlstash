@@ -849,6 +849,8 @@ def _process_comfyui_outputs(
     stack_id: int | None,
     source_picture_id: int | None,
     view_context: dict | None = None,
+    origin_generation: int | None = None,
+    origin_library_uuid: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
@@ -872,15 +874,54 @@ def _process_comfyui_outputs(
     Failures emit a ``PLUGIN_PROGRESS`` failure event via
     ``_emit_comfyui_failure_progress`` and never a ``PICTURE_IMPORTED`` event.
     """
+    lease = None
+    pinned_server = None
+
+    def acquire_origin():
+        coordinator = getattr(server, "library_coordinator", None)
+        if coordinator is None:
+            return None, server
+        candidate = coordinator.acquire_read()
+        if candidate is None:
+            return None, None
+        if (
+            origin_generation is not None and candidate.generation != origin_generation
+        ) or (
+            origin_library_uuid is not None
+            and candidate.library_uuid != origin_library_uuid
+        ):
+            coordinator.release_read(candidate)
+            return None, None
+
+        class PinnedServer:
+            def __init__(self, original, vault):
+                self._original = original
+                self.vault = vault
+
+            def __getattr__(self, name):
+                return getattr(self._original, name)
+
+        return candidate, PinnedServer(server, candidate.vault)
+
+    def emit_failure_if_current(message: str) -> None:
+        failure_lease, failure_server = acquire_origin()
+        if failure_server is None:
+            logger.info(
+                "Discarding stale ComfyUI failure for prompt %s after library change",
+                prompt_id,
+            )
+            return
+        try:
+            _emit_comfyui_failure_progress(failure_server, prompt_id, message)
+        finally:
+            if failure_lease is not None:
+                server.library_coordinator.release_read(failure_lease)
+
     try:
         images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
         if not images:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
-            _emit_comfyui_failure_progress(
-                server,
-                prompt_id,
-                "ComfyUI finished without outputs.",
-            )
+            emit_failure_if_current("ComfyUI finished without outputs.")
             return
         entries = []
         for entry in images:
@@ -888,11 +929,19 @@ def _process_comfyui_outputs(
             if img_bytes:
                 entries.append((img_bytes, ext))
 
+        lease, pinned_server = acquire_origin()
+        if pinned_server is None:
+            logger.info(
+                "Discarding stale ComfyUI outputs for prompt %s after library change",
+                prompt_id,
+            )
+            return
+
         output_dir: str | None = None
         ref_folder_id: int | None = None
         source_file_stem: str | None = None
         if source_picture_id is not None:
-            src_pic = server.vault.db.run_immediate_read_task(
+            src_pic = pinned_server.vault.db.run_immediate_read_task(
                 lambda session: session.get(Picture, source_picture_id)
             )
             if (
@@ -909,14 +958,14 @@ def _process_comfyui_outputs(
         # Already-existing re-imports (`duplicate_ids`) are deliberately ignored:
         # they are already in the grid and need no event.
         new_ids, _duplicate_ids = _import_comfyui_outputs(
-            server,
+            pinned_server,
             entries,
             output_dir=output_dir,
             reference_folder_id=ref_folder_id,
             source_file_stem=source_file_stem,
         )
         if stack_id and new_ids:
-            _assign_outputs_to_stack_top(server, stack_id, new_ids)
+            _assign_outputs_to_stack_top(pinned_server, stack_id, new_ids)
         if new_ids:
             # Both I2I and T2I defer to the same mechanism: mark the output with
             # its source, let face extraction find the output's REAL faces, and
@@ -931,11 +980,13 @@ def _process_comfyui_outputs(
             # corner and capture nothing). It also asserted the person is in the
             # output without looking at the output, which for a regenerated face
             # is a guess. Deferring costs one extraction pass and is correct.
-            _set_source_picture_id_on_pictures(server, source_picture_id, new_ids)
-            _copy_set_and_project_assignments(server, source_picture_id, new_ids)
+            _set_source_picture_id_on_pictures(
+                pinned_server, source_picture_id, new_ids
+            )
+            _copy_set_and_project_assignments(pinned_server, source_picture_id, new_ids)
         if new_ids and view_context:
             _assign_pictures_to_view_context(
-                server,
+                pinned_server,
                 new_ids,
                 set_id=view_context.get("set_id"),
                 project_id=view_context.get("project_id"),
@@ -949,7 +1000,7 @@ def _process_comfyui_outputs(
             # the originator) performs a slick in-place insert rather than the
             # originator suppressing its own echo. Externally-run ComfyUI arrives
             # via the watch/reference finders, which stay external/null.
-            server.vault.notify(
+            pinned_server.vault.notify(
                 EventType.PICTURE_IMPORTED,
                 {
                     "ids": new_ids,
@@ -959,10 +1010,19 @@ def _process_comfyui_outputs(
             )
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
-        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
+        if pinned_server is not None:
+            _emit_comfyui_failure_progress(pinned_server, prompt_id, str(exc))
+        else:
+            emit_failure_if_current(str(exc))
     except Exception as exc:
         logger.warning("Failed to import ComfyUI outputs: %s", exc)
-        _emit_comfyui_failure_progress(server, prompt_id, str(exc))
+        if pinned_server is not None:
+            _emit_comfyui_failure_progress(pinned_server, prompt_id, str(exc))
+        else:
+            emit_failure_if_current(str(exc))
+    finally:
+        if lease is not None:
+            server.library_coordinator.release_read(lease)
 
 
 def _comfyui_abort(base_url: str) -> dict:

@@ -689,7 +689,8 @@ class FullRestoreMixin:
             # token row in place.  ``run_control_task`` has returned, so the
             # swap has finished and released ``exclusive_engine_access``; this
             # writer task opens its session on the re-created engine.
-            db.run_task(self._clear_api_tokens, priority=0)
+            db.run_task(self._clear_guest_state, priority=0)
+            self._clear_hub_api_tokens()
             # Then drop the in-memory authentication state the swap invalidated.
             # Ordered after the token clear on purpose: once the swapped-in
             # database holds no token rows, a request arriving in the gap cannot
@@ -767,7 +768,7 @@ class FullRestoreMixin:
             )
 
     @staticmethod
-    def _clear_api_tokens(session: Session) -> None:
+    def _clear_guest_state(session: Session) -> None:
         """Delete every API token row from the swapped-in database.
 
         A restore always leaves the vault with no API tokens, whatever the
@@ -794,16 +795,36 @@ class FullRestoreMixin:
             session: Live writer session on the swapped-in database.
         """
         cleared: dict[str, int] = {}
+        # Clear the abandoned legacy vault token table as well. Live tokens
+        # are revoked from the hub below, but a restored portable credential
+        # copy must remain inert and blank.
         for model in (GuestScore, GuestSession, UserToken):
             cleared[model.__name__] = session.execute(sa_delete(model)).rowcount
         session.commit()
         logger.info(
-            "RestoreService: cleared API tokens after restore (%d token(s), "
-            "%d guest session(s), %d guest score(s)); tokens must be created "
-            "again from Settings and share links re-shared.",
-            cleared["UserToken"],
+            "RestoreService: cleared %d guest session(s) and %d guest score(s) "
+            "and %d legacy token row(s) from the restored vault.",
             cleared["GuestSession"],
             cleared["GuestScore"],
+            cleared["UserToken"],
+        )
+
+    def _clear_hub_api_tokens(self) -> None:
+        """Revoke tokens in the identity hub; tokens no longer live in a vault."""
+        auth_service = getattr(self._vault, "auth_service", None)
+        if auth_service is None:
+            return
+
+        def clear(session: Session) -> int:
+            count = session.execute(sa_delete(UserToken)).rowcount
+            session.commit()
+            return count
+
+        count = auth_service._db.run_task(clear, priority=0)
+        logger.info(
+            "RestoreService: revoked %d hub API token(s) after restore; tokens "
+            "must be recreated and share links re-shared.",
+            count,
         )
 
     def _find_missing_file_ids(

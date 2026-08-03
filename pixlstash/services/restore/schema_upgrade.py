@@ -20,6 +20,7 @@ from alembic.script import ScriptDirectory
 
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.portable_identity import sanitize_vault_file
 from pixlstash.utils.snapshot_compression import (
     materialize_snapshot,
     snapshot_scratch_dir,
@@ -232,18 +233,10 @@ class SchemaUpgradeMixin:
             config = _alembic_config(f"sqlite:///{tmp_snapshot}")
             with _ALEMBIC_UPGRADE_LOCK:
                 command.upgrade(config, "head")
-            # Snapshot and convert back to rollback journal so the
-            # main file contains all data without a WAL sidecar.
-            # ``with sqlite3.connect(...)`` commits but does not close the
-            # connection; close explicitly so the handle is released before the
-            # temp dir is removed (Windows blocks deletion of open files).
-            conn = sqlite3.connect(tmp_snapshot)
-            try:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                conn.execute("PRAGMA journal_mode=DELETE")
-                conn.commit()
-            finally:
-                conn.close()
+            # The upgraded scratch is the only file eligible for a live swap.
+            # Scrub portable identity, checkpoint/delete its journals, VACUUM,
+            # and verify it before any restore/preview path can consume it.
+            sanitize_vault_file(tmp_snapshot)
             logger.info(
                 "RestoreService: snapshot schema upgraded to head at %s",
                 tmp_snapshot,

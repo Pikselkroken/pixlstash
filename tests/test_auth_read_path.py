@@ -157,8 +157,11 @@ def _writer_busy_for(db, seconds: float = SLOW_WRITE_S):
 def _get_protected(client, token_value: str):
     """Issue an authenticated GET and return ``(response, elapsed_seconds)``."""
     started = time.monotonic()
+    # Guest enrichment is intentionally skipped on HUB_ONLY routes such as
+    # /protected. Exercise an active-library read route for this vault lookup.
     response = client.get(
-        "/protected", headers={"Authorization": f"Bearer {token_value}"}
+        "/users/me/penalised-tags",
+        headers={"Authorization": f"Bearer {token_value}"},
     )
     return response, time.monotonic() - started
 

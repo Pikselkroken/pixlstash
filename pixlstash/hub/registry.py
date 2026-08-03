@@ -33,7 +33,7 @@ VAULT_FILENAME = "vault.db"
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
-    "id, uuid, vault_uuid, settings_salt, name, path, created_at, attached_at, "
+    "id, uuid, vault_uuid, settings_salt, identity_migration_state, name, path, created_at, attached_at, "
     "detached_at, attached, is_active, notes"
 )
 
@@ -86,6 +86,7 @@ class Library:
     is_active: bool
     vault_uuid: Optional[str] = None
     settings_salt: Optional[str] = None
+    identity_migration_state: str = "not_required"
     attached: bool = True
     detached_at: Optional[str] = None
     notes: Optional[str] = None
@@ -334,7 +335,11 @@ class LibraryRegistry:
         validate_vault_folder(resolved)
         return self._register(resolved, name or os.path.basename(resolved))
 
-    def register_pending(self, folder: str, name: str | None = None) -> Library:
+    def register_pending(
+        self,
+        folder: str,
+        name: str | None = None,
+    ) -> Library:
         """Register a folder whose vault does not exist yet.
 
         Startup-only. On a fresh install the server is about to create the vault
@@ -343,7 +348,10 @@ class LibraryRegistry:
         which insist on a real vault.
         """
         resolved = resolve_path(folder)
-        return self._register(resolved, name or os.path.basename(resolved))
+        return self._register(
+            resolved,
+            name or os.path.basename(resolved),
+        )
 
     def create(self, folder: str, name: str | None = None) -> Library:
         """Create a folder, initialise a fresh vault in it, and register it.
@@ -363,7 +371,9 @@ class LibraryRegistry:
                 "to register it."
             )
 
-        os.makedirs(resolved, exist_ok=True)
+        os.makedirs(resolved, mode=0o700, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(resolved, 0o700)
 
         # Local import: pulls in the ORM and the image stack (numpy, PIL), which
         # `list`, `attach` and `detach` have no use for. Importing it at module
@@ -378,6 +388,99 @@ class LibraryRegistry:
         finally:
             vault.close()
         return registered
+
+    def record_legacy_preparation(
+        self, resolved_path: str, payload_digest: str, name: str = "Library 1"
+    ) -> Library:
+        """Atomically register a legacy vault and its explicit migration intent.
+
+        This is the sole registry path that may create ``pending`` identity
+        migration state. ``BEGIN IMMEDIATE`` makes the owner recheck, optional
+        registry insertion, and operation insertion one serialization point
+        across CLI and server processes.
+        """
+        cleaned = name.strip() or os.path.basename(resolved_path)
+        fingerprint = read_vault_uuid(resolved_path)
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._hub.transaction() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    f"SELECT {_LIBRARY_COLUMNS} FROM library WHERE path = ?",
+                    (resolved_path,),
+                ).fetchone()
+                library = self._row_to_library(row) if row is not None else None
+                if library is not None:
+                    operation = conn.execute(
+                        "SELECT state FROM identity_migration_operation "
+                        "WHERE library_uuid = ?",
+                        (library.uuid,),
+                    ).fetchone()
+                    if operation is not None and operation[0] != "pending":
+                        raise LibraryError(
+                            f"Legacy migration is already {operation[0]}; "
+                            "refusing to reauthorize it."
+                        )
+
+                if conn.execute("SELECT COUNT(*) FROM user").fetchone()[0]:
+                    raise LibraryError(
+                        "The hub already has an owner; refusing legacy import."
+                    )
+
+                if library is None:
+                    library_uuid = new_library_uuid()
+                    conn.execute(
+                        "INSERT INTO library_uuid_issued "
+                        "(uuid, issued_at, first_path) VALUES (?, ?, ?)",
+                        (library_uuid, now, resolved_path),
+                    )
+                    first_library = (
+                        conn.execute(
+                            "SELECT COUNT(*) FROM library WHERE attached = 1"
+                        ).fetchone()[0]
+                        == 0
+                    )
+                    cursor = conn.execute(
+                        "INSERT INTO library (uuid, vault_uuid, settings_salt, "
+                        "identity_migration_state, name, path, created_at, "
+                        "attached_at, is_active) VALUES (?, ?, ?, 'pending', ?, "
+                        "?, ?, ?, ?)",
+                        (
+                            library_uuid,
+                            fingerprint,
+                            secrets.token_hex(16),
+                            cleaned,
+                            resolved_path,
+                            now,
+                            now,
+                            1 if first_library else 0,
+                        ),
+                    )
+                    library_id = int(cursor.lastrowid)
+                else:
+                    library_id = library.id
+                    library_uuid = library.uuid
+                    conn.execute(
+                        "UPDATE library SET identity_migration_state='pending' "
+                        "WHERE id=?",
+                        (library_id,),
+                    )
+
+                conn.execute(
+                    "INSERT INTO identity_migration_operation "
+                    "(library_uuid, source_path, payload_digest, state) "
+                    "VALUES (?, ?, ?, 'pending') "
+                    "ON CONFLICT(library_uuid) DO UPDATE SET "
+                    "source_path=excluded.source_path, "
+                    "payload_digest=excluded.payload_digest",
+                    (library_uuid, resolved_path, payload_digest),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise LibraryExistsError(
+                f'Could not register {resolved_path} as "{cleaned}": the path '
+                "or name is already in the registry."
+            ) from exc
+        return self.get(library_id)
 
     def detach(self, name_or_id: str | int) -> Library:
         """Deregister a library. Files and share links are never destroyed.
@@ -501,7 +604,14 @@ class LibraryRegistry:
             ) from exc
         return self.get(library.id)
 
-    def _register(self, resolved_path: str, name: str) -> Library:
+    def _register(
+        self,
+        resolved_path: str,
+        name: str,
+        *,
+        identity_migration_state: str = "not_required",
+        recovered_uuid: str | None = None,
+    ) -> Library:
         """Register a library, reviving a previously detached row when it fits.
 
         A row kept by :meth:`detach` is revived only when the folder now at that
@@ -541,14 +651,18 @@ class LibraryRegistry:
 
         now = datetime.now(timezone.utc).isoformat()
         first_library = not self.list_libraries()
-        library_uuid = self._mint_uuid(resolved_path, now)
+        library_uuid = (
+            self._record_recovered_uuid(recovered_uuid, resolved_path, now)
+            if recovered_uuid
+            else self._mint_uuid(resolved_path, now)
+        )
 
         try:
             with self._hub.transaction() as conn:
                 cursor = conn.execute(
-                    "INSERT INTO library (uuid, vault_uuid, settings_salt, name, "
-                    "path, created_at, attached_at, is_active) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO library (uuid, vault_uuid, settings_salt, "
+                    "identity_migration_state, name, path, created_at, "
+                    "attached_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         library_uuid,
                         fingerprint,
@@ -557,6 +671,7 @@ class LibraryRegistry:
                         # keeps that fingerprint meaningless to anyone holding only
                         # the folder (see hub/schema.py).
                         secrets.token_hex(16),
+                        identity_migration_state,
                         cleaned,
                         resolved_path,
                         now,
@@ -588,6 +703,24 @@ class LibraryRegistry:
             " and made it active (first library)" if first_library else "",
         )
         return self.get(library_id)
+
+    def _record_recovered_uuid(
+        self, recovered_uuid: str, resolved_path: str, now: str
+    ) -> str:
+        """Restore a stamped UUID only under the caller's explicit recovery proof."""
+        try:
+            parsed = str(uuid_module.UUID(recovered_uuid))
+        except (ValueError, AttributeError) as exc:
+            raise LibraryError(
+                "The recovered library fingerprint is not a UUID."
+            ) from exc
+        with self._hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO library_uuid_issued (uuid, issued_at, first_path) "
+                "VALUES (?, ?, ?)",
+                (parsed, now, resolved_path),
+            )
+        return parsed
 
     def _mint_uuid(self, resolved_path: str, now: str) -> str:
         """Return a never-before-issued library uuid, recording it in the ledger.
@@ -662,6 +795,7 @@ class LibraryRegistry:
             uuid=row["uuid"],
             vault_uuid=row["vault_uuid"],
             settings_salt=row["settings_salt"],
+            identity_migration_state=row["identity_migration_state"],
             name=row["name"],
             path=row["path"],
             created_at=row["created_at"],

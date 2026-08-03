@@ -7,6 +7,9 @@ the claim the hub schema's shape exists to support.
 """
 
 import os
+import sqlite3
+import stat
+import threading
 
 import pytest
 from sqlmodel import select
@@ -15,6 +18,7 @@ from pixlstash.auth import AuthService
 from pixlstash.db_models import User
 from pixlstash.db_models.user_token import UserToken
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubPermissionError
 from pixlstash.hub.engine import HubEngine
 
 
@@ -128,6 +132,122 @@ class TestHubEngine:
         with engine.engine.connect() as conn:
             mode = conn.execute(text("PRAGMA journal_mode")).scalar()
         assert mode.lower() == "wal"
+
+
+class TestHubFileSecurity:
+    def test_first_sqlite_open_sees_an_already_private_file(
+        self, tmp_path, monkeypatch
+    ):
+        path = str(tmp_path / "hub.db")
+        real_connect = sqlite3.connect
+        seen_modes = []
+
+        def observing_connect(database, *args, **kwargs):
+            if str(database) == path:
+                seen_modes.append(stat.S_IMODE(os.lstat(path).st_mode))
+            return real_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", observing_connect)
+        HubDatabase(path).close()
+
+        assert seen_modes
+        assert seen_modes[0] == 0o600
+
+    def test_a_symlink_hub_is_refused_without_touching_its_target(self, tmp_path):
+        target = tmp_path / "target.db"
+        target.write_bytes(b"do not open")
+        link = tmp_path / "hub.db"
+        link.symlink_to(target)
+
+        with pytest.raises(HubPermissionError, match="symlink"):
+            HubDatabase(str(link))
+
+        assert target.read_bytes() == b"do not open"
+
+    def test_a_non_regular_hub_path_is_refused(self, tmp_path):
+        path = tmp_path / "hub.db"
+        path.mkdir()
+
+        with pytest.raises(HubPermissionError, match="non-regular"):
+            HubDatabase(str(path))
+
+    def test_simultaneous_first_open_never_observes_a_creation_race(self, tmp_path):
+        path = str(tmp_path / "hub.db")
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def open_hub():
+            try:
+                barrier.wait(timeout=5)
+                HubDatabase(path).close()
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=open_hub) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+
+    def test_path_replacement_during_sqlite_open_is_refused_before_schema_writes(
+        self, tmp_path, monkeypatch
+    ):
+        path = str(tmp_path / "hub.db")
+        real_connect = sqlite3.connect
+        replaced = False
+
+        def replacing_connect(database, *args, **kwargs):
+            nonlocal replaced
+            if not replaced and (str(database) == path or "/fd/" in str(database)):
+                replaced = True
+                os.unlink(path)
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                os.write(fd, b"replacement")
+                os.close(fd)
+            return real_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", replacing_connect)
+        with pytest.raises(HubPermissionError, match="changed while"):
+            HubDatabase(path)
+
+        assert open(path, "rb").read() == b"replacement"
+
+    def test_swap_away_and_back_cannot_redirect_the_sqlite_connection(
+        self, tmp_path, monkeypatch
+    ):
+        path = str(tmp_path / "hub.db")
+        decoy = str(tmp_path / "decoy.db")
+        held_original = str(tmp_path / "held-original.db")
+        held_decoy = str(tmp_path / "held-decoy.db")
+        for database_path, value in ((path, "original"), (decoy, "decoy")):
+            hub = HubDatabase(database_path)
+            with hub.transaction() as conn:
+                conn.execute("CREATE TABLE connection_probe (value TEXT)")
+                conn.execute("INSERT INTO connection_probe VALUES (?)", (value,))
+            hub.close()
+
+        real_connect = sqlite3.connect
+        swapped = False
+
+        def swapping_connect(database, *args, **kwargs):
+            nonlocal swapped
+            if not swapped and (str(database) == path or "/fd/" in str(database)):
+                swapped = True
+                os.rename(path, held_original)
+                os.rename(decoy, path)
+                connection = real_connect(database, *args, **kwargs)
+                os.rename(path, held_decoy)
+                os.rename(held_original, path)
+                return connection
+            return real_connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", swapping_connect)
+        with pytest.raises(HubPermissionError, match="namespace.*changed"):
+            HubDatabase(path)
 
 
 class TestAuthServiceOnTheHub:

@@ -12,6 +12,8 @@ not apply), and until it succeeds nothing has been given up.
 import os
 import sqlite3
 import tempfile
+import threading
+import time
 
 import pytest
 from sqlmodel import delete, select
@@ -117,6 +119,30 @@ class TestSwitching:
         with pytest.raises(LibraryNotFoundError):
             server.library_switch.switch_to(library.uuid)
 
+    def test_switch_clears_every_library_derived_runtime_cache(
+        self, server, tmp_path, monkeypatch
+    ):
+        from pixlstash.routes.pictures import _anomaly
+        from pixlstash.utils.service import picture_stats
+
+        library = server.library_registry.create(str(tmp_path / "cache-b"), "Cache B")
+        original = server.library_registry.active_library()
+        picture_stats._stats_cache["old-library"] = (0.0, {"count": 999})
+        _anomaly._anomaly_region_cache[(1, "old", "model")] = {"boxes": []}
+        thumbnail_cleared = []
+        monkeypatch.setattr(
+            server,
+            "_clear_thumbnail_runtime_cache",
+            lambda: thumbnail_cleared.append(True),
+        )
+        try:
+            server.library_switch.switch_to(library.uuid)
+            assert picture_stats._stats_cache == {}
+            assert _anomaly._anomaly_region_cache == {}
+            assert thumbnail_cleared == [True]
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
 
 class TestFailingToSwitch:
     def test_a_missing_folder_leaves_the_session_where_it_was(self, server, tmp_path):
@@ -151,6 +177,68 @@ class TestFailingToSwitch:
         assert server.vault is before_vault
         assert server.library_switch.state is SwitchState.READY
 
+    def test_a_recorded_fingerprint_that_disappears_is_refused_before_open(
+        self, server, tmp_path
+    ):
+        folder = str(tmp_path / "missing-fingerprint")
+        target = server.library_registry.create(folder, "Missing fingerprint")
+        original = server.library_registry.active_library()
+        server.library_switch.switch_to(target.uuid)
+        server.library_switch.switch_to(original.uuid)
+        target = server.library_registry.by_uuid(target.uuid)
+        assert target.vault_uuid is not None
+        conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+        conn.execute("DROP TABLE library_settings")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(
+            LibrarySwitchError,
+            match="Could not verify the registered library fingerprint",
+        ):
+            server.library_switch.switch_to(target.uuid)
+
+        conn = sqlite3.connect(os.path.join(folder, "vault.db"))
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            assert "library_settings" not in tables
+        finally:
+            conn.close()
+        assert server.library_registry.active_library().uuid == original.uuid
+
+    def test_switch_validates_recorded_vault_uuid_not_fresh_registry_uuid(
+        self, server, tmp_path
+    ):
+        folder = str(tmp_path / "recovered-fingerprint")
+        target = server.library_registry.create(folder, "Recovered fingerprint")
+        original = server.library_registry.active_library()
+        server.library_switch.switch_to(target.uuid)
+        server.library_switch.switch_to(original.uuid)
+        target = server.library_registry.by_uuid(target.uuid)
+        recorded = target.vault_uuid
+        recovered_uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO library_uuid_issued (uuid, issued_at, first_path) "
+                "VALUES (?, '2026-08-02T00:00:00+00:00', ?)",
+                (recovered_uuid, folder),
+            )
+            conn.execute(
+                "UPDATE library SET uuid=? WHERE id=?", (recovered_uuid, target.id)
+            )
+
+        server.library_switch.switch_to(recovered_uuid)
+        try:
+            assert read_vault_uuid(folder) == recorded
+            assert server.library_registry.active_library().uuid == recovered_uuid
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
     def test_a_vault_from_a_newer_build_is_refused(self, server, tmp_path):
         """Better a clear message than this build migrating a future database."""
         folder = str(tmp_path / "from-the-future")
@@ -168,6 +256,304 @@ class TestFailingToSwitch:
         assert "newer version of PixlStash" in str(excinfo.value)
         assert server.vault is before_vault
         assert server.library_switch.state is SwitchState.READY
+
+    def test_a_replaced_path_is_refused_before_alembic_touches_it(
+        self, server, tmp_path, monkeypatch
+    ):
+        """A foreign fingerprint is decisive before build_vault can migrate it."""
+        folder = str(tmp_path / "replaced-under-registry")
+        library = server.library_registry.create(folder, "Replaced")
+        vault_path = os.path.join(folder, "vault.db")
+        foreign_uuid = "00000000-0000-4000-8000-000000000099"
+        conn = sqlite3.connect(vault_path)
+        conn.execute("DROP TABLE library_settings")
+        conn.execute(
+            "CREATE TABLE library_settings (id INTEGER PRIMARY KEY, library_uuid TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO library_settings (id, library_uuid) VALUES (1, ?)",
+            (foreign_uuid,),
+        )
+        conn.execute("CREATE TABLE pre_migration_sentinel (payload TEXT NOT NULL)")
+        conn.execute("INSERT INTO pre_migration_sentinel VALUES ('untouched')")
+        conn.execute(
+            "UPDATE alembic_version SET version_num = "
+            "'0094_add_pending_score_invalidation'"
+        )
+        conn.commit()
+        conn.close()
+
+        build_calls = []
+        real_build = server.build_vault
+
+        def observed_build(image_root):
+            build_calls.append(image_root)
+            return real_build(image_root)
+
+        monkeypatch.setattr(server, "build_vault", observed_build)
+        with pytest.raises(LibrarySwitchError, match="fingerprint conflict"):
+            server.library_switch.switch_to(library.uuid)
+
+        assert len(build_calls) == 1, (
+            "the decisive fingerprint check belongs inside the securely bound "
+            "VaultDatabase open, immediately before Alembic"
+        )
+        conn = sqlite3.connect(vault_path)
+        try:
+            revision = conn.execute(
+                "SELECT version_num FROM alembic_version"
+            ).fetchone()
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(library_settings)")
+            }
+            sentinel = conn.execute(
+                "SELECT payload FROM pre_migration_sentinel"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert revision == ("0094_add_pending_score_invalidation",)
+        assert columns == {"id", "library_uuid"}
+        assert sentinel == ("untouched",)
+
+    def test_failure_after_old_close_reopens_previous_vault(
+        self, server, tmp_path, monkeypatch
+    ):
+        folder = str(tmp_path / "post-close-failure")
+        library = server.library_registry.create(folder, "Post-close failure")
+        before = server.library_registry.active_library()
+        real_build = server.build_vault
+
+        def build_with_failing_candidate(image_root):
+            vault = real_build(image_root)
+            if image_root == library.path:
+                vault.start = lambda: (_ for _ in ()).throw(
+                    RuntimeError("candidate start fault")
+                )
+            return vault
+
+        monkeypatch.setattr(server, "build_vault", build_with_failing_candidate)
+        with pytest.raises(LibrarySwitchError, match="still using the previous"):
+            server.library_switch.switch_to(library.uuid)
+
+        assert server.library_registry.active_library().uuid == before.uuid
+        assert server.vault.image_root == before.path
+        assert server.auth.vault_db is server.vault.db
+        assert _picture_count(server) >= 0
+
+    def test_close_that_releases_resources_then_raises_rebuilds_previous_vault(
+        self, server, tmp_path, monkeypatch
+    ):
+        library = server.library_registry.create(
+            str(tmp_path / "close-side-effect"), "Close side effect"
+        )
+        before_library = server.library_registry.active_library()
+        retired = server.vault
+        real_close = retired.close
+        raised = False
+
+        def close_then_raise():
+            nonlocal raised
+            real_close()  # real side effect: db is released and becomes None
+            if not raised:
+                raised = True
+                raise RuntimeError("close fault after resources released")
+
+        monkeypatch.setattr(retired, "close", close_then_raise)
+        with pytest.raises(LibrarySwitchError, match="still using the previous"):
+            server.library_switch.switch_to(library.uuid)
+
+        assert retired.db is None
+        assert server.vault is not retired
+        assert server.library_registry.active_library().uuid == before_library.uuid
+        assert server.vault.image_root == before_library.path
+        assert server.auth.vault_db is server.vault.db
+        assert server.handle_vault_event in server.vault._event_listeners
+        assert _picture_count(server) >= 0
+
+    def test_switch_waits_for_inflight_request_before_closing_old_vault(
+        self, server, tmp_path
+    ):
+        library = server.library_registry.create(str(tmp_path / "drain"), "Drain")
+        original = server.library_registry.active_library()
+        finished = threading.Event()
+        errors = []
+        # Model one already-running active-library request. The switch route is
+        # HUB_ONLY/SWITCH_WRITER and therefore does not hold a read lease that
+        # would deadlock its own writer admission.
+        lease = server.library_coordinator.acquire_read()
+        assert lease is not None
+
+        def do_switch():
+            try:
+                server.library_switch.switch_to(library.uuid)
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=do_switch)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while server.library_switch.state is not SwitchState.SWITCHING:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not finished.is_set()
+        assert server.vault.image_root == original.path
+
+        server.library_coordinator.release_read(lease)
+        thread.join(timeout=20)
+        assert not errors
+        assert finished.is_set()
+        assert server.vault.image_root == library.path
+        server.library_switch.switch_to(original.uuid)
+
+    def test_stale_comfyui_output_is_discarded_after_switch(
+        self, server, tmp_path, monkeypatch
+    ):
+        from pixlstash.services import comfyui_service
+
+        library = server.library_registry.create(
+            str(tmp_path / "comfy-stale"), "Comfy stale"
+        )
+        original = server.library_registry.active_library()
+        origin = server.library_coordinator.acquire_read()
+        assert origin is not None
+        server.library_coordinator.release_read(origin)
+        imported = []
+        failed = []
+        monkeypatch.setattr(
+            comfyui_service,
+            "_wait_for_comfyui_outputs",
+            lambda *_args, **_kwargs: [{"filename": "result.png"}],
+        )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_download_comfyui_image",
+            lambda *_args, **_kwargs: (b"generated", ".png"),
+        )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_import_comfyui_outputs",
+            lambda *_args, **_kwargs: imported.append(True) or ([1], []),
+        )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_emit_comfyui_failure_progress",
+            lambda *_args, **_kwargs: failed.append(True),
+        )
+        try:
+            server.library_switch.switch_to(library.uuid)
+            comfyui_service._process_comfyui_outputs(
+                server,
+                "http://comfy.invalid",
+                "old-prompt",
+                None,
+                None,
+                None,
+                origin_generation=origin.generation,
+                origin_library_uuid=origin.library_uuid,
+            )
+
+            assert imported == []
+            assert failed == []
+            assert _picture_count(server) == 0
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
+    def test_stale_comfyui_failure_does_not_notify_new_library(
+        self, server, tmp_path, monkeypatch
+    ):
+        from pixlstash.services import comfyui_service
+
+        library = server.library_registry.create(
+            str(tmp_path / "comfy-stale-failure"), "Comfy stale failure"
+        )
+        original = server.library_registry.active_library()
+        origin = server.library_coordinator.acquire_read()
+        assert origin is not None
+        server.library_coordinator.release_read(origin)
+        failed = []
+        monkeypatch.setattr(
+            comfyui_service,
+            "_wait_for_comfyui_outputs",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("failed")),
+        )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_emit_comfyui_failure_progress",
+            lambda *_args, **_kwargs: failed.append(True),
+        )
+        try:
+            server.library_switch.switch_to(library.uuid)
+            comfyui_service._process_comfyui_outputs(
+                server,
+                "http://comfy.invalid",
+                "old-failure",
+                None,
+                None,
+                None,
+                origin_generation=origin.generation,
+                origin_library_uuid=origin.library_uuid,
+            )
+            assert failed == []
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
+    def test_websockets_close_only_after_the_new_runtime_is_published(
+        self, server, tmp_path, monkeypatch
+    ):
+        library = server.library_registry.create(
+            str(tmp_path / "socket-publication"), "Socket publication"
+        )
+        original = server.library_registry.active_library()
+        observed = []
+
+        def observe_close(_clients):
+            lease = server.library_coordinator.acquire_read()
+            assert lease is not None, "a synchronous 1012 reload must be admitted"
+            observed.append(
+                (
+                    server.library_coordinator.state,
+                    server.library_registry.active_library().uuid,
+                    server.vault.image_root,
+                    server.auth.vault_db is server.vault.db,
+                    lease.library_uuid,
+                )
+            )
+            server.library_coordinator.release_read(lease)
+
+        monkeypatch.setattr(
+            server, "close_websocket_snapshot_for_switch", observe_close
+        )
+        try:
+            server.library_switch.switch_to(library.uuid)
+            assert observed[0] == (
+                SwitchState.READY,
+                library.uuid,
+                library.path,
+                True,
+                library.uuid,
+            )
+        finally:
+            server.library_switch.switch_to(original.uuid)
+
+    def test_old_socket_snapshot_cannot_capture_new_generation_registration(
+        self, server
+    ):
+        old_client = {"ws": object(), "loop": None}
+        new_client = {"ws": object(), "loop": None}
+        with server._ws_clients_lock:
+            assert server._ws_clients == []
+            server._ws_clients.append(old_client)
+
+        snapshot = server.claim_websockets_for_switch()
+        with server._ws_clients_lock:
+            server._ws_clients.append(new_client)
+        server.close_websocket_snapshot_for_switch(snapshot)
+
+        with server._ws_clients_lock:
+            assert server._ws_clients == [new_client]
+            server._ws_clients.clear()
 
 
 class TestSchemaGuard:
@@ -197,12 +583,94 @@ class TestSwitchingCreatesAFingerprint:
             # able to have one written. Either way it must not carry another
             # library's.
             observed = read_vault_uuid(folder)
-            assert observed in (None, library.uuid)
+            assert observed == library.uuid
         finally:
             server.library_switch.switch_to(original.uuid)
 
 
 class TestRefusingRequestsMidSwap:
+    def test_writer_waits_for_request_paused_inside_authentication(
+        self, server, tmp_path, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+
+        target = server.library_registry.create(
+            str(tmp_path / "auth-pause"), "Auth pause"
+        )
+        original = server.library_registry.active_library()
+        auth_entered = threading.Event()
+        release_auth = threading.Event()
+        request_done = threading.Event()
+        switch_done = threading.Event()
+        errors = []
+
+        def paused_token_lookup(_value):
+            auth_entered.set()
+            assert release_auth.wait(timeout=10)
+            return None
+
+        monkeypatch.setattr(server.auth, "_token_from_value", paused_token_lookup)
+
+        def request():
+            try:
+                TestClient(server.api).get(
+                    "/api/v1/pictures", headers={"Authorization": "Bearer paused"}
+                )
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                request_done.set()
+
+        def switch():
+            try:
+                server.library_switch.switch_to(target.uuid)
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                switch_done.set()
+
+        request_thread = threading.Thread(target=request)
+        switch_thread = threading.Thread(target=switch)
+        request_thread.start()
+        assert auth_entered.wait(timeout=10)
+        switch_thread.start()
+        deadline = time.monotonic() + 5
+        while server.library_coordinator.state is not SwitchState.SWITCHING:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not switch_done.is_set()
+        assert server.vault.image_root == original.path
+
+        release_auth.set()
+        request_thread.join(timeout=10)
+        switch_thread.join(timeout=20)
+        assert request_done.is_set() and switch_done.is_set()
+        assert errors == []
+        assert server.vault.image_root == target.path
+        server.library_switch.switch_to(original.uuid)
+
+    def test_http_admission_refuses_before_authentication(self, server, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        auth_calls = []
+
+        def observed_auth(_value):
+            auth_calls.append(True)
+            return None
+
+        monkeypatch.setattr(server.auth, "_token_from_value", observed_auth)
+        server.library_coordinator.state = SwitchState.SWITCHING
+        try:
+            response = TestClient(server.api).get(
+                "/api/v1/pictures",
+                headers={"Authorization": "Bearer cannot-run"},
+            )
+        finally:
+            server.library_coordinator.state = SwitchState.READY
+
+        assert response.status_code == 503
+        assert auth_calls == []
+
     def test_the_gate_returns_503_while_switching(self, server):
         """A request mid-swap must not be served against a half-swapped server."""
         from types import SimpleNamespace
@@ -212,7 +680,7 @@ class TestRefusingRequestsMidSwap:
         from pixlstash.authz.gate import AuthzGate
         from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 
-        server.library_switch._state = SwitchState.SWITCHING
+        server.library_coordinator.state = SwitchState.SWITCHING
         try:
             with pytest.raises(HTTPException) as excinfo:
                 AuthzGate._refuse_while_switching(
@@ -223,7 +691,7 @@ class TestRefusingRequestsMidSwap:
             assert excinfo.value.status_code == 503
             assert excinfo.value.headers.get("Retry-After")
         finally:
-            server.library_switch._state = SwitchState.READY
+            server.library_coordinator.state = SwitchState.READY
 
     def test_library_independent_routes_still_answer_mid_swap(self, server):
         """Otherwise a client could not ask what is happening."""
@@ -232,7 +700,7 @@ class TestRefusingRequestsMidSwap:
         from pixlstash.authz.gate import AuthzGate
         from pixlstash.authz.policy import AccessPolicy, RoutePolicy
 
-        server.library_switch._state = SwitchState.SWITCHING
+        server.library_coordinator.state = SwitchState.SWITCHING
         try:
             AuthzGate._refuse_while_switching(
                 SimpleNamespace(_server=server),
@@ -240,7 +708,66 @@ class TestRefusingRequestsMidSwap:
                 RoutePolicy(AccessPolicy.OWNER_ONLY, library_independent=True),
             )
         finally:
-            server.library_switch._state = SwitchState.READY
+            server.library_coordinator.state = SwitchState.READY
+
+
+def test_unrecoverable_post_retirement_failure_is_fatal_and_unavailable(
+    tmp_path, monkeypatch
+):
+    """Never republish READY around a closed/mixed runtime tuple."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    with Server(str(tmp_path / "fatal-server.json")) as isolated:
+        original = isolated.library_registry.active_library()
+        target = isolated.library_registry.create(
+            str(tmp_path / "fatal-target"), "Fatal target"
+        )
+        real_build = isolated.build_vault
+        recovering = False
+
+        def doomed_build(image_root):
+            nonlocal recovering
+            if image_root == original.path and recovering:
+                raise RuntimeError("injected recovery build failure")
+            vault = real_build(image_root)
+            if image_root == target.path:
+                real_start = vault.start
+
+                def fail_after_retirement():
+                    nonlocal recovering
+                    recovering = True
+                    # Keep the real method referenced so this remains clearly a
+                    # candidate-start failure injection, not a build failure.
+                    assert callable(real_start)
+                    raise RuntimeError("injected candidate start failure")
+
+                vault.start = fail_after_retirement
+            return vault
+
+        listener = SimpleNamespace(should_exit=False)
+        isolated._uvicorn_servers = [listener]
+        monkeypatch.setattr(isolated, "build_vault", doomed_build)
+
+        with pytest.raises(LibrarySwitchError, match="Restart the server"):
+            isolated.library_switch.switch_to(target.uuid)
+
+        assert isolated.library_coordinator.state is SwitchState.UNAVAILABLE
+        assert isolated.vault is None
+        assert isolated.auth.vault_db is None
+        assert isolated._fatal_shutdown_requested is True
+        assert listener.should_exit is True
+
+        def auth_must_not_run(_value):
+            raise AssertionError("authentication ran before unavailable admission")
+
+        monkeypatch.setattr(isolated.auth, "_token_from_value", auth_must_not_run)
+        response = TestClient(isolated.api).get(
+            "/api/v1/pictures", headers={"Authorization": "Bearer irrelevant"}
+        )
+        assert response.status_code == 503
+        assert "no verified open library" in response.text
 
     def test_nothing_is_refused_when_not_switching(self, server):
         from types import SimpleNamespace

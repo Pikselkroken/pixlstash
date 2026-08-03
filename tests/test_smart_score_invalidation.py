@@ -146,6 +146,11 @@ def _wait_for(predicate, timeout=10.0):
 def _set_smart_score(server, pic_id, value=0.5, with_embedding=True):
     """Give the picture a stored smart score (and an embedding so the finder sees it)."""
 
+    # Uploads require live workers, but every caller below is about to inspect
+    # deliberately controlled intermediate score state. Stop the finder before
+    # making that state visible so it cannot claim the row between assertions.
+    server.vault._work_planner.stop()
+
     def _apply(session):
         pic = session.get(Picture, pic_id)
         pic.smart_score = value

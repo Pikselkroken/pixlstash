@@ -13,6 +13,7 @@ Worker-heavy tests still live in :mod:`tests.test_server`.
 import logging
 import os
 import shutil
+import stat
 import tempfile
 import time
 
@@ -924,9 +925,17 @@ def test_pictures_export(server):
     download_url = status_payload.get("download_url")
     assert download_url, "Missing download_url in export status"
 
+    export_task = server.export_tasks[task_id]
+    export_path = export_task["file_path"]
+    private_dir = export_task["private_dir"]
+    assert stat.S_IMODE(os.stat(export_path).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(private_dir).st_mode) == 0o700
+
     download_resp = client.get(download_url)
     assert download_resp.status_code == 200, f"Error: {download_resp.text}"
     assert download_resp.content[:2] == b"PK"  # ZIP file signature
+    assert task_id not in server.export_tasks
+    assert not os.path.exists(private_dir)
     logger.info(
         "Exported pictures zip size: {} bytes".format(len(download_resp.content))
     )

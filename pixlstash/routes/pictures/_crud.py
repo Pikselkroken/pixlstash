@@ -1211,7 +1211,8 @@ def register_routes(router, server):
         ),
         response_model=ScrapheapDeletePreviewResponse,
     )
-    def preview_scrapheap_delete(payload: dict | None = Body(None)):
+    def preview_scrapheap_delete(request: Request, payload: dict | None = Body(None)):
+        lease = request.state.library_lease
         ids = _parse_scrapheap_ids(payload)
         rows = scrapheap_service.fetch_scrapheap_rows(server.vault, ids)
         if not rows:
@@ -1222,7 +1223,12 @@ def register_routes(router, server):
                 "unprotected_count": 0,
                 "protected": [],
                 "locked": [],
-                "confirm_token": scrapheap_confirmations.issue(ids, 0),
+                "confirm_token": scrapheap_confirmations.issue(
+                    ids,
+                    0,
+                    library_uuid=lease.library_uuid,
+                    generation=lease.generation,
+                ),
             }
         no_delete_folder_ids = scrapheap_service.fetch_no_delete_folder_ids(
             server.vault
@@ -1247,7 +1253,10 @@ def register_routes(router, server):
         # only here, so a delete can never run without these counts having been
         # computed for exactly this selection first.
         preview["confirm_token"] = scrapheap_confirmations.issue(
-            ids, preview["total_count"]
+            ids,
+            preview["total_count"],
+            library_uuid=lease.library_uuid,
+            generation=lease.generation,
         )
         return preview
 
@@ -1303,6 +1312,8 @@ def register_routes(router, server):
         confirmed, reason = scrapheap_confirmations.redeem(
             payload.get("confirm_token") if isinstance(payload, dict) else None,
             ids,
+            library_uuid=request.state.library_lease.library_uuid,
+            generation=request.state.library_lease.generation,
         )
         if not confirmed:
             if reason == scrapheap_service.CONFIRM_MISSING:

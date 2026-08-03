@@ -18,6 +18,21 @@ const BACKEND_URL = API_BASE_URL;
 const GRID_WS_COALESCE_MS = 200;
 
 /**
+ * Apply the server's WebSocket close contract.
+ *
+ * Code 1012 with the switch reason is not a transient disconnect: every id and
+ * store value in this SPA belongs to the retired library. Reload the document
+ * instead of reconnecting the socket underneath stale client state.
+ */
+export function handleUpdatesSocketClose(event, { reload, reconnect }) {
+  if (event?.code === 1012 && event?.reason === "Library switched") {
+    reload();
+    return;
+  }
+  reconnect();
+}
+
+/**
  * The live-updates channel: the /updates WebSocket, the filter handshake that
  * tells the backend which events this client cares about, and the reconnect
  * loop.
@@ -303,15 +318,20 @@ export function useUpdatesSocket({
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       updatesSocket = null;
       if (updatesReconnectTimer) {
         clearTimeout(updatesReconnectTimer);
       }
-      updatesReconnectTimer = setTimeout(() => {
-        updatesReconnectTimer = null;
-        connectUpdatesSocket();
-      }, 2000);
+      handleUpdatesSocketClose(event, {
+        reload: () => window.location.reload(),
+        reconnect: () => {
+          updatesReconnectTimer = setTimeout(() => {
+            updatesReconnectTimer = null;
+            connectUpdatesSocket();
+          }, 2000);
+        },
+      });
     };
   }
 

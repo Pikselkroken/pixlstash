@@ -5,13 +5,19 @@ and a working Switch, because over-blocking the owner on their own machine is as
 much a regression as leaking host layout to a remote one.
 """
 
+import io
+import os
 import tempfile
+import threading
+import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete
+from PIL import Image
+from sqlmodel import Session, delete, select
 
-from pixlstash.db_models import User, UserToken
+from pixlstash.db_models import Picture, User, UserToken
 from pixlstash.server import Server
 
 API = "/api/v1"
@@ -137,11 +143,200 @@ class TestListing:
         entry = _owner(server).get(f"{API}/libraries").json()["libraries"][0]
         assert "id" not in entry, "a row id must never be the client's handle"
 
+    def test_share_link_counts_are_available_before_switch_without_path_locality(
+        self, server, spare_library
+    ):
+        client = _owner(server)
+        active = server.library_registry.active_library()
+        created = client.post(
+            f"{API}/users/me/token",
+            json={
+                "description": "one shared set",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert created.status_code == 200, created.text
+        expired = client.post(
+            f"{API}/users/me/token",
+            json={
+                "description": "expired shared set",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 2,
+                "expires_at": "2020-01-01T00:00:00",
+            },
+        )
+        assert expired.status_code == 200, expired.text
+
+        local_entries = {
+            entry["uuid"]: entry
+            for entry in client.get(f"{API}/libraries").json()["libraries"]
+        }
+        remote_entries = {
+            entry["uuid"]: entry
+            for entry in _owner(server, REMOTE_IP)
+            .get(f"{API}/libraries")
+            .json()["libraries"]
+        }
+        assert local_entries[active.uuid]["active_share_links"] == 1
+        assert local_entries[spare_library.uuid]["active_share_links"] == 0
+        assert remote_entries[active.uuid]["active_share_links"] == 1
+        assert remote_entries[active.uuid]["path"] is None
+
     def test_an_anonymous_caller_is_refused(self, server):
         assert TestClient(server.api).get(f"{API}/libraries").status_code in (401, 403)
 
 
 class TestSwitching:
+    def test_staging_session_from_previous_generation_is_inaccessible_and_removed(
+        self, server, spare_library
+    ):
+        client = _owner(server)
+        original = server.library_registry.active_library()
+        opened = client.post(f"{API}/pictures/import/staging", json={})
+        assert opened.status_code == 200, opened.text
+        staging_id = opened.json()["staging_id"]
+        staging_dir = server.staging_sessions[staging_id]["staging_dir"]
+        assert os.path.isdir(staging_dir)
+        try:
+            server.library_switch.switch_to(spare_library.uuid)
+            for method, suffix in (
+                ("get", "/status"),
+                ("post", "/commit"),
+                ("delete", ""),
+            ):
+                response = getattr(client, method)(
+                    f"{API}/pictures/import/staging/{staging_id}{suffix}"
+                )
+                assert response.status_code == 404
+            staged = client.post(
+                f"{API}/pictures/import/staging/{staging_id}/files",
+                files={"file": ("stale.png", b"stale", "image/png")},
+            )
+            assert staged.status_code == 404
+            assert not os.path.exists(staging_dir)
+        finally:
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
+
+    def test_switch_discards_private_export_artifact_and_stale_status(
+        self, server, spare_library, tmp_path
+    ):
+        client = _owner(server)
+        original = server.library_registry.active_library()
+        lease = server.library_coordinator.acquire_read()
+        assert lease is not None
+        server.library_coordinator.release_read(lease)
+        private_dir = Path(
+            tempfile.mkdtemp(prefix="pixlstash_export_test_", dir=tmp_path)
+        )
+        artifact = private_dir / "old.zip"
+        artifact.write_bytes(b"old library")
+        os.chmod(artifact, 0o600)
+        task_id = "old-generation-export"
+        server.export_tasks[task_id] = {
+            "status": "completed",
+            "file_path": str(artifact),
+            "filename": "old.zip",
+            "total": 1,
+            "processed": 1,
+            "private_dir": str(private_dir),
+            "library_uuid": lease.library_uuid,
+            "generation": lease.generation,
+        }
+        try:
+            server.library_switch.switch_to(spare_library.uuid)
+            assert (
+                client.get(
+                    f"{API}/pictures/export/status", params={"task_id": task_id}
+                ).status_code
+                == 404
+            )
+            assert not private_dir.exists()
+            assert task_id not in server.export_tasks
+        finally:
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
+
+    def test_switch_waits_for_detached_import_and_never_cross_writes(
+        self, server, spare_library, monkeypatch
+    ):
+        from pixlstash.routes.pictures import _import as import_routes
+
+        client = _owner(server)
+        original = server.library_registry.active_library()
+        old_count = server.vault.db.run_immediate_read_task(
+            lambda session: len(session.exec(select(Picture)).all())
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        switched = threading.Event()
+        errors = []
+        real_create = import_routes._create_picture_imports
+
+        def paused_create(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=10)
+            return real_create(*args, **kwargs)
+
+        monkeypatch.setattr(import_routes, "_create_picture_imports", paused_create)
+        image = Image.new("RGB", (8, 8), (12, 34, 56))
+        encoded = io.BytesIO()
+        image.save(encoded, format="PNG")
+        response = client.post(
+            f"{API}/pictures/import",
+            files={"file": ("lease.png", encoded.getvalue(), "image/png")},
+        )
+        assert response.status_code == 200, response.text
+        task_id = response.json()["task_id"]
+        assert entered.wait(timeout=10)
+
+        def do_switch():
+            try:
+                server.library_switch.switch_to(spare_library.uuid)
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+            finally:
+                switched.set()
+
+        switch_thread = threading.Thread(target=do_switch)
+        switch_thread.start()
+        deadline = time.monotonic() + 5
+        while server.library_coordinator.state.value != "switching":
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not switched.is_set()
+
+        release.set()
+        switch_thread.join(timeout=20)
+        try:
+            assert not errors
+            assert switched.is_set()
+            assert server.library_registry.active_library().uuid == spare_library.uuid
+            assert (
+                server.vault.db.run_immediate_read_task(
+                    lambda session: len(session.exec(select(Picture)).all())
+                )
+                == 0
+            )
+            assert (
+                client.get(
+                    f"{API}/pictures/import/status", params={"task_id": task_id}
+                ).status_code
+                == 404
+            )
+        finally:
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
+        assert (
+            server.vault.db.run_immediate_read_task(
+                lambda session: len(session.exec(select(Picture)).all())
+            )
+            == old_count + 1
+        )
+
     def test_a_local_owner_can_switch(self, server, spare_library):
         client = _owner(server)
 
@@ -187,6 +382,68 @@ class TestSwitching:
 
         assert response.status_code == 409
         assert server.vault is before, "the session stays on its library"
+
+    def test_overlapping_switch_posts_finish_without_deadlock(
+        self, server, tmp_path, monkeypatch
+    ):
+        original = server.library_registry.active_library()
+        first_target = server.library_registry.create(
+            str(tmp_path / "concurrent-first"), "Concurrent first"
+        )
+        second_target = server.library_registry.create(
+            str(tmp_path / "concurrent-second"), "Concurrent second"
+        )
+        first_client = _owner(server)
+        second_client = _owner(server)
+        build_entered = threading.Event()
+        release_build = threading.Event()
+        real_build = server.build_vault
+        blocked_once = False
+
+        def blocking_build(image_root):
+            nonlocal blocked_once
+            if image_root == first_target.path and not blocked_once:
+                blocked_once = True
+                build_entered.set()
+                assert release_build.wait(timeout=10)
+            return real_build(image_root)
+
+        monkeypatch.setattr(server, "build_vault", blocking_build)
+        responses = {}
+
+        def post(name, client, target):
+            responses[name] = client.post(
+                f"{API}/libraries/active", json={"uuid": target.uuid}
+            )
+
+        first_thread = threading.Thread(
+            target=post, args=("first", first_client, first_target)
+        )
+        second_thread = threading.Thread(
+            target=post, args=("second", second_client, second_target)
+        )
+        first_thread.start()
+        try:
+            assert build_entered.wait(timeout=10)
+            second_thread.start()
+            second_thread.join(timeout=5)
+            assert not second_thread.is_alive(), "second switch must fail promptly"
+        finally:
+            release_build.set()
+        first_thread.join(timeout=20)
+        second_thread.join(timeout=20)
+
+        try:
+            assert not first_thread.is_alive()
+            assert not second_thread.is_alive()
+            assert responses["first"].status_code == 200
+            assert responses["second"].status_code == 409
+            assert "already in progress" in responses["second"].text
+            assert server.library_registry.active_library().uuid == first_target.uuid
+            assert server.vault.image_root == first_target.path
+        finally:
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
 
     def test_the_response_reports_share_links_left_behind(self, server, spare_library):
         """The owner is the only person who can see their links go dark."""

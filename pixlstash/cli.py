@@ -129,6 +129,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup_parser.set_defaults(handler=_cmd_backup)
 
+    migrate_parser = subparsers.add_parser(
+        "prepare-legacy-identity",
+        help="Explicitly approve one legacy owner/token migration before startup.",
+    )
+    migrate_parser.add_argument(
+        "folder", help="Legacy library folder containing vault.db."
+    )
+    migrate_parser.set_defaults(handler=_cmd_prepare_legacy_identity)
+
     rename_parser = subparsers.add_parser("rename", help="Change a library's name.")
     rename_parser.add_argument("library", help="Library name or id from `list`.")
     rename_parser.add_argument("new_name", help="The new display name.")
@@ -291,13 +300,28 @@ def _cmd_backup(registry: LibraryRegistry, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_prepare_legacy_identity(
+    registry: LibraryRegistry, args: argparse.Namespace
+) -> int:
+    from pixlstash.hub.bootstrap import HubBootstrapError, prepare_legacy_identity
+
+    try:
+        library = prepare_legacy_identity(registry._hub, args.folder)
+    except HubBootstrapError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"Prepared legacy identity migration for {library.uuid} at {library.path}")
+    print("Start PixlStash to copy, verify, and blank the approved legacy identity.")
+    return EXIT_OK
+
+
 def _tool_version() -> str:
     """Return the installed PixlStash version, or 'unknown'."""
-    try:
-        from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
+    try:
         return version("pixlstash")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 

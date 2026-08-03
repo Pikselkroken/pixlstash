@@ -139,6 +139,43 @@ class TestHubDatabase:
         mode = hub.connection.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode.lower() == "wal"
 
+    @pytest.mark.parametrize("earlier_lane_had_salt", [False, True])
+    def test_v1_hub_migrates_to_v2_idempotently(self, tmp_path, earlier_lane_had_salt):
+        path = str(tmp_path / "hub.db")
+        first = HubDatabase(path)
+        with first.transaction() as conn:
+            conn.execute(
+                "INSERT INTO library_uuid_issued VALUES "
+                "('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'now', '/library')"
+            )
+            conn.execute(
+                "INSERT INTO library (uuid, settings_salt, name, path, created_at, "
+                "attached_at) VALUES "
+                "('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'kept-salt', 'One', "
+                "'/library', 'now', 'now')"
+            )
+            conn.execute("ALTER TABLE library DROP COLUMN identity_migration_state")
+            if not earlier_lane_had_salt:
+                conn.execute("ALTER TABLE library DROP COLUMN settings_salt")
+            conn.execute("UPDATE schema_version SET version = 1")
+        first.close()
+
+        upgraded = HubDatabase(path)
+        columns = {
+            row[1] for row in upgraded.connection.execute("PRAGMA table_info(library)")
+        }
+        assert {"settings_salt", "identity_migration_state"} <= columns
+        row = upgraded.connection.execute(
+            "SELECT settings_salt, identity_migration_state FROM library"
+        ).fetchone()
+        assert row["identity_migration_state"] == "not_required"
+        if earlier_lane_had_salt:
+            assert row["settings_salt"] == "kept-salt"
+        else:
+            assert len(row["settings_salt"]) == 32
+        assert read_schema_version(upgraded.connection) == 2
+        upgraded.close()
+
 
 class TestVaultValidation:
     def test_accepts_a_vault_folder(self, tmp_path):

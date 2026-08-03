@@ -25,6 +25,7 @@ See ``docs/backend_architecture.md`` §17 and the multi-library plan §4.
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 
 from pixlstash.pixl_logging import get_logger
@@ -35,7 +36,7 @@ logger = get_logger(__name__)
 # The schema version this build expects. A hub file carrying a *higher* version
 # was written by a newer PixlStash: refuse it rather than migrate it downward
 # (see :func:`apply_migrations`).
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 # Identity plus the per-user preference and machine/deployment columns that move
@@ -62,7 +63,9 @@ CURRENT_SCHEMA_VERSION = 1
 #   and the same clutter hidden wherever they are. They are also personal
 #   information, which is a second reason to keep them out of a folder designed
 #   to be copied and shared (see ``settings_salt`` below).
-# * ``stack_strictness`` has no remaining consumer; left alone pending deletion.
+# * ``stack_strictness`` remains a hub-scoped owner preference. The frontend
+#   consumes it as the similarity threshold for stack ordering; it does not
+#   identify a vault row and therefore remains meaningful across libraries.
 _V1_USER = """
 CREATE TABLE IF NOT EXISTS user (
     id                          INTEGER PRIMARY KEY,
@@ -204,7 +207,6 @@ CREATE TABLE IF NOT EXISTS library (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid           TEXT NOT NULL UNIQUE,
     vault_uuid     TEXT,
-    settings_salt  TEXT,
     name        TEXT NOT NULL,
     path        TEXT NOT NULL,
     created_at  TEXT NOT NULL,
@@ -265,7 +267,41 @@ SCHEMA_MIGRATIONS: tuple[tuple[int, tuple[str, ...]], ...] = (
             *_V1_USER_TOKEN_INDEXES,
         ),
     ),
+    # Version 2 is applied by ``_apply_v2`` below. SQLite does not support
+    # ``ADD COLUMN IF NOT EXISTS``; the explicit column inspection is what
+    # makes this retryable for developers who opened an earlier lane commit
+    # whose nominal v1 already contained ``settings_salt``.
+    (2, ()),
 )
+
+
+def _apply_v2(conn: sqlite3.Connection) -> None:
+    """Add v2 library bootstrap state without rewriting an existing hub."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(library)").fetchall()}
+    if "settings_salt" not in columns:
+        conn.execute("ALTER TABLE library ADD COLUMN settings_salt TEXT")
+    if "identity_migration_state" not in columns:
+        conn.execute(
+            "ALTER TABLE library ADD COLUMN identity_migration_state TEXT "
+            "NOT NULL DEFAULT 'not_required'"
+        )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS identity_migration_operation ("
+        "library_uuid TEXT PRIMARY KEY REFERENCES library(uuid), "
+        "source_path TEXT NOT NULL, payload_digest TEXT NOT NULL, "
+        "state TEXT NOT NULL CHECK(state IN ('pending','copied','complete')))"
+    )
+    # Rows from the earliest feature-lane v1 may predate the column entirely.
+    # Backfill in Python so every library gets a distinct cryptographic value;
+    # SQLite has no suitable random-hex default for ALTER TABLE.
+    missing_salts = conn.execute(
+        "SELECT id FROM library WHERE settings_salt IS NULL OR settings_salt = ''"
+    ).fetchall()
+    for (library_id,) in missing_salts:
+        conn.execute(
+            "UPDATE library SET settings_salt = ? WHERE id = ?",
+            (secrets.token_hex(16), library_id),
+        )
 
 
 class HubSchemaTooNewError(RuntimeError):
@@ -307,6 +343,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
         logger.info("Upgrading hub schema to version %d", target_version)
         try:
             with conn:
+                if target_version == 2:
+                    _apply_v2(conn)
                 for statement in statements:
                     conn.execute(statement)
                 conn.execute("DELETE FROM schema_version")
@@ -323,5 +361,12 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
             )
             raise
         version = target_version
+
+    # Version 2 is still unreleased and existed in earlier feature-lane builds.
+    # Re-run its guarded shape reconciliation so those developer hubs receive
+    # newly added v2 tables without pretending a released v3 exists.
+    if version >= 2:
+        with conn:
+            _apply_v2(conn)
 
     return version

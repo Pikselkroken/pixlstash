@@ -37,6 +37,7 @@ import {
   serverLogPath,
   setBackendsRoot,
 } from './config';
+import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 
 const execFileP = promisify(execFile);
 
@@ -90,6 +91,11 @@ let teardownComplete = false;
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
+
+// Server-owned source detected by setup:probe. The renderer receives the path
+// only to name the consent choice; setup:commit sends a boolean and can never
+// substitute a different vault for the privileged preparer invocation.
+let detectedLegacyIdentitySource: string | null = null;
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -786,9 +792,15 @@ function registerIpc(): void {
     const imported = stdPath ? readJsonFile(stdPath) : null;
     const importedImageRoot =
       typeof imported?.image_root === 'string' ? (imported.image_root as string) : null;
+    const resolvedImportedRoot = importedImageRoot ? resolve(importedImageRoot) : null;
+    detectedLegacyIdentitySource =
+      resolvedImportedRoot && existsSync(join(resolvedImportedRoot, 'vault.db'))
+        ? resolvedImportedRoot
+        : null;
     const gpu = gpuUpgrade();
     return {
       importedFrom: imported ? stdPath : null,
+      legacyIdentitySource: detectedLegacyIdentitySource,
       defaults: {
         imageRoot: importedImageRoot || defaultLibraryDir(),
         useGpu: Boolean(gpu),
@@ -813,7 +825,15 @@ function registerIpc(): void {
 
   ipcMain.handle(
     'setup:commit',
-    async (_e, choices: { imageRoot: string; useGpu: boolean; installLocation?: string }) => {
+    async (
+      _e,
+      choices: {
+        imageRoot: string;
+        useGpu: boolean;
+        installLocation?: string;
+        importLegacyIdentity?: boolean;
+      },
+    ) => {
       if (!runtime) throw new Error('No bundled runtime available');
       const imageRoot = (choices?.imageRoot || '').trim();
       if (!imageRoot) throw new Error('Please choose a library folder.');
@@ -826,14 +846,41 @@ function registerIpc(): void {
         setBackendsRoot(normalizeBackendsRoot(installLocation, defaultBackendsRoot()));
       }
 
-      // Write the desktop's own config. Loopback HTTP; the active runtime drives
-      // the device (default_device left as auto). The backend fills the rest of
-      // the defaults on first read.
-      mkdirSync(dirname(serverConfigPath()), { recursive: true });
+      const configDir = dirname(serverConfigPath());
+      mkdirSync(configDir, { recursive: true });
+
+      if (choices?.importLegacyIdentity) {
+        if (!detectedLegacyIdentitySource) {
+          throw new Error('No existing standalone PixlStash library was detected.');
+        }
+        if (resolve(imageRoot) !== detectedLegacyIdentitySource) {
+          throw new Error(
+            'To import its login and share links, keep the detected existing library selected.',
+          );
+        }
+        // Fail closed before a live desktop config exists. A nonzero CLI exit
+        // leaves the vault untouched and this exception keeps the setup screen
+        // open instead of booting a server that looks migrated but is not.
+        await prepareLegacyIdentity(
+          bundledInterpreter(),
+          join(configDir, 'hub.db'),
+          detectedLegacyIdentitySource,
+        );
+      }
+
+      // Write the desktop's own config only after any requested preparation
+      // succeeds. Declining consent writes no provenance marker and therefore
+      // imports zero legacy identity. Loopback HTTP; the active runtime drives
+      // the device (default_device left as auto).
       writeFileSync(
         serverConfigPath(),
         JSON.stringify(
-          { host: '127.0.0.1', require_ssl: false, image_root: imageRoot, default_device: 'auto' },
+          {
+            host: '127.0.0.1',
+            require_ssl: false,
+            image_root: imageRoot,
+            default_device: 'auto',
+          },
           null,
           2,
         ),

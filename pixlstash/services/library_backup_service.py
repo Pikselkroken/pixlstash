@@ -6,12 +6,11 @@ already uses against the live vault: it takes a read transaction and, under WAL,
 produces a consistent point-in-time copy without blocking writers. So a backup of
 the active library needs no quiesce and no coordination with the server.
 
-**Databases first, then image files.** The archived catalogue then references
-only images that already existed on disk, all of which the file pass picks up.
-An image imported during the copy is simply an extra file the catalogue does not
-mention. The one residual gap is a picture purged between the two passes, which
-leaves a reference to a file that is not in the archive; that window is small and
-is stated rather than engineered away.
+**Databases first, then image files.** Every internal picture referenced by the
+copied catalogue must still be a regular file when the payload is assembled and
+again when it is archived. A concurrent purge therefore fails the backup instead
+of publishing an incomplete one. New, unreferenced files may harmlessly appear in
+the archive. Symlinks and other non-regular payloads are refused.
 
 **The archive contains the hub**, and therefore the password hash and every token
 hash. It is written owner-readable only and the CLI says so. That is a different
@@ -32,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -42,6 +42,11 @@ import zstandard
 
 from pixlstash.hub.registry import VAULT_FILENAME, Library
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.library_switch_service import known_vault_revisions
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+)
 
 logger = get_logger(__name__)
 
@@ -83,72 +88,218 @@ class BackupError(RuntimeError):
     """The backup could not be written, with a message for the terminal."""
 
 
-def _vacuum_into(source_path: str, destination_path: str) -> None:
-    """Write a consistent copy of a live SQLite database.
+def _open_guarded_source(
+    path: str, *, label: str, private: bool
+) -> tuple[sqlite3.Connection, TrustedSQLiteLocation]:
+    try:
+        guard = TrustedSQLiteLocation.open(path, private=private)
+    except TrustedSQLiteLocationError as exc:
+        raise BackupError(f"Could not securely open {label} {path}: {exc}") from exc
+    try:
+        conn = sqlite3.connect(f"file:{guard.path}?mode=ro", uri=True, timeout=30)
+        conn.row_factory = sqlite3.Row
+        guard.verify_after_open()
+    except Exception as exc:
+        guard.close()
+        raise BackupError(f"Could not read {label} {path}: {exc}") from exc
+    return conn, guard
 
-    Read-only on the source and safe against concurrent writers, which is what
-    lets this run against a library the server has open.
-    """
+
+def _validate_connection(
+    conn: sqlite3.Connection,
+    *,
+    label: str,
+    required_tables: set[str],
+) -> None:
     try:
-        conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True, timeout=30)
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
     except sqlite3.Error as exc:
-        raise BackupError(f"Could not read {source_path}: {exc}") from exc
+        raise BackupError(f"{label} is unreadable: {exc}") from exc
+    if not required_tables <= tables or not integrity or integrity[0] != "ok":
+        raise BackupError(f"{label} is not a valid PixlStash database.")
+
+
+def _validate_vault_connection(
+    conn: sqlite3.Connection, library: Library, *, label: str
+) -> None:
+    _validate_connection(
+        conn,
+        label=label,
+        required_tables={"picture", "alembic_version"},
+    )
+    rows = conn.execute("SELECT version_num FROM alembic_version").fetchall()
+    unknown = [row[0] for row in rows if row[0] not in known_vault_revisions()]
+    if unknown:
+        raise BackupError(
+            f"{label} has an unsupported schema revision: {', '.join(unknown)}."
+        )
+    if library.vault_uuid is not None:
+        try:
+            row = conn.execute(
+                "SELECT library_uuid FROM library_settings LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise BackupError(f"Could not validate {label} fingerprint: {exc}") from exc
+        observed = row[0] if row else None
+        if observed != library.vault_uuid:
+            raise BackupError(
+                f"{label} fingerprint {observed!r} does not match the registered "
+                f"library {library.vault_uuid!r}."
+            )
+
+
+def _open_validated_hub_source(
+    hub_path: str,
+) -> tuple[sqlite3.Connection, TrustedSQLiteLocation]:
+    """Open and validate the exact credential-hub inode to be archived."""
+    conn, guard = _open_guarded_source(hub_path, label="hub database", private=True)
     try:
-        conn.execute("VACUUM INTO ?", (destination_path,))
-    except sqlite3.Error as exc:
-        raise BackupError(f"Could not copy {source_path}: {exc}") from exc
-    finally:
+        _validate_connection(
+            conn,
+            label=f"Hub database {hub_path}",
+            required_tables={"user", "usertoken", "library"},
+        )
+    except Exception:
         conn.close()
+        guard.close()
+        raise
+    return conn, guard
 
 
-def _read_scalar(db_path: str, sql: str, default=None):
+def _vacuum_connection_into(
+    source: sqlite3.Connection, destination_path: str, source_label: str
+) -> None:
+    """Copy the already validated SQLite source without reopening its path."""
+    try:
+        source.execute("VACUUM INTO ?", (destination_path,))
+    except sqlite3.Error as exc:
+        raise BackupError(f"Could not copy {source_label}: {exc}") from exc
+
+
+def _read_scalar(connection: sqlite3.Connection, sql: str, default=None):
     """Run a one-value read against a database, returning *default* on failure."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=10)
-    except sqlite3.Error:
-        return default
-    try:
-        row = conn.execute(sql).fetchone()
+        row = connection.execute(sql).fetchone()
         return row[0] if row else default
     except sqlite3.Error:
         return default
-    finally:
-        conn.close()
 
 
-def _reference_folders(vault_path: str) -> list[str]:
+def _reference_folders(connection: sqlite3.Connection) -> list[str]:
     """Return the external folders this library points at.
 
     These live outside the library by definition, so they are **not** in the
     archive. Users assume otherwise unless told, so the caller names them.
     """
     try:
-        conn = sqlite3.connect(f"file:{vault_path}?mode=ro", uri=True, timeout=10)
-    except sqlite3.Error:
-        return []
-    try:
-        rows = conn.execute("SELECT folder FROM referencefolder").fetchall()
+        rows = connection.execute("SELECT folder FROM referencefolder").fetchall()
         return [row[0] for row in rows if row[0]]
     except sqlite3.Error:
         # The table's name or absence is not worth failing a backup over.
         return []
-    finally:
-        conn.close()
 
 
 def _library_files(library_root: str) -> list[tuple[str, str]]:
-    """Return ``(absolute, archive-relative)`` for every non-database file."""
-    collected = []
-    for directory, _subdirs, filenames in os.walk(library_root):
+    """Return every regular non-database file, refusing ambiguous payloads."""
+    collected: list[tuple[str, str]] = []
+    for directory, subdirs, filenames in os.walk(library_root, followlinks=False):
+        relative_directory = os.path.relpath(directory, library_root)
+        parts = relative_directory.split(os.sep)
+        if (
+            len(parts) >= 2
+            and parts[0] == "snapshots"
+            and (
+                parts[1] == ".tmp"
+                or any(part.startswith(".pixlstash_identity_scrub_") for part in parts)
+            )
+        ):
+            subdirs[:] = []
+            continue
+        for dirname in subdirs:
+            _validate_regular_directory(
+                os.path.join(directory, dirname), label="library payload directory"
+            )
         for filename in filenames:
             if os.path.relpath(directory, library_root) == "." and (
                 filename in _DATABASE_FILES
             ):
                 continue
             absolute = os.path.join(directory, filename)
+            _validate_regular_file(absolute, label="library payload")
             relative = os.path.relpath(absolute, library_root)
             collected.append((absolute, os.path.join("images", relative)))
     return collected
+
+
+def _validate_regular_directory(path: str, *, label: str) -> None:
+    """Refuse symlinked or non-directory path components in an archive walk."""
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise BackupError(f"Could not inspect {label} {path}: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise BackupError(f"Refusing symlinked {label} {path}.")
+    if not stat.S_ISDIR(info.st_mode):
+        raise BackupError(f"Refusing non-directory {label} {path}.")
+
+
+def _validate_regular_file(path: str, *, label: str) -> os.stat_result:
+    """Return an lstat for a regular file or fail without following symlinks."""
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise BackupError(f"Could not read {label} {path}: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise BackupError(f"Refusing symlinked {label} {path}.")
+    if not stat.S_ISREG(info.st_mode):
+        raise BackupError(f"Refusing non-regular {label} {path}.")
+    return info
+
+
+def _required_internal_picture_files(
+    connection: sqlite3.Connection, library_root: str
+) -> set[str]:
+    """Resolve internal picture references from the exact copied catalogue."""
+    root = os.path.normcase(os.path.abspath(library_root))
+    required: set[str] = set()
+    try:
+        rows = connection.execute(
+            "SELECT file_path FROM picture WHERE file_path IS NOT NULL"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise BackupError(f"Could not read copied picture paths: {exc}") from exc
+    for row in rows:
+        stored = row[0]
+        if not stored:
+            continue
+        resolved = stored if os.path.isabs(stored) else os.path.join(root, stored)
+        resolved = os.path.normcase(os.path.abspath(resolved))
+        try:
+            internal = os.path.commonpath((root, resolved)) == root
+        except ValueError:
+            internal = False
+        if internal:
+            required.add(resolved)
+    return required
+
+
+def _verify_required_files(required: set[str], payload: list[tuple[str, str]]) -> None:
+    """Prove that every copied internal reference is present in the payload."""
+    included = {os.path.normcase(os.path.abspath(path)) for path, _ in payload}
+    missing = sorted(required - included)
+    if missing:
+        example = missing[0]
+        raise BackupError(
+            "The copied catalogue references an internal picture that is missing "
+            f"from the backup payload: {example}. Repair or purge the missing "
+            "record, then retry. No archive was published."
+        )
 
 
 def create_backup(
@@ -191,55 +342,98 @@ def create_backup(
     destination = _resolve_destination(library, destination, compress)
     os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
 
-    picture_count = _read_scalar(vault_path, "SELECT COUNT(*) FROM picture", 0) or 0
-    revision = _read_scalar(vault_path, "SELECT version_num FROM alembic_version")
-    references = _reference_folders(vault_path)
-
-    manifest = {
-        "library_uuid": library.uuid,
-        "library_name": library.name,
-        "source_path": library.path,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "pixlstash_version": tool_version,
-        "vault_revision": revision,
-        "picture_count": picture_count,
-        "metadata_only": metadata_only,
-        "reference_folders": references,
-        "contains_hub": True,
-    }
-
+    vault_source, vault_guard = _open_guarded_source(
+        vault_path, label="vault database", private=False
+    )
+    try:
+        _validate_vault_connection(
+            vault_source, library, label=f"Vault database {vault_path}"
+        )
+    except Exception:
+        vault_source.close()
+        vault_guard.close()
+        raise
+    hub_source, hub_guard = _open_validated_hub_source(hub_path)
     scratch = tempfile.mkdtemp(prefix="pixlstash_backup_")
     file_count = 0
+    byte_size = 0
+    picture_count = 0
+    references: list[str] = []
+    required_files: set[str] = set()
     try:
         # Databases first: the archived catalogue then names only images that
         # already exist, and the file pass below collects them.
         vault_copy = os.path.join(scratch, VAULT_FILENAME)
-        _vacuum_into(vault_path, vault_copy)
+        _vacuum_connection_into(vault_source, vault_copy, vault_path)
 
         hub_copy = os.path.join(scratch, "hub.db")
-        if os.path.isfile(hub_path):
-            _vacuum_into(hub_path, hub_copy)
-        else:
-            hub_copy = None
-            manifest["contains_hub"] = False
+        _vacuum_connection_into(hub_source, hub_copy, hub_path)
+
+        # The manifest is derived from the private copies that will actually be
+        # archived, and both copies are independently validated before packing.
+        vault_copy_conn = sqlite3.connect(vault_copy)
+        vault_copy_conn.row_factory = sqlite3.Row
+        try:
+            _validate_vault_connection(
+                vault_copy_conn, library, label="Copied vault database"
+            )
+            picture_count = (
+                _read_scalar(vault_copy_conn, "SELECT COUNT(*) FROM picture", 0) or 0
+            )
+            revision = _read_scalar(
+                vault_copy_conn, "SELECT version_num FROM alembic_version"
+            )
+            references = _reference_folders(vault_copy_conn)
+            if not metadata_only:
+                required_files = _required_internal_picture_files(
+                    vault_copy_conn, library.path
+                )
+        finally:
+            vault_copy_conn.close()
+
+        hub_copy_conn = sqlite3.connect(hub_copy)
+        try:
+            _validate_connection(
+                hub_copy_conn,
+                label="Copied hub database",
+                required_tables={"user", "usertoken", "library"},
+            )
+        finally:
+            hub_copy_conn.close()
+
+        manifest = {
+            "library_uuid": library.uuid,
+            "library_name": library.name,
+            "source_path": library.path,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "pixlstash_version": tool_version,
+            "vault_revision": revision,
+            "picture_count": picture_count,
+            "metadata_only": metadata_only,
+            "reference_folders": references,
+            "contains_hub": True,
+        }
 
         manifest_copy = os.path.join(scratch, "manifest.json")
         with open(manifest_copy, "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2)
 
         payload = [(manifest_copy, "manifest.json"), (vault_copy, VAULT_FILENAME)]
-        if hub_copy:
-            payload.append((hub_copy, "hub.db"))
+        payload.append((hub_copy, "hub.db"))
         if not metadata_only:
-            payload.extend(_library_files(library.path))
+            library_payload = _library_files(library.path)
+            _verify_required_files(required_files, library_payload)
+            payload.extend(library_payload)
         file_count = len(payload)
 
-        _write_archive(payload, destination, compress)
+        byte_size = _write_archive(payload, destination, compress)
     finally:
+        hub_source.close()
+        hub_guard.close()
+        vault_source.close()
+        vault_guard.close()
         _remove_tree(scratch)
 
-    os.chmod(destination, BACKUP_FILE_MODE)
-    byte_size = os.path.getsize(destination)
     logger.info(
         "Backed up library %s (%s) to %s (%d bytes, %d file(s))",
         library.name,
@@ -271,39 +465,155 @@ def _resolve_destination(library: Library, destination: str, compress: bool) -> 
     return expanded
 
 
-def _open_private(destination: str):
-    """Open *destination* for writing, owner-readable from the first byte.
+def _destination_exists_error(destination: str) -> BackupError:
+    if os.path.islink(destination):
+        return BackupError(
+            f"Refusing to write backup through symlink {destination}. "
+            "Choose a new regular-file path."
+        )
+    return BackupError(
+        f"Backup destination already exists: {destination}. Choose a new path; "
+        "PixlStash never overwrites a backup."
+    )
 
-    Not ``open()`` followed by ``chmod``: that leaves a window in which the file
-    exists under the process umask (commonly 0644) while the hub's password and
-    token hashes are being written into it, and any local user could open it in
-    that window and keep the handle after the mode is tightened. Creating with
-    the right mode closes the window rather than narrowing it (CWE-732).
-    """
-    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, BACKUP_FILE_MODE)
-    return os.fdopen(fd, "wb")
+
+def _publish_private_temp(
+    temp_path: str,
+    destination: str,
+    expected: os.stat_result,
+) -> None:
+    """Atomically publish a completed adjacent temp without overwriting."""
+    linked = False
+    try:
+        current = os.lstat(temp_path)
+        if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+            raise BackupError(
+                "The private backup temporary file changed before publication."
+            )
+        os.link(temp_path, destination, follow_symlinks=False)
+        linked = True
+        published = os.lstat(destination)
+        if (published.st_dev, published.st_ino) != (expected.st_dev, expected.st_ino):
+            try:
+                os.unlink(destination)
+            except OSError:
+                pass
+            raise BackupError("The published backup did not match its private temp.")
+        _fsync_directory(os.path.dirname(destination) or ".")
+    except FileExistsError as exc:
+        raise _destination_exists_error(destination) from exc
+    except BackupError:
+        if linked:
+            _remove_uncommitted_publication(destination, expected)
+        raise
+    except OSError as exc:
+        if linked:
+            _remove_uncommitted_publication(destination, expected)
+        raise BackupError(f"Could not publish {destination}: {exc}") from exc
+
+
+def _remove_uncommitted_publication(destination: str, expected: os.stat_result) -> None:
+    """Remove only the final hardlink this writer created before commit."""
+    try:
+        observed = os.lstat(destination)
+        if (observed.st_dev, observed.st_ino) == (expected.st_dev, expected.st_ino):
+            os.unlink(destination)
+            try:
+                _fsync_directory(os.path.dirname(destination) or ".")
+            except BackupError as exc:
+                logger.warning(
+                    "Could not make failed backup cleanup durable for %s: %s",
+                    destination,
+                    exc,
+                )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(
+            "Could not remove failed backup publication %s: %s", destination, exc
+        )
+
+
+def _fsync_directory(path: str) -> None:
+    """Make adjacent create/unlink directory entries durable on POSIX."""
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        raise BackupError(
+            f"Could not make backup directory {path} durable: {exc}"
+        ) from exc
 
 
 def _write_archive(
     payload: list[tuple[str, str]], destination: str, compress: bool
-) -> None:
-    """Stream *payload* into a tar, optionally through zstd."""
+) -> int:
+    """Stream to a private adjacent temp, then publish atomically."""
+    destination_dir = os.path.dirname(destination) or "."
+    if os.path.lexists(destination):
+        raise _destination_exists_error(destination)
+    temp_fd = -1
+    temp_path: Optional[str] = None
     try:
+        temp_fd, temp_path = tempfile.mkstemp(
+            prefix=".pixlstash-backup-", suffix=".tmp", dir=destination_dir
+        )
+        os.fchmod(temp_fd, BACKUP_FILE_MODE)
+        expected = os.fstat(temp_fd)
         if not compress:
-            with _open_private(destination) as raw:
+            with os.fdopen(temp_fd, "wb") as raw:
+                temp_fd = -1
                 with tarfile.open(fileobj=raw, mode="w") as tar:
                     for absolute, arcname in payload:
+                        _validate_regular_file(absolute, label="backup payload")
                         tar.add(absolute, arcname=arcname)
-            return
-
-        compressor = zstandard.ZstdCompressor(level=3)
-        with _open_private(destination) as raw:
-            with compressor.stream_writer(raw) as stream:
-                with tarfile.open(mode="w|", fileobj=stream) as tar:
-                    for absolute, arcname in payload:
-                        tar.add(absolute, arcname=arcname)
-    except (OSError, tarfile.TarError) as exc:
+                raw.flush()
+                os.fsync(raw.fileno())
+        else:
+            compressor = zstandard.ZstdCompressor(level=3)
+            with os.fdopen(temp_fd, "wb") as raw:
+                temp_fd = -1
+                with compressor.stream_writer(raw, closefd=False) as stream:
+                    with tarfile.open(mode="w|", fileobj=stream) as tar:
+                        for absolute, arcname in payload:
+                            _validate_regular_file(absolute, label="backup payload")
+                            tar.add(absolute, arcname=arcname)
+                raw.flush()
+                os.fsync(raw.fileno())
+        completed = os.lstat(temp_path)
+        if (completed.st_dev, completed.st_ino) != (expected.st_dev, expected.st_ino):
+            raise BackupError("The private backup temp changed while it was written.")
+        _publish_private_temp(temp_path, destination, completed)
+        os.unlink(temp_path)
+        temp_path = None
+        try:
+            _fsync_directory(destination_dir)
+        except BackupError as exc:
+            # The final hardlink was already fsynced and is committed. Failure
+            # to durably record removal of its private sibling must not turn a
+            # valid backup into a reported failure that cannot be retried.
+            logger.warning("Could not fsync private backup temp cleanup: %s", exc)
+        return completed.st_size
+    except BackupError:
+        raise
+    except (OSError, tarfile.TarError, zstandard.ZstdError) as exc:
         raise BackupError(f"Could not write {destination}: {exc}") from exc
+    finally:
+        if temp_fd >= 0:
+            os.close(temp_fd)
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("Could not remove backup temp %s: %s", temp_path, exc)
 
 
 def _remove_tree(path: Optional[str]) -> None:

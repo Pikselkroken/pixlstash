@@ -56,6 +56,12 @@ def _cache_put(key: tuple, value: dict) -> None:
             _anomaly_region_cache.popitem(last=False)
 
 
+def clear_anomaly_region_cache() -> None:
+    """Drop library-derived Grad-CAM results during an active-library switch."""
+    with _anomaly_region_cache_lock:
+        _anomaly_region_cache.clear()
+
+
 class AnomalyRegionResponse(BaseModel):
     """Approximate localisation of an anomaly tag within a picture."""
 

@@ -13,10 +13,15 @@
  * another library, and every open view describes the old one.
  */
 import { computed, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
 import { VProgressCircular } from "vuetify/components";
 
-import { listLibraries, setActiveLibrary } from "../../api/libraries";
+import { LIBRARIES_DOCUMENTATION_URL } from "../../api/libraries";
 import { useConfirm } from "../../composables/useConfirm";
+import {
+  useLibrariesStore,
+  useLibrarySwitchStore,
+} from "../../stores/useLibrariesStore";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -28,82 +33,104 @@ const props = defineProps({
 });
 
 const { confirm } = useConfirm();
+const librariesStore = useLibrariesStore();
+const switchStore = useLibrarySwitchStore();
+const {
+  libraries,
+  canManage,
+  cliHint,
+  inDocker,
+  loading,
+  loadError,
+  hasLoadedSuccessfully,
+  activeLibrary,
+} = storeToRefs(librariesStore);
+const { targetLibrary, overlayOpen } = storeToRefs(switchStore);
+const copiedCommand = ref("");
+const expandedPaths = ref(new Set());
 
-const libraries = ref([]);
-const canManage = ref(false);
-const cliHint = ref("");
-const inDocker = ref(false);
-const loading = ref(false);
-const loadError = ref("");
-const switchingTo = ref("");
-const switchError = ref("");
-const copied = ref(false);
-
-const activeLibrary = computed(() =>
-  libraries.value.find((library) => library.is_active),
+const showOneLibraryPrimer = computed(
+  () => hasLoadedSuccessfully.value && libraries.value.length === 1,
 );
 
-const hasOnlyOneLibrary = computed(() => libraries.value.length <= 1);
+const cliCommands = computed(() => {
+  if (!cliHint.value) return [];
+  const base = cliHint.value.replace(/\s+list\s*$/, "");
+  return [
+    { verb: "list", syntax: "list", description: "Show what is attached." },
+    {
+      verb: "create",
+      syntax: "create <folder>",
+      description: "Start a new, empty library.",
+    },
+    {
+      verb: "attach",
+      syntax: "attach <folder>",
+      description: "Register a library that already exists on disk.",
+    },
+    {
+      verb: "detach",
+      syntax: "detach <name>",
+      description:
+        "Forget one. No files are removed and nothing inside the folder changes.",
+    },
+  ].map((item) => ({ ...item, command: `${base} ${item.syntax}` }));
+});
 
-async function load() {
-  loading.value = true;
-  loadError.value = "";
-  try {
-    const body = await listLibraries();
-    libraries.value = body?.libraries ?? [];
-    canManage.value = Boolean(body?.can_manage);
-    cliHint.value = body?.cli_hint ?? "";
-    inDocker.value = Boolean(body?.in_docker);
-  } catch (error) {
-    loadError.value =
-      error?.response?.data?.detail || "Could not read the list of libraries.";
-  } finally {
-    loading.value = false;
-  }
-}
+const copyAnnouncement = computed(() =>
+  copiedCommand.value ? `Copied ${copiedCommand.value}` : "",
+);
+
+const detachCommand = computed(() =>
+  cliHint.value
+    ? cliHint.value.replace(/\s+list\s*$/, " detach <name>")
+    : "",
+);
 
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) load();
+    if (isOpen) librariesStore.refresh();
   },
   { immediate: true },
 );
 
-async function switchTo(library) {
-  switchError.value = "";
+async function switchTo(library, event) {
+  // DOM Event.currentTarget is cleared as soon as synchronous dispatch ends.
+  // Save the invoking control before the confirmation awaits so failure can
+  // restore focus to the exact Switch button.
+  const trigger = event?.currentTarget ?? null;
+  const shareCount = Number(activeLibrary.value?.active_share_links ?? 0);
   const ok = await confirm({
     title: `Switch to ${library.name}?`,
     message:
       "PixlStash will reload. Work in progress finishes or is cancelled first.",
+    warning:
+      shareCount > 0
+        ? `${shareCount} share ${shareCount === 1 ? "link points" : "links point"} at ${activeLibrary.value?.name}. ${shareCount === 1 ? "It stops" : "They stop"} working until you switch back.`
+        : "",
     confirmLabel: "Switch and reload",
   });
   if (!ok) return;
-
-  switchingTo.value = library.uuid;
-  try {
-    await setActiveLibrary(library.uuid);
-    // The whole app describes the library that is closing, so reload rather
-    // than trying to reconcile stores against a different library.
-    window.location.reload();
-  } catch (error) {
-    // The server stays on the library it was already using when a switch
-    // fails, so the honest thing is to say so and leave the user where they are.
-    switchError.value =
-      error?.response?.data?.detail ||
-      `Could not switch to ${library.name}. PixlStash is still using ${
-        activeLibrary.value?.name ?? "the current library"
-      }.`;
-    switchingTo.value = "";
-  }
+  await switchStore.begin(
+    library,
+    activeLibrary.value,
+    trigger,
+  );
 }
 
-async function copyHint() {
-  if (!cliHint.value) return;
-  await copyText(cliHint.value);
-  copied.value = true;
+function togglePath(libraryUuid) {
+  const next = new Set(expandedPaths.value);
+  if (next.has(libraryUuid)) next.delete(libraryUuid);
+  else next.add(libraryUuid);
+  expandedPaths.value = next;
+}
+
+async function copyCommand(command) {
+  await copyText(command);
+  copiedCommand.value = command;
   window.setTimeout(() => {
-    copied.value = false;
+    if (copiedCommand.value === command) copiedCommand.value = "";
   }, 2000);
 }
 </script>
@@ -115,14 +142,17 @@ async function copyHint() {
       title="Libraries"
       desc="A library is a folder holding your pictures and their database. PixlStash keeps one open at a time."
     >
-      <div v-if="loading" class="libraries-loading">
+      <div v-if="loading" class="libraries-loading" role="status" aria-live="polite">
         <v-progress-circular indeterminate size="20" width="2" />
         <span>Reading the list of libraries…</span>
       </div>
 
-      <p v-else-if="loadError" class="libraries-error" role="alert">
-        {{ loadError }}
-      </p>
+      <div v-else-if="loadError" class="libraries-error" role="alert">
+        <span>{{ loadError }}</span>
+        <AppButton size="sm" variant="secondary" @click="librariesStore.refresh()">
+          Retry
+        </AppButton>
+      </div>
 
       <ul v-else class="libraries-list">
         <li
@@ -133,7 +163,9 @@ async function copyHint() {
         >
           <div class="library-row__text">
             <div class="library-row__name">
-              {{ library.name }}
+              <span class="library-row__label" :title="library.name">
+                {{ library.name }}
+              </span>
               <span v-if="library.is_active" class="library-chip">Active</span>
               <span
                 v-else-if="!library.is_reachable"
@@ -143,15 +175,30 @@ async function copyHint() {
             </div>
             <!-- Present only for a local session: the server omits the path
                  for a remote caller so it never leaks host layout. -->
-            <div
+            <button
               v-if="library.path"
+              type="button"
               class="library-row__path"
+              :class="{
+                'library-row__path--expanded': expandedPaths.has(library.uuid),
+              }"
               :title="library.path"
+              :aria-label="`${expandedPaths.has(library.uuid) ? 'Collapse' : 'Show'} full folder path for ${library.name}: ${library.path}`"
+              :aria-expanded="expandedPaths.has(library.uuid)"
+              @click="togglePath(library.uuid)"
             >
               {{ library.path }}
-            </div>
+            </button>
             <div v-if="!library.is_reachable" class="library-row__help">
-              Reconnect the drive, then reopen this tab.
+              Reconnect its storage, then reopen this tab.
+              <template v-if="cliHint">
+                If it is no longer needed, run
+                <code>{{ detachCommand }}</code>.
+              </template>
+              <template v-else>
+                The documentation explains how to detach it from the host.
+              </template>
+              Detaching removes only this entry; no files are removed.
             </div>
           </div>
 
@@ -161,18 +208,14 @@ async function copyHint() {
               size="sm"
               variant="secondary"
               :disabled="!canManage || !library.is_reachable"
-              :loading="switchingTo === library.uuid"
-              @click="switchTo(library)"
+              :loading="overlayOpen && targetLibrary?.uuid === library.uuid"
+              @click="switchTo(library, $event)"
             >
               Switch
             </AppButton>
           </div>
         </li>
       </ul>
-
-      <p v-if="switchError" class="libraries-error" role="alert">
-        {{ switchError }}
-      </p>
 
       <!-- Visible text, not a tooltip: a disabled control has to explain
            itself somewhere a keyboard or screen-reader user will reach. -->
@@ -189,42 +232,37 @@ async function copyHint() {
         because it points PixlStash at folders on your computer.
       </p>
 
-      <div v-if="cliHint" class="libraries-cli">
-        <code class="libraries-cli__command">{{ cliHint }}</code>
-        <AppButton
-          size="sm"
-          variant="ghost"
-          icon-left="content-copy"
-          @click="copyHint"
-        >
-          {{ copied ? "Copied" : "Copy" }}
-        </AppButton>
-      </div>
+      <ul v-if="cliCommands.length" class="libraries-cli-list">
+        <li v-for="item in cliCommands" :key="item.verb" class="libraries-cli">
+          <div class="libraries-cli__text">
+            <code class="libraries-cli__command">{{ item.command }}</code>
+            <span>{{ item.description }}</span>
+          </div>
+          <AppButton
+            class="libraries-cli__copy"
+            size="sm"
+            variant="ghost"
+            icon-left="content-copy"
+            :title="`Copy ${item.syntax} command`"
+            @click="copyCommand(item.command)"
+          >
+            {{ copiedCommand === item.command ? "Copied" : "Copy" }}
+          </AppButton>
+        </li>
+      </ul>
       <p v-else class="libraries-note">
-        Run it on the machine hosting PixlStash to see the exact command.
+        Open the documentation on the machine hosting PixlStash for the command
+        appropriate to that installation. Host paths and command details are
+        not shown to remote sessions.
       </p>
 
-      <dl class="libraries-verbs">
-        <div>
-          <dt>list</dt>
-          <dd>Show what is attached.</dd>
-        </div>
-        <div>
-          <dt>create</dt>
-          <dd>Start a new, empty library.</dd>
-        </div>
-        <div>
-          <dt>attach</dt>
-          <dd>Register a library that already exists on disk.</dd>
-        </div>
-        <div>
-          <dt>detach</dt>
-          <dd>
-            Forget one. <strong>No files are removed</strong> and nothing inside
-            the folder changes.
-          </dd>
-        </div>
-      </dl>
+      <p class="libraries-note">
+        <a
+          :href="LIBRARIES_DOCUMENTATION_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Open the PixlStash command-line documentation</a>.
+      </p>
 
       <p class="libraries-note">
         Run it on the machine hosting PixlStash, signed in as the user that owns
@@ -234,11 +272,16 @@ async function copyHint() {
         </template>
       </p>
 
-      <p v-if="hasOnlyOneLibrary" class="libraries-note">
-        You have one library. Attach another to keep separate sets of pictures,
-        such as client work and experiments, and switch between them here.
+      <p v-if="showOneLibraryPrimer" class="libraries-note">
+        You have one library. Use <code>attach &lt;folder&gt;</code> to add another,
+        keep separate sets of pictures such as client work and experiments, and
+        switch between them here.
       </p>
     </SettingsSection>
+
+    <p class="visually-hidden" role="status" aria-live="polite">
+      {{ copyAnnouncement }}
+    </p>
   </div>
 </template>
 
@@ -253,7 +296,7 @@ async function copyHint() {
   align-items: center;
   gap: var(--space-3);
   font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   padding: var(--space-3) 0;
 }
 
@@ -276,9 +319,11 @@ async function copyHint() {
 
 .library-row--active {
   border-color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.08);
 }
 
 .library-row__text {
+  flex: 1;
   min-width: 0;
 }
 
@@ -288,38 +333,74 @@ async function copyHint() {
   gap: var(--space-2);
   font-weight: var(--weight-semibold);
   font-size: var(--text-sm);
+  min-width: 0;
+}
+
+.library-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Truncate from the left so the identifying tail of the path stays readable:
    the last segments are what tell two libraries apart. */
 .library-row__path {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-family: var(--font-ui);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   margin-top: var(--space-1);
   direction: rtl;
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.library-row__path:hover {
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+
+.library-row__path:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.library-row__path--expanded {
+  direction: ltr;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .library-row__help {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   margin-top: var(--space-1);
 }
 
 .library-chip {
+  flex-shrink: 0;
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-semibold);
   padding: 0 var(--space-2);
+  border: 1px solid rgb(var(--v-theme-accent));
   border-radius: var(--radius-sm);
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-accent));
+  background: rgba(var(--v-theme-accent), 0.12);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .library-chip--warn {
-  color: rgb(var(--v-theme-warning));
+  border-color: rgb(var(--v-theme-warning));
+  background: rgba(var(--v-theme-warning), 0.12);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .library-row__action {
@@ -328,23 +409,47 @@ async function copyHint() {
 
 .libraries-note {
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   line-height: var(--leading-snug);
   margin: var(--space-2) 0 0;
 }
 
 .libraries-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   font-size: var(--text-xs);
-  color: rgb(var(--v-theme-error));
+  color: rgb(var(--v-theme-on-error));
+  background: rgb(var(--v-theme-error));
   line-height: var(--leading-snug);
   margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+.libraries-cli-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
 }
 
 .libraries-cli {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-2);
-  margin-top: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.libraries-cli__text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  font-size: var(--text-xs);
 }
 
 .libraries-cli__command {
@@ -357,30 +462,38 @@ async function copyHint() {
   padding: var(--space-2) var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
-  background: var(--hover-wash);
+  background: rgb(var(--v-theme-background));
 }
 
-.libraries-verbs {
-  margin: var(--space-3) 0 0;
-  font-size: var(--text-xs);
-  line-height: var(--leading-snug);
+.libraries-cli__copy {
+  min-width: 92px;
 }
 
-.libraries-verbs > div {
-  display: flex;
-  gap: var(--space-3);
-  margin-bottom: var(--space-1);
+.libraries-note a {
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 
-.libraries-verbs dt {
-  flex-shrink: 0;
-  width: 56px;
-  font-family: var(--font-mono);
-  font-weight: var(--weight-semibold);
+.libraries-note a:hover {
+  text-decoration-thickness: 2px;
 }
 
-.libraries-verbs dd {
-  margin: 0;
-  color: rgba(var(--v-theme-on-surface), 0.6);
+@media (max-width: 799px) {
+  .library-row,
+  .libraries-cli {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .library-row__action,
+  .libraries-cli__copy {
+    align-self: flex-end;
+  }
+
+  .libraries-cli__command {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 </style>

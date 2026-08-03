@@ -722,7 +722,7 @@ class Picture(SQLModel, table=True):
         resolution_bucket: Optional[str] = None,
         file_path_prefix: Optional[str] = None,
         guest_session_id: Optional[str] = None,
-        guest_token_id: Optional[int] = None,
+        guest_token_public_id: Optional[str] = None,
         count_only: bool = False,
         **search,
     ) -> Union[List["Picture"], int]:
@@ -957,8 +957,10 @@ class Picture(SQLModel, table=True):
                 join_cond = (gs_alias.picture_id == cls.id) & (
                     gs_alias.session_id == guest_session_id
                 )
-                if guest_token_id is not None:
-                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                if guest_token_public_id is not None:
+                    join_cond = join_cond & (
+                        gs_alias.token_public_id == guest_token_public_id
+                    )
                 query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, cls.score)
                 if sort_mech.descending:
@@ -1095,7 +1097,7 @@ class Picture(SQLModel, table=True):
         impossible_sources: Optional[List[str]] = None,
         picture_ids: Optional[List[int]] = None,
         guest_session_id: Optional[str] = None,
-        guest_token_id: Optional[int] = None,
+        guest_token_public_id: Optional[str] = None,
         count_only: bool = False,
     ):
         # Imported lazily to avoid a circular import (predicate_filter imports Picture).
@@ -1236,8 +1238,10 @@ class Picture(SQLModel, table=True):
                 join_cond = (gs_alias.picture_id == Picture.id) & (
                     gs_alias.session_id == guest_session_id
                 )
-                if guest_token_id is not None:
-                    join_cond = join_cond & (gs_alias.token_id == guest_token_id)
+                if guest_token_public_id is not None:
+                    join_cond = join_cond & (
+                        gs_alias.token_public_id == guest_token_public_id
+                    )
                 query = query.outerjoin(gs_alias, join_cond)
                 score_expr = func.coalesce(gs_alias.score, Picture.score)
                 query = query.order_by(

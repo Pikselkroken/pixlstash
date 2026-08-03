@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import text
 from sqlmodel import delete
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, User
 from pixlstash.db_models.picture_likeness import (
     PictureLikeness,
     PictureLikenessFrontier,
@@ -86,6 +86,40 @@ def _count_db_snapshots(server) -> int:
     return server.vault.db.run_immediate_read_task(
         lambda s: s.exec(select(func.count()).select_from(Snapshot)).one()
     )
+
+
+def test_new_snapshot_contains_no_portable_identity_and_is_private(server):
+    marker = "NEW-SNAPSHOT-PORTABLE-SECRET-19ab"
+
+    def _seed(session):
+        session.add(
+            User(
+                username=f"user-{marker}",
+                password_hash=f"password-{marker}",
+                hidden_tags=f'["{marker}"]',
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(_seed)
+    try:
+        snapshot = server.vault.snapshot_service.create_snapshot("MANUAL")
+        archive = os.path.join(server.vault.image_root, snapshot.relative_path)
+        assert os.stat(archive).st_mode & 0o777 == 0o600
+        with _open_snapshot(server, snapshot) as connection:
+            for table in ("user", "usertoken", "guest_session", "guest_score"):
+                assert connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone() == (0,)
+            database_path = connection.execute("PRAGMA database_list").fetchone()[2]
+            assert marker.encode() not in open(database_path, "rb").read()
+    finally:
+        server.vault.db.run_task(
+            lambda session: (
+                session.exec(text("DELETE FROM user")),
+                session.commit(),
+            )
+        )
 
 
 def _add_pictures(server, count: int = 3):

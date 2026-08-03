@@ -10,7 +10,7 @@ from contextlib import closing
 
 import pytest
 from sqlalchemy import text
-from sqlmodel import delete, select
+from sqlmodel import Session, create_engine, delete, select
 
 from pixlstash.db_models import (
     Character,
@@ -666,6 +666,44 @@ def test_upgrade_snapshot_schema_runs_alembic_on_old_snapshot(server):
             "_upgrade_snapshot_schema must add columns introduced by later "
             f"migrations; got columns: {sorted(cols_after)}"
         )
+    finally:
+        shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_restore_schema_scratch_removes_portable_identity(server):
+    """Every full/preview/resource restore consumes the same sanitized scratch."""
+    marker = "RESTORE-PORTABLE-SECRET-f342"
+    snapshot = server.vault.snapshot_service.create_snapshot("MANUAL")
+    work_dir = tempfile.mkdtemp(prefix="pixlstash_test_restore_identity_")
+    plain = os.path.join(work_dir, "identity-bearing.sqlite")
+    materialize_snapshot(
+        os.path.join(server.vault.image_root, snapshot.relative_path), plain
+    )
+    identity_engine = create_engine(f"sqlite:///{plain}")
+    try:
+        with Session(identity_engine) as session:
+            from pixlstash.db_models import User
+
+            session.add(
+                User(
+                    username=f"user-{marker}",
+                    password_hash=f"password-{marker}",
+                    hidden_tags=f'["{marker}"]',
+                )
+            )
+            session.commit()
+    finally:
+        identity_engine.dispose()
+
+    upgraded = server.vault.restore_service._upgrade_snapshot_schema(plain)
+    try:
+        with closing(sqlite3.connect(upgraded)) as connection:
+            for table in ("user", "usertoken", "guest_session", "guest_score"):
+                assert connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone() == (0,)
+        assert marker.encode() not in open(upgraded, "rb").read()
     finally:
         shutil.rmtree(os.path.dirname(upgraded), ignore_errors=True)
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -3375,7 +3413,14 @@ def _add_tokens_stamped_before_the_reset(conn) -> None:
     # The owner row the server creates on start-up is already in the snapshot;
     # hang the tokens off it rather than building one with every NOT NULL
     # settings column this table carries.
-    user_id = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()[0]
+    user_row = conn.execute("SELECT id FROM user ORDER BY id LIMIT 1").fetchone()
+    if user_row is None:
+        # Identity no longer lives in vault snapshots. Foreign keys are off on
+        # this raw snapshot-editing connection, so an orphan id is enough to
+        # model the portable legacy credential rows restore must erase.
+        user_id = 1
+    else:
+        user_id = user_row[0]
     for token_id, scope in ((1, "ALL"), (2, "READ")):
         conn.execute(
             "INSERT INTO usertoken "
@@ -3402,13 +3447,14 @@ def _add_guest_rows(conn) -> None:
     ]
     conn.execute(
         "INSERT INTO guest_session "
-        "(session_id, token_id, created_at, last_active_at, cookie_token) "
-        "VALUES ('sess-1', 2, '2026-01-01 00:00:00', '2026-01-01 00:00:00', NULL)"
+        "(session_id, token_public_id, created_at, last_active_at, cookie_token) "
+        "VALUES ('sess-1', 'public-2', '2026-01-01 00:00:00', "
+        "'2026-01-01 00:00:00', NULL)"
     )
     conn.execute(
         "INSERT INTO guest_score "
-        "(session_id, token_id, picture_id, score, scored_at) "
-        "VALUES ('sess-1', 2, ?, 4, '2026-01-01 00:00:00')",
+        "(session_id, token_public_id, picture_id, score, scored_at) "
+        "VALUES ('sess-1', 'public-2', ?, 4, '2026-01-01 00:00:00')",
         (picture_id,),
     )
 

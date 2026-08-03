@@ -243,6 +243,7 @@ jobs:
           tests/test_label_ledger.py
           tests/test_libraries_routes.py
           tests/test_library_backup.py
+          tests/test_library_generation_coordinator.py
           tests/test_library_settings.py
           tests/test_library_switch.py
           tests/test_share_link_library_pin.py

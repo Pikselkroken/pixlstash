@@ -27,6 +27,8 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "usertoken" not in inspector.get_table_names():
+        return
     existing_cols = {col["name"] for col in inspector.get_columns("usertoken")}
     if "library_uuid" not in existing_cols:
         op.add_column(
@@ -40,6 +42,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if "usertoken" not in inspector.get_table_names():
+        return
     existing_cols = {col["name"] for col in inspector.get_columns("usertoken")}
     if "library_uuid" in existing_cols:
         op.drop_index("ix_usertoken_library_uuid", table_name="usertoken")

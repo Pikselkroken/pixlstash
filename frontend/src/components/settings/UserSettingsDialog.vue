@@ -139,6 +139,7 @@ watch(
       ? requested
       : "appearance";
   },
+  { immediate: true },
 );
 </script>
 
@@ -157,13 +158,16 @@ watch(
       </AppButton>
     </template>
 
-    <nav class="settings-nav">
+    <nav class="settings-nav" aria-label="Settings sections">
       <button
         v-for="item in navItems"
         :key="item.id"
         type="button"
         class="settings-nav-item"
         :class="{ 'settings-nav-item--active': settingsTab === item.id }"
+        :id="`settings-nav-${item.id}`"
+        :aria-current="settingsTab === item.id ? 'page' : undefined"
+        :aria-controls="`settings-pane-${item.id}`"
         @click="settingsTab = item.id"
       >
         <span v-if="settingsTab === item.id" class="settings-nav-item__bar" />
@@ -182,11 +186,20 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'libraries'"
+        id="settings-pane-libraries"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-libraries"
       >
         <LibrariesSection :open="dialogOpen && settingsTab === 'libraries'" />
       </div>
-      <div v-show="settingsTab === 'appearance'" class="settings-pane">
+      <div
+        v-show="settingsTab === 'appearance'"
+        id="settings-pane-appearance"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-appearance"
+      >
         <AppearanceSection
           :sidebar-thumbnail-size="props.sidebarThumbnailSize"
           :theme-mode="props.themeMode"
@@ -205,14 +218,20 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'behaviour'"
+        id="settings-pane-behaviour"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-behaviour"
       >
         <BehaviourSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'smart-score'"
+        id="settings-pane-smart-score"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-smart-score"
       >
         <SmartScoreSection
           :open="dialogOpen"
@@ -223,7 +242,10 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'workflows'"
+        id="settings-pane-workflows"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-workflows"
       >
         <WorkflowsSection
           :open="dialogOpen"
@@ -233,28 +255,40 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'scrapheap'"
+        id="settings-pane-scrapheap"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-scrapheap"
       >
         <ScrapheapSection :open="dialogOpen" />
       </div>
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'snapshots'"
+        id="settings-pane-snapshots"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-snapshots"
       >
         <SnapshotsSection :open="dialogOpen" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
         v-show="settingsTab === 'compute'"
+        id="settings-pane-compute"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-compute"
       >
         <ComputeSection :open="dialogOpen" view="compute" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
         v-show="settingsTab === 'backend'"
+        id="settings-pane-backend"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-backend"
       >
         <ComputeSection
           :open="dialogOpen"
@@ -266,7 +300,10 @@ watch(
       <div
         v-if="!isReadOnly"
         v-show="settingsTab === 'account'"
+        id="settings-pane-account"
         class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-account"
       >
         <AccountSection
           :open="dialogOpen"
@@ -302,7 +339,7 @@ watch(
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), 0.65);
   background: transparent;
   transition:
     color var(--dur-1) var(--ease-standard),
@@ -315,9 +352,23 @@ watch(
 }
 
 .settings-nav-item--active {
-  color: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-surface));
   font-weight: var(--weight-semibold);
-  background: var(--hover-wash);
+  background: var(--active-wash);
+}
+
+.settings-nav-item:first-child {
+  margin-bottom: var(--space-3);
+}
+
+.settings-nav-item:first-child::after {
+  content: "";
+  position: absolute;
+  right: var(--space-4);
+  bottom: calc(var(--space-3) * -1);
+  left: var(--space-4);
+  height: 1px;
+  background: rgb(var(--v-theme-divider));
 }
 
 .settings-nav-item__bar {
@@ -362,5 +413,25 @@ watch(
 .settings-content :deep(.v-switch),
 .settings-content :deep(.v-checkbox) {
   --v-input-control-height: 32px;
+}
+
+@media (max-width: 480px) {
+  :deep(.app-dialog__body--flush) {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    width: 100%;
+    max-height: 180px;
+    flex-shrink: 1;
+    border-right: none;
+    border-bottom: 1px solid rgb(var(--v-theme-divider));
+  }
+
+  .settings-content {
+    width: 100%;
+    height: min(58vh, 524px);
+    padding: var(--space-4);
+  }
 }
 </style>

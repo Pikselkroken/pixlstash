@@ -120,7 +120,6 @@ def _bootstrap_server_config(server_config_path: str, force: bool = False) -> bo
     config["port"] = port
     config["require_ssl"] = require_ssl
     config["cookie_secure"] = require_ssl
-
     with open(server_config_path, "w") as handle:
         json.dump(config, handle, indent=2)
 

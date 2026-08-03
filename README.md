@@ -82,6 +82,76 @@ If you need to use a custom config path:
 python -m pixlstash.app --server-config "C:\path\to\server-config.json"
 ```
 
+## Multiple libraries
+
+PixlStash can register several independent image libraries and keep one open at
+a time. Pictures, tags, scores, snapshots, guest sessions, and guest scores stay
+with their library; your owner account and preferences stay with the
+installation. Switch from **Settings → Libraries**. API tokens and share links
+are pinned to the library where they were created: they become inactive while a
+different library is open and work again when you switch back.
+
+Run library commands on the machine hosting PixlStash as the OS user that owns
+`hub.db`. Put global options before `libraries`:
+
+```bash
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries list
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries create /path/to/new-library --name "New library"
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries attach /path/to/existing-library --name "Existing library"
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries detach "Existing library"
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries relocate "Existing library" /new/path
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries backup "Existing library" /path/to/backups/
+```
+
+`detach` only removes the registration and never deletes or changes library
+files. It refuses the active library; switch first. Reattaching the same
+fingerprinted folder revives its existing registration and share links.
+`relocate` preserves the library identity and links. A backup includes the hub
+and therefore login/token secrets; PixlStash creates it owner-readable and
+refuses to overwrite an existing destination. Source checkouts can replace
+`pixlstash-cli` with `python -m pixlstash.cli`. For a running Compose service,
+use `docker compose exec pixlstash pixlstash-cli ...`; paths are inside the
+container.
+
+### Required one-shot preparation when upgrading
+
+If an older installation already has its owner and tokens inside `vault.db`,
+install/pull the new version but **do not start it normally yet**. Authorize
+that exact legacy vault once; normal startup deliberately will not guess from
+the config file or from finding an existing vault. During desktop setup, the
+app performs this step only after you explicitly approve importing the detected
+legacy owner and tokens.
+
+Pip installation:
+
+```bash
+pixlstash-cli --hub /path/to/config-dir/hub.db libraries prepare-legacy-identity /path/to/library
+```
+
+Source checkout:
+
+```bash
+python -m pixlstash.cli --hub /path/to/config-dir/hub.db libraries prepare-legacy-identity /path/to/library
+```
+
+Docker Compose, before bringing the upgraded service up (adjust the two
+container paths if you configured custom mounts):
+
+```bash
+docker compose run --rm --entrypoint pixlstash-cli pixlstash \
+  --hub /home/pixlstash/.config/pixlstash/hub.db \
+  libraries prepare-legacy-identity \
+  /home/pixlstash/.config/pixlstash/images
+```
+
+After the command succeeds, start PixlStash normally. Startup verifies the
+approved path and identity digest, copies the owner/tokens into the hub, stamps
+the library, and only then removes portable owner, token, and guest-session data
+from the live vault and its historical snapshots. New snapshots and every
+restore scratch database receive the same sanitation, so identity remains
+hub-only. If verification fails, the hub does not mark the migration complete;
+correct the reported problem and retry.
+
 ## Server configuration
 
 On first run, PixlStash generates a `server-config.json` file in the user config directory:
@@ -487,4 +557,3 @@ docker run -d \
 ```
 
 Replace `/home/you/Photos` with your actual host path and adjust the container path index if you have multiple folders.
-

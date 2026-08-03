@@ -1,11 +1,12 @@
-import asyncio
 import os
 import shutil
+import threading
 import time
 import uuid
 import zipfile
 from collections import defaultdict
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi import (
     Body,
@@ -478,7 +479,7 @@ def register_routes(router, server):
             project_id,
         )
 
-        def run_import_task(server):
+        def run_import_task(server, vault, background_lease):
             try:
                 task = server.import_tasks[task_id]
 
@@ -501,7 +502,7 @@ def register_routes(router, server):
                     task["last_update_epoch_ms"] = int(time.time() * 1000)
 
                 shas, existing_map, new_pictures = _create_picture_imports(
-                    server,
+                    SimpleNamespace(vault=vault),
                     uploaded_files,
                     dest_folder,
                     progress_callback=_on_picture_written,
@@ -538,7 +539,7 @@ def register_routes(router, server):
                             session.refresh(pic)
                         return new_pictures
 
-                    new_pictures = server.vault.db.run_task(import_task)
+                    new_pictures = vault.db.run_task(import_task)
                     logger.debug(
                         f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                     )
@@ -666,19 +667,19 @@ def register_routes(router, server):
                         session.commit()
                         return changed_ids
 
-                    tagged_ids = server.vault.db.run_task(
+                    tagged_ids = vault.db.run_task(
                         apply_sidecar_tags,
                         picture_id_sidecar_tags,
                         duplicate_picture_id_set,
                     )
                     if tagged_ids:
-                        server.vault.notify(EventType.CHANGED_TAGS, tagged_ids)
+                        vault.notify(EventType.CHANGED_TAGS, tagged_ids)
 
                 if all_imported_ids:
                     _mark_stage("finalizing_import_context")
                     # Queue face extraction asynchronously — do not block on it.
                     for pic in new_pictures:
-                        server.vault.get_worker_future(
+                        vault.get_worker_future(
                             TaskType.FACE_EXTRACTION, Picture, pic.id, "faces"
                         )
 
@@ -718,7 +719,7 @@ def register_routes(router, server):
                         session.commit()
                         return updated
 
-                    imported_ids = server.vault.db.run_task(
+                    imported_ids = vault.db.run_task(
                         apply_import_context,
                         all_imported_ids,
                         project_id,
@@ -728,7 +729,7 @@ def register_routes(router, server):
                     server.import_tasks[task_id]["last_update_epoch_ms"] = int(
                         time.time() * 1000
                     )
-                    server.vault.notify(
+                    vault.notify(
                         EventType.CHANGED_PICTURES,
                         {
                             "picture_ids": imported_ids or [],
@@ -746,7 +747,7 @@ def register_routes(router, server):
                         # outside push raises the New-pictures pill instead of
                         # auto-inserting cards under the user.
                         import_source = "ui" if origin_client_id else "external"
-                        server.vault.notify(
+                        vault.notify(
                             EventType.PICTURE_IMPORTED,
                             {
                                 "ids": imported_ids,
@@ -761,7 +762,7 @@ def register_routes(router, server):
                     server.import_tasks[task_id]["last_update_epoch_ms"] = int(
                         time.time() * 1000
                     )
-                    server.vault.notify(
+                    vault.notify(
                         EventType.CHANGED_PICTURES,
                         {
                             "source": "ui" if origin_client_id else "external",
@@ -778,18 +779,36 @@ def register_routes(router, server):
                     time.time() * 1000
                 )
                 logger.error(f"Import task {task_id} failed: {exc}")
+            finally:
+                server.library_coordinator.release_read(background_lease)
 
-        async def run_import_task_async(server):
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, run_import_task, server)
-
-        # Schedule as an independent asyncio Task, detached from the ASGI
-        # request lifecycle.  Using BackgroundTasks would tie the task to the
-        # response, preventing uvicorn's h11 handler from accepting the next
-        # request on the keep-alive connection until the full 0.7-1 s SHA-
-        # hashing pass completes — causing TCP back-pressure that stalls the
-        # browser's upload for large multi-batch imports.
-        asyncio.create_task(run_import_task_async(server))
+        # Schedule independently from the ASGI/event-loop lifecycle. Using
+        # BackgroundTasks would tie the work to the response and a default
+        # executor Future can be cancelled while its thread keeps running at
+        # event-loop shutdown. The worker itself owns and finally releases the
+        # extra library lease, so a switch cannot retire its vault underneath
+        # it.
+        background_lease = server.library_coordinator.acquire_read()
+        if background_lease is None:
+            server.import_tasks[task_id]["status"] = "failed"
+            server.import_tasks[task_id]["stage"] = "failed"
+            server.import_tasks[task_id]["error"] = "Library is unavailable."
+            raise HTTPException(
+                status_code=503,
+                detail="Library is switching or unavailable. Try again.",
+            )
+        server.import_tasks[task_id]["library_uuid"] = background_lease.library_uuid
+        server.import_tasks[task_id]["generation"] = background_lease.generation
+        try:
+            worker = threading.Thread(
+                target=run_import_task,
+                args=(server, background_lease.vault, background_lease),
+                daemon=True,
+            )
+            worker.start()
+        except Exception:
+            server.library_coordinator.release_read(background_lease)
+            raise
         return {"task_id": task_id}
 
     @router.get(
@@ -798,9 +817,15 @@ def register_routes(router, server):
         description="Returns progress and result information for a previously started import task.",
         response_model=ImportStatusResponse,
     )
-    def import_status(task_id: str):
+    def import_status(request: Request, task_id: str):
         task = server.import_tasks.get(task_id)
-        if not task:
+        lease = getattr(request.state, "library_lease", None)
+        if (
+            not task
+            or lease is None
+            or task.get("library_uuid") != lease.library_uuid
+            or task.get("generation") != lease.generation
+        ):
             raise HTTPException(status_code=404, detail="Task not found")
 
         now_ms = int(time.time() * 1000)
@@ -850,11 +875,25 @@ def register_routes(router, server):
     # ------------------------------------------------------------------ #
 
     def _staging_base_dir() -> str:
-        return os.path.join(server.vault.image_root, ".staging")
+        path = os.path.join(server.vault.image_root, ".staging")
+        if os.path.lexists(path) and (os.path.islink(path) or not os.path.isdir(path)):
+            raise HTTPException(
+                status_code=500,
+                detail="The library staging path is not a trusted directory.",
+            )
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        os.chmod(path, 0o700)
+        return path
 
-    def _get_session_or_404(staging_id: str) -> dict:
+    def _get_session_or_404(request: Request, staging_id: str) -> dict:
         session = server.staging_sessions.get(staging_id)
-        if session is None:
+        lease = getattr(request.state, "library_lease", None)
+        if (
+            session is None
+            or lease is None
+            or session.get("library_uuid") != lease.library_uuid
+            or session.get("generation") != lease.generation
+        ):
             raise HTTPException(status_code=404, detail="Staging session not found")
         return session
 
@@ -921,6 +960,7 @@ def register_routes(router, server):
         payload: StagingOpenRequest = Body(default_factory=StagingOpenRequest),
     ):
         origin_client_id = getattr(request.state, "origin_client_id", None)
+        lease = request.state.library_lease
         # Opportunistically evict stale/finished sessions before opening a new
         # one, so abandoned staging dirs never accumulate.
         _reap_staging_sessions(server)
@@ -957,6 +997,8 @@ def register_routes(router, server):
             "task": None,
             "task_id": None,
             "origin_client_id": origin_client_id,
+            "library_uuid": lease.library_uuid,
+            "generation": lease.generation,
             "error": None,
             "created_epoch_ms": now_ms,
             "last_update_epoch_ms": now_ms,
@@ -983,10 +1025,11 @@ def register_routes(router, server):
         response_model=StagingFilesResponse,
     )
     async def stage_files(
+        request: Request,
         staging_id: str,
         file: list[UploadFile] = File(None),
     ):
-        session = _get_session_or_404(staging_id)
+        session = _get_session_or_404(request, staging_id)
         if session["stage"] != "staging":
             raise HTTPException(
                 status_code=409,
@@ -1264,8 +1307,8 @@ def register_routes(router, server):
         ),
         response_model=StagingCommitResponse,
     )
-    def commit_staging_session(staging_id: str):
-        session = _get_session_or_404(staging_id)
+    def commit_staging_session(request: Request, staging_id: str):
+        session = _get_session_or_404(request, staging_id)
         if session["stage"] != "staging":
             raise HTTPException(
                 status_code=409,
@@ -1377,8 +1420,8 @@ def register_routes(router, server):
         ),
         response_model=StagingStatusResponse,
     )
-    def cancel_staging_session(staging_id: str):
-        session = _get_session_or_404(staging_id)
+    def cancel_staging_session(request: Request, staging_id: str):
+        session = _get_session_or_404(request, staging_id)
         if session["stage"] not in ("staging",):
             raise HTTPException(
                 status_code=409,
@@ -1419,8 +1462,8 @@ def register_routes(router, server):
         ),
         response_model=StagingStatusResponse,
     )
-    def staging_status(staging_id: str):
-        session = _get_session_or_404(staging_id)
+    def staging_status(request: Request, staging_id: str):
+        session = _get_session_or_404(request, staging_id)
         staged_files: list[dict] = session.get("staged_files") or []
         task = session.get("task")
         stage = session["stage"]

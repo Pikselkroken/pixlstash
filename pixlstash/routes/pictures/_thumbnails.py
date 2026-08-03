@@ -64,6 +64,14 @@ def register_routes(router, server):
     thumbnail_memory_cache: OrderedDict[int, bytes] = OrderedDict()
     thumbnail_memory_cache_max = 128
 
+    def clear_thumbnail_runtime_cache() -> None:
+        thumbnail_memory_cache.clear()
+        thumbnail_generation_locks.clear()
+
+    # The cache is route-local, so expose its one lifecycle operation to the
+    # server's library switch coordinator without exposing the storage itself.
+    server._clear_thumbnail_runtime_cache = clear_thumbnail_runtime_cache
+
     def get_thumbnail_lock(picture_id: int) -> asyncio.Lock:
         lock = thumbnail_generation_locks.get(picture_id)
         if lock is None:
@@ -96,6 +104,8 @@ def register_routes(router, server):
     )
     async def get_thumbnail(request: Request, id: int):
         started_at = datetime.now()
+        vault = server.vault
+        generation = getattr(server, "library_generation", 0)
 
         def fetch_picture(session: Session, picture_id: int):
             pics = Picture.find(
@@ -110,13 +120,11 @@ def register_routes(router, server):
             )
             return pics[0] if pics else None
 
-        pic = server.vault.db.run_immediate_read_task(fetch_picture, id)
+        pic = vault.db.run_immediate_read_task(fetch_picture, id)
         if not pic or not getattr(pic, "file_path", None):
             raise HTTPException(status_code=404, detail="Picture not found")
 
-        thumb_path = ImageUtils.get_thumbnail_path(
-            server.vault.image_root, pic.file_path
-        )
+        thumb_path = ImageUtils.get_thumbnail_path(vault.image_root, pic.file_path)
         if thumb_path and os.path.exists(thumb_path):
             # For reference-folder pictures (absolute file_path) the source file
             # can change when a Docker volume is remapped to a different host
@@ -126,7 +134,7 @@ def register_routes(router, server):
             stale = False
             if pic.file_path and os.path.isabs(pic.file_path):
                 source_path = ImageUtils.resolve_picture_path(
-                    server.vault.image_root, pic.file_path
+                    vault.image_root, pic.file_path
                 )
                 if source_path and os.path.exists(source_path):
                     try:
@@ -186,7 +194,7 @@ def register_routes(router, server):
                 recheck_stale = False
                 if pic.file_path and os.path.isabs(pic.file_path):
                     source_path = ImageUtils.resolve_picture_path(
-                        server.vault.image_root, pic.file_path
+                        vault.image_root, pic.file_path
                     )
                     if source_path and os.path.exists(source_path):
                         try:
@@ -240,7 +248,7 @@ def register_routes(router, server):
                 str, str | None, bytes | None, str | None
             ]:
                 resolved = ImageUtils.resolve_picture_path(
-                    server.vault.image_root, pic.file_path
+                    vault.image_root, pic.file_path
                 )
                 if not resolved or not os.path.exists(resolved):
                     return "missing-source", resolved, None, None
@@ -257,7 +265,7 @@ def register_routes(router, server):
                     return "encode-failed", resolved, None, None
 
                 saved_thumb_path = ImageUtils.write_thumbnail_bytes(
-                    server.vault.image_root, pic.file_path, thumbnail_bytes
+                    vault.image_root, pic.file_path, thumbnail_bytes
                 )
                 if saved_thumb_path and os.path.exists(saved_thumb_path):
                     return "saved", resolved, None, saved_thumb_path
@@ -273,6 +281,11 @@ def register_routes(router, server):
             ) = await loop.run_in_executor(
                 _thumbnail_executor, build_thumbnail_blocking
             )
+            if generation != getattr(server, "library_generation", 0):
+                raise HTTPException(
+                    status_code=503,
+                    detail="The active library changed while the thumbnail was generated.",
+                )
 
             if status == "saved" and saved_thumb:
                 elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0

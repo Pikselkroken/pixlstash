@@ -20,6 +20,8 @@ from pixlstash.utils.service.anomaly_thresholds import resolve_anomaly_apply_thr
 from pixlstash.utils.service.smart_score_invalidation import anomaly_state_signature
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task import BaseTask
+from pixlstash.db_models.tag import DEFAULT_SMART_SCORE_PENALIZED_TAGS
+from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
 
 
 logger = get_logger(__name__)
@@ -66,9 +68,17 @@ class SmartScoreTask(BaseTask):
             return {"changed_count": 0}
 
         apply_thresholds = resolve_anomaly_apply_thresholds(self._vault)
+        owner = getattr(getattr(self._vault, "auth_service", None), "user", None)
+        owner_penalised_tags = smart_score_penalised_tags(
+            getattr(owner, "smart_score_penalised_tags", None),
+            DEFAULT_SMART_SCORE_PENALIZED_TAGS,
+        )
         good_anchors, bad_anchors, candidates, scorer_config, before_signature = (
             self._db.run_immediate_read_task(
-                self._fetch_score_data, picture_ids, apply_thresholds
+                self._fetch_score_data,
+                picture_ids,
+                apply_thresholds,
+                owner_penalised_tags,
             )
         )
 
@@ -109,7 +119,10 @@ class SmartScoreTask(BaseTask):
 
     @staticmethod
     def _fetch_score_data(
-        session: Session, candidate_ids: list, apply_thresholds: dict | None = None
+        session: Session,
+        candidate_ids: list,
+        apply_thresholds: dict | None = None,
+        owner_penalised_tags: dict | None = None,
     ):
         """Fetch anchors, candidates, and the scorer config for smart score computation.
 
@@ -194,6 +207,8 @@ class SmartScoreTask(BaseTask):
         scorer_config = attach_anomaly_inputs(
             session, candidates, apply_thresholds=apply_thresholds
         )
+        if owner_penalised_tags is not None:
+            scorer_config["penalised_tag_weights"] = owner_penalised_tags
 
         builtin_good, builtin_bad = _load_builtin_anchors()
         if len(good) < _BUILTIN_MIN_GOOD:

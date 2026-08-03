@@ -1180,6 +1180,8 @@ class DeleteConfirmation:
     fingerprint: str
     total_count: int
     expires_at: float
+    library_uuid: Optional[str] = None
+    generation: Optional[int] = None
 
 
 class ScrapheapDeleteConfirmations:
@@ -1209,13 +1211,22 @@ class ScrapheapDeleteConfirmations:
         self._lock = threading.Lock()
         self._outstanding: dict[str, DeleteConfirmation] = {}
 
-    def issue(self, ids: Optional[list[int]], total_count: int) -> str:
+    def issue(
+        self,
+        ids: Optional[list[int]],
+        total_count: int,
+        *,
+        library_uuid: Optional[str] = None,
+        generation: Optional[int] = None,
+    ) -> str:
         """Mint a confirmation for ``ids`` and return the opaque token."""
         token = secrets.token_urlsafe(32)
         record = DeleteConfirmation(
             fingerprint=selection_fingerprint(ids),
             total_count=int(total_count),
             expires_at=time.monotonic() + self._ttl_seconds,
+            library_uuid=library_uuid,
+            generation=generation,
         )
         with self._lock:
             self._prune_locked()
@@ -1235,7 +1246,12 @@ class ScrapheapDeleteConfirmations:
         return token
 
     def redeem(
-        self, token: Optional[str], ids: Optional[list[int]]
+        self,
+        token: Optional[str],
+        ids: Optional[list[int]],
+        *,
+        library_uuid: Optional[str] = None,
+        generation: Optional[int] = None,
     ) -> tuple[bool, str]:
         """Spend ``token`` for the selection ``ids``.
 
@@ -1266,7 +1282,11 @@ class ScrapheapDeleteConfirmations:
                 self._ttl_seconds,
             )
             return False, CONFIRM_UNKNOWN
-        if record.fingerprint != wanted:
+        if (
+            record.fingerprint != wanted
+            or record.library_uuid != library_uuid
+            or record.generation != generation
+        ):
             logger.warning(
                 "Delete-forever: REFUSED — the confirmation was minted for a "
                 "different selection (preview covered %s picture(s); this "

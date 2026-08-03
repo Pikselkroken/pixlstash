@@ -9,8 +9,9 @@ Enumerated and decided 2026-08-02: exactly one setting qualifies.
 per-user copy silently names a different person after a library switch. Hidden
 tags, the tag filter and the penalised-tag weights name library vocabulary but
 are the user's own working preferences, and the owner wants the same defects
-penalised everywhere, so they stay in the hub. ``stack_strictness`` has no
-remaining consumer and is left where it is.
+penalised everywhere, so they stay in the hub. ``stack_strictness`` is consumed
+as the owner's similarity threshold for stack ordering; it identifies no vault
+row, so it also remains in the hub.
 
 ``library_uuid`` is the library's fingerprint, written by PixlStash for a
 library it owns. It answers "is the folder at this path the same library I
@@ -51,7 +52,6 @@ def upgrade() -> None:
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("library_uuid", sa.String(), nullable=True),
             sa.Column("similarity_character", sa.Integer(), nullable=True),
-            sa.Column("settings_fingerprint", sa.String(), nullable=True),
         )
 
     # One row, ever. Seeded from the existing user row where there is one, so an
@@ -60,7 +60,12 @@ def upgrade() -> None:
     if existing:
         return
 
-    user_cols = {col["name"] for col in inspector.get_columns("user")}
+    tables = set(inspector.get_table_names())
+    user_cols = (
+        {col["name"] for col in inspector.get_columns("user")}
+        if "user" in tables
+        else set()
+    )
     wanted = ["similarity_character"]
     available = [name for name in wanted if name in user_cols]
 

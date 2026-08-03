@@ -942,6 +942,13 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 
 - Baseline: `0001_baseline` calls `SQLModel.metadata.create_all()` for the full current schema.
 - All subsequent migrations use conditional `add_column` (see [.github/copilot-instructions.md](../.github/copilot-instructions.md)) so they are safe on fresh DBs.
+
+The multi-library lane ends at `0095_add_settings_fingerprint`. `0092` creates
+the one-row `library_settings` table and owns `library_uuid` plus
+`similarity_character`; `0095` adds `settings_fingerprint` separately. Do not
+move the latter back into `0092`: feature-lane vaults may already have recorded
+0092, and Alembic only runs forward. Both revisions inspect the live schema so
+fresh databases and partially exercised development databases converge.
 - `__all__` is declared at the top of each migration to silence static-analysis "unused" warnings.
 - Data regenerations are triggered by `NULL`-resetting work columns — never by application logic in migrations.
 
@@ -1051,6 +1058,60 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
 
+### Hub and library identity
+
+`hub.db` sits beside `server-config.json`, outside every image library. It owns
+the owner row, password hash, all API/share tokens, preferences, and the library
+registry. Each registry row has an immutable random `library.uuid`; this is the
+only durable identity stamped on tokens. The integer row id and runtime switch
+generation are never durable identities. The hub uses its own sequential schema
+versioning (currently v2); v2 adds per-library `settings_salt` and the durable
+`identity_migration_state` plus a path- and payload-digest-bound
+`identity_migration_operation` used by one-shot legacy preparation.
+
+The vault carries an advisory `library_settings.library_uuid` fingerprint. It
+helps detect a folder swap, but never authorizes access and never supersedes the
+hub UUID. Startup is deliberately two-phase:
+
+1. The desktop preparer explicitly validates the legacy vault, reads its owner
+   and tokens in deterministic order, and writes a one-shot hub operation bound
+   to the canonical source path and a SHA-256 payload digest. Normal startup has
+   no inference path: config contents, config age, vault presence, and hub loss
+   never create `pending`. Startup copies only when the registry row and durable
+   operation are both `pending` and path/digest still match, then atomically
+   moves both hub states to `copied` with the identity rows.
+2. `VaultDatabase` opens the vault and completes Alembic. Only then does startup
+   atomically stamp an absent fingerprint, accept an equal one, or fail without
+   overwriting a conflict. Every library whose durable identity state is not yet
+   `complete` then undergoes a mandatory portable-identity scrub: all rows in
+   `guest_score`, `guest_session`, `usertoken`, and `user` are deleted child
+   first; SQLite `secure_delete`, WAL checkpoint/truncation, DELETE journal mode,
+   and `VACUUM` erase free-page and journal remnants; and the result is checked
+   for integrity, zero portable rows, and absent sidecars before its inode and
+   parent directory are synced. Every registered legacy plain or zstd snapshot
+   is materialized, scrubbed, recompressed when needed, independently verified,
+   and atomically replaced under strict path, type, ownership, and symlink
+   checks. Only after the live vault and all archives succeed does the hub mark
+   the library `complete`. A crash resumes the incomplete work; later opens skip
+   historical rewrites. This applies to attached secondary libraries as well as
+   the one explicit legacy identity donor.
+
+New snapshots are scrubbed before compression and written mode `0600` on POSIX.
+All restore, preview, and resource-restore paths scrub their materialized scratch
+database after schema upgrade, so an old or externally supplied archive cannot
+reintroduce portable owner, token, or guest-session state. Historical archives
+created under the old common `0664` umask are accepted only when they are regular
+files owned by the current account, then privatized through a no-follow file
+descriptor before their contents are processed. Every operation is idempotent,
+so a crash between copy, stamp, archive replacement, and marker update converges
+toward redundant sanitation rather than credential loss or reintroduction.
+
+Hub loss therefore does not re-import the blank legacy identity or deadlock
+registration. A recreated hub mints a fresh immutable registry UUID, records
+the vault fingerprint only as advisory evidence, creates an unclaimed hub
+owner, and requires the owner to register again; passwords and token/share-link
+values cannot be recovered without a hub backup.
+
 #### Engine and connection settings
 
 The engine is built once in `VaultDatabase.__init__` (`database.py`) and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py`). **Both must stay identical** — they share the `SQLITE_BUSY_TIMEOUT_S` constant and the `init_database` connect listener, so a setting added in one place applies to both. A restore that left the rebuilt engine better configured than the startup engine was a real bug (#651).
@@ -1084,6 +1145,7 @@ Settings are asserted against real pooled connections in `tests/test_database_en
 | Thumbnails | Memory (LRU, ~128) + disk `.pixlstash/` | Pre-generated at startup |
 | Watermarks | In-memory rendered images | Seed-keyed |
 | Quality stats | In-memory (≈60 s TTL) | Used by aggregate endpoints |
+| Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
 ---
@@ -1093,10 +1155,11 @@ Settings are asserted against real pooled connections in `tests/test_database_en
 1. `app.py:main()` parses CLI args and loads/creates the server config.
 2. `StartupChecks().run()` validates disk space, VRAM, CUDA, SSL; may force CPU mode.
 3. `Server.__init__()`:
-    - Instantiates `Vault` (loads `image_root`, opens `VaultDatabase`, creates `TaskRunner`, registers finders, and starts `TaskRunner` + `WorkPlanner`).
+    - Opens/migrates the hub, resolves its active immutable library UUID, and performs a legacy identity copy only when a matching explicit durable preparation operation exists.
+    - Instantiates `Vault` (opens `VaultDatabase` and runs Alembic), then stamps/validates `library_settings.library_uuid` and completes crash-safe legacy blanking before authentication starts.
     - Applies user-configured model/runtime settings (`keep_models_in_memory`, VRAM cap, tagger toggles/thresholds) to `Vault`.
    - Builds the FastAPI app, attaches middleware (CORS, rate limiter, auth), mounts routers and the SPA.
-4. `uvicorn.run(api, …)` enters the **lifespan**:
+4. A retained `uvicorn.Server` listener enters the **lifespan** (Electron retains both listeners):
    - Optional `_cleanup_missing_pictures()`.
    - Optional `_generate_missing_thumbnails()`.
     - Logs server readiness and serves requests.
@@ -1105,6 +1168,72 @@ Settings are asserted against real pooled connections in `tests/test_database_en
    - `Vault.close()` stops the planner and drains workers.
    - `VaultDatabase` flushes pending writes and closes connections.
    - WebSocket clients are disconnected.
+
+### Active-library switching
+
+`LibrarySwitchService` serializes switches. `LibraryGenerationCoordinator`
+classifies every declared HTTP route as `HUB_ONLY`, `ACTIVE_VAULT`, or the one
+`SWITCH_WRITER`. Its outermost ASGI lease begins before authentication and ends
+after the final response body frame; the lease captures one generation and its
+library UUID/vault/DB tuple. WebSockets use a shorter lease through auth,
+acceptance, and tracked registration. The writer closes admission, waits a
+bounded time for the old generation to drain, then re-resolves and validates the
+target fingerprint before any candidate migration. A second concurrent switch
+fails promptly with 409 rather than waiting behind the writer.
+
+While state is `SWITCHING`, new active-library requests receive 503 before auth;
+hub-only identity/registry routes remain available without guest-vault
+enrichment. `Vault.close()` then stops the planner, cancels queued/active tasks,
+joins workers, and closes its DB before publication.
+
+Publication updates the hub active row, `server.vault`, and `auth.vault_db`
+inside the refused-request window, then increments an ephemeral runtime
+generation used to reject stale async results. Only after that tuple is live,
+every `/ws/updates` subscriber and `/ws/comfyui` proxy is closed with 1012
+(`Library switched`); the SPA treats that close as a document reload rather than
+a transient reconnect, so a non-initiating tab cannot retain old-library ids or
+stores. Thumbnail-memory, stats and anomaly-region caches are cleared so row ids
+from one library cannot hit another's cache. Any exception before old close
+leaves it untouched; an exception after old close rebuilds and republishes the
+previous vault only after the coordinator verifies registry/vault/auth
+coherence. A recovery failure poisons the handles, enters terminal
+`UNAVAILABLE`, returns 503 before auth, closes sockets, and signals every
+retained listener to exit; it can never republish `READY` around a mixed tuple.
+
+`GET /libraries` returns an `active_share_links` count on every library entry.
+It is owner metadata with no host path sensitivity and is available before the
+switch so the confirmation UI can warn how many resource-scoped links will go
+inactive. The switch response retains its top-level `active_share_links` count
+for the library just left.
+
+**Accepted risk — remote registry metadata.** An authenticated remote owner may
+list library names, active/reachable status, UUIDs, and share-link counts even
+when host paths are redacted. Risk: those labels and counts can reveal collection
+categories and activity. Blast radius: the single authenticated owner account
+and this installation's registry metadata only; no picture content, credentials,
+or filesystem paths. Compensating controls: `OWNER_ONLY`, token/session auth,
+path and CLI-hint redaction, and library pinning on tokens. Owner: product
+security + backend/auth maintainer. Revisit: **2026-11-01 or before any multi-user
+principal can list libraries, whichever comes first.**
+
+**Accepted risk — explicit remote host operations.** Setting
+`allow_remote_host_ops=true` deliberately lets a genuinely remote authenticated
+owner see registered paths/CLI hints and switch the process-wide active library.
+Risk: host layout disclosure and availability impact to every connected client;
+blast radius: all registered library paths and all sessions on that one server.
+Compensating controls: disabled by default, owner-only authentication, a startup
+warning, trusted-proxy requirements, fail-fast switch serialization, and no HTTP
+attach/create/detach path. Risk owner: the deployment operator who enables the
+flag, with product security/backend maintaining the boundary. Revisit:
+**2026-11-01, before multi-user support, or before enabling the flag by default.**
+
+Locality has two intentionally different meanings here. Password/cookie owners
+on Tailscale pass `LOCAL_OWNER_ONLY` via `is_local_or_tailscale_ip`. An `ALL`
+bearer token is first checked by the older `require_local_for_write` middleware,
+which uses `is_local_ip` and therefore excludes Tailscale CGNAT. Consequently the
+route may advertise `can_manage=true` to a Tailscale cookie owner while the same
+request made with an `ALL` bearer is denied earlier; this is deliberate and not
+a promise that Tailscale is local for every authentication mechanism.
 
 ---
 
@@ -1164,9 +1293,14 @@ Settings are asserted against real pooled connections in `tests/test_database_en
 The HTTP auth middleware runs only for the `http` ASGI scope, so the WebSocket routes authenticate themselves **before** `accept()` (otherwise any reachable client — including a cross-site page, since the browser auto-attaches the session cookie — could subscribe):
 
 - `AuthService.authenticate_websocket(ws)` mirrors the HTTP paths (cookie session = owner; `?token=` honoured for READ scope only; `Bearer` header for any scope) and returns `WebSocketAuth(user_id, is_owner)` or `None`.
+- Token-authenticated WebSockets, including cookies created from a token, also
+  enforce the token's `library_uuid` before acceptance. Password/browser
+  sessions remain library-independent and follow a switch. All accepted
+  sockets, including ComfyUI progress proxies, are tracked and closed after
+  switch publication, so no connection can retain old-library filters or ids.
 - `AuthService.is_websocket_origin_allowed(ws, ...)` rejects cross-site handshakes (CSWSH): a present `Origin` must be same-origin (`Origin` host == `Host`) or in the configured CORS allow-list; a missing `Origin` (non-browser client) still has to pass the auth check.
 - `/ws/updates`: rejects (`close(1008)`) unauthenticated or foreign-Origin handshakes. The global vault-activity stream is **owner-only** — a resource-scoped / READ token may connect but `_broadcast_ws_event` never delivers it events outside its grant.
-- `/ws/comfyui`: requires an authenticated **owner** before proxying; the previous unauthenticated fallback to `DEFAULT_COMFYUI_URL` is removed.
+- `/ws/comfyui`: requires an authenticated **owner** before proxying; the previous unauthenticated fallback to `DEFAULT_COMFYUI_URL` is removed. Its downstream connection is registered in the same switch-lifecycle set as `/ws/updates`, while remaining excluded from vault-event broadcasts.
 
 ---
 
@@ -1195,7 +1329,7 @@ Prefix:   /assets/, /share/, /docs/
 
 In addition, `READ`-scoped tokens are blocked from non-GET methods (except a small `READ_SAFE_POST_PATHS` allowlist) and from a `READ_BLOCKED_GET_PATHS` set covering user config and filesystem browsing.
 
-**Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id and nothing else: a session carries no scope, so every request it authenticates resolves as a full, unscoped owner (`token_scope` stays `None`, and `require_unscoped_owner` passes). Three rules govern that, all enforced in `auth.py`:
+**Sessions and the credentials that may create one.** `active_session_ids` maps a `session_id` cookie to a user id. Password and desktop sessions carry no library pin and follow a switch. A token-derived session additionally records the minting token's immutable `library_uuid` in `_library_uuid_by_session`; the central gate enforces it on every library-bound request, so exchanging a token for a cookie cannot launder away its pin. Three other rules govern sessions, all enforced in `auth.py`:
 
 1. **Only an owner credential can be exchanged for a session.** `POST /login` with a `token` issues a cookie only for an *unexpired* `ALL`-scope token with **no** `resource_type`. A `READ` token, a resource-restricted token, and an expired token are each refused. The rule has one spelling, the module-level `is_unscoped_owner_token` / `is_token_expired` predicates, shared with the WebSocket handshake (`authenticate_websocket`) and matching what `require_unscoped_owner` derives from `request.state`. A refused exchange returns the same `401 {"detail": "Invalid token"}` as an unrecognised token, so the response does not distinguish the two cases; the reason is logged server-side.
 2. **Removing a token ends the sessions it created.** This is the enforced rule, and it is narrower than "a session never outlives its token" — see the gaps below. `_register_session` records the minting token id in `_sessions_by_token_id` / `_token_id_by_session` (both directions, so lookup and cleanup are O(1)), and every path that removes a token calls `_drop_sessions_for_tokens` with the removed ids before flushing the token cache. That covers `delete_token` and `revoke_tokens_for_resource`. Sessions from a password login and the seeded desktop session carry no token id and are deliberately untouched by token removal; the credential-changing paths (`change_password`, `remove_password_hash`) call `_clear_all_sessions`, which ends everything. `update_token` only toggles `watermark` and does not withdraw access, so it flushes the token cache but keeps sessions. `_session_lock` and `_token_cache_lock` are always taken separately, never nested.
@@ -1403,7 +1537,7 @@ A snapshot is a full copy of the live SQLite database taken via `VACUUM INTO`, t
 <vault_root>/snapshots/YYYY/MM/DD/<uuid>.hashes.json   (per-picture metadata_hash map)
 ```
 
-Before compression, only the **live pipeline-state tables** (`picturelikeness` / `picturelikenessqueue` / `picturelikenessfrontier`) are emptied — the restore path reconstructs those from the live DB. The expensive GPU-regenerated blobs (CLIP image/text embeddings, InsightFace face features) and derived scores are **kept**, so a restore comes back fully populated without a re-embedding pass. zstd gives roughly a 3× reduction on embedding-heavy snapshots, which is what makes keeping the blobs affordable. SQLite cannot query a compressed file in place, so a snapshot is treated as an archive: it is decompressed to a scratch `.sqlite` only when actually read (restore / preview), via `materialize_snapshot()`.
+Before compression, the **live pipeline-state tables** (`picturelikeness` / `picturelikenessqueue` / `picturelikenessfrontier`) are emptied and the portable-identity tables (`user`, `usertoken`, `guest_session`, `guest_score`) are securely scrubbed. The restore path reconstructs pipeline state, while identity always remains hub-only. The expensive GPU-regenerated blobs (CLIP image/text embeddings, InsightFace face features) and derived scores are **kept**, so a restore comes back fully populated without a re-embedding pass. zstd gives roughly a 3× reduction on embedding-heavy snapshots, which is what makes keeping the blobs affordable. SQLite cannot query a compressed file in place, so a snapshot is treated as an archive: it is decompressed to a private scratch `.sqlite` only when actually read (restore / preview), via `materialize_snapshot()`, then scrubbed again after schema upgrade before any restore consumer opens it.
 
 The manifest JSON contains: `picture_count`, `picture_ids`, `picture_set_count`, `project_count`, `character_count`, `schema_version`. A complete `{picture_id: metadata_hash}` map is written to a **separate** `<uuid>.hashes.json` sidecar (not the manifest, so the snapshot-list endpoint — which parses every manifest for its small counts — never reads the multi-MB hash blob). The hash sidecar lets the interactive restore preview / hash-compare read per-picture hashes from an uncompressed file, so it never has to decompress the archive.
 

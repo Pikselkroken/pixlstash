@@ -27,6 +27,21 @@
         <span id="importedText"></span>
       </div>
 
+      <div id="legacyIdentityPanel" class="panel hidden">
+        <label class="identity-consent">
+          <input id="importLegacyIdentity" type="checkbox" />
+          <span>
+            <strong>Use the login and share links from this existing library</strong>
+            <code id="legacyIdentitySource"></code>
+          </span>
+        </label>
+        <div class="sub identity-consent-copy">
+          If selected, PixlStash validates this vault and prepares a one-time identity
+          migration before desktop starts. Pictures stay in place. Leave this unchecked
+          to start desktop without importing its login or share links.
+        </div>
+      </div>
+
       <div class="panel">
         <div class="hw">Library folder</div>
         <div class="field">

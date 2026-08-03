@@ -528,6 +528,11 @@ def create_router(server) -> APIRouter:
         user, updated = server.hub_engine.run_task(
             update_user, user_id, priority=DBPriority.IMMEDIATE
         )
+        # Keep the process-local owner cache coherent with its new hub home.
+        # Background work (notably smart scoring) has no request from which to
+        # reload these settings.
+        server.auth.user = user
+        server._user = user
 
         if changed_tags:
             # Apply the recorded invalidation now, so the user sees the effect

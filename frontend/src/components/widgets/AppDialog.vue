@@ -107,6 +107,7 @@ function onKeydown(e) {
   flex-direction: column;
   max-height: 100%;
   overflow: hidden;
+  max-width: 100%;
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgb(var(--v-theme-border));

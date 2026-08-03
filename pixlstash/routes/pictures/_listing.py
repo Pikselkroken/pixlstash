@@ -610,8 +610,8 @@ def select_pictures_for_listing(
         raise HTTPException(status_code=400, detail=str(ve))
 
     guest_session_id = getattr(request.state, "guest_session_id", None)
-    guest_token_id = (
-        getattr(request.state, "token_id", None) if guest_session_id else None
+    guest_token_public_id = (
+        getattr(request.state, "token_public_id", None) if guest_session_id else None
     )
     # Fallback: rejected-consent guests have no HttpOnly cookie, but may pass
     # the in-memory session ID as a query param so scores are overlaid for the
@@ -622,7 +622,7 @@ def select_pictures_for_listing(
             qp_sid = request.query_params.get("guest_session_id", "")
             if qp_sid and re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", qp_sid):
                 guest_session_id = qp_sid
-                guest_token_id = getattr(request.state, "token_id", None)
+                guest_token_public_id = getattr(request.state, "token_public_id", None)
 
     hidden_tags = _get_hidden_tags_from_request(server, request) or None
 
@@ -952,7 +952,7 @@ def select_pictures_for_listing(
                 else None
             ),
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
         )
         pics = _record_sql_count(pics)
     elif only_deleted:
@@ -973,7 +973,7 @@ def select_pictures_for_listing(
                 impossible_sources=impossible_sources,
                 hidden_tags_filter=hidden_tags,
                 guest_session_id=guest_session_id,
-                guest_token_id=guest_token_id,
+                guest_token_public_id=guest_token_public_id,
                 **query_params,
             )
         pics = server.vault.db.run_task(
@@ -995,7 +995,7 @@ def select_pictures_for_listing(
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
             **query_params,
         )
         pics = _record_sql_count(pics)
@@ -1274,7 +1274,7 @@ def select_pictures_for_listing(
             impossible_sources=impossible_sources,
             hidden_tags_filter=hidden_tags,
             guest_session_id=guest_session_id,
-            guest_token_id=guest_token_id,
+            guest_token_public_id=guest_token_public_id,
             **query_params,
         )
         pics = _record_sql_count(pics)
@@ -1301,8 +1301,8 @@ def select_pictures_for_listing(
             # Python.  Avoids .in_() on sa_column-defined fields which can
             # silently produce no rows in SQLModel.
             stmt = select(GuestScore).where(GuestScore.session_id == guest_session_id)
-            if guest_token_id is not None:
-                stmt = stmt.where(GuestScore.token_id == guest_token_id)
+            if guest_token_public_id is not None:
+                stmt = stmt.where(GuestScore.token_public_id == guest_token_public_id)
             rows = session.exec(stmt).all()
             return {row.picture_id: row.score for row in rows}
 

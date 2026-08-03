@@ -29,6 +29,7 @@ function normalizeOptions(options) {
   return {
     title: o.title ?? "Are you sure?",
     message: o.message ?? "",
+    warning: o.warning ?? "",
     confirmLabel: o.confirmLabel ?? "Confirm",
     cancelLabel: o.cancelLabel ?? "Cancel",
     danger: Boolean(o.danger),
@@ -43,7 +44,7 @@ export function useConfirm() {
   /**
    * Ask the user to confirm. Resolves true (confirmed) / false (cancelled).
    * @param {string|Object} options - message string, or { title, message,
-   *   confirmLabel, cancelLabel, danger }.
+   *   warning, confirmLabel, cancelLabel, danger }.
    * @returns {Promise<boolean>}
    */
   function confirm(options) {

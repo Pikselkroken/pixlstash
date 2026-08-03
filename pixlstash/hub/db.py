@@ -24,6 +24,7 @@ import os
 import sqlite3
 import stat
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
@@ -32,6 +33,10 @@ from platformdirs import user_config_dir
 
 from pixlstash.hub.schema import apply_migrations
 from pixlstash.pixl_logging import get_logger
+from pixlstash.trusted_sqlite import (
+    TrustedSQLiteLocation,
+    TrustedSQLiteLocationError,
+)
 
 logger = get_logger(__name__)
 
@@ -52,6 +57,58 @@ HUB_FILE_MODE = 0o600
 
 class HubPermissionError(RuntimeError):
     """The hub file is readable or writable by users other than its owner."""
+
+
+def _validate_hub_file(path: str, *, repair: bool) -> os.stat_result:
+    """Require an owner-controlled regular file, without following symlinks."""
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        raise HubPermissionError(f"Could not inspect hub file {path}: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        kind = "symlink" if stat.S_ISLNK(info.st_mode) else "non-regular file"
+        raise HubPermissionError(f"Hub path {path} is a {kind}; refusing to open it.")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise HubPermissionError(
+            f"Hub file {path} is owned by uid {info.st_uid}, not the current user."
+        )
+    check_file_mode(path, repair=repair)
+    return info
+
+
+def _prepare_hub_file(path: str, *, repair: bool) -> tuple[bool, tuple[int, int]]:
+    """Atomically create *path* as 0600, or validate the existing file.
+
+    Returns True only for the process that won creation. ``O_EXCL`` handles a
+    simultaneous server/CLI first open without either observing a permissive
+    sqlite-created file; ``O_NOFOLLOW`` rejects a pre-positioned symlink where
+    the platform provides it.
+    """
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags, HUB_FILE_MODE)
+    except FileExistsError:
+        info = _validate_hub_file(path, repair=repair)
+        return False, (info.st_dev, info.st_ino)
+    except OSError as exc:
+        raise HubPermissionError(
+            f"Could not securely create hub file {path}: {exc}"
+        ) from exc
+
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise HubPermissionError(f"New hub path {path} is not a regular file.")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise HubPermissionError(
+                f"New hub file {path} is not owned by the current user."
+            )
+        os.fchmod(fd, HUB_FILE_MODE)
+    finally:
+        os.close(fd)
+    return True, (info.st_dev, info.st_ino)
 
 
 def default_hub_path() -> str:
@@ -79,7 +136,7 @@ def check_file_mode(path: str, *, repair: bool) -> None:
         HubPermissionError: ``repair`` is False and the mode is too permissive.
     """
     try:
-        mode = stat.S_IMODE(os.stat(path).st_mode)
+        mode = stat.S_IMODE(os.lstat(path).st_mode)
     except FileNotFoundError:
         return
     except OSError as exc:
@@ -131,8 +188,9 @@ class HubDatabase:
         parent = Path(self._path).parent
         parent.mkdir(parents=True, exist_ok=True)
 
-        existed = os.path.exists(self._path)
-        check_file_mode(self._path, repair=repair_permissions)
+        created, _expected_identity = _prepare_hub_file(
+            self._path, repair=repair_permissions
+        )
 
         # ``check_same_thread=False`` plus an explicit lock, because this
         # connection is reached from request-handler threads as well as from
@@ -142,19 +200,37 @@ class HubDatabase:
         # contract is short transactions only (see the module docstring), so no
         # caller holds the lock across I/O or user interaction.
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(
-            self._path,
-            timeout=HUB_BUSY_TIMEOUT_S,
-            isolation_level="",
-            check_same_thread=False,
-        )
-        self._conn.row_factory = sqlite3.Row
+        try:
+            guard = TrustedSQLiteLocation.open(
+                self._path,
+                private=True,
+                allow_windows_app_config=True,
+            )
+        except TrustedSQLiteLocationError as exc:
+            raise HubPermissionError(str(exc)) from exc
+        try:
+            self._conn = sqlite3.connect(
+                guard.path,
+                timeout=HUB_BUSY_TIMEOUT_S,
+                isolation_level="",
+                check_same_thread=False,
+            )
+            self._conn.row_factory = sqlite3.Row
+            guard.verify_after_open()
+        except TrustedSQLiteLocationError as exc:
+            connection = getattr(self, "_conn", None)
+            if connection is not None:
+                connection.close()
+            raise HubPermissionError(str(exc)) from exc
+        except Exception:
+            connection = getattr(self, "_conn", None)
+            if connection is not None:
+                connection.close()
+            raise
+        finally:
+            guard.close()
 
-        if not existed:
-            # Create it locked down before the first write puts a hash in it.
-            # sqlite3 honours the process umask on create, which is commonly
-            # 022 (0644), so this is a narrowing, not a formality.
-            os.chmod(self._path, HUB_FILE_MODE)
+        if created:
             logger.info("Created hub database at %s", self._path)
 
         self._configure()
@@ -214,10 +290,23 @@ class HubDatabase:
 
     def _configure(self) -> None:
         """Apply the connection pragmas the multi-process contract depends on."""
+        # Install the wait policy before journal-mode negotiation: two processes
+        # can win secure open at the same time on first startup, and the empty
+        # database's WAL transition itself takes the write lock.
+        self._conn.execute(f"PRAGMA busy_timeout={HUB_BUSY_TIMEOUT_S * 1000}")
         # WAL persists in the file header, so this is a no-op after the first
         # open; it is re-issued because a hub file could be restored from a
-        # rollback-journal copy.
-        self._conn.execute("PRAGMA journal_mode=WAL")
+        # rollback-journal copy. SQLite's journal-mode PRAGMA can return LOCKED
+        # immediately (without honoring busy_timeout) when two processes open a
+        # brand-new file together, so bound that one negotiation explicitly.
+        deadline = time.monotonic() + HUB_BUSY_TIMEOUT_S
+        while True:
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.execute(f"PRAGMA busy_timeout={HUB_BUSY_TIMEOUT_S * 1000}")

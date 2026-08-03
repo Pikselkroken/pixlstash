@@ -49,6 +49,7 @@ from pixlstash.services.set_lock_service import enforce_pictures_not_locked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.snapshot_service import SnapshotService
 from pixlstash.services.restore_service import RestoreService
+from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 
 
 logger = get_logger(__name__)
@@ -96,7 +97,9 @@ class Vault:
                 no models are ever loaded.  Intended for read-only deployments
                 where all processing is already complete.
         """
-        self.image_root = image_root
+        registered_hub = getattr(image_root, "hub", None)
+        registered_library = getattr(image_root, "library", None)
+        self.image_root = str(image_root)
         logger.debug(f"Image root: {self.image_root}")
         assert self.image_root is not None, "image_root cannot be None"
         logger.debug(f"Using image_root: {self.image_root}")
@@ -106,7 +109,32 @@ class Vault:
         )
 
         self._db_path = os.path.join(self.image_root, "vault.db")
-        self.db = VaultDatabase(self._db_path)
+        if registered_hub is not None and registered_library is not None:
+            from pixlstash.hub.bootstrap import (
+                finalize_library_connection,
+                prevalidate_opened_library,
+            )
+
+            location_guard = TrustedSQLiteLocation.open(
+                self._db_path,
+                create=not os.path.exists(self._db_path),
+                # The engine's connect hook legitimately creates WAL/SHM
+                # before verification. Main-file and parent-directory inode
+                # checks remain decisive; sidecars are validated afterwards.
+                strict_parent_changes=False,
+            )
+            self.db = VaultDatabase(
+                self._db_path,
+                location_guard=location_guard,
+                pre_migration_hook=lambda connection: prevalidate_opened_library(
+                    connection, registered_library
+                ),
+                post_migration_hook=lambda connection: finalize_library_connection(
+                    registered_hub, registered_library, connection
+                ),
+            )
+        else:
+            self.db = VaultDatabase(self._db_path)
         self.set_description(description or "")
 
         self.snapshot_service = SnapshotService(self)
@@ -471,6 +499,10 @@ class Vault:
             str: String representation.
         """
         return f"Vault(db_path='{self._db_path}')"
+
+    @property
+    def is_open(self) -> bool:
+        return not self._closed and self.db is not None and self.db.is_open
 
     def close(self):
         """

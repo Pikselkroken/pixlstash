@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -328,7 +329,7 @@ class ExportUtils:
             background_data: Dict of extra params (query, set_id, threshold,
                 caption_mode, include_character_name, resolution, export_type).
         """
-        TEMP_EXPORT_DIR = os.path.join(tempfile.gettempdir(), "pixlstash", "exports")
+        temp_export_dir = None
         try:
             params = ExportUtils._parse_export_params(request, background_data)
             export_type_d = params["export_type_d"]
@@ -465,8 +466,12 @@ class ExportUtils:
             filename = f"{filename}_{len(pics)}_images.zip"
             export_tasks[task_id]["filename"] = filename
 
-            os.makedirs(TEMP_EXPORT_DIR, exist_ok=True)
-            zip_path = os.path.join(TEMP_EXPORT_DIR, f"export_{task_id}.zip")
+            temp_export_dir = tempfile.mkdtemp(prefix=f"pixlstash_export_{task_id}_")
+            os.chmod(temp_export_dir, 0o700)
+            zip_path = os.path.join(temp_export_dir, f"export_{task_id}.zip")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            fd = os.open(zip_path, flags, 0o600)
+            os.close(fd)
             feature_faces_by_pic = {}
             face_tags_by_face = {}
 
@@ -712,6 +717,9 @@ class ExportUtils:
 
             export_tasks[task_id]["status"] = "completed"
             export_tasks[task_id]["file_path"] = zip_path
+            export_tasks[task_id]["private_dir"] = temp_export_dir
         except Exception as exc:
             export_tasks[task_id]["status"] = "failed"
+            if temp_export_dir is not None:
+                shutil.rmtree(temp_export_dir, ignore_errors=True)
             logger.error(f"Export task {task_id} failed: {exc}")
