@@ -14,14 +14,30 @@ on:
         description: 'Tag to use as the release version label (e.g. v1.7.0rc4)'
         required: true
 
+permissions: {}
+
 jobs:
   create-issues:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: release-tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$ ]]; then
+            echo "Release tag has an unsupported format: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Ensure release-testing label exists
         env:
@@ -35,7 +51,7 @@ jobs:
       - name: Create one issue per test-plan section
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           python3 - <<'PYEOF'
           import os, re, subprocess

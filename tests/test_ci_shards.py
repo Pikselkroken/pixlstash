@@ -35,6 +35,7 @@ the gate's own algorithm would audit that algorithm with itself, so
 """
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +47,34 @@ from tests.conftest import _block_shard_bounds
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTS_DIR = REPO_ROOT / "tests"
+
+# These workflows can publish packages/images/pages, create release issues or
+# PRs, attach signed artifacts, mint OIDC tokens, or consume release-signing
+# secrets. Their action and shell boundaries therefore need stronger invariants
+# than an ordinary read-only CI job.
+PRIVILEGED_WORKFLOW_PATHS = tuple(
+    REPO_ROOT / ".github" / "workflows" / name
+    for name in (
+        "certum-signer-image.yml",
+        "docker-publish.yml",
+        "electron.yml",
+        "pages.yml",
+        "publish-pypi.yml",
+        "release-test-issues.yml",
+        "release-version.yml",
+        "windows-installer.yml",
+        "windows-signing-test.yml",
+    )
+)
+
+_ACTION_USE_RE = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*([^#\s]+)\s*(?:#\s*(.+?))?\s*$", re.MULTILINE
+)
+_FULL_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_VERSION_COMMENT_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+){1,3}(?:[-+._][0-9A-Za-z.-]+)?$")
+_RELEASE_SECRET_RE = re.compile(
+    r"secrets\.(?:APPLE_|CERTUM_|DOCKERHUB_|RELEASE_BOT_TOKEN)"
+)
 
 # Which `--ci-*shard` option each sharded job is required to use. Round-robin
 # balances wall clock and is right for the blocking gates; contiguous blocks
@@ -203,6 +232,101 @@ def _pytest_steps(job: dict) -> list[dict]:
     return [
         step for step in job.get("steps", []) if "pytest" in (step.get("run") or "")
     ]
+
+
+def _privileged_workflows() -> list[tuple[Path, dict, str]]:
+    """Load the release-capable workflows protected by the static guards."""
+    loaded = []
+    for path in PRIVILEGED_WORKFLOW_PATHS:
+        assert path.is_file(), f"Missing privileged workflow: {path}"
+        text = path.read_text(encoding="utf-8")
+        loaded.append((path, yaml.safe_load(text), text))
+    return loaded
+
+
+def _grants_write_permission(value) -> bool:
+    """Return whether a parsed workflow node grants any write permission."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "permissions":
+                if child == "write-all" or (
+                    isinstance(child, dict) and "write" in child.values()
+                ):
+                    return True
+            if _grants_write_permission(child):
+                return True
+    elif isinstance(value, list):
+        return any(_grants_write_permission(child) for child in value)
+    return False
+
+
+def test_privileged_workflow_inventory_is_complete():
+    """New write/OIDC/release-secret workflows must enter the guarded set."""
+    expected = set(PRIVILEGED_WORKFLOW_PATHS)
+    discovered = set()
+    for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+        if _grants_write_permission(data) or _RELEASE_SECRET_RE.search(text):
+            discovered.add(path)
+    assert discovered == expected, (
+        "Keep PRIVILEGED_WORKFLOW_PATHS aligned with workflows that grant write "
+        "permissions or consume release credentials; "
+        f"missing={sorted(discovered - expected)}, "
+        f"stale={sorted(expected - discovered)}"
+    )
+
+
+def test_privileged_workflow_actions_are_immutable():
+    """Third-party code in release-capable jobs must use reviewed commits."""
+    for path, _workflow, text in _privileged_workflows():
+        matches = list(_ACTION_USE_RE.finditer(text))
+        assert matches, f"Expected at least one action in {path}"
+        for match in matches:
+            action, version_comment = match.groups()
+            if action.startswith("./"):
+                continue
+            action_name, separator, ref = action.rpartition("@")
+            assert separator and action_name, (
+                f"Malformed action reference in {path}: {action}"
+            )
+            assert _FULL_COMMIT_SHA_RE.fullmatch(ref), (
+                f"Privileged workflow action must use an exact 40-character "
+                f"commit SHA, not a mutable tag: {path}: {action}"
+            )
+            assert version_comment and _VERSION_COMMENT_RE.fullmatch(
+                version_comment
+            ), (
+                f"Pinned action must retain a machine-readable version comment "
+                f"for updates: {path}: {action}"
+            )
+
+
+def test_privileged_workflow_run_blocks_do_not_interpolate_expressions():
+    """Event/ref/input expressions cross into shells only through quoted env."""
+    for path, workflow_data, _text in _privileged_workflows():
+        for job_name, job in workflow_data.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                run = step.get("run")
+                assert not run or "${{" not in run, (
+                    f"Move GitHub expressions from `run` into a step `env` value "
+                    f"and quote the environment variable in the shell: "
+                    f"{path}:{job_name}:{step.get('name', '<unnamed>')}"
+                )
+
+
+def test_privileged_workflow_checkouts_do_not_persist_credentials():
+    """Release jobs must not leave checkout credentials available to later code."""
+    for path, workflow_data, _text in _privileged_workflows():
+        for job_name, job in workflow_data.get("jobs", {}).items():
+            for step in job.get("steps", []):
+                uses = step.get("uses", "")
+                if not uses.startswith("actions/checkout@"):
+                    continue
+                assert step.get("with", {}).get("persist-credentials") is False, (
+                    f"Set persist-credentials: false on checkout in "
+                    f"{path}:{job_name}"
+                )
 
 
 def _shard_matrix(job: dict) -> list:

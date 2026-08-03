@@ -6,21 +6,59 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
     permissions:
       contents: read
-      id-token: write
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate tag matches pyproject version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          release_ref = os.environ["RELEASE_REF"]
+          tag = os.environ["RELEASE_TAG"]
+          tag_pattern = re.compile(
+              r"^v[0-9]+\.[0-9]+\.[0-9]+"
+              r"(?:(?:a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$"
+          )
+          if release_ref != f"refs/tags/{tag}" or not tag_pattern.fullmatch(tag):
+              print(f"::error::Ref {release_ref!r} is not an allowed release tag")
+              sys.exit(1)
+
+          pyproject = pathlib.Path("pyproject.toml")
+          data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+          expected = f"v{data['project']['version']}"
+          if tag != expected:
+              print(f"::error::Tag {tag} does not match project version {expected}")
+              sys.exit(1)
+
+          print(f"Tag/version check passed: {tag}")
+          PY
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "20"
           cache: npm
@@ -32,39 +70,10 @@ jobs:
           npm ci
           npm run build
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install build tooling
         run: |
           python -m pip install --upgrade pip
           python -m pip install build twine
-
-      - name: Validate tag matches pyproject version
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          python - <<'PY'
-          import pathlib
-          import sys
-          try:
-              import tomllib
-          except ImportError:
-              import tomli as tomllib
-
-          pyproject = pathlib.Path('pyproject.toml')
-          data = tomllib.loads(pyproject.read_text(encoding='utf-8'))
-          version = data['project']['version']
-
-          tag = '${{ github.ref_name }}'
-          expected = f'v{version}'
-          if tag != expected:
-              print(f'::error::Tag {tag} does not match project version {expected}')
-              sys.exit(1)
-
-          print(f'Tag/version check passed: {tag}')
-          PY
 
       - name: Build Python distributions
         run: python -m build
@@ -105,6 +114,28 @@ jobs:
 
       - name: Check distribution metadata
         run: twine check dist/*
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-distributions
+          path: dist
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0

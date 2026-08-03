@@ -18,10 +18,8 @@ on:
       - ".github/workflows/electron.yml"
   workflow_dispatch:
 
-# Least privilege: the workflow defaults to read-only. Only build-electron, which
-# attaches installers to the GitHub release, is granted contents: write (and even
-# that uses the RELEASE_BOT_TOKEN for the release itself). build-wheel only checks
-# out and uploads a workflow artifact, so it stays read-only.
+# Least privilege: all jobs use a read-only GITHUB_TOKEN. Release uploads use
+# RELEASE_BOT_TOKEN only in the action step that attaches each artifact.
 permissions:
   contents: read
 
@@ -62,6 +60,8 @@ jobs:
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
@@ -85,8 +85,15 @@ jobs:
           echo "is_prerelease=$pre" >> "$GITHUB_OUTPUT"
       - name: Validate tag matches version
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          [ "${{ github.ref_name }}" = "v${{ steps.version.outputs.version }}" ] || { echo "tag/version mismatch"; exit 1; }
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$ ]]; then
+            echo "Release tag has an unsupported format: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          [ "$RELEASE_TAG" = "v$EXPECTED_VERSION" ] || { echo "tag/version mismatch"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheel
@@ -94,9 +101,8 @@ jobs:
 
   build-electron:
     needs: build-wheel
-    # Needs write to attach installers to the GitHub release (softprops below).
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +137,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
@@ -155,11 +163,15 @@ jobs:
             build-runtime-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.accel }}-
       - name: Build bundled runtime (${{ matrix.os }}/${{ matrix.arch }}/${{ matrix.accel }})
         shell: bash
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_ACCEL: ${{ matrix.accel }}
         run: |
           WHEEL=$(ls dist/pixlstash-*.whl | head -n1)
           python scripts/build_desktop_runtime.py \
             --wheel "$WHEEL" \
-            --os ${{ matrix.os }} --arch ${{ matrix.arch }} --accel ${{ matrix.accel }} \
+            --os "$TARGET_OS" --arch "$TARGET_ARCH" --accel "$TARGET_ACCEL" \
             --output-dir electron/resources
       # Install deps in a step WITHOUT the signing secrets in scope: npm ci runs
       # third-party dependency lifecycle scripts, which must never see the Apple
@@ -182,7 +194,7 @@ jobs:
         # an empty string elsewhere) so the certificate never lands on the Windows or
         # Linux runners that have no use for it.
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          TARGET_OS: ${{ matrix.os }}
           CSC_LINK: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
           APPLE_ID: ${{ matrix.os == 'mac' && secrets.APPLE_ID || '' }}
@@ -190,7 +202,7 @@ jobs:
           APPLE_TEAM_ID: ${{ matrix.os == 'mac' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
-          if [ "${{ matrix.os }}" != "mac" ]; then
+          if [ "$TARGET_OS" != "mac" ]; then
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             npm run dist -- --publish never
             exit 0
