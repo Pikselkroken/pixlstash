@@ -71,14 +71,25 @@ describe("DedupScanBanner", () => {
     expect(mountBanner({ percent: 100 }).find(".scan-banner").exists()).toBe(true);
   });
 
-  it("renders nothing when the scan is not running", () => {
+  it("renders nothing when the scan completed or is idle", () => {
     // A finished, idle or failed scan must not leave a banner frozen at 99
-    // percent. `pending` and `running` are the only live statuses.
-    for (const status of ["idle", "complete", "failed"]) {
+    // percent. Incomplete terminal states have their own persistent warning.
+    for (const status of ["idle", "complete"]) {
       expect(
         mountBanner({ status, percent: 40 }).find(".scan-banner").exists(),
       ).toBe(false);
     }
+  });
+
+  it.each([
+    ["partial", "Duplicate scan incomplete.", "pair limit reached"],
+    ["failed", "Duplicate scan failed.", "worker stopped"],
+  ])("keeps a %s scan visible as an incomplete warning", (status, copy, error) => {
+    const wrapper = mountBanner({ status, error });
+    expect(textOf(wrapper)).toContain(copy);
+    expect(textOf(wrapper)).toContain(error);
+    expect(wrapper.find(".scan-banner").attributes("role")).toBe("alert");
+    expect(wrapper.find(".scan-banner__track").exists()).toBe(false);
   });
 
   it("announces a pending person scan as queued without inventing zero totals", () => {

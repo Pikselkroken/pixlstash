@@ -548,6 +548,21 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
 });
 
 describe("DuplicateQueue — when a verdict does not land", () => {
+  it.each(["partial", "failed"])(
+    "never renders Queue clear when the latest scan is %s",
+    async (status) => {
+      const { wrapper, store } = await mountQueue([]);
+      store.scan = { ...store.scan, status, error: "comparison work omitted" };
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.text()).toContain(
+        status === "failed" ? "Scan failed" : "Scan incomplete",
+      );
+      expect(wrapper.text()).not.toContain("Queue clear");
+      wrapper.unmount();
+    },
+  );
+
   it("never renders Queue clear when the queue state failed to load", async () => {
     const { wrapper, store } = await mountQueue([]);
     store.error = new Error("network down");
