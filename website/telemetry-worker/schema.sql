@@ -1,6 +1,7 @@
 -- D1 schema for the telemetry ingestion Worker.
 --
--- Two tables and nothing else. `install` holds one row per installation and no
+-- Three durable data tables plus one checkpoint table. `install` holds one row
+-- per installation and no
 -- request metadata: no IP, no user agent, no timestamps finer than a UTC date.
 -- `aggregate_snapshot` holds the published numbers, computed daily and never
 -- recomputed (see README, "compute daily, never backfill").
@@ -48,4 +49,16 @@ CREATE TABLE IF NOT EXISTS aggregate_snapshot (
   -- bitmap window, so it is stored the day it is computable and never derived
   -- again afterwards.
   payload       TEXT NOT NULL
+);
+
+-- A scheduled invocation does a bounded amount of work, then persists its
+-- accumulator and cursor here. The immutable snapshot is committed before the
+-- phase changes to prune, so a timeout or D1 failure can replay work but cannot
+-- discard the only copy of a day's aggregate.
+CREATE TABLE IF NOT EXISTS aggregation_run (
+  snapshot_date TEXT PRIMARY KEY,
+  phase         TEXT NOT NULL CHECK (phase IN ('scan', 'prune')),
+  cutoff        TEXT NOT NULL,
+  cursor        TEXT NOT NULL DEFAULT '',
+  accumulator   TEXT NOT NULL
 );

@@ -3,8 +3,8 @@
  *
  * Computed in JS rather than SQL on purpose. The bit-range arithmetic for
  * "was this install active in week N of its own life" is unreadable in SQLite,
- * and at PixlStash's scale the whole table fits in one Worker invocation: even
- * 10,000 installs is well under a megabyte.
+ * and the persisted accumulator lets a bounded scheduled invocation resume at
+ * the next install id instead of trying to hold or scan the whole table.
  *
  * **Compute daily, never backfill.** Life-week N is only answerable while the
  * relevant bits are still inside the 63-day window, so each day's cells are
@@ -139,6 +139,24 @@ export function createAccumulator() {
     // cohortWeek -> { size, cells: [{answerable, active}, ...] }
     cohorts: new Map(),
   };
+}
+
+/** Encode the Map-based accumulator as checkpoint-safe JSON. */
+export function serializeAccumulator(state) {
+  return JSON.stringify({
+    active: state.active,
+    byType: state.byType,
+    newLast7d: state.newLast7d,
+    resurrectionEligible: state.resurrectionEligible,
+    resurrected: state.resurrected,
+    cohorts: [...state.cohorts.entries()],
+  });
+}
+
+/** Restore an accumulator written by serializeAccumulator. */
+export function deserializeAccumulator(serialized) {
+  const value = JSON.parse(serialized);
+  return { ...value, cohorts: new Map(value.cohorts ?? []) };
 }
 
 /**

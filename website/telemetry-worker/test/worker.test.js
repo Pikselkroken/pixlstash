@@ -575,8 +575,9 @@ describe("growth caps", () => {
     };
 
     const res = await worker.fetch(pingRequest(VALID), e);
-    // Assuming headroom is how the cap gets bypassed by breaking the counter.
-    assert.equal(res.status, 429);
+    // Storage failure is distinct from an intact capacity refusal, but still
+    // fails closed and never inserts an uncapped row.
+    assert.equal(res.status, 503);
     assert.equal(e.DB.installs.size, 0);
   });
 
@@ -606,6 +607,7 @@ describe("growth caps", () => {
     e.DB.counters.set("total_installs", { value: MAX_TOTAL_INSTALLS, day: null });
 
     await worker.scheduled({}, e);
+    await worker.scheduled({}, e);
 
     assert.equal(e.DB.counters.get("total_installs").value, 0, "prune must free headroom");
     const res = await worker.fetch(pingRequest(VALID), e);
@@ -634,6 +636,7 @@ describe("growth caps", () => {
         install_type: "pip",
       });
     }
+    await worker.scheduled({}, e);
     await worker.scheduled({}, e);
 
     const snapshot = JSON.parse([...e.DB.snapshots.values()][0]);
@@ -711,6 +714,7 @@ describe("scheduled", () => {
       install_type: "pip",
     });
     await worker.fetch(pingRequest(VALID), e);
+    await worker.scheduled({}, e);
     await worker.scheduled({}, e);
     assert.equal(e.DB.installs.has("old"), false);
     assert.equal(e.DB.installs.has(UUID), true);

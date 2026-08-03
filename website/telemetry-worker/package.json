@@ -5,12 +5,15 @@
   "type": "module",
   "description": "Cloudflare Worker that ingests anonymous install pings and publishes aggregate cohort numbers.",
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "build:config": "sh scripts/render-wrangler-config.sh",
-    "dev": "npm run build:config && wrangler dev --config build/wrangler.toml",
-    "deploy": "npm run build:config && wrangler deploy --config build/wrangler.toml"
+    "test": "npm run test:unit && npm run test:d1",
+    "test:unit": "node --test test/config.test.js test/worker.test.js",
+    "test:d1": "node --test test/d1-integration.test.js",
+    "dev": "wrangler dev",
+    "check:config": "WRANGLER_LOG_PATH=.wrangler/logs wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "deploy": "wrangler deploy --no-x-provision --no-x-auto-create"
   },
   "devDependencies": {
-    "wrangler": "4.36.0"
+    "miniflare": "https://registry.npmjs.org/miniflare/-/miniflare-5.20260730.0-alpha.tgz",
+    "wrangler": "4.118.0"
   }
 }

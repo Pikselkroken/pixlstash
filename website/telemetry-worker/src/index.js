@@ -20,14 +20,16 @@
 import {
   accumulateRow,
   createAccumulator,
+  deserializeAccumulator,
   finalizeAggregate,
   hasResurrected,
   RESURRECTION_GAP_DAYS,
+  serializeAccumulator,
 } from "./aggregate.js";
 import { daysBetween, encodeActivity, rollActivity } from "./activity.js";
 import { MAX_BODY_BYTES, validatePing } from "./validate.js";
 
-/** Rows whose last_seen is older than this are deleted by the daily cron. */
+/** Rows whose last_seen is older than this are deleted by scheduled slices. */
 const RETENTION_DAYS = 400;
 
 /** Aggregate snapshots served by one GET, newest first. */
@@ -53,8 +55,11 @@ const AGGREGATE_PAGE = 90;
 export const MAX_TOTAL_INSTALLS = 5_000_000;
 export const MAX_NEW_INSTALLS_PER_DAY = 5_000;
 
-/** Rows read per query when the aggregation pass walks the table. */
-const AGGREGATE_SCAN_PAGE = 10_000;
+/** Bounded work per five-minute scheduled invocation. */
+export const AGGREGATE_SCAN_PAGE = 2_000;
+export const AGGREGATE_PAGES_PER_SLICE = 20;
+export const PRUNE_PAGE = 10_000;
+export const PRUNE_PAGES_PER_SLICE = 5;
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
@@ -144,92 +149,62 @@ async function readCappedBody(request) {
 }
 
 /**
- * Read a counter row, treating a stale day as zero.
+ * Atomically admit one unique install and update both counters.
  *
- * @returns {Promise<{value: number, day: string|null}>}
+ * D1 documents batch() as a sequential SQL transaction that rolls the whole
+ * sequence back on failure. `changes()` carries the conditional INSERT's row
+ * count through the two counter updates. Concurrent requests therefore cannot
+ * both consume the last slot, and a duplicate install consumes no slot.
  */
-async function readCounter(db, name) {
-  const row = await db
-    .prepare("SELECT value, day FROM counter WHERE name = ?")
-    .bind(name)
-    .first();
-  return { value: Number(row?.value ?? 0), day: row?.day ?? null };
-}
-
-/**
- * True if another install may be created right now.
- *
- * Fails CLOSED on a counter read error: refusing a ping loses one datapoint,
- * whereas assuming headroom is how the cap gets bypassed by making the counter
- * table unreadable.
- */
-async function canCreateInstall(db, date) {
-  try {
-    const total = await readCounter(db, "total_installs");
-    if (total.value >= MAX_TOTAL_INSTALLS) {
-      console.error(
-        `install ceiling reached (${total.value}); refusing new installs`,
-      );
-      return false;
-    }
-    const today = await readCounter(db, "new_installs_today");
-    // A counter from an earlier day is stale, so today's count is zero.
-    const createdToday = today.day === date ? today.value : 0;
-    if (createdToday >= MAX_NEW_INSTALLS_PER_DAY) {
-      console.error(
-        `daily new-install cap reached (${createdToday}); refusing until tomorrow`,
-      );
-      return false;
-    }
-    return true;
-  } catch (error) {
-    console.error(`counter read failed (${error}); refusing new install`);
-    return false;
-  }
-}
-
-/**
- * Recompute `total_installs` from the actual row count.
- *
- * Without this the counter is a LIFETIME tally: the prune deletes rows and
- * never decrements it, so reaching the ceiling once refuses every genuine new
- * install for ever, with no way back and a 429 that is deliberately
- * indistinguishable from rate limiting. Reconciling daily, right after the
- * prune, makes the ceiling mean "rows currently stored" and makes pruning
- * restore headroom.
- */
-async function reconcileTotalInstalls(db) {
-  const row = await db.prepare("SELECT COUNT(*) AS n FROM install").first();
-  const actual = Number(row?.n ?? 0);
-  await db
-    .prepare(
-      `INSERT INTO counter (name, value, day) VALUES ('total_installs', ?, NULL)
-       ON CONFLICT(name) DO UPDATE SET value = excluded.value`,
-    )
-    .bind(actual)
-    .run();
-  return actual;
-}
-
-/** Bump both growth counters after a successful insert. */
-async function bumpInstallCounters(db, date) {
-  await db.batch([
+export async function admitInstall(db, ping, date) {
+  const statements = [
     db
       .prepare(
-        `INSERT INTO counter (name, value, day) VALUES ('total_installs', 1, NULL)
-         ON CONFLICT(name) DO UPDATE SET value = counter.value + 1`,
+        `INSERT INTO counter (name, value, day)
+         VALUES ('total_installs', 0, NULL) ON CONFLICT(name) DO NOTHING`,
       ),
     db
       .prepare(
-        // Resets to 1 when the stored day is not today, which is what makes the
-        // daily cap a daily cap rather than a lifetime one.
-        `INSERT INTO counter (name, value, day) VALUES ('new_installs_today', 1, ?1)
+        `INSERT INTO counter (name, value, day)
+         VALUES ('new_installs_today', 0, ?1)
          ON CONFLICT(name) DO UPDATE SET
-           value = CASE WHEN counter.day = ?1 THEN counter.value + 1 ELSE 1 END,
+           value = CASE WHEN counter.day = ?1 THEN counter.value ELSE 0 END,
            day = ?1`,
       )
       .bind(date),
-  ]);
+    db
+      .prepare(
+        `INSERT INTO install
+           (install_id, first_seen, last_seen, activity, has_resurrected,
+            is_new_install, install_type)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+          WHERE (SELECT value FROM counter WHERE name = 'total_installs') < ?
+            AND (SELECT value FROM counter WHERE name = 'new_installs_today') < ?
+         ON CONFLICT(install_id) DO NOTHING
+         RETURNING install_id`,
+      )
+      .bind(
+        ping.install_id,
+        date,
+        date,
+        encodeActivity(1n),
+        0,
+        ping.is_new_install ? 1 : 0,
+        ping.install_type,
+        MAX_TOTAL_INSTALLS,
+        MAX_NEW_INSTALLS_PER_DAY,
+      ),
+    db.prepare(
+      `UPDATE counter SET value = value + 1
+        WHERE name = 'total_installs' AND changes() = 1`,
+    ),
+    db.prepare(
+      `UPDATE counter SET value = value + 1
+        WHERE name = 'new_installs_today' AND changes() = 1`,
+    ),
+  ];
+  const results = await db.batch(statements);
+  return Number(results[2]?.meta?.changes ?? results[2]?.results?.length ?? 0) === 1;
 }
 
 /**
@@ -247,7 +222,7 @@ async function bumpInstallCounters(db, date) {
  * @returns {Promise<"created"|"updated"|"capped">}
  */
 async function recordPing(db, ping, date) {
-  const existing = await db
+  let existing = await db
     .prepare(
       `SELECT first_seen, last_seen, activity, has_resurrected
          FROM install WHERE install_id = ?`,
@@ -259,29 +234,17 @@ async function recordPing(db, ping, date) {
     // Growth caps apply to INSERT only, never to UPDATE. Capping updates would
     // hand an attacker a denial-of-service against real installs: flood until
     // the cap trips, and every genuine install stops being counted.
-    const allowed = await canCreateInstall(db, date);
-    if (!allowed) return "capped";
-
-    await db
+    if (await admitInstall(db, ping, date)) return "created";
+    // A concurrent request for the same id may have won the unique insert.
+    // Treat that as an update; only absence here means capacity refused us.
+    existing = await db
       .prepare(
-        `INSERT INTO install
-           (install_id, first_seen, last_seen, activity, has_resurrected,
-            is_new_install, install_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(install_id) DO NOTHING`,
+        `SELECT first_seen, last_seen, activity, has_resurrected
+           FROM install WHERE install_id = ?`,
       )
-      .bind(
-        ping.install_id,
-        date,
-        date,
-        encodeActivity(1n),
-        0,
-        ping.is_new_install ? 1 : 0,
-        ping.install_type,
-      )
-      .run();
-    await bumpInstallCounters(db, date);
-    return "created";
+      .bind(ping.install_id)
+      .first();
+    if (!existing) return "capped";
   }
 
   const elapsed = daysBetween(existing.last_seen, date);
@@ -410,6 +373,163 @@ async function handleAggregates(request, env) {
   });
 }
 
+function cutoffFor(date) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) - RETENTION_DAYS * 86400000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** Run one bounded, restartable aggregation or prune slice. */
+export async function runScheduledSlice(db, date = today(), limits = {}) {
+  const scanPage = limits.scanPage ?? AGGREGATE_SCAN_PAGE;
+  const scanPagesPerSlice = limits.scanPagesPerSlice ?? AGGREGATE_PAGES_PER_SLICE;
+  const prunePage = limits.prunePage ?? PRUNE_PAGE;
+  const prunePagesPerSlice = limits.prunePagesPerSlice ?? PRUNE_PAGES_PER_SLICE;
+  const initial = serializeAccumulator(createAccumulator());
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO aggregation_run
+         (snapshot_date, phase, cutoff, cursor, accumulator)
+       SELECT ?, 'scan', ?, '', ?
+        WHERE NOT EXISTS (SELECT 1 FROM aggregation_run)
+          AND NOT EXISTS (
+            SELECT 1 FROM aggregate_snapshot WHERE snapshot_date = ?
+          )`,
+    )
+    .bind(date, cutoffFor(date), initial, date)
+    .run();
+
+  const run = await db
+    .prepare(
+      `SELECT snapshot_date, phase, cutoff, cursor, accumulator
+         FROM aggregation_run ORDER BY snapshot_date LIMIT 1`,
+    )
+    .first();
+  if (!run) return { phase: "idle", date };
+
+  if (run.phase === "scan") {
+    const state = deserializeAccumulator(run.accumulator);
+    let cursor = run.cursor;
+    let scanned = 0;
+    for (let pageNumber = 0; pageNumber < scanPagesPerSlice; pageNumber++) {
+      const { results } = await db
+        .prepare(
+          `SELECT install_id, first_seen, last_seen, activity, has_resurrected,
+                  is_new_install, install_type
+             FROM install WHERE install_id > ? ORDER BY install_id LIMIT ?`,
+        )
+        .bind(cursor, scanPage)
+        .all();
+      const page = results ?? [];
+      scanned += page.length;
+      for (const row of page) accumulateRow(state, row, run.snapshot_date);
+
+      if (page.length < scanPage) {
+        const aggregate = finalizeAggregate(state, run.snapshot_date);
+        const results = await db.batch([
+          db
+            .prepare(
+              `INSERT INTO aggregate_snapshot (snapshot_date, payload)
+               VALUES (?, ?) ON CONFLICT(snapshot_date) DO NOTHING`,
+            )
+            .bind(run.snapshot_date, JSON.stringify(aggregate)),
+          db
+            .prepare(
+              `UPDATE aggregation_run SET phase = 'prune'
+                WHERE snapshot_date = ? AND phase = 'scan' AND cursor = ?`,
+            )
+            .bind(run.snapshot_date, run.cursor),
+        ]);
+        if (Number(results[1]?.meta?.changes ?? 0) !== 1) {
+          throw new Error("aggregation checkpoint was advanced concurrently");
+        }
+        console.log(
+          JSON.stringify({
+            message: "telemetry snapshot committed",
+            snapshot_date: run.snapshot_date,
+            active_installs: aggregate.active_installs,
+            published_cohorts: Object.keys(aggregate.cohort_retention).length,
+            suppressed_cohorts: aggregate.suppressed_cohorts,
+          }),
+        );
+        return { phase: "prune", date: run.snapshot_date, complete: true };
+      }
+
+      cursor = page[page.length - 1].install_id;
+      // If this write fails, the transaction has not advanced the cursor. The
+      // next trigger re-reads this page into the prior accumulator, so no row is
+      // skipped or counted twice in durable state.
+      const checkpoint = await db
+        .prepare(
+          `UPDATE aggregation_run SET cursor = ?, accumulator = ?
+            WHERE snapshot_date = ? AND phase = 'scan' AND cursor = ?`,
+        )
+        .bind(cursor, serializeAccumulator(state), run.snapshot_date, run.cursor)
+        .run();
+      if (Number(checkpoint.meta?.changes ?? 0) !== 1) {
+        throw new Error("aggregation checkpoint was advanced concurrently");
+      }
+      run.cursor = cursor;
+    }
+    console.log(
+      JSON.stringify({
+        message: "telemetry scan checkpointed",
+        snapshot_date: run.snapshot_date,
+        rows_scanned_this_slice: scanned,
+      }),
+    );
+    return { phase: "scan", date: run.snapshot_date, cursor };
+  }
+
+  let pruned = 0;
+  for (let pageNumber = 0; pageNumber < prunePagesPerSlice; pageNumber++) {
+    const results = await db.batch([
+      db
+        .prepare(
+          `DELETE FROM install WHERE install_id IN (
+             SELECT install_id FROM install WHERE last_seen < ?
+              ORDER BY install_id LIMIT ?
+           )`,
+        )
+        .bind(run.cutoff, prunePage),
+      db.prepare(
+        `UPDATE counter SET value = MAX(0, value - changes())
+          WHERE name = 'total_installs'`,
+      ),
+    ]);
+    const removed = Number(results[0]?.meta?.changes ?? 0);
+    pruned += removed;
+    if (removed < prunePage) {
+      await db.batch([
+        db.prepare(
+          `INSERT INTO counter (name, value, day)
+           SELECT 'total_installs', COUNT(*), NULL FROM install WHERE true
+           ON CONFLICT(name) DO UPDATE SET value = excluded.value`,
+        ),
+        db
+          .prepare("DELETE FROM aggregation_run WHERE snapshot_date = ?")
+          .bind(run.snapshot_date),
+      ]);
+      console.log(
+        JSON.stringify({
+          message: "telemetry prune complete",
+          snapshot_date: run.snapshot_date,
+          cutoff: run.cutoff,
+        }),
+      );
+      return { phase: "complete", date: run.snapshot_date };
+    }
+  }
+  console.log(
+    JSON.stringify({
+      message: "telemetry prune checkpointed",
+      snapshot_date: run.snapshot_date,
+      rows_pruned_this_slice: pruned,
+    }),
+  );
+  return { phase: "prune", date: run.snapshot_date };
+}
+
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
@@ -418,66 +538,16 @@ export default {
     return fail(404, "not found");
   },
 
-  /**
-   * Daily cron: prune aged-out rows, then snapshot the day's aggregate.
-   *
-   * Order matters. Pruning first means the snapshot reflects what is actually
-   * retained, so a published number can always be re-derived from the store it
-   * was taken from.
-   */
-  async scheduled(event, env) {
-    const date = today();
-    // The prune is destructive and the snapshot is not recomputable ("compute
-    // daily, never backfill"), so a failure after the delete would lose the day
-    // permanently. Wrapping keeps the failure visible without leaving the
-    // Worker in a half-run state that looks like success.
+  async scheduled(_event, env) {
     try {
-
-    const cutoff = new Date(Date.parse(`${date}T00:00:00Z`) - RETENTION_DAYS * 86400000)
-      .toISOString()
-      .slice(0, 10);
-    const pruned = await env.DB.prepare("DELETE FROM install WHERE last_seen < ?")
-      .bind(cutoff)
-      .run();
-    console.log(`pruned ${pruned.meta?.changes ?? 0} rows older than ${cutoff}`);
-
-    // Reconcile BEFORE aggregating, so the ceiling reflects what the prune just
-    // left behind rather than everything ever created.
-    const stored = await reconcileTotalInstalls(env.DB);
-    console.log(`reconciled total_installs to ${stored}`);
-
-    // Keyset-paged and folded incrementally: no page is retained after it has
-    // been accumulated, so the daily job's memory is independent of table size.
-    const state = createAccumulator();
-    let cursor = "";
-    for (;;) {
-      const { results } = await env.DB.prepare(
-        `SELECT install_id, first_seen, last_seen, activity, has_resurrected,
-                is_new_install, install_type
-           FROM install WHERE install_id > ? ORDER BY install_id LIMIT ?`,
-      )
-        .bind(cursor, AGGREGATE_SCAN_PAGE)
-        .all();
-      const page = results ?? [];
-      for (const row of page) accumulateRow(state, row, date);
-      if (page.length < AGGREGATE_SCAN_PAGE) break;
-      cursor = page[page.length - 1].install_id;
-    }
-
-    const aggregate = finalizeAggregate(state, date);
-    await env.DB.prepare(
-      `INSERT INTO aggregate_snapshot (snapshot_date, payload) VALUES (?, ?)
-       ON CONFLICT(snapshot_date) DO UPDATE SET payload = excluded.payload`,
-    )
-      .bind(date, JSON.stringify(aggregate))
-      .run();
-      console.log(
-        `snapshot ${date}: ${aggregate.active_installs} active, ` +
-          `${Object.keys(aggregate.cohort_retention).length} published cohorts, ` +
-          `${aggregate.suppressed_cohorts} suppressed`,
-      );
+      await runScheduledSlice(env.DB);
     } catch (error) {
-      console.error(`scheduled run failed after pruning (${error})`);
+      console.error(
+        JSON.stringify({
+          message: "telemetry scheduled slice failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
       throw error;
     }
   },

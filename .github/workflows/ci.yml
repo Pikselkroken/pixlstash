@@ -113,20 +113,9 @@ jobs:
         working-directory: website/telemetry-worker
         run: npm ci
 
-      - name: Install telemetry config renderer
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gettext-base
-
       - name: Test telemetry Worker
         working-directory: website/telemetry-worker
-        env:
-          # CI exercises the deployment recipe without selecting production.
-          D1_DATABASE_ID: 00000000-0000-0000-0000-000000000000
-        run: |
-          npm run build:config
-          npx --yes wrangler@4.36.0 deploy --dry-run --config build/wrangler.toml --outdir build/worker
-          npm test
+        run: npm test
 
       - name: Validate telemetry Worker config and D1 binding
         working-directory: website/telemetry-worker
