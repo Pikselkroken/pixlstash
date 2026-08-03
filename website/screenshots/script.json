@@ -345,6 +345,14 @@
   },
   {
     "page": "whatsnew.html",
+    "asset": "ScreenshotInstallId.jpg",
+    "label": "PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number",
+    "alt": "PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number",
+    "caption": null,
+    "kind": "image"
+  },
+  {
+    "page": "whatsnew.html",
     "asset": "ScreenshotJoyCaption.jpg",
     "label": "Tagger and description plugin settings in PixlStash 1.3",
     "alt": "Tagger and description plugin settings in PixlStash 1.3",
