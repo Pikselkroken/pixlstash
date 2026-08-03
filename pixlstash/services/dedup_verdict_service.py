@@ -248,6 +248,7 @@ def _record_operation(
     source: str = "external",
     origin_client_id: Optional[str] = None,
     empty_diff_target_ids: Optional[list[int]] = None,
+    commit: bool = True,
 ) -> Optional[Operation]:
     """Append **one** operation row for this verdict.
 
@@ -272,6 +273,7 @@ def _record_operation(
         source=source,
         origin_client_id=origin_client_id,
         empty_diff_target_ids=empty_diff_target_ids,
+        commit=commit,
     )
 
 
@@ -718,6 +720,7 @@ def apply_stack_verdict_in_session(
     actor: Optional[str] = None,
     source: str = "external",
     origin_client_id: Optional[str] = None,
+    commit: bool = True,
 ) -> VerdictResult:
     """Stack a group's members and remember the decision.
 
@@ -886,8 +889,10 @@ def apply_stack_verdict_in_session(
         actor=actor,
         source=source,
         origin_client_id=origin_client_id,
+        commit=commit,
     )
-    session.commit()
+    if commit:
+        session.commit()
     logger.info(
         "[dedup-verdict] stacked %d picture(s) (%d named by the group) into "
         "stack %s (cover=%s, excluded=%s, signature=%s, batch=%s)",
@@ -922,6 +927,7 @@ def apply_keep_separate_in_session(
     actor: Optional[str] = None,
     source: str = "external",
     origin_client_id: Optional[str] = None,
+    commit: bool = True,
 ) -> VerdictResult:
     """Remember that this group is *not* duplicates. Changes no picture row.
 
@@ -978,8 +984,10 @@ def apply_keep_separate_in_session(
         source=source,
         origin_client_id=origin_client_id,
         empty_diff_target_ids=member_ids,
+        commit=commit,
     )
-    session.commit()
+    if commit:
+        session.commit()
     logger.info(
         "[dedup-verdict] keep-separate recorded for signature=%s (%d members, "
         "batch=%s)",
@@ -1752,6 +1760,90 @@ def apply_keep_separate(
     return result
 
 
+def apply_verdict_batch_in_session(
+    session: Session,
+    actions: list[dict[str, Any]],
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Apply one frontend bulk gesture as one transaction and undo unit.
+
+    A shared batch id alone cannot make several HTTP requests one history unit:
+    another client can record between requests, producing ``A1(X), B, A2(X)``
+    and a correctly stale-rejected batch. Keeping the whole gesture in one DB
+    task makes its operation rows contiguous and commits all verdicts or none.
+    """
+    if not actions:
+        raise DedupVerdictError("a verdict batch needs at least one action")
+
+    batch_id = batch_id or new_batch_id()
+    results: list[VerdictResult] = []
+    event_picture_ids: set[int] = set()
+    try:
+        for action in actions:
+            verdict = action["verdict"]
+            if verdict == VERDICT_STACKED:
+                result = apply_stack_verdict_in_session(
+                    session,
+                    action["signature"],
+                    action.get("cover_picture_id"),
+                    action.get("excluded_picture_ids") or [],
+                    batch_id,
+                    actor,
+                    source,
+                    origin_client_id,
+                    commit=False,
+                )
+            elif verdict == VERDICT_KEEP_SEPARATE:
+                result = apply_keep_separate_in_session(
+                    session,
+                    action["signature"],
+                    batch_id,
+                    actor,
+                    source,
+                    origin_client_id,
+                    commit=False,
+                )
+            else:
+                raise DedupVerdictError(f"unknown verdict {verdict!r}")
+            results.append(result)
+            event_picture_ids.update(result.event_picture_ids)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    return {
+        "batch_id": batch_id,
+        "results": [result.as_dict() for result in results],
+        "event_picture_ids": sorted(event_picture_ids),
+    }
+
+
+def apply_verdict_batch(
+    vault: "Vault",
+    actions: list[dict[str, Any]],
+    batch_id: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: str = "external",
+    origin_client_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Write-path wrapper for one atomic frontend verdict gesture."""
+    report = vault.db.run_task(
+        apply_verdict_batch_in_session,
+        actions,
+        batch_id,
+        actor,
+        source,
+        origin_client_id,
+    )
+    event_picture_ids = report.pop("event_picture_ids", [])
+    _notify_pictures_changed(vault, event_picture_ids, origin_client_id, source)
+    return report
+
+
 def reopen_verdict(
     vault: "Vault",
     signature: str,
@@ -1852,6 +1944,8 @@ __all__ = [
     "apply_metadata_union_in_session",
     "apply_stack_verdict",
     "apply_stack_verdict_in_session",
+    "apply_verdict_batch",
+    "apply_verdict_batch_in_session",
     "bulk_auto_stack",
     "bulk_auto_stack_in_session",
     "new_batch_id",

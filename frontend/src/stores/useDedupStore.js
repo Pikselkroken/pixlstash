@@ -55,6 +55,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   autoStackExact,
   listMixedStacks,
@@ -2153,41 +2154,42 @@ export const useDedupStore = defineStore("dedup", () => {
     if (showingDecided.value) return null;
     const targets = verdictTargets(group);
     if (targets.length > 1) {
-      // One gesture, one Ctrl+Z: every selected group shares a client batch
-      // id, so the operation log coalesces the verdicts into one undo step.
       const gestureId = batchId || newOperationBatchId();
-      let last = null;
-      let recorded = false;
-      const stackedTargets = [];
-      const gestureSkipped = [];
-      for (const target of targets) {
-        last = await stackOne(target, {
-          batchId: gestureId,
-          deferCommit: true,
-        });
-        // Stop on the first failure rather than half-applying silently; the
-        // failed group and the rest stay selected and in the queue. A PARTIAL
-        // success is not a failure: the group was decided, so the run carries
-        // on and the skips are reported once for the whole gesture.
-        if (!last) {
-          commitStackedGroups(stackedTargets);
-          if (recorded) narrateVerdictOperation();
-          return {
-            failed: true,
-            uncertain: isAmbiguousMutationError(error.value),
-            completed: stackedTargets.length,
-            requested: targets.length,
-          };
+      busy.value = true;
+      try {
+        const result = await applyVerdictBatch(
+          targets.map((target) => ({
+            verdict: "stacked",
+            signature: target.signature,
+            coverPictureId: coverIdFor(target),
+            excludedPictureIds: effectiveExcludedFor(target),
+          })),
+          { batchId: gestureId },
+        );
+        commitStackedGroups(targets);
+        clearSelection();
+        if (result?.batch_id) narrateVerdictOperation();
+        return {
+          ...result,
+          gesture_skipped: (result?.results ?? []).flatMap(
+            (item) => item.skipped ?? [],
+          ),
+        };
+      } catch (err) {
+        error.value = err;
+        console.warn("[dedup] failed to apply the bulk stack gesture", err);
+        if (isAmbiguousMutationError(err)) {
+          await reconcileAfterUncertainMutation(err);
         }
-        stackedTargets.push(target);
-        if (last.batch_id) recorded = true;
-        gestureSkipped.push(...(last.skipped ?? []));
+        return {
+          failed: true,
+          uncertain: isAmbiguousMutationError(err),
+          completed: 0,
+          requested: targets.length,
+        };
+      } finally {
+        busy.value = false;
       }
-      commitStackedGroups(stackedTargets);
-      clearSelection();
-      // One receipt per GESTURE, not per group: the batch is one undo step.
-      if (recorded) narrateVerdictOperation();
-      return { ...last, gesture_skipped: gestureSkipped };
     }
     const result = await stackOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
@@ -2196,7 +2198,7 @@ export const useDedupStore = defineStore("dedup", () => {
       : result;
   }
 
-  async function stackOne(group, { batchId, deferCommit = false } = {}) {
+  async function stackOne(group, { batchId } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
@@ -2209,7 +2211,7 @@ export const useDedupStore = defineStore("dedup", () => {
         excludedPictureIds: effectiveExcludedFor(group),
         batchId,
       });
-      if (!deferCommit) commitStackedGroups([group]);
+      commitStackedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
@@ -2226,12 +2228,9 @@ export const useDedupStore = defineStore("dedup", () => {
   /**
    * Apply one settled stack gesture to the visible queue in one assignment.
    *
-   * Bulk requests stay sequential for the server's operation ordering, but a
-   * response is not permission to make the list jump while more selected rows
-   * are still being processed. Successful targets are therefore collected and
-   * committed together after the sequence settles. On a refusal, only the
-   * successes leave; the failed target and every unattempted target remain
-   * selected for an honest retry.
+   * A bulk gesture commits atomically on the server and is reflected here in
+   * one assignment only after that response lands, so selected rows never jump
+   * while their shared transaction is in flight.
    *
    * @param {Object[]} stackedGroups
    */
@@ -2302,49 +2301,53 @@ export const useDedupStore = defineStore("dedup", () => {
     const targets = verdictTargets(group);
     if (targets.length > 1) {
       const gestureId = batchId || newOperationBatchId();
-      let last = null;
-      let recorded = false;
-      const completed = [];
-      for (const target of targets) {
-        last = await keepSeparateOne(target, {
-          batchId: gestureId,
-          deferCommit: true,
-        });
-        if (!last) {
-          commitSeparatedGroups(completed);
-          if (recorded) narrateVerdictOperation();
-          return {
-            failed: true,
-            uncertain: isAmbiguousMutationError(error.value),
-            completed: completed.length,
-            requested: targets.length,
-          };
+      busy.value = true;
+      try {
+        const result = await applyVerdictBatch(
+          targets.map((target) => ({
+            verdict: "keep_separate",
+            signature: target.signature,
+          })),
+          { batchId: gestureId },
+        );
+        commitSeparatedGroups(targets);
+        clearSelection();
+        if (result?.batch_id) narrateVerdictOperation();
+        return {
+          ...result,
+          completed: targets.length,
+          requested: targets.length,
+        };
+      } catch (err) {
+        error.value = err;
+        console.warn(
+          "[dedup] failed to apply the bulk keep-separate gesture",
+          err,
+        );
+        if (isAmbiguousMutationError(err)) {
+          await reconcileAfterUncertainMutation(err);
         }
-        completed.push(target);
-        if (last.batch_id) recorded = true;
+        return {
+          failed: true,
+          uncertain: isAmbiguousMutationError(err),
+          completed: 0,
+          requested: targets.length,
+        };
+      } finally {
+        busy.value = false;
       }
-      commitSeparatedGroups(completed);
-      clearSelection();
-      // A backend that has made keep-separate undoable mirrors the stack
-      // response and carries a batch_id; an older one returns null there and
-      // the gesture stays receipt-less, exactly as before.
-      if (recorded) narrateVerdictOperation();
-      return { ...last, completed: completed.length, requested: targets.length };
     }
     const result = await keepSeparateOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
     return result;
   }
 
-  async function keepSeparateOne(
-    group,
-    { batchId, deferCommit = false } = {},
-  ) {
+  async function keepSeparateOne(group, { batchId } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
       const result = await keepGroupSeparate(group.signature, { batchId });
-      if (!deferCommit) commitSeparatedGroups([group]);
+      commitSeparatedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;

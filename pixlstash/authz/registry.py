@@ -612,6 +612,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "pictures. POST is also blocked for READ tokens"
         ),
     ),
+    ("POST", "/api/v1/dedup/verdicts/batch"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Atomically applies several stack or keep-separate verdicts over "
+            "arbitrary vault pictures; same owner-only boundary as the single "
+            "verdict routes. POST is also blocked for READ tokens"
+        ),
+    ),
     ("POST", "/api/v1/dedup/verdicts/reopen"): RoutePolicy(
         _OWNER,
         justification=(
