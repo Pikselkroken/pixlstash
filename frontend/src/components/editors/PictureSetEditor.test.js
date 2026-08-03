@@ -36,8 +36,9 @@ const AppDialog = {
 };
 const fieldStub = (name) => ({
   name,
-  props: ["modelValue", "disabled", "label", "options", "rows"],
-  template: `<div class="${name}-stub" :data-disabled="disabled ? 'true' : 'false'"></div>`,
+  props: ["modelValue", "disabled", "label", "options", "rows", "multiple"],
+  emits: ["update:modelValue"],
+  template: `<div class="${name}-stub" :data-disabled="disabled ? 'true' : 'false'" :data-multiple="multiple ? 'true' : 'false'"></div>`,
 });
 const AppButton = {
   name: "AppButton",
@@ -156,5 +157,36 @@ describe("PictureSetEditor — unlocked set", () => {
     expect(apiClient.patch).toHaveBeenCalledTimes(1);
     const [, body] = apiClient.patch.mock.calls[0];
     expect(body).toMatchObject({ id: 7, name: "Eval slice", locked: false });
+  });
+
+  it("loads multiple projects and PATCHes the complete edited selection", async () => {
+    const wrapper = mount(PictureSetEditor, {
+      props: {
+        open: true,
+        set: { ...lockedSet, locked: false, project_ids: [1, 2] },
+        backendUrl: "http://x",
+        projects: [
+          { id: 1, name: "One" },
+          { id: 2, name: "Two" },
+          { id: 3, name: "Three" },
+        ],
+      },
+      global: globalOpts,
+    });
+    const projectSelect = wrapper.findComponent({ name: "AppSelect" });
+    expect(projectSelect.attributes("data-multiple")).toBe("true");
+    expect(projectSelect.props("modelValue")).toEqual(["1", "2"]);
+
+    projectSelect.vm.$emit("update:modelValue", ["2", "3"]);
+    await wrapper.vm.$nextTick();
+    const saveBtn = wrapper
+      .findAll("button.app-button-stub")
+      .find((button) => button.text().includes("Save"));
+    await saveBtn.trigger("click");
+
+    expect(apiClient.patch).toHaveBeenCalledTimes(1);
+    const [, body] = apiClient.patch.mock.calls[0];
+    expect(body).toMatchObject({ project_ids: [2, 3] });
+    expect(body).not.toHaveProperty("project_id");
   });
 });

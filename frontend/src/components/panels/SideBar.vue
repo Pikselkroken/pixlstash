@@ -53,6 +53,12 @@ import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
+  entityBelongsToProject,
+  getEntityProjectIds,
+  toggleEntityProjectPatch,
+  withEntityProjectIds,
+} from "../../utils/projectMembership.js";
+import {
   SET_ICONS,
   SET_COLORS,
   SET_ICON_CATEGORIES,
@@ -1112,7 +1118,9 @@ function createSet() {
   // Pick an icon and color not already in use by sibling sets.
   const siblingScope =
     defaultProjectId !== null
-      ? nonReferenceSets.value.filter((s) => s.project_id === defaultProjectId)
+      ? nonReferenceSets.value.filter((s) =>
+          entityBelongsToProject(s, defaultProjectId),
+        )
       : nonReferenceSets.value;
   const usedIcons = new Set(
     siblingScope.map((s) => s.set_icon).filter(Boolean),
@@ -1376,7 +1384,7 @@ const selectedProjectObj = computed(() =>
 const visibleCharacters = computed(() => {
   if (projectViewMode.value === "global") return sortedCharacters.value;
   return sortedCharacters.value.filter(
-    (c) => c.project_id === selectedProjectId.value,
+    (c) => entityBelongsToProject(c, selectedProjectId.value),
   );
 });
 
@@ -1392,7 +1400,7 @@ const projectMenuCharacterGroups = computed(() => {
   if (projectViewMode.value !== "project" || selectedProjectId.value === null)
     return [];
   const all = sortedCharacters.value;
-  const globalItems = all.filter((c) => c.project_id === null);
+  const globalItems = all.filter((c) => getEntityProjectIds(c).length === 0);
   const projectsSorted = [...projects.value].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -1401,7 +1409,7 @@ const projectMenuCharacterGroups = computed(() => {
     groups.push({ label: "Global", projectId: null, items: globalItems });
   }
   for (const proj of projectsSorted) {
-    const items = all.filter((c) => c.project_id === proj.id);
+    const items = all.filter((c) => getEntityProjectIds(c)[0] === proj.id);
     if (items.length > 0) {
       groups.push({ label: proj.name, projectId: proj.id, items });
     }
@@ -1413,7 +1421,7 @@ const projectMenuSetGroups = computed(() => {
   if (projectViewMode.value !== "project" || selectedProjectId.value === null)
     return [];
   const all = nonReferenceSets.value;
-  const globalItems = all.filter((s) => s.project_id === null);
+  const globalItems = all.filter((s) => getEntityProjectIds(s).length === 0);
   const projectsSorted = [...projects.value].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -1422,7 +1430,7 @@ const projectMenuSetGroups = computed(() => {
     groups.push({ label: "Global", projectId: null, items: globalItems });
   }
   for (const proj of projectsSorted) {
-    const items = all.filter((s) => s.project_id === proj.id);
+    const items = all.filter((s) => getEntityProjectIds(s)[0] === proj.id);
     if (items.length > 0) {
       groups.push({ label: proj.name, projectId: proj.id, items });
     }
@@ -1433,7 +1441,7 @@ const projectMenuSetGroups = computed(() => {
 const visibleSets = computed(() => {
   if (projectViewMode.value === "global") return nonReferenceSets.value;
   return nonReferenceSets.value.filter(
-    (s) => s.project_id === selectedProjectId.value,
+    (s) => entityBelongsToProject(s, selectedProjectId.value),
   );
 });
 
@@ -3516,22 +3524,23 @@ function switchToProjectView() {
 
 async function toggleCharacterProjectMembership(charId) {
   const char = characters.value.find((c) => c.id === charId);
-  const newProjectId =
-    char?.project_id === selectedProjectId.value
-      ? null
-      : selectedProjectId.value;
+  if (!char || selectedProjectId.value == null) return;
+  const membershipPatch = toggleEntityProjectPatch(
+    char,
+    selectedProjectId.value,
+  );
   try {
     await patchCharacter(
       charId,
-      { project_id: newProjectId },
+      membershipPatch,
       { baseUrl: props.backendUrl },
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
-      characters.value[idx] = {
-        ...characters.value[idx],
-        project_id: newProjectId,
-      };
+      characters.value[idx] = withEntityProjectIds(
+        characters.value[idx],
+        membershipPatch.project_ids,
+      );
     }
     // Reassignment changes per-project and per-character image counts.
     fetchSidebarData();
@@ -3542,22 +3551,23 @@ async function toggleCharacterProjectMembership(charId) {
 
 async function toggleSetProjectMembership(setId) {
   const set = pictureSets.value.find((s) => s.id === setId);
-  const newProjectId =
-    set?.project_id === selectedProjectId.value
-      ? null
-      : selectedProjectId.value;
+  if (!set || selectedProjectId.value == null) return;
+  const membershipPatch = toggleEntityProjectPatch(
+    set,
+    selectedProjectId.value,
+  );
   try {
     await patchPictureSet(
       setId,
-      { project_id: newProjectId },
+      membershipPatch,
       { baseUrl: props.backendUrl },
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
-      pictureSets.value[idx] = {
-        ...pictureSets.value[idx],
-        project_id: newProjectId,
-      };
+      pictureSets.value[idx] = withEntityProjectIds(
+        pictureSets.value[idx],
+        membershipPatch.project_ids,
+      );
     }
     // Reassignment changes per-project and per-set image counts.
     fetchSidebarData();
@@ -3596,7 +3606,12 @@ function onEntityDragEnd() {
 
 async function moveCharacterToProject(charId, projectId) {
   const char = characters.value.find((c) => c.id === charId);
-  if (!char || char.project_id === projectId) return;
+  const currentProjectIds = getEntityProjectIds(char);
+  if (
+    !char ||
+    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
+  )
+    return;
   try {
     await patchCharacter(
       charId,
@@ -3605,10 +3620,9 @@ async function moveCharacterToProject(charId, projectId) {
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
-      characters.value[idx] = {
-        ...characters.value[idx],
-        project_id: projectId,
-      };
+      characters.value[idx] = withEntityProjectIds(characters.value[idx], [
+        projectId,
+      ]);
     }
     // Reassignment changes per-project and per-character image counts.
     fetchSidebarData();
@@ -3622,7 +3636,12 @@ async function moveCharacterToProject(charId, projectId) {
 
 async function moveSetToProject(setId, projectId) {
   const set = pictureSets.value.find((s) => s.id === setId);
-  if (!set || set.project_id === projectId) return;
+  const currentProjectIds = getEntityProjectIds(set);
+  if (
+    !set ||
+    (currentProjectIds.length === 1 && currentProjectIds[0] === projectId)
+  )
+    return;
   try {
     await patchPictureSet(
       setId,
@@ -3631,10 +3650,9 @@ async function moveSetToProject(setId, projectId) {
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
-      pictureSets.value[idx] = {
-        ...pictureSets.value[idx],
-        project_id: projectId,
-      };
+      pictureSets.value[idx] = withEntityProjectIds(pictureSets.value[idx], [
+        projectId,
+      ]);
     }
     // Reassignment changes per-project and per-set image counts.
     fetchSidebarData();
@@ -5768,8 +5786,9 @@ defineExpose({
                     >
                       <v-icon
                         v-show="
-                          sortedCharacters.filter((c) => c.project_id === p.id)
-                            .length > 0
+                          sortedCharacters.filter((c) =>
+                            entityBelongsToProject(c, p.id),
+                          ).length > 0
                         "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
@@ -5840,7 +5859,10 @@ defineExpose({
                                   class="sidebar-move-menu-item"
                                   :class="{
                                     'sidebar-move-menu-item--checked':
-                                      char.project_id === selectedProjectId,
+                                      entityBelongsToProject(
+                                        char,
+                                        selectedProjectId,
+                                      ),
                                   }"
                                   @click.stop="
                                     toggleCharacterProjectMembership(char.id)
@@ -5850,7 +5872,10 @@ defineExpose({
                                     size="16"
                                     class="sidebar-move-menu-check"
                                     >{{
-                                      char.project_id === selectedProjectId
+                                      entityBelongsToProject(
+                                        char,
+                                        selectedProjectId,
+                                      )
                                         ? "mdi-checkbox-marked"
                                         : "mdi-checkbox-blank-outline"
                                     }}</v-icon
@@ -5865,8 +5890,8 @@ defineExpose({
                     </div>
                     <template v-if="!projectTreePeopleCollapsed.has(p.id)">
                       <div
-                        v-for="char in sortedCharacters.filter(
-                          (c) => c.project_id === p.id,
+                        v-for="char in sortedCharacters.filter((c) =>
+                          entityBelongsToProject(c, p.id),
                         )"
                         :key="char.id"
                         :class="[
@@ -5977,8 +6002,9 @@ defineExpose({
                     >
                       <v-icon
                         v-show="
-                          nonReferenceSets.filter((s) => s.project_id === p.id)
-                            .length > 0
+                          nonReferenceSets.filter((s) =>
+                            entityBelongsToProject(s, p.id),
+                          ).length > 0
                         "
                         size="14"
                         class="sidebar-project-tree-sub-chevron"
@@ -6048,7 +6074,10 @@ defineExpose({
                                   class="sidebar-move-menu-item"
                                   :class="{
                                     'sidebar-move-menu-item--checked':
-                                      pset.project_id === selectedProjectId,
+                                      entityBelongsToProject(
+                                        pset,
+                                        selectedProjectId,
+                                      ),
                                   }"
                                   @click.stop="
                                     toggleSetProjectMembership(pset.id)
@@ -6058,7 +6087,10 @@ defineExpose({
                                     size="16"
                                     class="sidebar-move-menu-check"
                                     >{{
-                                      pset.project_id === selectedProjectId
+                                      entityBelongsToProject(
+                                        pset,
+                                        selectedProjectId,
+                                      )
                                         ? "mdi-checkbox-marked"
                                         : "mdi-checkbox-blank-outline"
                                     }}</v-icon
@@ -6073,8 +6105,8 @@ defineExpose({
                     </div>
                     <template v-if="!projectTreeSetsCollapsed.has(p.id)">
                       <div
-                        v-for="pset in nonReferenceSets.filter(
-                          (s) => s.project_id === p.id,
+                        v-for="pset in nonReferenceSets.filter((s) =>
+                          entityBelongsToProject(s, p.id),
                         )"
                         :key="pset.id"
                         :class="[

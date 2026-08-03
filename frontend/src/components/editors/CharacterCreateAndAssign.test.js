@@ -126,6 +126,59 @@ describe("CharacterEditor unwraps the mutation envelope", () => {
   });
 });
 
+describe("CharacterEditor — multi-project membership", () => {
+  it("loads every project and PATCHes the complete edited selection", async () => {
+    const wrapper = mount(CharacterEditor, {
+      props: {
+        open: true,
+        character: {
+          id: 99,
+          name: "Alice",
+          project_id: 1,
+          project_ids: [1, 2],
+        },
+        backendUrl: "http://x",
+        projects: [
+          { id: 1, name: "One" },
+          { id: 2, name: "Two" },
+          { id: 3, name: "Three" },
+        ],
+      },
+      global: {
+        plugins: [vuetify],
+        stubs: {
+          AppDialog: {
+            props: ["open", "title", "width"],
+            template: "<div><slot /><slot name='footer' /></div>",
+          },
+        },
+      },
+    });
+    await flushPromises();
+
+    const projectCheckboxes = wrapper.findAll(
+      ".app-select__multiple-option input",
+    );
+    expect(projectCheckboxes.map((input) => input.element.checked)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+
+    await projectCheckboxes[0].setValue(false);
+    await projectCheckboxes[2].setValue(true);
+    await wrapper.vm.save();
+    await flushPromises();
+
+    expect(patchCharacter).toHaveBeenCalledTimes(1);
+    expect(patchCharacter.mock.calls[0][1]).toMatchObject({
+      id: 99,
+      project_ids: [2, 3],
+    });
+    expect(patchCharacter.mock.calls[0][1]).not.toHaveProperty("project_id");
+  });
+});
+
 // ── The two host handlers, driven by the payload the editor really emits ─────
 
 /** Reproduces ImageGrid.handleCreatePersonSaved's assignment branch. */

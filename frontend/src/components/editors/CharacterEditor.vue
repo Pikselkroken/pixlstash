@@ -28,8 +28,9 @@
       />
       <AppSelect
         v-model="projectSelection"
-        label="Project"
+        label="Projects"
         :options="projectOptions"
+        :multiple="true"
       />
       <div v-if="character?.id" class="ref-pictures-section">
         <div class="ref-pictures-header">
@@ -110,6 +111,7 @@ import {
 import { listPicturesByIds } from "../../api/pictures";
 import { useSubmitGuard } from "../../composables/useSubmitGuard";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { getEntityProjectIds } from "../../utils/projectMembership";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -128,20 +130,14 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
 });
 
-// Native <select> carries string values, so map the "no project" sentinel to an
-// empty string and back to a null project_id.
-const projectOptions = computed(() => [
-  { value: "", label: "— No project —" },
-  ...props.projects.map((p) => ({ value: String(p.id), label: p.name })),
-]);
+const projectOptions = computed(() =>
+  props.projects.map((p) => ({ value: String(p.id), label: p.name })),
+);
 
 const projectSelection = computed({
-  get: () =>
-    localCharacter.value.project_id == null
-      ? ""
-      : String(localCharacter.value.project_id),
+  get: () => localCharacter.value.project_ids.map(String),
   set: (v) => {
-    localCharacter.value.project_id = v === "" ? null : Number(v);
+    localCharacter.value.project_ids = v.map(Number);
   },
 });
 
@@ -152,7 +148,7 @@ const localCharacter = ref({
   name: "",
   description: "",
   extra_metadata: "",
-  project_id: null,
+  project_ids: [],
 });
 
 const nameInputRef = ref(null);
@@ -224,7 +220,7 @@ watch(
         name: newChar.name || "",
         description: newChar.description || "",
         extra_metadata: newChar.extra_metadata || "",
-        project_id: newChar.project_id ?? null,
+        project_ids: getEntityProjectIds(newChar),
       };
     } else {
       localCharacter.value = {
@@ -232,7 +228,7 @@ watch(
         name: "",
         description: "",
         extra_metadata: "",
-        project_id: null,
+        project_ids: [],
       };
     }
   },
