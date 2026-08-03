@@ -1,5 +1,10 @@
 import { onUnmounted, watch } from "vue";
-import { API_BASE_URL, appendShareToken, isReadOnly } from "../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+  toBackendWebSocketUrl,
+} from "../utils/apiClient";
 import { useGridRealtimeSync } from "./useGridRealtimeSync";
 import { useWsStore } from "../stores/useWsStore";
 import { useGridStore } from "../stores/useGridStore";
@@ -66,12 +71,13 @@ export function useUpdatesSocket({
 
   function buildUpdatesSocketUrl() {
     if (!BACKEND_URL) return "";
-    const wsBase = BACKEND_URL.replace(/^http/i, "ws");
     // The backend authenticates the WebSocket handshake (the HTTP auth
     // middleware does not cover WebSockets). A full session authenticates via
     // the same-origin session cookie; a share/read-only session has no cookie,
     // so append its READ token as ?token= the same way HTTP requests do.
-    return appendShareToken(`${wsBase}/ws/updates`);
+    return appendShareToken(
+      toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`),
+    );
   }
 
   // A `pictures_changed` event may carry a `fields` list naming the columns that

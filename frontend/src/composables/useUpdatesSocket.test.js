@@ -39,6 +39,7 @@ vi.mock("../utils/apiClient", async (importOriginal) => {
 });
 
 import { useUpdatesSocket } from "./useUpdatesSocket";
+import { API_BASE_URL } from "../utils/apiClient";
 
 /** The last socket the composable opened, so a test can push a frame at it. */
 let socket = null;
@@ -164,6 +165,17 @@ describe("useUpdatesSocket: routing to the duplicate queue", () => {
 });
 
 describe("useUpdatesSocket: connection lifecycle", () => {
+  it("opens the socket on the configured backend origin", () => {
+    connect();
+    const backend = new URL(API_BASE_URL);
+    const opened = new URL(socket.url);
+    expect(opened.protocol).toBe(
+      backend.protocol === "https:" ? "wss:" : "ws:",
+    );
+    expect(opened.host).toBe(backend.host);
+    expect(opened.pathname).toBe("/api/v1/ws/updates");
+  });
+
   it("does not reconnect after an intentional disconnect", async () => {
     vi.useFakeTimers();
     connect();

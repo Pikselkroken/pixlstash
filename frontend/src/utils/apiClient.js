@@ -103,11 +103,15 @@ function operationBatchHeaders(batchId) {
  * that bypass the axios interceptor.
  */
 function appendShareToken(url) {
-  if (!_shareToken || !url) return url;
+  if (!_shareToken || !url || !backendCredentialTarget(url, {
+    allowWebSocket: true,
+  })) return url;
   // Avoid double-appending if the token is already in the URL.
   if (url.includes(`token=${encodeURIComponent(_shareToken)}`)) return url;
-  const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}token=${encodeURIComponent(_shareToken)}`;
+  const [withoutHash, ...hashParts] = url.split('#');
+  const sep = withoutHash.includes('?') ? '&' : '?';
+  const hash = hashParts.length ? `#${hashParts.join('#')}` : '';
+  return `${withoutHash}${sep}token=${encodeURIComponent(_shareToken)}${hash}`;
 }
 
 const DEFAULT_BACKEND_PORT = 9537;
@@ -136,6 +140,53 @@ function deriveBackendUrl() {
 const resolvedBaseUrl = deriveBackendUrl();
 const apiBaseUrl = `${resolvedBaseUrl}${API_PREFIX}`;
 
+/**
+ * Parse a request target against the configured backend and decide whether it
+ * is allowed to carry PixlStash credentials. URL parsing, not string matching,
+ * is load-bearing here: suffix hosts, userinfo and alternate ports must never
+ * inherit the backend's share token or per-tab client id.
+ *
+ * Relative references resolve against the configured backend origin. Absolute
+ * and protocol-relative references must have exactly that origin. WebSocket
+ * schemes are accepted only for browser-native socket URLs, where ws maps to
+ * http and wss maps to https for the origin comparison.
+ */
+function backendCredentialTarget(rawUrl, {allowWebSocket = false} = {}) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
+
+  let backend;
+  let target;
+  try {
+    const documentOrigin = typeof window !== 'undefined'
+      ? window.location.origin
+      : undefined;
+    backend = new URL(resolvedBaseUrl, documentOrigin);
+    target = new URL(rawUrl, `${backend.origin}/`);
+  } catch {
+    return null;
+  }
+
+  if (!['http:', 'https:'].includes(backend.protocol) ||
+      backend.username || backend.password || target.username ||
+      target.password) {
+    return null;
+  }
+
+  if (allowWebSocket && ['ws:', 'wss:'].includes(target.protocol)) {
+    target.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+  }
+  if (!['http:', 'https:'].includes(target.protocol)) return null;
+  return target.origin === backend.origin ? target : null;
+}
+
+/** Convert a trusted backend HTTP URL into its corresponding socket URL. */
+function toBackendWebSocketUrl(rawUrl) {
+  const target = backendCredentialTarget(rawUrl);
+  if (!target) return '';
+  target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+  return target.toString();
+}
+
 // Axios instance
 const apiClient = axios.create({
   baseURL: resolvedBaseUrl,
@@ -162,24 +213,16 @@ apiClient.interceptors.request.use((config) => {
     return config;
   }
 
-  // For fully-qualified URLs, only inject the token / client id when the
-  // request targets the same origin (skip external hosts like ComfyUI to
-  // prevent leakage), then return early — the URL needs no path rewriting.
-  if (/^https?:\/\//i.test(rawUrl)) {
-    const isSameOrigin = typeof window !== 'undefined' &&
-        rawUrl.startsWith(window.location.origin);
-    if (isSameOrigin) {
-      if (_shareToken) {
-        config.params = {...(config.params || {}), token: _shareToken};
-      }
-      if (_clientId && isMutatingRequest(config)) {
-        config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
-      }
-    }
+  const target = backendCredentialTarget(rawUrl);
+  if (!target) {
+    // Axios inherits `withCredentials: true` from this instance. Disable it on
+    // every untrusted or malformed absolute target as a second fail-closed
+    // boundary; the browser must not attach destination cookies either.
+    config.withCredentials = false;
     return config;
   }
 
-  // Inject share token into relative API requests.
+  config.withCredentials = true;
   if (_shareToken) {
     config.params = {...(config.params || {}), token: _shareToken};
   }
@@ -188,6 +231,14 @@ apiClient.interceptors.request.use((config) => {
   if (_clientId && isMutatingRequest(config)) {
     config.headers = {...(config.headers || {}), 'X-Client-Id': _clientId};
   }
+
+  // Fully-qualified and protocol-relative backend URLs already carry their
+  // complete path. Only relative API references need the API prefix.
+  const trimmedUrl = rawUrl.trim();
+  const isAbsoluteReference =
+      /^[a-z][a-z\d+.-]*:/i.test(trimmedUrl) ||
+      /^[\\/]{2}/.test(trimmedUrl);
+  if (isAbsoluteReference) return config;
 
   if (rawUrl.startsWith(API_PREFIX)) {
     return config;
@@ -297,5 +348,6 @@ export {
   operationBatchHeaders,
   sessionContext,
   setRequestClientId,
+  toBackendWebSocketUrl,
   apiBaseUrl as API_BASE_URL,
 };
