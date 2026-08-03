@@ -41,18 +41,30 @@ import { useOperationStore } from "../../stores/useOperationStore";
 // rendered inline (rather than teleported) while the menu is open.
 const VMenuStub = {
   name: "VMenu",
-  props: { modelValue: { type: Boolean, default: false } },
+  props: {
+    modelValue: { type: Boolean, default: false },
+    location: { type: String, default: "" },
+    origin: { type: String, default: "" },
+  },
   emits: ["update:modelValue"],
   setup(props, { slots, emit }) {
     return () =>
-      h("div", { class: "v-menu-stub" }, [
-        slots.activator?.({
-          props: {
-            onClick: () => emit("update:modelValue", !props.modelValue),
-          },
-        }),
-        props.modelValue ? slots.default?.() : null,
-      ]);
+      h(
+        "div",
+        {
+          class: "v-menu-stub",
+          "data-location": props.location,
+          "data-origin": props.origin,
+        },
+        [
+          slots.activator?.({
+            props: {
+              onClick: () => emit("update:modelValue", !props.modelValue),
+            },
+          }),
+          props.modelValue ? slots.default?.() : null,
+        ],
+      );
   },
 };
 
@@ -183,6 +195,19 @@ describe("UndoControl — enablement", () => {
 });
 
 describe("UndoControl — the History popover", () => {
+  it("anchors its viewport-clamped panel and caret to the History button", async () => {
+    const { wrapper } = await mountOpen([op({ id: 13 })]);
+    const menu = wrapper.find(".v-menu-stub");
+
+    // History lives at the toolbar's right edge. End anchoring lets Vuetify
+    // keep the wide panel on-screen without leaving the caret at panel-left.
+    expect(menu.attributes("data-location")).toBe("bottom end");
+    expect(menu.attributes("data-origin")).toBe("top end");
+    expect(wrapper.find(".tbm-caret").classes()).toContain(
+      "tbm-caret--icon-center-end",
+    );
+  });
+
   it("lists the stack newest first with the redo side above it", async () => {
     const { wrapper } = await mountOpen([
       op({ id: 13, status: "undone", summary: "Scored" }),

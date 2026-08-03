@@ -234,8 +234,8 @@ defineExpose({
       <v-menu
         v-model="menuOpen"
         :close-on-content-click="false"
-        location="bottom start"
-        origin="top start"
+        location="bottom end"
+        origin="top end"
         :offset="8"
         transition="scale-transition"
         :activator-props="{ 'aria-haspopup': 'dialog' }"
@@ -258,7 +258,7 @@ defineExpose({
           aria-label="History"
           @mouseleave="previewId = null"
         >
-          <span class="tbm-caret tbm-caret--start"></span>
+          <span class="tbm-caret tbm-caret--icon-center-end"></span>
           <div class="tbm-header">
             <v-icon size="18" class="tbm-header-icon">mdi-history</v-icon>
             <span class="tbm-title">History</span>

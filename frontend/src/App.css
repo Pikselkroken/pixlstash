@@ -545,6 +545,12 @@ kbd {
 .tbm-caret--end {
   right: 22px;
 }
+/* A 32px icon activator whose panel is end-aligned. Keep the panel's connected
+   viewport clamping, but point the caret at the activator's 16px centre rather
+   than the 22px inset used by wider toolbar buttons. */
+.tbm-caret--icon-center-end {
+  right: calc(16px - 5.5px);
+}
 
 .tbm-header {
   display: flex;

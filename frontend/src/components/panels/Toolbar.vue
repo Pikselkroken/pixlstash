@@ -391,7 +391,7 @@
             </button>
           </template>
           <div class="tbm gb-search-panel">
-            <span class="tbm-caret tbm-caret--end"></span>
+            <span class="tbm-caret tbm-caret--icon-center-end"></span>
             <div class="tbm-header">
               <v-icon size="18" class="tbm-header-icon">mdi-magnify</v-icon>
               <span class="tbm-title">Search</span>
