@@ -435,6 +435,27 @@ def test_assign_face_face_ids_branch_denied(env, monkeypatch):
     )
 
 
+def test_assign_authoritative_face_checks_actual_face_owner(env, monkeypatch):
+    """A forged in-scope picture_id cannot launder an out-of-scope face_id."""
+    server, client, picture_ids, character_id = env
+    in_scope, out_of_scope = picture_ids[0], picture_ids[1]
+    _scope_to(monkeypatch, [crud_module], None)
+    created = client.post(
+        f"{API}/pictures/{out_of_scope}/face",
+        json={"bbox": [1, 1, 20, 20], "frame_index": 0},
+    )
+    assert created.status_code == 200, created.text
+    out_face_id = created.json()["id"]
+
+    _scope_to(monkeypatch, [characters_faces_module], {in_scope})
+    response = client.post(
+        f"{API}/characters/{character_id}/faces",
+        json={"face_assignments": [{"picture_id": in_scope, "face_id": out_face_id}]},
+    )
+
+    assert response.status_code == 403, response.text
+
+
 def test_remove_character_face_ids_branch_denied(env, monkeypatch):
     server, client, picture_ids, character_id = env
     in_scope, out_of_scope = picture_ids[0], picture_ids[1]

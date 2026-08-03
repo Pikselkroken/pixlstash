@@ -1587,6 +1587,7 @@ def bulk_auto_stack_in_session(
     batch_id = batch_id or new_batch_id()
     results: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    event_picture_ids: set[int] = set()
     for group in groups:
         try:
             result = apply_stack_verdict_in_session(
@@ -1634,6 +1635,10 @@ def bulk_auto_stack_in_session(
             )
             continue
         results.append({**result.as_dict(), "outcome": BULK_REASON_APPLIED})
+        # A group can name one member of an already-existing stack. Folding that
+        # stack reparents and renumbers every sibling, so aggregate the verdict's
+        # complete affected set rather than reconstructing it from picture_ids.
+        event_picture_ids.update(result.event_picture_ids)
     prune_stale_groups_in_session(session)
     logger.info(
         "[dedup-verdict] auto-stacked %d exact group(s) under batch %s "
@@ -1655,6 +1660,8 @@ def bulk_auto_stack_in_session(
         "failures": failures,
         "blocked": sum(1 for f in failures if f["outcome"] == BULK_REASON_BLOCKED),
         "failed": sum(1 for f in failures if f["outcome"] == BULK_REASON_FAILED),
+        # Wrapper-only broadcast plumbing; removed before the API response.
+        "event_picture_ids": sorted(event_picture_ids),
     }
 
 
@@ -1797,16 +1804,11 @@ def bulk_auto_stack(
         origin_client_id,
     )
     if not report.get("dry_run"):
-        # One announcement over every applied group's members. The per-result
-        # dicts carry the group members, not the stack-expanded set; a folded
-        # pre-existing stack's siblings are the (rare, exact-tier) gap.
+        event_picture_ids = report.pop("event_picture_ids", [])
+        # One post-commit announcement over the full stack-expanded affected set.
         _notify_pictures_changed(
             vault,
-            [
-                pid
-                for item in report.get("results", [])
-                for pid in item.get("picture_ids", [])
-            ],
+            event_picture_ids,
             origin_client_id,
             source,
         )

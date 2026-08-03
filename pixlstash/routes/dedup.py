@@ -1008,7 +1008,11 @@ class ScanProgressModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`idle`, `pending`, `running`, `complete` or `failed`."
+        description=(
+            "`idle`, `pending`, `running`, `complete`, `partial` or `failed`. "
+            "`partial` means bounded near-scan work omitted comparisons and "
+            "the prior complete near evidence was preserved."
+        )
     )
     scanned_pictures: int = Field(description="Pictures covered so far.")
     total_pictures: int = Field(description="Pictures in scope.")
@@ -1018,7 +1022,8 @@ class ScanProgressModel(BaseModel):
     total_buckets: int = Field(description="Tier-2 candidate buckets in total.")
     groups_found: int = Field(description="Unresolved groups this scan produced.")
     error: Optional[str] = Field(
-        default=None, description="Why the scan failed, when it did."
+        default=None,
+        description="Why the scan failed or is partial, when applicable.",
     )
 
 

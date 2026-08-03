@@ -110,7 +110,7 @@ def _create_picture_imports(
     """
     Given a list of (img_bytes, ext), create Picture objects for new images,
     skipping content already in the vault (live OR scrapheaped) by pixel_sha.
-    Returns (shas, existing_map, scrapheaped_map, new_pictures)
+    Returns (fingerprints, existing_map, scrapheaped_map, new_picture_map)
 
     **A scrapheaped match is skipped too, and reported separately.** This call
     site used to ask ``Picture.find(..., pixel_shas=shas)``, whose
@@ -130,49 +130,63 @@ def _create_picture_imports(
             to disk. Receives no arguments. Used for incremental progress tracking.
 
     Returns:
-        ``(shas, existing_map, scrapheaped_map, new_pictures)``. The two maps are
-        ``pixel_sha -> ShaMatch`` and are disjoint; a sha in neither is new and
-        has a freshly created ``Picture`` in ``new_pictures``.
+        ``(fingerprints, existing_map, scrapheaped_map, new_picture_map)``.
+        Maps use ``(sampled_sha, size_bytes, full_sha)`` keys, so sampled-hash
+        collisions remain distinct throughout a batch. ``new_picture_map`` has
+        one Picture per unique new file; repeated identical uploads share it.
     """
 
-    def create_sha(img_bytes):
-        return ImageUtils.calculate_hash_from_bytes(img_bytes)
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        shas = list(
-            executor.map(create_sha, (img_bytes for img_bytes, *_ in uploaded_files))
+    def create_fingerprint(img_bytes):
+        return (
+            ImageUtils.calculate_hash_from_bytes(img_bytes),
+            len(img_bytes),
+            ImageUtils.calculate_full_hash_from_bytes(img_bytes),
         )
 
-    existing_map, scrapheaped_map = server.vault.db.run_immediate_read_task(
-        import_dedup_service.partition_by_pixel_sha_in_session, shas
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        fingerprints = list(
+            executor.map(
+                create_fingerprint,
+                (img_bytes for img_bytes, *_ in uploaded_files),
+            )
+        )
+
+    candidates = server.vault.db.run_immediate_read_task(
+        import_dedup_service.load_match_candidates_in_session,
+        [(sampled, size) for sampled, size, _full in fingerprints],
+    )
+    existing_map, scrapheaped_map = import_dedup_service.partition_confirmed_matches(
+        candidates, fingerprints, server.vault.image_root
     )
 
-    importable = [
-        (entry, sha)
-        for (entry, sha) in zip(uploaded_files, shas)
-        if sha not in existing_map and sha not in scrapheaped_map
-    ]
-
-    if importable:
-        new_pictures = []
-        for file_entry, sha in importable:
+    new_picture_map = {}
+    for file_entry, fingerprint in zip(uploaded_files, fingerprints):
+        if (
+            fingerprint in existing_map
+            or fingerprint in scrapheaped_map
+            or fingerprint in new_picture_map
+        ):
+            continue
+        sampled_sha, _size_bytes, _full_sha = fingerprint
+        try:
             img_bytes, ext, original_name = file_entry
             pic_uuid = str(uuid.uuid4()) + ext
             logger.debug(f"Importing picture from uploaded bytes as id={pic_uuid}")
-            pic = ImageUtils.create_picture_from_bytes(
+            new_picture_map[fingerprint] = ImageUtils.create_picture_from_bytes(
                 image_root_path=dest_folder,
                 image_bytes=img_bytes,
                 picture_uuid=pic_uuid,
-                pixel_sha=sha,
+                pixel_sha=sampled_sha,
                 original_file_name=original_name,
             )
-            new_pictures.append(pic)
             if progress_callback is not None:
                 progress_callback()
-    else:
-        new_pictures = []
+        except Exception:
+            # Preserve the existing failure behaviour: creation errors escape to
+            # the task wrapper, which reports the import failed.
+            raise
 
-    return shas, existing_map, scrapheaped_map, new_pictures
+    return fingerprints, existing_map, scrapheaped_map, new_picture_map
 
 
 def _normalise_sidecar_stem(filename: str) -> str:

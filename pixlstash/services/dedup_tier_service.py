@@ -1451,6 +1451,8 @@ class NearBucket:
     kind: str
     key: str
     picture_ids: tuple[int, ...]
+    oversized: bool = False
+    source_member_count: int = 0
 
 
 def _bucket_rows(session: Session, scope: DedupScope) -> list[tuple]:
@@ -1516,25 +1518,32 @@ def build_near_buckets(
         if len(ordered) <= MAX_BUCKET_MEMBERS:
             buckets.append(NearBucket(kind=kind, key=key, picture_ids=tuple(ordered)))
             continue
-        # Oversized bucket: split into contiguous shards. Neighbouring ids come
-        # from the same import run, so a shard boundary rarely separates a real
-        # pair, and the alternative (dropping the bucket) would hide duplicates.
-        logger.info(
-            "[dedup-tier2] bucket %s=%s has %d members; splitting into shards of %d",
+        # Oversized bucket: split into bounded contiguous shards, but overlap the
+        # preceding boundary member. Without that overlap a 4,001-member bucket
+        # produced a 4,000-member shard plus a discarded singleton, so the last
+        # member was not compared at all. The overlap cannot recover every
+        # cross-shard pair, so the scan is reported as partial by its task.
+        logger.warning(
+            "[dedup-tier2] bucket %s=%s has %d members; splitting into overlapping "
+            "shards of %d and reporting the scan partial because cross-shard "
+            "comparisons are incomplete",
             kind,
             key,
             len(ordered),
             MAX_BUCKET_MEMBERS,
         )
-        for start in range(0, len(ordered), MAX_BUCKET_MEMBERS):
+        stride = MAX_BUCKET_MEMBERS - 1
+        for shard_index, start in enumerate(range(0, len(ordered), stride)):
             shard = ordered[start : start + MAX_BUCKET_MEMBERS]
             if len(shard) < 2:
                 continue
             buckets.append(
                 NearBucket(
                     kind=kind,
-                    key=f"{key}#{start // MAX_BUCKET_MEMBERS}",
+                    key=f"{key}#{shard_index}",
                     picture_ids=tuple(shard),
+                    oversized=True,
+                    source_member_count=len(ordered),
                 )
             )
     buckets.sort(key=lambda bucket: (bucket.kind, bucket.key))
@@ -1557,7 +1566,10 @@ def _popcount64(values: np.ndarray) -> np.ndarray:
 
 
 def near_pairs_in_bucket(
-    session: Session, bucket: NearBucket, threshold: float
+    session: Session,
+    bucket: NearBucket,
+    threshold: float,
+    status: Optional[dict[str, Any]] = None,
 ) -> list[tuple[int, int, float]]:
     """Compare perceptual hashes **within one bucket** and return the near pairs.
 
@@ -1665,6 +1677,15 @@ def near_pairs_in_bucket(
             truncated_at_offset,
             len(kept) - 1,
             len(kept),
+        )
+    if status is not None:
+        status.update(
+            {
+                "truncated": truncated_at_offset is not None,
+                "truncated_at_offset": truncated_at_offset,
+                "member_count": len(kept),
+                "pair_count": len(pairs),
+            }
         )
     return pairs
 
@@ -1923,6 +1944,55 @@ def prune_stale_groups_in_session(session: Session) -> int:
     if removed:
         session.commit()
         logger.info("[dedup] pruned %d stale group(s)", removed)
+    return removed
+
+
+def retire_obsolete_scan_groups_in_session(
+    session: Session,
+    scan_id: int,
+    signatures_by_tier: dict[str, set[str]],
+    complete_tiers: Iterable[str],
+) -> int:
+    """Retire evidence absent from one successfully completed scan generation.
+
+    ``DedupScan`` rows are reused, so a schema generation column would be
+    redundant: the running task carries this generation's final signatures and
+    reconciles only at successful finalisation. ``DedupGroup.scan_id`` limits
+    deletion to evidence last produced by this same scope; a global or sibling
+    scoped scan that subsequently refreshed a row owns it and cannot be deleted
+    here. Failed/cancelled tasks never call this function, and partial tiers are
+    omitted from ``complete_tiers`` so their prior complete evidence survives.
+
+    Deletions are left uncommitted so the caller can commit them atomically with
+    the terminal scan status.
+    """
+    completed = {str(tier) for tier in complete_tiers}
+    if not completed:
+        return 0
+    current = {
+        tier: {str(signature) for signature in signatures_by_tier.get(tier, set())}
+        for tier in completed
+    }
+    rows = session.exec(
+        select(DedupGroup).where(
+            DedupGroup.scan_id == int(scan_id),
+            DedupGroup.tier.in_(sorted(completed)),
+        )
+    ).all()
+    removed = 0
+    for row in rows:
+        if row.signature in current.get(row.tier, set()):
+            continue
+        session.delete(row)
+        removed += 1
+    if removed:
+        logger.info(
+            "[dedup-scan] retiring %d obsolete group(s) from scan %s across "
+            "complete tiers %s",
+            removed,
+            scan_id,
+            sorted(completed),
+        )
     return removed
 
 
@@ -3090,6 +3160,7 @@ __all__ = [
     "queue_response",
     "request_scan",
     "request_scan_in_session",
+    "retire_obsolete_scan_groups_in_session",
     "run_scan_now_in_session",
     "scan_progress",
     "scan_progress_in_session",

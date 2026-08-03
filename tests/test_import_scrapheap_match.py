@@ -35,6 +35,8 @@ from pixlstash.db_models import (
     PictureSetMember,
 )
 from pixlstash.server import Server
+from pixlstash.services.comfyui_service import _import_comfyui_outputs
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 
 
@@ -47,6 +49,14 @@ def _png_bytes(color=(100, 149, 237)) -> bytes:
     img = Image.new("RGB", (48, 48), color=color)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _bmp_bytes(color=(100, 149, 237), size=(48, 48)) -> bytes:
+    """Uncompressed images make equal/different byte-size cases deterministic."""
+    img = Image.new("RGB", size, color=color)
+    buf = io.BytesIO()
+    img.save(buf, format="BMP")
     return buf.getvalue()
 
 
@@ -654,3 +664,104 @@ def test_staging_status_is_owner_only_and_the_owner_still_polls_it(owner_server)
     r = owner.get(url)
     assert r.status_code == 200, r.text
     assert r.json()["stage"] == "completed", r.json()
+
+
+# ---------------------------------------------------------------------------
+# Sampled SHA is a candidate key, never final file identity
+# ---------------------------------------------------------------------------
+
+
+def test_one_shot_same_size_sampled_collision_imports_both(owner_server, monkeypatch):
+    srv, client = owner_server
+    first = _bmp_bytes((1, 2, 3))
+    second = _bmp_bytes((4, 5, 6))
+    assert len(first) == len(second)
+    monkeypatch.setattr(
+        ImageUtils,
+        "calculate_hash_from_bytes",
+        staticmethod(lambda _data: "forced-sampled-collision"),
+    )
+
+    status = _one_shot_import(client, [("a.bmp", first), ("b.bmp", second)])
+
+    assert status["imported_count"] == 2, status
+    assert status["duplicate_count"] == 0, status
+    assert _row_count(srv) == 2
+
+
+def test_one_shot_different_size_sampled_collision_imports_both(
+    owner_server, monkeypatch
+):
+    srv, client = owner_server
+    first = _bmp_bytes((7, 8, 9), (48, 48))
+    second = _bmp_bytes((7, 8, 9), (49, 48))
+    assert len(first) != len(second)
+    monkeypatch.setattr(
+        ImageUtils,
+        "calculate_hash_from_bytes",
+        staticmethod(lambda _data: "forced-sampled-collision"),
+    )
+
+    status = _one_shot_import(client, [("a.bmp", first), ("b.bmp", second)])
+
+    assert status["imported_count"] == 2, status
+    assert status["duplicate_count"] == 0, status
+    assert _row_count(srv) == 2
+
+
+def test_full_hash_mismatch_does_not_offer_scrapheap_restore(owner_server, monkeypatch):
+    srv, client = owner_server
+    old = _bmp_bytes((10, 20, 30))
+    different = _bmp_bytes((30, 20, 10))
+    assert len(old) == len(different)
+    monkeypatch.setattr(
+        ImageUtils,
+        "calculate_hash_from_bytes",
+        staticmethod(lambda _data: "forced-sampled-collision"),
+    )
+
+    assert _one_shot_import(client, [("old.bmp", old)])["imported_count"] == 1
+    _scrapheap(client, _picture_ids(srv)[0])
+    status = _one_shot_import(client, [("different.bmp", different)])
+
+    assert status["imported_count"] == 1, status
+    assert status["scrapheaped_count"] == 0, status
+    assert status["scrapheaped_picture_ids"] == [], status
+    assert _row_count(srv) == 2
+
+
+def test_staging_and_comfy_batches_keep_sampled_collisions_distinct(
+    owner_server, monkeypatch
+):
+    srv, client = owner_server
+    first = _bmp_bytes((40, 50, 60))
+    second = _bmp_bytes((60, 50, 40))
+    assert len(first) == len(second)
+    monkeypatch.setattr(
+        ImageUtils,
+        "calculate_hash_from_file_path",
+        staticmethod(lambda _path: "forced-staging-collision"),
+    )
+
+    status = _staging_import(client, [("a.bmp", first), ("b.bmp", second)])
+    assert status["imported_count"] == 2, status
+    assert status["duplicate_count"] == 0, status
+
+    monkeypatch.setattr(
+        ImageUtils,
+        "calculate_hash_from_bytes",
+        staticmethod(lambda _data: "forced-comfy-collision"),
+    )
+    third = _bmp_bytes((70, 80, 90))
+    fourth = _bmp_bytes((90, 80, 70))
+    new_ids, duplicate_ids = _import_comfyui_outputs(
+        srv, [(third, ".bmp"), (fourth, ".bmp")]
+    )
+    assert len(new_ids) == 2
+    assert duplicate_ids == []
+
+    repeated_new, repeated_duplicates = _import_comfyui_outputs(
+        srv, [(third, ".bmp"), (fourth, ".bmp")]
+    )
+    assert repeated_new == []
+    assert sorted(repeated_duplicates) == sorted(new_ids)

@@ -34,6 +34,7 @@ from pixlstash.database import DBPriority
 from pixlstash.db_models.dedup import (
     SCAN_COMPLETE,
     SCAN_FAILED,
+    SCAN_PARTIAL,
     SCAN_PENDING,
     SCAN_RUNNING,
     DedupScan,
@@ -97,6 +98,13 @@ class DedupScanTask(BaseTask):
             )
             total_pictures = int(initial["total_pictures"])
             found = int(initial["groups_found"])
+            signatures_by_tier: dict[str, set[str]] = {
+                DedupTier.EXACT.value: set(initial.get("exact_signatures", [])),
+                DedupTier.NEAR.value: set(),
+                DedupTier.EMBEDDING.value: set(),
+            }
+            incomplete_tiers: set[str] = set()
+            partial_reasons: list[str] = []
             # Initialise for every persisted tier combination. The public
             # TierPolicy currently requires embedding => near, but task resume
             # must not turn that API invariant into an unbound local if an old
@@ -115,6 +123,12 @@ class DedupScanTask(BaseTask):
                 # distinct setup/final phases and never reports terminal early.
                 total_phases = 3 + len(buckets) + int(policy.embedding_enabled)
                 self._set_task_progress(2, total_phases)
+                if any(bucket.oversized for bucket in buckets):
+                    incomplete_tiers.add(DedupTier.NEAR.value)
+                    partial_reasons.append(
+                        "near scan used overlapping shards for oversized buckets; "
+                        "cross-shard comparisons are incomplete"
+                    )
                 seen_pictures: set[int] = set()
                 pair_cache: dict[tuple[int, int], float] = {}
                 pair_cap_reported = False
@@ -134,6 +148,12 @@ class DedupScanTask(BaseTask):
                     )
                     found = int(result["groups_found"])
                     pair_cap_reported = bool(result["pair_cap_reported"])
+                    signatures_by_tier[DedupTier.NEAR.value] = set(
+                        result["near_signatures"]
+                    )
+                    if result["incomplete"]:
+                        incomplete_tiers.add(DedupTier.NEAR.value)
+                        partial_reasons.extend(result["partial_reasons"])
                     self._set_task_progress(2 + index, total_phases)
 
             if policy.embedding_enabled:
@@ -160,13 +180,17 @@ class DedupScanTask(BaseTask):
                 for start_index in range(
                     0, len(components), EMBEDDING_COMPONENTS_PER_SLICE
                 ):
-                    found += self._run_low_slice(
+                    persisted = self._run_low_slice(
                         DedupScanTask._persist_embedding_slice,
                         self._scan_id,
                         components[
                             start_index : start_index + EMBEDDING_COMPONENTS_PER_SLICE
                         ],
                         policy,
+                    )
+                    found += int(persisted["unresolved"])
+                    signatures_by_tier[DedupTier.EMBEDDING.value].update(
+                        persisted["signatures"]
                     )
                 self._set_task_progress(total_phases - 1, total_phases)
 
@@ -176,6 +200,9 @@ class DedupScanTask(BaseTask):
                 total_pictures,
                 found,
                 scope.key,
+                signatures_by_tier,
+                incomplete_tiers,
+                partial_reasons,
             )
             self._set_task_progress(self._total_count, self._total_count)
         except _DedupScanCancelled:
@@ -286,7 +313,7 @@ class DedupScanTask(BaseTask):
             return
         # A cancellation racing with the final slice must not regress a scan
         # whose complete result has already committed.
-        if scan.status == SCAN_COMPLETE:
+        if scan.status in (SCAN_COMPLETE, SCAN_PARTIAL):
             return
         scan.status = SCAN_PENDING
         scan.error = None
@@ -339,6 +366,7 @@ class DedupScanTask(BaseTask):
             "scope_id": scope.scope_id,
             "total_pictures": total_pictures,
             "groups_found": found,
+            "exact_signatures": [group.signature for group in exact_groups],
         }
 
     @staticmethod
@@ -372,8 +400,9 @@ class DedupScanTask(BaseTask):
     ) -> dict:
         """Compare and persist one capped bucket; all carried state is plain."""
         touched: set[int] = set()
+        bucket_status: dict = {}
         for a, b, similarity in dedup_tier_service.near_pairs_in_bucket(
-            session, bucket, policy.threshold
+            session, bucket, policy.threshold, bucket_status
         ):
             key = (a, b)
             if key not in pair_cache and len(pair_cache) >= (
@@ -398,6 +427,7 @@ class DedupScanTask(BaseTask):
         seen_pictures.update(bucket.picture_ids)
 
         near_groups = 0
+        groups = []
         if pair_cache:
             groups = dedup_tier_service.groups_from_pairs(
                 session,
@@ -422,9 +452,25 @@ class DedupScanTask(BaseTask):
         scan.updated_at = datetime.utcnow()
         session.add(scan)
         session.commit()
+        partial_reasons = []
+        if bucket_status.get("truncated"):
+            partial_reasons.append(
+                f"near bucket {bucket.kind}={bucket.key} hit the "
+                f"{dedup_tier_service.MAX_PAIRS_PER_BUCKET}-pair cap"
+            )
+        if pair_cap_reported:
+            partial_reasons.append(
+                f"near scan hit the {dedup_tier_service.MAX_TRACKED_PAIRS} "
+                "tracked-pair cap"
+            )
         return {
             "groups_found": found,
             "pair_cap_reported": pair_cap_reported,
+            "near_signatures": [group.signature for group in groups]
+            if pair_cache
+            else [],
+            "incomplete": bool(partial_reasons),
+            "partial_reasons": partial_reasons,
         }
 
     @staticmethod
@@ -474,12 +520,17 @@ class DedupScanTask(BaseTask):
         scan_id: int,
         components: list[tuple[list[int], float, float]],
         policy: TierPolicy,
-    ) -> int:
+    ) -> dict:
         """Assemble and persist one bounded component batch."""
         groups = dedup_tier_service.groups_from_components(
             session, components, policy, DedupTier.EMBEDDING
         )
-        return dedup_tier_service.persist_groups_in_session(session, groups, scan_id)
+        return {
+            "unresolved": dedup_tier_service.persist_groups_in_session(
+                session, groups, scan_id
+            ),
+            "signatures": [group.signature for group in groups],
+        }
 
     @staticmethod
     def _finish_scan_slice(
@@ -488,11 +539,24 @@ class DedupScanTask(BaseTask):
         total_pictures: int,
         found: int,
         scope_key: str,
+        signatures_by_tier: dict[str, set[str]],
+        incomplete_tiers: set[str],
+        partial_reasons: list[str],
     ) -> dict:
         scan = session.get(DedupScan, scan_id)
         if scan is None:
             raise ValueError(f"DedupScan {scan_id} no longer exists")
-        scan.status = SCAN_COMPLETE
+        requested_tiers = set(json.loads(scan.tiers or "[]"))
+        complete_tiers = requested_tiers - set(incomplete_tiers)
+        retired = dedup_tier_service.retire_obsolete_scan_groups_in_session(
+            session,
+            scan_id,
+            signatures_by_tier,
+            complete_tiers,
+        )
+        unique_reasons = list(dict.fromkeys(partial_reasons))
+        scan.status = SCAN_PARTIAL if unique_reasons else SCAN_COMPLETE
+        scan.error = "; ".join(unique_reasons)[:2000] if unique_reasons else None
         scan.scanned_pictures = total_pictures
         scan.groups_found = found
         scan.finished_at = datetime.utcnow()
@@ -504,6 +568,9 @@ class DedupScanTask(BaseTask):
             "scope": scope_key,
             "total_pictures": total_pictures,
             "groups_found": found,
+            "status": scan.status,
+            "retired_groups": retired,
+            "partial_reasons": unique_reasons,
         }
 
     @staticmethod
@@ -536,9 +603,19 @@ class DedupScanTask(BaseTask):
         session.commit()
 
         found = 0
+        signatures_by_tier: dict[str, set[str]] = {
+            DedupTier.EXACT.value: set(),
+            DedupTier.NEAR.value: set(),
+            DedupTier.EMBEDDING.value: set(),
+        }
+        incomplete_tiers: set[str] = set()
+        partial_reasons: list[str] = []
 
         # --- Tier 1: exact. Indexed GROUP BY, so the queue fills immediately.
         exact_groups = dedup_tier_service.find_exact_groups_in_session(session, scope)
+        signatures_by_tier[DedupTier.EXACT.value] = {
+            group.signature for group in exact_groups
+        }
         found += dedup_tier_service.persist_groups_in_session(
             session, exact_groups, scan_id
         )
@@ -552,6 +629,12 @@ class DedupScanTask(BaseTask):
         # --- Tier 2: bucketed near, one commit per bucket.
         if policy.near_enabled:
             buckets = dedup_tier_service.build_near_buckets(session, scope)
+            if any(bucket.oversized for bucket in buckets):
+                incomplete_tiers.add(DedupTier.NEAR.value)
+                partial_reasons.append(
+                    "near scan used overlapping shards for oversized buckets; "
+                    "cross-shard comparisons are incomplete"
+                )
             scan = session.get(DedupScan, scan_id)
             scan.total_buckets = len(buckets)
             scan.updated_at = datetime.utcnow()
@@ -566,6 +649,7 @@ class DedupScanTask(BaseTask):
             pair_cache: dict[tuple[int, int], float] = {}
             pair_cap_reported = False
             near_groups = 0
+            groups = []
             for index, bucket in enumerate(buckets, start=1):
                 # Ids whose grouping this bucket could have changed. Only groups
                 # touching one of these are re-persisted below; previously the
@@ -574,8 +658,9 @@ class DedupScanTask(BaseTask):
                 # writer thread — every import, tag edit and verdict queues
                 # behind a running scan.
                 touched: set[int] = set()
+                bucket_status: dict = {}
                 for a, b, similarity in dedup_tier_service.near_pairs_in_bucket(
-                    session, bucket, policy.threshold
+                    session, bucket, policy.threshold, bucket_status
                 ):
                     key = (a, b)
                     if key not in pair_cache and len(pair_cache) >= (
@@ -623,6 +708,18 @@ class DedupScanTask(BaseTask):
                     dedup_tier_service.persist_groups_in_session(
                         session, changed, scan_id
                     )
+                if pair_cache:
+                    # ``groups`` is the complete forest over every retained pair
+                    # so far, not only this bucket's changed slice.
+                    signatures_by_tier[DedupTier.NEAR.value] = {
+                        group.signature for group in groups
+                    }
+                if bucket_status.get("truncated"):
+                    incomplete_tiers.add(DedupTier.NEAR.value)
+                    partial_reasons.append(
+                        f"near bucket {bucket.kind}={bucket.key} hit the "
+                        f"{dedup_tier_service.MAX_PAIRS_PER_BUCKET}-pair cap"
+                    )
                 scan = session.get(DedupScan, scan_id)
                 scan.scanned_buckets = index
                 scan.scanned_pictures = min(len(seen_pictures), total_pictures)
@@ -631,18 +728,36 @@ class DedupScanTask(BaseTask):
                 session.add(scan)
                 session.commit()
             found = session.get(DedupScan, scan_id).groups_found
+            if pair_cap_reported:
+                incomplete_tiers.add(DedupTier.NEAR.value)
+                partial_reasons.append(
+                    f"near scan hit the {dedup_tier_service.MAX_TRACKED_PAIRS} "
+                    "tracked-pair cap"
+                )
 
         # --- Tier 3: embedding, appended to the same queue.
         if policy.embedding_enabled:
             embedding_groups = dedup_tier_service.find_embedding_groups_in_session(
                 session, policy, scope
             )
+            signatures_by_tier[DedupTier.EMBEDDING.value] = {
+                group.signature for group in embedding_groups
+            }
             found += dedup_tier_service.persist_groups_in_session(
                 session, embedding_groups, scan_id
             )
 
         scan = session.get(DedupScan, scan_id)
-        scan.status = SCAN_COMPLETE
+        complete_tiers = set(json.loads(scan.tiers or "[]")) - incomplete_tiers
+        retired = dedup_tier_service.retire_obsolete_scan_groups_in_session(
+            session,
+            scan_id,
+            signatures_by_tier,
+            complete_tiers,
+        )
+        unique_reasons = list(dict.fromkeys(partial_reasons))
+        scan.status = SCAN_PARTIAL if unique_reasons else SCAN_COMPLETE
+        scan.error = "; ".join(unique_reasons)[:2000] if unique_reasons else None
         scan.scanned_pictures = total_pictures
         scan.groups_found = found
         scan.finished_at = datetime.utcnow()
@@ -654,6 +769,9 @@ class DedupScanTask(BaseTask):
             "scope": scope.key,
             "total_pictures": total_pictures,
             "groups_found": found,
+            "status": scan.status,
+            "retired_groups": retired,
+            "partial_reasons": unique_reasons,
         }
 
     @staticmethod

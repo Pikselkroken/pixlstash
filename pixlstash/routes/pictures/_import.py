@@ -551,7 +551,7 @@ def register_routes(router, server):
                     task["processed"] = task.get("processed", 0) + 1
                     task["last_update_epoch_ms"] = int(time.time() * 1000)
 
-                shas, existing_map, scrapheaped_map, new_pictures = (
+                fingerprints, existing_map, scrapheaped_map, new_picture_map = (
                     _create_picture_imports(
                         server,
                         uploaded_files,
@@ -564,12 +564,19 @@ def register_routes(router, server):
                 # the progress bar stays accurate even when most files are dupes.
                 # Scrapheap matches are equally instant and are counted in their
                 # OWN bucket: they are neither imported nor ordinary duplicates.
-                # Both are counted directly (one pass over `shas`), never derived
+                # Both are counted directly (one pass over fingerprints), never derived
                 # by subtracting from the total.
-                duplicate_count_initial = sum(1 for sha in shas if sha in existing_map)
+                fresh_seen = set()
+                duplicate_count_initial = 0
+                for fingerprint in fingerprints:
+                    if fingerprint in existing_map or fingerprint in fresh_seen:
+                        duplicate_count_initial += 1
+                    elif fingerprint not in scrapheaped_map:
+                        fresh_seen.add(fingerprint)
                 scrapheaped_count_initial = sum(
-                    1 for sha in shas if sha in scrapheaped_map
+                    1 for fingerprint in fingerprints if fingerprint in scrapheaped_map
                 )
+                new_pictures = list(new_picture_map.values())
                 task["processed"] = (
                     len(new_pictures)
                     + duplicate_count_initial
@@ -619,7 +626,6 @@ def register_routes(router, server):
                 imported_count = 0
                 duplicate_count = 0
                 scrapheaped_count = 0
-                index = 0
                 picture_id_sidecar_tags: dict[int, set[str]] = defaultdict(set)
                 duplicate_picture_id_set: set[int] = set()
                 # Distinct scrapheaped pictures the caller may restore. Several
@@ -629,13 +635,16 @@ def register_routes(router, server):
                 # how many rows come back).
                 scrapheaped_picture_ids: list[int] = []
                 seen_scrapheaped_ids: set[int] = set()
-                for stem, _, sha in zip(uploaded_file_stems, uploaded_files, shas):
+                seen_new_fingerprints = set()
+                for stem, _, fingerprint in zip(
+                    uploaded_file_stems, uploaded_files, fingerprints
+                ):
                     # Three disjoint outcomes per uploaded file. `existing_map`
                     # and `scrapheaped_map` are disjoint by construction (a live
                     # row outranks a soft-deleted one for the same hash), so the
                     # branches below cannot double-count.
-                    if sha in existing_map:
-                        pic = existing_map[sha]
+                    if fingerprint in existing_map:
+                        pic = existing_map[fingerprint]
                         results.append(
                             {
                                 "status": "duplicate",
@@ -646,8 +655,8 @@ def register_routes(router, server):
                         duplicate_count += 1
                         if pic.id is not None:
                             duplicate_picture_id_set.add(pic.id)
-                    elif sha in scrapheaped_map:
-                        pic = scrapheaped_map[sha]
+                    elif fingerprint in scrapheaped_map:
+                        pic = scrapheaped_map[fingerprint]
                         results.append(
                             {
                                 "status": "scrapheaped",
@@ -659,8 +668,8 @@ def register_routes(router, server):
                         if pic.id is not None and pic.id not in seen_scrapheaped_ids:
                             seen_scrapheaped_ids.add(pic.id)
                             scrapheaped_picture_ids.append(pic.id)
-                    else:
-                        pic = new_pictures[index]
+                    elif fingerprint not in seen_new_fingerprints:
+                        pic = new_picture_map[fingerprint]
                         results.append(
                             {
                                 "status": "success",
@@ -669,7 +678,21 @@ def register_routes(router, server):
                             }
                         )
                         imported_count += 1
-                        index += 1
+                        seen_new_fingerprints.add(fingerprint)
+                    else:
+                        # A byte-identical repeat inside this upload maps to the
+                        # one row created for its first occurrence.
+                        pic = new_picture_map[fingerprint]
+                        results.append(
+                            {
+                                "status": "duplicate",
+                                "picture_id": pic.id,
+                                "file": pic.file_path,
+                            }
+                        )
+                        duplicate_count += 1
+                        if pic.id is not None:
+                            duplicate_picture_id_set.add(pic.id)
 
                     if (
                         pic.id is not None
@@ -678,7 +701,7 @@ def register_routes(router, server):
                         # A scrapheaped match is not being imported and the user
                         # has not decided to restore it yet, so this import must
                         # not edit its tags behind its back.
-                        and sha not in scrapheaped_map
+                        and fingerprint not in scrapheaped_map
                     ):
                         picture_id_sidecar_tags[pic.id].update(
                             sidecar_tags_by_stem[stem]

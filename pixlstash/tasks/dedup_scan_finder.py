@@ -34,10 +34,19 @@ class DedupScanFinder(BaseTaskFinder):
         return 1
 
     def depends_on(self) -> list:
-        # Tier 1 is only complete once every picture has a pixel_sha, and tier 2
-        # needs the perceptual hash the embedding worker writes. Waiting for both
-        # means a scan reports honest counts instead of a partial library.
-        return [TaskType.PIXEL_SHA, TaskType.IMAGE_EMBEDDING]
+        # Every tier needs the sampled content hash, but an exact-only request
+        # must not sit behind an unrelated embedding backlog. Only the near and
+        # embedding policies consume the perceptual hash produced by that
+        # worker. With no pending request we keep the conservative exact
+        # dependency; ``find_task`` will immediately report no work anyway.
+        scan = self._db.run_immediate_read_task(DedupScanTask.find_pending_scan)
+        if scan is None:
+            return [TaskType.PIXEL_SHA]
+        policy = DedupScanTask._policy_for(scan)
+        dependencies = [TaskType.PIXEL_SHA]
+        if policy.near_enabled or policy.embedding_enabled:
+            dependencies.append(TaskType.IMAGE_EMBEDDING)
+        return dependencies
 
     def find_task(self):
         scan = self._db.run_immediate_read_task(DedupScanTask.find_pending_scan)
