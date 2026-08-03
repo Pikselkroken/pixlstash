@@ -103,30 +103,25 @@ export function buildPayloadLegend(variant, context) {
   if (variant === "check" || variant === "checkid") {
     legend.push({
       term: context.version,
-      meaning: "the PixlStash version you are running right now",
+      meaning: "your current PixlStash version",
     });
   }
   legend.push({
     term: context.installType,
     meaning:
-      'how you installed it. "pip" covers both a pip install and the Windows ' +
-      'server installer. The other two are "docker" and "electron", the desktop app',
+      'how you installed it: "pip" (also Windows server installer), "docker", or "electron"',
   });
   if (variant === "id" || variant === "checkid") {
     legend.push(
       {
         term: "install_id",
-        meaning:
-          "the random number. Not derived from anything about you or your computer, " +
-          "and you can replace it whenever you like",
+        meaning: "random and replaceable; not derived from you or your computer",
       },
       {
         term: "is_new_install",
-        meaning:
-          "whether telemetry was enabled as part of a fresh install, so upgrades " +
-          "and people who opt in after using PixlStash are not counted as brand new",
+        meaning: "whether telemetry began on a fresh install or was enabled later",
       },
-      { term: "install_type", meaning: "the same value as above" },
+      { term: "install_type", meaning: "the same install method shown above" },
     );
   }
   return legend;
