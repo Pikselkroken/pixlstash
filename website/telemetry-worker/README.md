@@ -4,8 +4,11 @@ Receives anonymous install pings and publishes aggregate cohort numbers. This is
 the first PixlStash endpoint that accepts unauthenticated writes from the public
 internet, so it is built as an attack surface rather than as plumbing.
 
-**Not deployed.** Everything here runs and is tested locally. Deployment needs
-CSO sign-off on both the endpoint and the Cloudflare API credential.
+**Production:** deployed at `https://t.pixlstash.dev` on Cloudflare Workers. It
+uses an EU-jurisdiction D1 database, the `RATE_LIMITER` binding, and a daily
+03:00 UTC cron. `GET /v1/aggregates` is protected by `AGGREGATES_TOKEN`, which
+is mirrored as the `TELEMETRY_AGGREGATE_TOKEN` Actions secret in the private
+`pixlstash-metrics` repository.
 
 ## Where the data lives
 
@@ -30,30 +33,31 @@ not "we never request it". The Worker does read `CF-Connecting-IP`, and an
 absolute that the code does not honour literally is the first thing a hostile
 reader attacks.
 
-### Choosing the D1 region, which is a one-shot decision
+### D1 location
 
 D1's physical location is fixed at creation and **cannot be changed afterwards**.
 Recovering from the wrong choice means creating a new database and migrating.
 
 The rows are a persistent identifier tied to first-seen and last-seen dates, so
-they are personal data under GDPR and the primary belongs in the EU:
+the production database was created with Cloudflare's binding EU jurisdiction:
 
 ```sh
-wrangler d1 create pixlstash-telemetry --location=weur
+npx wrangler@latest d1 create pixlstash-telemetry --jurisdiction=eu
 ```
 
-`--location` is a **hint**: Cloudflare uses "the nearest possible location (by
-latency) to your preference" and does not guarantee placement. D1 also supports a
-**jurisdiction** constraint, which is binding rather than best-effort and is
-likewise creation-only. For an EEA user base the jurisdiction is the stronger
-choice. Confirm the exact flag against `wrangler d1 create --help` before
-running it, because there is no second attempt.
+Do not recreate it with a location hint: a jurisdiction is a hard placement
+constraint, while a location is only a best-effort hint. Both choices are
+creation-only.
 
-Then apply the schema:
+Apply the schema and deploy from this directory:
 
 ```sh
-wrangler d1 execute pixlstash-telemetry --file=./schema.sql --remote
+npx wrangler@latest d1 execute pixlstash-telemetry --file=./schema.sql --remote
+npx wrangler@latest deploy
 ```
+
+The Custom Domain in `wrangler.toml` makes the Worker the origin for
+`t.pixlstash.dev`; Cloudflare manages its DNS record and certificate.
 
 ## Endpoints
 
