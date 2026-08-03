@@ -231,6 +231,67 @@ describe("the person suggestion search is dropped by a view change", () => {
   });
 });
 
+describe("completing the person suggestion search", () => {
+  it("returns to the view underneath when the refreshed suggestions are empty", async () => {
+    let suggestionRequestCount = 0;
+    apiPost.mockImplementation((url) => {
+      const requestUrl = String(url ?? "");
+      if (requestUrl.includes("/pictures/face-search")) {
+        suggestionRequestCount += 1;
+        return Promise.resolve({
+          data:
+            suggestionRequestCount === 1
+              ? [
+                  {
+                    picture_id: 101,
+                    face_id: 201,
+                    likeness: 0.91,
+                    reference_likeness: [0.91],
+                  },
+                ]
+              : [],
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    apiGet.mockImplementation((url) => {
+      const requestUrl = String(url ?? "");
+      if (requestUrl.includes("/pictures?id=101")) {
+        return Promise.resolve({
+          data: [{ id: 101, format: "JPG", width: 100, height: 100 }],
+        });
+      }
+      return Promise.resolve({ data: { pictures: [], count: 0, total: 0 } });
+    });
+
+    const wrapper = mountGrid();
+    useSelectionStore().selectedCharacter = 42;
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await armSuggestion(wrapper);
+
+    expect(wrapper.vm.faceSearchAssignIds).toEqual([101]);
+    apiGet.mockClear();
+
+    await wrapper.vm.handleAssignFaceSearchResults();
+
+    expect(suggestionRequestCount).toBe(2);
+    expect(wrapper.vm.searchResultsActive).toBe(false);
+    expect(useSelectionStore().selectedCharacter).toBe(42);
+    const gridUrls = apiGet.mock.calls.map(([url]) => String(url ?? ""));
+    expect(
+      gridUrls.some(
+        (url) =>
+          (url.includes("/pictures/count") ||
+            url.includes("/pictures/stream")) &&
+          url.includes("character_id=42"),
+      ),
+    ).toBe(true);
+
+    wrapper.unmount();
+  });
+});
+
 describe("character navigation while duplicate scanning continues", () => {
   it("issues the singleton character grid request without waiting for the scan", async () => {
     const wrapper = mountGrid();

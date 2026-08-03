@@ -5465,6 +5465,84 @@ const {
   },
 );
 
+// ── Character membership undo/redo must reconcile a character grid ───
+// The history endpoint changes the face metadata and the operation store updates
+// its history/receipt, but the resulting pictures_changed event carries this
+// tab's own origin and is deliberately suppressed by the realtime grid sync.
+// That leaves a character view showing pictures whose assignment was just
+// undone or redone until an unrelated full refresh. Subscribe to the completed
+// shared history action, as DuplicateQueue does for its domain state, and
+// re-read only when character membership can affect the active grid.
+const CHARACTER_MEMBERSHIP_HISTORY_ACTIONS = new Set([
+  "undo",
+  "undoTo",
+  "undoBatchById",
+  "redo",
+]);
+const CHARACTER_MEMBERSHIP_OP_TYPES = new Set([
+  "characters.assign",
+  "characters.unassign",
+]);
+
+const isCharacterScopedView = computed(() => {
+  if (normalizedSelectedCharacterIds.value.length > 0) return true;
+  const selected = selectionStore.selectedCharacter;
+  if (selected == null) return false;
+  const key = String(selected).toUpperCase();
+  return ![
+    String(ALL_PICTURES_ID).toUpperCase(),
+    String(UNASSIGNED_PICTURES_ID).toUpperCase(),
+    String(SCRAPHEAP_PICTURES_ID).toUpperCase(),
+  ].includes(key);
+});
+
+/** Operations a history action is about to touch, before its stack moves. */
+function characterMembershipHistoryTargets(name, args) {
+  if (name === "undo") {
+    return operationStore.nextUndo ? [operationStore.nextUndo] : [];
+  }
+  if (name === "undoTo") {
+    const past = operationStore.past ?? [];
+    const index = past.findIndex((op) => op?.id === args?.[0]);
+    return index < 0 ? [] : past.slice(0, index + 1);
+  }
+  if (name === "undoBatchById") {
+    return (operationStore.operations ?? []).filter(
+      (op) => op?.batch_id === args?.[0],
+    );
+  }
+  if (name === "redo") {
+    return operationStore.nextRedo ? [operationStore.nextRedo] : [];
+  }
+  return [];
+}
+
+operationStore.$onAction(({ name, args, after }) => {
+  if (!CHARACTER_MEMBERSHIP_HISTORY_ACTIONS.has(name)) return;
+  const targets = characterMembershipHistoryTargets(name, args);
+  if (
+    !targets.some((op) =>
+      CHARACTER_MEMBERSHIP_OP_TYPES.has(String(op?.op_type || "")),
+    )
+  ) {
+    return;
+  }
+
+  after(async (result) => {
+    // History actions return null on failure; `undoTo` returns the number of
+    // operations actually reverted, including a partial successful walk. A
+    // failed undo or redo must leave the current grid untouched.
+    const succeeded = name === "undoTo" ? Number(result) > 0 : result != null;
+    if (!succeeded || !isCharacterScopedView.value) return;
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    preserveScrollOnNextFetch.value = true;
+    await fetchAllGridImages({ force: true });
+  });
+});
+
 // ============================================================
 // STACK ORDERING + EXPAND / COLLAPSE + REORDER DRAG
 // (moved to useStackOrdering composable)
@@ -7712,6 +7790,14 @@ async function handleAssignFaceSearchResults() {
     // de-dup window and leave the grid showing what was just assigned.
     faceSearchRanked.value = null;
     await fetchAllGridImages({ force: true });
+    // Once the refreshed cut has no suggestions left, the temporary search
+    // has served its purpose. Drop it and reload the still-selected view that
+    // was underneath it instead of leaving the user in an empty suggestion
+    // grid. If any matches remain, keep the mode open for another assignment.
+    if (faceSearchMatches.value.length === 0) {
+      clearCharacterFaceSearch();
+      await fetchAllGridImages({ force: true });
+    }
     updateVisibleThumbnails();
     // Raises the "Assigned N pictures…· Undo" receipt for this client.
     operationStore.refresh();
