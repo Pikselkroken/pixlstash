@@ -509,7 +509,12 @@ class Florence2Service:
             logger.debug("Loading Florence-2 model for captioning...")
             logger.debug("Transformers version: %s", transformers.__version__)
 
-            use_cpu = self._force_cpu_fn() or self._device == "cpu"
+            requested_device = (
+                self._device
+                if isinstance(self._device, torch.device)
+                else torch.device(self._device)
+            )
+            use_cpu = self._force_cpu_fn() or requested_device.type == "cpu"
 
             if use_cpu:
                 logger.debug(
@@ -518,7 +523,7 @@ class Florence2Service:
                 self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
-            elif torch.cuda.is_available():
+            elif requested_device.type == "cuda" and torch.cuda.is_available():
                 try:
                     logger.debug("Attempting to load Florence-2 on GPU with FP16...")
                     self._load_model(torch.device("cuda"), torch.float16)
@@ -532,16 +537,24 @@ class Florence2Service:
                     self._load_model(torch.device("cpu"), torch.float32)
                     self._batch_size = FLORENCE_BATCH_SIZE_CPU
                     logger.debug("Florence-2 loaded successfully on CPU")
-            else:
-                logger.debug("No GPU available, loading Florence-2 on CPU with FP32...")
-                device = (
-                    self._device
-                    if isinstance(self._device, torch.device)
-                    else torch.device(self._device)
+            elif requested_device.type == "cuda":
+                unavailable = RuntimeError(
+                    "CUDA was explicitly requested but torch.cuda.is_available() is false"
                 )
-                self._load_model(device, torch.float32)
+                self._record_fallback("cuda_unavailable", unavailable)
+                logger.warning(
+                    "CUDA was explicitly requested but is unavailable; loading "
+                    "Florence-2 on CPU with FP32"
+                )
+                self._load_model(torch.device("cpu"), torch.float32)
                 self._batch_size = FLORENCE_BATCH_SIZE_CPU
                 logger.debug("Florence-2 loaded successfully on CPU")
+            else:
+                # Preserve explicitly supported non-CUDA accelerators rather
+                # than silently changing their device. CUDA is special-cased
+                # above because availability has a first-class torch probe.
+                self._load_model(requested_device, torch.float32)
+                self._batch_size = FLORENCE_BATCH_SIZE_CPU
 
         except Exception as e:
             logger.error("Failed to load Florence-2: %s", e)
@@ -702,11 +715,26 @@ class Florence2Service:
         return detections
 
     def _is_cuda_error(self, error: Exception) -> bool:
-        return (
-            self._model_device is not None
-            and getattr(self._model_device, "type", "") == "cuda"
-            and "cuda" in str(error).lower()
+        if (
+            self._model_device is None
+            or getattr(self._model_device, "type", "") != "cuda"
+        ):
+            return False
+        # PyTorch's typed OOM deliberately does not promise the word "cuda" in
+        # its message. Type identity is the stable signal; the string fallback
+        # retains compatibility with provider/runtime errors raised outside
+        # PyTorch's own exception hierarchy.
+        oom_type = getattr(torch, "OutOfMemoryError", None)
+        cuda_error_type = getattr(torch.cuda, "CudaError", None)
+        typed_cuda_errors = tuple(
+            error_type
+            for error_type in (oom_type, cuda_error_type)
+            if isinstance(error_type, type)
         )
+        if typed_cuda_errors and isinstance(error, typed_cuda_errors):
+            return True
+        message = str(error).lower()
+        return "cuda" in message or "cudnn" in message or "cublas" in message
 
 
 class Florence2Plugin(TaggerPlugin):

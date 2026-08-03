@@ -99,7 +99,30 @@ def _score_best_faces(
         un-combined row is what lets a caller ask how *many* queries a match
         satisfies, not merely how well it satisfies the best one.
     """
-    query_matrix = np.stack(query_embeddings).astype(np.float32)  # (Q, D)
+    valid_queries = [
+        np.asarray(embedding, dtype=np.float32)
+        for embedding in query_embeddings
+        if np.asarray(embedding).ndim == 1 and np.asarray(embedding).size > 0
+    ]
+    widths = sorted({int(embedding.shape[0]) for embedding in valid_queries})
+    if not valid_queries:
+        raise HTTPException(
+            status_code=422,
+            detail="No valid one-dimensional face embeddings were available.",
+        )
+    if len(widths) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Face references use incompatible embedding widths "
+                f"{widths}; finish face-model refresh or choose one compatible face."
+            ),
+        )
+
+    query_matrix = np.stack(valid_queries).astype(np.float32)  # (Q, D)
+    query_matrix /= np.maximum(
+        np.linalg.norm(query_matrix, axis=1, keepdims=True), 1e-8
+    )
     query_dim = query_matrix.shape[1]
 
     face_ids: list[int] = []
@@ -109,7 +132,11 @@ def _score_best_faces(
     skipped_dim_mismatch = 0
 
     for pic_id, faces in candidates:
-        comparable = [(fid, emb) for fid, emb in faces if emb.shape[0] == query_dim]
+        comparable = [
+            (fid, np.asarray(emb, dtype=np.float32))
+            for fid, emb in faces
+            if np.asarray(emb).ndim == 1 and np.asarray(emb).shape[0] == query_dim
+        ]
         skipped_dim_mismatch += len(faces) - len(comparable)
         if not comparable:
             continue
@@ -129,7 +156,12 @@ def _score_best_faces(
         )
 
     if not embeddings:
-        return [], np.empty(0, dtype=np.float32), [], np.empty((0, 0), dtype=np.float32)
+        return (
+            [],
+            np.empty(0, dtype=np.float32),
+            [],
+            np.empty((0, len(valid_queries)), dtype=np.float32),
+        )
 
     # One matmul over every candidate face beats a per-picture Python loop: a
     # mature vault holds six figures of faces and this endpoint is interactive.
@@ -302,6 +334,10 @@ def register_routes(router, server):
     ):
         # ── Authentication ────────────────────────────────────────────────
         server.auth.require_user_id(request)
+        engine = getattr(server.vault, "_engine", None)
+        active_model_pack = getattr(engine, "insightface_model_pack", None) or getattr(
+            server.vault, "_insightface_model_pack", None
+        )
 
         # A character query carries up to 10 reference faces of the same person
         # shot years and angles apart. Their mean is nobody, so a good match to
@@ -416,7 +452,7 @@ def register_routes(router, server):
 
         if source_character_id is not None:
             source_embs = search_query_service.fetch_character_reference_embeddings(
-                server.vault.db, source_character_id
+                server.vault.db, source_character_id, active_model_pack
             )
             if not source_embs:
                 raise HTTPException(
@@ -436,7 +472,7 @@ def register_routes(router, server):
 
         elif source_face_id is not None:
             source_embs = search_query_service.fetch_face_embedding_by_face_id(
-                server.vault.db, source_face_id
+                server.vault.db, source_face_id, active_model_pack
             )
             if not source_embs:
                 raise HTTPException(
@@ -453,7 +489,7 @@ def register_routes(router, server):
 
         elif source_picture_id is not None:
             source_embs = search_query_service.fetch_face_embeddings_by_picture(
-                server.vault.db, source_picture_id
+                server.vault.db, source_picture_id, active_model_pack
             )
             if not source_embs:
                 raise HTTPException(
@@ -505,7 +541,6 @@ def register_routes(router, server):
             # ── Run face detection via the GPU task queue ──────────────────
             # FaceDetectionTask runs at URGENT priority, loads InsightFace if not
             # yet initialised, and returns list[list[FaceResult]] — one per image.
-            engine = getattr(server.vault, "_engine", None)
             if engine is None:
                 raise HTTPException(
                     status_code=503,
@@ -571,7 +606,7 @@ def register_routes(router, server):
 
         # ── Fetch candidate face embeddings from DB ───────────────────────
         candidates = search_query_service.fetch_face_candidates(
-            server.vault.db, candidate_ids
+            server.vault.db, candidate_ids, active_model_pack
         )
         if excluded_picture_ids:
             candidates = [

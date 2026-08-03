@@ -32,21 +32,24 @@ def _db() -> sqlite3.Connection:
     conn.executescript(
         """
         CREATE TABLE picture (
-            id INTEGER PRIMARY KEY, width INTEGER, height INTEGER, created_at TEXT
+            id INTEGER PRIMARY KEY, width INTEGER, height INTEGER, created_at TEXT,
+            source_picture_id INTEGER
         );
         CREATE TABLE face (
             id INTEGER PRIMARY KEY, picture_id INTEGER, bbox TEXT,
-            features BLOB, character_id INTEGER
+            features BLOB, character_id INTEGER, frame_index INTEGER DEFAULT 0,
+            face_index INTEGER DEFAULT 0
         );
         """
     )
     return conn
 
 
-def _picture(conn, pic_id, width, height, created):
+def _picture(conn, pic_id, width, height, created, source_picture_id=None):
     conn.execute(
-        "INSERT INTO picture (id, width, height, created_at) VALUES (?,?,?,?)",
-        (pic_id, width, height, created),
+        "INSERT INTO picture "
+        "(id, width, height, created_at, source_picture_id) VALUES (?,?,?,?,?)",
+        (pic_id, width, height, created, source_picture_id),
     )
 
 
@@ -58,7 +61,11 @@ def _face(conn, face_id, pic_id, bbox, embedding, character_id=None):
             face_id,
             pic_id,
             json.dumps(bbox),
-            np.asarray(embedding, dtype=np.float32).tobytes(),
+            (
+                np.asarray(embedding, dtype=np.float32).tobytes()
+                if embedding is not None
+                else None
+            ),
             character_id,
         ),
     )
@@ -147,6 +154,36 @@ def test_same_size_duplicates_are_left_alone():
     picture_ids, copied = find_affected(conn)
     assert picture_ids == set()
     assert copied == []
+
+
+def test_same_size_generated_copy_is_reported_from_provenance():
+    """Generation provenance disambiguates a copy from a duplicate import."""
+    conn = _db()
+    _picture(conn, 1, 1024, 1024, "2026-03-09")
+    _picture(conn, 2, 1024, 1024, "2026-03-10", source_picture_id=1)
+    _face(conn, 10, 1, [100, 100, 300, 400], [1, 0, 0, 0], character_id=15)
+    _face(conn, 11, 2, [100, 100, 300, 400], [1, 0, 0, 0], character_id=15)
+
+    picture_ids, copied = find_affected(conn)
+
+    assert picture_ids == {2}
+    assert [entry[0] for entry in copied] == [11]
+
+
+def test_null_feature_generated_copy_is_reported_but_manual_row_is_safe():
+    """Historical Comfy copies can predate embeddings; provenance still pins them."""
+    conn = _db()
+    _picture(conn, 1, 512, 512, "2026-03-09")
+    _picture(conn, 2, 512, 512, "2026-03-10", source_picture_id=1)
+    _picture(conn, 3, 512, 512, "2026-03-11")
+    _face(conn, 10, 1, [40, 50, 140, 180], None, character_id=9)
+    _face(conn, 11, 2, [40, 50, 140, 180], None, character_id=9)
+    _face(conn, 12, 3, [40, 50, 140, 180], None, character_id=9)
+
+    picture_ids, copied = find_affected(conn)
+
+    assert picture_ids == {2}
+    assert [entry[0] for entry in copied] == [11]
 
 
 @pytest.mark.parametrize("bad_bbox", ["not json", "[1, 2]", "null"])

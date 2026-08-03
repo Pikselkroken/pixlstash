@@ -143,25 +143,105 @@ def create_router(server) -> APIRouter:
         origin_client_id = getattr(request.state, "origin_client_id", None)
         face_ids = payload.get("face_ids")
         picture_ids = payload.get("picture_ids")
+        face_assignments_raw = payload.get("face_assignments")
         if face_ids is not None and not isinstance(face_ids, list):
             raise HTTPException(status_code=400, detail="face_ids must be a list")
         if picture_ids is not None and not isinstance(picture_ids, list):
             raise HTTPException(status_code=400, detail="picture_ids must be a list")
+        if face_assignments_raw is not None and not isinstance(
+            face_assignments_raw, list
+        ):
+            raise HTTPException(
+                status_code=400, detail="face_assignments must be a list"
+            )
+        if face_assignments_raw and (face_ids or picture_ids):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "face_assignments is authoritative and cannot be combined "
+                    "with face_ids or picture_ids"
+                ),
+            )
+
+        face_assignments: list[tuple[int, int]] = []
+        seen_pictures: set[int] = set()
+        seen_faces: set[int] = set()
+        for index, raw in enumerate(face_assignments_raw or []):
+            if not isinstance(raw, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"face_assignments[{index}] must be an object",
+                )
+            try:
+                picture_id = int(raw["picture_id"])
+                face_id = int(raw["face_id"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"face_assignments[{index}] requires integer picture_id "
+                        "and face_id"
+                    ),
+                )
+            if picture_id <= 0 or face_id <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"face_assignments[{index}] picture_id and face_id must "
+                        "be positive"
+                    ),
+                )
+            if picture_id in seen_pictures or face_id in seen_faces:
+                raise HTTPException(
+                    status_code=400,
+                    detail="face_assignments must contain unique pictures and faces",
+                )
+            seen_pictures.add(picture_id)
+            seen_faces.add(face_id)
+            face_assignments.append((picture_id, face_id))
+
+        assignment_picture_ids = [picture_id for picture_id, _ in face_assignments]
+        assignment_face_ids = [face_id for _, face_id in face_assignments]
         # Scope guard (BOLA): a write-capable resource-scoped token may only
         # assign faces on pictures within its granted resource. Covers both the
         # face_ids and picture_ids branches.
         _enforce_face_mutation_scope(
-            server, request, face_ids=face_ids, picture_ids=picture_ids
+            server,
+            request,
+            face_ids=[*(face_ids or []), *assignment_face_ids],
+            picture_ids=[*(picture_ids or []), *assignment_picture_ids],
         )
 
         def assign_faces(
             session: Session,
+            face_assignments: list[tuple[int, int]],
             face_ids: list[int],
             picture_ids: list[str],
             character_id: int,
         ):
             faces_to_assign = []
             existing_faces = []
+            for expected_picture_id, face_id in face_assignments:
+                face = session.get(Face, face_id)
+                if face is None:
+                    raise HTTPException(
+                        status_code=404, detail=f"Face {face_id} not found"
+                    )
+                if int(face.picture_id) != expected_picture_id:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Face {face_id} belongs to picture {face.picture_id}, "
+                            f"not submitted picture {expected_picture_id}"
+                        ),
+                    )
+                if face.character_id == character_id:
+                    existing_faces.append(face)
+                else:
+                    # Suggest More already compared every face and named this
+                    # winner. Assign it verbatim; a second likeness pass here
+                    # could choose a different person under another reducer.
+                    faces_to_assign.append(face)
             if picture_ids:
                 # Stacks move as a unit: assigning any stacked picture to a
                 # character assigns every member of its stack, so a collapsed
@@ -325,12 +405,15 @@ def create_router(server) -> APIRouter:
             operation_log_service.run_recorded_metadata_task(
                 server.vault,
                 assign_faces,
+                face_assignments,
                 face_ids,
                 picture_ids,
                 character_id,
                 op_type="characters.assign",
-                picture_ids=picture_ids,
-                resolve_picture_ids=_picture_ids_for_faces(face_ids),
+                picture_ids=[*(picture_ids or []), *assignment_picture_ids],
+                resolve_picture_ids=_picture_ids_for_faces(
+                    [*(face_ids or []), *assignment_face_ids]
+                ),
                 expand_stacks=True,
                 summary="Assigned pictures to a character",
                 **operation_log_service.request_context(request),

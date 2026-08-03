@@ -9,6 +9,8 @@ parameter schema, and the engine property that reads the user's setting.
 from types import SimpleNamespace
 
 import pytest
+import torch
+from PIL import Image
 
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.florence2 import (
@@ -111,6 +113,59 @@ class TestVramGateFollowsTheVariant:
         svc.set_model_variant(variant)
         svc.description_batch_size()
         assert seen == [expected]
+
+
+class TestDeviceFallback:
+    def test_explicit_cuda_unavailable_loads_cpu_and_records_reason(self, monkeypatch):
+        svc = Florence2Service(device="cuda")
+        loaded = []
+
+        def fake_load(device, dtype):
+            loaded.append((device.type, dtype))
+            svc._model = object()
+            svc._processor = object()
+            svc._model_device = device
+            svc._dtype = dtype
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(svc, "_load_model", fake_load)
+
+        svc.ensure_ready()
+
+        assert loaded == [("cpu", torch.float32)]
+        assert svc._model_device.type == "cpu"
+        assert svc._last_fallback_reason.startswith("cuda_unavailable:")
+
+    def test_typed_oom_retries_caption_on_cpu(self, monkeypatch, tmp_path):
+        path = tmp_path / "sample.png"
+        Image.new("RGB", (8, 8), "white").save(path)
+        svc = Florence2Service(device="cuda")
+        svc._model = object()
+        svc._processor = object()
+        svc._model_device = torch.device("cuda")
+        svc._dtype = torch.float16
+        calls = 0
+        fallback_causes = []
+
+        def infer(_image):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise torch.OutOfMemoryError("allocation failed")
+            return "Recovered on CPU."
+
+        def reload_cpu(cause=None):
+            fallback_causes.append(cause)
+            svc._model_device = torch.device("cpu")
+            return True
+
+        monkeypatch.setattr(svc, "_infer_single", infer)
+        monkeypatch.setattr(svc, "_reload_on_cpu", reload_cpu)
+
+        assert svc.generate_caption(str(path)) == "Recovered on CPU."
+        assert calls == 2
+        assert len(fallback_causes) == 1
+        assert isinstance(fallback_causes[0], torch.OutOfMemoryError)
 
 
 class TestPluginSchema:

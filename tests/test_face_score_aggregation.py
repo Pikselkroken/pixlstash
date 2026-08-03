@@ -20,6 +20,8 @@ a real 45k-face library that is small (mean best score 0.116 at one face vs
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from fastapi import HTTPException
 
 from pixlstash.routes.pictures._face_search import _score_best_faces
 
@@ -106,6 +108,42 @@ def test_the_winning_face_is_the_one_reported():
     assert abs(float(scores[0]) - float(np.dot(good, query))) < 1e-5
     # reference_likeness travels from the same winning face.
     assert abs(float(per_query[0][0]) - float(np.dot(good, query))) < 1e-5
+
+
+def test_mixed_width_candidates_skip_only_incompatible_faces():
+    query = [np.asarray([1, 0, 0, 0], dtype=np.float32)]
+    candidates = [
+        (
+            1,
+            [
+                (10, np.asarray([1, 0, 0, 0], dtype=np.float32)),
+                (11, np.asarray([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32)),
+            ],
+        ),
+        (2, [(20, np.asarray([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32))]),
+    ]
+
+    picture_ids, scores, face_ids, per_query = _score_best_faces(
+        query, candidates, "max"
+    )
+
+    assert picture_ids == [1]
+    assert face_ids == [10]
+    assert scores.tolist() == pytest.approx([1.0])
+    assert per_query.shape == (1, 1)
+
+
+def test_mixed_width_query_references_return_controlled_422():
+    query = [
+        np.asarray([1, 0, 0, 0], dtype=np.float32),
+        np.asarray([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+    ]
+
+    with pytest.raises(HTTPException) as caught:
+        _score_best_faces(query, [], "max")
+
+    assert caught.value.status_code == 422
+    assert "incompatible embedding widths [4, 8]" in caught.value.detail
 
 
 def test_sql_and_python_likeness_paths_both_reduce_with_max():

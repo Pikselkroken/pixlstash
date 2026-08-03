@@ -15,11 +15,14 @@ import os
 import tempfile
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from pixlstash.db_models.face import Face
+from pixlstash.picture_scoring import compute_character_likeness_for_faces
 from pixlstash.server import Server
+from pixlstash.services import operation_log_service
 from tests.test_server import random_images
 from tests.utils import API_PREFIX, upload_pictures_and_wait
 
@@ -91,6 +94,198 @@ def _assign_pictures(client, character_id, picture_ids):
     body = resp.json()
     assert body["status"] == "success"
     return body
+
+
+def test_record_failure_rolls_back_face_assignment(monkeypatch):
+    """A face-to-character join cannot survive without its undo receipt."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            login = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert login.status_code == 200
+            picture_id = _upload(client, 1)[0]
+            character_id = _create_character(client, "Atomic")
+            face_id = _add_face(server, picture_id, ALONG_X, SMALL_BBOX)
+            monkeypatch.setattr(
+                operation_log_service,
+                "record_operation_in_session",
+                lambda *args, **kwargs: (_ for _ in ()).throw(
+                    RuntimeError("face receipt failed")
+                ),
+            )
+
+            with pytest.raises(RuntimeError, match="face receipt failed"):
+                client.post(
+                    f"{API_PREFIX}/characters/{character_id}/faces",
+                    json={"face_ids": [face_id]},
+                )
+
+            assert _face_character_ids(server, [face_id]) == {face_id: None}
+            assert (
+                operation_log_service.list_operations(
+                    server.vault, op_type="characters.assign"
+                )
+                == []
+            )
+
+
+def test_authoritative_face_assignment_rejects_a_mismatched_picture():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            assert (
+                client.post(
+                    "/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                ).status_code
+                == 200
+            )
+            first, second = _upload(client, 2)
+            character_id = _create_character(client, "Mismatch")
+            face_id = _add_face(server, first, ALONG_X, SMALL_BBOX)
+
+            response = client.post(
+                f"{API_PREFIX}/characters/{character_id}/faces",
+                json={"face_assignments": [{"picture_id": second, "face_id": face_id}]},
+            )
+
+            assert response.status_code == 422, response.text
+            assert _face_character_ids(server, [face_id]) == {face_id: None}
+
+
+def test_face_search_mixed_legacy_reference_widths_returns_422():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            assert (
+                client.post(
+                    "/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                ).status_code
+                == 200
+            )
+            first, second, candidate = _upload(client, 3)
+            character_id = _create_character(client, "Mixed widths")
+            _add_face(
+                server,
+                first,
+                np.asarray([1, 0, 0, 0], dtype=np.float32).tobytes(),
+                SMALL_BBOX,
+                character_id=character_id,
+            )
+            _add_face(
+                server,
+                second,
+                np.asarray([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32).tobytes(),
+                SMALL_BBOX,
+                character_id=character_id,
+            )
+            _add_face(
+                server,
+                candidate,
+                np.asarray([1, 0, 0, 0], dtype=np.float32).tobytes(),
+                SMALL_BBOX,
+            )
+
+            response = client.post(
+                f"{API_PREFIX}/pictures/face-search",
+                params={
+                    "source_character_id": character_id,
+                    "exclude_character_id": character_id,
+                },
+            )
+
+            assert response.status_code == 422, response.text
+            assert "incompatible embedding widths [4, 8]" in response.json()["detail"]
+
+
+def test_suggest_more_max_winner_is_assigned_without_softmax_reranking():
+    """Search and assignment share one winning-face decision."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            assert (
+                client.post(
+                    "/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                ).status_code
+                == 200
+            )
+            picture_ids = _upload(client, 11)
+            reference_ids, candidate_id = picture_ids[:10], picture_ids[10]
+            character_id = _create_character(client, "Reducer parity")
+
+            ref_a = np.asarray([1.0, 0.0], dtype=np.float32).tobytes()
+            ref_b = np.asarray([0.5, 0.8660254], dtype=np.float32).tobytes()
+            for index, picture_id in enumerate(reference_ids):
+                _add_face(
+                    server,
+                    picture_id,
+                    ref_a if index == 0 else ref_b,
+                    SMALL_BBOX,
+                    character_id=character_id,
+                )
+            candidate_a = _add_face(
+                server, candidate_id, ref_a, SMALL_BBOX, face_index=0
+            )
+            candidate_b = _add_face(
+                server,
+                candidate_id,
+                np.asarray([0.8660254, 0.5], dtype=np.float32).tobytes(),
+                LARGE_BBOX,
+                face_index=1,
+            )
+
+            def old_softmax_winner(session):
+                refs = session.exec(
+                    select(Face).where(Face.picture_id.in_(reference_ids))
+                ).all()
+                candidates = session.exec(
+                    select(Face).where(Face.picture_id == candidate_id)
+                ).all()
+                scores = compute_character_likeness_for_faces(refs, candidates)
+                return max(scores, key=scores.get)
+
+            assert server.vault.db.run_task(old_softmax_winner) == candidate_b
+
+            search = client.post(
+                f"{API_PREFIX}/pictures/face-search",
+                params={
+                    "source_character_id": character_id,
+                    "exclude_character_id": character_id,
+                    "combine": "max",
+                    "top_n": 100,
+                },
+            )
+            assert search.status_code == 200, search.text
+            match = next(
+                row for row in search.json() if row["picture_id"] == candidate_id
+            )
+            assert match["face_id"] == candidate_a
+
+            assigned = client.post(
+                f"{API_PREFIX}/characters/{character_id}/faces",
+                json={
+                    "face_assignments": [
+                        {
+                            "picture_id": match["picture_id"],
+                            "face_id": match["face_id"],
+                        }
+                    ]
+                },
+            )
+            assert assigned.status_code == 200, assigned.text
+            assert assigned.json()["face_ids"] == [candidate_a]
+            assert _face_character_ids(server, [candidate_a, candidate_b]) == {
+                candidate_a: character_id,
+                candidate_b: None,
+            }
 
 
 def test_new_character_bootstraps_multi_face_pictures_from_solo_shots():
