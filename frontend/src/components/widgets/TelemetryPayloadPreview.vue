@@ -68,7 +68,7 @@ const legend = computed(() =>
   background: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
   border-radius: var(--radius-md);
-  padding: var(--space-5);
+  padding: var(--space-4);
   overflow-x: auto;
   min-height: 9rem;
 }
@@ -80,14 +80,14 @@ const legend = computed(() =>
   letter-spacing: var(--tracking-label);
   font-weight: var(--weight-semibold);
   opacity: 0.65;
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .tp__body {
   margin: 0;
   white-space: pre;
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: var(--leading-body);
 }
 
@@ -95,11 +95,11 @@ const legend = computed(() =>
 .tp__legend {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: var(--space-2) var(--space-5);
-  margin: var(--space-5) 0 0;
-  padding: var(--space-5) 0 0;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4) 0 0;
   border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  font-size: var(--text-xs);
+  font-size: var(--text-2xs);
 }
 
 .tp__legend dt {
