@@ -126,6 +126,34 @@ def _create_file(server, relative_path: str):
     return abs_path
 
 
+def _create_picture_share(owner, server, filename: str) -> tuple[Picture, dict]:
+    """Create a servable picture and return its scoped share credential."""
+    from PIL import Image
+
+    file_path = _create_file(server, filename)
+    Image.new("RGB", (2, 2), color=(20, 40, 60)).save(file_path, format="JPEG")
+    pic = _add_picture(server, filename=filename)
+
+    def _set_format(session):
+        stored = session.get(Picture, pic.id)
+        stored.format = os.path.splitext(filename)[1].lstrip(".").lower()
+        session.add(stored)
+        session.commit()
+
+    server.vault.db.run_task(_set_format)
+    response = owner.post(
+        "/api/v1/users/me/token",
+        json={
+            "description": "restore barrier share",
+            "scope": "READ",
+            "resource_type": "picture",
+            "resource_id": pic.id,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return pic, response.json()
+
+
 def _remove_file(server, relative_path: str):
     """Delete a placeholder file from the vault image_root."""
     os.remove(os.path.join(server.vault.image_root, relative_path))
@@ -3767,6 +3795,155 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
         .status_code
         == 401
     )
+
+
+def test_share_link_is_unavailable_while_restore_admission_is_closed(server):
+    """The embedded share credential uses the same atomic restore gate."""
+    from fastapi.testclient import TestClient
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _pic, created = _create_picture_share(owner, server, "share-gate.jpg")
+    share_path = f"/share/{created['token']}.jpg"
+    share_url = f"http://testserver{share_path}"
+    anonymous = TestClient(server.api)
+    assert anonymous.get(share_url).status_code == 200
+
+    server.auth.close_auth_for_restore()
+    try:
+        response = anonymous.get(share_url)
+        assert response.status_code == 503, response.text
+        assert response.headers["Retry-After"] == "5"
+    finally:
+        server.auth.reopen_auth_after_restore()
+
+    assert anonymous.get(share_url).status_code == 200
+    deleted = owner.delete(f"/api/v1/users/me/token/{created['token_id']}")
+    assert deleted.status_code == 200, deleted.text
+
+
+def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
+    """A share token/resource lookup admitted before closure finishes first."""
+    from fastapi import Request
+    from fastapi.responses import Response
+    from fastapi.testclient import TestClient
+
+    from pixlstash.services import share_service
+
+    owner = TestClient(server.api, raise_server_exceptions=True)
+    login = owner.post(
+        "/api/v1/login", json={"username": "owner", "password": "ownerpass1"}
+    )
+    assert login.status_code == 200, login.text
+    _pic, created = _create_picture_share(owner, server, "share-drain.jpg")
+    share_path = f"/share/{created['token']}.jpg"
+    share_url = f"http://testserver{share_path}"
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    admitted = threading.Event()
+    release_share = threading.Event()
+    lookup_completed = threading.Event()
+    close_started = threading.Event()
+    swap_started = threading.Event()
+    original_close = server.auth.close_auth_for_restore
+    original_swap = server.vault.restore_service._swap_database
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": share_path,
+            "raw_path": share_path.encode(),
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+    )
+
+    async def _serve_admitted_share(_request):
+        admitted.set()
+        released = await asyncio.get_running_loop().run_in_executor(
+            None, release_share.wait, 10
+        )
+        assert released, "test did not release admitted share request"
+        matched = share_service.validate_picture_share_token(
+            server.auth, created["token"]
+        )
+        assert matched is not None
+        assert share_service.get_shared_picture(server.vault, matched.resource_id)
+        lookup_completed.set()
+        return Response(status_code=200)
+
+    def _close_and_signal(restore_request_lease=None):
+        close_started.set()
+        return original_close(restore_request_lease)
+
+    def _swap_and_signal(live_db_path, new_db_path):
+        assert lookup_completed.is_set(), "share lookup crossed the database cutover"
+        swap_started.set()
+        return original_swap(live_db_path, new_db_path)
+
+    monkeypatch.setattr(server.auth, "close_auth_for_restore", _close_and_signal)
+    monkeypatch.setattr(server.vault.restore_service, "_swap_database", _swap_and_signal)
+
+    share_outcome = {}
+    restore_outcome = {}
+
+    def _share_request():
+        try:
+            share_outcome["response"] = asyncio.run(
+                server.auth.auth_middleware(
+                    request,
+                    _serve_admitted_share,
+                    allow_origins=[],
+                    allow_origin_regex=None,
+                )
+            )
+        except BaseException as exc:
+            share_outcome["error"] = exc
+
+    def _restore():
+        try:
+            restore_outcome["report"] = server.vault.restore_service.restore_full(cp.id)
+        except BaseException as exc:
+            restore_outcome["error"] = exc
+
+    share_thread = threading.Thread(target=_share_request, daemon=True)
+    restore_thread = threading.Thread(target=_restore, daemon=True)
+    share_thread.start()
+    if not admitted.wait(10):
+        raise AssertionError(
+            "share request never acquired its admission lease: "
+            f"{share_outcome.get('error')!r}"
+        )
+    restore_thread.start()
+    assert close_started.wait(20), "restore never began the admission drain"
+    assert server.auth.is_auth_closed_for_restore()
+    assert not swap_started.wait(0.2), "database swapped before share request drained"
+
+    release_share.set()
+    share_thread.join(timeout=10)
+    restore_thread.join(timeout=30)
+    assert not share_thread.is_alive(), "share request did not finish"
+    assert not restore_thread.is_alive(), "restore did not finish after share drain"
+    assert "error" not in share_outcome, share_outcome.get("error")
+    assert share_outcome["response"].status_code == 200
+    assert lookup_completed.is_set()
+    assert "error" not in restore_outcome, restore_outcome.get("error")
+    assert not restore_outcome["report"].errors
+    assert swap_started.is_set()
+
+    # Restore deletes every token, including one present in the restored
+    # snapshot, so the old share credential cannot resolve a post-swap ID.
+    assert _live_token_count(server) == 0
+    assert not server.auth._token_cache
+    assert TestClient(server.api).get(share_url).status_code == 404
 
 
 def test_full_restore_drains_an_admitted_http_request_before_swap(

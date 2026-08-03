@@ -75,6 +75,11 @@ AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/docs/",
 )
 AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
+# Credential-bearing paths that must share the full-restore admission barrier.
+# Public share links bypass normal API authentication because the credential is
+# embedded in the URL, but their token and resource lookups still read the live
+# database and therefore cannot cross a whole-file restore cutover.
+RESTORE_ADMISSION_PREFIXES: tuple[str, ...] = (*AUTH_API_PREFIXES, "/share/")
 
 # POST paths that are semantically read-only (large request bodies preclude GET).
 # These are exempted from the "block non-GET for READ tokens" check.
@@ -2213,18 +2218,24 @@ class AuthService:
     async def auth_middleware(
         self, request: Request, call_next, allow_origins, allow_origin_regex
     ):
-        """Admit API traffic atomically and hold its lease through the response.
+        """Admit credential-bearing traffic and hold its lease through response.
 
         Admission happens before credential lookup, including for public auth
-        endpoints such as login/check-session. Otherwise a request could begin
-        token or owner-row verification just before the restore closes the gate,
-        miss the boolean check, and enter its handler after the database swap.
+        endpoints such as login/check-session and ``/share/{token_slug}``.
+        Otherwise a request could begin token or owner/resource-row verification
+        just before the restore closes the gate, miss the boolean check, and
+        enter its handler after the database swap.
         """
-        is_api_request = any(
-            request.url.path.startswith(prefix) for prefix in AUTH_API_PREFIXES
+        requires_restore_admission = any(
+            request.url.path.startswith(prefix)
+            for prefix in RESTORE_ADMISSION_PREFIXES
         )
-        lease = self._acquire_restore_http_lease() if is_api_request else None
-        if is_api_request and lease is None:
+        lease = (
+            self._acquire_restore_http_lease()
+            if requires_restore_admission
+            else None
+        )
+        if requires_restore_admission and lease is None:
             return self._restore_unavailable_response()
         if lease is not None:
             request.state.restore_admission_lease = lease
