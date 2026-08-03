@@ -154,7 +154,14 @@ def test_operation_log_emit_announces_the_scrapheap_lifecycle():
         lifecycle={"scrapheaped": [3], "restored": [1]},
     )
 
-    by_ids = {tuple(data["picture_ids"]): data for _event, data in emitted}
+    # Picture 2 is announced twice on purpose (see the stack-facet test below),
+    # so pick the ordinary announcement by its absence of a ``fields`` list
+    # rather than by "the last one with these ids".
+    by_ids = {
+        tuple(data["picture_ids"]): data
+        for _event, data in emitted
+        if not data.get("fields")
+    }
     assert by_ids[(1,)]["change_kind"] == "restored"
     assert by_ids[(3,)]["change_kind"] == "removed"
     assert by_ids[(2,)]["change_kind"] == "updated"
@@ -171,3 +178,86 @@ def test_operation_log_emit_announces_the_scrapheap_lifecycle():
         for event, data in emitted
         if data["change_kind"] in ("restored", "removed")
     )
+
+
+def test_operation_log_emit_announces_the_surviving_stack_members_count():
+    """A lifecycle move changes the live member count of the stacks it touched.
+
+    The members that did NOT move render that count as their stack badge, and
+    they carry no facet diff, so they are not even in ``picture_ids``: undoing a
+    "Keep cover only" whose union was a no-op put four copies back and announced
+    nothing at all about the cover, which went on drawing itself as a stack of
+    one. ``lifecycle["stack_siblings"]`` names them and they get their own
+    ``fields=["stack_count"]`` announcement.
+
+    It is ADDITIVE: the blanket no-``fields`` ``updated`` still goes out for
+    anything in ``picture_ids``, so a facet change that may affect any view
+    keeps its conservative treatment.
+    """
+    from pixlstash.event_types import EventType
+    from pixlstash.services import operation_log_service
+
+    emitted: list[tuple] = []
+
+    class _Vault:
+        def notify(self, event_type, data=None):
+            emitted.append((event_type, data))
+
+    operation_log_service._emit(
+        _Vault(),
+        [1, 2, 3],
+        {operation_log_service.FACET_DELETED},
+        "undo-tab",
+        lifecycle={"scrapheaped": [3], "restored": [1], "stack_siblings": [7]},
+    )
+
+    stack_events = [
+        data for _event, data in emitted if data.get("fields") == ["stack_count"]
+    ]
+    assert len(stack_events) == 1, emitted
+    stack = stack_events[0]
+    # The survivors, and only them: the moved pictures already carry a lifecycle
+    # kind of their own, and merging the two would tell the grid a vanished
+    # picture was merely updated and leave a 404-clickable card behind.
+    assert stack["picture_ids"] == [7]
+    assert stack["change_kind"] == "updated"
+    assert stack["origin_client_id"] == "undo-tab"
+    assert WsBroadcasterMixin._source_from(stack) == "ui"
+    assert all(
+        event == EventType.CHANGED_PICTURES
+        for event, data in emitted
+        if data.get("fields") == ["stack_count"]
+    )
+    # The conservative announcement over the touched-but-unmoved picture is
+    # still there, unnarrowed.
+    assert any(
+        data["picture_ids"] == [2] and not data.get("fields")
+        for _event, data in emitted
+    )
+
+
+def test_operation_log_emit_stays_silent_about_stacks_when_nothing_is_stacked():
+    """No stack siblings, no stack announcement.
+
+    An ordinary metadata undo (a tag edit, a score) cannot change any stack's
+    live member count, so the extra event would be pure churn: every receiving
+    tab would issue a stack read for nothing.
+    """
+    from pixlstash.services import operation_log_service
+
+    emitted: list[tuple] = []
+
+    class _Vault:
+        def notify(self, event_type, data=None):
+            emitted.append((event_type, data))
+
+    operation_log_service._emit(
+        _Vault(),
+        [1, 2, 3],
+        {operation_log_service.FACET_SCORE},
+        "undo-tab",
+        lifecycle={"scrapheaped": [], "restored": [], "stack_siblings": []},
+    )
+
+    assert emitted, "an undo must still announce itself"
+    assert not [data for _event, data in emitted if data.get("fields")]

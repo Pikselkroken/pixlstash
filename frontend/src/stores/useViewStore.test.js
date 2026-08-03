@@ -5,6 +5,7 @@ import { reactive, watch, nextTick } from "vue";
 import { parseRouteView, useViewStore } from "./useViewStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useProjectStore } from "./useProjectStore";
+import { useFilterStore } from "./useFilterStore";
 
 // Route → view resolution is the Phase 3 seam that replaced App.vue's inline
 // `applyRouteToStores`. These tests pin the URL shapes the router declares
@@ -220,6 +221,46 @@ describe("useViewStore.applyRoute", () => {
 
     expect(selection.selectedSetIds).toEqual([3]);
     expect(viewStore.activeFolderKey).toBeNull();
+  });
+});
+
+// The only filter the route owns. It exists because the Duplicates queue-clear
+// screen routes to All Pictures with the stacked filter applied, and that
+// destination has to be reloadable rather than a state only one click can
+// produce.
+describe("the stack-state filter in the URL", () => {
+  it("carries the filter into the store on a real navigation", () => {
+    const viewStore = useViewStore();
+    const filters = useFilterStore();
+    viewStore.applyRoute(routeOf("all-pictures", {}, { stack_state: "stacked" }));
+    expect(filters.stackStateFilter).toBe("stacked");
+  });
+
+  it("works on any grid route, not only All Pictures", () => {
+    const viewStore = useViewStore();
+    const filters = useFilterStore();
+    viewStore.applyRoute(
+      routeOf("set", { id: "3" }, { stack_state: "unstacked" }),
+    );
+    expect(filters.stackStateFilter).toBe("unstacked");
+  });
+
+  // ADDITIVE ONLY. Resetting on every route tick would silently clear a filter
+  // the user set from the filter panel the moment they navigated anywhere,
+  // which no other filter does.
+  it("leaves the filter alone when the route says nothing about it", () => {
+    const viewStore = useViewStore();
+    const filters = useFilterStore();
+    filters.stackStateFilter = "stacked";
+    viewStore.applyRoute(routeOf("character", { id: "7" }));
+    expect(filters.stackStateFilter).toBe("stacked");
+  });
+
+  it("ignores a value the grid cannot ask the server for", () => {
+    const viewStore = useViewStore();
+    const filters = useFilterStore();
+    viewStore.applyRoute(routeOf("all-pictures", {}, { stack_state: "wat" }));
+    expect(filters.stackStateFilter).toBe("all");
   });
 });
 

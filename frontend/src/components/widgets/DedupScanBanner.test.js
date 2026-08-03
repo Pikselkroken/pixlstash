@@ -50,22 +50,25 @@ describe("DedupScanBanner", () => {
     expect(text).toContain("Groups appear here as they are found.");
   });
 
-  // Tier 2 streams its groups in as each candidate bucket finishes, so a scope
-  // whose picture total is not known yet still has honest progress to report.
-  it("counts candidate batches when there is no picture total yet", () => {
+  // Once candidate buckets exist they describe the expensive comparison phase,
+  // even if picture enumeration has already reached its total.
+  it("prefers candidate batches for a running person scan", () => {
     const text = textOf(
-      mountBanner({ total: 0, scanned: 0, buckets: 3, totalBuckets: 12 }),
+      mountBanner({
+        total: 8,
+        scanned: 8,
+        buckets: 3,
+        totalBuckets: 12,
+        percent: 25,
+      }),
     );
     expect(text).toContain("3 of 12 candidate batches compared.");
     expect(text).not.toContain("pictures compared");
+    expect(text).toContain("25%");
   });
 
-  it("renders nothing once the scan reaches 100 percent", () => {
-    // A banner that stays up after the pass finishes tells the user the list
-    // is still incomplete when it is not.
-    expect(mountBanner({ percent: 100 }).find(".scan-banner").exists()).toBe(
-      false,
-    );
+  it("keeps a running person scan visible when its counters reach 100 percent", () => {
+    expect(mountBanner({ percent: 100 }).find(".scan-banner").exists()).toBe(true);
   });
 
   it("renders nothing when the scan is not running", () => {
@@ -76,11 +79,41 @@ describe("DedupScanBanner", () => {
         mountBanner({ status, percent: 40 }).find(".scan-banner").exists(),
       ).toBe(false);
     }
+  });
+
+  it("announces a pending person scan as queued without inventing zero totals", () => {
+    const wrapper = mountBanner({
+      status: "pending",
+      scanned: 0,
+      total: 0,
+      buckets: 0,
+      totalBuckets: 0,
+      percent: 0,
+    });
+    expect(textOf(wrapper)).toContain("Duplicate scan queued.");
+    expect(textOf(wrapper)).toContain("Queued");
+    expect(textOf(wrapper)).not.toContain("0 of 0");
+    expect(wrapper.find(".scan-banner").attributes("role")).toBe("status");
     expect(
-      mountBanner({ status: "pending", percent: 0 })
-        .find(".scan-banner")
-        .exists(),
-    ).toBe(true);
+      wrapper.find(".scan-banner__track").attributes("aria-valuenow"),
+    ).toBeUndefined();
+  });
+
+  it("announces a running person scan with unknown totals as starting", () => {
+    const wrapper = mountBanner({
+      status: "running",
+      scanned: 0,
+      total: 0,
+      buckets: 0,
+      totalBuckets: 0,
+      percent: 0,
+    });
+    expect(textOf(wrapper)).toContain("Duplicate scan is starting.");
+    expect(textOf(wrapper)).toContain("Starting");
+    expect(textOf(wrapper)).not.toContain("0 of 0");
+    expect(
+      wrapper.find(".scan-banner__track").attributes("aria-valuenow"),
+    ).toBeUndefined();
   });
 
   // The server reports no time estimate, and inventing one from a bucket rate
@@ -94,7 +127,7 @@ describe("DedupScanBanner", () => {
     // screen reader (WCAG 1.3.1).
     const track = mountBanner({ percent: 42 }).find(".scan-banner__track");
     expect(track.attributes("role")).toBe("progressbar");
-    expect(track.attributes("aria-label")).toBe("Duplicate scan progress");
+    expect(track.attributes("aria-label")).toBe("Duplicate pictures processed");
     expect(track.attributes("aria-valuenow")).toBe("42");
     expect(track.attributes("aria-valuemin")).toBe("0");
     expect(track.attributes("aria-valuemax")).toBe("100");
@@ -109,9 +142,8 @@ describe("DedupScanBanner", () => {
     );
   });
 
-  it("treats unknown progress as zero instead of NaN", () => {
-    // The first poll of a fresh scan can arrive without a percent.
-    const wrapper = mountBanner({ percent: undefined });
+  it("treats an unknown percentage with known totals as zero instead of NaN", () => {
+    const wrapper = mountBanner({ percent: undefined, total: 12 });
     expect(textOf(wrapper)).toContain("0%");
     expect(
       wrapper.find(".scan-banner__track").attributes("aria-valuenow"),

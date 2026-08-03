@@ -137,6 +137,15 @@ describe("isDestructiveOpType", () => {
     expect(isDestructiveOpType("stacks.dissolve")).toBe(true);
   });
 
+  // Keep cover only moves every copy but the cover to the scrapheap, but its op
+  // type says what the user asked for rather than where the pictures went, so
+  // none of the other patterns catch it. Without this it would take the ordinary
+  // 5s receipt: the shortest undo window on the most consequential action.
+  it("flags keeping only a stack's cover", () => {
+    expect(isDestructiveOpType("stack.keep_cover_only")).toBe(true);
+    expect(iconForOpType("stack.keep_cover_only")).toBe("mdi-layers-minus");
+  });
+
   it("leaves ordinary edits alone", () => {
     expect(isDestructiveOpType("pictures.tags.add")).toBe(false);
     expect(isDestructiveOpType("pictures.score")).toBe(false);
@@ -871,5 +880,57 @@ describe("useOperationStore — ghost tiles", () => {
     expect(store.ghostState).toBe("none");
     expect(store.ghostPictureIds).toEqual([]);
     expect(store.collapsingPictureIds).toEqual([]);
+  });
+});
+
+// A second sentence on the SAME pill, for what an action deliberately did not
+// do. Keep cover only skips a whole stack when a locked set or a character link
+// would lose data, and that belongs beside the move it reports: splitting one
+// action across a pill and a notice is how the half that needed a decision gets
+// dismissed along with the half that did not.
+describe("the receipt's second sentence", () => {
+  const KEEP_COVER = {
+    id: 2,
+    op_type: "stack.keep_cover_only",
+    summary: "Kept the cover of 3 stacks · 414 pictures to the Scrapheap",
+    target_count: 414,
+  };
+
+  it("appends the caller's note to the operation the note names", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt(
+      "stack.keep_cover_only",
+      "2 stacks skipped: held by a locked picture set.",
+    );
+    serve([op(KEEP_COVER), op()]);
+    await store.refresh();
+
+    expect(store.receipt.summary).toContain("414 pictures to the Scrapheap");
+    expect(store.receipt.note).toBe(
+      "2 stacks skipped: held by a locked picture set.",
+    );
+  });
+
+  // A note that outlived its action would eventually describe an unrelated one,
+  // and a wrong second sentence is worse than none.
+  it("never lands on an operation of a different type", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt("stack.keep_cover_only", "2 stacks skipped.");
+    serve([op({ id: 2 }), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
+
+    // …and it is consumed rather than carried forward to the next receipt.
+    serve([op(KEEP_COVER), op({ id: 2 }), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
+  });
+
+  it("treats a blank note as no note", async () => {
+    const store = await primed([op()]);
+    store.noteNextReceipt("stack.keep_cover_only", "");
+    serve([op(KEEP_COVER), op()]);
+    await store.refresh();
+    expect(store.receipt.note).toBe("");
   });
 });

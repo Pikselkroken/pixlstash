@@ -275,6 +275,8 @@ def test_get_sort_mechanisms():
         data = resp.json()
         assert isinstance(data, list)
         assert len(data) > 0
+        stack_time = next(item for item in data if item["key"] == "STACK_UPDATED_AT")
+        assert stack_time["description"] == "Recently changed stacks"
     finally:
         server.vault.close()
         temp_dir.cleanup()

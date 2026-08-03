@@ -10,6 +10,13 @@ vi.mock("../api/dedup", () => ({
   keepGroupSeparate: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
+  // The third page's contract (design D5). It is lazy: a cold all-stack score
+  // must not occupy the database worker during ordinary queue startup.
+  listMixedStacks: vi.fn(),
+  splitMixedStack: vi.fn(),
+  unstackMixedStack: vi.fn(),
+  keepMixedStack: vi.fn(),
+  clearMixedStackKeep: vi.fn(),
   GLOBAL_SCOPE: "global",
 }));
 
@@ -30,8 +37,17 @@ import {
   keepGroupSeparate,
   reopenGroup,
   autoStackExact,
+  listMixedStacks,
+  splitMixedStack,
+  unstackMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
 } from "../api/dedup";
 import { useOperationStore } from "./useOperationStore";
+// The refusal readers the view uses, asserted here on the rejection the store
+// carried up: a 423 that reaches the view unreadable is a named refusal that
+// silently degrades to the generic sentence.
+import { lockedPictureIds, serverDetail } from "../utils/dedup";
 import {
   useDedupStore,
   scopeKey,
@@ -105,6 +121,11 @@ beforeEach(() => {
     keepGroupSeparate,
     reopenGroup,
     autoStackExact,
+    listMixedStacks,
+    splitMixedStack,
+    unstackMixedStack,
+    keepMixedStack,
+    clearMixedStackKeep,
   ]) {
     fn.mockReset();
   }
@@ -117,6 +138,17 @@ beforeEach(() => {
     unresolved_groups: 0,
     by_tier: {},
     scopes: [],
+  });
+  // An empty Mixed stacks list is the default answer when the page is opened.
+  listMixedStacks.mockResolvedValue({
+    threshold: 0.9,
+    total: 0,
+    kept_total: 0,
+    live_stack_count: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+    stacks: [],
   });
 });
 
@@ -1687,6 +1719,47 @@ describe("useDedupStore — multi-select", () => {
     expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
   });
 
+  it("keeps the selected queue stable until every bulk stack request settles", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
+    store.toggleSelected(0);
+    store.toggleSelected(2);
+    const before = store.groups.map((g) => g.signature);
+    const beforeFocus = store.focusIndex;
+    let resolveFirst;
+    let resolveSecond;
+    stackGroup
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    const pending = store.stack(store.groups[2]);
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-one", skipped: [] });
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+
+    // The first server verdict landed, but the visible gesture has not.
+    expect(store.groups.map((g) => g.signature)).toEqual(before);
+    expect(store.selectionCount).toBe(2);
+    expect(store.focusIndex).toBe(beforeFocus);
+
+    resolveSecond({ signature: "g3", batch_id: "cli-one", skipped: [] });
+    await pending;
+    expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
+    expect(store.selectionCount).toBe(0);
+    expect(store.focusIndex).toBe(0);
+    expect(getCounts).toHaveBeenCalledTimes(1);
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps every selected group separate in one gesture", async () => {
     const store = await openWith([group("g1"), group("g2")]);
     store.toggleSelected(0);
@@ -1709,18 +1782,47 @@ describe("useDedupStore — multi-select", () => {
     expect(store.selectionCount).toBe(2);
   });
 
-  it("stops at the first failure and keeps the unresolved groups selected", async () => {
-    const store = await openWith([group("g1"), group("g2")]);
+  it("commits earlier successes once after a bulk failure and keeps unresolved groups selected", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
     store.toggleSelected(0);
-    store.toggleSelected(1);
+    store.selectRange(2);
+    let resolveFirst;
+    let rejectSecond;
     stackGroup
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error("locked"));
-    const result = await store.stack(store.groups[0]);
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSecond = reject;
+          }),
+      );
+
+    const pending = store.stack(store.groups[0]);
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-partial" });
+    await vi.waitFor(() => expect(rejectSecond).toBeTypeOf("function"));
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2", "g3"]);
+    expect(store.selectionCount).toBe(3);
+    expect(store.focusIndex).toBe(2);
+
+    rejectSecond(new Error("locked"));
+    const result = await pending;
     expect(result).toBeNull();
-    // g1 landed and left; g2 failed and stays both queued and selected.
-    expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
+    // g1 landed; g2 failed and g3 was never attempted. Both remain selected.
+    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(store.groups.map((g) => g.signature)).toEqual(["g2", "g3"]);
     expect(store.isSelected("g2")).toBe(true);
+    expect(store.isSelected("g3")).toBe(true);
+    expect(store.focusIndex).toBe(0);
+    expect(getCounts).toHaveBeenCalledTimes(1);
+    // The successful first verdict is still one undoable batch and earns one
+    // receipt even though a later selected group was refused.
+    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
   });
 
   it("clears the selection when the list reloads", async () => {
@@ -1866,14 +1968,251 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
 });
 
 describe("useDedupStore — scans and bulk auto-stack", () => {
-  it("opening the queue queues a scan: the cache only fills when one runs", async () => {
-    // The regression this pins: openQueue read the (empty) cache and nothing
-    // ever requested a scan, so the queue stayed empty no matter which tiers
-    // or threshold the user set.
-    servePage([]);
+  it("keeps a pending person scan queued with unknown totals", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = {
+        status: "pending",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 0,
+        total_pictures: 0,
+        scanned_buckets: 0,
+        total_buckets: 0,
+      };
+      servePage([], {
+        scan: pending,
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: pending,
+      });
+      const store = useDedupStore();
+      await store.openQueue({ type: "character", id: 7, label: "Ada" });
+      expect(listGroups).toHaveBeenCalledWith(
+        expect.objectContaining({ scopeType: "character", scopeId: 7 }),
+      );
+      expect(store.scan).toMatchObject({ status: "pending", percent: 0 });
+      expect(store.isScanning).toBe(true);
+      expect(startScan).not.toHaveBeenCalled();
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses candidate-batch progress for a running person scan", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 3,
+        total_pictures: 3,
+        scanned_buckets: 1,
+        total_buckets: 4,
+      };
+      servePage([], {
+        scan: running,
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: running,
+      });
+      const store = useDedupStore();
+      await store.openQueue({ type: "character", id: 7, label: "Ada" });
+      expect(store.scan).toMatchObject({
+        status: "running",
+        scanned: 3,
+        total: 3,
+        buckets: 1,
+        totalBuckets: 4,
+        percent: 25,
+      });
+      expect(store.isScanning).toBe(true);
+      expect(startScan).not.toHaveBeenCalled();
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opening an unscanned queue queues its first scan", async () => {
+    servePage([], { scan: { status: "idle" } });
     const store = useDedupStore();
     await store.openQueue({});
     expect(startScan).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.invocationCallOrder[0]).toBeLessThan(
+      startScan.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not mistake completed progress for proof the library is still fresh", async () => {
+    servePage([], {
+      scan: { status: "complete", scanned_pictures: 12098, total_pictures: 12098 },
+    });
+    const store = useDedupStore();
+    await store.openQueue({});
+    expect(startScan).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares concurrent equivalent queue opens", async () => {
+    let resolvePage;
+    listGroups.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    startScan.mockResolvedValue({ status: "pending" });
+    const store = useDedupStore();
+    const first = store.openQueue({ type: "global" });
+    const second = store.openQueue({ type: "global" });
+    await vi.waitFor(() => expect(resolvePage).toBeTypeOf("function"));
+    resolvePage({ groups: [], total: 0, scan: { status: "idle" } });
+    await Promise.all([first, second]);
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(startScan).toHaveBeenCalledTimes(1);
+    store.stopScanPoll();
+  });
+
+  it("joins an equivalent active scan without posting another request", async () => {
+    vi.useFakeTimers();
+    try {
+      servePage([group("g1")], {
+        scan: {
+          status: "running",
+          tiers: ["exact"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: {
+          status: "running",
+          tiers: ["exact"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      expect(startScan).not.toHaveBeenCalled();
+      expect(store.isScanning).toBe(true);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a different-policy active scan once after it completes", async () => {
+    vi.useFakeTimers();
+    try {
+      servePage([group("g1")], {
+        scan: {
+          status: "running",
+          tiers: ["exact", "near"],
+          threshold: 0.9,
+          scanned_pictures: 10,
+          total_pictures: 100,
+        },
+      });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete" },
+      });
+      startScan.mockResolvedValue({ status: "pending" });
+      const store = useDedupStore();
+      await store.openQueue({});
+      expect(startScan).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(startScan).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(startScan).toHaveBeenCalledTimes(1);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adopts a 409 busy scan and retries the requested policy only once", async () => {
+    vi.useFakeTimers();
+    try {
+      startScan
+        .mockRejectedValueOnce({
+          response: {
+            data: {
+              detail: {
+                code: "dedup_scan_busy",
+                message: "another policy is active",
+                active_scan: {
+                  status: "running",
+                  tiers: ["exact", "near"],
+                  threshold: 0.9,
+                },
+              },
+            },
+          },
+        })
+        .mockResolvedValueOnce({ status: "pending" });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 0,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete" },
+      });
+      const store = useDedupStore();
+      await store.triggerScan();
+      expect(store.isScanning).toBe(true);
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(startScan).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(startScan).toHaveBeenCalledTimes(2);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops scan polling when the store is disposed", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 1,
+        total_pictures: 10,
+      };
+      servePage([group("g1")], { scan: active });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: active,
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      await vi.advanceTimersByTimeAsync(0);
+      getCounts.mockClear();
+      store.$dispose();
+      await vi.advanceTimersByTimeAsync(4100);
+      expect(getCounts).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rescans when a tier is enabled, not when one is disabled", async () => {
@@ -2236,5 +2575,996 @@ describe("locked-set candidates", () => {
     const store = await openWith([g]);
     expect(store.stackSizeFor(g)).toBe(3);
     expect(store.effectiveExcludedFor(g)).toEqual([]);
+  });
+});
+
+// --- Units: the queue's cover, exclusion and floor all move whole stacks -----
+//
+// `_stack_members` folds in every member of any stack the group touches, so the
+// picture-level gestures the queue used to offer could not be honoured:
+// excluding one member of an existing stack was a silent no-op, and choosing
+// one as cover silently re-covered that whole stack in the library.
+
+/**
+ * A group naming ONE member of a live 4-stack, plus two loose pictures.
+ *
+ * The stack's leader (501) is deliberately NOT a candidate: on a real library
+ * one stack-touching group in three is shaped exactly like this.
+ */
+function stackGroupFixture(over = {}) {
+  return {
+    signature: "sg",
+    tier: "near",
+    confidence: 0.9,
+    member_count: 3,
+    // The server's smart-score pick is a LOOSE picture, which is what makes the
+    // deck-wins rule visible: honouring it would re-curate stack 12.
+    cover_picture_id: 700,
+    why: [],
+    candidates: [
+      { picture_id: 503, stack_id: 12, width: 1000, height: 1000 },
+      { picture_id: 700, width: 6000, height: 4000 },
+      { picture_id: 701, width: 4000, height: 3000 },
+    ],
+    stacks: {
+      12: {
+        stack_id: 12,
+        member_count: 4,
+        leader_picture_id: 501,
+        leader_thumbnail_version: "1024x768",
+        matched_picture_ids: [503],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+    ...over,
+  };
+}
+
+describe("useDedupStore: the cover default with a deck present", () => {
+  // The whole point: the default verdict must not silently re-curate a stack
+  // the user already made. The server's own preselection (a loose picture here)
+  // loses to the deck.
+  it("preselects the deck's LEADER over the server's smart-score pick", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(g.cover_picture_id).toBe(700);
+    expect(store.coverIdFor(g)).toBe(501);
+  });
+
+  // With nothing stacked the rule is unchanged: the server's preselection wins.
+  it("leaves an all-loose group's preselection alone", async () => {
+    servePage([group("g1", 3, { cover_picture_id: 102 })], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(102);
+  });
+
+  // Merging into the larger stack re-curates the fewest pictures.
+  it("prefers the deeper deck when a group holds two", async () => {
+    servePage(
+      [
+        stackGroupFixture({
+          candidates: [
+            { picture_id: 503, stack_id: 12 },
+            { picture_id: 601, stack_id: 13 },
+          ],
+          stacks: {
+            12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+            13: { stack_id: 13, member_count: 9, leader_picture_id: 600 },
+          },
+        }),
+      ],
+      { total: 1 },
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(600);
+  });
+
+  // ── The two gestures that arrive on setCover, told apart by the id ───────
+  //
+  // Choosing the DECK passes the unit's own `coverPictureId` (the leader),
+  // that is what the row's tile, the digits, Compare's card and its zoom all
+  // emit. Promoting a MEMBER passes one of the stack's other pictures, which
+  // only Compare's expansion band ever does. Both must stick.
+
+  // Choosing the deck resolves to its leader: the picture the tile shows, and
+  // the only one the server can lead the resulting stack with.
+  it("keeps a deck's choice on the stack's leader", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 700);
+    expect(store.coverIdFor(g)).toBe(700);
+    // The deck, addressed the way every deck-level gesture addresses it.
+    store.setCover(g.signature, 501);
+    expect(store.coverIdFor(g)).toBe(501);
+  });
+
+  // The bug this closes: `unitForPictureId` resolved a promoted member back to
+  // its deck and handed back the LEADER, so promoting a member the group had
+  // named was a silent no-op, and the gesture only appeared to work for the
+  // members the group had NOT named, which fell through the lookup by accident.
+  it("honours a member promoted from inside the deck", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    // 503 is a matched member of stack 12: the case that used to snap back.
+    store.setCover(g.signature, 503);
+    expect(store.coverIdFor(g)).toBe(503);
+  });
+
+  // The other half of the same stack: a member the group never named. It
+  // already stuck, and it must keep sticking through the new branch.
+  it("honours a promoted member the group never named", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 504);
+    expect(store.coverIdFor(g)).toBe(504);
+  });
+
+  // A promotion sends that picture as the verdict's cover: the server resolves
+  // it against the pictures that will END UP in the stack (backend contract
+  // B2), which includes every member of a folded stack.
+  it("sends a promoted member as the verdict's cover", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    stackGroup.mockResolvedValue({ signature: "sg", picture_ids: [503, 700] });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 503);
+    await store.stack(g);
+    expect(stackGroup).toHaveBeenCalledWith(
+      "sg",
+      expect.objectContaining({ coverPictureId: 503 }),
+    );
+  });
+
+  // A frozen deck cannot lead a stack it is not in, whichever of its pictures
+  // was named: the promotion branch must not smuggle one past the lock.
+  it("refuses a promoted member of a frozen deck", async () => {
+    const frozen = stackGroupFixture();
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    store.setCover(g.signature, 503);
+    expect(store.coverIdFor(g)).toBe(700);
+  });
+
+  // A frozen deck cannot lead a stack it is not in, so the label stays truthful
+  // before Stack is ever pressed.
+  it("skips a frozen deck and falls back to the loose pictures", async () => {
+    const frozen = stackGroupFixture();
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.coverIdFor(store.groups[0])).toBe(700);
+  });
+});
+
+describe("useDedupStore: exclusion is a whole-unit gesture", () => {
+  // Excluding one member of an existing stack was a silent no-op: the rest of
+  // its stack dragged it straight back in. The deck goes out entire instead.
+  it("takes every picture of a deck out at once", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.toggleExcluded(g, 503)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([503]);
+    expect(store.includedUnitCountFor(g)).toBe(2);
+    // And back in as one gesture.
+    expect(store.toggleExcluded(g, 503)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([]);
+  });
+
+  // The leader is usually not a group member, so it has to address the deck
+  // too: that is what the row emits when the deck's tile is right-clicked.
+  it("addresses a deck by its leader as well as by its members", async () => {
+    servePage([stackGroupFixture()], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.toggleExcluded(g, 501)).toBe(true);
+    expect(store.excludedFor("sg")).toEqual([503]);
+  });
+
+  // The floor is two UNITS, not two pictures: the server folds a stack as one
+  // thing, so a deck and a loose picture is the smallest group with a decision
+  // left in it however deep the deck runs.
+  it("counts the floor in units", async () => {
+    const two = stackGroupFixture({
+      candidates: [{ picture_id: 503, stack_id: 12 }, { picture_id: 700 }],
+    });
+    servePage([two], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    // Five pictures in play, but only two units, so nothing may be excluded.
+    expect(store.stackSizeFor(g)).toBe(2);
+    expect(store.includedUnitCountFor(g)).toBe(2);
+    expect(store.isAtStackFloor(g)).toBe(true);
+    expect(store.toggleExcluded(g, 503)).toBe(false);
+    expect(store.toggleExcluded(g, 700)).toBe(false);
+    expect(store.excludedFor("sg")).toEqual([]);
+  });
+
+  // The cover moves to the surviving DECK, not to the best loose picture:
+  // otherwise excluding one stack quietly re-curates the other.
+  it("moves the cover onto the remaining deck when its unit goes out", async () => {
+    servePage(
+      [
+        stackGroupFixture({
+          candidates: [
+            { picture_id: 503, stack_id: 12 },
+            { picture_id: 601, stack_id: 13 },
+            { picture_id: 700, width: 6000, height: 4000 },
+          ],
+          stacks: {
+            12: { stack_id: 12, member_count: 9, leader_picture_id: 501 },
+            13: { stack_id: 13, member_count: 4, leader_picture_id: 600 },
+          },
+        }),
+      ],
+      { total: 1 },
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.coverIdFor(g)).toBe(501);
+    expect(store.toggleExcluded(g, 501)).toBe(true);
+    expect(store.coverIdFor(g)).toBe(600);
+  });
+
+  // A locked set freezes a WHOLE stack, including members the group never
+  // named, so the request must carry every visible member of that deck.
+  it("sends a frozen deck's whole visible membership as excluded", async () => {
+    const frozen = stackGroupFixture({
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+        { picture_id: 701 },
+      ],
+    });
+    frozen.stacks[12].stackable = false;
+    frozen.stacks[12].blocked_by_sets = [{ id: 7, name: "Portfolio" }];
+    servePage([frozen], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    expect(store.effectiveExcludedFor(g).sort()).toEqual([503, 504]);
+    // And `X` cannot walk the server's own exclusion back.
+    expect(store.toggleExcluded(g, 503)).toBe("locked");
+    expect(store.toggleExcluded(g, 501)).toBe("locked");
+  });
+});
+
+describe("useDedupStore: a scrapheap move while the queue is open", () => {
+  /** A `pictures_changed` message in the backend's shape. */
+  const event = (change_kind, picture_ids) => ({
+    type: "pictures_changed",
+    change_kind,
+    picture_ids,
+    source: "ui",
+  });
+
+  /** A group whose candidates sit in one existing stack (a deck). */
+  function deckGroup(signature, stackId, matched, depth, leader) {
+    const g = group(signature, matched.length);
+    g.candidates = matched.map((id, i) => ({
+      ...g.candidates[i],
+      picture_id: id,
+      stack_id: stackId,
+    }));
+    g.stacks = {
+      [String(stackId)]: {
+        stack_id: stackId,
+        member_count: depth,
+        leader_picture_id: leader,
+        leader_thumbnail_version: "800x600",
+        matched_picture_ids: [...matched],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    };
+    return g;
+  }
+
+  it("drops a group whose live members fall below two", async () => {
+    servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const doomed = idsOf(store.groups[1])[0];
+
+    const decision = store.applyPictureEvent(event("removed", [doomed]));
+
+    expect(decision.action).toBe("targeted");
+    expect(decision.dropped).toEqual(["g2"]);
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g3"]);
+  });
+
+  // Over-filtering is its own regression: three copies minus one is still a
+  // decision the user has to make.
+  it("keeps a group that still has two live members, minus the deleted tile", async () => {
+    servePage([group("g1", 3)], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const gone = idsOf(store.groups[0])[2];
+
+    store.applyPictureEvent(event("removed", [gone]));
+
+    expect(store.groups).toHaveLength(1);
+    const survivor = store.groups[0];
+    expect(idsOf(survivor)).not.toContain(gone);
+    expect(survivor.candidates).toHaveLength(2);
+    // Every count on the row is the LIVE one; the server reports it the same way.
+    expect(survivor.member_count).toBe(2);
+  });
+
+  it("takes the row out of the count and the queue's own total", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    getCounts.mockResolvedValue({ unresolved_groups: 2, by_tier: {} });
+    const store = useDedupStore();
+    await store.refreshCounts();
+    await store.loadFirstPage();
+    expect(store.openCount).toBe(2);
+    expect(store.total).toBe(2);
+
+    store.applyPictureEvent(event("removed", [idsOf(store.groups[0])[0]]));
+
+    expect(store.openCount).toBe(1);
+    expect(store.total).toBe(1);
+  });
+
+  it("walks the focus off a row it removes", async () => {
+    servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.setFocus(2);
+
+    store.applyPictureEvent(event("removed", [idsOf(store.groups[2])[0]]));
+
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2"]);
+    expect(store.focusIndex).toBe(1);
+    expect(store.focusedGroup.signature).toBe("g2");
+  });
+
+  // The deck stands for a whole existing stack, so a deleted member must not
+  // leave a hole in its depth: the row would promise to move a picture that is
+  // already in the Scrapheap.
+  it("shrinks a deck's depth when one of its matched members goes", async () => {
+    const g = deckGroup("g1", 7, [10, 11], 4, 10);
+    g.candidates.push({ ...group("g1").candidates[0], picture_id: 99 });
+    servePage([g], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    store.applyPictureEvent(event("removed", [11]));
+
+    const deck = store.groups[0].stacks["7"];
+    expect(deck.member_count).toBe(3);
+    expect(deck.matched_picture_ids).toEqual([10]);
+    expect(deck.leader_picture_id).toBe(10);
+  });
+
+  // The stack's next leader is a fact only the server holds, so the face falls
+  // back to a surviving matched member rather than a 404 thumbnail.
+  it("moves a deck's face off a deleted leader", async () => {
+    const g = deckGroup("g1", 7, [10, 11], 4, 10);
+    g.candidates.push({ ...group("g1").candidates[0], picture_id: 99 });
+    servePage([g], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    store.applyPictureEvent(event("removed", [10]));
+
+    const units = store.unitsFor(store.groups[0]);
+    const deck = units.find((u) => u.kind === "deck");
+    expect(deck.depth).toBe(3);
+    expect(deck.coverPictureId).toBe(11);
+    expect(store.groups[0].stacks["7"].leader_picture_id).toBeNull();
+  });
+
+  // A choice that names a picture the Scrapheap took is not a choice any more:
+  // left in place it rides along as an `excluded_picture_ids` entry the server
+  // cannot resolve, and `coverIdFor` hands back a raw deleted id.
+  it("forgets a cover choice and an exclusion that named a deleted picture", async () => {
+    servePage([group("g1", 4)], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    const g = store.groups[0];
+    const [first, , third, fourth] = idsOf(g);
+    store.toggleExcluded(g, fourth);
+    store.setCover("g1", third);
+    expect(store.excludedFor("g1")).toEqual([fourth]);
+
+    store.applyPictureEvent(event("removed", [third, fourth]));
+
+    expect(store.groups).toHaveLength(1);
+    expect(store.coverChoices.g1).toBeUndefined();
+    expect(store.excludedFor("g1")).toEqual([]);
+    expect(store.coverIdFor(store.groups[0])).toBe(first);
+  });
+
+  // The decided page reviews decisions that have already been made; hiding a
+  // row because its pictures were scrapheaped would strand the decision with no
+  // way back to it.
+  it("never drops a row from the decided page, only its dead tiles", async () => {
+    servePage([group("g1")], { total: 1 });
+    const store = useDedupStore();
+    store.showingDecided = true;
+    await store.loadFirstPage();
+    const gone = idsOf(store.groups[0])[0];
+
+    store.applyPictureEvent(event("removed", [gone]));
+
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1"]);
+    expect(idsOf(store.groups[0])).not.toContain(gone);
+  });
+
+  // The queue is windowed and keyset-paged: a restore lands at a position in the
+  // confidence ordering the client cannot compute, and rebuilding the window
+  // would throw a triage in progress back to row one for one returning group.
+  it("does not yank a triage in progress back to the top on a restore", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.setFocus(1);
+    listGroups.mockClear();
+
+    const decision = store.applyPictureEvent(event("restored", [4242]));
+
+    expect(decision.action).toBe("ignored");
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(store.focusIndex).toBe(1);
+  });
+
+  // ...but "nothing left to review" while the badge says otherwise is the one
+  // lie a to-do count cannot afford, and an empty window has nothing to disturb.
+  it("rebuilds an empty queue when a restore puts a group back", async () => {
+    servePage([], { total: 0 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    servePage([group("g1")], { total: 1 });
+
+    const decision = store.applyPictureEvent(event("restored", [4242]));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(decision.action).toBe("reload");
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1"]);
+  });
+
+  it("ignores events that are not a scrapheap move", async () => {
+    servePage([group("g1")], { total: 1 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    expect(
+      store.applyPictureEvent({
+        type: "pictures_changed",
+        change_kind: "updated",
+        fields: ["smart_score"],
+        picture_ids: idsOf(store.groups[0]),
+      }).action,
+    ).toBe("ignored");
+    expect(
+      store.applyPictureEvent({ type: "picture_imported", picture_ids: [1] })
+        .action,
+    ).toBe("ignored");
+    expect(store.groups).toHaveLength(1);
+  });
+
+  it("leaves the queue alone when the deletion touches no loaded group", async () => {
+    servePage([group("g1"), group("g2")], { total: 2 });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+
+    const decision = store.applyPictureEvent(event("removed", [999999]));
+
+    expect(decision.action).toBe("ignored");
+    expect(store.groups).toHaveLength(2);
+    expect(store.total).toBe(2);
+  });
+});
+
+// ── Mixed stacks: the third page (design D5) ────────────────────────────────
+
+/** One `MixedStackModel` row in the backend's shape. */
+function mixedStack(over = {}) {
+  return {
+    stack_id: 42,
+    threshold: 0.9,
+    member_count: 5,
+    member_ids: [7, 8, 9, 10, 11],
+    membership_fingerprint: "fp-42",
+    component_count: 2,
+    component_sizes: [4, 1],
+    components: [[7, 8, 9, 10], [11]],
+    largest_component_size: 4,
+    stranded_picture_ids: [11],
+    weakest_edge: 0.91,
+    unhashed_picture_ids: [],
+    suggested_action: "split",
+    kept: false,
+    leader_picture_id: 7,
+    leader_thumbnail_version: null,
+    ...over,
+  };
+}
+
+/** One page of `GET /dedup/mixed-stacks`. */
+function mixedPage(stacks, over = {}) {
+  return {
+    threshold: 0.9,
+    total: stacks.length,
+    kept_total: 0,
+    live_stack_count: 209,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+    stacks,
+    ...over,
+  };
+}
+
+describe("useDedupStore: the mixed-stack list is bound to the threshold", () => {
+  // The design's one non-negotiable here: the same stack is mixed at 0.90 and
+  // one clean cluster at 0.65. A list computed at a constant would describe a
+  // library the slider no longer points at.
+  it("asks at the queue's own threshold, never a constant", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledWith(
+      expect.objectContaining({ threshold: 0.9 }),
+    );
+  });
+
+  // 26 at the default 0.90 and 9 at the 0.65 floor, on the owner's library.
+  it("re-reads the list when the threshold moves", async () => {
+    listGroups.mockResolvedValue({ groups: [], total: 0 });
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 26 }, (_, i) => mixedStack({ stack_id: i })),
+      ),
+    );
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(store.mixedTotal).toBe(26);
+
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 9 }, (_, i) => mixedStack({ stack_id: i })),
+        { threshold: 0.65, total: 9 },
+      ),
+    );
+    await store.setThreshold(0.65);
+    expect(listMixedStacks).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threshold: 0.65 }),
+    );
+    expect(store.mixedTotal).toBe(9);
+    // The page states what the SERVER computed at, not what the slider says:
+    // the two differ for exactly as long as a reload is in flight.
+    expect(store.mixedThreshold).toBe(0.65);
+  });
+
+  // The list is a page, not a bag: the server's ranking IS the ordering, worst
+  // first, and the store must not re-sort it into something else.
+  it("keeps the server's least-held-together-first order", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 3, stranded_picture_ids: [1, 2] }),
+        mixedStack({ stack_id: 1, stranded_picture_ids: [4] }),
+        mixedStack({
+          stack_id: 2,
+          stranded_picture_ids: [],
+          component_count: 2,
+        }),
+      ]),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([3, 1, 2]);
+  });
+
+  // A failed read must never render as "no mixed stacks": that sentence is a
+  // claim about the library, and nobody asked.
+  it("records a failed read rather than reporting an empty library", async () => {
+    listMixedStacks.mockRejectedValue(new Error("boom"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.mixedError).toBeTruthy();
+    expect(store.mixedLoaded).toBe(false);
+    expect(store.mixedStacks).toEqual([]);
+  });
+
+  it("pages by plain offset and drops a re-served row", async () => {
+    listMixedStacks.mockResolvedValueOnce(
+      mixedPage([mixedStack({ stack_id: 1 })], { total: 2, next_offset: 1 }),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    listMixedStacks.mockResolvedValueOnce(
+      mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })], {
+        total: 2,
+        next_offset: null,
+      }),
+    );
+    await store.loadMoreMixedStacks();
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([1, 2]);
+    expect(store.hasMoreMixed).toBe(false);
+  });
+});
+
+describe("useDedupStore: the queue's warning chip reads the same list", () => {
+  // Only the STRONG case is flagged. The soft ones are often legitimate, and a
+  // mark on one tile in eight stops being a warning at all.
+  it("flags only the stacks with a stranded member", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 11, stranded_picture_ids: [99] }),
+        mixedStack({ stack_id: 12, stranded_picture_ids: [] }),
+      ]),
+    );
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(store.isStackFlagged(11)).toBe(true);
+    expect(store.isStackFlagged("11")).toBe(true);
+    expect(store.isStackFlagged(12)).toBe(false);
+    expect(store.isStackFlagged(null)).toBe(false);
+  });
+
+  // The first request after cache invalidation scores every stack. It belongs to
+  // the optional page, never to ordinary queue startup.
+  it("defers the mixed list until the page is opened", async () => {
+    listGroups.mockResolvedValue({ groups: [], total: 0 });
+    startScan.mockResolvedValue({ status: "complete" });
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.openQueue();
+    expect(listMixedStacks).not.toHaveBeenCalled();
+
+    await store.showMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useDedupStore: the mixed-stack actions", () => {
+  it("splits with the ids the row showed and drops the row", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    const result = await store.resolveMixedStack(store.mixedStacks[0]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ pictureIds: [11], threshold: 0.9 }),
+    );
+    expect(result.split_picture_ids).toEqual([11]);
+    expect(store.mixedStacks).toEqual([]);
+    expect(store.mixedTotal).toBe(0);
+    // One operation, so the standard receipt covers it: no second undo
+    // mechanism is invented for this surface.
+    expect(useOperationStore().refresh).toHaveBeenCalled();
+  });
+
+  // ONE call carries both outcomes. The split route takes any live member of
+  // the stack, so an unstack is "every member leaves" and the server dissolves
+  // a stack that would be left with fewer than two members either way. Routing
+  // between two endpoints on a client-side prediction only creates a case where
+  // the prediction and the request disagree.
+  it("unstacks through the same split call, naming every member", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
+          suggested_action: "unstack",
+          stranded_picture_ids: [],
+          components: [[7], [8]],
+        }),
+      ]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 7,
+      split_picture_ids: [7, 8],
+      remaining_picture_ids: [],
+      stack_dissolved: true,
+      batch_id: "srv-2",
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    await store.resolveMixedStack(store.mixedStacks[0], [7, 8]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ pictureIds: [7, 8] }),
+    );
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(store.mixedStacks).toEqual([]);
+  });
+
+  // The threshold the LIST was computed at, not the slider's live value. The
+  // two differ for exactly as long as a reload is in flight, and that is the
+  // window in which a write built from the rows on screen would be bounded by a
+  // threshold those rows were never computed at.
+  it("sends the threshold the list was served at, not the live slider", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack()], { threshold: 0.72 }),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-3",
+    });
+    const store = useDedupStore();
+    await store.loadPolicy();
+    await store.loadMixedStacks();
+    expect(store.threshold).toBe(0.9);
+    expect(store.mixedThreshold).toBe(0.72);
+    await store.resolveMixedStack(store.mixedStacks[0]);
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ threshold: 0.72 }),
+    );
+  });
+
+  // A 400 means the row no longer describes the stack: a marked member left it
+  // since the list was read. Without a handler the button simply did nothing,
+  // which is the definition of a dead control. The list is re-read so the row
+  // either comes back correct or leaves.
+  it("re-reads the list when the server says the row is stale", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue({
+      response: { status: 400, data: { detail: "not members of stack 42" } },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(listMixedStacks).toHaveBeenCalledTimes(2);
+    // The row stays: nothing was written, so nothing may leave the list on the
+    // strength of a refusal.
+    expect(store.mixedStacks).toHaveLength(1);
+  });
+
+  // A failed action must leave the row where it was: the page's whole promise
+  // is that nothing changes until it says it did.
+  it("keeps the row when the action fails", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue(new Error("nope"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+  });
+
+  // A locked picture set refuses the WHOLE stack with 423 and writes nothing,
+  // so the row has to stay AND has to stop offering an outcome that cannot
+  // land. The refusal is fresher truth than the page the row was read from, so
+  // it is what the row is marked with.
+  it("keeps a 423-refused row and marks it with the sets the server named", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    splitMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            action: "split a stack",
+            sets: [{ id: 3, name: "Frozen" }],
+            picture_ids: [11],
+          },
+        },
+      },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedTotal).toBe(1);
+    expect(store.mixedStacks[0].stackable).toBe(false);
+    expect(store.mixedStacks[0].blocked_by_sets).toEqual([
+      { id: 3, name: "Frozen" },
+    ]);
+    // The rejection is still carried up, so the view can name the sets and
+    // flash the pictures the refusal listed.
+    expect(lockedPictureIds(store.error)).toEqual([11]);
+    expect(serverDetail(store.error)).toContain("Frozen");
+  });
+
+  // An unstack takes the same refusal, and the row it leaves behind must read
+  // the same way: one refusal, one marking. It travels as a split over every
+  // member, so this is the same call refused with the same code.
+  it("marks the row when an unstack is refused by a lock", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
+          suggested_action: "unstack",
+          stranded_picture_ids: [],
+          components: [[7], [8]],
+        }),
+      ]),
+    );
+    splitMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            sets: [
+              { id: 3, name: "Frozen" },
+              { id: 4, name: "Archive" },
+            ],
+            picture_ids: [7, 8],
+          },
+        },
+      },
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedStacks[0].stackable).toBe(false);
+    expect(store.mixedStacks[0].blocked_by_sets).toHaveLength(2);
+  });
+
+  // Over-marking is its own regression: a network blip is not a lock, and a row
+  // that quietly disabled itself on one would strand work the user could do.
+  it("does not mark a row locked when the failure was not a lock", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue(new Error("nope"));
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    expect(await store.resolveMixedStack(store.mixedStacks[0])).toBeNull();
+    expect(store.mixedStacks).toHaveLength(1);
+    expect(store.mixedStacks[0].stackable).toBeUndefined();
+  });
+
+  // Keep is what makes the list drainable. It changes no picture, so it records
+  // no operation and DELETE is the only way back.
+  it("Keep removes the row, and clearing the Keep brings it back", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    keepMixedStack.mockResolvedValue({
+      stack_id: 42,
+      dismissed: true,
+      created: true,
+      membership_fingerprint: "fp-42",
+    });
+    const store = useDedupStore();
+    await store.loadMixedStacks();
+    await store.keepMixed(store.mixedStacks[0]);
+    expect(keepMixedStack).toHaveBeenCalledWith(42);
+    expect(store.mixedStacks).toEqual([]);
+    expect(store.mixedKeptTotal).toBe(1);
+    // No operation was recorded, so no receipt is raised for it.
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
+
+    clearMixedStackKeep.mockResolvedValue({
+      stack_id: 42,
+      dismissed: false,
+      removed: 1,
+    });
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    await store.unkeepMixedStack(42);
+    expect(clearMixedStackKeep).toHaveBeenCalledWith(42);
+    expect(store.mixedStacks.map((s) => s.stack_id)).toEqual([42]);
+  });
+});
+
+describe("useDedupStore: the two-way shortcut", () => {
+  /** A queue group that folds in one existing stack. */
+  function groupWithStack(signature, stackId) {
+    const g = group(signature, 2);
+    g.candidates[0].stack_id = stackId;
+    g.stacks = {
+      [String(stackId)]: {
+        stack_id: stackId,
+        member_count: 5,
+        leader_picture_id: 7,
+        matched_picture_ids: [g.candidates[0].picture_id],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    };
+    return g;
+  }
+
+  it("finds the loaded group a stack appears in, in ABSOLUTE indices", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1), groupWithStack("a2", 42)],
+      total: 2,
+    });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    expect(store.groupIndexForStack(42)).toBe(1);
+    expect(store.groupIndexForStack("42")).toBe(1);
+    expect(store.groupIndexForStack(999)).toBe(-1);
+  });
+
+  // A shortcut that scrolled to a guessed row would be worse than one that is
+  // not offered, so the store refuses rather than moving the cursor anywhere.
+  it("declines when no loaded group holds the stack", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1)],
+      total: 1,
+    });
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    store.showingMixed = true;
+    expect(store.showQueueForStack(42)).toBe(false);
+    expect(store.showingMixed).toBe(true);
+  });
+
+  it("puts the queue's focus on the group and leaves the page", async () => {
+    listGroups.mockResolvedValue({
+      groups: [groupWithStack("a1", 1), groupWithStack("a2", 42)],
+      total: 2,
+    });
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    await store.showMixedStacks(42);
+    expect(store.showingMixed).toBe(true);
+    expect(store.mixedFocusStackId).toBe("42");
+    // The queue is untouched while the page is up, which is what lets the
+    // return restore exactly what the user left.
+    expect(store.focusIndex).toBe(0);
+
+    expect(store.showQueueForStack(42)).toBe(true);
+    expect(store.showingMixed).toBe(false);
+    expect(store.focusIndex).toBe(1);
+  });
+
+  // Flipping the page must not reload the queue: it is a page of the same
+  // destination, not a route away.
+  it("costs the queue no reload in either direction", async () => {
+    listGroups.mockResolvedValue({ groups: [group("a1")], total: 1 });
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const store = useDedupStore();
+    await store.loadFirstPage();
+    listGroups.mockClear();
+    await store.showMixedStacks();
+    store.hideMixedStacks();
+    expect(listGroups).not.toHaveBeenCalled();
+    expect(store.showingMixed).toBe(false);
   });
 });

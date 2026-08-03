@@ -360,8 +360,31 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── pictures: owner-only surfaces ───────────────────────────────────────
     ("GET", "/api/v1/pictures/plugins"): RoutePolicy(_ANY),
     ("GET", "/api/v1/sort_mechanisms"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/pictures/import/status"): RoutePolicy(_ANY),
-    ("GET", "/api/v1/pictures/import/staging/{staging_id}/status"): RoutePolicy(_ANY),
+    # Import status is NOT ANY_TOKEN: the completed payload carries per-object
+    # data (``results[].picture_id``, ``results[].file`` the vault-relative
+    # filename, and ``scrapheaped_picture_ids``) for pictures anywhere in the
+    # vault. ``ANY_TOKEN``'s contract is that a route returns no per-object
+    # resource data, so declaring it there handed a resource-scoped share token
+    # the ids and filenames of pictures its own thumbnail route refuses. Both
+    # routes serve the owner's own import UI (their POST siblings are already
+    # OWNER_ONLY, so nobody who cannot start an import has a task to poll), which
+    # makes OWNER_ONLY the correct tier and not a narrowing of any live caller.
+    ("GET", "/api/v1/pictures/import/status"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Import job status; the completed payload names imported/duplicate/"
+            "scrapheaped picture ids and vault filenames, so it is per-object "
+            "owner data, not a progress counter"
+        ),
+    ),
+    ("GET", "/api/v1/pictures/import/staging/{staging_id}/status"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Async staging import status; same per-object payload as "
+            "GET /pictures/import/status (scrapheaped_picture_ids), and its "
+            "open/files/commit siblings are already owner only"
+        ),
+    ),
     ("GET", "/api/v1/pictures/export/status"): RoutePolicy(_ANY),
     ("GET", "/api/v1/pictures/export/download/{task_id}"): RoutePolicy(_ANY),
     ("POST", "/api/v1/pictures/import"): RoutePolicy(
@@ -452,6 +475,32 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Set member position; PATCH blocked for READ tokens; owner only",
     ),
+    # ── stacks.py: Keep cover only (docs/design/keep-cover-only.md) ─────────
+    ("POST", "/api/v1/stacks/keep-cover-only/preview"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Dry run over stacks named only by stack or picture id, which can "
+            "reach any stack in the vault. It returns per-stack membership, the "
+            "names of the locked picture sets freezing a stack and of the "
+            "characters a collapse would strand, plus a byte total, none of "
+            "which can be narrowed to a share token's scope without either "
+            "leaking that out-of-scope members exist or reporting counts "
+            "measured over a subset, which would be wrong numbers rather than "
+            "narrower ones (the same reasoning as GET /dedup/mixed-stacks). "
+            "POST is also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/stacks/keep-cover-only"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Soft-deletes stack members to the Scrapheap and writes the "
+            "metadata union (tags, score, pending character) onto their covers, "
+            "across pictures named only by a stack or picture id. Stacks are "
+            "set-membership-atomic, so this also changes what collections "
+            "effectively contain. Same reasoning as POST /dedup/verdicts/stack "
+            "and the mixed-stack mutations; POST is also blocked for READ tokens"
+        ),
+    ),
     # ── dedup.py (near-duplicate sweep, dry run) ────────────────────────────
     ("GET", "/api/v1/dedup/sweep/policy"): RoutePolicy(
         _OWNER,
@@ -491,6 +540,23 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "membership, so it routinely spans a share token's scope boundary "
             "and cannot be narrowed without leaking that out-of-scope copies "
             "exist"
+        ),
+    ),
+    ("GET", "/api/v1/dedup/stacks/{stack_id}/members"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "The Duplicates queue's deck expansion: returns every live member "
+            "of one existing stack with the same per-picture fields the queue "
+            "row carries. It is the lazy half of GET /dedup/groups and is "
+            "owner-only for the same reason: a stack folded into a duplicate "
+            "group is defined by content identity, not by collection "
+            "membership, so its members routinely straddle a share token's "
+            "scope boundary and narrowing the list would leak that out-of-scope "
+            "siblings exist. Deliberately NOT scoped like GET /stacks/"
+            "{stack_id}/pictures, which self-filters for a scoped token: this "
+            "surface must report the stack's TRUE depth (that is the whole "
+            "point of the deck), and a filtered depth would be a wrong number "
+            "rather than a narrower one"
         ),
     ),
     ("POST", "/api/v1/dedup/counts"): RoutePolicy(
@@ -538,6 +604,55 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "Bulk stacking across the whole vault under one undo batch; the "
             "most far-reaching mutation on this surface. POST is also blocked "
             "for READ tokens"
+        ),
+    ),
+    # ── dedup.py (v1.9 Mixed stacks, design D5/B5) ──────────────────────────
+    # The same two reasons as the rest of this surface. The list is a
+    # vault-wide aggregate over every live stack, and the three actions mutate
+    # stack membership on pictures named only by a stack id.
+    ("GET", "/api/v1/dedup/mixed-stacks"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Enumerates every live stack in the vault that is not one cluster, "
+            "with its member picture ids. Cohesion is a fact about the whole "
+            "stack, so the list cannot be narrowed to a share token's scope "
+            "without either leaking that out-of-scope members exist or "
+            "reporting a component count measured over a subset, a wrong "
+            "number rather than a narrower one, the same reasoning that makes "
+            "GET /dedup/stacks/{stack_id}/members owner-only"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/split"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Removes pictures from a stack anywhere in the vault, identified "
+            "only by a stack id; stacks are set-membership-atomic, so this "
+            "changes what collections effectively contain. POST is also "
+            "blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/unstack"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Dissolves a stack anywhere in the vault, freeing every member. "
+            "Same reasoning as the split, at the whole-stack scale. POST is "
+            "also blocked for READ tokens"
+        ),
+    ),
+    ("POST", "/api/v1/dedup/mixed-stacks/{stack_id}/keep"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Writes a durable dismissal against a stack anywhere in the vault. "
+            "Changes no picture, but it is owner state on an owner-only "
+            "surface and a scoped token has no listing to suppress. POST is "
+            "also blocked for READ tokens"
+        ),
+    ),
+    ("DELETE", "/api/v1/dedup/mixed-stacks/{stack_id}/keep"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Clears the dismissal above; owner-only for the same reason. "
+            "DELETE is also blocked for READ tokens"
         ),
     ),
     # ── characters.py ───────────────────────────────────────────────────────

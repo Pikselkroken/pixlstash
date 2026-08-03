@@ -41,6 +41,18 @@ vi.mock("../../api/dedup", () => ({
   keepGroupSeparate: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
+  // The lazy half of the stack contract: a row's expansion reads its members
+  // only when the user opens one.
+  listStackMembers: vi.fn(),
+  // The third page (design D5). The queue reads this list on open even when
+  // the page is never shown, because the flagged deck badge is built from it.
+  listMixedStacks: vi.fn(),
+  splitMixedStack: vi.fn(),
+  unstackMixedStack: vi.fn(),
+  keepMixedStack: vi.fn(),
+  clearMixedStackKeep: vi.fn(),
+  MAX_STACK_MEMBER_PAGE: 200,
+  MAX_MIXED_STACK_PAGE: 200,
   GLOBAL_SCOPE: "global",
 }));
 
@@ -50,9 +62,14 @@ vi.mock("../../api/dedup", () => ({
 // mirror write into the URL feeds back into the component's own route sync.
 const routeMock = reactive({ name: "duplicates", query: {} });
 const routerReplace = vi.fn();
+const routerPush = vi.fn();
 vi.mock("vue-router", () => ({
   useRoute: () => routeMock,
-  useRouter: () => ({ replace: (...a) => routerReplace(...a) }),
+  useRouter: () => ({
+    replace: (...a) => routerReplace(...a),
+    // Only the queue-clear route to the stacks pushes; the URL mirror replaces.
+    push: (...a) => routerPush(...a),
+  }),
 }));
 
 vi.mock("../../api/pictures", () => ({
@@ -116,6 +133,12 @@ import {
   stackGroup,
   keepGroupSeparate,
   reopenGroup,
+  listStackMembers,
+  listMixedStacks,
+  splitMixedStack,
+  unstackMixedStack,
+  keepMixedStack,
+  clearMixedStackKeep,
 } from "../../api/dedup";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -142,6 +165,44 @@ function group(signature, n = 2) {
       height: 3000,
       megapixels: 12,
     })),
+  };
+}
+
+/** One `MixedStackModel` row from `GET /dedup/mixed-stacks`. */
+function mixedStack(over = {}) {
+  return {
+    stack_id: 42,
+    threshold: 0.9,
+    member_count: 5,
+    member_ids: [7, 8, 9, 10, 11],
+    membership_fingerprint: "fp-42",
+    component_count: 2,
+    component_sizes: [4, 1],
+    components: [[7, 8, 9, 10], [11]],
+    largest_component_size: 4,
+    stranded_picture_ids: [11],
+    weakest_edge: 0.91,
+    unhashed_picture_ids: [],
+    suggested_action: "split",
+    kept: false,
+    leader_picture_id: 7,
+    leader_thumbnail_version: null,
+    ...over,
+  };
+}
+
+/** One page of that list. */
+function mixedPage(stacks, over = {}) {
+  return {
+    threshold: 0.9,
+    total: stacks.length,
+    kept_total: 0,
+    live_stack_count: 209,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+    stacks,
+    ...over,
   };
 }
 
@@ -221,6 +282,7 @@ beforeEach(() => {
   routeMock.name = "duplicates";
   routeMock.query = {};
   routerReplace.mockReset();
+  routerPush.mockReset();
   __actionListeners.length = 0;
   __operationStoreMock.refresh.mockReset();
   __operationStoreMock.nextUndo = null;
@@ -237,12 +299,21 @@ beforeEach(() => {
     stackGroup,
     keepGroupSeparate,
     reopenGroup,
+    listStackMembers,
+    listMixedStacks,
+    splitMixedStack,
+    unstackMixedStack,
+    keepMixedStack,
+    clearMixedStackKeep,
     errorSpy,
     notices.info,
     notices.warning,
   ]) {
     fn.mockReset();
   }
+  // Most libraries have no mixed stack at all, so an empty list is the default
+  // answer here too. Cases that need rows override it.
+  listMixedStacks.mockResolvedValue(mixedPage([]));
 });
 
 afterEach(() => {
@@ -400,6 +471,33 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
     await store.setVerdictEnabled("keep_separate", false);
     await wrapper.vm.$nextTick();
     expect(button.attributes("aria-label")).toBe("Stacked");
+    wrapper.unmount();
+  });
+
+  it("shows decided candidates individually and removes stack expansion", async () => {
+    const decidedGroup = {
+      ...deckGroup("decided-deck", 12),
+      verdict: "stacked",
+      decided_at: "2026-08-02T12:00:00",
+    };
+    const { wrapper } = await decidedQueue({ groups: [decidedGroup], total: 1 });
+
+    const row = wrapper.findComponent({ name: "DedupGroupRow" });
+    expect(row.props("collapseStacks")).toBe(false);
+    expect(row.findAll(".gthumb")).toHaveLength(2);
+    expect(row.findComponent({ name: "StackBadge" }).exists()).toBe(false);
+
+    listStackMembers.mockClear();
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(listStackMembers).not.toHaveBeenCalled();
+    expect(
+      wrapper.find('[data-testid="dedup-announcement"]').text(),
+    ).toContain("already shown");
+
+    const compare = wrapper.findComponent({ name: "DedupCompareDialog" });
+    expect(compare.props("collapseStacks")).toBe(false);
+    expect(compare.props("readOnly")).toBe(true);
     wrapper.unmount();
   });
 
@@ -702,7 +800,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     store.nearEnabled = true;
     await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
     await wrapper.vm.$nextTick();
-    const input = wrapper.find(".tm-threshold-input");
+    const input = wrapper.find(".dth-input");
     input.element.focus();
     wrapper
       .findComponent({ name: "DedupTierMenu" })
@@ -715,7 +813,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
   it("keys pressed on the threshold slider never fire verdicts", async () => {
     const { wrapper } = await mountQueue([group("g1")]);
     await wrapper.find(".dq-tier-wrap .dq-btn").trigger("click");
-    const input = wrapper.find(".tm-threshold-input").element;
+    const input = wrapper.find(".dth-input").element;
     input.focus();
     stackGroup.mockResolvedValue({});
     key("s", input);
@@ -732,7 +830,7 @@ describe("DuplicateQueue — the toolbar hands the keyboard back", () => {
     const trigger = wrapper.find(".dq-tier-wrap .dq-btn");
     await trigger.trigger("click");
     await wrapper.vm.$nextTick();
-    const input = wrapper.find(".tm-threshold-input");
+    const input = wrapper.find(".dth-input");
     input.element.focus();
     await input.trigger("keydown", { key: "Escape" });
     expect(wrapper.findComponent({ name: "DedupTierMenu" }).exists()).toBe(
@@ -1864,6 +1962,58 @@ describe("DuplicateQueue — multi-select", () => {
     expect(batchIds[1]).toBe(batchIds[0]);
   });
 
+  it("keeps rows and announcement stable until the selected stack gesture settles", async () => {
+    const { wrapper, store } = await mountQueue([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+    ]);
+    const rows = wrapper.findAll(".grow");
+    await rows[0].trigger("click", { ctrlKey: true });
+    await rows[2].trigger("click", { ctrlKey: true });
+    let resolveFirst;
+    let resolveSecond;
+    stackGroup
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    await wrapper.findAll(".grow")[0].find(".gbtn--stack").trigger("click");
+    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
+    resolveFirst({ signature: "g1", batch_id: "cli-visible" });
+    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+    await wrapper.vm.$nextTick();
+
+    expect(store.groups.map((entry) => entry.signature)).toEqual([
+      "g1",
+      "g2",
+      "g3",
+    ]);
+    expect(wrapper.findAll(".grow")).toHaveLength(3);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).not.toContain(
+      "Stacked",
+    );
+
+    resolveSecond({ signature: "g3", batch_id: "cli-visible" });
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+    expect(store.groups.map((entry) => entry.signature)).toEqual(["g2"]);
+    expect(wrapper.findAll(".grow")).toHaveLength(1);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Stacked 2 groups",
+    );
+    wrapper.unmount();
+  });
+
   it("shift+click selects the range from the focus, Escape clears it", async () => {
     const { wrapper, store } = await mountQueue([
       group("g1"),
@@ -2071,5 +2221,1182 @@ describe("DuplicateQueue — a read-only session", () => {
       wrapper.findComponent({ name: "DedupCompareDialog" }).props("readOnly"),
     ).toBe(true);
     wrapper.unmount();
+  });
+});
+
+describe("DuplicateQueue: a picture scrapheaped elsewhere", () => {
+  /** A `pictures_changed` frame, as `useUpdatesSocket` hands it to the store. */
+  const removed = (picture_ids) => ({
+    type: "pictures_changed",
+    change_kind: "removed",
+    picture_ids,
+    source: "ui",
+  });
+
+  const rowIds = (wrapper) =>
+    wrapper
+      .findAll("[data-testid^='dedup-group-']")
+      .map((el) => el.attributes("data-testid"));
+
+  // The reported bug, at the surface it was reported on: the row for a group
+  // that is now one picture stayed on screen, drawing an empty slot beside it.
+  it("takes a group thinned below two off the screen without a reload", async () => {
+    const { wrapper, store } = await mountQueue([
+      group("g1"),
+      group("g2"),
+      group("g3"),
+    ]);
+    expect(rowIds(wrapper)).toEqual([
+      "dedup-group-g1",
+      "dedup-group-g2",
+      "dedup-group-g3",
+    ]);
+    listGroups.mockClear();
+
+    store.applyPictureEvent(
+      removed([store.groups[1].candidates[0].picture_id]),
+    );
+    await wrapper.vm.$nextTick();
+
+    expect(rowIds(wrapper)).toEqual(["dedup-group-g1", "dedup-group-g3"]);
+    // Surgical, not a rebuild: the window and the user's place in it survive.
+    expect(listGroups).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // Over-filtering is its own regression, and so is a tile that outlives its
+  // picture: the row stays, one tile lighter.
+  it("keeps a group that still has two, minus the deleted tile", async () => {
+    const { wrapper, store } = await mountQueue([group("g1", 3)]);
+    const gone = store.groups[0].candidates[2].picture_id;
+    expect(wrapper.findAll(".gunit")).toHaveLength(3);
+
+    store.applyPictureEvent(removed([gone]));
+    await wrapper.vm.$nextTick();
+
+    expect(rowIds(wrapper)).toEqual(["dedup-group-g1"]);
+    expect(wrapper.findAll(".gunit")).toHaveLength(2);
+    expect(wrapper.html()).not.toContain(`/pictures/thumbnails/${gone}.webp`);
+    wrapper.unmount();
+  });
+});
+
+// --- The row's expansion band (D4) -------------------------------------------
+//
+// A deck stands for a whole existing stack and the row shows one picture of it.
+// The band is where the rest can be looked at, and the invariant that makes it
+// safe is the queue's, not the row's: ONE band, on the FOCUSED row. Both scroll
+// spacers are sized from a single uniform row pitch, so a second
+// variable-height row breaks the arithmetic the whole track is built from.
+
+/** A group of one deck (stack 12, four deep) and one loose picture. */
+function deckGroup(signature = "d1", stackId = 12) {
+  return {
+    signature,
+    tier: "near",
+    confidence: 0.91,
+    member_count: 2,
+    cover_picture_id: null,
+    why: [],
+    candidates: [
+      { picture_id: stackId * 10 + 3, stack_id: stackId },
+      { picture_id: stackId * 10 + 7 },
+    ],
+    stacks: {
+      [stackId]: {
+        stack_id: stackId,
+        member_count: 4,
+        leader_picture_id: stackId * 10 + 1,
+        leader_thumbnail_version: "vlead",
+        matched_picture_ids: [stackId * 10 + 3],
+        stackable: true,
+        blocked_by_sets: [],
+      },
+    },
+  };
+}
+
+/** The whole member list, as `GET /dedup/stacks/{id}/members` serves it. */
+function memberPage(stackId) {
+  return {
+    stack_id: stackId,
+    member_count: 4,
+    members: Array.from({ length: 4 }, (_, i) => ({
+      picture_id: stackId * 10 + i + 1,
+      thumbnail_version: `v${i}`,
+      position: i,
+    })),
+    next_offset: null,
+  };
+}
+
+/** The badges of every mounted row, in render order. */
+function badges(wrapper) {
+  return wrapper.findAll('[data-testid="stack-badge"]');
+}
+
+function bands(wrapper) {
+  return wrapper.findAll('[data-testid="dedup-row-expansion"]');
+}
+
+describe("DuplicateQueue: the expansion band", () => {
+  beforeEach(() => {
+    listStackMembers.mockImplementation((stackId) =>
+      Promise.resolve(memberPage(stackId)),
+    );
+  });
+
+  // Lazy by contract: the payload sizes the stack and names its leader, and
+  // the members are a separate read the user asks for. Nothing is fetched
+  // until a badge is pressed.
+  it("reads a deck's members only when its badge is pressed", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    expect(listStackMembers).not.toHaveBeenCalled();
+    expect(bands(wrapper)).toHaveLength(0);
+
+    await badges(wrapper)[0].trigger("click");
+    expect(listStackMembers).toHaveBeenCalledWith(12, { limit: 200 });
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.exists()).toBe(true);
+    // The whole stack, not the one member this group named.
+    expect(band.findAll('[data-testid="stack-member"]')).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // Inline in the strip would nest a second horizontal scroller on the same
+  // axis, and would break the unit reading the row exists to create.
+  it("opens below the row's columns, inside the row", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const row = wrapper.find(".grow").element;
+    const band = bands(wrapper)[0].element;
+    const strip = wrapper.find(".gstrip").element;
+    expect(row.contains(band)).toBe(true);
+    expect(strip.contains(band)).toBe(false);
+    expect(
+      strip.compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  // The hard constraint. A second open band is a second variable-height row,
+  // and the spacers are sized from one uniform pitch.
+  it("keeps at most one band in the whole queue", async () => {
+    const { wrapper } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(badges(wrapper)[0].attributes("aria-expanded")).toBe("true");
+
+    await badges(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(badges(wrapper)[0].attributes("aria-expanded")).toBe("false");
+    expect(badges(wrapper)[1].attributes("aria-expanded")).toBe("true");
+    wrapper.unmount();
+  });
+
+  // Pressing the same badge again closes it, without a second read.
+  it("closes on a second press", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    expect(listStackMembers).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  // The band lives on the focused row and nowhere else, so the keyboard cursor
+  // takes it with it. This is what keeps the pitch sampled from collapsed rows.
+  it("collapses when the focus moves off its row", async () => {
+    const { wrapper, store } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+
+    await wrapper.find(".dq").trigger("keydown", { key: "ArrowDown" });
+    await flushPromises();
+    expect(store.focusIndex).toBe(1);
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // A verdict advances the cursor onto a different group under the same index,
+  // so the collapse cannot be keyed on the index alone.
+  it("collapses when a verdict advances onto another group", async () => {
+    const { wrapper, store } = await mountQueue([
+      deckGroup("d1", 12),
+      deckGroup("d2", 20),
+    ]);
+    stackGroup.mockResolvedValue({ signature: "d1", picture_ids: [121, 127] });
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+
+    await store.stack(store.groups[0]);
+    await flushPromises();
+    expect(store.focusIndex).toBe(0);
+    expect(store.focusedGroup.signature).toBe("d2");
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // Disclosure, not a mode: the verdict a user was about to give is the same
+  // verdict a moment after they opened a deck to check it.
+  it("leaves the verdict live, and Enter does what it would have done", async () => {
+    const { wrapper } = await mountQueue([deckGroup(), group("g2")]);
+    stackGroup.mockResolvedValue({ signature: "d1", picture_ids: [121, 127] });
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const stackButton = wrapper.find(".gbtn--stack");
+    expect(stackButton.attributes("disabled")).toBeUndefined();
+    // The label still names the verdict's outcome over the row's units.
+    expect(stackButton.text()).toContain("Add 1 to stack of 4");
+
+    await wrapper.find(".dq").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(stackGroup).toHaveBeenCalledWith(
+      "d1",
+      expect.objectContaining({ coverPictureId: 121 }),
+    );
+    wrapper.unmount();
+  });
+
+  // The digits address the strip's tiles whether the band is open or not: one
+  // key meaning two things on one screen is how a key stops being trusted.
+  it("keeps the digits on the units while a band is open", async () => {
+    const { wrapper, store } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    await wrapper.find(".dq").trigger("keydown", { key: "2" });
+    expect(store.coverIdFor(store.groups[0])).toBe(127);
+    await wrapper.find(".dq").trigger("keydown", { key: "1" });
+    // The deck's LEADER, not one of the members the band just put on screen.
+    expect(store.coverIdFor(store.groups[0])).toBe(121);
+    wrapper.unmount();
+  });
+
+  // E is the keyboard's way in, and it is a read gesture: no verdict, no
+  // change to the cover, nothing but the band.
+  it("opens and closes the focused group's stack with E", async () => {
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(1);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Showing the 4 pictures in this stack",
+    );
+
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  // Not a dead key on a group of loose pictures: there is nothing folded away,
+  // and saying so is what stops the user pressing it again.
+  it("says so when the focused group holds no stack", async () => {
+    const { wrapper } = await mountQueue([group("g1")]);
+    await wrapper.find(".dq").trigger("keydown", { key: "e" });
+    await flushPromises();
+    expect(bands(wrapper)).toHaveLength(0);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "no stack",
+    );
+    wrapper.unmount();
+  });
+
+  it("shows a reading state while the members are in flight", async () => {
+    let settle;
+    listStackMembers.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await wrapper.vm.$nextTick();
+
+    const band = bands(wrapper)[0];
+    expect(band.find('[role="status"]').text()).toContain(
+      "Reading the pictures in this stack",
+    );
+    expect(band.findAll('[data-testid="stack-member"]')).toHaveLength(0);
+
+    settle(memberPage(12));
+    await flushPromises();
+    expect(
+      bands(wrapper)[0].findAll('[data-testid="stack-member"]'),
+    ).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // A failure to DISCLOSE is not a failure to decide, and the retry sits with
+  // the sentence that says so.
+  it("reports a failed read, keeps the verdict, and retries", async () => {
+    listStackMembers.mockRejectedValueOnce(new Error("boom"));
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.find('[role="alert"]').text()).toContain(
+      "The verdict buttons still work",
+    );
+    expect(wrapper.find(".gbtn--stack").attributes("disabled")).toBeUndefined();
+
+    listStackMembers.mockImplementation((stackId) =>
+      Promise.resolve(memberPage(stackId)),
+    );
+    await band.find(".gexp-state--error button").trigger("click");
+    await flushPromises();
+    expect(
+      bands(wrapper)[0].findAll('[data-testid="stack-member"]'),
+    ).toHaveLength(4);
+    wrapper.unmount();
+  });
+
+  // A stack that answered with nothing is a failed read, not an empty stack:
+  // the route 404s rather than serving an empty membership.
+  it("treats an empty member list as a failed read", async () => {
+    listStackMembers.mockResolvedValue({ stack_id: 12, members: [] });
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(bands(wrapper)[0].find('[role="alert"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  // Reading is not a verdict, so the band is offered in a share session too,
+  // and it carries nothing that could write there or anywhere else.
+  it("stays available, and read-only, in a read-only session", async () => {
+    readOnlyRef.value = true;
+    const { wrapper } = await mountQueue([deckGroup()]);
+    await badges(wrapper)[0].trigger("click");
+    await flushPromises();
+
+    const band = bands(wrapper)[0];
+    expect(band.exists()).toBe(true);
+    expect(band.find('[data-testid="stack-unstack"]').exists()).toBe(false);
+    for (const member of band.findAll('[data-testid="stack-member"]')) {
+      expect(member.attributes("disabled")).toBeDefined();
+    }
+    wrapper.unmount();
+  });
+});
+
+// ── The Mixed stacks page (design D5) ───────────────────────────────────────
+//
+// A third page of the SAME destination, which is the whole reason it is not a
+// route and not a sidebar row: the queue stays standing behind it with its
+// focus intact, so the two-way shortcut can offer a return that restores it.
+
+/** A queue group that folds in one existing stack, so a deck is drawn. */
+function groupWithStack(signature, stackId, over = {}) {
+  const g = group(signature, 2);
+  g.candidates[0].stack_id = stackId;
+  g.stacks = {
+    [String(stackId)]: {
+      stack_id: stackId,
+      member_count: 5,
+      leader_picture_id: 7,
+      leader_thumbnail_version: null,
+      matched_picture_ids: [g.candidates[0].picture_id],
+      stackable: true,
+      blocked_by_sets: [],
+      ...over,
+    },
+  };
+  return g;
+}
+
+/** Mount the queue and flip to the Mixed stacks page. */
+async function openMixedPage(wrapper, store) {
+  await store.showMixedStacks();
+  await wrapper.vm.$nextTick();
+  await flushPromises();
+}
+
+describe("DuplicateQueue: the Mixed stacks page", () => {
+  // The count rides on the page toggle and never on the sidebar badge, which
+  // has to keep meaning "groups to review".
+  it("offers the third page from the header, carrying its own count", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await store.loadMixedStacks();
+    await wrapper.vm.$nextTick();
+    const toggle = wrapper.find('[data-testid="mixed-toggle"]');
+    expect(toggle.exists()).toBe(true);
+    expect(toggle.text()).toContain("Mixed stacks");
+    expect(toggle.text()).toContain("2");
+  });
+
+  // Ranked worst first by the server, and printed in that order with no
+  // numerals: the order IS the ranking.
+  it("lists the rows in the server's ranked order, without rank numerals", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 3, stranded_picture_ids: [1, 2] }),
+        mixedStack({ stack_id: 1, stranded_picture_ids: [4] }),
+        mixedStack({
+          stack_id: 2,
+          stranded_picture_ids: [],
+          suggested_action: "unstack",
+        }),
+      ]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    const rows = wrapper.findAll('[data-testid^="mixed-stack-"]');
+    expect(rows.map((r) => r.attributes("data-testid"))).toEqual([
+      "mixed-stack-3",
+      "mixed-stack-1",
+      "mixed-stack-2",
+    ]);
+    expect(wrapper.find(".mlist").text()).not.toMatch(/\b1\.\s/);
+  });
+
+  // The list is a function of the threshold, not of a constant: 26 at the
+  // default 0.90 and 9 at the 0.65 floor on the owner's library.
+  it("rebinds the list when the threshold slider moves", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 3 }, (_, i) => mixedStack({ stack_id: i + 1 })),
+      ),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(3);
+    expect(wrapper.text()).toContain("90% similar");
+
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 })], { threshold: 0.65, total: 1 }),
+    );
+    await store.setThreshold(0.65);
+    await flushPromises();
+    expect(listMixedStacks).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threshold: 0.65 }),
+    );
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(wrapper.text()).toContain("65% similar");
+  });
+
+  // Mirrors the shipped "No decided groups" construction, and carries its own
+  // way back for the same reason: the header toggle is not where the user is
+  // looking when the list runs out.
+  it("mirrors the Decided page's empty state, with its own way back", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([]));
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    const empty = wrapper.find(".qdone");
+    expect(empty.text()).toContain("No mixed stacks");
+    expect(empty.text()).toContain("Back to review");
+    await empty.find("button").trigger("click");
+    expect(store.showingMixed).toBe(false);
+  });
+
+  // A failed read is not an empty library, and must never be reported as one.
+  it("reports a failed read rather than claiming there are none", async () => {
+    listMixedStacks.mockRejectedValue(new Error("boom"));
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.text()).toContain("Could not check the stacks");
+    expect(wrapper.text()).not.toContain("No mixed stacks");
+  });
+});
+
+describe("DuplicateQueue: the Mixed stacks actions", () => {
+  it("splits with the ids the row showed, and the row goes", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    await wrapper.find(".gact button").trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ pictureIds: [11] }),
+    );
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "Ctrl+Z",
+    );
+  });
+
+  // The primary names its outcome, and the name is a function of the MARKS:
+  // `Unstack all N` the moment they would leave fewer than two members. Both
+  // outcomes travel as one split call, so there is never a case where the label
+  // and the request disagree about what is being done.
+  it("unstacks, through the same split call, when nothing would be left", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 7,
+          member_count: 2,
+          member_ids: [7, 8],
+          component_sizes: [1, 1],
+          components: [[7], [8]],
+          largest_component_size: 1,
+          stranded_picture_ids: [7, 8],
+          suggested_action: "unstack",
+        }),
+      ]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 7,
+      split_picture_ids: [7, 8],
+      remaining_picture_ids: [],
+      stack_dissolved: true,
+      batch_id: "srv-2",
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".gact").text()).toContain("Unstack all 2");
+    await wrapper.find(".gact button").trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ pictureIds: [7, 8] }),
+    );
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+    // Reported from the response, never from the prediction.
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "removed the stack",
+    );
+  });
+
+  // A failed action leaves the row exactly where it was, and says so: the
+  // page's promise is that nothing changes until it says it did.
+  it("keeps the row and reports the failure when an action fails", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    splitMixedStack.mockRejectedValue(new Error("nope"));
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    await wrapper.find(".gact button").trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain(
+      "Check the connection or server log",
+    );
+    expect(errorSpy.mock.calls.at(-1)[0]).not.toContain("Nothing was changed");
+  });
+
+  // The 423 the whole lock contract exists for. Nothing was written, so the row
+  // stays; it is marked with what the server named, so the button stops
+  // offering an outcome that cannot happen; and the sentence names the SET,
+  // because that is the only thing the user can go and act on.
+  it("keeps a 423-refused row, names the set and locks the action", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    splitMixedStack.mockRejectedValue({
+      response: {
+        status: 423,
+        data: {
+          detail: {
+            code: "pictures_locked",
+            action: "split a stack",
+            sets: [{ id: 3, name: "Frozen" }],
+            picture_ids: [11],
+          },
+        },
+      },
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    await wrapper.find(".gact button").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+    expect(wrapper.find('[data-testid="dedup-announcement"]').text()).toContain(
+      "locked set 'Frozen'",
+    );
+    // The row now carries the refusal's own truth, so the reason is on screen
+    // and the second press never reaches the server.
+    const note = wrapper.find(".mqlock");
+    expect(note.text()).toBe("Frozen by locked set 'Frozen'");
+    expect(note.classes()).toContain("mqlock--flash");
+    const primary = wrapper.find(".gact button");
+    expect(primary.attributes("aria-disabled")).toBe("true");
+    expect(primary.attributes("aria-describedby")).toBe(note.attributes("id"));
+
+    splitMixedStack.mockClear();
+    await primary.trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+  });
+
+  // A row the LIST already knew was frozen never issues the doomed call at all,
+  // and the press is answered rather than reading as a dead control.
+  it("answers a press on a row the list already served as frozen", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 42,
+          stackable: false,
+          blocked_by_sets: [{ id: 3, name: "Frozen" }],
+        }),
+      ]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".mqlock").text()).toBe(
+      "Frozen by locked set 'Frozen'",
+    );
+    await wrapper.find(".gact button").trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    expect(errorSpy.mock.calls.at(-1)[0]).toContain("locked set 'Frozen'");
+  });
+
+  // Over-blocking is its own regression: a live row keeps its action, and the
+  // action still reaches the server.
+  it("leaves a stackable row's action live", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 42, stackable: true, blocked_by_sets: [] }),
+      ]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".mqlock").exists()).toBe(false);
+    const primary = wrapper.find(".gact button");
+    expect(primary.attributes("aria-disabled")).toBeUndefined();
+    await primary.trigger("click");
+    await flushPromises();
+    expect(splitMixedStack).toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+  });
+
+  // Keep is what makes the list drainable, and it is the one action here that
+  // is NOT undoable: it changes no picture, so DELETE is the way back and the
+  // page has to offer it where the row used to be.
+  it("Keep removes the row and offers the DELETE that brings it back", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    keepMixedStack.mockResolvedValue({
+      stack_id: 42,
+      dismissed: true,
+      created: true,
+    });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    const buttons = wrapper.findAll(".gact button");
+    await buttons[1].trigger("click");
+    await flushPromises();
+    expect(keepMixedStack).toHaveBeenCalledWith(42);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+
+    // The offer, and the way back it carries.
+    const notices = useNoticeStore();
+    const offer = notices.info.mock.calls.at(-1);
+    expect(offer[0]).toContain("Kept this stack");
+    expect(offer[1].action.label).toBe("Undo keep");
+
+    clearMixedStackKeep.mockResolvedValue({ stack_id: 42, removed: 1 });
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42 })]),
+    );
+    await offer[1].action.handler();
+    await flushPromises();
+    expect(clearMixedStackKeep).toHaveBeenCalledWith(42);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+});
+
+// ── The Mixed stacks page as a QUEUE ───────────────────────────────────────
+//
+// The owner rejected the first cut as under-equipped: no zoom, no Compare, no
+// individual selection, no threshold, no multi-select, no keyboard. It is now
+// the third queue, reusing the review queue's machinery rather than being a
+// bespoke list, so what is pinned here is the machinery arriving intact.
+
+describe("DuplicateQueue: the Mixed stacks queue's keyboard", () => {
+  // A queue-trained user reads S as Stack and would mean Split; the two acts
+  // are opposites. The key is claimed either way (it must never run the primary
+  // by accident, and it must never fall through to the app shell) and answered
+  // out loud rather than doing nothing, which would read as a broken key.
+  it("answers S instead of running the primary", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    splitMixedStack.mockClear();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }));
+    await flushPromises();
+
+    expect(splitMixedStack).not.toHaveBeenCalled();
+    expect(unstackMixedStack).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+    const said = wrapper.find('[data-testid="dedup-announcement"]').text();
+    expect(said).toContain("S means Stack in the review queue");
+    expect(said).toContain("Split off 1");
+    expect(said).toContain("press Enter");
+  });
+
+  // The digits address the same tiles on both queues and mean the same thing,
+  // "point at this one". On this page pointing is all they do; the mark is X, a
+  // second and deliberate press.
+  it("moves the member cursor with a digit and marks it with X", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "3" }));
+    await flushPromises();
+    const units = wrapper.findAll(".gunit");
+    expect(units[2].classes()).toContain("gunit--cursor");
+    // Pointing changes nothing about the outcome.
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+    expect(wrapper.find(".gact button").text()).toContain("Split off 2");
+    expect(wrapper.findAll(".gunit")[2].find(".gthumb").classes()).toContain(
+      "gthumb--marked",
+    );
+
+    // Symmetric: the same key takes the mark straight back off.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+    expect(wrapper.find(".gact button").text()).toContain("Split off 1");
+  });
+
+  // The engine's marks and the user's are one list, so X unmarks a member the
+  // SERVER marked exactly as it unmarks one the user did.
+  it("unmarks an engine mark with the same key", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    // Member 11 is the fifth tile, and the engine opened with it marked.
+    expect(wrapper.findAll(".gunit")[4].find(".gthumb").classes()).toContain(
+      "gthumb--marked",
+    );
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "5" }));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    await flushPromises();
+
+    expect(
+      wrapper.findAll(".gunit")[4].find(".gthumb").classes(),
+    ).not.toContain("gthumb--marked");
+    // Nothing marked means the only outcome left is to free the whole stack.
+    expect(wrapper.find(".gact button").text()).toContain("Unstack all 5");
+  });
+});
+
+describe("DuplicateQueue: the Mixed stacks queue's selection", () => {
+  // Only Keep acts in bulk: the primary's outcome differs per row, so a bulk
+  // primary could not name what it was about to do.
+  it("says Keep is the only bulk action, and acts on the whole selection", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 1 }),
+        mixedStack({ stack_id: 2 }),
+        mixedStack({ stack_id: 3 }),
+      ]),
+    );
+    keepMixedStack.mockResolvedValue({ stack_id: 1, dismissed: true });
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    const rows = wrapper.findAll('[data-testid^="mixed-stack-"]');
+    await rows[0].trigger("click", { ctrlKey: true });
+    await rows[1].trigger("click", { ctrlKey: true });
+    expect(wrapper.find(".qselchip").text()).toContain(
+      "2 rows selected: Keep applies to all",
+    );
+
+    // The primary keeps naming ONE row's outcome while the selection holds.
+    const buttons = rows[1].findAll(".gact button");
+    expect(buttons[0].text()).toContain("Split off 1");
+    expect(buttons[0].text()).not.toContain("2 stacks");
+    expect(buttons[1].text()).toContain("Keep 2 stacks");
+
+    keepMixedStack.mockClear();
+    await buttons[1].trigger("click");
+    await flushPromises();
+    expect(keepMixedStack.mock.calls.map((c) => c[0]).sort()).toEqual([1, 2]);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+
+  // Ctrl+A names what the selection can do, rather than leaving the user to
+  // discover that the primary did not follow.
+  it("names Keep when Ctrl+A takes the page", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await flushPromises();
+    const said = wrapper.find('[data-testid="dedup-announcement"]').text();
+    expect(said).toContain("Selected all 2 stacks");
+    expect(said).toContain("Keep applies to all of them");
+  });
+});
+
+describe("DuplicateQueue: the Mixed stacks threshold header", () => {
+  // The count is the sentence's SUBJECT, not a figure beside a caption: one
+  // fact, so the two cannot drift apart. The band is sticky inside the list's
+  // own scroller, because every row is a verdict relative to that number.
+  it("states the count and the threshold as one sentence, and moves both", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage(
+        Array.from({ length: 3 }, (_, i) => mixedStack({ stack_id: i + 1 })),
+      ),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    const head = wrapper.find(".mixed-head");
+    expect(head.exists()).toBe(true);
+    expect(head.find(".mixed-lede").text()).toContain(
+      "3 stacks don't hang together at 90% similar",
+    );
+    // The slider is the SHIPPED control, so its label, step and formatting
+    // cannot differ from the tier popover's copy of the same number.
+    expect(head.find(".dth-input").exists()).toBe(true);
+
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 1 })], { threshold: 0.65, total: 1 }),
+    );
+    await head.find(".dth-input").trigger("change");
+    await store.setThreshold(0.65);
+    await flushPromises();
+
+    expect(wrapper.find(".mixed-lede").text()).toContain(
+      "1 stack doesn't hang together at 65% similar",
+    );
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(1);
+  });
+});
+
+describe("DuplicateQueue: Compare on the Mixed stacks queue", () => {
+  // The zoom is the single largest thing this page gains by being a queue, and
+  // a second dialog would be a second copy of it. What matters at this level is
+  // that the dialog is handed the SAME marks the row is drawing, so a mark made
+  // in one place is the mark the other shows.
+  it("opens the shared dialog in mixed mode over the focused row's marks", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    const { wrapper, store } = await mountQueue([group("g1")]);
+    await openMixedPage(wrapper, store);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }));
+    await flushPromises();
+
+    const dialog = wrapper.findComponent({ name: "DedupCompareDialog" });
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("mode")).toBe("mixed");
+    expect(dialog.props("mixedStack").stack_id).toBe(42);
+    expect(dialog.props("markedIds")).toEqual([11]);
+    expect(dialog.props("primaryLabel")).toBe("Split off 1");
+    expect(dialog.props("primaryIcon")).toBe("call-split");
+
+    // A mark made from Compare is the row's mark: one list, one gesture.
+    dialog.vm.$emit("toggle-mark", 9);
+    await flushPromises();
+    expect(dialog.props("markedIds")).toEqual([11, 9]);
+    expect(dialog.props("primaryLabel")).toBe("Split off 2");
+    expect(wrapper.find(".gact button").text()).toContain("Split off 2");
+  });
+});
+
+describe("DuplicateQueue: the warning chip on a deck in the queue", () => {
+  it("marks only the deck whose stack is the strong case", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 12, stranded_picture_ids: [99] })]),
+    );
+    const { wrapper, store } = await mountQueue([
+      groupWithStack("g1", 12),
+      groupWithStack("g2", 13),
+    ]);
+    await store.loadMixedStacks();
+    await wrapper.vm.$nextTick();
+    const badges = wrapper.findAll('[data-testid="stack-badge"]');
+    expect(badges).toHaveLength(2);
+    expect(badges[0].attributes("data-flagged")).toBe("true");
+    expect(badges[1].attributes("data-flagged")).toBeUndefined();
+  });
+
+  // The soft cases never reach the flag set at all: the store keeps only the
+  // stacks with a stranded member, because a mark on one tile in eight becomes
+  // a warning field.
+  it("leaves a soft case unmarked", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({
+          stack_id: 12,
+          stranded_picture_ids: [],
+          suggested_action: "unstack",
+        }),
+      ]),
+    );
+    const { wrapper, store } = await mountQueue([groupWithStack("g1", 12)]);
+    await store.loadMixedStacks();
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper.find('[data-testid="stack-badge"]').attributes("data-flagged"),
+    ).toBeUndefined();
+  });
+
+  // The rule the design is most explicit about. A mixed stack is one a user may
+  // legitimately want to add to.
+  it("never blocks the verdict on the row it sits in", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 12, stranded_picture_ids: [99] })]),
+    );
+    stackGroup.mockResolvedValue({
+      signature: "g1",
+      verdict: "stacked",
+      picture_ids: [1, 2],
+      batch_id: "srv-9",
+    });
+    const { wrapper, store } = await mountQueue([groupWithStack("g1", 12)]);
+    await store.loadMixedStacks();
+    await wrapper.vm.$nextTick();
+    const stackButton = wrapper.find(".gbtn--stack");
+    expect(stackButton.attributes("disabled")).toBeUndefined();
+    await stackButton.trigger("click");
+    await flushPromises();
+    expect(stackGroup).toHaveBeenCalled();
+  });
+});
+
+describe("DuplicateQueue: the two-way shortcut", () => {
+  // Queue to page: the queue's focus is deliberately untouched, which is what
+  // makes the return a restore rather than a fresh arrival.
+  it("goes from a flagged deck's open band to that stack's row", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([
+        mixedStack({ stack_id: 11 }),
+        mixedStack({ stack_id: 12, stranded_picture_ids: [99] }),
+      ]),
+    );
+    listStackMembers.mockResolvedValue({
+      stack_id: 12,
+      member_count: 5,
+      members: [{ picture_id: 7, is_leader: true }],
+      next_offset: null,
+    });
+    const { wrapper, store } = await mountQueue([
+      group("g0"),
+      groupWithStack("g1", 12),
+    ]);
+    await store.loadMixedStacks();
+    store.setFocus(1);
+    await wrapper.vm.$nextTick();
+    // Open the band: the badge is the disclosure, and the band is where the
+    // shortcut lives, because the corner is already spoken for.
+    await wrapper.find('[data-testid="stack-badge"]').trigger("click");
+    await flushPromises();
+    await wrapper.find(".gexp-flag button").trigger("click");
+    await flushPromises();
+    expect(store.showingMixed).toBe(true);
+    expect(store.mixedFocusStackId).toBe("12");
+    // The row that was jumped to says so, or the jump reads as a dead press on
+    // a list of near-identical rows.
+    expect(wrapper.find('[data-testid="mixed-stack-12"]').classes()).toContain(
+      "grow--revealed",
+    );
+    // And the queue is exactly where it was left.
+    expect(store.focusIndex).toBe(1);
+  });
+
+  // Page to queue: offered only when a LOADED group holds the stack, so the
+  // control never promises a landing it cannot make.
+  it("goes from a row back to the duplicate group the stack appears in", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 12 }), mixedStack({ stack_id: 99 })]),
+    );
+    const { wrapper, store } = await mountQueue([
+      group("g0"),
+      groupWithStack("g1", 12),
+    ]);
+    await openMixedPage(wrapper, store);
+    const held = wrapper.find('[data-testid="mixed-stack-12"]');
+    const orphan = wrapper.find('[data-testid="mixed-stack-99"]');
+    expect(held.text()).toContain("In the queue");
+    // No loaded group holds stack 99, so the row does not offer the jump.
+    expect(orphan.text()).not.toContain("In the queue");
+
+    await held.findAll(".gact button").at(-1).trigger("click");
+    await flushPromises();
+    expect(store.showingMixed).toBe(false);
+    expect(store.focusIndex).toBe(1);
+    expect(wrapper.find('[data-testid="dedup-group-g1"]').exists()).toBe(true);
+  });
+
+  // A page of the same destination, not a route away: leaving it costs no
+  // reload and no place in the queue.
+  it("returns with one Escape, restoring the queue's focus", async () => {
+    listMixedStacks.mockResolvedValue(mixedPage([mixedStack()]));
+    const { wrapper, store } = await mountQueue([group("g0"), group("g1")]);
+    store.setFocus(1);
+    await openMixedPage(wrapper, store);
+    listGroups.mockClear();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    expect(store.showingMixed).toBe(false);
+    expect(store.focusIndex).toBe(1);
+    expect(listGroups).not.toHaveBeenCalled();
+  });
+
+  // While the page is up the REVIEW queue's rows are not on screen, so its
+  // verdict keys must never reach them: Enter belongs to the page in front of
+  // the user, which is now a queue of its own.
+  // Asserted on this queue's own state rather than on the shared api mock:
+  // earlier cases in this file attach their queues to the document and never
+  // unmount them, so a document-level key reaches all of them.
+  it("gives Enter to the Mixed queue, never to the group underneath", async () => {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([mixedStack({ stack_id: 42, stranded_picture_ids: [11] })]),
+    );
+    splitMixedStack.mockResolvedValue({
+      stack_id: 42,
+      split_picture_ids: [11],
+      remaining_picture_ids: [7, 8, 9, 10],
+      stack_dissolved: false,
+      batch_id: "srv-1",
+    });
+    const { wrapper, store } = await mountQueue([group("g0")]);
+    await openMixedPage(wrapper, store);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await flushPromises();
+    expect(splitMixedStack).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ pictureIds: [11] }),
+    );
+    // The group behind the page is untouched, and the page is still up.
+    expect(store.groups).toHaveLength(1);
+    expect(store.showingMixed).toBe(true);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(0);
+  });
+});
+
+// ── The route from the queue-clear screen to the stacks ────────────────────
+//
+// The end-of-task surface is the one place this is offered: the toolbar would
+// put it in front of someone mid-triage. The library fact arrives lazily with
+// the optional Mixed stacks read, so a cold queue never starts an all-stack
+// score just to decide whether to show a shortcut.
+describe("DuplicateQueue: the route to the stacks", () => {
+  /** Mount straight onto the queue-clear screen. */
+  async function mountCleared({ liveStackCount = 209, loadStackFacts = true } = {}) {
+    listMixedStacks.mockResolvedValue(
+      mixedPage([], { live_stack_count: liveStackCount }),
+    );
+    const { wrapper, store } = await mountQueue([]);
+    await flushPromises();
+    expect(wrapper.text()).toContain("Queue clear");
+    if (loadStackFacts) {
+      await store.loadMixedStacks();
+      await flushPromises();
+    }
+    return { wrapper, store };
+  }
+
+  /** The queue-clear screen's stacks button, or undefined when not offered. */
+  function stacksButton(wrapper) {
+    return wrapper
+      .findAll(".qdone button")
+      .find((b) => b.text().includes("Review your stacks"));
+  }
+
+  it("does not cold-load the optional all-stack facts on queue startup", async () => {
+    const { wrapper } = await mountCleared({ loadStackFacts: false });
+    expect(listMixedStacks).not.toHaveBeenCalled();
+    expect(stacksButton(wrapper)).toBeUndefined();
+  });
+
+  // Once the optional page has supplied the library fact, the route is not
+  // gated on this session's verdict tally: old stacks count too.
+  it("is offered after the library's stack facts have been loaded", async () => {
+    const { wrapper, store } = await mountCleared();
+    expect(store.stackedCount).toBe(0);
+    expect(stacksButton(wrapper)).toBeTruthy();
+    expect(wrapper.text()).toContain("209 stacks hold");
+  });
+
+  it("is not offered when the library holds no multi-picture stack", async () => {
+    const { wrapper } = await mountCleared({ liveStackCount: 0 });
+    expect(stacksButton(wrapper)).toBeUndefined();
+  });
+
+  // A one-click path from a satisfying "Queue clear" screen into a confirm for
+  // hundreds of deletions is how you get a bad afternoon. It lands in All
+  // Pictures with the stacked filter applied and nothing else happening.
+  it("goes to the place, not to the action", async () => {
+    const { wrapper } = await mountCleared();
+    await stacksButton(wrapper).trigger("click");
+
+    expect(routerPush).toHaveBeenCalledTimes(1);
+    expect(routerPush).toHaveBeenCalledWith({
+      path: "/",
+      query: { stack_state: "stacked" },
+    });
+    // Nothing is selected and nothing is armed: the push carries no picture or
+    // stack ids at all, and no confirm was opened on the way out.
+    const [to] = routerPush.mock.calls[0];
+    expect(Object.keys(to.query)).toEqual(["stack_state"]);
+    expect(JSON.stringify(to)).not.toMatch(/picture|stack_id|ids/);
+    expect(wrapper.text()).not.toMatch(/Scrapheap/);
+  });
+
+  // A real route change, so it is reloadable and Back returns to the queue.
+  // The URL mirror uses replace() for its own writes; this must not.
+  it("pushes a real history entry rather than replacing the queue's", async () => {
+    const { wrapper } = await mountCleared();
+    routerReplace.mockReset();
+    await stacksButton(wrapper).trigger("click");
+    expect(routerReplace).not.toHaveBeenCalled();
   });
 });

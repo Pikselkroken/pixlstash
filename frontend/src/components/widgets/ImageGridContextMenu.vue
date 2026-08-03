@@ -529,7 +529,24 @@
         <div class="ctx-sep" />
       </template>
 
-      <!-- ── Remove / Delete ───────────────────────────────────────── -->
+      <!-- ── Remove / Delete ───────────────────────────────────────────
+           The trailing danger group, ordered by escalating severity:
+           Keep cover only → Move to the Scrapheap → Delete forever. Keep cover
+           only is recoverable and touches only stacks; Delete moves the whole
+           selection; the scrapheap view's Delete destroys files. -->
+      <button
+        v-if="showKeepCoverOnly"
+        class="ctx-item ctx-item--danger"
+        :disabled="isReadOnly || !!keepCoverOnlyLockReason"
+        :title="
+          keepCoverOnlyLockReason ||
+          'Keep each selected stack\'s cover and move its other pictures to the Scrapheap'
+        "
+        @click="onAction('keep-cover-only')"
+      >
+        <v-icon class="ctx-icon" size="15">{{ KEEP_COVER_ONLY_ICON }}</v-icon>
+        {{ keepCoverOnlyLabel }}
+      </button>
       <button
         v-if="showRemoveButton"
         class="ctx-item ctx-item--danger"
@@ -565,6 +582,10 @@ import { isReadOnly } from "../../utils/apiClient";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
+import {
+  KEEP_COVER_ONLY_ICON,
+  keepCoverOnlyMenuLabel,
+} from "../../utils/keepCoverOnly";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
@@ -588,6 +609,15 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
   showRemoveFromStack: { type: Boolean, default: false },
   selectedMultipleStackIds: { type: Array, default: () => [] },
+  // How many collapsible stacks the selection names. The unit of Keep cover
+  // only is the stack, so the item is offered only when the selection names at
+  // least one, and its label counts stacks rather than echoing the tile count.
+  keepCoverOnlyStackCount: { type: Number, default: 0 },
+  // Reason string when EVERY stack the selection names is frozen by a locked
+  // set, which is the only case where the action provably cannot do anything.
+  // A mixed selection stays enabled and the dialog reports the skips, which is
+  // the same rule the shipped Delete item follows.
+  keepCoverOnlyLockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   // Reason string when at least one selected picture is frozen by a locked set;
   // gates the label-data actions (tag / auto-tag / description / delete) and is
@@ -623,6 +653,7 @@ const emit = defineEmits([
   "create-stack",
   "create-stacks-from-groups",
   "remove-from-group",
+  "keep-cover-only",
   "delete-selected",
   "open-tag-panel",
   "open-plugin-panel",
@@ -947,6 +978,21 @@ const showGroupStackButton = computed(
     !isScrapheapView.value &&
     selectedCount.value > 0 &&
     props.selectedSort === "LIKENESS_GROUPS",
+);
+
+// Offered only when the selection actually names a stack. Rendering it disabled
+// over a selection of loose pictures would advertise an action whose unit the
+// user has no way to satisfy from here; the stack actions above are gated the
+// same way.
+const showKeepCoverOnly = computed(
+  () => !isScrapheapView.value && props.keepCoverOnlyStackCount > 0,
+);
+
+const keepCoverOnlyLabel = computed(() =>
+  keepCoverOnlyMenuLabel({
+    stackCount: props.keepCoverOnlyStackCount,
+    selectedCount: selectedCount.value,
+  }),
 );
 
 const showAnyStackAction = computed(

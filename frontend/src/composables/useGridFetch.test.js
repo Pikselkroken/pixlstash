@@ -3,6 +3,8 @@ import { ref, reactive } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { useSortStore } from "../stores/useSortStore.js";
 import { useFilterStore } from "../stores/useFilterStore.js";
+import { useSelectionStore } from "../stores/useSelectionStore.js";
+import { useDedupStore } from "../stores/useDedupStore.js";
 import { useGridFetch } from "./useGridFetch.js";
 import { getPictureCount, streamPictures } from "../api/pictures";
 
@@ -92,7 +94,13 @@ function makeHarness({
   };
 
   const grid = useGridFetch(refs, props, callbacks);
-  return { grid, refs, startSmartScoreProgress, completeSmartScoreProgress };
+  return {
+    grid,
+    refs,
+    callbacks,
+    startSmartScoreProgress,
+    completeSmartScoreProgress,
+  };
 }
 
 describe("useGridFetch sort-progress lifecycle", () => {
@@ -138,6 +146,36 @@ describe("useGridFetch streaming path", () => {
     expect(countQuery).toContain("sort=CHARACTER_LIKENESS");
     expect(countQuery).toContain("descending=true");
     expect(countQuery).toContain("reference_character_id=7");
+  });
+
+  it("issues a singleton character fetch while a duplicate scan is running", async () => {
+    getPictureCount.mockResolvedValue({ count: 1 });
+    streamPictures.mockResolvedValue({
+      pictures: [{ id: 17, character_id: 7 }],
+      done: true,
+      next_offset: 1,
+    });
+
+    const { grid, refs, callbacks } = makeHarness();
+    useSelectionStore().selectedCharacter = 7;
+    // The duplicate store remains alive after leaving its destination. Its
+    // progress must never become a fetch gate for the newly mounted grid.
+    useDedupStore().scan = {
+      status: "running",
+      scanned: 5000,
+      total: 12098,
+    };
+
+    await grid.fetchAllGridImages({ force: true });
+
+    expect(getPictureCount).toHaveBeenCalledTimes(1);
+    expect(getPictureCount.mock.calls[0][0]).toContain("character_id=7");
+    expect(streamPictures).toHaveBeenCalledTimes(1);
+    expect(streamPictures.mock.calls[0][0]).toContain("character_id=7");
+    expect(refs.allGridImages.value.map((picture) => picture.id)).toEqual([17]);
+    expect(callbacks.fetchThumbnailsBatch).toHaveBeenCalledWith(0, 1, {
+      reason: "initial-visible-prefetch",
+    });
   });
 
   it("trims trailing placeholders when the stream yields fewer rows than the count", async () => {

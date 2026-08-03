@@ -2,7 +2,11 @@
 
 Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as described under 1.8.1 below: create replacements from Settings, share your links again with their new values, and enter your public URL and ComfyUI URL again. If you already updated to 1.8.1 this has happened and your tokens are left alone.
 
+- Full Undo/Redo for soft-deletion, tagging, editing descriptions, image associations, image movement, etc. Use standard keyboard shortcuts (CTRL-Z, CTRL-Y),
+  undo/redo-buttons or the undo history to undo more than one edit.
+- A brand new Duplicates view that helps you stack duplicates in your current view.
 - Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
+- Filter your views on stacked or unstacked images, and collapse a stack down to the copy you want to keep with **Keep cover only**. The rest go to the Scrapheap, so you can change your mind.
 
 # [1.8.2]
 

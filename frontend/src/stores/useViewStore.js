@@ -25,6 +25,7 @@ import { defineStore } from "pinia";
 
 import { useSelectionStore } from "./useSelectionStore";
 import { useProjectStore } from "./useProjectStore";
+import { useFilterStore } from "./useFilterStore";
 
 export const ALL_PICTURES_ID = "ALL";
 export const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -78,6 +79,29 @@ function parseProjectId(raw) {
   return Number.isFinite(projectId) && projectId > 0 ? projectId : null;
 }
 
+/**
+ * The stack-state filter a URL may carry (`?stack_state=stacked`).
+ *
+ * The only filter the route owns, and it is deliberately ADDITIVE: an absent or
+ * unrecognised param resolves to `null`, which means "leave the filter store
+ * alone". Resetting it on every route tick would silently clear a filter the
+ * user set from the filter panel the moment they navigated anywhere.
+ *
+ * It exists because the Duplicates queue-clear screen routes to All Pictures
+ * with the stacked filter applied, and that destination has to be reloadable
+ * and Back-able rather than a state only one click can produce.
+ *
+ * @param {string|string[]|undefined} raw `route.query.stack_state`
+ * @returns {string|null}
+ */
+function parseStackState(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const text = value == null ? "" : String(value);
+  return ["all", "stacked", "unstacked", "unresolved"].includes(text)
+    ? text
+    : null;
+}
+
 function characterLabelFor(charId) {
   if (charId === ALL_PICTURES_ID) return "All Pictures";
   if (charId === UNASSIGNED_PICTURES_ID) return "Unassigned Pictures";
@@ -110,6 +134,8 @@ function baseView(name) {
     clearFolderFilter: true,
     characterLabel: null,
     folderKey: null,
+    // `null` = "leave the filter store alone" (see `parseStackState`).
+    stackState: null,
   };
 }
 
@@ -123,6 +149,10 @@ function baseView(name) {
 export function parseRouteView(route) {
   const { name, params = {}, query = {} } = route || {};
   const view = baseView(name);
+  // Read once, for every grid route: the filter is not specific to one view
+  // shape, and a `/set/3?stack_state=stacked` link should work as well as
+  // `/?stack_state=stacked`.
+  view.stackState = parseStackState(query.stack_state);
 
   if (name === "all-pictures") {
     view.characterLabel = "All Pictures";
@@ -203,10 +233,16 @@ function sameNumIds(a, b) {
  * "ALL"/"UNASSIGNED"/"SCRAPHEAP" pseudo-ids, and `5 !== "5"` would otherwise
  * churn the grid on every route tick.
  */
-function applyView(view, selectionStore, projectStore) {
+function applyView(view, selectionStore, projectStore, filterStore) {
   if (!view) return;
 
   if (view.clearFolderFilter) selectionStore.selectedFolderFilter = null;
+
+  // Additive only: a route that says nothing about the stack filter leaves
+  // whatever the filter panel set. See `parseStackState`.
+  if (view.stackState && filterStore.stackStateFilter !== view.stackState) {
+    filterStore.stackStateFilter = view.stackState;
+  }
 
   if (
     String(selectionStore.selectedCharacter) !== String(view.selectedCharacter)
@@ -244,6 +280,7 @@ function applyView(view, selectionStore, projectStore) {
 export const useViewStore = defineStore("view", () => {
   const selectionStore = useSelectionStore();
   const projectStore = useProjectStore();
+  const filterStore = useFilterStore();
 
   // The last parsed route. `null` for a route the grid is not driven from.
   const view = ref(null);
@@ -260,7 +297,7 @@ export const useViewStore = defineStore("view", () => {
    */
   function applyRoute(route) {
     view.value = parseRouteView(route);
-    applyView(view.value, selectionStore, projectStore);
+    applyView(view.value, selectionStore, projectStore, filterStore);
   }
 
   /**

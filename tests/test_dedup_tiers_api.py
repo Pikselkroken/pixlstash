@@ -49,6 +49,11 @@ KEEP_SEPARATE_URL = f"{API}/dedup/verdicts/keep-separate"
 REOPEN_URL = f"{API}/dedup/verdicts/reopen"
 AUTO_STACK_URL = f"{API}/dedup/auto-stack"
 
+
+def _stack_members_url(stack_id) -> str:
+    return f"{API}/dedup/stacks/{stack_id}/members"
+
+
 # The SPA catch-all answers unmatched GETs with 200, so a wrong URL could make a
 # positive assertion vacuous. See tests/authz_guard.py.
 pytestmark = pytest.mark.usefixtures("no_spa_fallback")
@@ -176,6 +181,10 @@ def test_scoped_read_token_is_denied_on_every_route():
             == 403
         )
         assert scoped.post(AUTO_STACK_URL, json={}, headers=headers).status_code == 403
+        # The deck expansion is deny-by-default too, and the gate answers
+        # before the handler, so a scoped token is refused whether or not
+        # the stack exists - it never learns which.
+        assert scoped.get(_stack_members_url(1), headers=headers).status_code == 403
 
         # Same via the ?token= query-param path (no Authorization header).
         assert scoped.get(POLICY_URL, params={"token": token}).status_code == 403
@@ -208,6 +217,10 @@ def test_scoped_read_token_is_denied_on_every_route():
         )
         assert (
             scoped.post(AUTO_STACK_URL, params={"token": token}, json={}).status_code
+            == 403
+        )
+        assert (
+            scoped.get(_stack_members_url(1), params={"token": token}).status_code
             == 403
         )
     finally:
@@ -404,6 +417,44 @@ def test_requesting_a_scan_returns_immediately_with_progress():
         _teardown(temp_dir, server)
 
 
+def test_an_active_scan_coalesces_equivalent_requests_and_rejects_policy_changes():
+    temp_dir, client, server, _ids, _token, set_id = _env()
+    try:
+        payload = {
+            "policy": {"near_enabled": True},
+            "scope": {"scope_type": "set", "scope_id": str(set_id)},
+        }
+        first = client.post(SCAN_URL, json=payload)
+        assert first.status_code == 200, first.text
+        second = client.post(SCAN_URL, json=payload)
+        assert second.status_code == 200, second.text
+        assert second.json()["scan_id"] == first.json()["scan_id"]
+        assert second.json()["started_at"] == first.json()["started_at"]
+
+        changed = client.post(
+            SCAN_URL,
+            json={
+                "policy": {"near_enabled": True, "threshold": 0.8},
+                "scope": {"scope_type": "set", "scope_id": str(set_id)},
+            },
+        )
+        assert changed.status_code == 409, changed.text
+        detail = changed.json()["detail"]
+        assert detail["code"] == "dedup_scan_busy"
+        assert detail["active_scan"]["scan_id"] == first.json()["scan_id"]
+        assert detail["active_scan"]["threshold"] == 0.9
+        persisted = _run(
+            server,
+            lambda session: session.exec(
+                select(DedupScan).where(DedupScan.scope_key == f"set:{set_id}")
+            ).one(),
+        )
+        assert persisted.threshold == 0.9
+        assert persisted.tiers == '["exact", "near"]'
+    finally:
+        _teardown(temp_dir, server)
+
+
 # ── verdicts ──────────────────────────────────────────────────────────────────
 
 
@@ -577,15 +628,16 @@ def test_the_decided_page_lists_the_verdict_and_clears_via_reopen():
         _teardown(temp_dir, server)
 
 
-def test_the_decided_page_orders_by_decision_time_newest_first():
-    """The Decided flip is "review what I decided": most recent decision on top.
+def test_the_decided_page_orders_by_recent_activity_first():
+    """The Decided flip puts the most recently active decision on top.
 
     It used to reuse the queue's `(confidence DESC, id ASC)` ordering, which is
     meaningless for a review list (every exact group ties at 1.0, so the list
     came out in group-id order regardless of when anything was decided — the
     user's "very weird" report, 2026-07-30). Both directions are asserted: the
-    decided page follows `decided_at` descending across both verdict kinds, and
-    the OPEN queue keeps its confidence ordering.
+    Initially that is `decided_at` across both verdict kinds; a later stack
+    change has its own explicit regression below. The OPEN queue keeps its
+    confidence ordering.
     """
     temp_dir, client, server, _ids, _token, _set_id = _env()
     try:
@@ -634,6 +686,63 @@ def test_the_decided_page_orders_by_decision_time_newest_first():
         )
         decided = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
         assert [g["signature"] for g in decided] == [second, third, first]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_decided_compare_groups_follow_the_latest_stack_change():
+    """A changed stack returns to the top of the Decided comparison sequence.
+
+    The cursor must use that same activity stamp, or page two would repeat or
+    skip a group even when page one appears correctly sorted.
+    """
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        stacked_signature, separate_signature = _signatures(client)
+
+        stacked = client.post(STACK_URL, json={"signature": stacked_signature})
+        assert stacked.status_code == 200, stacked.text
+        kept = client.post(KEEP_SEPARATE_URL, json={"signature": separate_signature})
+        assert kept.status_code == 200, kept.text
+
+        initial = client.get(GROUPS_URL, params={"decided": True}).json()["groups"]
+        assert [group["signature"] for group in initial] == [
+            separate_signature,
+            stacked_signature,
+        ]
+
+        def touch_stack_after_latest_decision(session):
+            latest_decision = session.exec(
+                select(DedupVerdict.decided_at).where(
+                    DedupVerdict.signature == separate_signature
+                )
+            ).one()
+            stack = session.get(PictureStack, stacked.json()["stack_id"])
+            stack.updated_at = latest_decision + timedelta(seconds=1)
+            session.add(stack)
+            session.commit()
+
+        _run(server, touch_stack_after_latest_decision)
+
+        first_page = client.get(GROUPS_URL, params={"decided": True, "limit": 1}).json()
+        assert [group["signature"] for group in first_page["groups"]] == [
+            stacked_signature
+        ]
+        assert first_page["next_cursor"]
+
+        second_page = client.get(
+            GROUPS_URL,
+            params={
+                "decided": True,
+                "limit": 1,
+                "cursor": first_page["next_cursor"],
+            },
+        ).json()
+        assert [group["signature"] for group in second_page["groups"]] == [
+            separate_signature
+        ]
     finally:
         _teardown(temp_dir, server)
 
@@ -1740,5 +1849,205 @@ def test_a_folder_scope_that_normalises_to_nothing_is_rejected():
             assert counts.status_code == 200, counts.text
             assert counts.json()["scopes"][0]["unresolved_groups"] == 1
             assert counts.json()["scopes"][0]["key"] == "folder:/vault"
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ── stack units: the deck and its lazy expansion ──────────────────────────────
+
+
+def _stack_over_http(server, picture_ids, thumbnails=None):
+    """Stack *picture_ids* in order by hand; return the stack id."""
+
+    def build(session):
+        stack = PictureStack(name=None)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, picture_id in enumerate(picture_ids):
+            picture = session.get(Picture, int(picture_id))
+            picture.stack_id = int(stack.id)
+            picture.stack_position = position
+            size = (thumbnails or {}).get(int(picture_id))
+            if size is not None:
+                picture.thumbnail_width, picture.thumbnail_height = size
+            session.add(picture)
+        session.commit()
+        return int(stack.id)
+
+    return _run(server, build)
+
+
+def test_a_queue_row_carries_the_stack_truth_behind_each_deck():
+    """A `stack_id` alone cannot render a deck, so every group ships a `stacks`
+    block with the stack's REAL depth and its leader.
+
+    Picture 2 (unique) leads a stack that also contains picture 0, one half of
+    the exact pair. The group therefore names ONE member of a 2-stack, and the
+    row has to say the deck is 2 deep and led by a picture the group never
+    mentions.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        stack_id = _stack_over_http(
+            server, [ids[2], ids[0]], thumbnails={ids[2]: (800, 600)}
+        )
+        body = client.get(GROUPS_URL).json()
+        assert len(body["groups"]) == 1, body
+        group = body["groups"][0]
+        assert sorted(c["picture_id"] for c in group["candidates"]) == sorted(ids[:2])
+
+        assert list(group["stacks"]) == [str(stack_id)]
+        deck = group["stacks"][str(stack_id)]
+        assert deck == {
+            "stack_id": stack_id,
+            "member_count": 2,
+            "leader_picture_id": ids[2],
+            "leader_thumbnail_version": "800x600",
+            "matched_picture_ids": [ids[0]],
+            "stackable": True,
+            "blocked_by_sets": [],
+        }
+        # The loose half of the pair is its own unit and adds no entry.
+        assert len(group["stacks"]) == 1
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_group_with_no_stacked_member_carries_an_empty_stacks_block():
+    """The field is always present, so the client never branches on absence."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        group = client.get(GROUPS_URL).json()["groups"][0]
+        assert group["stacks"] == {}
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_the_owner_expands_a_deck_and_a_scoped_token_cannot():
+    """Both directions on the new route: the owner gets the stack's members,
+    a resource-scoped READ token gets 403 on the same URL.
+
+    Over-blocking would be its own regression, so the positive half asserts a
+    complete answer rather than merely a non-403.
+    """
+    temp_dir, client, server, ids, token, _set_id = _env()
+    try:
+        stack_id = _stack_over_http(
+            server, [ids[2], ids[0]], thumbnails={ids[2]: (800, 600)}
+        )
+        url = _stack_members_url(stack_id)
+
+        response = client.get(url)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["stack_id"] == stack_id
+        assert body["member_count"] == 2
+        assert body["leader_picture_id"] == ids[2]
+        assert body["leader_thumbnail_version"] == "800x600"
+        assert body["stackable"] is True
+        assert body["blocked_by_sets"] == []
+        assert body["offset"] == 0
+        assert body["next_offset"] is None
+        assert [m["picture_id"] for m in body["members"]] == [ids[2], ids[0]]
+        assert [m["position"] for m in body["members"]] == [0, 1]
+        assert [m["is_leader"] for m in body["members"]] == [True, False]
+        # The tile fields are the queue candidate's, so the strip reuses it.
+        leader = body["members"][0]
+        assert leader["thumbnail_version"] == "800x600"
+        assert leader["why"] == []
+        assert leader["stackable"] is True
+
+        scoped = TestClient(server.api)
+        assert (
+            scoped.get(url, headers={"Authorization": f"Bearer {token}"}).status_code
+            == 403
+        )
+        assert scoped.get(url, params={"token": token}).status_code == 403
+        # ids[0] IS inside the token's granted set, so this is a refusal of the
+        # route, not an accident of which pictures the token can reach.
+        assert ids[0] in [m["picture_id"] for m in body["members"]]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_expanding_a_deck_pages_and_clamps():
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        extra = _insert_pictures(server, [{"pixel_sha": f"deck-{i}"} for i in range(3)])
+        stack_id = _stack_over_http(server, [ids[2], *extra])
+        url = _stack_members_url(stack_id)
+
+        first = client.get(url, params={"limit": 2}).json()
+        assert [m["picture_id"] for m in first["members"]] == [ids[2], extra[0]]
+        assert first["limit"] == 2
+        assert first["next_offset"] == 2
+
+        second = client.get(url, params={"limit": 2, "offset": first["next_offset"]})
+        assert second.status_code == 200
+        assert [m["picture_id"] for m in second.json()["members"]] == extra[1:]
+        assert second.json()["next_offset"] is None
+        assert [m["position"] for m in second.json()["members"]] == [2, 3]
+
+        # The cap is a 422 at the boundary, not a silent clamp.
+        over = client.get(url, params={"limit": tiers.MAX_STACK_MEMBER_PAGE_SIZE + 1})
+        assert over.status_code == 422, over.text
+        assert client.get(url, params={"offset": -1}).status_code == 422
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_expanding_a_stack_with_no_live_members_is_a_404():
+    """Never an empty stack that appears to exist."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        assert client.get(_stack_members_url(987654)).status_code == 404
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_locked_sibling_outside_the_group_makes_the_whole_deck_unstackable():
+    """A stack cannot be partially stacked, so one frozen member freezes the
+    deck: even a member the group never names.
+
+    The group keeps two other stackable units (the two loose duplicates), so it
+    is still served; the deck inside it is marked instead of the row vanishing.
+    """
+    temp_dir, client, server, ids, _token, _set_id = _env()
+    try:
+        loose = _insert_pictures(
+            server, [{"pixel_sha": "aaa", "size_bytes": 100}]
+        )  # a third copy of the exact pair
+        stack_id = _stack_over_http(server, [ids[2], ids[0]])
+
+        def lock_the_leader(session):
+            frozen = PictureSet(name="Frozen", locked=True)
+            session.add(frozen)
+            session.commit()
+            session.refresh(frozen)
+            session.add(PictureSetMember(set_id=int(frozen.id), picture_id=ids[2]))
+            session.commit()
+            return int(frozen.id)
+
+        set_id = _run(server, lock_the_leader)
+        _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+        groups = client.get(GROUPS_URL).json()["groups"]
+        assert len(groups) == 1, groups
+        deck = groups[0]["stacks"][str(stack_id)]
+        assert deck["matched_picture_ids"] == [ids[0]]
+        assert deck["stackable"] is False
+        assert deck["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+
+        # The two loose units are untouched: over-blocking is its own regression.
+        by_id = {c["picture_id"]: c for c in groups[0]["candidates"]}
+        assert by_id[ids[1]]["stackable"] is True
+        assert by_id[loose[0]]["stackable"] is True
+
+        # The expansion reports the same unit-level verdict.
+        expanded = client.get(_stack_members_url(stack_id)).json()
+        assert expanded["stackable"] is False
+        assert expanded["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+        assert all(member["stackable"] is False for member in expanded["members"])
     finally:
         _teardown(temp_dir, server)

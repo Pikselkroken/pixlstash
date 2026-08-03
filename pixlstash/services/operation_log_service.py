@@ -76,6 +76,7 @@ from pixlstash.utils.service.smart_score_invalidation import (
     InteractiveRescoreRegistry,
     invalidate_on_anomaly_change,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.service.tag_prediction_utils import (
     recompute_anomaly_tag_uncertainty,
 )
@@ -120,6 +121,12 @@ FACETS = (
 # contract (docs/backend_architecture.md §21).
 OP_SCRAPHEAP_MOVE = "pictures.scrapheap.move"
 OP_SCRAPHEAP_RESTORE = "pictures.scrapheap.restore"
+
+# Keep cover only (docs/design/keep-cover-only.md): a stack keeps its cover and
+# every other live member is soft-deleted. Named `keep_cover_only`, never
+# `squash`: in git that word means "merge without losing content", so a
+# git-literate reader grepping it would assume this action loses nothing.
+OP_STACK_KEEP_COVER_ONLY = "stack.keep_cover_only"
 
 # The tag-review decisions (§21.2). Named for the same reason the scrapheap pair
 # is: the frontend keys its icon/receipt affordances off the string.
@@ -233,8 +240,11 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
     if not ids:
         return {}
 
+    picture_scope = scope_id_subquery(
+        session, ids, name="_pixlstash_operation_picture_ids"
+    )
     state: dict[str, dict] = {}
-    pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
+    pictures = session.exec(select(Picture).where(Picture.id.in_(picture_scope))).all()
     for picture in pictures:
         if picture.id is None:
             continue
@@ -265,10 +275,8 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
     if not state:
         return {}
 
-    present = [int(pid) for pid in state]
-
     for picture_id, tag in session.exec(
-        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(present))
+        select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(picture_scope))
     ).all():
         state[str(int(picture_id))][FACET_TAGS].append(tag)
 
@@ -297,7 +305,7 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
             TagPrediction.labeled_at,
             TagPrediction.label_model_version,
             TagPrediction.label_confidence,
-        ).where(TagPrediction.picture_id.in_(present))
+        ).where(TagPrediction.picture_id.in_(picture_scope))
     ).all():
         state[str(int(picture_id))][FACET_TAG_PREDICTIONS][tag] = {
             # The tagger's own live fields. Captured so a row the operation itself
@@ -317,21 +325,21 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
 
     for picture_id, set_id in session.exec(
         select(PictureSetMember.picture_id, PictureSetMember.set_id).where(
-            PictureSetMember.picture_id.in_(present)
+            PictureSetMember.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_SETS].append(int(set_id))
 
     for picture_id, project_id in session.exec(
         select(PictureProjectMember.picture_id, PictureProjectMember.project_id).where(
-            PictureProjectMember.picture_id.in_(present)
+            PictureProjectMember.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_PROJECTS].append(int(project_id))
 
     for face_id, picture_id, character_id in session.exec(
         select(Face.id, Face.picture_id, Face.character_id).where(
-            Face.picture_id.in_(present)
+            Face.picture_id.in_(picture_scope)
         )
     ).all():
         state[str(int(picture_id))][FACET_CHARACTERS][str(int(face_id))] = (
@@ -346,10 +354,13 @@ def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
         if entry[FACET_STACK]["id"] is not None
     }
     if stack_ids:
+        stack_scope = scope_id_subquery(
+            session, stack_ids, name="_pixlstash_operation_stack_ids"
+        )
         names = dict(
             session.exec(
                 select(PictureStack.id, PictureStack.name).where(
-                    PictureStack.id.in_(sorted(stack_ids))
+                    PictureStack.id.in_(stack_scope)
                 )
             ).all()
         )
@@ -481,6 +492,27 @@ def scrapheap_restore_summary(before: dict, after: dict) -> Optional[str]:
     if not restored:
         return None
     return f"Restored {_pictures(len(restored))} from the Scrapheap"
+
+
+def keep_cover_only_summary(stack_count: int, moved_count: int) -> str:
+    """Build ``Kept the cover of 3 stacks · 7 pictures to the Scrapheap``.
+
+    A plain string, built from the collapse **plan** rather than from the diff
+    like :func:`scrapheap_move_summary` is. The plan is already the filtered
+    truth here: skipped stacks (a locked-set member, a character link that
+    lives only on a copy) are not in it, so both figures are counted directly
+    and neither is derived by subtracting one query's answer from another's.
+
+    The sentence names what you keep *and* what moves, mirroring the confirm
+    dialog's title/button pairing, and it deliberately claims no space was
+    freed, because a soft delete frees none.
+
+    Args:
+        stack_count: Stacks actually collapsed.
+        moved_count: Pictures actually soft-deleted to the Scrapheap.
+    """
+    stacks = f"{stack_count} stack" if stack_count == 1 else f"{stack_count} stacks"
+    return f"Kept the cover of {stacks} · {_pictures(moved_count)} to the Scrapheap"
 
 
 def request_context(request, *, fallback_batch_id: Optional[str] = None) -> dict:
@@ -1336,6 +1368,52 @@ def _batch_members_in_session(
     )
 
 
+def _stack_siblings_in_session(session: Session, moved: set[int]) -> list[int]:
+    """Live members of the stacks *moved* touched, excluding *moved* itself.
+
+    A card renders its stack's LIVE member count as its badge, so a scrapheap
+    move changes what every **surviving** member of that stack should draw. The
+    survivors are exactly the pictures a restore does *not* touch, so they carry
+    no facet diff and never reach ``touched``: undoing a "Keep cover only" whose
+    metadata union happened to be a no-op restored four copies and announced
+    nothing whatsoever about the cover they belong to, which went on rendering
+    "stack of 1".
+
+    Read AFTER the restore's writes, so ``deleted`` is already the new truth.
+
+    Args:
+        session: The restore's own session.
+        moved: Pictures this restore scrapheaped or brought back.
+
+    Returns:
+        Sorted picture ids, empty when nothing moved or nothing was stacked.
+    """
+    if not moved:
+        return []
+    stack_ids = {
+        int(stack_id)
+        for stack_id in session.exec(
+            select(Picture.stack_id).where(
+                Picture.id.in_(moved),
+                Picture.stack_id.is_not(None),
+            )
+        ).all()
+        if stack_id is not None
+    }
+    if not stack_ids:
+        return []
+    live = {
+        int(picture_id)
+        for picture_id in session.exec(
+            select(Picture.id).where(
+                Picture.stack_id.in_(stack_ids),
+                Picture.deleted.is_(False),
+            )
+        ).all()
+    }
+    return sorted(live - moved)
+
+
 def _restore(
     session: Session,
     operations: list[Operation],
@@ -1403,6 +1481,10 @@ def _restore(
     lifecycle = {
         "scrapheaped": sorted(scrapheaped),
         "restored": sorted(restored),
+        # Computed here, not in `_emit`: it needs the session, and it needs to
+        # run after `delete_emptied_stacks` so a stack the restore dissolved
+        # contributes no phantom survivors.
+        "stack_siblings": _stack_siblings_in_session(session, scrapheaped | restored),
     }
     return sorted(touched), facets, lifecycle
 
@@ -1430,11 +1512,22 @@ def _emit(
     ``added`` means "this picture is new to the vault": the SPA's sidebar reads
     ``added`` as a fresh import and raises its NEW marker on the affected
     counts, which is a lie for a picture that has been in the library all along.
+
+    A lifecycle move also changes the **live member count of every stack it
+    touched**, and the members that did not move render that count as their
+    stack badge. Those survivors carry no facet diff, so they are not even in
+    ``picture_ids``: undoing a "Keep cover only" put four copies back and left
+    the cover still drawn as a stack of one. ``lifecycle["stack_siblings"]``
+    names them (resolved in :func:`_stack_siblings_in_session`, which has the
+    session), and they get an announcement of their own with
+    ``fields=["stack_count"]``: the derived, listing-only value the SPA
+    re-reads, since it is absent from ``GET /pictures/{id}/metadata``.
     """
     if not picture_ids:
         return
     scrapheaped = list((lifecycle or {}).get("scrapheaped") or [])
     restored = list((lifecycle or {}).get("restored") or [])
+    stack_siblings = list((lifecycle or {}).get("stack_siblings") or [])
     moved = set(scrapheaped) | set(restored)
     updated = [picture_id for picture_id in picture_ids if picture_id not in moved]
 
@@ -1446,23 +1539,29 @@ def _emit(
     if not events:
         events = [EventType.CHANGED_PICTURES]
 
-    def _notify(event: EventType, ids: list[int], change_kind: str) -> None:
+    def _notify(
+        event: EventType,
+        ids: list[int],
+        change_kind: str,
+        fields: Optional[list[str]] = None,
+    ) -> None:
         if not ids:
             return
-        vault.notify(
-            event,
-            {
-                "picture_ids": ids,
-                "origin_client_id": origin_client_id,
-                "change_kind": change_kind,
-                "source": "ui",
-            },
-        )
+        data = {
+            "picture_ids": ids,
+            "origin_client_id": origin_client_id,
+            "change_kind": change_kind,
+            "source": "ui",
+        }
+        if fields:
+            data["fields"] = list(fields)
+        vault.notify(event, data)
 
     for event in events:
         _notify(event, updated, "updated")
     _notify(EventType.CHANGED_PICTURES, scrapheaped, "removed")
     _notify(EventType.CHANGED_PICTURES, restored, "restored")
+    _notify(EventType.CHANGED_PICTURES, stack_siblings, "updated", ["stack_count"])
 
 
 def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operation:

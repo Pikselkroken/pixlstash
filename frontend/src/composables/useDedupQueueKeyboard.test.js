@@ -68,6 +68,7 @@ beforeEach(() => {
     isBlocked: vi.fn(() => false),
     onEscape: vi.fn(),
     onExclusionRefused: vi.fn(),
+    toggleExpansion: vi.fn(),
   };
   handle = createDedupKeyHandler(deps);
 });
@@ -346,6 +347,49 @@ describe("dedup keyboard — Compare", () => {
   });
 });
 
+describe("dedup keyboard: E opens the stack in place", () => {
+  it("hands the focused group to the view's toggle and claims the key", () => {
+    const event = keyEvent("e");
+    handle(event);
+    expect(deps.toggleExpansion).toHaveBeenCalledWith(store.groups[0]);
+    // Claimed, so it never reaches the app shell underneath.
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  // Opening a deck is looking, not deciding, so it survives the guard that
+  // takes the verdict keys away: exactly as C does.
+  it("still works in a read-only session", () => {
+    deps.isReadOnly.mockReturnValue(true);
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).toHaveBeenCalledTimes(1);
+  });
+
+  // Disclosure, not a mode: the verdict the user was about to give is the same
+  // verdict a moment after they opened a deck to check it.
+  it("leaves the verdict keys untouched", () => {
+    handle(keyEvent("e"));
+    handle(keyEvent("Enter"));
+    expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
+    handle(keyEvent("k"));
+    expect(store.keepSeparate).toHaveBeenCalledWith(store.groups[0]);
+  });
+
+  // Compare has its own expansion on its own control. One key meaning two
+  // different bands on one screen is how a key stops being trusted.
+  it("does not open a second band from inside Compare", () => {
+    compareOpen = true;
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).not.toHaveBeenCalled();
+  });
+
+  // The default is a no-op rather than a crash: the model predates the band and
+  // is mounted by tests that never pass the dep.
+  it("no-ops when the view supplies no toggle", () => {
+    const bare = createDedupKeyHandler({ ...deps, toggleExpansion: undefined });
+    expect(() => bare(keyEvent("e"))).not.toThrow();
+  });
+});
+
 describe("dedup keyboard — select all", () => {
   it("Ctrl+A selects every loaded group and claims the key", () => {
     store.selectAll = vi.fn();
@@ -589,5 +633,184 @@ describe("dedup keyboard — undo and the guards", () => {
     handle(keyEvent("Enter", { altKey: true }));
     expect(store.stack).not.toHaveBeenCalled();
     expect(store.keepSeparate).not.toHaveBeenCalled();
+  });
+});
+
+describe("dedup keyboard: digits address units, not candidates", () => {
+  // A deck occupies one slot and one index however many of its members the
+  // group named, so the number under a tile is the number that selects it. A
+  // handler still indexing `candidates` would put `2` on the deck's second
+  // member: a tile that does not exist.
+  it("indexes the strip's units and resolves a deck to its leader", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+      },
+    };
+    // Two tiles, not three: the deck, then the loose picture.
+    handle(keyEvent("1"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 501);
+    handle(keyEvent("2"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 700);
+
+    // And nothing beyond the second tile, even though a third candidate exists.
+    store.setCover.mockClear();
+    const event = keyEvent("3");
+    handle(event);
+    expect(store.setCover).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  // The band shows a deck's members, and it must not become a second thing the
+  // digits can address: `1`-`9` keep meaning the strip's tiles whether it is
+  // open or not, or the same key means two things on one screen.
+  it("keeps addressing units while an expansion is open", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [
+        { picture_id: 503, stack_id: 12 },
+        { picture_id: 504, stack_id: 12 },
+        { picture_id: 700 },
+      ],
+      stacks: {
+        12: { stack_id: 12, member_count: 4, leader_picture_id: 501 },
+      },
+    };
+    handle(keyEvent("e"));
+    expect(deps.toggleExpansion).toHaveBeenCalledTimes(1);
+
+    handle(keyEvent("1"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 501);
+    handle(keyEvent("2"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 700);
+    // Not 503/504: the deck's own members are never addressable by digit.
+    expect(store.setCover).toHaveBeenCalledTimes(2);
+  });
+
+  // A frozen unit cannot lead a stack it is not in, exactly as a click on it
+  // does not set the cover. Still claimed, so the key never falls through.
+  it("declines a frozen unit but keeps the key claimed", () => {
+    store.groups[0] = {
+      signature: "g1",
+      candidates: [{ picture_id: 1, stackable: false }, { picture_id: 2 }],
+    };
+    const event = keyEvent("1");
+    handle(event);
+    expect(store.setCover).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+});
+
+// ── Parameterised for a second queue ────────────────────────────────────────
+//
+// The Mixed stacks page is the third dedup queue, and it drives THIS handler
+// rather than a copy of it: the five decline guards, the claim contract, the
+// Escape layering and the Compare-open branch are identical there, and a second
+// implementation would be a second place for them to drift. Three hooks carry
+// the three facts that genuinely differ.
+
+describe("createDedupKeyHandler — a second queue's rows", () => {
+  /** A row whose addressable things are a stack's members, not a group's units. */
+  const row = { stack_id: 42, member_ids: [7, 8, 9] };
+
+  function mixedDeps(over = {}) {
+    const mixedStore = {
+      ...makeStore(),
+      groups: [row],
+      focusIndex: 0,
+      get focusedGroup() {
+        return row;
+      },
+    };
+    return {
+      ...deps,
+      store: mixedStore,
+      unitsOf: () =>
+        row.member_ids.map((id) => ({ coverPictureId: id, stackable: true })),
+      signatureOf: (r) => r.stack_id,
+      ...over,
+    };
+  }
+
+  // The digits address the same tiles on both queues and mean the same thing.
+  it("points the digits at whatever the surface says its row holds", () => {
+    const d = mixedDeps();
+    const handler = createDedupKeyHandler(d);
+    const event = keyEvent("2");
+    handler(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    // Keyed on the row's own id, not on a `signature` a stack does not have.
+    expect(d.store.setCover).toHaveBeenCalledWith(42, 8);
+  });
+
+  it("still claims a digit that addresses nothing", () => {
+    const d = mixedDeps();
+    const handler = createDedupKeyHandler(d);
+    const event = keyEvent("9");
+    handler(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(d.store.setCover).not.toHaveBeenCalled();
+  });
+
+  // S is Stack in the review queue, and a user trained there presses it here
+  // meaning Stack. On a queue whose primary is Split, that is the opposite act,
+  // so the key is claimed and answered rather than run.
+  it("hands S to the surface instead of the primary when asked to", () => {
+    const onStackSynonym = vi.fn();
+    const d = mixedDeps({ onStackSynonym });
+    const handler = createDedupKeyHandler(d);
+    const event = keyEvent("s");
+    handler(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(onStackSynonym).toHaveBeenCalledWith(row);
+    expect(d.store.stack).not.toHaveBeenCalled();
+    // Enter is untouched: it is still the primary.
+    handler(keyEvent("Enter"));
+    expect(d.store.stack).toHaveBeenCalledWith(row);
+  });
+
+  it("keeps S as Enter's synonym when no hook is given", () => {
+    const d = mixedDeps();
+    createDedupKeyHandler(d)(keyEvent("s"));
+    expect(d.store.stack).toHaveBeenCalledWith(row);
+  });
+
+  // The same layering inside Compare, because a verdict there is the point of
+  // having Compare at all.
+  it("answers S the same way from inside Compare", () => {
+    const onStackSynonym = vi.fn();
+    const d = mixedDeps({ onStackSynonym, isCompareOpen: () => true });
+    createDedupKeyHandler(d)(keyEvent("s"));
+    expect(onStackSynonym).toHaveBeenCalledWith(row);
+    expect(d.store.stack).not.toHaveBeenCalled();
+  });
+
+  // X is the SAME gesture on both queues: it acts on the item under the cursor,
+  // which `coverIdFor` names.
+  it("points X at the item under the cursor", () => {
+    const d = mixedDeps();
+    d.store.coverIdFor = vi.fn(() => 9);
+    d.store.toggleExcluded = vi.fn(() => true);
+    const handler = createDedupKeyHandler(d);
+    const event = keyEvent("x");
+    handler(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(d.store.toggleExcluded).toHaveBeenCalledWith(row, 9);
+  });
+
+  // The default is the review queue's own behaviour, unchanged: the two new
+  // hooks must be invisible to every existing caller.
+  it("leaves the review queue's digits and S exactly as they were", () => {
+    const handler = createDedupKeyHandler(deps);
+    handler(keyEvent("3"));
+    expect(store.setCover).toHaveBeenCalledWith("g1", 3);
+    handler(keyEvent("s"));
+    expect(store.stack).toHaveBeenCalledWith(store.groups[0]);
   });
 });

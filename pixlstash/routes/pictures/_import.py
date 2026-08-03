@@ -226,8 +226,32 @@ class StagingStatusResponse(BaseModel):
     processed: int
     task_id: Optional[str] = None
     imported_count: Optional[int] = None
+    """Staged files that became new pictures."""
+
     duplicate_count: Optional[int] = None
+    """Staged files whose content is already in the vault as a LIVE picture
+    (including a second copy inside this same batch)."""
+
+    scrapheaped_count: Optional[int] = None
+    """Staged files whose content matches a picture in the Scrapheap.
+
+    Not imported again and not restored: the restore is *offered*, because the
+    user scrapheapped those pictures on purpose. Counted per FILE, so
+    ``imported + duplicate + scrapheaped + failed + cancelled == total``.
+    """
+
+    scrapheaped_picture_ids: Optional[list[int]] = None
+    """Distinct scrapheaped pictures behind ``scrapheaped_count``, per PICTURE,
+    so several incoming copies of one content name its id once. Feed these
+    straight to ``POST /pictures/scrapheap/restore``."""
+
     failed_count: Optional[int] = None
+    """Staged files that could not be hashed or ingested."""
+
+    cancelled_count: Optional[int] = None
+    """Staged files never reached because the import was cancelled. Present so
+    the buckets still sum to ``total`` on a cancelled run."""
+
     error: Optional[str] = None
 
 
@@ -241,6 +265,10 @@ class ImportResultEntry(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+    """``success`` (a new picture), ``duplicate`` (content already live in the
+    vault), or ``scrapheaped`` (content matches a picture in the Scrapheap: not
+    imported again, offered for restore instead)."""
+
     picture_id: Optional[int] = None
     file: Optional[str] = None
 
@@ -254,6 +282,29 @@ class ImportStatusResponse(BaseModel):
     processed: int
     progress: float
     results: Optional[list[ImportResultEntry]] = None
+    imported_count: Optional[int] = None
+    """Files that became new pictures. Set once the import completes."""
+
+    duplicate_count: Optional[int] = None
+    """Files whose content is already in the vault as a LIVE picture."""
+
+    scrapheaped_count: Optional[int] = None
+    """Files whose content matches a picture in the Scrapheap.
+
+    Counted per FILE, so ``imported_count + duplicate_count +
+    scrapheaped_count == total``. These files were deliberately not imported
+    again (that would double the bytes on disk and refill the duplicate queue)
+    and deliberately not restored either: the user scrapheapped them on
+    purpose, so restoring is offered, not performed.
+    """
+
+    scrapheaped_picture_ids: Optional[list[int]] = None
+    """Distinct scrapheaped pictures behind ``scrapheaped_count``.
+
+    Per PICTURE, not per file: several incoming copies of the same content name
+    one id once. Feed these straight to ``POST /pictures/scrapheap/restore``.
+    """
+
     error: Optional[str] = None
 
 
@@ -500,22 +551,36 @@ def register_routes(router, server):
                     task["processed"] = task.get("processed", 0) + 1
                     task["last_update_epoch_ms"] = int(time.time() * 1000)
 
-                shas, existing_map, new_pictures = _create_picture_imports(
-                    server,
-                    uploaded_files,
-                    dest_folder,
-                    progress_callback=_on_picture_written,
+                shas, existing_map, scrapheaped_map, new_pictures = (
+                    _create_picture_imports(
+                        server,
+                        uploaded_files,
+                        dest_folder,
+                        progress_callback=_on_picture_written,
+                    )
                 )
 
                 # Duplicates are instantly "processed" — credit them now so that
                 # the progress bar stays accurate even when most files are dupes.
+                # Scrapheap matches are equally instant and are counted in their
+                # OWN bucket: they are neither imported nor ordinary duplicates.
+                # Both are counted directly (one pass over `shas`), never derived
+                # by subtracting from the total.
                 duplicate_count_initial = sum(1 for sha in shas if sha in existing_map)
-                task["processed"] = len(new_pictures) + duplicate_count_initial
+                scrapheaped_count_initial = sum(
+                    1 for sha in shas if sha in scrapheaped_map
+                )
+                task["processed"] = (
+                    len(new_pictures)
+                    + duplicate_count_initial
+                    + scrapheaped_count_initial
+                )
                 task["last_update_epoch_ms"] = int(time.time() * 1000)
 
                 _mark_stage(
                     "deduplicated",
                     duplicate_count_initial=duplicate_count_initial,
+                    scrapheaped_count_initial=scrapheaped_count_initial,
                     new_count=len(new_pictures),
                 )
 
@@ -543,16 +608,32 @@ def register_routes(router, server):
                         f"Queuing likeness calculation for {len(new_pictures)} new pictures."
                     )
                 else:
-                    logger.warning("No new pictures to import; all are duplicates.")
+                    logger.warning(
+                        "No new pictures to import; every file already matches a "
+                        "live or scrapheaped picture."
+                    )
                     new_pictures = []
 
                 _mark_stage("building_results")
                 results = []
+                imported_count = 0
                 duplicate_count = 0
+                scrapheaped_count = 0
                 index = 0
                 picture_id_sidecar_tags: dict[int, set[str]] = defaultdict(set)
                 duplicate_picture_id_set: set[int] = set()
+                # Distinct scrapheaped pictures the caller may restore. Several
+                # incoming files can match the SAME scrapheaped picture: the
+                # count is per FILE (so the buckets sum to the file total) while
+                # this list is per PICTURE (so the restore offer is honest about
+                # how many rows come back).
+                scrapheaped_picture_ids: list[int] = []
+                seen_scrapheaped_ids: set[int] = set()
                 for stem, _, sha in zip(uploaded_file_stems, uploaded_files, shas):
+                    # Three disjoint outcomes per uploaded file. `existing_map`
+                    # and `scrapheaped_map` are disjoint by construction (a live
+                    # row outranks a soft-deleted one for the same hash), so the
+                    # branches below cannot double-count.
                     if sha in existing_map:
                         pic = existing_map[sha]
                         results.append(
@@ -565,6 +646,19 @@ def register_routes(router, server):
                         duplicate_count += 1
                         if pic.id is not None:
                             duplicate_picture_id_set.add(pic.id)
+                    elif sha in scrapheaped_map:
+                        pic = scrapheaped_map[sha]
+                        results.append(
+                            {
+                                "status": "scrapheaped",
+                                "picture_id": pic.id,
+                                "file": pic.file_path,
+                            }
+                        )
+                        scrapheaped_count += 1
+                        if pic.id is not None and pic.id not in seen_scrapheaped_ids:
+                            seen_scrapheaped_ids.add(pic.id)
+                            scrapheaped_picture_ids.append(pic.id)
                     else:
                         pic = new_pictures[index]
                         results.append(
@@ -574,12 +668,17 @@ def register_routes(router, server):
                                 "file": pic.file_path,
                             }
                         )
+                        imported_count += 1
                         index += 1
 
                     if (
                         pic.id is not None
                         and stem in sidecar_tags_by_stem
                         and sidecar_tags_by_stem[stem]
+                        # A scrapheaped match is not being imported and the user
+                        # has not decided to restore it yet, so this import must
+                        # not edit its tags behind its back.
+                        and sha not in scrapheaped_map
                     ):
                         picture_id_sidecar_tags[pic.id].update(
                             sidecar_tags_by_stem[stem]
@@ -591,18 +690,55 @@ def register_routes(router, server):
                         duplicate_count,
                         len(uploaded_files),
                     )
+                if scrapheaped_count:
+                    logger.warning(
+                        "Import completed with %d file(s) out of %d matching %d "
+                        "scrapheaped picture(s) %s: NOT imported again, offered "
+                        "for restore instead.",
+                        scrapheaped_count,
+                        len(uploaded_files),
+                        len(scrapheaped_picture_ids),
+                        scrapheaped_picture_ids,
+                    )
+                bucket_total = imported_count + duplicate_count + scrapheaped_count
+                if bucket_total != len(uploaded_files):
+                    # The three buckets are the whole story of this import; a
+                    # mismatch means the summary the user reads is wrong, so say
+                    # so loudly rather than let a silently-lossy count ship.
+                    logger.error(
+                        "Import task %s bucket arithmetic is inconsistent: "
+                        "imported=%d + duplicate=%d + scrapheaped=%d = %d, but "
+                        "%d file(s) were uploaded.",
+                        task_id,
+                        imported_count,
+                        duplicate_count,
+                        scrapheaped_count,
+                        bucket_total,
+                        len(uploaded_files),
+                    )
                 server.import_tasks[task_id]["results"] = results
                 server.import_tasks[task_id]["processed"] = len(uploaded_files)
+                server.import_tasks[task_id]["imported_count"] = imported_count
+                server.import_tasks[task_id]["duplicate_count"] = duplicate_count
+                server.import_tasks[task_id]["scrapheaped_count"] = scrapheaped_count
+                server.import_tasks[task_id]["scrapheaped_picture_ids"] = (
+                    scrapheaped_picture_ids
+                )
                 server.import_tasks[task_id]["last_update_epoch_ms"] = int(
                     time.time() * 1000
                 )
                 # Only apply import context to pictures that were actually
                 # touched by this request (one results row per uploaded file).
+                # Scrapheaped matches are deliberately excluded: they were not
+                # imported, and stamping `imported_at` / joining them to the
+                # target project would quietly act on a picture the user has not
+                # chosen to restore.
                 all_imported_ids = list(
                     dict.fromkeys(
                         entry.get("picture_id")
                         for entry in results
                         if entry.get("picture_id") is not None
+                        and entry.get("status") != "scrapheaped"
                     )
                 )
 
@@ -834,6 +970,14 @@ def register_routes(router, server):
         }
         if task["status"] == "completed":
             payload["results"] = task.get("results") or []
+            # The three disjoint buckets, each counted directly while the results
+            # were built: never derived from the total by subtraction.
+            payload["imported_count"] = task.get("imported_count")
+            payload["duplicate_count"] = task.get("duplicate_count")
+            payload["scrapheaped_count"] = task.get("scrapheaped_count")
+            payload["scrapheaped_picture_ids"] = (
+                task.get("scrapheaped_picture_ids") or []
+            )
         if task["status"] == "failed":
             payload["error"] = task.get("error")
         return payload
@@ -1427,6 +1571,8 @@ def register_routes(router, server):
         processed = 0
         total = len(staged_files)
         imported_count = duplicate_count = failed_count = None
+        scrapheaped_count = cancelled_count = None
+        scrapheaped_picture_ids: list[int] = []
         error = session.get("error")
 
         if task is not None:
@@ -1439,7 +1585,10 @@ def register_routes(router, server):
                 result = task.result if isinstance(task.result, dict) else {}
                 imported_count = result.get("imported_count")
                 duplicate_count = result.get("duplicate_count")
+                scrapheaped_count = result.get("scrapheaped_count")
+                scrapheaped_picture_ids = result.get("scrapheaped_picture_ids") or []
                 failed_count = result.get("failed_count")
+                cancelled_count = result.get("cancelled_count")
                 # Terminal: drop the retained task/dir reference so the session
                 # record no longer pins the finished task object.
                 session["stage"] = "completed"
@@ -1468,6 +1617,9 @@ def register_routes(router, server):
             "task_id": session.get("task_id"),
             "imported_count": imported_count,
             "duplicate_count": duplicate_count,
+            "scrapheaped_count": scrapheaped_count,
+            "scrapheaped_picture_ids": scrapheaped_picture_ids,
             "failed_count": failed_count,
+            "cancelled_count": cancelled_count,
             "error": error,
         }

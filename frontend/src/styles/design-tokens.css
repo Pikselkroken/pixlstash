@@ -149,6 +149,15 @@
      differ by height and air only, never by a second colour. */
   --rule-h: 24px;
   --rule-h-seam: 32px;
+
+  /* The leading status rail: a vertical stripe that carries a hue beside a
+     block it must not tint. Its first consumer is the Keep-cover-only confirm,
+     where the headline numeral stays `on-surface` (a 22px `error` figure would
+     be the loudest object in the app) and the rail carries the consequence
+     instead. A rendered width, not a gap, for the same reason as
+     `--countdown-h`; three components already carry a raw 3px rail, and naming
+     it is what stops the next one picking a fourth value. */
+  --rail-w: 3px;
   --bar-height: 48px; /* contextual action-bar / toolbar band height */
   /* The right-hand stats rail's fixed column width. Not invented: it is already
      the de-facto constant in `.stats-sidebar` (width/min-width/max-width) and in

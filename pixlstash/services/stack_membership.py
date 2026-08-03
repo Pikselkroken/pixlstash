@@ -20,6 +20,7 @@ specific pictures and a stack may mix characters); the UI refuses per-member
 character edits instead.
 """
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -27,6 +28,40 @@ from pixlstash.db_models import (
     PictureProjectMember,
     PictureSetMember,
 )
+from pixlstash.utils.service.scope_table import scope_id_subquery
+
+
+def in_a_live_stack():
+    """A picture that is in a stack **that is still a stack**.
+
+    ``stack_id IS NOT NULL`` on its own is not that. A soft-deleted picture keeps
+    its ``stack_id``, deliberately: it is what lets a Scrapheap restore put the
+    picture back into the stack it came from, and what makes undoing a collapse a
+    flag flip rather than a rebuild. So a stack whose other members are all in the
+    Scrapheap leaves one live picture still carrying a ``stack_id``, and that
+    picture is not stacked in any sense the user would recognise.
+
+    The rest of the app already knew this and this predicate did not, which is the
+    bug it exists to close. ``_enrich_stack_counts`` counts live members only and
+    ``StackBadge`` hides below two, so the grid draws that survivor as a plain
+    picture while the ``stacked`` filter served it as a stack. Collapsing a stack
+    to its cover produces exactly that state every time, so what had been a rare
+    inconsistency became a guaranteed one.
+
+    One definition, used by every surface that asks the question, so the filter,
+    the count and the badge cannot drift apart again.
+
+    Returns:
+        A SQLAlchemy predicate over :class:`Picture`, true when the picture is
+        live, carries a ``stack_id``, and at least one OTHER live picture shares
+        it.
+    """
+    return Picture.stack_id.is_not(None) & Picture.stack_id.in_(
+        select(Picture.stack_id)
+        .where(Picture.stack_id.is_not(None), Picture.deleted.is_(False))
+        .group_by(Picture.stack_id)
+        .having(func.count(Picture.id) >= 2)
+    )
 
 
 def expand_picture_ids_to_stacks(
@@ -52,18 +87,22 @@ def expand_picture_ids_to_stacks(
     if not ids:
         return []
 
+    input_scope = scope_id_subquery(session, ids, name="_pixlstash_expand_picture_ids")
     stack_ids = {
         int(stack_id)
         for stack_id in session.exec(
             select(Picture.stack_id).where(
-                Picture.id.in_(ids),
+                Picture.id.in_(input_scope),
                 Picture.stack_id.is_not(None),
             )
         ).all()
         if stack_id is not None
     }
     if stack_ids:
-        member_query = select(Picture.id).where(Picture.stack_id.in_(stack_ids))
+        stack_scope = scope_id_subquery(
+            session, stack_ids, name="_pixlstash_expand_stack_ids"
+        )
+        member_query = select(Picture.id).where(Picture.stack_id.in_(stack_scope))
         if not include_deleted:
             member_query = member_query.where(Picture.deleted.is_(False))
         member_ids = session.exec(member_query).all()
@@ -111,6 +150,9 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     enforce_stack_membership_not_locked(
         session, member_ids, stack_id, "stack pictures together"
     )
+    member_scope = scope_id_subquery(
+        session, member_ids, name="_pixlstash_reconcile_stack_members"
+    )
 
     changed = False
 
@@ -119,7 +161,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
         int(pid)
         for pid in session.exec(
             select(PictureProjectMember.project_id).where(
-                PictureProjectMember.picture_id.in_(member_ids)
+                PictureProjectMember.picture_id.in_(member_scope)
             )
         ).all()
         if pid is not None
@@ -129,7 +171,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
             int(pic_id)
             for pic_id in session.exec(
                 select(PictureProjectMember.picture_id).where(
-                    PictureProjectMember.picture_id.in_(member_ids),
+                    PictureProjectMember.picture_id.in_(member_scope),
                     PictureProjectMember.project_id == project_id,
                 )
             ).all()
@@ -144,7 +186,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
     # Keep the scalar Picture.project_id consistent across the stack: a single
     # deterministic primary (lowest project id in the union, else None).
     primary_project_id = min(project_ids) if project_ids else None
-    for pic in session.exec(select(Picture).where(Picture.id.in_(member_ids))).all():
+    for pic in session.exec(select(Picture).where(Picture.id.in_(member_scope))).all():
         if pic.project_id != primary_project_id:
             pic.project_id = primary_project_id
             session.add(pic)
@@ -155,7 +197,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
         int(sid)
         for sid in session.exec(
             select(PictureSetMember.set_id).where(
-                PictureSetMember.picture_id.in_(member_ids)
+                PictureSetMember.picture_id.in_(member_scope)
             )
         ).all()
         if sid is not None
@@ -165,7 +207,7 @@ def reconcile_stack_membership(session: Session, stack_id) -> bool:
             int(pic_id)
             for pic_id in session.exec(
                 select(PictureSetMember.picture_id).where(
-                    PictureSetMember.picture_id.in_(member_ids),
+                    PictureSetMember.picture_id.in_(member_scope),
                     PictureSetMember.set_id == set_id,
                 )
             ).all()

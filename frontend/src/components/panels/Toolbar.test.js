@@ -31,6 +31,7 @@ vi.mock("../../utils/apiClient", async () => {
 import Toolbar from "./Toolbar.vue";
 import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useSortStore } from "../../stores/useSortStore";
 
 // Vuetify is not installed in the test app; v-menu is stubbed with the two
 // behaviours the toolbar relies on (activator slot props carry the toggle,
@@ -148,6 +149,55 @@ describe("Toolbar — the shell band's one box recipe", () => {
       return match[1];
     };
     expect(rightInset(dq)).toBe(rightInset(grid));
+  });
+});
+
+describe("Toolbar — Recently changed stacks", () => {
+  const options = [
+    { label: "Date Created", value: "DATE" },
+    { label: "Recently changed stacks", value: "STACK_UPDATED_AT" },
+  ];
+
+  async function openSortMenu(wrapper) {
+    await wrapper.find(".bar-split-menu").trigger("click");
+  }
+
+  it("offers the decorated stack-time sort only in the stacked view", async () => {
+    const sortStore = useSortStore();
+    const filterStore = useFilterStore();
+    sortStore.setSortOptions(options);
+
+    const ordinary = mountToolbar();
+    await openSortMenu(ordinary);
+    expect(ordinary.text()).not.toContain("Recently changed stacks");
+    ordinary.unmount();
+
+    filterStore.stackStateFilter = "stacked";
+    const stacked = mountToolbar();
+    await openSortMenu(stacked);
+    expect(stacked.text()).toContain("Recently changed stacks");
+    const badge = stacked.find(".tbm-toggle-filter-badge");
+    expect(badge.exists()).toBe(true);
+    expect(badge.attributes("title")).toBe(
+      "Only available when viewing stacks",
+    );
+    expect(badge.attributes("aria-label")).toBe(
+      "Only available when viewing stacks",
+    );
+  });
+
+  it("falls back to Date when the stacked view is left", async () => {
+    const sortStore = useSortStore();
+    const filterStore = useFilterStore();
+    sortStore.setSortOptions(options);
+    filterStore.stackStateFilter = "stacked";
+    sortStore.selectedSort = "STACK_UPDATED_AT";
+    const wrapper = mountToolbar();
+
+    filterStore.stackStateFilter = "all";
+    await wrapper.vm.$nextTick();
+
+    expect(sortStore.selectedSort).toBe("DATE");
   });
 });
 

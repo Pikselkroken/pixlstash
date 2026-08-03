@@ -23,16 +23,20 @@ import gc
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta
 
 import pytest
 from sqlmodel import select
 
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, PictureSet, PictureSetMember
+from pixlstash.db_models import Picture, PictureSet, PictureSetMember, PictureStack
 from pixlstash.db_models.dedup import (
+    SCAN_PENDING,
+    SCAN_RUNNING,
     VERDICT_KEEP_SEPARATE,
     DedupGroup,
+    DedupScan,
     DedupVerdict,
 )
 from pixlstash.db_models.picture_likeness import PictureLikeness
@@ -48,6 +52,10 @@ from pixlstash.services.dedup_tier_service import (
     ScopeType,
     TierPolicy,
 )
+from pixlstash.tasks import dedup_scan_task as dedup_scan_task_module
+from pixlstash.tasks.dedup_scan_task import DedupScanTask
+from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
+from pixlstash.task_runner import TaskRunner
 
 _BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -913,6 +921,216 @@ def test_stale_groups_are_pruned_when_their_members_go_to_the_scrapheap(server):
     assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
 
 
+def _soft_delete(server, picture_id):
+    """Move one picture to the scrapheap, the way ``DELETE /pictures/{id}`` does."""
+
+    def go(session):
+        picture = session.get(Picture, picture_id)
+        picture.deleted = True
+        session.add(picture)
+        session.commit()
+
+    _run(server, go)
+
+
+def test_a_group_thinned_below_two_leaves_the_queue_at_once(server):
+    """Not "on the next verdict or scan": immediately, with no prune in between.
+
+    The owner's report: scrapheap one of a pair and the queue kept the row,
+    drawn as a lone picture beside an empty slot.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1 and total == 1
+
+    _soft_delete(server, ids[1])
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert page == []
+    assert total == 0
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 0
+    assert _run(server, tiers.count_by_tier_in_session, None, None)["exact"] == 0
+    # The row itself is still there, unpruned: it is the READ that filters, so
+    # restoring the picture must bring the group straight back.
+    assert (
+        len(_run(server, lambda session: session.exec(select(DedupGroup)).all())) == 1
+    )
+
+
+def test_a_restored_member_brings_its_group_back_without_a_rescan(server):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _run(server, tiers.page_queue_in_session)[0][0]["signature"]
+    _soft_delete(server, ids[1])
+    assert _run(server, tiers.page_queue_in_session)[0] == []
+
+    def restore(session):
+        picture = session.get(Picture, ids[1])
+        picture.deleted = False
+        session.add(picture)
+        session.commit()
+
+    _run(server, restore)
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert [group["signature"] for group in page] == [signature]
+    assert total == 1
+    assert _run(server, tiers.count_unresolved_in_session, None, None) == 1
+
+
+def test_a_group_with_two_live_members_left_keeps_its_place_in_the_queue(server):
+    """Over-filtering is its own regression: three minus one is still a decision.
+
+    The row stays, and every number on it counts the LIVE members only, the
+    stored ``member_count`` still says three until the next prune.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "bbb", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 100},
+            {"pixel_sha": "bbb", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    _soft_delete(server, ids[2])
+
+    page, total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1
+    assert total == 1
+    group = page[0]
+    assert group["member_count"] == 2
+    assert sorted(c["picture_id"] for c in group["candidates"]) == sorted(ids[:2])
+    assert group["cover_picture_id"] in ids[:2]
+    stored = _run(
+        server,
+        lambda session: session.exec(select(DedupGroup)).first().member_count,
+    )
+    assert stored == 3, "the payload's count is live even while the stored one lags"
+
+
+def test_large_group_evidence_tracks_the_live_member_count(server):
+    """The warning and header must never report two different group sizes.
+
+    The evidence is stored at scan time, but the queue filters scrapheaped
+    members live. A group that shrinks back under the policy limit must lose
+    its stale size warning rather than saying both "2 pictures" and "3
+    pictures" in the same row.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "large", "size_bytes": 100},
+            {"pixel_sha": "large", "size_bytes": 100},
+            {"pixel_sha": "large", "size_bytes": 100},
+        ],
+    )
+    policy = TierPolicy(max_group_size=2)
+    _scan(server, policy)
+
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, policy)
+    assert page[0]["member_count"] == 3
+    assert any("(3 pictures)" in pill["text"] for pill in page[0]["why"])
+
+    _soft_delete(server, ids[2])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session, policy)
+    assert page[0]["member_count"] == 2
+    assert not any(
+        pill["text"].startswith("Unusually large group") for pill in page[0]["why"]
+    )
+
+
+def test_a_thinned_group_still_lists_on_the_decided_page(server):
+    """The way back must survive the scrapheap.
+
+    The open queue drops a group that no longer poses a decision, but the
+    decided page keeps it: the verdict already happened and "clear this
+    decision" is the only route back to it.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "ccc", "size_bytes": 100},
+            {"pixel_sha": "ccc", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _run(server, tiers.page_queue_in_session)[0][0]["signature"]
+    _run(server, verdicts.apply_keep_separate_in_session, signature, None)
+    _soft_delete(server, ids[1])
+
+    page, total, _cursor = _run(
+        server, tiers.page_queue_in_session, None, None, 0, 20, None, True
+    )
+    assert [group["signature"] for group in page] == [signature]
+    assert total == 1
+    assert page[0]["member_count"] == 1, "live members only, even here"
+
+
+def test_a_decks_depth_in_the_queue_follows_a_scrapheaped_stack_member(server):
+    """A deleted member must not leave a hole in the deck's depth.
+
+    The deck's depth is the STACK's live member count, so scrapheaping a member
+    the group never even names still has to shrink it, otherwise the row
+    promises to move a picture that is in the Scrapheap.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:3])
+    group = _only_group(server)
+    assert group["stacks"][str(stack_id)]["member_count"] == 3
+
+    # A sibling the group never names: it is not a candidate, but it IS depth.
+    _soft_delete(server, ids[1])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1
+    deck = page[0]["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["leader_picture_id"] == ids[0]
+    assert deck["matched_picture_ids"] == [ids[2]]
+
+
+def test_a_deck_whose_leader_is_scrapheaped_reports_the_next_live_leader(server):
+    """The face has to move: a deck drawn from a scrapheaped leader is the
+    404-thumbnail the queue's empty placeholder was made of."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:3])
+    assert _only_group(server)["stacks"][str(stack_id)]["leader_picture_id"] == ids[0]
+
+    _soft_delete(server, ids[0])
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    deck = page[0]["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["leader_picture_id"] == ids[1]
+
+
 def test_scoped_counts_are_reported_per_scope(server):
     ids = _seed(
         server,
@@ -958,15 +1176,263 @@ def test_a_scope_id_is_required_for_a_non_global_scope():
 # ── scan progress ─────────────────────────────────────────────────────────────
 
 
-def test_requesting_a_scan_creates_one_row_per_scope_and_reuses_it(server):
+def test_an_equivalent_active_scan_request_is_coalesced_without_restarting(server):
     first = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
     assert first["status"] == "pending"
     assert first["scope_key"] == "global"
-    second = _run(
-        server, tiers.request_scan_in_session, TierPolicy(near_enabled=True), None
-    )
+    second = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
     assert second["scan_id"] == first["scan_id"]
-    assert second["tiers"] == ["exact", "near"]
+    assert second["started_at"] == first["started_at"]
+    assert second["updated_at"] == first["updated_at"]
+
+
+def test_a_different_policy_cannot_overwrite_an_active_scan(server):
+    first = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
+    with pytest.raises(tiers.DedupScanBusyError) as raised:
+        _run(
+            server,
+            tiers.request_scan_in_session,
+            TierPolicy(near_enabled=True),
+            None,
+        )
+    assert raised.value.active_scan["scan_id"] == first["scan_id"]
+    assert raised.value.active_scan["tiers"] == ["exact"]
+    persisted = _run(server, tiers.scan_progress_in_session, None)
+    assert persisted["tiers"] == ["exact"]
+    assert persisted["status"] == "pending"
+
+
+def test_scan_slices_yield_the_writer_between_near_buckets(server, monkeypatch):
+    """An interactive callback queued after bucket 1 runs before bucket 2."""
+    _seed(
+        server,
+        [
+            {"perceptual_hash": PHASH_ZERO},
+            {"perceptual_hash": PHASH_ONE_BIT},
+        ],
+    )
+    progress = _run(
+        server,
+        tiers.request_scan_in_session,
+        TierPolicy(near_enabled=True),
+        None,
+    )
+    task = DedupScanTask(server.vault.db, progress["scan_id"])
+    order: list[str] = []
+    queued_interactive = threading.Event()
+    original_bucket_slice = DedupScanTask._run_near_bucket_slice
+
+    def marked_bucket_slice(session, *args):
+        order.append(f"bucket-{args[3]}")
+        return original_bucket_slice(session, *args)
+
+    monkeypatch.setattr(
+        DedupScanTask, "_run_near_bucket_slice", staticmethod(marked_bucket_slice)
+    )
+    original_run_low_slice = task._run_low_slice
+
+    def run_low_slice(func, *args):
+        result = original_run_low_slice(func, *args)
+        if func is marked_bucket_slice and not queued_interactive.is_set():
+            queued_interactive.set()
+            server.vault.db.submit_task(
+                lambda _session: order.append("interactive"),
+                priority=DBPriority.IMMEDIATE,
+            )
+        return result
+
+    monkeypatch.setattr(task, "_run_low_slice", run_low_slice)
+    task._run_task()
+    bucket_positions = [i for i, item in enumerate(order) if item.startswith("bucket-")]
+    assert len(bucket_positions) >= 2, order
+    assert bucket_positions[0] < order.index("interactive") < bucket_positions[1]
+
+
+def test_sliced_scan_preserves_cross_bucket_chaining_and_restart(server):
+    ids = _seed(
+        server,
+        [
+            {
+                "perceptual_hash": PHASH_ZERO,
+                "width": 100,
+                "height": 100,
+                "file_path": "/a/one.png",
+            },
+            {
+                "perceptual_hash": PHASH_ONE_BIT,
+                "width": 100,
+                "height": 100,
+                "file_path": "/b/two.png",
+            },
+            {
+                "perceptual_hash": PHASH_FOUR_BITS,
+                "width": 200,
+                "height": 200,
+                "file_path": "/b/three.png",
+            },
+        ],
+    )
+    progress = _run(
+        server,
+        tiers.request_scan_in_session,
+        TierPolicy(near_enabled=True),
+        None,
+    )
+
+    def mark_interrupted(session, scan_id):
+        scan = session.get(DedupScan, scan_id)
+        scan.status = SCAN_RUNNING
+        session.add(scan)
+        session.commit()
+
+    _run(server, mark_interrupted, progress["scan_id"])
+    _run(
+        server,
+        DedupScanTask._mark_pending_after_cancel,
+        progress["scan_id"],
+    )
+    pending = _run(server, DedupScanTask.find_pending_scan)
+    assert pending.id == progress["scan_id"]
+    assert pending.status == SCAN_PENDING
+    resumed_task = DedupScanFinder(server.vault.db).find_task()
+    assert resumed_task is not None
+    assert resumed_task.params["scan_id"] == progress["scan_id"]
+    DedupScanTask(server.vault.db, progress["scan_id"])._run_task()
+    rows = _run(server, lambda session: session.exec(select(DedupGroup)).all())
+    matching = [row for row in rows if row.tier == "near" and row.member_count == 3]
+    assert len(matching) == 1
+    members = _run(
+        server,
+        lambda session: session.exec(
+            select(tiers.DedupGroupMember.picture_id).where(
+                tiers.DedupGroupMember.group_id == matching[0].id
+            )
+        ).all(),
+    )
+    assert sorted(members) == sorted(ids)
+
+
+def test_task_runner_shutdown_stops_scan_after_current_slice():
+    """Shutdown lets one active callback finish but submits no later slice."""
+    slice_started = threading.Event()
+    release_slice = threading.Event()
+    calls: list[str] = []
+
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            calls.append(func.__name__)
+            if func.__name__ == "_start_scan_slice":
+                slice_started.set()
+                assert release_slice.wait(timeout=2)
+                return {
+                    "policy": TierPolicy(near_enabled=True).as_dict(),
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 100,
+                    "groups_found": 1,
+                }
+            if func.__name__ == "_mark_pending_after_cancel":
+                assert priority == DBPriority.IMMEDIATE
+                return None
+            raise AssertionError(f"shutdown submitted later slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=7)
+    runner = TaskRunner(name="dedup-shutdown-test", num_workers=1)
+    runner.start()
+    runner.submit(task)
+    assert slice_started.wait(timeout=1)
+
+    shutdown = threading.Thread(target=runner.stop)
+    shutdown.start()
+    # stop() must wait for the callback that currently owns the DB session.
+    shutdown.join(timeout=0.05)
+    assert shutdown.is_alive()
+
+    release_slice.set()
+    shutdown.join(timeout=1)
+    assert not shutdown.is_alive()
+    assert calls == ["_start_scan_slice", "_mark_pending_after_cancel"]
+    assert task.result == {
+        "scan_id": 7,
+        "status": SCAN_PENDING,
+        "cancelled": True,
+    }
+
+
+def test_legacy_exact_plus_embedding_scan_has_defined_phase_progress(monkeypatch):
+    """A persisted pre-validator tier combination must not unbind total_phases."""
+
+    class LegacyPolicy:
+        def __init__(self, **values):
+            self.near_enabled = bool(values.get("near_enabled"))
+            self.embedding_enabled = bool(values.get("embedding_enabled"))
+            self.threshold = float(values.get("threshold", 0.9))
+            self.min_group_size = int(values.get("min_group_size", 2))
+            self.max_group_size = int(values.get("max_group_size", 24))
+
+    monkeypatch.setattr(dedup_scan_task_module, "TierPolicy", LegacyPolicy)
+
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            if func.__name__ == "_start_scan_slice":
+                return {
+                    "policy": {
+                        "near_enabled": False,
+                        "embedding_enabled": True,
+                        "threshold": 0.9,
+                        "min_group_size": 2,
+                        "max_group_size": 24,
+                    },
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 1,
+                    "groups_found": 0,
+                }
+            if func.__name__ == "_embedding_scope_slice":
+                return None
+            if func.__name__ == "_embedding_edge_page_slice":
+                return {"edges": [], "cursor": (-1, -1), "done": True}
+            if func.__name__ == "_finish_scan_slice":
+                assert task.task_progress() == (2, 3)
+                return {
+                    "scan_id": 1,
+                    "scope": "global",
+                    "total_pictures": 1,
+                    "groups_found": 0,
+                }
+            raise AssertionError(f"unexpected slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=1)
+    assert task._run_task()["scan_id"] == 1
+    assert task.task_progress() == (3, 3)
+
+
+def test_near_scan_with_no_buckets_keeps_finalisation_remaining():
+    class FakeDatabase:
+        def run_task(self, func, *args, priority):
+            if func.__name__ == "_start_scan_slice":
+                return {
+                    "policy": TierPolicy(near_enabled=True).as_dict(),
+                    "scope_type": "global",
+                    "scope_id": None,
+                    "total_pictures": 0,
+                    "groups_found": 0,
+                }
+            if func.__name__ == "_prepare_near_slice":
+                return []
+            if func.__name__ == "_finish_scan_slice":
+                assert task.task_progress() == (2, 3)
+                return {
+                    "scan_id": 1,
+                    "scope": "global",
+                    "total_pictures": 0,
+                    "groups_found": 0,
+                }
+            raise AssertionError(f"unexpected slice {func.__name__}")
+
+    task = DedupScanTask(FakeDatabase(), scan_id=1)
+    task._run_task()
+    assert task.task_progress() == (3, 3)
 
 
 def test_scan_progress_for_an_unscanned_scope_is_idle_not_an_error(server):
@@ -1227,3 +1693,310 @@ def test_a_folder_scope_is_normalised_to_one_scope_key():
     trailing = DedupScope(scope_type=ScopeType.FOLDER, scope_id="/photos/2026/")
     assert plain.key == trailing.key == "folder:/photos/2026"
     assert trailing.scope_id == "/photos/2026"
+
+
+# ── stack units: the deck's depth is the STACK's, not the group's ─────────────
+
+
+def _stack(server, picture_ids, thumbnails=None):
+    """Put *picture_ids* in one stack, in order, and return the stack id.
+
+    ``picture_ids[0]`` becomes the leader (``stack_position`` 0). *thumbnails*
+    optionally maps a picture id to a ``(width, height)`` pair so the leader's
+    cache-buster token is a real value rather than the unprocessed ``"0"``.
+    """
+
+    def build(session):
+        stack = PictureStack(name=None)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for position, picture_id in enumerate(picture_ids):
+            picture = session.get(Picture, int(picture_id))
+            picture.stack_id = int(stack.id)
+            picture.stack_position = position
+            size = (thumbnails or {}).get(int(picture_id))
+            if size is not None:
+                picture.thumbnail_width, picture.thumbnail_height = size
+            session.add(picture)
+        session.commit()
+        return int(stack.id)
+
+    return _run(server, build)
+
+
+def _lock_set(server, name, picture_ids):
+    """Create a LOCKED picture set containing *picture_ids*; return its id."""
+
+    def build(session):
+        picture_set = PictureSet(name=name, locked=True)
+        session.add(picture_set)
+        session.commit()
+        session.refresh(picture_set)
+        for picture_id in picture_ids:
+            session.add(
+                PictureSetMember(set_id=int(picture_set.id), picture_id=int(picture_id))
+            )
+        session.commit()
+        return int(picture_set.id)
+
+    return _run(server, build)
+
+
+def _only_group(server):
+    """Scan, page the queue, and return the single group it serves."""
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+    page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    assert len(page) == 1, page
+    return page[0]
+
+
+def test_a_group_naming_one_member_of_a_four_stack_reports_the_stacks_depth(server):
+    """The measured majority case: 36 of 116 stack-touching groups name ONE
+    member of a stack. The deck must still stand for the whole stack, or the
+    row draws a 4-deep stack as one picture and then silently moves four."""
+    ids = _seed(
+        server,
+        [
+            # The stack: leader, two siblings the group never names, and the
+            # member that is a byte-identical duplicate of the loose picture.
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "stack-b", "size_bytes": 11},
+            {"pixel_sha": "stack-c", "size_bytes": 12},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            # The loose picture it duplicates.
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:4], thumbnails={ids[0]: (1024, 768)})
+
+    group = _only_group(server)
+    assert sorted(c["picture_id"] for c in group["candidates"]) == sorted(ids[3:])
+
+    stacks = group["stacks"]
+    assert list(stacks) == [str(stack_id)], "keyed by stack id, as a string"
+    deck = stacks[str(stack_id)]
+    assert deck["stack_id"] == stack_id
+    # The stack's REAL depth, not the one member of it that is in the group.
+    assert deck["member_count"] == 4
+    assert deck["matched_picture_ids"] == [ids[3]]
+    # The face is the stack's leader, which is NOT the matched member.
+    assert deck["leader_picture_id"] == ids[0]
+    assert deck["leader_picture_id"] not in deck["matched_picture_ids"]
+    assert deck["leader_thumbnail_version"] == "1024x768"
+    assert deck["stackable"] is True
+    assert deck["blocked_by_sets"] == []
+    # Eager count and leader, LAZY members: the members are never inlined.
+    assert "members" not in deck
+    assert "member_ids" not in deck
+
+
+def test_a_group_naming_a_whole_two_stack_reports_two_and_two(server):
+    """When the group does name every member, depth and matched agree."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:2])
+
+    group = _only_group(server)
+    deck = group["stacks"][str(stack_id)]
+    assert deck["member_count"] == 2
+    assert deck["matched_picture_ids"] == sorted(ids[:2])
+    assert deck["leader_picture_id"] == ids[0]
+    # The loose third picture is its own unit and contributes no stacks entry.
+    assert len(group["stacks"]) == 1
+
+
+def test_a_deck_with_one_locked_member_is_unstackable_at_unit_level(server):
+    """A stack cannot be partially stacked, so ONE frozen member freezes the
+    deck: including a member the group never names, because a locked set
+    freezes a whole stack.
+
+    Three units keep the group in the queue at all: a frozen deck plus two loose
+    pictures still leaves two stackable units, which is what
+    ``_live_groups_filter`` requires.
+    """
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "stack-leader", "size_bytes": 10},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+            {"pixel_sha": "shared", "size_bytes": 100},
+        ],
+    )
+    stack_id = _stack(server, ids[:2])
+    # The LEADER is locked, and the leader is not in the group at all.
+    set_id = _lock_set(server, "Frozen", [ids[0]])
+
+    group = _only_group(server)
+    deck = group["stacks"][str(stack_id)]
+    assert deck["matched_picture_ids"] == [ids[1]], "only the sibling is in the group"
+    assert deck["member_count"] == 2
+    assert deck["stackable"] is False
+    assert deck["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+    # The per-candidate value it rolls up says the same thing, and the two loose
+    # units are untouched: over-blocking would be its own regression.
+    by_id = {c["picture_id"]: c for c in group["candidates"]}
+    assert by_id[ids[1]]["stackable"] is False
+    assert by_id[ids[2]]["stackable"] is True
+    assert by_id[ids[3]]["stackable"] is True
+
+
+def test_the_deck_rollup_costs_one_query_for_the_whole_page(server):
+    """The page resolves stacks once, not once per group (no N+1).
+
+    Five groups, each touching its own stack. ``load_stack_facts`` must be
+    called exactly once for the page, with every stack id in it.
+    """
+    stack_ids = []
+    for index in range(5):
+        ids = _seed(
+            server,
+            [
+                {"pixel_sha": f"lead-{index}", "size_bytes": 10 + index},
+                {"pixel_sha": f"shared-{index}", "size_bytes": 100 + index},
+                {"pixel_sha": f"shared-{index}", "size_bytes": 100 + index},
+            ],
+        )
+        stack_ids.append(_stack(server, ids[:2]))
+    _run(server, tiers.run_scan_now_in_session, TierPolicy(), None)
+
+    calls = []
+    original = tiers.load_stack_facts
+
+    def counting(session, ids):
+        materialised = sorted({int(i) for i in ids})
+        calls.append(materialised)
+        return original(session, materialised)
+
+    tiers.load_stack_facts = counting
+    try:
+        page, _total, _cursor = _run(server, tiers.page_queue_in_session)
+    finally:
+        tiers.load_stack_facts = original
+
+    assert len(page) == 5
+    assert len(calls) == 1, f"one batched resolve per page, got {len(calls)}"
+    assert calls[0] == sorted(stack_ids)
+
+
+def test_the_leader_ranking_matches_the_grids(server):
+    """An unpositioned stack still names a leader, by the same rule the grid
+    uses: position (NULLs last), then score, then newest capture, then id."""
+    ids = _seed(
+        server,
+        [
+            {"score": 1, "created_at": 0},
+            {"score": 5, "created_at": 10},
+            {"score": 5, "created_at": 20},
+        ],
+    )
+
+    def unposition(session):
+        stack = PictureStack(name=None)
+        session.add(stack)
+        session.commit()
+        session.refresh(stack)
+        for picture_id in ids:
+            picture = session.get(Picture, picture_id)
+            picture.stack_id = int(stack.id)
+            picture.stack_position = None
+            session.add(picture)
+        session.commit()
+        return int(stack.id)
+
+    stack_id = _run(server, unposition)
+    facts = _run(server, tiers.load_stack_facts, [stack_id])[stack_id]
+    # Highest score wins; the newer capture breaks the tie between the two 5s.
+    assert facts.leader_picture_id == ids[2]
+    assert facts.member_ids == (ids[2], ids[1], ids[0])
+    assert facts.member_count == 3
+
+
+def test_a_scrapheaped_member_is_not_part_of_the_stacks_depth(server):
+    """``member_count`` is the LIVE member count: a deck must not promise to
+    move a picture that is already in the scrapheap."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "a", "size_bytes": 10},
+            {"pixel_sha": "b", "size_bytes": 11},
+            {"pixel_sha": "c", "size_bytes": 12, "deleted": True},
+        ],
+    )
+    stack_id = _stack(server, ids)
+    facts = _run(server, tiers.load_stack_facts, [stack_id])[stack_id]
+    assert facts.member_count == 2
+    assert facts.member_ids == (ids[0], ids[1])
+
+
+# ── the lazy half: one stack's members, paged ────────────────────────────────
+
+
+def test_stack_members_pages_in_canonical_order(server):
+    ids = _seed(server, [{"pixel_sha": f"m{index}"} for index in range(5)])
+    stack_id = _stack(server, ids, thumbnails={ids[0]: (640, 480)})
+
+    first = _run(server, tiers.stack_members_in_session, stack_id, 0, 2)
+    assert first["stack_id"] == stack_id
+    assert first["member_count"] == 5
+    assert first["leader_picture_id"] == ids[0]
+    assert first["leader_thumbnail_version"] == "640x480"
+    assert [m["picture_id"] for m in first["members"]] == ids[:2]
+    assert [m["position"] for m in first["members"]] == [0, 1]
+    assert [m["is_leader"] for m in first["members"]] == [True, False]
+    assert first["next_offset"] == 2
+    assert first["stackable"] is True
+    assert first["blocked_by_sets"] == []
+    # The tile fields are the queue candidate's, unchanged, so the expansion
+    # strip reuses the row's tile.
+    assert "thumbnail_version" in first["members"][0]
+    assert "smart_score" in first["members"][0]
+
+    last = _run(server, tiers.stack_members_in_session, stack_id, 4, 2)
+    assert [m["picture_id"] for m in last["members"]] == [ids[4]]
+    assert [m["position"] for m in last["members"]] == [4]
+    assert last["next_offset"] is None
+
+
+def test_stack_members_clamps_the_page_size(server):
+    ids = _seed(server, [{"pixel_sha": "one"}, {"pixel_sha": "two"}])
+    stack_id = _stack(server, ids)
+    page = _run(
+        server,
+        tiers.stack_members_in_session,
+        stack_id,
+        0,
+        tiers.MAX_STACK_MEMBER_PAGE_SIZE * 10,
+    )
+    assert page["limit"] == tiers.MAX_STACK_MEMBER_PAGE_SIZE
+
+
+def test_stack_members_rolls_the_lock_up_over_the_whole_stack(server):
+    """Page 2 must not report a different stackability from page 1, so the unit
+    rollup is taken over every member, not over the page."""
+    ids = _seed(server, [{"pixel_sha": f"m{index}"} for index in range(4)])
+    stack_id = _stack(server, ids)
+    set_id = _lock_set(server, "Frozen", [ids[3]])
+
+    for offset in (0, 2):
+        page = _run(server, tiers.stack_members_in_session, stack_id, offset, 2)
+        assert page["stackable"] is False, offset
+        assert page["blocked_by_sets"] == [{"id": set_id, "name": "Frozen"}]
+        # A locked set freezes the whole stack, so every member is out.
+        assert all(member["stackable"] is False for member in page["members"])
+
+
+def test_stack_members_is_none_for_a_stack_with_no_live_members(server):
+    """The route turns this into a 404 rather than an empty stack that looks
+    like it exists."""
+    assert _run(server, tiers.stack_members_in_session, 987654, 0, 10) is None
+    ids = _seed(server, [{"pixel_sha": "gone", "deleted": True}])
+    stack_id = _stack(server, ids)
+    assert _run(server, tiers.stack_members_in_session, stack_id, 0, 10) is None
