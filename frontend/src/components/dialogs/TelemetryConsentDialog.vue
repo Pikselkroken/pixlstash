@@ -234,10 +234,10 @@ watch(
 
 <style scoped>
 .tc {
-  padding: var(--space-7);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 
 .tc__title {
@@ -256,7 +256,7 @@ watch(
 .tc__options {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .tc__options--two {
@@ -277,13 +277,13 @@ watch(
 .tc__opt {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-2);
   text-align: left;
   background: rgb(var(--v-theme-surface));
   color: rgb(var(--v-theme-on-surface));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-  padding: var(--space-5) var(--space-4);
+  padding: var(--space-4);
   cursor: pointer;
   font: inherit;
   transition:
@@ -308,18 +308,20 @@ watch(
 
 .tc__mark {
   color: rgb(var(--v-theme-accent));
+  width: 48px;
+  height: 26px;
 }
 
 .tc__opt-name {
   font-weight: var(--weight-semibold);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   line-height: var(--leading-snug);
 }
 
 .tc__opt-desc {
   margin: 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-body);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-surface), 0.7);
 }
 

@@ -53,7 +53,15 @@ const rendered = computed(() => {
   return requests
     .map((req) => {
       const head = `${req.method} ${req.url}`;
-      return req.body ? `${head}\n${JSON.stringify(req.body, null, 2)}` : head;
+      if (!req.body) return head;
+      const entries = Object.entries(req.body);
+      const first = entries[0];
+      const rest = entries.slice(1);
+      const firstLine = `{ ${JSON.stringify(first[0])}: ${JSON.stringify(first[1])},`;
+      const restLine = rest
+        .map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
+        .join(", ");
+      return `${head}\n${firstLine}\n  ${restLine} }`;
     })
     .join("\n\n");
 });
@@ -70,7 +78,8 @@ const legend = computed(() =>
   border-radius: var(--radius-md);
   padding: var(--space-4);
   overflow-x: auto;
-  min-height: 9rem;
+  box-sizing: border-box;
+  height: 14.625rem;
 }
 
 .tp__label {
@@ -88,7 +97,7 @@ const legend = computed(() =>
   white-space: pre;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  line-height: var(--leading-body);
+  line-height: var(--leading-snug);
 }
 
 /* The legend is the point: a URL nobody can decode is not transparency. */
@@ -96,10 +105,11 @@ const legend = computed(() =>
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: var(--space-2) var(--space-4);
-  margin: var(--space-4) 0 0;
-  padding: var(--space-4) 0 0;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) 0 0;
   border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
   font-size: var(--text-2xs);
+  line-height: var(--leading-snug);
 }
 
 .tp__legend dt {
@@ -110,5 +120,14 @@ const legend = computed(() =>
 .tp__legend dd {
   margin: 0;
   opacity: 0.7;
+}
+
+/* Narrow dialogs need wrapping room; the fixed desktop height is what keeps
+   pointer movement between choices from making the dialog jump. */
+@media (max-width: 44rem) {
+  .tp {
+    height: auto;
+    min-height: 14.625rem;
+  }
 }
 </style>
