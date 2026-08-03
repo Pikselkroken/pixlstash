@@ -1,0 +1,39 @@
+# Deployment recipe. `npm run build:config` substitutes D1_DATABASE_ID and
+# writes build/wrangler.toml; Wrangler commands use that generated file.
+name = "pixlstash-telemetry"
+main = "../src/index.js"
+compatibility_date = "2026-08-01"
+
+# Its own Custom Domain keeps the marketing site a pure static GitHub Pages
+# origin and lets anyone null-route telemetry without breaking the website.
+# The Worker is the origin for this hostname, so Cloudflare owns the DNS record
+# and certificate; the request handler still exposes only the /v1 endpoints.
+routes = [
+  { pattern = "t.pixlstash.dev", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pixlstash-telemetry"
+database_id = "${D1_DATABASE_ID}"
+
+# Per-IP flood control. The IP is used as the limiter key and discarded: it is
+# never written to D1, never logged, and never leaves the request handler.
+# 20/minute is far above a legitimate client, which pings once a day.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+# 03:00 UTC, after the day has closed everywhere, and 20 hours before the
+# metrics repo's 23:00 collection so a snapshot is always ready to be pulled.
+[triggers]
+crons = ["0 3 * * *"]
+
+# AGGREGATES_TOKEN is a secret and is NOT declared here. Generate the config,
+# then run:
+# `wrangler secret put AGGREGATES_TOKEN --config build/wrangler.toml`
+# The same value goes into pixlstash-metrics as TELEMETRY_AGGREGATE_TOKEN.

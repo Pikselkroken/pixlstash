@@ -103,9 +103,20 @@ jobs:
           npm ci
           npm test
 
+      - name: Install telemetry config renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gettext-base
+
       - name: Test telemetry Worker
         working-directory: website/telemetry-worker
-        run: npm test
+        env:
+          # CI exercises the deployment recipe without selecting production.
+          D1_DATABASE_ID: 00000000-0000-0000-0000-000000000000
+        run: |
+          npm run build:config
+          npx --yes wrangler@4.36.0 deploy --dry-run --config build/wrangler.toml --outdir build/worker
+          npm test
 
   # ---------------------------------------------------------------------------
   # The backend gate. Split across 8 runners instead of one job with 22

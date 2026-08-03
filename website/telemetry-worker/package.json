@@ -6,8 +6,9 @@
   "description": "Cloudflare Worker that ingests anonymous install pings and publishes aggregate cohort numbers.",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "build:config": "sh scripts/render-wrangler-config.sh",
+    "dev": "npm run build:config && wrangler dev --config build/wrangler.toml",
+    "deploy": "npm run build:config && wrangler deploy --config build/wrangler.toml"
   },
   "devDependencies": {
     "wrangler": "4.36.0"
