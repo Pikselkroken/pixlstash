@@ -935,8 +935,10 @@ def build_group_evidence(
     pills: list[dict[str, Any]] = []
     if tier is DedupTier.EXACT:
         pills.append(_pill("Identical file hash"))
-    else:
-        pills.append(_pill(f"{int(round(confidence * 100))}% visual match"))
+    # Near-group confidence is already rendered as the group's ``% similar``
+    # badge. Repeating that exact value as a ``% visual match`` pill adds no
+    # evidence; exact groups keep the hash pill because it names the mechanism,
+    # not merely the confidence score.
 
     dimensions = {(m.width, m.height) for m in members if m.width and m.height}
     if len(dimensions) == 1:

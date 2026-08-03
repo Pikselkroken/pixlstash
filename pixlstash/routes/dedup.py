@@ -1600,7 +1600,9 @@ class MixedStackModel(BaseModel):
             "duplicate group carries, so the shipped pill component renders it "
             "unchanged. Only the content differs: the strangers named by how "
             "unlike the rest they measure (`1 picture is only 89% like the "
-            "rest`), the component structure (`2 groups (2 + 1)`), and the "
+            "rest`), the qualitative component structure (`1 picture differs "
+            "from the rest`, `Most pictures differ`, or `All pictures differ`), "
+            "and the "
             "weakest surviving edge (`Weakest match 97%`), plus `1 picture not "
             "comparable yet` when a member has no hash. A stranger is never "
             "described as matching nothing: at a 6-bit cut a member 7 bits from "
@@ -1610,7 +1612,9 @@ class MixedStackModel(BaseModel):
             "it argues for waiting, not for breaking the stack up, and it is "
             "subtracted from the stranger count for the same reason. When fewer "
             "than two members can be compared at all the only pill is `Nothing "
-            "here can be compared yet`."
+            "here can be compared yet`. The component-structure pill also "
+            "carries an optional `accessible_text` expansion; the structured "
+            "`component_sizes` and `components` fields remain authoritative."
         ),
     )
     suggested_action: str = Field(

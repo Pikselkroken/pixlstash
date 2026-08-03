@@ -128,6 +128,17 @@ function buttonLabelled(wrapper, label) {
 }
 
 describe("DedupCompareDialog: the comparison", () => {
+  it("uses the single supporting similarity treatment in the header", () => {
+    const wrapper = mountDialog();
+    const confidence = wrapper.find(".conf-pill");
+    expect(confidence.text()).toBe("92% similar");
+    expect(confidence.classes()).toContain("conf-pill--near");
+    expect(confidence.attributes("aria-label")).toBe(
+      "92% similar. Supports stacking.",
+    );
+    expect(wrapper.find(".dc-confidence").exists()).toBe(false);
+  });
+
   it("marks the winner of each column, one card at a time", () => {
     // A single wrong best-mark is the whole point of the dialog going wrong:
     // the user picks the cover by reading which value is emphasised.

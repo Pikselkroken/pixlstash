@@ -75,6 +75,7 @@ import {
 } from "../../utils/zoomMath";
 import AppDialog from "./AppDialog.vue";
 import AppButton from "./AppButton.vue";
+import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -88,7 +89,6 @@ import {
   candidateMegapixels,
   candidateSharpness,
   candidateSmartScore,
-  confidenceLabel,
   groupUnits,
   includedUnits,
   isUnitExcluded,
@@ -187,8 +187,6 @@ const BROWSER_IMAGE_FORMATS = new Set([
   "avif",
 ]);
 
-const confidence = computed(() => confidenceLabel(props.group));
-
 /** Whether a card is one member of a live stack rather than a group unit. */
 const isMixed = computed(() => props.mode === "mixed");
 
@@ -203,9 +201,7 @@ const dialogTitle = computed(() =>
  * the mixed row's own reason for being listed. Both are the one-line answer to
  * "why am I looking at this", so they share the slot.
  */
-const headerNote = computed(() =>
-  isMixed.value ? mixedStackReason(props.mixedStack) : confidence.value.label,
-);
+const headerNote = computed(() => mixedStackReason(props.mixedStack));
 
 /**
  * One mixed stack's members, in canonical stack order. Empty in `group` mode,
@@ -1667,7 +1663,8 @@ function onZoomContextMenu() {
          visible while the strip below scrolls: the group's confidence, or the
          mixed row's own reason for being listed. -->
     <template #header-right>
-      <span class="dc-confidence">{{ headerNote }}</span>
+      <span v-if="isMixed" class="dc-confidence">{{ headerNote }}</span>
+      <DedupConfidencePill v-else :group="group" />
     </template>
 
     <!-- ── The unit strip ──────────────────────────────────────────────────

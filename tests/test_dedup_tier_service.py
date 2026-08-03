@@ -332,7 +332,7 @@ def test_group_evidence_reports_both_directions():
     ]
     pills = tiers.build_group_evidence(DedupTier.NEAR, 0.96, members)
     texts = {pill["text"]: pill["against"] for pill in pills}
-    assert texts["96% visual match"] is False
+    assert "96% visual match" not in texts
     assert texts["Different resolution"] is True
     assert texts["Different aspect ratio"] is True
     assert texts["Different file format"] is True
