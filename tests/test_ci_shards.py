@@ -329,6 +329,69 @@ def test_privileged_workflow_checkouts_do_not_persist_credentials():
                 )
 
 
+def test_electron_apple_signing_requires_validated_release_tag():
+    """Branch dispatch cannot receive Apple credentials or sign a macOS build."""
+    path = REPO_ROOT / ".github" / "workflows" / "electron.yml"
+    workflow_data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    wheel_job = workflow_data["jobs"]["build-wheel"]
+    electron_job = workflow_data["jobs"]["build-electron"]
+
+    assert electron_job["needs"] == "build-wheel"
+    assert "environment" not in electron_job, (
+        "Branch/dispatch matrix builds must not enter a signing environment"
+    )
+    assert wheel_job["outputs"]["validated_release_tag"] == (
+        "${{ steps.release-ref.outputs.validated_release_tag }}"
+    )
+
+    steps_by_name = {
+        step.get("name"): step for step in wheel_job["steps"] + electron_job["steps"]
+    }
+    validation = steps_by_name["Classify and validate release ref"]
+    assert "if" not in validation, "Ref classification must run for branch dispatch too"
+    assert validation["env"] == {
+        "RELEASE_REF": "${{ github.ref }}",
+        "RELEASE_TAG": "${{ github.ref_name }}",
+        "EXPECTED_VERSION": "${{ steps.version.outputs.version }}",
+    }
+    assert 'validated_release_tag=false' in validation["run"]
+    assert 'validated_release_tag=true' in validation["run"]
+    assert '"refs/tags/$RELEASE_TAG"' in validation["run"]
+    assert "^v[0-9]+" in validation["run"]
+    assert '"v$EXPECTED_VERSION"' in validation["run"]
+
+    unsigned = steps_by_name["Build unsigned Electron installers"]
+    assert unsigned["if"] == (
+        "matrix.os != 'mac' || "
+        "needs.build-wheel.outputs.validated_release_tag != 'true'"
+    )
+    assert set(unsigned.get("env", {})) == {"TARGET_OS"}
+    assert "CSC_IDENTITY_AUTO_DISCOVERY=false" in unsigned["run"]
+    assert "-unsigned.${ext}" in unsigned["run"]
+
+    signed = steps_by_name["Build signed macOS Electron installer"]
+    assert signed["if"] == (
+        "matrix.os == 'mac' && "
+        "needs.build-wheel.outputs.validated_release_tag == 'true'"
+    )
+    assert set(signed["env"]) == {
+        "CSC_LINK",
+        "CSC_KEY_PASSWORD",
+        "APPLE_ID",
+        "APPLE_APP_SPECIFIC_PASSWORD",
+        "APPLE_TEAM_ID",
+    }
+
+    secret_steps = [
+        step
+        for step in electron_job["steps"]
+        if "secrets.APPLE_" in yaml.safe_dump(step)
+    ]
+    assert secret_steps == [signed], (
+        "Apple credentials must exist only in the validated tag-only signing step"
+    )
+
+
 def _shard_matrix(job: dict) -> list:
     """Return the ``shard`` matrix values declared by *job*."""
     matrix = job.get("strategy", {}).get("matrix", {})

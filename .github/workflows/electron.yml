@@ -58,6 +58,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      validated_release_tag: ${{ steps.release-ref.outputs.validated_release_tag }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -83,17 +84,27 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           pre=$(python -c "from packaging.version import Version;print('true' if Version('$version').is_prerelease else 'false')")
           echo "is_prerelease=$pre" >> "$GITHUB_OUTPUT"
-      - name: Validate tag matches version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Classify and validate release ref
+        id: release-ref
         env:
+          RELEASE_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.ref_name }}
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          if [[ "$RELEASE_REF" != refs/tags/* ]]; then
+            echo "validated_release_tag=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$RELEASE_REF" != "refs/tags/$RELEASE_TAG" ]; then
+            echo "Release ref/tag mismatch: $RELEASE_REF / $RELEASE_TAG" >&2
+            exit 1
+          fi
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|[.-]dev[.-]?[0-9]+)?$ ]]; then
             echo "Release tag has an unsupported format: $RELEASE_TAG" >&2
             exit 1
           fi
           [ "$RELEASE_TAG" = "v$EXPECTED_VERSION" ] || { echo "tag/version mismatch"; exit 1; }
+          echo "validated_release_tag=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wheel
@@ -123,11 +134,10 @@ jobs:
             arch: x64
             accel: cpu
             release_files: ""
-          # macOS (Apple Silicon, Metal). Builds UNSIGNED until the Apple Developer ID
-          # signing secrets are added to the repo (see "Build Electron installers"
-          # below): unsigned artifacts get a "-unsigned" suffix and Gatekeeper
-          # quarantines them. Once the signing secrets are set the build signs +
-          # notarises and drops the suffix.
+          # macOS (Apple Silicon, Metal). Branch dispatches are always unsigned;
+          # only an exact validated release tag can reach the Apple signing step.
+          # If the tag is valid but signing secrets are absent, the artifact still
+          # receives the explicit "-unsigned" suffix.
           - runner: macos-14
             os: mac
             arch: arm64
@@ -179,34 +189,36 @@ jobs:
       - name: Install desktop dependencies
         working-directory: electron
         run: npm ci
-      - name: Build Electron installers
+      - name: Build unsigned Electron installers
+        if: matrix.os != 'mac' || needs.build-wheel.outputs.validated_release_tag != 'true'
         working-directory: electron
         shell: bash
-        # macOS signing + notarisation is opt-in via secrets. When APPLE_CSC_LINK (a
-        # base64-encoded Developer ID Application .p12) is present the mac build is
-        # signed (and notarised, if the APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/
-        # APPLE_TEAM_ID secrets are also set) and ships under its clean name. When the
-        # cert secret is absent the build still runs but is UNSIGNED and labelled with
-        # a "-unsigned" suffix. Linux is unaffected and always unsigned; the Windows
-        # exe is signed afterwards by the sign-windows-desktop job, not here.
-        #
-        # The Apple secrets are scoped to the macOS runner only (the ternary yields
-        # an empty string elsewhere) so the certificate never lands on the Windows or
-        # Linux runners that have no use for it.
         env:
           TARGET_OS: ${{ matrix.os }}
-          CSC_LINK: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.os == 'mac' && secrets.APPLE_CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ matrix.os == 'mac' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.os == 'mac' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
           if [ "$TARGET_OS" != "mac" ]; then
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
             npm run dist -- --publish never
             exit 0
           fi
+          echo "::warning title=Unsigned macOS build::This build did not originate from an exact validated release tag. Apple signing credentials are not available, and the artifact is explicitly labelled '-unsigned'."
+          npm run dist -- --publish never --config.mac.artifactName='${productName}-desktop-${version}-${os}-${arch}-unsigned.${ext}'
+
+      - name: Build signed macOS Electron installer
+        if: matrix.os == 'mac' && needs.build-wheel.outputs.validated_release_tag == 'true'
+        working-directory: electron
+        shell: bash
+        # This is the only Apple-secret-bearing step. Its required dependency is
+        # the build-wheel job's exact ref/tag/pyproject-version validation above.
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
           # macOS signs the bundled Python/torch tree (tens of thousands of files,
           # thousands of torch headers in one directory) and the runner's default
           # descriptor limit trips codesign with EMFILE. On macOS ulimit is capped by
@@ -217,7 +229,7 @@ jobs:
           sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=131072 2>/dev/null || true
           ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
           echo "fd after: soft=$(ulimit -Sn) hard=$(ulimit -Hn) maxfilesperproc=$(sysctl -n kern.maxfilesperproc 2>/dev/null || echo n/a)"
-          # macOS: branch on whether the signing certificate secret is available.
+          # Branch on whether the signing certificate secret is available.
           # Notarisation needs no config: electron-builder notarises automatically
           # when APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID are all set
           # (it reads them from the environment), and skips notarisation when they
