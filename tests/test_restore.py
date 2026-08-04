@@ -12,6 +12,7 @@ from contextlib import closing
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import delete, select
 
 from pixlstash.db_models import (
@@ -3036,7 +3037,112 @@ def test_snapshot_engine_is_configured_like_the_vault_engine(server):
         )
 
 
-def test_restore_paths_open_snapshots_through_the_shared_engine_helper(server):
+def _engine_pragmas(engine) -> dict:
+    """Read the §13 settings off a *real* pooled connection of *engine*.
+
+    Every one of these is per-connection state applied by the ``connect``
+    listener plus ``connect_args``, so reading them back from a connection the
+    pool actually hands out is the only assertion that proves both halves of
+    the configuration arrived. Asserting that some constructor was called
+    would not.
+    """
+    with engine.connect() as conn:
+        return {
+            name: conn.exec_driver_sql(f"PRAGMA {name}").scalar()
+            for name in ("journal_mode", "foreign_keys", "cache_size", "busy_timeout")
+        }
+
+
+def test_full_restore_rebuilds_the_live_engine_with_the_startup_configuration(
+    server, tmp_path
+):
+    """The engine rebuilt after the DB swap is configured like the startup one.
+
+    This is issue #651 itself: ``_swap_database`` disposes the live engine and
+    builds a replacement, and for a while that replacement was written out by
+    hand, so the two definitions drifted. Settings are read back from a real
+    pooled connection of the rebuilt engine, because they are per-connection
+    state applied by ``connect_args`` and the ``connect`` listener; asserting
+    that some constructor was called would prove nothing.
+
+    The reference is a fresh ``create_configured_engine``, the exact
+    expression ``VaultDatabase.__init__`` uses, rather than the live engine
+    read before the restore. The live engine's pool hands back *recycled*
+    connections, and this module's ``clean_db`` fixture runs
+    ``PRAGMA foreign_keys = OFF`` on one of them, which sticks for that
+    connection's lifetime. That reference is not circular with respect to what
+    is under test here: ``_swap_database`` reverting to a bare
+    ``create_engine`` breaks the comparison. The other link in the chain,
+    helper == real startup engine, is asserted in
+    ``tests/test_database_engine_config.py``.
+
+    Note which pragmas discriminate: the file swapped in is a snapshot, i.e. a
+    rollback-journal file, so a bare ``create_engine`` here reports
+    ``journal_mode=delete``, ``foreign_keys=0``, SQLite's default 2 MiB cache
+    and a 5 s busy timeout.
+    """
+    from pixlstash.database import (
+        SQLITE_BUSY_TIMEOUT_S,
+        SQLITE_CACHE_SIZE_KIB,
+        create_configured_engine,
+    )
+
+    _create_file(server, "engine_after_swap.jpg")
+    pic = _add_picture(
+        server, filename="engine_after_swap.jpg", description="before swap"
+    )
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+
+    engine_before = server.vault.db._engine
+
+    report = server.vault.restore_service.restore_full(cp.id)
+    assert not report.errors, f"Restore errors: {report.errors}"
+
+    engine_after = server.vault.db._engine
+    assert engine_after is not engine_before, (
+        "the restore did not rebuild the engine, so this test proves nothing "
+        "about the rebuild"
+    )
+    settings_after = _engine_pragmas(engine_after)
+
+    reference_engine = create_configured_engine(tmp_path / "startup-reference.db")
+    try:
+        settings_reference = _engine_pragmas(reference_engine)
+    finally:
+        reference_engine.dispose()
+
+    assert settings_after == settings_reference, (
+        "the engine rebuilt by _swap_database drifted from the startup engine "
+        f"(#651): startup={settings_reference} rebuilt={settings_after}"
+    )
+    # Absolute values too: equality alone would also hold if BOTH engines were
+    # built badly.
+    assert settings_after["journal_mode"] == "wal", settings_after
+    assert settings_after["foreign_keys"] == 1, settings_after
+    assert settings_after["cache_size"] == SQLITE_CACHE_SIZE_KIB, settings_after
+    assert settings_after["busy_timeout"] == SQLITE_BUSY_TIMEOUT_S * 1000, (
+        settings_after
+    )
+
+    # The custom SQL functions are the other half of the connect listener and
+    # travel with the same configuration.
+    with engine_after.connect() as conn:
+        assert isinstance(
+            conn.exec_driver_sql("SELECT levenshtein('kitten', 'sitting')").scalar(),
+            float,
+        )
+        assert isinstance(
+            conn.exec_driver_sql(
+                "SELECT levenshtein_with_id('kitten', 'sitting', 1)"
+            ).scalar(),
+            float,
+        )
+
+    # And the restore itself really did run against the rebuilt engine.
+    assert _get_picture(server, pic.id) is not None
+
+
+def test_preview_paths_open_snapshots_through_the_shared_engine_helper(server):
     """The preview / compare paths must all route through ``snapshot_engine``.
 
     Asserted behaviourally: each engine they open is counted, so a call site
@@ -3068,30 +3174,102 @@ def test_restore_paths_open_snapshots_through_the_shared_engine_helper(server):
     assert len(calls) >= 4, calls
 
 
-def test_no_bare_create_engine_in_the_restore_package():
-    """Arithmetic completeness, not judgement: the package builds no engine of
-    its own. Every one comes from ``create_configured_engine`` (via
-    ``snapshot_engine`` for snapshot files), so a new engine cannot inherit
-    SQLite's defaults by omission the way the original nine did (#709)."""
-    import pixlstash.services.restore as restore_pkg
+def test_full_restore_paths_open_snapshots_through_the_shared_engine_helper(server):
+    """``full_restore``'s two snapshot readers must route through the helper.
 
-    package_dir = os.path.dirname(restore_pkg.__file__)
-    offenders = []
-    for name in sorted(os.listdir(package_dir)):
-        if not name.endswith(".py"):
-            continue
-        path = os.path.join(package_dir, name)
-        with open(path, encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                stripped = line.strip()
-                if stripped.startswith("#"):
-                    continue
-                if "create_engine(" in line and "create_configured_engine(" not in line:
-                    offenders.append(f"{name}:{lineno}: {stripped}")
-    assert not offenders, (
-        "restore code must build engines through create_configured_engine/"
-        "snapshot_engine:\n" + "\n".join(offenders)
+    Patching ``preview.snapshot_engine`` only ever covered ``preview.py``;
+    ``full_restore.py`` imports the name into its own module namespace, so it
+    needs its own spy. Each of its two call sites is pinned separately (a
+    revert of just one would otherwise hide behind the other), then a real
+    end-to-end ``restore_full`` proves the flow reaches both.
+    """
+    import pixlstash.services.restore.full_restore as full_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    _pic, snap_id, legacy_abs = _make_legacy_snapshot(server, "engine_full.jpg")
+    svc = server.vault.restore_service
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = full_mod.snapshot_engine
+    full_mod.snapshot_engine = _counting
+    try:
+        # Site 1: the missing-file scan.
+        svc._find_missing_file_ids(legacy_abs, server.vault.image_root)
+        assert len(calls) == 1, (
+            f"_find_missing_file_ids did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # Site 2: the permanent-deletion ledger cross-check. It short-circuits
+        # on an empty ledger, so hand it a hash to look for.
+        calls.clear()
+        svc._find_permanently_deleted_ids(legacy_abs, {"0" * 64}, set())
+        assert len(calls) == 1, (
+            f"_find_permanently_deleted_ids did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # End to end: a real restore reaches both. A ledger row for an
+        # unrelated path keeps site 2 live without matching anything in the
+        # snapshot.
+        calls.clear()
+        _add_deleted_log(server, "purged_elsewhere.jpg")
+        report = svc.restore_full(snap_id)
+        assert not report.errors, f"Restore errors: {report.errors}"
+    finally:
+        full_mod.snapshot_engine = original
+
+    assert len(calls) >= 2, (
+        f"a full restore must open the snapshot through snapshot_engine for "
+        f"both the missing-file scan and the deletion-ledger scan: {calls}"
     )
+
+
+def test_resource_restore_paths_open_snapshots_through_the_shared_engine_helper(
+    server,
+):
+    """``resource_restore``'s two snapshot readers must route through the helper.
+
+    Same reasoning as the ``full_restore`` case: its own module namespace, its
+    own spy, and each call site pinned by its own restore call so reverting
+    one is not masked by the other.
+    """
+    import pixlstash.services.restore.resource_restore as resource_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, snap_id, _legacy_abs = _make_legacy_snapshot(server, "engine_resource.jpg")
+    svc = server.vault.restore_service
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = resource_mod.snapshot_engine
+    resource_mod.snapshot_engine = _counting
+    try:
+        # Site 1: single-resource restore.
+        report = svc.restore_resource(snap_id, "picture", pic.id)
+        assert not report.errors, f"restore_resource errors: {report.errors}"
+        assert len(calls) >= 1, (
+            f"restore_resource did not open the snapshot through "
+            f"snapshot_engine: {calls}"
+        )
+
+        # Site 2: the batch dependency collection.
+        calls.clear()
+        svc.restore_batch(snap_id, [{"type": "picture", "id": pic.id}])
+        assert len(calls) >= 1, (
+            f"restore_batch did not open the snapshot through snapshot_engine: {calls}"
+        )
+    finally:
+        resource_mod.snapshot_engine = original
 
 
 def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
@@ -3103,6 +3281,11 @@ def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
     neither a child key nor a parent key, so SQLite runs no FK check and the
     write must still succeed. This is the assertion that made it safe to leave
     FK enforcement ON for snapshot engines rather than silently off (#709).
+
+    Both directions are asserted. The positive one alone would also pass with
+    ``foreign_keys=OFF``, which would leave the setting pinned by nothing but a
+    single PRAGMA read, so the same connection is then made to *refuse* a
+    genuine violation.
     """
     from pixlstash.services.restore.schema_upgrade import snapshot_engine
 
@@ -3126,9 +3309,22 @@ def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
             stored = conn.exec_driver_sql(
                 f"SELECT metadata_hash FROM picture WHERE id = {pic.id}"
             ).scalar()
+            assert stored is not None, (
+                "the backfill must still write through FK enforcement"
+            )
+
+            # Negative direction, on the SAME connection: an insert that really
+            # does violate tag.picture_id -> picture.id must be rejected. With
+            # foreign_keys=OFF this INSERT succeeds, which is exactly the state
+            # the positive assertion above cannot tell apart.
+            with pytest.raises(IntegrityError) as excinfo:
+                conn.exec_driver_sql(
+                    "INSERT INTO tag (picture_id, tag) VALUES (424242, 'must-fail')"
+                )
+            assert "FOREIGN KEY" in str(excinfo.value).upper(), str(excinfo.value)
+            conn.rollback()
     finally:
         engine.dispose()
-    assert stored is not None, "the backfill must still write through FK enforcement"
 
     with closing(sqlite3.connect(legacy_abs)) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

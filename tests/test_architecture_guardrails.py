@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
+PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
 ROUTES_DIR = REPO_ROOT / "pixlstash" / "routes"
 TASKS_DIR = REPO_ROOT / "pixlstash" / "tasks"
 SERVICES_DIR = REPO_ROOT / "pixlstash" / "services"
@@ -1144,3 +1145,209 @@ def test_fastapi_floor_covers_route_inventory_dependency():
         "fastapi.routing.iter_route_contexts (required by "
         "pixlstash/route_inventory.py) first appears in 0.138.0"
     )
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: every SQLite engine comes from create_configured_engine (#651/#709)
+# ---------------------------------------------------------------------------
+# The §13 connection settings arrive in two halves: ``connect_args={"timeout":
+# SQLITE_BUSY_TIMEOUT_S}`` and the ``connect`` listener that sets the PRAGMAs
+# and registers the custom SQL functions. A call site that builds its own
+# engine gets neither and silently runs on SQLite's defaults: a 5 s busy
+# timeout, a 2 MiB page cache, a rollback journal and foreign keys OFF. That
+# has been a real bug twice (#651, #709).
+#
+# This is AST-based and recursive on purpose. The first version of this
+# guardrail was a non-recursive text grep over one package directory, and every
+# one of the shapes in _ENGINE_GUARDRAIL_ESCAPES walked straight past it.
+
+# SQLAlchemy / SQLModel entry points that construct an Engine.
+_ENGINE_FACTORIES = ("create_engine", "engine_from_config")
+
+# Repo-relative path -> why that file is allowed to build its own engine.
+# Every entry is a deliberate architectural exception, and
+# ``test_engine_factory_allowlist_has_no_dead_entries`` keeps the list honest.
+_ENGINE_FACTORY_ALLOWLIST = {
+    "pixlstash/database.py": (
+        "Defines create_configured_engine itself. This is the single sanctioned "
+        "create_engine call that every other call site routes through."
+    ),
+    "pixlstash/migrations/env.py": (
+        "Alembic owns its own connection. It builds an engine with "
+        "engine_from_config from alembic.ini and runs migrations with foreign "
+        "keys OFF, and its render_as_batch=True table recreation (copy into a "
+        "new table, drop, rename) would be hazardous with FK enforcement on. "
+        "Deliberately not routed through create_configured_engine."
+    ),
+}
+
+
+def _engine_factory_offenders(source: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, snippet)`` for every engine construction in *source*.
+
+    Detects, in addition to a plain ``create_engine(...)`` call:
+
+    - an aliased import (``from sqlmodel import create_engine as _ce``) and any
+      later use of that alias, including binding it to another name first;
+    - a qualified call (``sa.create_engine(...)``);
+    - a dynamic lookup (``getattr(sa, "create_engine")(...)``).
+
+    Args:
+        source: Python source text of a single module.
+
+    Returns:
+        Sorted ``(lineno, stripped source line)`` pairs, one per offending
+        line.
+    """
+    tree = ast.parse(source)
+
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name in _ENGINE_FACTORIES:
+                    aliases.add(alias.asname or alias.name)
+
+    lines = source.splitlines()
+    hits: dict[int, str] = {}
+
+    def _record(node) -> None:
+        lineno = getattr(node, "lineno", 0)
+        snippet = lines[lineno - 1].strip() if 0 < lineno <= len(lines) else ""
+        hits.setdefault(lineno, snippet)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in aliases:
+            _record(node)
+        elif isinstance(node, ast.Attribute) and node.attr in _ENGINE_FACTORIES:
+            _record(node)
+        elif isinstance(node, ast.Constant) and node.value in _ENGINE_FACTORIES:
+            _record(node)
+
+    return sorted(hits.items())
+
+
+def _scan_for_engine_factories(root: Path, base: Path) -> dict[str, list]:
+    """Walk *root* recursively and map each offending module to its hits.
+
+    Args:
+        root: Directory tree to scan.
+        base: Directory the reported keys are made relative to.
+
+    Returns:
+        ``{posix relative path: [(lineno, snippet), ...]}`` for modules that
+        build an engine of their own.
+    """
+    found: dict[str, list] = {}
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            pytest.fail(f"could not read {path}: {exc}")
+        try:
+            hits = _engine_factory_offenders(source)
+        except SyntaxError as exc:
+            pytest.fail(f"could not parse {path}: {exc}")
+        if hits:
+            found[path.relative_to(base).as_posix()] = hits
+    return found
+
+
+def test_no_engine_is_built_outside_create_configured_engine():
+    """Arithmetic completeness: nothing under ``pixlstash/`` builds its own engine.
+
+    Scoped to the whole package, not one directory. A bare engine planted in
+    ``services/snapshot_service.py`` left the previous, restore-package-only
+    version of this guardrail entirely green.
+    """
+    found = _scan_for_engine_factories(PIXLSTASH_DIR, REPO_ROOT)
+
+    offenders = []
+    for rel, hits in sorted(found.items()):
+        if rel in _ENGINE_FACTORY_ALLOWLIST:
+            continue
+        for lineno, snippet in hits:
+            offenders.append(f"  {rel}:{lineno}: {snippet}")
+
+    assert not offenders, (
+        "SQLite engines must be built by pixlstash.database.create_configured_engine "
+        "(docs/backend_architecture.md §13). A bare engine gets neither the busy "
+        "timeout (connect_args) nor the PRAGMAs and custom SQL functions (the "
+        "connect listener), so it silently runs on SQLite's defaults: 5 s busy "
+        "timeout, 2 MiB page cache, rollback journal, foreign keys OFF (#651, "
+        "#709).\n\nOffending call sites:\n"
+        + "\n".join(offenders)
+        + "\n\nFix: call create_configured_engine(path), or "
+        "services/restore/schema_upgrade.snapshot_engine(path) for a snapshot "
+        "file. If a call site genuinely must own its engine, add its repo-relative "
+        "path to _ENGINE_FACTORY_ALLOWLIST in this file together with the reason."
+    )
+
+
+def test_engine_factory_allowlist_has_no_dead_entries():
+    """An allowlist entry that no longer names a real engine build is a lie.
+
+    A stale entry would silently re-permit the file the day someone puts an
+    unconfigured engine back into it.
+    """
+    found = _scan_for_engine_factories(PIXLSTASH_DIR, REPO_ROOT)
+    stale = sorted(set(_ENGINE_FACTORY_ALLOWLIST) - set(found))
+    assert not stale, (
+        "these _ENGINE_FACTORY_ALLOWLIST entries no longer build an engine and "
+        "must be removed from the allowlist:\n  " + "\n  ".join(stale)
+    )
+
+
+# Every shape that escaped the original text-grep guardrail, plus the ones a
+# naive AST check would still miss. Each is planted in a throwaway tree below
+# and must be caught.
+_ENGINE_GUARDRAIL_ESCAPES = {
+    "aliased import": (
+        "from sqlmodel import create_engine as _ce\n\nE = _ce('sqlite:///x.db')\n"
+    ),
+    "qualified call": (
+        "import sqlalchemy as sa\n\nE = sa.create_engine('sqlite:///x.db')\n"
+    ),
+    "dynamic lookup": (
+        "import sqlalchemy as sa\n\nE = getattr(sa, 'create_engine')('sqlite:///x.db')\n"
+    ),
+    "indirect binding": (
+        "from sqlalchemy import create_engine\n\n"
+        "_factory = create_engine\nE = _factory('sqlite:///x.db')\n"
+    ),
+    "alembic style": (
+        "from sqlalchemy import engine_from_config\n\nE = engine_from_config({})\n"
+    ),
+    "plain call": (
+        "from sqlmodel import create_engine\n\nE = create_engine('sqlite:///x.db')\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_ENGINE_GUARDRAIL_ESCAPES))
+def test_engine_guardrail_detects_every_known_escape_shape(shape, tmp_path):
+    """The guardrail's own regression test.
+
+    Each shape is planted inside a **nested subpackage**, which also pins the
+    recursion: the previous ``os.listdir`` version never descended, so a new
+    subpackage under ``services/restore/`` was a free pass.
+    """
+    nested = tmp_path / "pkg" / "sub" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "sneaky.py").write_text(_ENGINE_GUARDRAIL_ESCAPES[shape])
+
+    found = _scan_for_engine_factories(tmp_path, tmp_path)
+    assert "pkg/sub/deeper/sneaky.py" in found, (
+        f"the {shape!r} escape shape was not detected: {found}"
+    )
+
+
+def test_engine_guardrail_does_not_flag_the_configured_helpers(tmp_path):
+    """Over-blocking is its own regression: the sanctioned calls must pass."""
+    (tmp_path / "ok.py").write_text(
+        "from pixlstash.database import create_configured_engine\n"
+        "from .schema_upgrade import snapshot_engine\n\n"
+        "E = create_configured_engine('/tmp/x.db')\n"
+        "S = snapshot_engine('/tmp/y.sqlite')\n"
+    )
+    assert _scan_for_engine_factories(tmp_path, tmp_path) == {}
