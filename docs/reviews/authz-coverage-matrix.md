@@ -539,7 +539,25 @@ would duplicate each handler's own int-or-name lookup and risk a
 gate/handler divergence (the exact defect this refactor exists to kill; there is
 **no** shared name→id resolver today, verified). Their inline
 `_require_scope_allows_*` checks remain the live enforcement and must **not** be
-removed in Step 5 until a shared resolver exists. Note: `GET
+removed in Step 5 until a shared resolver exists.
+
+**#708 condition-2 amendment (2026-08-04):** all four also name a **project** in
+their path — a second scope question, over the project space rather than the
+object, that neither the gate's `id_param` resolution nor
+`enforce_project_filter_scope` (query params only) can see. Each handler resolved
+that project *before* any scope check, so its 404 branches answered from it: a
+`picture_set`-scoped token could tell "project exists and holds my set" (200) from
+"exists and does not" (404 *Picture set not found*) from "does not exist" (404
+*Project not found*), and `GET /projects/{id_or_name}` answered 403 for an
+existing project vs 404 for a missing one. All four now call
+`enforce_project_path_scope(server, request, resolved_id_or_None)` on the resolved
+id **before** the membership query, refusing with one constant 403 body in all
+three cases; the two `project_scoped` routes have it *instead of*
+`_require_scope_allows_project` (a strict superset of it), the two name-derived
+`set`/`character` routes have it *in addition to* their own inline check. Do not
+reorder it after the resolution. See `docs/backend_architecture.md` §16.6; both
+directions pinned in the R1d section of
+`tests/test_multi_project_membership_authz.py`. Note: `GET
 /projects/{project_id}/summary|export|attachments*` are **numeric** `project_id`
 (or the aggregate `UNASSIGNED`, which the gate fails closed to 403 for a scoped
 token — matching the handler), so those are gate-enforced, not `resolved_inline`.
