@@ -374,6 +374,32 @@ def create_router(server) -> APIRouter:
         normalized = normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
+    def _hidden_tag_condition(hidden_tags: list[str]):
+        """SQL predicate: the correlated ``Picture`` carries no hidden tag.
+
+        The in-SQL counterpart of ``_filter_hidden_picture_ids``, for query
+        paths that must not read a picture id list into Python first (issue
+        #651). Same matching rule: a picture is hidden when it has ANY tag whose
+        lowercased value is in ``hidden_tags``.
+
+        Args:
+            hidden_tags: Tag names to hide, matched case-insensitively.
+
+        Returns:
+            A correlated ``NOT EXISTS`` expression, or ``None`` when there is
+            nothing to hide and the caller should add no condition at all.
+        """
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags or [] if tag}
+        if not hidden_tag_set:
+            return None
+        return ~exists(
+            select(Tag.picture_id).where(
+                Tag.picture_id == Picture.id,
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(hidden_tag_set),
+            )
+        )
+
     def _filter_hidden_picture_ids(
         session, picture_ids: list[int], hidden_tags: list[str]
     ) -> list[int]:
@@ -477,45 +503,94 @@ def create_router(server) -> APIRouter:
                     ).where(PictureSetProjectMember.set_id.in_(listed_ids))
                 ).all():
                     project_ids_by_set.setdefault(int(sid), []).append(int(pid))
+            # Counts and previews for EVERY listed set in two queries, not two
+            # per set (issue #651). The previous shape read the complete member
+            # id list of every set into Python, passed it back as an `IN` bind
+            # list to filter hidden tags, counted it with `len(set(...))`, and
+            # passed it back a third time to pick the top 3. On a large library
+            # that is the dominant cost of the sidebar's set list, and the bind
+            # list is unbounded: past SQLITE_LIMIT_VARIABLE_NUMBER (a
+            # compile-time constant, 250k on the build this was measured on,
+            # but as low as 32766 elsewhere) the endpoint fails outright.
+            #
+            # Nothing here materialises a member id in Python any more, so the
+            # only `IN` list left is over the LISTED SETS, which is bounded by
+            # what the sidebar can show.
+            counts_by_set: dict[int, int] = {}
+            top_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                member_conditions = [
+                    PictureSetMember.set_id.in_(listed_ids),
+                    Picture.deleted.is_(False),
+                ]
+                if project_filter is not None:
+                    member_conditions.append(project_filter)
+                hidden_condition = _hidden_tag_condition(hidden_tags)
+                if hidden_condition is not None:
+                    member_conditions.append(hidden_condition)
+
+                # DISTINCT in its own subquery, not on the ranked select: a
+                # window function is evaluated BEFORE DISTINCT, so duplicate
+                # member rows would each receive a different row_number and
+                # survive the de-duplication. The old code de-duplicated
+                # implicitly (`len(set(...))`, and `IN` collapsing repeats), so
+                # this preserves the counts it produced.
+                visible_members = (
+                    select(
+                        PictureSetMember.set_id.label("set_id"),
+                        PictureSetMember.picture_id.label("picture_id"),
+                    )
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(*member_conditions)
+                    .distinct()
+                    .subquery()
+                )
+
+                for set_id, member_count in session.exec(
+                    select(visible_members.c.set_id, func.count())
+                    .select_from(visible_members)
+                    .group_by(visible_members.c.set_id)
+                ).all():
+                    counts_by_set[int(set_id)] = int(member_count)
+
+                ranked_members = (
+                    select(
+                        visible_members.c.set_id,
+                        visible_members.c.picture_id,
+                        func.row_number()
+                        .over(
+                            partition_by=visible_members.c.set_id,
+                            order_by=(
+                                nullslast(desc(Picture.score)),
+                                nullslast(desc(Picture.aesthetic_score)),
+                                nullslast(desc(Picture.imported_at)),
+                                desc(Picture.id),
+                            ),
+                        )
+                        .label("rank"),
+                    )
+                    .select_from(visible_members)
+                    .join(Picture, Picture.id == visible_members.c.picture_id)
+                    .subquery()
+                )
+
+                for set_id, picture_id in session.exec(
+                    select(ranked_members.c.set_id, ranked_members.c.picture_id)
+                    .where(ranked_members.c.rank <= 3)
+                    .order_by(ranked_members.c.set_id, ranked_members.c.rank)
+                ).all():
+                    if picture_id is None:
+                        continue
+                    top_ids_by_set.setdefault(int(set_id), []).append(int(picture_id))
+
             result = []
             for s in sets:
-                members_query = (
-                    select(PictureSetMember.picture_id)
-                    .join(Picture, Picture.id == PictureSetMember.picture_id)
-                    .where(
-                        PictureSetMember.set_id == s.id,
-                        Picture.deleted.is_(False),
-                    )
-                )
-                if project_filter is not None:
-                    members_query = members_query.where(project_filter)
-                members = session.exec(members_query).all()
-                filtered_ids = _filter_hidden_picture_ids(
-                    session,
-                    [m for m in members if m is not None],
-                    hidden_tags,
-                )
-                count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
                 narrow_project_fields(
                     set_dict, project_ids_by_set.get(int(s.id), []), visible_projects
                 )
-                set_dict["picture_count"] = count
-                top_picture_ids = []
-                if filtered_ids:
-                    top_rows = session.exec(
-                        select(Picture.id)
-                        .where(Picture.id.in_(filtered_ids))
-                        .order_by(
-                            nullslast(desc(Picture.score)),
-                            nullslast(desc(Picture.aesthetic_score)),
-                            nullslast(desc(Picture.imported_at)),
-                            desc(Picture.id),
-                        )
-                        .limit(3)
-                    ).all()
-                    top_picture_ids = [row for row in top_rows if row is not None]
-                set_dict["top_picture_ids"] = top_picture_ids
+                set_dict["picture_count"] = counts_by_set.get(int(s.id), 0)
+                set_dict["top_picture_ids"] = top_ids_by_set.get(int(s.id), [])
                 set_dict["thumbnail_url"] = f"/picture_sets/{s.id}/thumbnail"
                 result.append(set_dict)
             return result
@@ -868,25 +943,22 @@ def create_router(server) -> APIRouter:
             set_id: int,
             active_hidden_tags: list[str],
         ):
-            member_rows = session.exec(
-                select(PictureSetMember.picture_id)
-                .join(Picture, Picture.id == PictureSetMember.picture_id)
-                .where(
-                    PictureSetMember.set_id == set_id,
-                    Picture.deleted.is_(False),
-                )
-            ).all()
-            member_ids = [row for row in member_rows if row is not None]
-            filtered_ids = _filter_hidden_picture_ids(
-                session,
-                member_ids,
-                active_hidden_tags,
-            )
-            if not filtered_ids:
-                return []
+            # One query, and no member id list in Python. The list endpoint's
+            # per-set scan was the same shape and had the same unbounded `IN`
+            # (issue #651); this is that fix applied to the single-set path,
+            # picking the same top 3 by the same ordering.
+            conditions = [
+                PictureSetMember.set_id == set_id,
+                Picture.deleted.is_(False),
+            ]
+            hidden_condition = _hidden_tag_condition(active_hidden_tags)
+            if hidden_condition is not None:
+                conditions.append(hidden_condition)
             rows = session.exec(
                 select(Picture.id)
-                .where(Picture.id.in_(filtered_ids))
+                .join(PictureSetMember, PictureSetMember.picture_id == Picture.id)
+                .where(*conditions)
+                .distinct()
                 .order_by(
                     nullslast(desc(Picture.score)),
                     nullslast(desc(Picture.aesthetic_score)),
