@@ -250,6 +250,7 @@ jobs:
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
+          tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
           tests/test_image_embedding_worker.py
@@ -263,14 +264,17 @@ jobs:
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
+          tests/test_metadata_hash_batching.py
           tests/test_migrations.py
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
+          tests/test_picture_is_video.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
           tests/test_picture_set_locking.py
           tests/test_picture_sets.py
+          tests/test_picture_sets_query_cost.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
           tests/test_project_membership_service.py
@@ -284,6 +288,7 @@ jobs:
           tests/test_scope_table.py
           tests/test_scrapheap_retention.py
           tests/test_server.py
+          tests/test_sidebar_counts_query_cost.py
           tests/test_smart_score_consistency.py
           tests/test_snapshots.py
           tests/test_snapshots_auth.py
