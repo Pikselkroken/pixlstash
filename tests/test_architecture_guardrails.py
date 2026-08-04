@@ -997,9 +997,10 @@ def _iter_body_project_refs(app):
     cap descended through at most five nested models and silently dropped anything
     below that; a ``project_id`` six models down was measured as missed.
     """
-    from fastapi.dependencies.utils import get_flat_dependant
-
-    from pixlstash.route_inventory import iter_api_route_contexts
+    from pixlstash.route_inventory import (
+        flatten_dependant_fields,
+        iter_api_route_contexts,
+    )
 
     def _walk(name, annotation, out, seen=frozenset()):
         descended = False
@@ -1024,7 +1025,7 @@ def _iter_body_project_refs(app):
         if dependant is None:
             continue
         found: list[str] = []
-        for field in get_flat_dependant(dependant, skip_repeats=True).body_params:
+        for field in flatten_dependant_fields(dependant, "body_params"):
             annotation = getattr(getattr(field, "field_info", None), "annotation", None)
             _walk(getattr(field, "alias", None) or field.name, annotation, found)
         for dotted in sorted(set(found)):
@@ -1042,9 +1043,10 @@ def _iter_opaque_body_routes(app):
     """
     import typing
 
-    from fastapi.dependencies.utils import get_flat_dependant
-
-    from pixlstash.route_inventory import iter_api_route_contexts
+    from pixlstash.route_inventory import (
+        flatten_dependant_fields,
+        iter_api_route_contexts,
+    )
 
     def _is_opaque(annotation):
         pending = [annotation]
@@ -1063,7 +1065,7 @@ def _iter_opaque_body_routes(app):
         dependant = getattr(route, "dependant", None)
         if dependant is None:
             continue
-        for field in get_flat_dependant(dependant, skip_repeats=True).body_params:
+        for field in flatten_dependant_fields(dependant, "body_params"):
             annotation = getattr(getattr(field, "field_info", None), "annotation", None)
             if _models_in(annotation):
                 continue
@@ -1107,11 +1109,13 @@ def test_project_filter_params_are_declared(built_app):
        parameter contributed one level down is enumerated, and §16.6 advertises
        that. But the assertion only requires ``project_id`` to be found *somewhere*,
        and ``project_id`` is taken at top level by a dozen routes: stub
-       ``get_flat_dependant`` to a no-op and the assertion still passes while every
+       ``flatten_dependant_fields`` to a no-op and the assertion still passes while every
        nested parameter silently vanishes. No route today contributes a
-       project-ish parameter *only* via a nested ``Depends``, so nothing but a
-       synthetic test exercises that capability. If you add one, do not assume this
-       test would notice it disappearing.
+       project-ish parameter *only* via a nested ``Depends``, so the capability is
+       covered synthetically by
+       ``test_query_parameter_enumeration_descends_nested_depends`` instead. That
+       keeps the flattening honest; it does not make *this* test notice a real
+       nested parameter disappearing, so do not assume it would.
     """
     from pixlstash.authz.membership import PROJECT_FILTER_QUERY_PARAMS
     from pixlstash.route_inventory import iter_api_query_params
@@ -1160,6 +1164,57 @@ def test_project_filter_params_are_declared(built_app):
         "mounted route's query parameters. Prune them so the exemption list "
         "cannot rot into cover for a future parameter of the same name:\n"
         + "\n".join(f"  {name}" for name in sorted(stale))
+    )
+
+
+def test_query_parameter_enumeration_descends_nested_depends():
+    """A filter parameter contributed by a nested ``Depends`` is still enumerated.
+
+    ``test_project_filter_params_are_declared`` cannot prove this and says so: it
+    only needs ``project_id`` found *somewhere*, and a dozen routes take it at top
+    level, so the flattening could be a no-op and that assertion would still pass.
+    No route in the tree contributes a project-ish parameter *only* via a nested
+    dependency, so nothing else exercises the capability §16.6 advertises. This
+    does, on a synthetic app, which is the only way to make the claim non-vacuous
+    without adding a real route for the sake of a test.
+
+    It is also the regression test for the flattening itself.
+    ``pixlstash.route_inventory.flatten_dependant_fields`` is a local walk over
+    ``Dependant``'s own fields precisely because the FastAPI helper it replaced
+    (``get_flat_dependant``) was removed in 0.141 — and a walk that silently
+    stopped descending would report *fewer* parameters, i.e. false coverage, with
+    every other guardrail still green.
+    """
+    from fastapi import Depends, FastAPI, Query
+
+    from pixlstash.route_inventory import iter_api_query_params
+
+    def _two_levels_down(deep_project_id: str = Query(None)):
+        return deep_project_id
+
+    def _one_level_down(
+        _deep=Depends(_two_levels_down),
+        aliased: str = Query(None, alias="wire_project"),
+    ):
+        return aliased
+
+    app = FastAPI()
+
+    @app.get("/synthetic")
+    def _handler(top_level: str = Query(None), _dep=Depends(_one_level_down)):
+        return {}  # pragma: no cover - never called, only introspected
+
+    found = {
+        name
+        for method, path, name in iter_api_query_params(app)
+        if path == "/synthetic"
+    }
+    assert found == {"top_level", "wire_project", "deep_project_id"}, (
+        "The query-parameter enumeration did not descend the whole Depends chain. "
+        "It must yield the handler's own parameter, one contributed a level down "
+        "(under its WIRE name, not the Python name), and one two levels down. "
+        f"Got: {sorted(found)}. Fix flatten_dependant_fields in "
+        "pixlstash/route_inventory.py — a partial walk reports false coverage."
     )
 
 
