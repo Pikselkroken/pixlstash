@@ -2986,9 +2986,7 @@ def test_locked_lookup_survives_a_large_scrapheap_scope(server):
     try:
         absent_ids = list(range(10_000_000, 10_001_001))
         assert (
-            scrapheap_service.locked_scrapheap_picture_ids(
-                server.vault, absent_ids
-            )
+            scrapheap_service.locked_scrapheap_picture_ids(server.vault, absent_ids)
             == set()
         )
     finally:

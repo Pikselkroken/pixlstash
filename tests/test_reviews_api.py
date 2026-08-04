@@ -972,10 +972,13 @@ def test_full_pair_card_page_survives_sqlite_variable_ceiling():
         assert response.status_code == 200, response.text
         cards = response.json()
         assert len(cards) == card_count
-        assert len(
-            {card["picture_id"] for card in cards}
-            | {card["twin_picture_id"] for card in cards}
-        ) == card_count * 2
+        assert (
+            len(
+                {card["picture_id"] for card in cards}
+                | {card["twin_picture_id"] for card in cards}
+            )
+            == card_count * 2
+        )
     finally:
         _teardown(temp_dir, server)
 

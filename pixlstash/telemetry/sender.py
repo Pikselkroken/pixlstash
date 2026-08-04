@@ -173,7 +173,12 @@ def send_install_ping(
     request = urllib.request.Request(
         endpoint,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            # Cloudflare rejects Python urllib's default User-Agent before the
+            # request reaches the Worker. Use an explicit product identity.
+            "User-Agent": "pixlstash-telemetry/1.0",
+        },
         method="POST",
     )
 
