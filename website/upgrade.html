@@ -220,13 +220,65 @@
         padding-bottom: 0;
       }
 
+      /* Fixed basis, never shrinking: the column has to hold the widest
+         security badge ("Security: Moderate") on one line, and every row
+         has to line its bullets up at the same place whether it carries a
+         badge or not. No nowrap here, so an unexpectedly long label wraps
+         inside the column instead of spilling over the text beside it. */
       .change-version {
-        font-family: "IBM Plex Mono", monospace;
+        flex: 0 0 152px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        font-family: var(--mono);
         font-size: 0.8rem;
         font-weight: 600;
         color: var(--accent);
-        white-space: nowrap;
-        min-width: 52px;
+      }
+
+      /* The badge is a label, not code: keep it off the column's mono font,
+         which is both wider and wrong for it. */
+      .change-version .security-badge {
+        margin-left: 0;
+        font-family: var(--sans);
+      }
+
+      /* Below this the 152px gutter costs more than it buys, so the version
+         and its badge sit on one row above the text instead. */
+      @media (max-width: 700px) {
+        .change-entry {
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .change-version {
+          flex: 0 0 auto;
+          flex-direction: row;
+          align-items: center;
+          gap: 8px;
+        }
+      }
+
+      .change-body {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .change-note {
+        margin: 0;
+        padding-left: 10px;
+        border-left: 2px solid var(--accent);
+        font-size: 0.85rem;
+        line-height: 1.5;
+        color: var(--text);
+      }
+
+      .change-body code {
+        font-family: var(--mono);
+        font-size: 0.85em;
       }
 
       .change-items {
@@ -576,15 +628,29 @@
       }
 
       function escHtml(s) {
-        return s
+        return String(s)
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      // Minimal inline Markdown, applied to already-escaped text: code spans,
+      // links and bold. Italics are deliberately left alone because release
+      // text is full of literal asterisks (globs like *-win-x64.exe).
+      function inlineMarkdown(escaped) {
+        return escaped
+          .replace(/`([^`]+)`/g, "<code>$1</code>")
+          .replace(
+            /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+            '<a href="$2" target="_blank" rel="noopener">$1</a>',
+          )
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       }
 
       function formatItem(raw) {
-        return escHtml(raw).replace(
-          /\[Security:(\w+)\]/gi,
+        return inlineMarkdown(escHtml(raw)).replace(
+          /\[Security:\s*(\w+)\]/gi,
           function (_, level) {
             return (
               '<span class="security-badge security-badge--' +
@@ -597,36 +663,105 @@
         );
       }
 
-      // Extract items from a GitHub release body (Markdown).
-      // Accepts "- item", "* item", or plain non-heading non-empty lines.
-      // Skips Markdown headings (# …) and HTML tags.
-      function itemsFromBody(body) {
-        var items = [];
-        (body || "").split("\n").forEach(function (line) {
-          var trimmed = line.trim();
-          if (!trimmed) return;
-          if (trimmed.match(/^#+\s/)) return; // heading
-          if (trimmed.match(/^<[a-z]/i)) return; // HTML tag
-          var m = trimmed.match(/^[-*]\s+(.*)/);
-          items.push(m ? m[1].trim() : trimmed);
-        });
-        return items;
+      // Markdown block constructs that never carry a change item: headings,
+      // table rows, blockquotes, raw HTML and horizontal rules. The release
+      // body is now a download guide built almost entirely out of these.
+      function isBlockNoise(trimmed) {
+        return (
+          /^#{1,6}\s/.test(trimmed) ||
+          /^\|/.test(trimmed) ||
+          /^>/.test(trimmed) ||
+          /^<[a-z/!]/i.test(trimmed) ||
+          /^[-*_]{3,}$/.test(trimmed)
+        );
       }
 
-      // Parse a raw CHANGELOG.md text into { version -> [items] } map.
-      function parseChangelog(text) {
-        var map = {};
-        var cur = null;
+      // Split one section of Markdown into its lead note (the paragraph above
+      // the first bullet, where upgrade warnings live) and its bullet items.
+      // Wrapped continuation lines are folded into the bullet they belong to
+      // rather than dropped, and fenced code is skipped whole.
+      function parseSection(text) {
+        var note = [];
+        var items = [];
+        var current = null;
+        var inFence = false;
+        var seenBullet = false;
+
+        function flush() {
+          if (current === null) return;
+          var value = current.replace(/\s+/g, " ").trim();
+          if (value) items.push(value);
+          current = null;
+        }
+
         (text || "").split("\n").forEach(function (line) {
-          var hm = line.match(/^#\s*\[([^\]]+)\]/);
-          if (hm) {
-            cur = hm[1].trim();
-            map[cur] = [];
-          } else if (cur && line.indexOf("- ") === 0) {
-            map[cur].push(line.slice(2).trim());
+          if (/^\s*(```|~~~)/.test(line)) {
+            inFence = !inFence;
+            flush();
+            return;
+          }
+          if (inFence) return;
+
+          var trimmed = line.trim();
+          if (!trimmed || isBlockNoise(trimmed)) {
+            flush();
+            return;
+          }
+
+          var bullet = trimmed.match(/^[-*+]\s+(.*)$/);
+          if (bullet) {
+            flush();
+            seenBullet = true;
+            current = bullet[1];
+            return;
+          }
+
+          // Indented text directly under a bullet is that bullet wrapping.
+          if (current !== null && /^\s/.test(line)) {
+            current += " " + trimmed;
+            return;
+          }
+
+          flush();
+          if (!seenBullet) note.push(trimmed);
+        });
+
+        flush();
+        return { note: note.join(" ").trim(), items: items };
+      }
+
+      // Parse CHANGELOG.md into { version -> { note, items, security } }.
+      // Headings look like "# [1.8.1] [Security:Critical]".
+      function parseChangelog(text) {
+        var sections = {};
+        var current = null;
+        (text || "").split("\n").forEach(function (line) {
+          var heading = line.match(/^#\s*\[([^\]]+)\]\s*(.*)$/);
+          if (heading) {
+            current = {
+              security: heading[2].trim(),
+              lines: [],
+            };
+            sections[heading[1].trim()] = current;
+          } else if (current) {
+            current.lines.push(line);
           }
         });
-        return map;
+        Object.keys(sections).forEach(function (version) {
+          var section = sections[version];
+          var parsed = parseSection(section.lines.join("\n"));
+          section.note = parsed.note;
+          section.items = parsed.items;
+        });
+        return sections;
+      }
+
+      // Release bodies are now the fixed "which download do I want?" asset
+      // guide, which carries no change items at all. Drop it so only text
+      // written above it survives.
+      function stripAssetGuide(body) {
+        var marker = (body || "").match(/^##\s*Which download do I want/im);
+        return marker ? body.slice(0, marker.index) : body || "";
       }
 
       function renderEntries(entries) {
@@ -635,20 +770,52 @@
           userVersionStr;
         document.getElementById("changes-since-list").innerHTML = entries
           .map(function (e) {
+            var note = e.note
+              ? '<p class="change-note">' + formatItem(e.note) + "</p>"
+              : "";
+            var items = e.items.length
+              ? '<ul class="change-items">' +
+                e.items
+                  .map(function (i) {
+                    return "<li>" + formatItem(i) + "</li>";
+                  })
+                  .join("") +
+                "</ul>"
+              : "";
             return (
-              '<div class="change-entry"><span class="change-version">v' +
+              '<div class="change-entry"><div class="change-version"><span>v' +
               escHtml(e.version) +
-              '</span><ul class="change-items">' +
-              e.items
-                .map(function (i) {
-                  return "<li>" + formatItem(i) + "</li>";
-                })
-                .join("") +
-              "</ul></div>"
+              "</span>" +
+              (e.security ? formatItem(e.security) : "") +
+              '</div><div class="change-body">' +
+              note +
+              items +
+              "</div></div>"
             );
           })
           .join("");
         document.getElementById("changes-since").style.display = "block";
+      }
+
+      function fetchText(url) {
+        return fetch(url)
+          .then(function (r) {
+            return r.ok ? r.text() : "";
+          })
+          .catch(function () {
+            return "";
+          });
+      }
+
+      // CHANGELOG.md at the released tag holds every version's entry, so one
+      // fetch covers the whole range. Fall back to main if a tag has no copy.
+      function fetchChangelog(tag) {
+        var base = "https://raw.githubusercontent.com/pikselkroken/pixlstash/";
+        return fetchText(
+          base + "refs/tags/" + encodeURIComponent(tag) + "/CHANGELOG.md",
+        ).then(function (text) {
+          return text || fetchText(base + "refs/heads/main/CHANGELOG.md");
+        });
       }
 
       // Fetch the full releases list so we can show changes across multiple
@@ -700,54 +867,36 @@
           });
           if (!newer.length) return;
 
-          // Build a preliminary entry list using each release's body.
-          // Releases with an empty body are flagged for CHANGELOG fallback.
-          var entries = newer.map(function (rel) {
-            var items = itemsFromBody(rel.body);
-            return {
-              version: rel.tag_name.replace(/^v/, ""),
-              tag: rel.tag_name,
-              items: items,
-              needsFallback: items.length === 0,
-            };
-          });
-
-          var anyNeedsFallback = entries.some(function (e) {
-            return e.needsFallback;
-          });
-
-          function applyAndRender(changelogText) {
-            var clMap = parseChangelog(changelogText);
-            var final = entries
-              .map(function (e) {
-                var items = e.needsFallback ? clMap[e.version] || [] : e.items;
-                return { version: e.version, items: items };
+          // CHANGELOG.md is the primary source: the release body is a fixed
+          // download guide with no per-version content. A release only falls
+          // back to its own body if the changelog never mentions it.
+          fetchChangelog(newer[0].tag_name).then(function (changelogText) {
+            var sections = parseChangelog(changelogText);
+            var entries = newer
+              .map(function (rel) {
+                var version = rel.tag_name.replace(/^v/, "");
+                var section = sections[version];
+                if (section && (section.items.length || section.note)) {
+                  return {
+                    version: version,
+                    note: section.note,
+                    items: section.items,
+                    security: section.security,
+                  };
+                }
+                var fallback = parseSection(stripAssetGuide(rel.body));
+                return {
+                  version: version,
+                  note: fallback.note,
+                  items: fallback.items,
+                  security: "",
+                };
               })
               .filter(function (e) {
-                return e.items.length > 0;
+                return e.items.length > 0 || e.note;
               });
-            renderEntries(final);
-          }
-
-          if (!anyNeedsFallback) {
-            applyAndRender("");
-            return;
-          }
-
-          // Fetch CHANGELOG once from the newest release tag as fallback.
-          // This single file contains all point-release entries on the branch.
-          fetch(
-            "https://raw.githubusercontent.com/pikselkroken/pixlstash/refs/tags/" +
-              newer[0].tag_name +
-              "/CHANGELOG.md",
-          )
-            .then(function (r) {
-              return r.ok ? r.text() : "";
-            })
-            .then(applyAndRender)
-            .catch(function () {
-              applyAndRender("");
-            });
+            renderEntries(entries);
+          });
         })
         .catch(function () {});
 
