@@ -13,13 +13,21 @@ import { setActivePinia, createPinia } from "pinia";
 
 // Hoisted with the `vi.mock` factories that close over them: the factories run
 // before the module body, so a plain `const` here would still be uninitialised.
-const { applyPictureEvent, handleMessage, isReadOnly, reloadAfterFullRestore } =
-  vi.hoisted(() => ({
+const {
+  applyPictureEvent,
+  handleMessage,
+  isReadOnly,
+  isFullRestoreRequestInFlight,
+  prepareForFullRestoreTransition,
+  reloadAfterFullRestore,
+} = vi.hoisted(() => ({
   applyPictureEvent: vi.fn(() => ({ action: "ignored", reason: "test" })),
   handleMessage: vi.fn(() => ({ action: "ignored", reason: "test" })),
   // Only ever read as `.value`, so a bare box stands in for the real ref
   // without dragging Vue into the hoisted block.
   isReadOnly: { value: false },
+  isFullRestoreRequestInFlight: vi.fn(() => false),
+  prepareForFullRestoreTransition: vi.fn(),
   reloadAfterFullRestore: vi.fn(),
 }));
 
@@ -31,7 +39,11 @@ vi.mock("./useGridRealtimeSync", () => ({
   useGridRealtimeSync: () => ({ handleMessage, flushNow: vi.fn() }),
 }));
 
-vi.mock("../utils/fullRestoreTransition", () => ({ reloadAfterFullRestore }));
+vi.mock("../utils/fullRestoreTransition", () => ({
+  isFullRestoreRequestInFlight,
+  prepareForFullRestoreTransition,
+  reloadAfterFullRestore,
+}));
 
 vi.mock("../utils/apiClient", async (importOriginal) => {
   const actual = await importOriginal();
@@ -59,8 +71,8 @@ class FakeWebSocket {
     socket = this;
   }
   send() {}
-  close() {
-    this.onclose?.();
+  close(code = 1000) {
+    this.onclose?.({ code });
   }
 }
 
@@ -77,6 +89,9 @@ beforeEach(() => {
   applyPictureEvent.mockClear();
   handleMessage.mockClear();
   reloadAfterFullRestore.mockClear();
+  prepareForFullRestoreTransition.mockClear();
+  isFullRestoreRequestInFlight.mockReset();
+  isFullRestoreRequestInFlight.mockReturnValue(false);
   vi.stubGlobal("WebSocket", FakeWebSocket);
 });
 
@@ -189,12 +204,70 @@ describe("useUpdatesSocket: connection lifecycle", () => {
     vi.useRealTimers();
   });
 
-  it("reconnects after an unexpected close", async () => {
+  it("reconnects after an ordinary unexpected close", async () => {
     vi.useFakeTimers();
     connect();
-    socket.onclose();
+    socket.onclose({ code: 1006 });
     await vi.advanceTimersByTimeAsync(2000);
     expect(socketCount).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("hard reloads a non-initiating tab from the pre-drain restore event", async () => {
+    vi.useFakeTimers();
+    connect();
+    const drainedSocket = socket;
+
+    receive({ type: "restore_started", resource_type: "full" });
+    expect(prepareForFullRestoreTransition).toHaveBeenCalledTimes(1);
+    expect(reloadAfterFullRestore).not.toHaveBeenCalled();
+    drainedSocket.onclose({ code: 1012 });
+    drainedSocket.onclose({ code: 1012 });
+    drainedSocket.onmessage({
+      data: JSON.stringify({
+        type: "restore_completed",
+        resource_type: "full",
+      }),
+    });
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(reloadAfterFullRestore).toHaveBeenCalledTimes(1);
+    expect(socketCount).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("hard reloads a read-only tab when the restore barrier drains it", () => {
+    isReadOnly.value = true;
+    connect();
+
+    socket.onclose({ code: 1012 });
+
+    expect(reloadAfterFullRestore).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses close code 1012 when the tab missed restore_started", async () => {
+    vi.useFakeTimers();
+    connect();
+
+    socket.onclose({ code: 1012 });
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(reloadAfterFullRestore).toHaveBeenCalledTimes(1);
+    expect(socketCount).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("leaves the initiating tab to its request-driven reload", async () => {
+    vi.useFakeTimers();
+    isFullRestoreRequestInFlight.mockReturnValue(true);
+    connect();
+
+    receive({ type: "restore_started", resource_type: "full" });
+    socket.onclose({ code: 1012 });
+    await vi.advanceTimersByTimeAsync(2500);
+
+    expect(reloadAfterFullRestore).not.toHaveBeenCalled();
+    expect(socketCount).toBe(1);
     vi.useRealTimers();
   });
 

@@ -96,6 +96,12 @@ def _assign_pictures(client, character_id, picture_ids):
     return body
 
 
+def _stack(client, picture_ids):
+    response = client.post(f"{API_PREFIX}/stacks", json={"picture_ids": picture_ids})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 def test_record_failure_rolls_back_face_assignment(monkeypatch):
     """A face-to-character join cannot survive without its undo receipt."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -146,15 +152,109 @@ def test_authoritative_face_assignment_rejects_a_mismatched_picture():
             )
             first, second = _upload(client, 2)
             character_id = _create_character(client, "Mismatch")
-            face_id = _add_face(server, first, ALONG_X, SMALL_BBOX)
+            first_face_id = _add_face(server, first, ALONG_X, SMALL_BBOX)
+            second_face_id = _add_face(server, second, ALONG_X, SMALL_BBOX)
+            _stack(client, [first, second])
 
             response = client.post(
                 f"{API_PREFIX}/characters/{character_id}/faces",
-                json={"face_assignments": [{"picture_id": second, "face_id": face_id}]},
+                json={
+                    "face_assignments": [
+                        {"picture_id": second, "face_id": first_face_id}
+                    ]
+                },
             )
 
             assert response.status_code == 422, response.text
-            assert _face_character_ids(server, [face_id]) == {face_id: None}
+            assert _face_character_ids(server, [first_face_id, second_face_id]) == {
+                first_face_id: None,
+                second_face_id: None,
+            }
+
+
+def test_authoritative_face_assignment_is_exact_stack_atomic_and_undoable():
+    """The reviewed face wins verbatim; stack siblings use normal selection."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            client = TestClient(server.api)
+            assert (
+                client.post(
+                    "/login",
+                    json={"username": "testuser", "password": "testpassword"},
+                ).status_code
+                == 200
+            )
+            reference_id, reviewed_id, sibling_id = _upload(client, 3)
+            character_id = _create_character(client, "Stack atomic")
+            _add_face(
+                server,
+                reference_id,
+                ALONG_X,
+                SMALL_BBOX,
+                character_id=character_id,
+            )
+
+            reviewed_winner = _add_face(
+                server, reviewed_id, ALONG_Y, SMALL_BBOX, face_index=0
+            )
+            reviewed_rerank_winner = _add_face(
+                server, reviewed_id, ALONG_X, LARGE_BBOX, face_index=1
+            )
+            sibling_bystander = _add_face(
+                server, sibling_id, ALONG_Y, LARGE_BBOX, face_index=0
+            )
+            sibling_target = _add_face(
+                server, sibling_id, NEAR_X, SMALL_BBOX, face_index=1
+            )
+            _stack(client, [reviewed_id, sibling_id])
+
+            assigned = client.post(
+                f"{API_PREFIX}/characters/{character_id}/faces",
+                json={
+                    "face_assignments": [
+                        {"picture_id": reviewed_id, "face_id": reviewed_winner}
+                    ]
+                },
+            )
+
+            assert assigned.status_code == 200, assigned.text
+            assert set(assigned.json()["face_ids"]) == {
+                reviewed_winner,
+                sibling_target,
+            }
+            assert _face_character_ids(
+                server,
+                [
+                    reviewed_winner,
+                    reviewed_rerank_winner,
+                    sibling_bystander,
+                    sibling_target,
+                ],
+            ) == {
+                reviewed_winner: character_id,
+                reviewed_rerank_winner: None,
+                sibling_bystander: None,
+                sibling_target: character_id,
+            }
+
+            undone = client.post(f"{API_PREFIX}/operations/undo")
+            assert undone.status_code == 200, undone.text
+            assert set(undone.json()["picture_ids"]) == {reviewed_id, sibling_id}
+            assert _face_character_ids(
+                server,
+                [
+                    reviewed_winner,
+                    reviewed_rerank_winner,
+                    sibling_bystander,
+                    sibling_target,
+                ],
+            ) == {
+                reviewed_winner: None,
+                reviewed_rerank_winner: None,
+                sibling_bystander: None,
+                sibling_target: None,
+            }
 
 
 def test_face_search_mixed_legacy_reference_widths_returns_422():

@@ -57,6 +57,7 @@ def _enforce_face_mutation_scope(
     *,
     face_ids: list | None,
     picture_ids: list | None,
+    expand_stacks: bool = False,
 ) -> None:
     """Raise 403 if a scoped token targets faces/pictures outside its scope.
 
@@ -95,6 +96,13 @@ def _enforce_face_mutation_scope(
         affected |= server.vault.db.run_immediate_read_task(
             _resolve, normalized_face_ids
         )
+
+    if expand_stacks and affected:
+
+        def _expand(session: Session, ids: set[int]) -> set[int]:
+            return set(expand_picture_ids_to_stacks(session, ids))
+
+        affected = server.vault.db.run_immediate_read_task(_expand, affected)
 
     if any(pid not in scope_allowed for pid in affected):
         raise HTTPException(
@@ -210,6 +218,7 @@ def create_router(server) -> APIRouter:
             request,
             face_ids=[*(face_ids or []), *assignment_face_ids],
             picture_ids=[*(picture_ids or []), *assignment_picture_ids],
+            expand_stacks=bool(picture_ids or face_assignments),
         )
 
         def assign_faces(
@@ -242,13 +251,32 @@ def create_router(server) -> APIRouter:
                     # winner. Assign it verbatim; a second likeness pass here
                     # could choose a different person under another reducer.
                     faces_to_assign.append(face)
+            selection_picture_ids = []
             if picture_ids:
+                selection_picture_ids = expand_picture_ids_to_stacks(
+                    session, picture_ids
+                )
+            elif face_assignments:
+                # The reviewed picture/face pairs are authoritative, but the
+                # rest of each live stack still moves as one character unit.
+                # Exclude named pictures from this selection pass so their
+                # submitted winners cannot be silently re-ranked.
+                authoritative_picture_ids = {
+                    picture_id for picture_id, _ in face_assignments
+                }
+                selection_picture_ids = [
+                    picture_id
+                    for picture_id in expand_picture_ids_to_stacks(
+                        session, authoritative_picture_ids
+                    )
+                    if picture_id not in authoritative_picture_ids
+                ]
+            if selection_picture_ids:
                 # Stacks move as a unit: assigning any stacked picture to a
                 # character assigns every member of its stack, so a collapsed
                 # stack dragged onto a character moves all of its pictures
                 # (reassigning each member's face also moves it off the old
                 # character, keeping character counts consistent).
-                picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
                 reference_faces = select_reference_faces_for_character(
                     session, character_id
                 )
@@ -301,7 +329,7 @@ def create_router(server) -> APIRouter:
                 bootstrap_refs = []
                 deferred_multi_face = []
 
-                for pic_id in picture_ids:
+                for pic_id in selection_picture_ids:
                     faces = Face.find(session, picture_id=pic_id)
                     if not faces:
                         # Face.find excludes sentinel records (face_index == -1),

@@ -149,6 +149,7 @@ def test_sends_exactly_the_three_accepted_keys(config_path, monkeypatch):
         captured["url"] = request.full_url
         captured["method"] = request.method
         captured["body"] = json.loads(request.data.decode("utf-8"))
+        captured["user_agent"] = request.get_header("User-agent")
         return _FakeResponse(204)
 
     monkeypatch.setattr(sender.urllib.request, "urlopen", _fake_urlopen)
@@ -163,6 +164,7 @@ def test_sends_exactly_the_three_accepted_keys(config_path, monkeypatch):
     ]
     assert captured["body"]["install_type"] == "docker"
     assert captured["method"] == "POST"
+    assert captured["user_agent"] == "pixlstash-telemetry/1.0"
 
 
 def test_sends_no_version_timestamp_or_machine_detail(config_path, monkeypatch):

@@ -12,6 +12,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   autoStackExact,
   scopeBody,
@@ -289,6 +290,36 @@ describe("api/dedup — verdicts", () => {
       { signature: "sig-2" },
     );
     expect(result.verdict).toBe("keep_separate");
+  });
+
+  it("posts a multi-group gesture as one atomic verdict batch", async () => {
+    apiClient.post.mockResolvedValue({
+      data: { batch_id: "cli-gesture-1", results: [] },
+    });
+    await applyVerdictBatch(
+      [
+        {
+          verdict: "stacked",
+          signature: "sig-1",
+          coverPictureId: 42,
+          excludedPictureIds: [43],
+        },
+        { verdict: "keep_separate", signature: "sig-2" },
+      ],
+      { batchId: "cli-gesture-1" },
+    );
+    expect(apiClient.post).toHaveBeenCalledWith("/dedup/verdicts/batch", {
+      actions: [
+        {
+          verdict: "stacked",
+          signature: "sig-1",
+          cover_picture_id: 42,
+          excluded_picture_ids: [43],
+        },
+        { verdict: "keep_separate", signature: "sig-2" },
+      ],
+      batch_id: "cli-gesture-1",
+    });
   });
 
   it("reopenGroup posts the signature alone by default", async () => {

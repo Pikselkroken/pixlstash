@@ -15,9 +15,9 @@ Two operations maintain that invariant:
   the **union** of its members' project & set memberships so it becomes
   consistent again.
 
-Character/face assignment is intentionally *not* made atomic here (faces live in
-specific pictures and a stack may mix characters); the UI refuses per-member
-character edits instead.
+Character assignment also uses the expansion helper: an authoritative face stays
+fixed for its reviewed picture while the established face-selection rules choose
+one face for every other live stack member.
 """
 
 from sqlalchemy import func

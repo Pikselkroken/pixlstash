@@ -520,6 +520,19 @@
       Confirming whether the queue is clear.
     </div>
 
+    <div
+      v-else-if="scanIncomplete && !store.showingDecided"
+      class="qdone"
+      role="alert"
+    >
+      <v-icon size="48">mdi-alert-circle-outline</v-icon>
+      <h3>{{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}</h3>
+      <p>
+        Some duplicate comparisons were not completed, so this queue cannot be
+        marked clear. Review any available groups and run the scan again.
+      </p>
+    </div>
+
     <!-- The empty DECIDED page keeps its own copy and, crucially, its own way
          back: the header toggle lives on the list, which is not rendered here. -->
     <div v-else-if="store.showingDecided" class="qdone">
@@ -984,6 +997,9 @@ const flashSignature = ref("");
 let flashTimer = null;
 
 const readOnly = computed(() => Boolean(isReadOnly.value));
+const scanIncomplete = computed(() =>
+  ["partial", "failed"].includes(store.scan?.status),
+);
 
 // ── The row's stack expansion (D4) ────────────────────────────────────────
 // One band in the whole queue, on the focused row, with its members read

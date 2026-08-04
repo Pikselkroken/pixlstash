@@ -412,6 +412,46 @@ export async function keepGroupSeparate(
 }
 
 /**
+ * Apply one multi-group Stack or Keep Separate gesture atomically.
+ *
+ * The server runs the full list in one database task and transaction. Sharing
+ * a batch id across separate requests is insufficient because another client
+ * can otherwise record between them and make that batch permanently stale.
+ *
+ * @param {Array<Object>} actions
+ * @param {Object} [options]
+ * @param {string} [options.batchId]
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Object>} `{ batch_id, results }`.
+ */
+export async function applyVerdictBatch(
+  actions,
+  { batchId, baseUrl = "" } = {},
+) {
+  const body = {
+    actions: actions.map((action) => {
+      const item = {
+        verdict: action.verdict,
+        signature: action.signature,
+      };
+      if (
+        action.coverPictureId !== undefined &&
+        action.coverPictureId !== null
+      ) {
+        item.cover_picture_id = action.coverPictureId;
+      }
+      if (action.excludedPictureIds?.length) {
+        item.excluded_picture_ids = action.excludedPictureIds;
+      }
+      return item;
+    }),
+  };
+  if (batchId) body.batch_id = batchId;
+  const res = await apiClient.post(dedupUrl("/verdicts/batch", baseUrl), body);
+  return res.data;
+}
+
+/**
  * Reopen a decided group ("Clear decision") so it is offered again.
  *
  * Clearing a `stacked` verdict whose stack still stands also dissolves that

@@ -39,6 +39,7 @@ vi.mock("../../api/dedup", () => ({
   startScan: vi.fn(),
   stackGroup: vi.fn(),
   keepGroupSeparate: vi.fn(),
+  applyVerdictBatch: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
   // The lazy half of the stack contract: a row's expansion reads its members
@@ -132,6 +133,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   listStackMembers,
   listMixedStacks,
@@ -298,6 +300,7 @@ beforeEach(() => {
     getCounts,
     stackGroup,
     keepGroupSeparate,
+    applyVerdictBatch,
     reopenGroup,
     listStackMembers,
     listMixedStacks,
@@ -548,6 +551,21 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
 });
 
 describe("DuplicateQueue — when a verdict does not land", () => {
+  it.each(["partial", "failed"])(
+    "never renders Queue clear when the latest scan is %s",
+    async (status) => {
+      const { wrapper, store } = await mountQueue([]);
+      store.scan = { ...store.scan, status, error: "comparison work omitted" };
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.text()).toContain(
+        status === "failed" ? "Scan failed" : "Scan incomplete",
+      );
+      expect(wrapper.text()).not.toContain("Queue clear");
+      wrapper.unmount();
+    },
+  );
+
   it("never renders Queue clear when the queue state failed to load", async () => {
     const { wrapper, store } = await mountQueue([]);
     store.error = new Error("network down");
@@ -2032,16 +2050,18 @@ describe("DuplicateQueue — multi-select", () => {
     const stackBtn = wrapper.findAll(".grow")[0].find(".gbtn--stack");
     expect(stackBtn.text()).toContain("Stack 2 groups");
 
-    stackGroup.mockResolvedValue({});
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-visible",
+      results: [{}, {}],
+    });
     await stackBtn.trigger("click");
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
 
-    expect(stackGroup).toHaveBeenCalledTimes(2);
-    const batchIds = stackGroup.mock.calls.map((call) => call[1].batchId);
-    // One gesture, one Ctrl+Z: both verdicts share one client batch id.
-    expect(batchIds[0]).toMatch(/^cli-/);
-    expect(batchIds[1]).toBe(batchIds[0]);
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
+    const [actions, options] = applyVerdictBatch.mock.calls[0];
+    expect(actions.map((action) => action.signature)).toEqual(["g1", "g2"]);
+    expect(options.batchId).toMatch(/^cli-/);
   });
 
   it("keeps rows and announcement stable until the selected stack gesture settles", async () => {
@@ -2053,26 +2073,16 @@ describe("DuplicateQueue — multi-select", () => {
     const rows = wrapper.findAll(".grow");
     await rows[0].trigger("click", { ctrlKey: true });
     await rows[2].trigger("click", { ctrlKey: true });
-    let resolveFirst;
-    let resolveSecond;
-    stackGroup
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
+    let resolveBatch;
+    applyVerdictBatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBatch = resolve;
+        }),
+    );
 
     await wrapper.findAll(".grow")[0].find(".gbtn--stack").trigger("click");
-    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
-    resolveFirst({ signature: "g1", batch_id: "cli-visible" });
-    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(resolveBatch).toBeTypeOf("function"));
     await wrapper.vm.$nextTick();
 
     expect(store.groups.map((entry) => entry.signature)).toEqual([
@@ -2085,7 +2095,7 @@ describe("DuplicateQueue — multi-select", () => {
       "Stacked",
     );
 
-    resolveSecond({ signature: "g3", batch_id: "cli-visible" });
+    resolveBatch({ batch_id: "cli-visible", results: [{}, {}] });
     await flushPromises();
     await wrapper.vm.$nextTick();
     expect(store.groups.map((entry) => entry.signature)).toEqual(["g2"]);
