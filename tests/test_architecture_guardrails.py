@@ -1371,6 +1371,26 @@ def test_picture_metadata_fields_membership_is_pinned():
     #719 defect repeated. If the new column is safe for a scoped token, add it to
     the set below. If it is not, narrow it at those six sites the way
     `narrow_picture_project_ids` does.
+
+    **Membership in the set below does NOT certify a column as safe.** The set is
+    the *current* projection, pinned so a change is noticed; it is not a list of
+    columns anyone has cleared. Three members are known disclosures to a scoped
+    token, reproduced during the #719 review and deliberately left unnarrowed
+    pending a decision, so nothing here should be read as their having been
+    reviewed and passed:
+
+    * ``pending_character_id`` — a character FK, while ``GET /characters/{id}``
+      is ``CHARACTER_SCOPED`` and 403s the same token. Not transient: the dedup
+      verdict and keep-cover-only services set it on pictures whose face
+      extraction has already run, so it persists. Narrowing it needs a
+      ``visible_character_ids`` ladder, which does not exist yet.
+    * ``source_picture_id`` — points at a picture the token may not be granted
+      (verified: that picture's own endpoints 403 the same token).
+    * ``reference_folder_id`` — same shape, and additionally in ``grid_fields()``,
+      so it rides every listing rather than only these six routes.
+
+    ``import_source_folder``, ``pixel_sha``, ``original_file_name`` and the
+    ComfyUI prompt columns are a separate host-information question (§16.3).
     """
     from pixlstash.db_models import Picture
 

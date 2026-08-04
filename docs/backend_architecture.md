@@ -1471,7 +1471,17 @@ Deliberately **not** equalised — that is a runtime change to a hot read path, 
 
 **Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
 
-#### CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row payload
+#### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
+
+**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. It does **not** close the confidentiality boundary those routes are named after, because the two generic field readers also serve the ORM **relationship** namespace, which no projection constrains. Reproduced 2026-08-05 with a `picture`-scoped token:
+
+```
+GET /projects/1            -> 403
+GET /pictures/1/project_id -> {"project_id": null}          # closed by #719
+GET /pictures/1/projects   -> {"projects":[{"id":1,"name":"P1",...}]}   # still open
+```
+
+`Picture.projects` is a `Relationship` and `safe_model_dict` recurses into relationships, so `select_fields=[field]` does not bound the response. The same shape holds for `GET /pictures/{id}/picture_sets` (set names, plus `project_id` again on a sibling key) and for the character twin, `GET /characters/{id}/project` and `GET /characters/{id}/pictures` — the latter serving full `Picture` rows off the relationship, bypassing every narrowing site in the codebase. Tracked as its own issue; the durable fix is an allowlist of servable field names on both readers, not another `if field == ...` branch. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it".
 
 **Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
 
