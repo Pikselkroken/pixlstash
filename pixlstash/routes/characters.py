@@ -59,6 +59,7 @@ from pixlstash.utils.service.filter_helpers import (
     combine_likeness_scores,
     fetch_scope_allowed_character_ids,
     fetch_scope_allowed_picture_ids,
+    filter_visible_project_ids,
     narrow_project_fields,
     VALID_COMBINE_MODES,
     visible_project_ids,
@@ -208,6 +209,28 @@ class CharacterListItemResponse(BaseModel):
     )
     reference_picture_set_id: Optional[int] = None
     has_reference_faces: bool = False
+    image_count: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "Number of non-deleted pictures with at least one face assigned to "
+            "this character, across the whole vault. Populated only when the "
+            "request passes ``include_counts=true``; ``null`` otherwise. Same "
+            "number as ``GET /characters/{id}/summary`` returns with no "
+            "``project_id``, so the sidebar can render its counts from this one "
+            "list response instead of one request per character (issue #651)."
+        ),
+    )
+    project_image_count: Optional[int] = PydanticField(
+        default=None,
+        description=(
+            "The same count as ``image_count``, narrowed to the project named by "
+            "this row's ``project_id`` — or, when ``project_id`` is ``null``, to "
+            "pictures that belong to no project at all. Populated only when the "
+            "request passes ``include_counts=true``; ``null`` otherwise. Same "
+            "number as ``GET /characters/{id}/summary?project_id=<project_id>`` "
+            "(or ``project_id=UNASSIGNED``) returns."
+        ),
+    )
 
 
 class CharacterSummaryResponse(BaseModel):
@@ -358,6 +381,141 @@ def create_router(server) -> APIRouter:
                 PictureProjectMember.picture_id == Picture.id
             )
         )
+
+    def _character_picture_counts(
+        session: Session,
+        char_ids: list[int],
+        extra_conditions=None,
+        join_character: bool = False,
+    ) -> dict[int, int]:
+        """Count each character's visible pictures in ONE grouped query.
+
+        The per-row shape is exactly the assigned-character branch of
+        ``GET /characters/{id}/summary``: ``count(distinct Face.picture_id)``
+        over ``Face`` joined to a non-deleted ``Picture``. The only difference
+        is that the character id is an ``IN`` list plus a ``GROUP BY`` instead
+        of an equality, so N characters cost one query rather than N.
+
+        Args:
+            session: Open read session.
+            char_ids: The character ids to count for. Always the ids the list
+                endpoint's own scope filtering already returned, never a
+                widened set.
+            extra_conditions: Extra WHERE clauses, e.g. a project-membership
+                predicate.
+            join_character: Join ``Character`` so a condition may correlate on
+                ``Character.project_id``.
+
+        Returns:
+            ``{character_id: count}``. A character with no matching picture is
+            absent, so callers default it to 0.
+        """
+        if not char_ids:
+            return {}
+        query = (
+            select(Face.character_id, func.count(func.distinct(Face.picture_id)))
+            .select_from(Face)
+            .join(Picture, Face.picture_id == Picture.id)
+        )
+        if join_character:
+            query = query.join(Character, Character.id == Face.character_id)
+        query = query.where(
+            Face.character_id.in_(char_ids),
+            Picture.deleted.is_(False),
+            *(extra_conditions or []),
+        ).group_by(Face.character_id)
+        return {
+            int(char_id): int(count)
+            for char_id, count in session.exec(query).all()
+            if char_id is not None
+        }
+
+    def _inline_character_counts(
+        session: Session,
+        characters,
+        narrowed_by_char: dict[int, list[int]],
+    ) -> tuple[dict[int, int], dict[int, int]]:
+        """Global and primary-project picture counts for every listed character.
+
+        Serves the sidebar's counts from the list response so it no longer
+        fires one ``GET /characters/{id}/summary`` per character on every
+        refresh (issue #651). The sidebar asks each character for the scope of
+        its OWN primary project, so both numbers are independent of the
+        selected project and one cached list response serves both view modes.
+
+        ``project_image_count`` is computed against the project this response
+        actually reports in ``project_id`` — the *narrowed* primary project,
+        not the raw ``Character.project_id`` column, since
+        :func:`narrow_project_fields` hides project ids a scoped token may not
+        learn (issue #125 / R1b). That keeps the two fields self-consistent for
+        every caller and never scopes a count to a project the caller cannot
+        see.
+
+        Cost is a constant 1-3 queries regardless of how many characters are
+        listed: one global, plus at most one per distinct *narrowed* primary
+        project. The owner case correlates on ``Character.project_id`` inside
+        SQL, so its many distinct primary projects still cost a single query;
+        a scoped token's narrowed ids are a subset of
+        :func:`visible_project_ids`, which holds at most one project.
+
+        Args:
+            session: Open read session.
+            characters: The ``Character`` rows the endpoint is returning.
+            narrowed_by_char: Each character's scope-narrowed project ids.
+
+        Returns:
+            ``(global_counts, project_counts)``, both ``{character_id: count}``.
+        """
+        char_ids = [int(c.id) for c in characters if c.id is not None]
+        if not char_ids:
+            return {}, {}
+
+        global_counts = _character_picture_counts(session, char_ids)
+
+        # Bucket by the project each row reports, so every bucket is one query.
+        correlated_ids: list[int] = []  # narrowed primary == Character.project_id
+        unassigned_ids: list[int] = []  # no visible project at all
+        by_project_ids: dict[int, list[int]] = {}  # narrowed primary != the column
+        for character in characters:
+            if character.id is None:
+                continue
+            char_id = int(character.id)
+            narrowed = narrowed_by_char.get(char_id) or []
+            effective_project_id = narrowed[0] if narrowed else None
+            if effective_project_id is None:
+                unassigned_ids.append(char_id)
+            elif effective_project_id == character.project_id:
+                correlated_ids.append(char_id)
+            else:
+                by_project_ids.setdefault(int(effective_project_id), []).append(char_id)
+
+        project_counts: dict[int, int] = {}
+        if correlated_ids:
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    correlated_ids,
+                    [_project_membership_exists(Character.project_id)],
+                    join_character=True,
+                )
+            )
+        if unassigned_ids:
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    unassigned_ids,
+                    [_project_unassigned_membership()],
+                )
+            )
+        for project_id_value, ids in by_project_ids.items():
+            project_counts.update(
+                _character_picture_counts(
+                    session,
+                    ids,
+                    [_project_membership_exists(project_id_value)],
+                )
+            )
+        return global_counts, project_counts
 
     def _require_scope_allows_character(request: Request, character_id: int):
         """Raise 403 if the token scope does not cover the requested character.
@@ -1145,13 +1303,37 @@ def create_router(server) -> APIRouter:
         summary="List characters",
         description="Lists characters, optionally filtered by exact name or project. "
         "Pass ``project_id`` as a numeric ID to restrict to one project, "
-        "or ``UNASSIGNED`` for characters with no project.",
+        "or ``UNASSIGNED`` for characters with no project.\n\n"
+        "Pass ``include_counts=true`` to get each character's picture counts "
+        "(``image_count`` and ``project_image_count``) inline, so a sidebar does "
+        "not need one ``GET /characters/{id}/summary`` request per character.",
         response_model=list[CharacterListItemResponse],
     )
     def get_characters(
         request: Request,
-        name: str = Query(None),
-        project_id: str | None = Query(default=None),
+        name: str = Query(
+            None, description="Return only the character with this exact name."
+        ),
+        project_id: str | None = Query(
+            default=None,
+            description=(
+                "Restrict the listing to one project: a numeric project id, or "
+                "``UNASSIGNED`` for characters that belong to no project. Omit "
+                "for every character the caller may see. Note this filters "
+                "WHICH characters are listed; it does not change the scope of "
+                "``project_image_count``, which always follows each row's own "
+                "``project_id``."
+            ),
+        ),
+        include_counts: bool = Query(
+            default=False,
+            description=(
+                "When true, every row carries ``image_count`` (whole-vault) and "
+                "``project_image_count`` (this row's own project). Both cost a "
+                "constant number of extra queries for the whole listing. "
+                "Defaults to false, so existing callers pay nothing."
+            ),
+        ),
     ):
         token_scope = getattr(request.state, "token_scope", None)
         visible_projects = visible_project_ids(server, request)
@@ -1216,17 +1398,49 @@ def create_router(server) -> APIRouter:
                     ).all():
                         project_ids_by_char.setdefault(int(cid), []).append(int(pid))
 
-                return [
-                    narrow_project_fields(
-                        {
-                            **c.model_dump(exclude_unset=False),
-                            "has_reference_faces": c.id in chars_with_faces,
-                        },
-                        project_ids_by_char.get(int(c.id), []),
-                        visible_projects,
+                # Narrow once: the counts below must be scoped to the project
+                # each row REPORTS, and narrow_project_fields derives that same
+                # scalar from this list. Re-narrowing an already-narrowed list
+                # is idempotent, so the payload still goes through the one
+                # helper that owns both project fields.
+                narrowed_by_char = {
+                    int(c.id): filter_visible_project_ids(
+                        project_ids_by_char.get(int(c.id), []), visible_projects
                     )
                     for c in characters
-                ]
+                    if c.id is not None
+                }
+
+                # Sidebar counts, inline and for the WHOLE listing in a constant
+                # number of queries (issue #651). Computed only for the rows the
+                # scope filtering above already returned, so a scoped token
+                # learns nothing it could not read from the per-id summary
+                # endpoint it is already granted.
+                global_counts: dict[int, int] = {}
+                project_counts: dict[int, int] = {}
+                if include_counts:
+                    global_counts, project_counts = _inline_character_counts(
+                        session, characters, narrowed_by_char
+                    )
+
+                rows = []
+                for c in characters:
+                    payload = {
+                        **c.model_dump(exclude_unset=False),
+                        "has_reference_faces": c.id in chars_with_faces,
+                    }
+                    if include_counts:
+                        char_id = int(c.id)
+                        payload["image_count"] = global_counts.get(char_id, 0)
+                        payload["project_image_count"] = project_counts.get(char_id, 0)
+                    rows.append(
+                        narrow_project_fields(
+                            payload,
+                            narrowed_by_char.get(int(c.id), []),
+                            visible_projects,
+                        )
+                    )
+                return rows
 
             return server.vault.db.run_immediate_read_task(fetch)
         except HTTPException:
