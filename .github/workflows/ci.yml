@@ -44,7 +44,19 @@ env:
   # stays at INFO, so a *failing* test still reports its full captured log —
   # the debugging signal is unchanged, only the noise from passing tests is
   # gone. `-ra` lists every non-passing outcome in the trailing summary.
-  PYTEST_FLAGS: -q -ra --log-level=INFO --fast-captions --force-cpu
+  #
+  # `--durations=0 --durations-min=0` is the data source for the time-balanced
+  # `--ci-shard` deal (tests/conftest.py). It reports every test's setup/call/
+  # teardown time, which `scripts/record_test_durations.py` turns back into the
+  # committed tests/ci_test_durations.json. `--durations-min=0` (rather than
+  # pytest's 0.005 s default) is what makes the map COMPLETE: a test omitted
+  # for being fast would be indistinguishable from a test that is new, and the
+  # sharder charges an unknown test the median cost, which for a 2 ms test is
+  # wrong by two orders of magnitude. The price is ~3 extra log lines per test.
+  # This changes no test's behaviour and adds no runtime — it only prints.
+  PYTEST_FLAGS: >-
+    -q -ra --log-level=INFO --fast-captions --force-cpu
+    --durations=0 --durations-min=0
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -171,14 +183,25 @@ jobs:
   # below keeps it
   # visible in the meantime.
   #
-  # `--ci-shard i/N` (implemented in tests/conftest.py) deals the collected
-  # tests round-robin, so each file's tests are spread evenly and no single slow
-  # file becomes one shard's critical path — splitting by *test* rather than by
-  # file is what breaks up the authz suites and the 6-minute test_server.py.
-  # Measured with the authz files gated: 684 tests deal out 85-86 per shard,
-  # with the 151 authz tests landing 18-20 per shard, so no shard absorbs the
-  # block. tests/test_ci_shards.py asserts the matrix below and the `/N` in the
-  # command agree.
+  # `--ci-shard i/N` (implemented in tests/conftest.py) splits by *test* rather
+  # than by file, which is what breaks up the authz suites and the 6-minute
+  # test_server.py, and it balances the shards by RECORDED TIME
+  # (longest-processing-time-first over the committed
+  # tests/ci_test_durations.json). It used to deal round-robin by position:
+  # that equalises test count perfectly and test time not at all, and the
+  # measured result on run 30925279472 was 744 s to 1205 s across the eight
+  # shards — a 1.62x spread, with the gate waiting on shard 7 while shard 6 had
+  # been idle for ~460 s.
+  #
+  # The durations map is committed rather than cached because all eight shards
+  # must compute the SAME partition without communicating; see the module
+  # docstring of scripts/record_test_durations.py, which also regenerates it.
+  # A test missing from the map keeps its old round-robin position and a
+  # missing or corrupt map degrades the whole deal back to round-robin, so
+  # stale data costs wall clock and never coverage.
+  # tests/test_ci_shards.py asserts the matrix below and the `/N` in the
+  # command agree, and that the split stays an exact partition under all of
+  # those degraded inputs.
   #
   # Parallelism is deliberately across runners only, NOT pytest-xdist inside a
   # runner. xdist is installed (and is a good local `-n auto`), but two attempts

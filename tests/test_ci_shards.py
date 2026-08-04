@@ -25,6 +25,17 @@ someone says which, and that is a failure:
   partition — every collected test in exactly one shard — by actually running
   pytest's collection, not by re-implementing the arithmetic.
 
+``--ci-shard`` no longer deals by position: it places tests
+longest-processing-time-first from the committed
+``tests/ci_test_durations.json`` so the gate's shards finish together rather
+than merely holding the same number of tests. That turns a data file into an
+input to the partition, and eight independent processes have to derive the
+identical partition from it, so the guardrails below cover the degraded inputs
+as well as the happy one: an absent, truncated, wrongly-shaped or
+negative-valued map, and tests the map has never heard of. All of them must
+still yield a complete, disjoint partition — a slower gate is an acceptable
+outcome, a dropped test is not.
+
 The second property these protect is the release-prep sweep's *ordering*
 control. The blocking gate deals tests round-robin (``--ci-shard``); the sweep
 runs the same suite in contiguous blocks of collection order
@@ -42,11 +53,17 @@ from pathlib import Path
 
 import pytest
 import yaml
-from tests.conftest import _block_shard_bounds
+from tests import conftest as shard_conftest
+from tests.conftest import (
+    _block_shard_bounds,
+    _load_recorded_durations,
+    _time_balanced_shard_assignment,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TESTS_DIR = REPO_ROOT / "tests"
+DURATIONS_PATH = TESTS_DIR / "ci_test_durations.json"
 
 # These workflows can publish packages/images/pages, create release issues or
 # PRs, attach signed artifacts, mint OIDC tokens, or consume release-signing
@@ -900,6 +917,447 @@ def test_shard_modes_are_mutually_exclusive():
     )
     assert result.returncode != 0, "Both shard modes at once was accepted"
     assert "mutually exclusive" in (result.stdout + result.stderr)
+
+
+class _StubItem:
+    """The only part of a collected item the sharding hook reads."""
+
+    def __init__(self, nodeid: str):
+        self.nodeid = nodeid
+
+
+class _StubHook:
+    """Captures the ``pytest_deselected`` call the hook makes."""
+
+    def __init__(self):
+        self.deselected: list[_StubItem] = []
+
+    def pytest_deselected(self, items):
+        self.deselected.extend(items)
+
+
+class _StubConfig:
+    """A minimal ``config`` exposing just the two shard options."""
+
+    def __init__(self, options: dict):
+        self._options = options
+        self.hook = _StubHook()
+
+    def getoption(self, name):
+        return self._options[name]
+
+
+def _shard_via_hook(nodeids: list[str], option: str, spec: str) -> list[str]:
+    """Run the real conftest hook over *nodeids* and return what it kept."""
+    items = [_StubItem(nodeid) for nodeid in nodeids]
+    config = _StubConfig(
+        {
+            _ROUND_ROBIN_OPTION: spec if option == _ROUND_ROBIN_OPTION else None,
+            _BLOCK_OPTION: spec if option == _BLOCK_OPTION else None,
+        }
+    )
+    shard_conftest.pytest_collection_modifyitems(config, items)
+    return [item.nodeid for item in items]
+
+
+def _synthetic_nodeids(count: int) -> list[str]:
+    return [f"tests/test_synthetic.py::test_{index:04d}" for index in range(count)]
+
+
+def _shard_loads(
+    nodeids: list[str], assignment: list[int], total: int, durations: dict
+) -> list[float]:
+    loads = [0.0] * total
+    for nodeid, shard in zip(nodeids, assignment):
+        loads[shard] += durations.get(nodeid, 0.0)
+    return loads
+
+
+def _round_robin_loads(nodeids: list[str], total: int, durations: dict) -> list[float]:
+    return _shard_loads(
+        nodeids,
+        [position % total for position in range(len(nodeids))],
+        total,
+        durations,
+    )
+
+
+@pytest.mark.parametrize("count", [0, 1, 7, 8, 9, 63, 200])
+@pytest.mark.parametrize("total", [1, 2, 3, 8])
+@pytest.mark.parametrize("coverage", ["none", "partial", "full"])
+def test_time_balanced_assignment_is_a_total_partition(count, total, coverage):
+    """Every collected test lands in exactly one shard, for every input.
+
+    This is the property the whole mechanism is subordinate to. Balancing by
+    recorded time introduces a *data file* into the partition decision, so the
+    ways to break it multiply: a test the data has never seen, a data set that
+    covers nothing, an awkward count/shard ratio. None of them may drop or
+    duplicate a test, and the sweep here is arithmetic rather than a judgement
+    call about which combinations are interesting.
+    """
+    nodeids = _synthetic_nodeids(count)
+    if coverage == "none":
+        durations = {}
+    elif coverage == "partial":
+        # Every third test known, with a wide spread so LPT actually moves them.
+        durations = {
+            nodeid: float((index % 17) ** 2)
+            for index, nodeid in enumerate(nodeids)
+            if index % 3 == 0
+        }
+    else:
+        durations = {
+            nodeid: float((index % 17) ** 2) for index, nodeid in enumerate(nodeids)
+        }
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, durations)
+
+    assert len(assignment) == count, "One shard decision per collected test"
+    assert all(0 <= shard < total for shard in assignment), (
+        f"Assignment left the 0..{total - 1} range: {sorted(set(assignment))}"
+    )
+
+    covered = sorted(
+        position
+        for shard in range(total)
+        for position, chosen in enumerate(assignment)
+        if chosen == shard
+    )
+    assert covered == list(range(count)), (
+        "Shards are not a complete, disjoint partition of the collection for "
+        f"count={count} total={total} coverage={coverage}"
+    )
+
+
+def test_no_recorded_durations_reproduces_the_round_robin_deal():
+    """An empty map must be byte-for-byte the behaviour it replaced.
+
+    "Degrades to today's behaviour" has to be exact, not approximate: it is the
+    fallback every other failure path funnels into, so if it were subtly
+    different the safety argument for all of them would be untested.
+    """
+    nodeids = _synthetic_nodeids(50)
+    for total in (2, 3, 8):
+        assert _time_balanced_shard_assignment(nodeids, total, {}) == [
+            position % total for position in range(50)
+        ]
+
+
+def test_unknown_tests_keep_their_round_robin_position():
+    """A test the durations map has never seen is still placed, positionally.
+
+    New and renamed tests are the normal state of the map between refreshes.
+    They must not need the map to exist, and they must not be quietly excluded
+    from the deal, which is the failure that would look like a passing gate.
+    """
+    nodeids = _synthetic_nodeids(40)
+    known = {nodeid: 10.0 for index, nodeid in enumerate(nodeids) if index % 2 == 0}
+    total = 4
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, known)
+
+    unknown_positions = [index for index in range(40) if index % 2 == 1]
+    assert [assignment[index] for index in unknown_positions] == [
+        index % total for index in unknown_positions
+    ], "Unknown tests must keep the positional fallback"
+
+
+def test_time_balanced_assignment_is_deterministic():
+    """The same collection and data give the identical partition, every time.
+
+    The eight shards decide independently, in eight processes on eight
+    runners, and never compare notes. If the decision depended on dict/set
+    iteration order, a hash seed, or the order the data happened to be written
+    in, two shards could disagree and a test would be run twice or not at all —
+    with a green tick on it either way.
+    """
+    nodeids = _synthetic_nodeids(300)
+    durations = {
+        nodeid: float((index * 7919) % 401) / 3.0
+        for index, nodeid in enumerate(nodeids)
+        if index % 4 != 0
+    }
+    reversed_durations = dict(reversed(list(durations.items())))
+
+    baseline = _time_balanced_shard_assignment(nodeids, 8, durations)
+    for _ in range(5):
+        assert _time_balanced_shard_assignment(nodeids, 8, durations) == baseline
+    assert (
+        _time_balanced_shard_assignment(nodeids, 8, reversed_durations) == baseline
+    ), "Assignment changed when the durations map was written in another order"
+
+
+def test_ties_do_not_depend_on_collection_order_of_equal_tests():
+    """Equal durations break on nodeid, so the deal is stable and reproducible."""
+    nodeids = _synthetic_nodeids(64)
+    durations = dict.fromkeys(nodeids, 5.0)
+    assignment = _time_balanced_shard_assignment(nodeids, 8, durations)
+
+    counts = [assignment.count(shard) for shard in range(8)]
+    assert counts == [8] * 8, f"Equal-cost tests should deal evenly, got {counts}"
+    assert _time_balanced_shard_assignment(nodeids, 8, durations) == assignment
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("truncated.json", '{"durations": {"tests/a.py::t": 1.0'),
+        ("not_json.json", "this is a CI log, not the durations map"),
+        ("wrong_shape.json", '["tests/a.py::t", 1.0]'),
+        ("no_durations_key.json", '{"version": 1}'),
+        ("durations_not_object.json", '{"durations": []}'),
+        ("empty.json", ""),
+    ],
+)
+def test_unusable_duration_maps_degrade_to_round_robin(tmp_path, name, content):
+    """A corrupt or missing map yields ``{}`` and a warning, never an error.
+
+    A build must not fail because an optimisation input rotted, and it must not
+    silently keep using half of a truncated file either. The loud-but-harmless
+    middle is the only acceptable behaviour: warn, and fall back to the deal
+    that needs no data at all.
+    """
+    path = tmp_path / name
+    path.write_text(content, encoding="utf-8")
+
+    with pytest.warns(UserWarning):
+        assert _load_recorded_durations(path) == {}
+
+    with pytest.warns(UserWarning):
+        assert _load_recorded_durations(tmp_path / "absent.json") == {}
+
+
+def test_nonsense_duration_values_are_dropped_not_trusted(tmp_path):
+    """Negative, non-finite and non-numeric durations are rejected per entry.
+
+    A single ``-1e9`` would otherwise make one shard look infinitely cheap and
+    collect the entire suite, which is a balanced-looking green run that tested
+    everything on one runner.
+    """
+    path = tmp_path / "durations.json"
+    path.write_text(
+        json.dumps(
+            {
+                "durations": {
+                    "tests/a.py::good": 1.5,
+                    "tests/a.py::negative": -3.0,
+                    "tests/a.py::infinite": float("inf"),
+                    "tests/a.py::text": "12.0",
+                    "tests/a.py::boolean": True,
+                    "tests/a.py::integer": 4,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning):
+        durations = _load_recorded_durations(path)
+
+    assert durations == {"tests/a.py::good": 1.5, "tests/a.py::integer": 4.0}
+
+
+def test_committed_durations_map_is_well_formed():
+    """The shipped map parses, is non-trivial, and names plausible tests."""
+    assert DURATIONS_PATH.is_file(), (
+        f"Missing {DURATIONS_PATH}. --ci-shard still partitions without it, but "
+        "the gate falls back to count-balanced shards; regenerate it with "
+        "scripts/record_test_durations.py."
+    )
+    durations = _load_recorded_durations(DURATIONS_PATH)
+    assert len(durations) > 500, (
+        f"Only {len(durations)} durations recorded; the gate collects far more "
+        "than that, so this map was probably built from a truncated log."
+    )
+    malformed = [nodeid for nodeid in durations if "::" not in nodeid]
+    assert not malformed, f"Durations keys must be pytest nodeids: {malformed[:5]}"
+    outside = [nodeid for nodeid in durations if not nodeid.startswith("tests/")]
+    assert not outside, f"Durations keys must be rooted at tests/: {outside[:5]}"
+
+
+def test_recorded_durations_actually_balance_the_gate():
+    """The whole point, asserted: LPT flattens the shards, round-robin does not.
+
+    Modelled over the committed map with the eight shards the gate uses. The
+    positional baseline is computed in sorted-nodeid order, which is a stand-in
+    for collection order rather than the real thing — good enough to show the
+    difference in kind, and it is the *balanced* side that carries the
+    assertion. If a single test ever grows past a shard's share this fails, and
+    it should: no assignment can balance that, and the fix is the test.
+    """
+    durations = _load_recorded_durations(DURATIONS_PATH)
+    nodeids = sorted(durations)
+    total = 8
+
+    assignment = _time_balanced_shard_assignment(nodeids, total, durations)
+    balanced = _shard_loads(nodeids, assignment, total, durations)
+    positional = _round_robin_loads(nodeids, total, durations)
+
+    assert max(balanced) < max(positional), (
+        f"Time-balanced shards ({max(balanced):.1f}s) are no faster than the "
+        f"positional deal ({max(positional):.1f}s) on the recorded data"
+    )
+    assert max(balanced) / min(balanced) < 1.05, (
+        "Time-balanced shards are still uneven on the recorded data: "
+        f"{[round(load, 1) for load in balanced]}"
+    )
+
+
+def test_negligible_tests_do_not_all_land_on_one_shard():
+    """Sub-millisecond tests must still be dealt, not dumped.
+
+    A greedy "cheapest shard wins" loop never changes which shard is cheapest
+    when the item it just placed cost 0.0, so every test that rounds to zero
+    goes to the same runner. Measured on the real map before the per-test floor
+    was added: 648 tests on shard 6 against ~153 on each of the others. Total
+    recorded load was perfectly level and the deal was still a valid partition,
+    so nothing else in this file noticed — a *balanced* wrong answer is the
+    hardest kind to see.
+    """
+    nodeids = _synthetic_nodeids(800)
+    durations = {
+        nodeid: (30.0 if index < 8 else 0.0) for index, nodeid in enumerate(nodeids)
+    }
+
+    assignment = _time_balanced_shard_assignment(nodeids, 8, durations)
+    counts = [assignment.count(shard) for shard in range(8)]
+
+    assert max(counts) <= 2 * min(counts), (
+        f"Zero-cost tests piled onto one shard instead of being dealt: {counts}"
+    )
+
+
+def test_duration_parser_reads_the_ids_pytest_actually_prints():
+    """The recorder must not quietly skip tests whose ids are awkward.
+
+    Requiring the nodeid to be a single non-space token dropped 19 real tests
+    from an otherwise complete map — every one of them a parametrised id
+    containing spaces. Nothing failed: the map simply had a hole, and the tests
+    in it were balanced as if brand new, forever. The GitHub log prefix is
+    covered here too, since ``gh run view --log`` is the intended refresh path.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    try:
+        from record_test_durations import parse_durations
+    finally:
+        sys.path.pop(0)
+
+    parsed = parse_durations(
+        [
+            "0.42s call     tests/test_a.py::test_plain",
+            "0.01s setup    tests/test_a.py::test_plain",
+            "12.34s call     tests/test_b.py::test_p[Clementine holding a rifle]",
+            "backend\tRun tests\t2026-08-04T00:00:00.0Z 1.50s teardown "
+            "tests/test_b.py::test_p[Clementine holding a rifle]",
+            "5.00s call     not_tests/elsewhere.py::test_out_of_tree",
+            "note: 3.00s call is mentioned in prose",
+        ]
+    )
+
+    assert parsed == {
+        "tests/test_a.py::test_plain": 0.43,
+        "tests/test_b.py::test_p[Clementine holding a rifle]": 13.84,
+    }
+
+
+def test_block_shard_mode_never_consults_the_durations_map(monkeypatch):
+    """The sweep's contiguous blocks stay a pure function of collection order.
+
+    ``--ci-block-shard`` is an ordering control: re-dealing its blocks by
+    recorded time would preserve the partition and destroy the only property
+    the sweep exists to provide. Asserting "the blocks are still contiguous"
+    would not catch a well-behaved reordering, so this asserts the stronger
+    thing — block mode does not so much as *read* the data — by making the
+    read explode.
+    """
+
+    def _explode(path=None):
+        raise AssertionError("--ci-block-shard must not read the durations map")
+
+    monkeypatch.setattr(shard_conftest, "_load_recorded_durations", _explode)
+
+    nodeids = _synthetic_nodeids(20)
+    union: list[str] = []
+    for index in range(1, 5):
+        block = _shard_via_hook(nodeids, _BLOCK_OPTION, f"{index}/4")
+        start, stop = _block_shard_bounds(len(nodeids), index - 1, 4)
+        assert block == nodeids[start:stop]
+        union.extend(block)
+    assert union == nodeids
+
+    with pytest.raises(AssertionError, match="must not read the durations map"):
+        _shard_via_hook(nodeids, _ROUND_ROBIN_OPTION, "1/4")
+
+
+def test_hook_partitions_the_collection_with_the_committed_map():
+    """End to end through the real hook: the eight shards tile the collection."""
+    nodeids = _synthetic_nodeids(120) + sorted(_load_recorded_durations(DURATIONS_PATH))
+    total = 8
+
+    union: list[str] = []
+    for index in range(1, total + 1):
+        union.extend(_shard_via_hook(nodeids, _ROUND_ROBIN_OPTION, f"{index}/{total}"))
+
+    assert sorted(union) == sorted(nodeids), (
+        "The hook's shards are not a partition of the collection; "
+        f"missing={sorted(set(nodeids) - set(union))[:5]}, "
+        f"duplicated={len(union) - len(set(union))}"
+    )
+
+
+def test_shard_selection_is_reproducible_across_processes():
+    """Two independent pytest processes select the identical shard.
+
+    The unit tests above prove the algorithm is deterministic; this proves the
+    *process* is, which is the form the gate actually relies on — eight
+    interpreters, eight collections, one agreed partition.
+    """
+    targets = [
+        str(TESTS_DIR / "test_scope_table.py"),
+        str(TESTS_DIR / "test_ci_shards.py"),
+    ]
+
+    def collect() -> list[str]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                *targets,
+                "--ci-shard=2/4",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+        return [line for line in result.stdout.splitlines() if "::" in line]
+
+    first = collect()
+    assert first, "Expected shard 2/4 of the probe modules to be non-empty"
+    assert collect() == first, "Two runs of the same shard selected different tests"
+
+
+def test_backend_flags_record_the_durations_the_sharder_needs(workflow):
+    """CI must keep emitting the data the committed map is rebuilt from.
+
+    Dropping ``--durations`` would not break a single run — it would quietly
+    make the map unrefreshable, so it would rot until the gate was back to a
+    count-balanced deal with a stale file explaining why it should not be.
+    """
+    flags = workflow["env"]["PYTEST_FLAGS"]
+    assert "--durations=0" in flags, (
+        "PYTEST_FLAGS must keep --durations=0 so scripts/record_test_durations.py "
+        f"can rebuild tests/ci_test_durations.json; got {flags!r}"
+    )
+    assert "--durations-min=0" in flags, (
+        "PYTEST_FLAGS must keep --durations-min=0; pytest otherwise hides tests "
+        "under 5 ms, and a hidden test is indistinguishable from a new one, "
+        f"which the sharder charges the median cost. Got {flags!r}"
+    )
 
 
 @pytest.mark.parametrize("option", ["--ci-shard", "--ci-block-shard"])
