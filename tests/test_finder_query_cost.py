@@ -232,18 +232,21 @@ def test_character_features_rollup_is_served_by_its_partial_index(tmp_path):
     it differs between processes. An earlier revision of this test asserted the
     equality shape and failed roughly every other run for exactly that reason.
     The one-pass shape is chosen unconditionally, and is what ``GET /characters``
-    should be asking anyway: one grouped query rather than one probe per
-    character. See ``Face.__table_args__``.
+    asks. See ``Face.__table_args__``.
+
+    Asserted against the statement the endpoint actually issues, compiled from
+    ``characters_with_reference_faces_query`` rather than hand-written here. An
+    earlier revision hand-wrote a similar query, which passed while the real
+    endpoint used the OTHER index: the index looked justified and was not.
     """
+    from pixlstash.routes.characters import characters_with_reference_faces_query
+
     with Vault(image_root=str(tmp_path)) as vault:
         _seed(vault, tmp_path, count=4, with_faces=True)
-        plan = _explain(
-            vault,
-            "SELECT face.character_id, count(*) FROM face "
-            "WHERE face.features IS NOT NULL AND face.character_id IS NOT NULL "
-            "GROUP BY face.character_id",
-            (),
+        statement = characters_with_reference_faces_query().compile(
+            vault.db._engine, compile_kwargs={"literal_binds": True}
         )
+        plan = _explain(vault, str(statement), ())
         assert any("ix_face_character_features" in line for line in plan), (
             f"character-features rollup is not using its partial index; plan was {plan}"
         )

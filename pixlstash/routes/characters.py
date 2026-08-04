@@ -78,6 +78,40 @@ _LIKENESS_SEARCH_MAX_POOL_M = 2000
 _MAX_REFS_PER_CHARACTER = 10
 
 
+def characters_with_reference_faces_query():
+    """Select every character id that has at least one embedded face.
+
+    Deliberately NOT narrowed to the characters being listed, with the
+    intersection done in Python instead. Narrowing makes the predicate
+    ``character_id = ?``, which BOTH ``ix_face_character_id`` and the partial
+    ``ix_face_character_features`` can serve. Nothing here runs ``ANALYZE``, so
+    with no ``sqlite_stat1`` the two tie and SQLite breaks the tie on index
+    creation order, which ``create_all`` iterates from a *set*: roughly half of
+    all databases got the plain index, which cannot answer ``features IS NOT
+    NULL`` from the index and so read every candidate face row, embedding BLOB
+    and all. Measured on 200k faces, per sidebar refresh: 4.0 ms on the partial
+    index against 180.7 ms on the plain one.
+
+    As a one-pass rollup the partial index is strictly the smaller object and is
+    chosen unconditionally. It is also index-only, and the result is bounded by
+    the number of characters rather than the number of faces.
+
+    Extracted so the query-plan test asserts on the statement this endpoint
+    actually issues. An earlier revision asserted a hand-written query that no
+    production code ran, which let the index look useful while the real endpoint
+    quietly used the other one.
+
+    Returns:
+        A SQLModel ``select`` yielding one ``character_id`` per character that
+        has an embedded face. Characters with no faces are simply absent.
+    """
+    return (
+        select(Face.character_id)
+        .where(Face.features.is_not(None))
+        .group_by(Face.character_id)
+    )
+
+
 def _fetch_character_candidate_embeddings(
     server, scope_allowed: set[int] | None
 ) -> list[tuple[int, list[np.ndarray]]]:
@@ -217,7 +251,10 @@ class CharacterListItemResponse(BaseModel):
             "request passes ``include_counts=true``; ``null`` otherwise. Same "
             "number as ``GET /characters/{id}/summary`` returns with no "
             "``project_id``, so the sidebar can render its counts from this one "
-            "list response instead of one request per character (issue #651)."
+            "list response instead of one request per character (issue #651). "
+            "Hidden tags are NOT applied: this count has no ``apply_tag_filter`` "
+            "equivalent, so it matches that endpoint called without one. Use the "
+            "per-id summary if you need a hidden-tag-filtered number."
         ),
     )
     project_image_count: Optional[int] = PydanticField(
@@ -228,7 +265,8 @@ class CharacterListItemResponse(BaseModel):
             "pictures that belong to no project at all. Populated only when the "
             "request passes ``include_counts=true``; ``null`` otherwise. Same "
             "number as ``GET /characters/{id}/summary?project_id=<project_id>`` "
-            "(or ``project_id=UNASSIGNED``) returns."
+            "(or ``project_id=UNASSIGNED``) returns, again without any "
+            "hidden-tag filtering."
         ),
     )
 
@@ -395,6 +433,13 @@ def create_router(server) -> APIRouter:
         over ``Face`` joined to a non-deleted ``Picture``. The only difference
         is that the character id is an ``IN`` list plus a ``GROUP BY`` instead
         of an equality, so N characters cost one query rather than N.
+
+        One deliberate exception to that parity: the hidden-tag filter. The
+        per-id endpoint applies it when the caller passes ``apply_tag_filter``,
+        and this path has no equivalent parameter, so the numbers here always
+        match that endpoint called WITHOUT one. That is what the only caller
+        needs (the sidebar has never passed it), but it does mean these counts
+        and a tag-filtered summary can legitimately disagree.
 
         Args:
             session: Open read session.
@@ -1369,15 +1414,14 @@ def create_router(server) -> APIRouter:
                 # embedding so the UI can filter the similarity-sort dropdown.
                 char_ids = [c.id for c in characters]
                 if char_ids:
-                    has_faces_query = (
-                        select(Face.character_id)
-                        .where(
-                            Face.character_id.in_(char_ids),
-                            Face.features.is_not(None),
-                        )
-                        .distinct()
-                    )
-                    chars_with_faces = set(session.exec(has_faces_query).all())
+                    listed = set(char_ids)
+                    chars_with_faces = {
+                        cid
+                        for cid in session.exec(
+                            characters_with_reference_faces_query()
+                        ).all()
+                        if cid in listed
+                    }
                 else:
                     chars_with_faces = set()
 

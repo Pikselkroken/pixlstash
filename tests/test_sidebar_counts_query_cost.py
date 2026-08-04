@@ -146,22 +146,36 @@ class _GroupedCountQueryCounter:
     sibling suite ``test_picture_sets_query_cost`` records an early version
     failing for exactly that reason).
 
-    The inline-count queries are the only ones that ``GROUP BY
-    face.character_id`` or group the picture/project join table, which is what
-    separates them from a finder's per-picture lookups.
+    Each needle is EVERY substring that must be present, not just one. Grouping
+    alone is too loose to identify these statements: the same endpoint's
+    has-reference-faces rollup also groups by ``face.character_id`` (it is
+    written that way so SQLite reliably picks the partial index over
+    ``ix_face_character_id``), and matching it here made this counter register
+    reads that are not inline counts at all. Pairing the grouping with the
+    aggregate is what actually distinguishes them, since only the count queries
+    aggregate.
+
+    This is the failure mode to watch: the needles describe the codebase as it
+    is, not a property of the tests, so a new query elsewhere that happens to
+    match turns the exact-equality assertions below into load-dependent
+    failures. If that happens, tighten the needle rather than relaxing the
+    assertion.
     """
 
-    CHARACTER = "group by face.character_id"
-    PROJECT = "group by pictureprojectmember.project_id"
+    # ``count(distinct(...))`` with the inner parentheses, because the query
+    # builds it as ``func.count(func.distinct(...))`` and SQLAlchemy renders
+    # that nested call rather than the ``COUNT(DISTINCT x)`` keyword form.
+    CHARACTER = ("group by face.character_id", "count(distinct(face.picture_id))")
+    PROJECT = ("group by pictureprojectmember.project_id", "count(")
 
     def __init__(self, server, needle):
         self._engine = server.vault.db._engine
-        self._needle = needle
+        self._needles = (needle,) if isinstance(needle, str) else tuple(needle)
         self.count = 0
 
     def _on_execute(self, conn, cursor, statement, parameters, context, executemany):
         collapsed = " ".join(statement.split()).lower()
-        if self._needle in collapsed:
+        if all(needle in collapsed for needle in self._needles):
             self.count += 1
 
     def __enter__(self):
