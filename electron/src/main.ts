@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
+import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { ServerProcess } from './backend/ServerProcess';
 import {
@@ -777,6 +778,49 @@ async function acceleratorState() {
   };
 }
 
+/**
+ * The user's Downloads folder, created if missing, or null if the OS has no such
+ * path (or we can't create it). Both save paths start here: plain Save writes into
+ * it without asking, Save As opens its dialog there.
+ */
+function downloadsDir(): string | null {
+  try {
+    const dir = app.getPath('downloads');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch (e) {
+    console.warn(`[download] no usable Downloads folder: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Give every renderer-initiated download an automatic destination.
+ *
+ * Electron's default for a download with no save path is a native Save dialog,
+ * which made plain Save indistinguishable from Save As. Worse, the renderer's
+ * "Download started" notice fired while the dialog was still waiting, so the notice
+ * lied until the user confirmed. Saving straight into Downloads (browser-style,
+ * with " (n)" applied on collision) is what the notice already promises. Save As
+ * keeps its own dialog via media:beginSaveAs.
+ */
+function registerDownloadHandling(): void {
+  session.defaultSession.on('will-download', (_event, item) => {
+    const dir = downloadsDir();
+    // Without a directory we leave the item untouched: Electron then shows its
+    // dialog, which is the old behavior but still lets the user keep the file.
+    if (!dir) return;
+    const filename = safeMediaFilename(item.getFilename());
+    const savePath = uniqueDownloadPath(dir, filename);
+    item.setSavePath(savePath);
+    item.once('done', (_e, state) => {
+      if (state !== 'completed') {
+        console.warn(`[download] ${state} while saving ${savePath}`);
+      }
+    });
+  });
+}
+
 function registerIpc(): void {
   ipcMain.handle('app:bootstrap', async () => ({
     version: app.getVersion(),
@@ -873,9 +917,12 @@ function registerIpc(): void {
       ? suggestedName.split('.').pop()?.toLowerCase() || ''
       : '';
     const filterExtension = /^[a-z0-9]{1,16}$/.test(extension) ? extension : '';
+    // Open in Downloads, where plain Save puts files, instead of letting a bare
+    // filename resolve against the process working directory (the home folder).
+    const dir = downloadsDir();
     const options: Electron.SaveDialogOptions = {
       title: 'Save media as',
-      defaultPath: suggestedName,
+      defaultPath: dir ? join(dir, suggestedName) : suggestedName,
       ...(filterExtension
         ? { filters: [{ name: 'Media', extensions: [filterExtension] }] }
         : {}),
@@ -1018,6 +1065,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     loadDesktopPrefs();
     buildMenu();
+    registerDownloadHandling();
     registerIpc();
     createMainWindow();
     createTray();
