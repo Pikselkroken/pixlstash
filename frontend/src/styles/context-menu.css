@@ -37,6 +37,13 @@
   opacity: 0.75;
 }
 
+.ctx-shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  font-size: 11px;
+  opacity: 0.62;
+}
+
 .ctx-sep {
   height: 1px;
   margin: 4px 0;

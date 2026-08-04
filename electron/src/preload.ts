@@ -21,6 +21,14 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   // Desktop conveniences re-homed from the (removed) native menu.
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
+  // Narrow media operations for the web-app lightbox. The renderer supplies
+  // authenticated bytes; only main chooses a destination or touches clipboard.
+  beginMediaSaveAs: (suggestedName: string) =>
+    ipcRenderer.invoke('media:beginSaveAs', suggestedName),
+  completeMediaSaveAs: (saveId: string, data: ArrayBuffer) =>
+    ipcRenderer.invoke('media:completeSaveAs', { saveId, data }),
+  cancelMediaSaveAs: (saveId: string) => ipcRenderer.invoke('media:cancelSaveAs', saveId),
+  copyPngToClipboard: (data: ArrayBuffer) => ipcRenderer.invoke('media:copyPng', data),
   // Desktop-shell preferences (hide-to-tray-on-close, ...).
   getDesktopPrefs: () => ipcRenderer.invoke('desktop:getPrefs'),
   setDesktopPrefs: (prefs: unknown) => ipcRenderer.invoke('desktop:setPrefs', prefs),

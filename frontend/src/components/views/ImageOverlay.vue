@@ -781,6 +781,15 @@
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
     />
+    <OverlaySaveAsDialog
+      v-if="fallbackSaveDialog.open"
+      :open="fallbackSaveDialog.open"
+      :suggested-name="fallbackSaveDialog.suggestedName"
+      :original-extension="fallbackSaveDialog.originalExtension"
+      :media-noun="fallbackSaveDialog.mediaNoun"
+      @close="closeFallbackSaveDialog"
+      @save="confirmFallbackSaveDialog"
+    />
   </div>
 </template>
 
@@ -809,6 +818,7 @@ import {
   listPictureFaces,
   listPictureDetections,
   addPictureFace,
+  downloadPicture,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -829,7 +839,6 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
-import { copyText } from "../../utils/clipboard";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
@@ -838,6 +847,7 @@ import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
+import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
@@ -850,6 +860,46 @@ const noticeStore = useNoticeStore();
 // (OverlayActionReceipt, in the lightbox's own dark chrome).
 const operationStore = useOperationStore();
 const receiptRef = ref(null);
+const fallbackSaveDialog = ref({
+  open: false,
+  suggestedName: "",
+  originalExtension: "",
+  mediaNoun: "picture",
+  downloadUrl: "",
+});
+let fallbackSaveResolver = null;
+
+function closeFallbackSaveDialog() {
+  fallbackSaveDialog.value = { ...fallbackSaveDialog.value, open: false };
+  const resolve = fallbackSaveResolver;
+  fallbackSaveResolver = null;
+  resolve?.(null);
+}
+
+function confirmFallbackSaveDialog(filename) {
+  // Initiate the real same-origin media download synchronously inside the
+  // dialog button's click task. Firefox can reject a synthetic download that
+  // is started only after an awaited fetch has consumed user activation.
+  triggerMediaUrlDownload(fallbackSaveDialog.value.downloadUrl, filename);
+  fallbackSaveDialog.value = { ...fallbackSaveDialog.value, open: false };
+  const resolve = fallbackSaveResolver;
+  fallbackSaveResolver = null;
+  resolve?.(filename);
+}
+
+function requestFallbackSaveFilename(info) {
+  closeFallbackSaveDialog();
+  fallbackSaveDialog.value = {
+    open: true,
+    suggestedName: info.filename,
+    originalExtension: info.format,
+    mediaNoun: info.noun,
+    downloadUrl: getFullImageUrl(info),
+  };
+  return new Promise((resolve) => {
+    fallbackSaveResolver = resolve;
+  });
+}
 /** A receipt is on screen: the two bottom-centre hints stand down while it is. */
 const hasReceipt = computed(() => Boolean(operationStore.receipt));
 
@@ -1103,7 +1153,6 @@ const descriptionPanelRef = ref(null);
 const isDescriptionEditing = computed(
   () => descriptionPanelRef.value?.isEditingDescription ?? false,
 );
-const overlayCopyState = ref("idle");
 const imagePlaceholderLabel = "{{image_path}}";
 const captionPlaceholderLabel = "{{caption}}";
 const descriptionTeaser = computed(() => {
@@ -1991,14 +2040,13 @@ watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
-  resetOverlayCopyState();
 });
 
 watch(open, (isOpen) => {
   if (!isOpen) {
     descriptionPanelRef.value?.cancelEditDescription();
     descriptionPanelRef.value?.resetCopyState();
-    resetOverlayCopyState();
+    closeFallbackSaveDialog();
   }
 });
 
@@ -2092,6 +2140,12 @@ function isTypingTarget(target) {
   );
 }
 
+function hasNativeCopyContext(target) {
+  if (isTypingTarget(target)) return true;
+  const selection = typeof window === "undefined" ? null : window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
+}
+
 function handleKeydown(e) {
   if (!open.value) return;
   // Prevent other window keydown listeners (e.g. ImageGrid) from seeing this
@@ -2137,16 +2191,31 @@ function handleKeydown(e) {
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&
     !e.repeat &&
-    !isReadOnly.value &&
     !isTypingTarget(e.target)
   ) {
-    const undoKey = e.key?.toLowerCase();
-    if (undoKey === "z" && !e.shiftKey) {
+    const commandKey = e.key?.toLowerCase();
+    if (!e.shiftKey && commandKey === "s" && image.value?.id) {
+      e.preventDefault();
+      saveMedia(buildContextMenuImage());
+      return;
+    }
+    if (
+      !e.shiftKey &&
+      commandKey === "c" &&
+      !hasNativeCopyContext(e.target) &&
+      copyAvailability().available
+    ) {
+      e.preventDefault();
+      copyMedia(buildContextMenuImage());
+      return;
+    }
+    if (isReadOnly.value) return;
+    if (commandKey === "z" && !e.shiftKey) {
       e.preventDefault();
       operationStore.undo();
       return;
     }
-    if (undoKey === "y" || (undoKey === "z" && e.shiftKey)) {
+    if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
       e.preventDefault();
       operationStore.redo();
       return;
@@ -2246,19 +2315,6 @@ function handleKeydown(e) {
     } else {
       return;
     }
-  }
-
-  if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-    const isEditable =
-      target &&
-      (target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target.isContentEditable);
-    if (!isEditable) {
-      e.preventDefault();
-      copyOverlayImage();
-    }
-    return;
   }
 
   if (e.key === "Escape") {
@@ -2406,10 +2462,15 @@ function handleBackdropClick() {
 // / spellcheck in the description and tag fields).
 function buildContextMenuImage() {
   if (!image.value?.id) return null;
+  const copy = copyAvailability();
+  const video = isSupportedVideoFile(getOverlayFormat(image.value));
   return {
     ...image.value,
     format: getOverlayFormat(image.value),
     faces: Array.isArray(faceBboxes.value) ? faceBboxes.value : [],
+    mediaKind: video ? "video" : "picture",
+    copyAvailable: copy.available,
+    copyUnavailableReason: copy.reason,
   };
 }
 
@@ -3110,8 +3171,8 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
-  resetOverlayCopyState();
   clearCharacterThumbnails();
+  closeFallbackSaveDialog();
 });
 
 watch(open, (isOpen) => {
@@ -3983,98 +4044,267 @@ function handleDescriptionUpdate(imageId, newDescription) {
   emit("update-description", imageId, newDescription);
 }
 
-async function copyOverlayImage() {
-  if (!image.value) return;
-  const url = getFullImageUrl(image.value);
-  let copied;
-  try {
-    if (isSupportedVideoFile(getOverlayFormat(image.value))) {
-      copied = await copyVideoFrameToClipboard();
-    } else {
-      copied = await copyImageElementToClipboard();
-    }
-    if (!copied) {
-      copied = await copyImageByFetch(url);
-    }
-    if (!copied) {
-      await copyTextToClipboard(url);
-    }
-    overlayCopyState.value = "copied";
-    if (overlayCopyResetTimer) {
-      clearTimeout(overlayCopyResetTimer);
-    }
-    overlayCopyResetTimer = window.setTimeout(() => {
-      resetOverlayCopyState();
-    }, 2000);
-  } catch (err) {
-    try {
-      await copyTextToClipboard(url);
-      overlayCopyState.value = "copied";
-    } catch (fallbackErr) {
-      console.warn("Failed to copy overlay image:", fallbackErr || err);
-    }
-  }
+function mediaActionInfo(target = null) {
+  const media = target || image.value;
+  const format = MediaFormat(media);
+  if (!media?.id || !format) return null;
+  const video = isSupportedVideoFile(`file.${format}`);
+  return {
+    ...media,
+    format,
+    mediaKind: video ? "video" : "picture",
+    noun: video ? "video" : "picture",
+    filename: safeDownloadName(
+      media.original_file_name,
+      `${media.id}.${format}`,
+    ),
+  };
 }
 
-async function copyImageElementToClipboard() {
-  const imgEl = imgRef.value;
-  if (!imgEl || !imgEl.complete) return false;
-  const canvas = document.createElement("canvas");
-  canvas.width = imgEl.naturalWidth || imgEl.width;
-  canvas.height = imgEl.naturalHeight || imgEl.height;
-  if (!canvas.width || !canvas.height) return false;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return false;
+function mediaActionError(err, fallback = "Please try again.") {
+  return (
+    err?.response?.data?.detail || err?.message || String(err || fallback)
+  );
+}
+
+function triggerMediaDownload(blob, filename) {
+  const link = document.createElement("a");
+  const objectUrl = URL.createObjectURL(blob);
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+    link.remove();
+  }, 2000);
+}
+
+function triggerMediaUrlDownload(url, filename) {
+  if (!url) throw new Error("The media download URL is unavailable.");
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  window.setTimeout(() => link.remove(), 2000);
+}
+
+async function fetchOriginalMedia(info) {
+  return downloadPicture(info.id, info.format, {
+    version: info.pixel_sha,
+    baseUrl: backendUrl.value,
+  });
+}
+
+async function saveMedia(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
   try {
-    ctx.drawImage(imgEl, 0, 0);
-    const blob = await canvasToBlob(canvas, "image/png");
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
+    const blob = await fetchOriginalMedia(info);
+    triggerMediaDownload(blob, info.filename);
+    noticeStore.success(`Download started for ${info.filename}.`, {
+      key: "save-overlay-media",
+    });
+    return true;
+  } catch (err) {
+    console.error("Failed to save overlay media", err);
+    noticeStore.error(
+      `Couldn't save that ${info.noun}. ${mediaActionError(err)}`,
+      { key: "save-overlay-media" },
+    );
     return false;
   }
 }
 
-async function copyVideoFrameToClipboard() {
-  const videoEl = videoRef.value;
-  if (!videoEl || videoEl.readyState < 2) return false;
-  const width = videoEl.videoWidth || videoEl.clientWidth;
-  const height = videoEl.videoHeight || videoEl.clientHeight;
-  if (!width || !height) return false;
+function savePickerOptions(info) {
+  const mime = mediaMimeType(info);
+  const validType =
+    /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mime) &&
+    /^[a-z0-9]{1,16}$/i.test(info.format);
+  return {
+    suggestedName: info.filename,
+    ...(validType
+      ? {
+          types: [
+            {
+              description: info.mediaKind === "video" ? "Video" : "Picture",
+              accept: { [mime]: [`.${info.format}`] },
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
+async function saveMediaAs(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
+  const desktop = window.pixlstashDesktop;
+  let pickerOpened = false;
+  try {
+    if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
+      const choice = await desktop.beginMediaSaveAs(info.filename);
+      if (choice?.canceled) return false;
+      if (!choice?.saveId) throw new Error("The desktop save dialog did not return a save request.");
+      try {
+        const blob = await fetchOriginalMedia(info);
+        const result = await desktop.completeMediaSaveAs(
+          choice.saveId,
+          await blob.arrayBuffer(),
+        );
+        if (!result?.saved) throw new Error("The desktop app did not write the file.");
+      } catch (err) {
+        await desktop.cancelMediaSaveAs?.(choice.saveId);
+        throw err;
+      }
+      noticeStore.success(`Saved ${info.filename}.`, {
+        key: "save-overlay-media-as",
+      });
+      return true;
+    }
+
+    if (typeof window.showSaveFilePicker === "function") {
+      // The picker must be opened before the media fetch: the web API requires
+      // transient user activation, while the later writable stream does not.
+      const handle = await window.showSaveFilePicker(savePickerOptions(info));
+      pickerOpened = true;
+      const blob = await fetchOriginalMedia(info);
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      noticeStore.success(`Saved ${info.filename}.`, {
+        key: "save-overlay-media-as",
+      });
+      return true;
+    }
+
+    const fallbackFilename = await requestFallbackSaveFilename(info);
+    if (!fallbackFilename) return false;
+    noticeStore.info(
+      `Download started as ${fallbackFilename}. Your browser controls the download folder.`,
+      { key: "save-overlay-media-as" },
+    );
+    return true;
+  } catch (err) {
+    // Dismissing the picker is not an error. Once a handle exists, an AbortError
+    // can instead mean the write was interrupted and should be reported.
+    if (!pickerOpened && err?.name === "AbortError") return false;
+    console.error("Failed to save overlay media as", err);
+    noticeStore.error(
+      `Couldn't save that ${info.noun}. ${mediaActionError(err)}`,
+      { key: "save-overlay-media-as" },
+    );
+    return false;
+  }
+}
+
+function copyAvailability() {
+  const desktopCapable =
+    typeof window.pixlstashDesktop?.copyPngToClipboard === "function";
+  const browserCapable = Boolean(
+    navigator?.clipboard?.write && typeof window.ClipboardItem === "function",
+  );
+  if (!desktopCapable && !browserCapable) {
+    return {
+      available: false,
+      reason:
+        "This browser cannot copy image pixels. Save the media instead.",
+    };
+  }
+  const video = isSupportedVideoFile(getOverlayFormat(image.value));
+  if (video) {
+    const el = videoRef.value;
+    if (!el || el.readyState < 2 || !el.videoWidth || !el.videoHeight) {
+      return {
+        available: false,
+        reason: "The video frame is still loading and cannot be copied yet.",
+      };
+    }
+  } else {
+    const el = imgRef.value;
+    if (!el?.complete || !el.naturalWidth || !el.naturalHeight) {
+      return {
+        available: false,
+        reason: "The picture is still loading and cannot be copied yet.",
+      };
+    }
+  }
+  return { available: true, reason: "" };
+}
+
+async function renderMediaPng(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info || String(info.id) !== String(image.value?.id)) {
+    throw new Error("That media is no longer displayed.");
+  }
+  const source = info.mediaKind === "video" ? videoRef.value : imgRef.value;
+  const width =
+    info.mediaKind === "video" ? source?.videoWidth : source?.naturalWidth;
+  const height =
+    info.mediaKind === "video" ? source?.videoHeight : source?.naturalHeight;
+  if (!source || !width || !height) {
+    throw new Error(
+      info.mediaKind === "video"
+        ? "The current video frame is not ready."
+        : "The picture is not ready.",
+    );
+  }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return false;
+  if (!ctx) throw new Error("This browser cannot create a PNG image.");
   try {
-    ctx.drawImage(videoEl, 0, 0, width, height);
-    const blob = await canvasToBlob(canvas, "image/png");
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
-    return false;
+    ctx.drawImage(source, 0, 0, width, height);
+  } catch (err) {
+    throw new Error(
+      `The media pixels could not be read. ${mediaActionError(err)}`,
+      { cause: err },
+    );
   }
+  const blob = await canvasToBlob(canvas, "image/png");
+  if (!blob) throw new Error("This browser could not encode the pixels as PNG.");
+  return blob;
 }
 
-async function copyImageByFetch(url) {
-  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
-  try {
-    const response = await fetch(url, { credentials: "include" });
-    if (!response.ok) return false;
-    const blob = await response.blob();
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
+async function copyMedia(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
+  const availability = copyAvailability();
+  if (!availability.available) {
+    noticeStore.error(availability.reason, { key: "copy-overlay-media" });
     return false;
   }
-}
-
-async function copyBlobToClipboard(blob) {
-  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
-  const mime = blob.type || "image/png";
-  const item = new ClipboardItem({ [mime]: blob });
-  await navigator.clipboard.write([item]);
-  return true;
+  try {
+    const pngPromise = renderMediaPng(info);
+    if (window.pixlstashDesktop?.copyPngToClipboard) {
+      const png = await pngPromise;
+      const result = await window.pixlstashDesktop.copyPngToClipboard(
+        await png.arrayBuffer(),
+      );
+      if (!result?.copied) throw new Error("The desktop clipboard rejected the image.");
+    } else {
+      // Pass the pending PNG promise to ClipboardItem and call write immediately;
+      // this preserves the transient user activation required by some browsers.
+      const item = new ClipboardItem({ "image/png": pngPromise });
+      await navigator.clipboard.write([item]);
+    }
+    noticeStore.success(
+      info.mediaKind === "video"
+        ? "Copied the current frame as PNG."
+        : "Copied the picture as PNG.",
+      { key: "copy-overlay-media" },
+    );
+    return true;
+  } catch (err) {
+    console.warn("Failed to copy overlay media pixels", err);
+    noticeStore.error(
+      `Couldn't copy the ${info.mediaKind === "video" ? "current frame" : "picture"}. ${mediaActionError(err, "Check clipboard permission and try again.")}`,
+      { key: "copy-overlay-media" },
+    );
+    return false;
+  }
 }
 
 function canvasToBlob(canvas, type) {
@@ -4093,19 +4323,7 @@ function canvasToBlob(canvas, type) {
   });
 }
 
-async function copyTextToClipboard(text) {
-  const ok = await copyText(text);
-  if (!ok) throw new Error("Copy failed");
-}
-
-let overlayCopyResetTimer = null;
-function resetOverlayCopyState() {
-  if (overlayCopyResetTimer) {
-    clearTimeout(overlayCopyResetTimer);
-    overlayCopyResetTimer = null;
-  }
-  overlayCopyState.value = "idle";
-}
+defineExpose({ saveMedia, saveMediaAs, copyMedia });
 </script>
 
 <style scoped>

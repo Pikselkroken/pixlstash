@@ -1,5 +1,6 @@
 <template>
   <ImageOverlay
+    ref="imageOverlayRef"
     :open="overlayOpen"
     :initialImageId="overlayImageId"
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
@@ -175,6 +176,9 @@
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
       @close="overlayCtxVisible = false"
+      @save-picture="handleOverlaySave"
+      @save-picture-as="handleOverlaySaveAs"
+      @copy-picture="handleOverlayCopy"
       @share-picture="handleOverlayShare"
       @find-similar-faces="handleOverlayFindSimilarFaces"
       @reverse-image-search="handleOverlayReverseImageSearch"
@@ -1459,6 +1463,7 @@ const overlayCtxVisible = ref(false);
 const overlayCtxX = ref(0);
 const overlayCtxY = ref(0);
 const overlayCtxImage = ref(null);
+const imageOverlayRef = ref(null);
 // The overlay menu acts on exactly one picture: the one on screen.
 const overlayCtxSelectedIds = computed(() =>
   overlayCtxImage.value?.id != null ? [overlayCtxImage.value.id] : [],
@@ -6889,6 +6894,18 @@ function handleOverlayContextMenuRequest(payload) {
   overlayCtxX.value = payload.clientX ?? 0;
   overlayCtxY.value = payload.clientY ?? 0;
   overlayCtxVisible.value = true;
+}
+
+async function handleOverlaySave() {
+  await imageOverlayRef.value?.saveMedia?.(overlayCtxImage.value);
+}
+
+async function handleOverlaySaveAs() {
+  await imageOverlayRef.value?.saveMediaAs?.(overlayCtxImage.value);
+}
+
+async function handleOverlayCopy() {
+  await imageOverlayRef.value?.copyMedia?.(overlayCtxImage.value);
 }
 
 function handleOverlayShare() {
