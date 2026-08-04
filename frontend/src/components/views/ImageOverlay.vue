@@ -865,7 +865,6 @@ const fallbackSaveDialog = ref({
   suggestedName: "",
   originalExtension: "",
   mediaNoun: "picture",
-  downloadUrl: "",
 });
 let fallbackSaveResolver = null;
 
@@ -877,10 +876,6 @@ function closeFallbackSaveDialog() {
 }
 
 function confirmFallbackSaveDialog(filename) {
-  // Initiate the real same-origin media download synchronously inside the
-  // dialog button's click task. Firefox can reject a synthetic download that
-  // is started only after an awaited fetch has consumed user activation.
-  triggerMediaUrlDownload(fallbackSaveDialog.value.downloadUrl, filename);
   fallbackSaveDialog.value = { ...fallbackSaveDialog.value, open: false };
   const resolve = fallbackSaveResolver;
   fallbackSaveResolver = null;
@@ -892,9 +887,11 @@ function requestFallbackSaveFilename(info) {
   fallbackSaveDialog.value = {
     open: true,
     suggestedName: info.filename,
-    originalExtension: info.format,
+    // Keep the suffix the user already recognises from the original filename.
+    // The stored media format can be an equivalent alias (jpg vs jpeg), but
+    // Save As should never rewrite the visible default name behind their back.
+    originalExtension: MediaFormat(info.filename) || info.format,
     mediaNoun: info.noun,
-    downloadUrl: getFullImageUrl(info),
   };
   return new Promise((resolve) => {
     fallbackSaveResolver = resolve;
@@ -4080,16 +4077,6 @@ function triggerMediaDownload(blob, filename) {
   }, 2000);
 }
 
-function triggerMediaUrlDownload(url, filename) {
-  if (!url) throw new Error("The media download URL is unavailable.");
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  window.setTimeout(() => link.remove(), 2000);
-}
-
 async function fetchOriginalMedia(info) {
   return downloadPicture(info.id, info.format, {
     version: info.pixel_sha,
@@ -4169,11 +4156,12 @@ async function saveMediaAs(target = null) {
       // transient user activation, while the later writable stream does not.
       const handle = await window.showSaveFilePicker(savePickerOptions(info));
       pickerOpened = true;
+      const savedFilename = safeDownloadName(handle?.name, info.filename);
       const blob = await fetchOriginalMedia(info);
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      noticeStore.success(`Saved ${info.filename}.`, {
+      noticeStore.success(`Saved ${savedFilename}.`, {
         key: "save-overlay-media-as",
       });
       return true;
@@ -4181,6 +4169,11 @@ async function saveMediaAs(target = null) {
 
     const fallbackFilename = await requestFallbackSaveFilename(info);
     if (!fallbackFilename) return false;
+    // A direct backend URL can override the anchor's download name through its
+    // response headers (observed in Firefox). Reuse regular Save's authenticated
+    // blob path so the filename chosen in our dialog remains authoritative.
+    const blob = await fetchOriginalMedia(info);
+    triggerMediaDownload(blob, fallbackFilename);
     noticeStore.info(
       `Download started as ${fallbackFilename}. Your browser controls the download folder.`,
       { key: "save-overlay-media-as" },

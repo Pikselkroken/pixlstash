@@ -1,17 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { normalizeOverlaySaveAsFilename } from "./overlaySaveAsFilename.js";
+import {
+  normalizeOverlaySaveAsFilename,
+  overlaySaveAsStem,
+} from "./overlaySaveAsFilename.js";
 
 describe("overlay Save As filename", () => {
-  it("trims the name and appends the original extension when omitted", () => {
+  it("prefills the editable stem without the fixed original extension", () => {
+    expect(overlaySaveAsStem("holiday.JPG", ".jpg")).toBe("holiday");
+    expect(overlaySaveAsStem("archive.photo.jpg", "jpg")).toBe(
+      "archive.photo",
+    );
+  });
+
+  it("trims the stem and appends the fixed original extension", () => {
     expect(normalizeOverlaySaveAsFilename("  renamed  ", ".JPG")).toEqual({
       filename: "renamed.jpg",
       error: "",
     });
   });
 
-  it("preserves an explicit extension", () => {
-    expect(normalizeOverlaySaveAsFilename("renamed.jpeg", "jpg").filename).toBe(
-      "renamed.jpeg",
+  it("does not allow typed text to replace the original extension", () => {
+    expect(normalizeOverlaySaveAsFilename("renamed.png", "jpg").filename).toBe(
+      "renamed.png.jpg",
     );
   });
 

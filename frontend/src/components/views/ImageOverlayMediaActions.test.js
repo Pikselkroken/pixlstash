@@ -46,15 +46,22 @@ const STUBS = {
     emits: ["close", "save"],
     data: () => ({ name: "" }),
     watch: {
-      open(value) {
-        if (value) this.name = this.suggestedName;
+      open: {
+        immediate: true,
+        handler(value) {
+          if (!value) return;
+          const suffix = `.${this.originalExtension}`;
+          this.name = this.suggestedName.toLowerCase().endsWith(suffix)
+            ? this.suggestedName.slice(0, -suffix.length)
+            : this.suggestedName;
+        },
       },
     },
     template: `
       <div v-if="open" class="save-as-test-dialog">
         <input id="overlay-save-as-name" :value="name" @input="name = $event.target.value" />
         <button @click="$emit('close')">Cancel</button>
-        <button @click="$emit('save', name.includes('.') ? name : name + '.' + originalExtension)">Download</button>
+        <button @click="$emit('save', name + '.' + originalExtension)">Download</button>
       </div>
     `,
   },
@@ -266,6 +273,8 @@ describe("ImageOverlay local media commands", () => {
   });
 
   it("Save As uses the native writable picker when available and writes original bytes", async () => {
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const noticeStore = useNoticeStore();
     const calls = [];
     const writable = {
       write: vi.fn(async (blob) => calls.push(["write", await blob.text()])),
@@ -273,7 +282,10 @@ describe("ImageOverlay local media commands", () => {
     };
     window.showSaveFilePicker = vi.fn(async () => {
       calls.push(["picker"]);
-      return { createWritable: vi.fn(async () => writable) };
+      return {
+        name: "renamed-in-chrome.jpg",
+        createWritable: vi.fn(async () => writable),
+      };
     });
     apiGet.mockImplementationOnce(async () => ({ data: [] }));
     const wrapper = await openOverlay();
@@ -296,6 +308,9 @@ describe("ImageOverlay local media commands", () => {
       ["write", "original-jpeg"],
       ["close"],
     ]);
+    expect(noticeStore.notices.at(-1)?.text).toBe(
+      "Saved renamed-in-chrome.jpg.",
+    );
     wrapper.unmount();
   });
 
@@ -304,11 +319,12 @@ describe("ImageOverlay local media commands", () => {
     const resultPromise = wrapper.vm.saveMediaAs({
       id: 7,
       format: "jpg",
-      original_file_name: "holiday.jpg",
+      original_file_name: "holiday.jpeg",
     });
     await flush();
     const input = document.querySelector("#overlay-save-as-name");
     expect(input).toBeTruthy();
+    expect(input.value).toBe("holiday");
     input.value = "renamed-holiday";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     const download = [...document.querySelectorAll("button")].find(
@@ -317,8 +333,14 @@ describe("ImageOverlay local media commands", () => {
     download.click();
     const result = await resultPromise;
     expect(result).toBe(true);
+    expect(apiGet).toHaveBeenCalledWith("http://test/pictures/7.jpg", {
+      responseType: "blob",
+    });
     expect(anchorClick).toHaveBeenCalledTimes(1);
-    expect(document.querySelector("a")?.download).toBe("renamed-holiday.jpg");
+    expect(document.querySelector("a")?.href).toBe("blob:media");
+    expect(document.querySelector("a")?.download).toBe(
+      "renamed-holiday.jpeg",
+    );
     wrapper.unmount();
   });
 
