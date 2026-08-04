@@ -21,7 +21,7 @@ from fastapi import (
 )
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
-from sqlalchemy import case as sa_case, exists, func
+from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
 from pixlstash.authz.membership import enforce_character_scope
@@ -1078,11 +1078,6 @@ def create_router(server) -> APIRouter:
             meta_path = resolve_path_within(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
-                _video_exts = (".mp4", ".mov", ".webm", ".avi", ".mkv")
-                is_video_expr = sa_case(
-                    *[(Picture.file_path.ilike(f"%{ext}"), 1) for ext in _video_exts],
-                    else_=0,
-                )
                 row = session.exec(
                     select(Picture.id, Picture.score)
                     .join(Face, Face.picture_id == Picture.id)
@@ -1091,7 +1086,7 @@ def create_router(server) -> APIRouter:
                         Picture.deleted.is_(False),
                     )
                     .order_by(
-                        is_video_expr,  # prefer still images over videos
+                        Picture.is_video,  # prefer still images (False/0) over videos
                         Picture.score.is_(None),
                         Picture.score.desc(),
                         Picture.id.desc(),

@@ -948,6 +948,7 @@ class ImageUtils:
             comfyui_positive_prompt=comfyui_positive_prompt,
             comfyui_models=comfyui_models_json,
             comfyui_loras=comfyui_loras_json,
+            is_video=is_video,
             **thumb_cols,
         )
 

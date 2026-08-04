@@ -10,6 +10,7 @@ from sqlalchemy import Float, Index, String, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
+    Boolean,
     Column,
     DateTime,
     SQLModel,
@@ -323,6 +324,21 @@ class Picture(SQLModel, table=True):
     metadata_hash: Optional[str] = Field(
         default=None,
         sa_column=Column("metadata_hash", String, default=None, nullable=True),
+    )
+    # Whether this picture is a video. Replaces a non-sargable CASE over five
+    # ``file_path ILIKE '%.ext'`` tests that ``fetch_best_picture_id`` used to
+    # sort on, which defeated its LIMIT 1.
+    #
+    # NOT NULL with a server default is load-bearing, not tidiness. SQLite sorts
+    # NULL FIRST, so a NULL here would outrank ``False`` and hand the character
+    # thumbnail to a row of unknown type ahead of a genuine still image — the
+    # CASE it replaces could only ever yield 0 or 1. A NULL would also be
+    # invisible to the ``= 0`` backfill guard in 0096 and so never repaired.
+    is_video: bool = Field(
+        default=False,
+        sa_column=Column(
+            "is_video", Boolean, nullable=False, server_default="0", index=False
+        ),
     )
 
     # Relationships
