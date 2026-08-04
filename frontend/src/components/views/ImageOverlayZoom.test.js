@@ -10,6 +10,8 @@ import { createPinia, setActivePinia } from "pinia";
 import { anchorZoomOffset } from "../../utils/zoomMath";
 import { ZOOM_SETTLE_MS } from "../../composables/useWheelZoom";
 
+let metadataResponse = [];
+
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/workflow")) {
     const e = new Error("no workflow");
@@ -18,6 +20,9 @@ const getMock = vi.fn(async (url) => {
   }
   if (typeof url === "string" && url.includes("/faces")) {
     return { data: [{ bbox: [100, 100, 300, 200], frame_index: 0 }] };
+  }
+  if (typeof url === "string" && url.includes("/metadata")) {
+    return { data: await metadataResponse };
   }
   return { data: [] };
 });
@@ -41,7 +46,13 @@ globalThis.ResizeObserver = class {
 };
 
 const STUBS = {
-  OverlayTagsPanel: true,
+  OverlayTagsPanel: {
+    setup(_props, { expose }) {
+      expose({ refetchPredictions: vi.fn() });
+      return {};
+    },
+    template: "<div />",
+  },
   OverlayFilmstrip: true,
   OverlayDescriptionPanel: true,
   OverlayMetadataPanel: true,
@@ -68,8 +79,8 @@ async function openOverlay() {
       open: false,
       initialImageId: 7,
       allImages: [
-        { id: 7, tags: [] },
-        { id: 8, tags: [] },
+        { id: 7, format: "jpg", tags: [] },
+        { id: 8, format: "jpg", tags: [] },
       ],
       backendUrl: "http://test",
       tagUpdate: { key: 0, pictureIds: [] },
@@ -181,10 +192,59 @@ function mediaTransform(wrapper) {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  metadataResponse = [];
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("ImageOverlay cold media bootstrap", () => {
+  it("waits for a real media URL and recovers when that same-id URL changes", async () => {
+    let resolveMetadata;
+    metadataResponse = new Promise((resolve) => {
+      resolveMetadata = resolve;
+    });
+
+    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: true,
+        initialImageId: 7,
+        allImages: [{ id: 7, tags: [] }],
+        backendUrl: "http://test",
+        tagUpdate: { key: 0, pictureIds: [] },
+        descriptionUpdate: { key: 0, pictureIds: [] },
+        smartScoreUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+      attachTo: document.body,
+    });
+
+    // An id-only cold-route placeholder must never point <img> at the JSON
+    // `/pictures/{id}` endpoint while metadata is still in flight.
+    expect(wrapper.find(".overlay-img").exists()).toBe(false);
+    expect(wrapper.find(".overlay-image-error").exists()).toBe(false);
+
+    resolveMetadata({ id: 7, format: "png", pixel_sha: "first", tags: [] });
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+      "http://test/pictures/7.png?v=first",
+    );
+
+    await wrapper.find(".overlay-img").trigger("error");
+    expect(wrapper.find(".overlay-image-error").exists()).toBe(true);
+
+    await wrapper.setProps({ backendUrl: "http://replacement" });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".overlay-image-error").exists()).toBe(false);
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+      "http://replacement/pictures/7.png?v=first",
+    );
+    wrapper.unmount();
+  });
 });
 
 describe("ImageOverlay zoom — the continuous wheel", () => {

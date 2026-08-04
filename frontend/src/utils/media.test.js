@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isFileDrag, isInternalImageDrag } from './media.js'
+import { buildMediaUrl, isFileDrag, isInternalImageDrag } from './media.js'
 
 // Minimal DataTransfer stand-in: only `types` (array) and `files` (array-like)
 // are read by the drag predicates.
@@ -40,5 +40,20 @@ describe('isFileDrag', () => {
 
   it('is false for an internal-only drag', () => {
     expect(isFileDrag(dt({ types: ['application/json'] }))).toBe(false)
+  })
+})
+
+describe('buildMediaUrl', () => {
+  it('builds an extension-qualified native-media URL', () => {
+    expect(
+      buildMediaUrl({
+        backendUrl: '/api/v1',
+        image: { id: 7, format: 'PNG', pixel_sha: 'abc' },
+      }),
+    ).toBe('/api/v1/pictures/7.png?v=abc')
+  })
+
+  it('does not turn an id-only placeholder into a JSON endpoint media URL', () => {
+    expect(buildMediaUrl({ backendUrl: '/api/v1', image: { id: 7 } })).toBe('')
   })
 })

@@ -73,7 +73,7 @@ async function openOverlay() {
     props: {
       open: false,
       initialImageId: 7,
-      allImages: [{ id: 7, tags: [] }],
+      allImages: [{ id: 7, format: "jpg", tags: [] }],
       backendUrl: "http://test",
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
