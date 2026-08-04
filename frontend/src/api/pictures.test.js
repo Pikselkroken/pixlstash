@@ -25,6 +25,7 @@ import {
   startExport,
   getExportStatus,
   downloadExport,
+  downloadPicture,
 } from "./pictures";
 
 beforeEach(() => {
@@ -284,6 +285,22 @@ describe("api/pictures", () => {
     apiClient.get.mockResolvedValue({ data: blob, headers: {} });
     const result = await downloadExport("/dl");
     expect(result.filename).toBe("pixlstash_export.zip");
+  });
+
+  it("downloadPicture fetches the original media as a blob", async () => {
+    const blob = new Blob(["picture"]);
+    apiClient.get.mockResolvedValue({ data: blob });
+
+    const result = await downloadPicture(42, ".JPG", {
+      version: "pixel-hash",
+      baseUrl: "/be",
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/be/pictures/42.jpg?v=pixel-hash",
+      { responseType: "blob" },
+    );
+    expect(result).toBe(blob);
   });
 
   it("getAnomalyRegion passes the tag as a query param", async () => {

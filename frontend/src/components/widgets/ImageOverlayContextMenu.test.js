@@ -6,8 +6,9 @@
 // exercise the exact contracts the feature relies on:
 //
 //   1. ImageGridContextMenu in overlay-mode renders ONLY the restricted overlay
-//      action set (and, in scrapheap view, Restore + Delete forever), hiding all
-//      grid-only actions. Its Delete is scoped by the `selectedImageIds` prop.
+//      action set (and, in scrapheap view, Save picture + Restore + Delete
+//      forever), hiding all grid-only actions. Its Delete is scoped by the
+//      `selectedImageIds` prop.
 //   2. The overlay's media-area right-click guard: a contextmenu over the media
 //      canvas opens the custom menu; over a text/sidebar panel it does NOT
 //      (native menu preserved for copy/paste/spellcheck).
@@ -46,7 +47,15 @@ const globalStubs = {
 function itemLabels(wrapper) {
   return wrapper
     .findAll("button.ctx-item")
-    .map((b) => b.text().replace(/\s+/g, " ").trim())
+    .map((b) => {
+      const shortcut = b.find(".ctx-shortcut");
+      const suffix = shortcut.exists() ? shortcut.text() : "";
+      return b
+        .text()
+        .replace(suffix, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    })
     .filter(Boolean);
 }
 
@@ -55,7 +64,7 @@ beforeEach(() => {
 });
 
 describe("overlay-mode context menu — action set", () => {
-  it("renders exactly the 6 normal-view overlay actions and hides grid-only ones", () => {
+  it("renders the normal-view overlay actions and hides grid-only ones", () => {
     const wrapper = mount(ImageGridContextMenu, {
       props: {
         ...REQUIRED,
@@ -63,7 +72,13 @@ describe("overlay-mode context menu — action set", () => {
         visible: true,
         selectedImageIds: [42],
         selectedCharacter: "ALL",
-        contextImage: { id: 42, format: "jpg", faces: [] },
+        contextImage: {
+          id: 42,
+          format: "jpg",
+          faces: [],
+          mediaKind: "picture",
+          copyAvailable: true,
+        },
       },
       ...globalStubs,
     });
@@ -71,6 +86,9 @@ describe("overlay-mode context menu — action set", () => {
     const labels = itemLabels(wrapper).join(" | ");
 
     // The overlay set (find-similar-faces only appears when faces exist).
+    expect(labels).toContain("Save picture");
+    expect(labels).toContain("Save picture as…");
+    expect(labels).toContain("Copy picture");
     expect(labels).toContain("Share picture");
     expect(labels).toContain("Reverse image search");
     expect(labels).toContain("Segment");
@@ -112,7 +130,7 @@ describe("overlay-mode context menu — action set", () => {
     expect(itemLabels(withFaces).join(" ")).toContain("Find similar faces");
   });
 
-  it("renders only Restore + Delete forever in scrapheap view", () => {
+  it("keeps Save picture alongside Restore + Delete forever in scrapheap view", () => {
     const wrapper = mount(ImageGridContextMenu, {
       props: {
         ...REQUIRED,
@@ -120,15 +138,138 @@ describe("overlay-mode context menu — action set", () => {
         visible: true,
         selectedImageIds: [42],
         selectedCharacter: "SCRAPHEAP", // matches scrapheapPicturesId
-        contextImage: { id: 42, format: "jpg", faces: [] },
+        contextImage: {
+          id: 42,
+          format: "jpg",
+          faces: [],
+          mediaKind: "picture",
+          copyAvailable: true,
+        },
       },
       ...globalStubs,
     });
     const labels = itemLabels(wrapper);
+    expect(labels).toContain("Save picture");
+    expect(labels).toContain("Save picture as…");
+    expect(labels).toContain("Copy picture");
     expect(labels).toContain("Restore");
     expect(labels).toContain("Delete forever");
     expect(labels).not.toContain("Share picture");
     expect(labels).not.toContain("Segment");
+  });
+
+  it("Save picture emits the overlay-scoped save action", async () => {
+    const wrapper = mount(ImageGridContextMenu, {
+      props: {
+        ...REQUIRED,
+        overlayMode: true,
+        visible: true,
+        selectedImageIds: [42],
+        selectedCharacter: "ALL",
+        contextImage: {
+          id: 42,
+          format: "jpg",
+          faces: [],
+          mediaKind: "picture",
+          copyAvailable: true,
+        },
+      },
+      ...globalStubs,
+    });
+
+    const save = wrapper
+      .findAll("button.ctx-item")
+      .find((b) => b.text().includes("Save picture"));
+    expect(save).toBeTruthy();
+    await save.trigger("click");
+
+    expect(wrapper.emitted("save-picture")).toBeTruthy();
+  });
+
+  it("renders the extraction group first, with semantic separators and adaptive video labels", () => {
+    const wrapper = mount(ImageGridContextMenu, {
+      props: {
+        ...REQUIRED,
+        overlayMode: true,
+        visible: true,
+        selectedImageIds: [42],
+        selectedCharacter: "ALL",
+        contextImage: {
+          id: 42,
+          format: "mp4",
+          mediaKind: "video",
+          copyAvailable: true,
+          faces: [],
+        },
+      },
+      ...globalStubs,
+    });
+
+    expect(itemLabels(wrapper).slice(0, 4)).toEqual([
+      "Save video",
+      "Save video as…",
+      "Copy current frame",
+      "Share picture",
+    ]);
+    expect(wrapper.findAll('[role="separator"]').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("exposes accelerator hints and routes them through the same menu actions", async () => {
+    const wrapper = mount(ImageGridContextMenu, {
+      props: {
+        ...REQUIRED,
+        overlayMode: true,
+        visible: true,
+        selectedImageIds: [42],
+        selectedCharacter: "ALL",
+        contextImage: {
+          id: 42,
+          format: "jpg",
+          mediaKind: "picture",
+          copyAvailable: true,
+          faces: [],
+        },
+      },
+      ...globalStubs,
+    });
+    const menu = wrapper.find('[role="menu"]');
+    await menu.trigger("keydown", { key: "s", ctrlKey: true });
+    expect(wrapper.emitted("save-picture")).toHaveLength(1);
+
+    await wrapper.setProps({ visible: true });
+    await menu.trigger("keydown", { key: "c", ctrlKey: true });
+    expect(wrapper.emitted("copy-picture")).toHaveLength(1);
+    expect(wrapper.find('[aria-keyshortcuts="Control+S"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-keyshortcuts="Control+C"]').exists()).toBe(true);
+  });
+
+  it("keeps unavailable Copy visible, disabled, and explains why", () => {
+    const reason = "The picture is still loading and cannot be copied yet.";
+    const wrapper = mount(ImageGridContextMenu, {
+      props: {
+        ...REQUIRED,
+        overlayMode: true,
+        visible: true,
+        selectedImageIds: [42],
+        selectedCharacter: "ALL",
+        contextImage: {
+          id: 42,
+          format: "jpg",
+          mediaKind: "picture",
+          copyAvailable: false,
+          copyUnavailableReason: reason,
+          faces: [],
+        },
+      },
+      ...globalStubs,
+    });
+    const copy = wrapper
+      .findAll("button.ctx-item")
+      .find((button) => button.text().includes("Copy picture"));
+    expect(copy.attributes("disabled")).toBeDefined();
+    expect(copy.attributes("title")).toBe(reason);
+    const reasonId = copy.attributes("aria-describedby");
+    expect(wrapper.find(`#${reasonId}`).text()).toBe(reason);
   });
 
   it("Delete emits delete-selected — scoped by the selectedImageIds prop (the overlay picture)", async () => {

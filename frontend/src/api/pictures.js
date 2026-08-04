@@ -616,6 +616,34 @@ export async function downloadExport(downloadUrl, { baseUrl = "" } = {}) {
 }
 
 /**
+ * Download one picture's original media bytes.
+ *
+ * @param {number|string} id
+ * @param {string} format - file extension without a leading dot.
+ * @param {Object} [options]
+ * @param {number|string} [options.version] - pixel hash cache-buster.
+ * @param {string} [options.baseUrl=""]
+ * @returns {Promise<Blob>} the picture media.
+ */
+export async function downloadPicture(
+  id,
+  format,
+  { version, baseUrl = "" } = {},
+) {
+  const ext = String(format || "").replace(/^\./, "").toLowerCase();
+  if (!id || !ext) throw new Error("Picture id and format are required");
+  const query =
+    version === undefined || version === null
+      ? ""
+      : `?v=${encodeURIComponent(version)}`;
+  const res = await apiClient.get(
+    `${baseUrl}/pictures/${id}.${encodeURIComponent(ext)}${query}`,
+    { responseType: "blob" },
+  );
+  return res.data;
+}
+
+/**
  * Read library statistics for a filtered scope.
  *
  * The stats endpoint is deliberately sectioned: the caller asks for the parts
