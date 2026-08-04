@@ -195,7 +195,16 @@ def _load_recorded_durations(path: Path | None = None) -> dict[str, float]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             rejected.append(str(nodeid))
             continue
-        seconds = float(value)
+        try:
+            # A hand-edited map can hold a JSON integer too large for a float
+            # (Python parses it exactly, so it passes the isinstance guard and
+            # only fails on conversion). Reject it like any other unusable
+            # value: this runs during collection on every shard, so letting it
+            # escape would take the whole gate down over one bad entry.
+            seconds = float(value)
+        except (OverflowError, ValueError):
+            rejected.append(str(nodeid))
+            continue
         if not math.isfinite(seconds) or seconds < 0.0:
             rejected.append(str(nodeid))
             continue
