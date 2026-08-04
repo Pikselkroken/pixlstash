@@ -2510,11 +2510,52 @@ function sidebarCountRequestKey() {
 
 async function fetchSidebarData() {
   const requestEpoch = (sidebarCountEpoch += 1);
+  // The per-character and per-project counts arrive ON the shared lists
+  // (`include_counts`), so this pass has to hold those lists before it can read
+  // a count off them, and before it can compute a request key that describes
+  // what it is about to write. `refreshSidebar` fires `fetchCharacters()` /
+  // `fetchProjects()` unawaited a tick earlier, and `useEntityListsStore.refresh`
+  // de-duplicates on the kind while a request is in flight, so awaiting here
+  // JOINS those reads rather than issuing a second pair. (Awaiting them after
+  // computing the key instead would be a bug: a cold list landing mid-flight
+  // changes the key and every count write would be discarded as stale.)
+  const [characterRows, projectRows] = await Promise.all([
+    entityLists.refresh("characters", { baseUrl: props.backendUrl }),
+    entityLists.refresh("projects", { baseUrl: props.backendUrl }),
+  ]);
   const requestKey = sidebarCountRequestKey();
   const isCurrentRequest = () =>
     requestEpoch === sidebarCountEpoch &&
     requestKey === sidebarCountRequestKey();
   const shouldFlash = flashCountsNextFetch.value;
+  // Per-character counts come off the list rows fetched above: one read for
+  // the whole tree instead of a `/characters/{id}/summary` per row (#651). Both
+  // scopes ship on every row, so a mode switch is a re-read of the same shape:
+  // `project_image_count` is already scoped to the character's own project (or
+  // to "in no project" when it has none), which is exactly what the per-request
+  // `project_id` param used to ask for. Written before the category summaries
+  // below so the tree's numbers do not wait on those round-trips.
+  if (isCurrentRequest()) {
+    for (const char of characterRows) {
+      const count =
+        projectViewMode.value === "project"
+          ? char.project_image_count
+          : char.image_count;
+      // Absent (older backend) or null (list read without the counts) leaves
+      // the previous number in place rather than blanking the row; a real 0
+      // still writes.
+      if (count == null) continue;
+      setCategoryCount(char.id, count, shouldFlash);
+    }
+  }
+  // Same for the projects. The unassigned bucket is not a row in that list, so
+  // it stays a single summary request (below).
+  if (isCurrentRequest()) {
+    for (const project of projectRows) {
+      if (project.image_count == null) continue;
+      projectCounts.value[project.id] = project.image_count;
+    }
+  }
   // Fetch total image count for END key logic
   try {
     // All images summary
@@ -2556,48 +2597,14 @@ async function fetchSidebarData() {
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
-  await Promise.all(
-    characters.value.map(async (char) => {
-      try {
-        const characterSummaryParams =
-          projectViewMode.value === "project"
-            ? {
-                project_id:
-                  char.project_id != null ? char.project_id : "UNASSIGNED",
-              }
-            : null;
-        const data = await getCharacterSummary(
-          char.id,
-          characterSummaryParams ?? undefined,
-          { baseUrl: props.backendUrl },
-        );
-        if (isCurrentRequest())
-          setCategoryCount(char.id, data.image_count, shouldFlash);
-      } catch (e) {
-        console.warn("Error fetching character images summary:", e);
-      }
-    }),
-  );
-  // Fetch counts for each project and the unassigned bucket
   try {
-    const countRequests = [
-      getProjectSummary("UNASSIGNED", undefined, {
-        baseUrl: props.backendUrl,
-      }).then((body) => {
-        if (isCurrentRequest())
-          projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
-      }),
-      ...projects.value.map((p) =>
-        getProjectSummary(p.id, undefined, {
-          baseUrl: props.backendUrl,
-        }).then((body) => {
-          if (isCurrentRequest()) projectCounts.value[p.id] = body.image_count;
-        }),
-      ),
-    ];
-    await Promise.all(countRequests);
+    const body = await getProjectSummary("UNASSIGNED", undefined, {
+      baseUrl: props.backendUrl,
+    });
+    if (isCurrentRequest())
+      projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
   } catch (e) {
-    console.warn("Error fetching project counts:", e);
+    console.warn("Error fetching unassigned project count:", e);
   }
   if (isCurrentRequest()) flashCountsNextFetch.value = false;
 }
