@@ -25,6 +25,7 @@ vi.mock("../../utils/apiClient", async () => {
   return {
     apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
     isReadOnly: ref(false), // real ref so the menu template unwraps it
+    onSessionReset: () => () => {},
   };
 });
 

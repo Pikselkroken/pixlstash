@@ -19,7 +19,7 @@ import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useDedupStore } from "../../stores/useDedupStore.js";
-import { ref, computed } from "vue";
+import { ref } from "vue";
 
 const { dedupStoreMock } = vi.hoisted(() => ({
   dedupStoreMock: { scan: { status: "idle" } },
@@ -37,9 +37,14 @@ const apiPatch = vi.fn();
 const apiPut = vi.fn();
 const apiDelete = vi.fn();
 
-vi.mock("../../utils/apiClient", () => {
-  const isAuthenticated = ref(true);
-  const sessionContext = ref({ scope: "ALL" });
+// Async factory with a local `await import("vue")`: the store imports above
+// pull in apiClient, so this factory runs BEFORE the file's own top-level `vue`
+// import has initialised. Closing over that binding throws "Cannot access
+// __vi_import__ before initialization".
+vi.mock("../../utils/apiClient", async () => {
+  const { ref: makeRef, computed: makeComputed } = await import("vue");
+  const isAuthenticated = makeRef(true);
+  const sessionContext = makeRef({ scope: "ALL" });
   return {
     apiClient: {
       get: (...args) => apiGet(...args),
@@ -56,7 +61,7 @@ vi.mock("../../utils/apiClient", () => {
     checkLoginStatus: vi.fn(),
     checkSession: vi.fn(),
     isAuthenticated,
-    isReadOnly: computed(() => false),
+    isReadOnly: makeComputed(() => false),
     login: vi.fn(),
     logout: vi.fn(),
     sessionContext,

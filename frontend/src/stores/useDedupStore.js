@@ -81,7 +81,7 @@ import {
   lockedSets,
   mixedStackEngineMarks,
 } from "../utils/dedup";
-import { newOperationBatchId } from "../utils/apiClient";
+import { newOperationBatchId, onSessionReset } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
 
 /** How many groups one queue page holds. */
@@ -3163,6 +3163,102 @@ export const useDedupStore = defineStore("dedup", () => {
     }
   }
 
+  /**
+   * Drop every trace of the previous credential's dedup state (issue #655).
+   *
+   * Dedup is an owner-only surface, so this is hygiene rather than a
+   * cross-scope leak — but the queue holds picture ids, thumbnails and group
+   * signatures read under one credential, and none of it survived a logout by
+   * design. It survived only because nothing cleared it.
+   *
+   * Three things have to go together, in this order:
+   *
+   *   1. The scan poll and the end-chase, so no TIMER re-enters the store and
+   *      repopulates it a second after the clear. `stopScanPoll` already owns
+   *      the interval and the deferred request, so it is reused rather than
+   *      re-implemented.
+   *   2. The in-flight bookkeeping, so a caller cannot JOIN a request that
+   *      belongs to the previous session.
+   *   3. The state itself.
+   *
+   * `windowEpoch` is bumped for the same reason it is bumped on a window
+   * rebase: a page request still on the wire must discard its result instead
+   * of appending the previous session's rows into an empty window.
+   *
+   * `sizeLevel` deliberately stays. It is a persisted VIEW preference backed by
+   * localStorage (like the review overlay's sticker shelf), not server data.
+   */
+  function reset() {
+    stopScanPoll();
+    cancelEndChase();
+    windowEpoch += 1;
+    pageInFlight = null;
+    prevInFlight = null;
+    scopeCountsInFlight.clear();
+    openQueueInFlight.clear();
+    scanRequestInFlight.clear();
+
+    policyDefaults.value = null;
+    bounds.value = null;
+    policyLoaded.value = false;
+
+    openCount.value = 0;
+    byTier.value = {};
+    scan.value = { ...IDLE_SCAN };
+    countsLoaded.value = false;
+    scopeCounts.value = {};
+
+    scopeType.value = GLOBAL_SCOPE;
+    scopeId.value = null;
+    scopeLabel.value = "";
+    scopeIcon.value = "";
+
+    groups.value = [];
+    windowStart.value = 0;
+    total.value = 0;
+    nextOffset.value = 0;
+    nextCursor.value = null;
+    hasMore.value = false;
+    focusIndex.value = 0;
+    loading.value = false;
+    loadingMore.value = false;
+    error.value = null;
+    busy.value = false;
+    stackedCount.value = 0;
+    separatedCount.value = 0;
+
+    hiddenVerdicts.value = new Set();
+    decidedByVerdict.value = {};
+    showingDecided.value = false;
+
+    nearEnabled.value = false;
+    embeddingEnabled.value = false;
+    threshold.value = null;
+    filtersRestored.value = false;
+
+    coverChoices.value = {};
+    exclusions.value = {};
+
+    selectedSignatures.value = new Set();
+    selectionAnchor = null;
+
+    showingMixed.value = false;
+    mixedStacks.value = [];
+    mixedTotal.value = 0;
+    mixedKeptTotal.value = 0;
+    mixedLiveStackCount.value = 0;
+    mixedThreshold.value = null;
+    mixedNextOffset.value = null;
+    mixedLoading.value = false;
+    mixedLoaded.value = false;
+    mixedError.value = null;
+    mixedBusyStackId.value = null;
+    mixedFocusStackId.value = null;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
+
   return {
     // policy
     policyDefaults,
@@ -3290,5 +3386,6 @@ export const useDedupStore = defineStore("dedup", () => {
     resolveMixedStack,
     keepMixed,
     unkeepMixedStack,
+    reset,
   };
 });

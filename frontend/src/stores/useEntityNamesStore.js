@@ -1,5 +1,6 @@
-import { ref } from "vue";
+import { ref, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
+import { onSessionReset } from "../utils/apiClient";
 
 /**
  * Reactive id → display-name maps for the entities a breadcrumb needs to label.
@@ -17,6 +18,14 @@ import { defineStore } from "pinia";
  * (e.g. only a project's sets in project view), and replacing would drop names
  * resolved under a different scope. Accumulating id → name is safe because the
  * mapping is stable.
+ *
+ * ── Security (issue #655 item 2) ──────────────────────────────────────────
+ * Every name here was resolved from a `SCOPED_LIST` read, so the CONTENT of
+ * these maps is an authorization decision. Merging is what makes that matter:
+ * an entry is never removed by an ordinary refetch, so without `reset()` the
+ * breadcrumb would go on labelling an id with a name resolved under a previous
+ * credential. `reset()` is wired to the single `onSessionReset` chokepoint in
+ * `utils/apiClient.js`, alongside `useEntityListsStore`.
  */
 export const useEntityNamesStore = defineStore("entityNames", () => {
   const characterNames = ref({}); // id -> name
@@ -52,6 +61,20 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
     _merge(importFolderLabels, list, "label");
   }
 
+  /** Drop every resolved name. Called on every auth-context transition. */
+  function reset() {
+    characterNames.value = {};
+    setNames.value = {};
+    projectNames.value = {};
+    refFolderLabels.value = {};
+    importFolderLabels.value = {};
+  }
+
+  // This store has no fetches of its own — the sidebar publishes into it — so
+  // there is no in-flight response to guard, only the accumulated maps.
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
+
   return {
     characterNames,
     setNames,
@@ -63,5 +86,6 @@ export const useEntityNamesStore = defineStore("entityNames", () => {
     mergeProjectNames,
     mergeRefFolderLabels,
     mergeImportFolderLabels,
+    reset,
   };
 });

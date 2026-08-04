@@ -1,5 +1,22 @@
-import { computed, ref } from "vue";
+// useSelectionStore.js — what the sidebar currently has selected.
+//
+// ── Security (issue #655, found by the store matrix) ─────────────────────────
+// Most of this is UI state, but `selectedSetNames` holds server-resolved set
+// NAMES and the four id lists hold server object ids, all read under one
+// credential. Left in place across an auth-context change the consequence is
+// over-blocking rather than leakage (the next credential's requests for those
+// ids 403), but over-blocking is its own regression, so the selection is
+// dropped through the same `onSessionReset` chokepoint as the caches.
+//
+// The three sessionStorage-backed values (`characterMultiMode`, `setMultiMode`,
+// `setDifferenceBaseId`) are view preferences that survive a reload by design.
+// Only `setDifferenceBaseId` names a server object, so it alone is cleared —
+// through its own setter, so the stored copy goes with it rather than being
+// left behind to reappear on the next reload.
+
+import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
+import { onSessionReset } from "../utils/apiClient";
 
 const ALL_PICTURES_ID = "ALL";
 
@@ -82,6 +99,23 @@ export const useSelectionStore = defineStore("selection", () => {
     saveBaseId("pixlstash:setDifferenceBaseId", val);
   }
 
+  /** Drop the previous credential's selection. */
+  function reset() {
+    selectedCharacter.value = ALL_PICTURES_ID;
+    selectedCharacterIds.value = [];
+    selectedSet.value = null;
+    selectedSetIds.value = [];
+    selectedSetNames.value = {};
+    selectedFolderFilter.value = null;
+    selectedImageIds.value = [];
+    lastSelectedCharacterLabel.value = "All Pictures";
+    lastSelectedSetLabel.value = "Picture Set";
+    setSetDifferenceBaseId(null);
+  }
+
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
+
   return {
     selectedCharacter,
     selectedCharacterIds,
@@ -99,5 +133,6 @@ export const useSelectionStore = defineStore("selection", () => {
     setCharacterMultiMode,
     setSetMultiMode,
     setSetDifferenceBaseId,
+    reset,
   };
 });
