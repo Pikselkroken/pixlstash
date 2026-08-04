@@ -1383,6 +1383,26 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
 **Known follow-up.** `delete_token`/`update_token`/`revoke_tokens_for_resource` still flush the *entire* token cache rather than evicting one entry, because the cache is keyed on a digest of the raw token value and nothing maps a token back to that digest. `public_id` does not supply the digest either, so precise eviction needs a second index maintained at insert time (`public_id → {digest}`) rather than falling out of this change. Left as-is: the flush is correct, just coarse.
 
+### 16.6 Project ids are a second axis the policy registry does not cover (#125 R1b, #708)
+
+**A route can carry the right `AccessPolicy` and still disclose a project id.** The registry answers "may this token reach this *object*"; it says nothing about the *project ids named inside the answer*, and nothing about a `project_id` **filter** the caller supplies. `visible_project_ids` (in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py)) is the single ladder for both: a `project` token may learn its own project id, and a `character` / `picture_set` / `picture` token may learn none at all — `GET /projects/{other_id}` 403s them, so no sibling route may answer it either. There are therefore two rules, enforced in two different places, and a new endpoint has to satisfy both.
+
+**Outbound — narrow every project id you serialise (handler responsibility).** Any payload carrying project membership passes through the shared helpers before it is returned:
+
+- `narrow_project_fields(payload, project_ids, visible)` — sets both `project_ids` and the legacy scalar `project_id`, the scalar always *derived from the narrowed list*, never read off the model (the stored scalar names the entity's primary project, which a token scoped to a secondary project must not learn).
+- `filter_visible_project_ids(project_ids, visible)` — the list on its own.
+- `narrow_project_assignments(assignments, visible)` — for the one payload shape *keyed* by project id, `POST /projects/membership`. Anything derived from such a mapping (its `unassigned_picture_ids`) must be computed from the **narrowed** mapping, or the derivation re-leaks what the narrowing removed.
+
+This is not gate-enforceable today: the gate runs before the handler and never sees the response. Treat a raw `s.project_id` / `char.project_id` in a payload as a defect on sight — that spelling is what #708 F1/F4/F5 were.
+
+**Inbound — the `project_id` filter is enforced centrally by the gate.** `AuthzGate._enforce_policy` calls `enforce_project_filter_scope` (in [`authz/membership.py`](../pixlstash/authz/membership.py)) for **every declared route, before any policy branch**, because a project filter is a question about the project space rather than about the object the route is named after. A resource-scoped token may name only a project id it can already see; another project's id, a non-existent id and the `UNASSIGNED` sentinel all get the same 403, so the refusal is not itself an oracle. Owner and unscoped tokens are never restricted.
+
+Without it, a filter needs no payload to answer the hidden question: `GET /picture_sets?project_id=7` returning a row told a set-scoped token that project 7 exists and holds its set, and the same channel existed on `/pictures`, `/pictures/count`, `/pictures/stream`, `/pictures/stats`, `/pictures/export`, `/pictures/likeness-groups`, `/pictures/face-search`, `/characters`, `/characters/likeness-search`, `/characters/{id}/summary`, `/picture_sets/{id}` and `/tag_suggestions` — twelve-plus routes, which is exactly why it is one chokepoint and not twelve patches. **Do not re-add a per-handler `project_id` scope check.** The handler-side "force `project_id` to the token's own project" lines that predate this remain as defence in depth; new code does not need them. A new *spelling* of the parameter must be added to `PROJECT_FILTER_QUERY_PARAMS`, which is the only way the gate can miss one.
+
+**Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
+
+**Known gap (open, deliberately not fixed here).** A **picture's** own scalar `project_id` is still serialised raw — `GET /pictures/{id}/metadata` and `GET /pictures/{id}/{field}` hand a set- or picture-scoped token the id of a project it cannot otherwise see. Unlike characters and picture sets, picture payloads have no narrowing site at all (they are built from `Picture.find(select_fields=…)` across metadata, listing, stream, search, stack and export paths), so closing it is a serialisation-layer change rather than three call sites. Tracked separately; the inbound filter rule above already denies the *query* half of that class.
+
 ---
 
 ## 17. Data Flow Pipeline

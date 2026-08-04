@@ -533,6 +533,36 @@ def narrow_project_fields(
     return payload
 
 
+def narrow_project_assignments(
+    assignments: dict[int, list[int]], visible: set[int] | None
+) -> dict[int, list[int]]:
+    """Drop the project keys a caller may not see from a membership mapping.
+
+    The sibling of :func:`narrow_project_fields` for the one payload shape that
+    is *keyed* by project id rather than carrying a ``project_ids`` list:
+    ``POST /projects/membership`` answers "which of these pictures belong to
+    which project". Every key is a project id, so an unnarrowed mapping tells a
+    ``picture_set``- or ``picture``-scoped token which projects exist and which
+    of its pictures are filed under them — the facts
+    :func:`visible_project_ids` exists to withhold (issue #125 / R1b, #708 F1).
+
+    Args:
+        assignments: ``project_id -> [picture_id, ...]``, straight from the join
+            table.
+        visible: The result of :func:`visible_project_ids` — ``None`` for an
+            owner / unscoped token (no narrowing).
+
+    Returns:
+        A new mapping containing only the visible projects, each with its picture
+        ids sorted. The owner's mapping is returned whole.
+    """
+    return {
+        int(project_id): sorted({int(pid) for pid in picture_ids})
+        for project_id, picture_ids in assignments.items()
+        if visible is None or int(project_id) in visible
+    }
+
+
 def _project_scope_picture_ids(session: Session, project_id: int) -> set[int]:
     """Picture ids that are members of *project_id* (excluding soft-deleted)."""
     rows = session.exec(

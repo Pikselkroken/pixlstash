@@ -48,6 +48,7 @@ from pixlstash.db_models import (
     TagSuggestion,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.filter_helpers import visible_project_ids
 
 logger = get_logger(__name__)
 
@@ -279,6 +280,86 @@ def enforce_project_scope(server, request: Request, project_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Project *filter* scope: the `project_id` query parameter (issue #708)
+# ---------------------------------------------------------------------------
+
+# Query parameters that name a project the caller wants to filter by. Every
+# route that takes one takes it under one of these names; a new spelling must be
+# added here, or the gate will not see it (the CI guardrail
+# ``test_project_filter_params_are_declared`` fails the build on a new one).
+PROJECT_FILTER_QUERY_PARAMS: tuple[str, ...] = ("project_id", "project_ids")
+
+
+def enforce_project_filter_scope(server, request: Request) -> None:
+    """Raise 403 when a scoped token filters by a project it may not see.
+
+    ``visible_project_ids`` decides which project ids a token may *learn about*:
+    its own for a ``project`` token, none at all for a ``character`` /
+    ``picture_set`` / ``picture`` token (issue #125 / R1b). Narrowing the ids in
+    the *response* is only half the rule — a ``project_id`` **filter** turns any
+    list, count, or summary route into a membership oracle for the same hidden
+    facts: ``GET /picture_sets?project_id=7`` returning a row tells a set-scoped
+    token that project 7 exists and that its set is filed under it, which
+    ``GET /projects/7`` (403) deliberately refuses to say (issue #708 F2/F3 and
+    their siblings on ``/pictures``, ``/pictures/count``, ``/pictures/stream``,
+    ``/pictures/stats``, ``/picture_sets/{id}`` and ``/characters/{id}/summary``).
+
+    So the gate answers the filter the same way it answers the payload: a
+    resource-scoped token may name **only** a project id it can already see.
+    Anything else — another project's id, a non-existent id, or the
+    ``UNASSIGNED`` sentinel (which asks the complementary question, "which of my
+    things are in *no* project") — is refused with the same 403 regardless of
+    whether the project exists, so the refusal itself is not an oracle either.
+
+    An owner / unscoped token (``visible_project_ids`` returns ``None``) is never
+    restricted, and a request that carries no project filter is a no-op.
+
+    Args:
+        server: The server instance (unused; kept for signature symmetry with the
+            other membership helpers).
+        request: The current FastAPI request.
+    """
+    visible = visible_project_ids(server, request)
+    if visible is None:
+        return
+
+    for param in PROJECT_FILTER_QUERY_PARAMS:
+        for raw in request.query_params.getlist(param):
+            if raw is None or raw == "":
+                continue
+            try:
+                project_id = int(raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "enforce_project_filter_scope: scoped token passed "
+                    "non-numeric %s=%r on %s %s; refusing (a scoped token may "
+                    "only name a project it can see)",
+                    param,
+                    raw,
+                    request.method,
+                    request.url.path,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to filter by this project",
+                )
+            if project_id not in visible:
+                logger.warning(
+                    "enforce_project_filter_scope: scoped token requested "
+                    "%s=%d on %s %s but may only see %s; refusing",
+                    param,
+                    project_id,
+                    request.method,
+                    request.url.path,
+                    sorted(visible),
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Token is not authorised to filter by this project",
+                )
+
+
+# ---------------------------------------------------------------------------
 # Id resolvers: map a non-picture route id to the picture id it authorises on
 # ---------------------------------------------------------------------------
 
@@ -328,6 +409,8 @@ __all__ = [
     "enforce_set_scope",
     "enforce_character_scope",
     "enforce_project_scope",
+    "enforce_project_filter_scope",
     "resolve_tag_suggestion_picture_id",
     "ID_RESOLVERS",
+    "PROJECT_FILTER_QUERY_PARAMS",
 ]

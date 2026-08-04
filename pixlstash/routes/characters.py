@@ -1317,6 +1317,26 @@ def create_router(server) -> APIRouter:
                 crop.save(buf, format="PNG")
                 return Response(content=buf.getvalue(), media_type="image/png")
         try:
+            if field == "project_id":
+                # The stored scalar names the character's *primary* project,
+                # which a token scoped to the character (or to a secondary
+                # project) has no grant to learn. Derive it from the narrowed
+                # membership list like every other serialisation site does
+                # (issue #125 / R1b, #708 F5).
+                visible_projects = visible_project_ids(server, request)
+
+                def fetch_project_ids(session: Session):
+                    if session.get(Character, id) is None:
+                        raise KeyError("Character not found")
+                    return character_project_ids(session, id)
+
+                payload: dict = {}
+                narrow_project_fields(
+                    payload,
+                    server.vault.db.run_immediate_read_task(fetch_project_ids),
+                    visible_projects,
+                )
+                return {"project_id": payload["project_id"]}
             char = server.vault.db.run_immediate_read_task(
                 Character.find, select_fields=[field], id=id
             )
