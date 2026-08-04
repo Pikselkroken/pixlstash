@@ -43,6 +43,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     filter_visible_project_ids,
+    narrow_picture_project_ids,
     narrow_project_fields,
     visible_project_ids,
 )
@@ -1329,6 +1330,7 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
+            narrow_picture_project_ids(server, request, pictures)
             return {
                 "pictures": pictures,
                 "set": narrow_project_fields(
@@ -1354,6 +1356,7 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
+            narrow_picture_project_ids(server, request, pictures)
             return {
                 "pictures": pictures,
                 "set": narrow_project_fields(
@@ -1393,6 +1396,10 @@ def create_router(server) -> APIRouter:
 
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
         pictures = _enrich_with_stack_counts(pictures)
+        # The set's own scalar is narrowed just below; the member rows carry the
+        # raw `Picture.project_id` from `metadata_fields()` and need the same
+        # treatment, one payload shape at a time (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, pictures)
         set_payload = safe_model_dict(picture_set)
         narrow_project_fields(set_payload, set_project_ids, visible_projects)
         return {"pictures": pictures, "set": set_payload}

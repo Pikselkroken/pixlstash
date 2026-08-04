@@ -17,6 +17,7 @@ from pixlstash.db_models import (
     PictureSetProjectMember,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.service.scope_table import scope_id_subquery
 
 logger = get_logger(__name__)
 
@@ -531,6 +532,92 @@ def narrow_project_fields(
     payload["project_ids"] = narrowed
     payload["project_id"] = narrowed[0] if narrowed else None
     return payload
+
+
+def picture_project_ids_map(
+    session: Session, picture_ids: Iterable[int]
+) -> dict[int, list[int]]:
+    """Return every project each of *picture_ids* belongs to, lowest id first.
+
+    The picture twin of ``character_project_ids`` / ``picture_set_project_ids``
+    in ``project_membership_service``, batched: one query for a whole page of
+    rows rather than one per row. The id scope goes through
+    :func:`scope_id_subquery` because a page can be a whole picture set, which
+    would otherwise bind one SQL variable per member.
+
+    Args:
+        session: Active database session.
+        picture_ids: The pictures to look up.
+
+    Returns:
+        ``picture_id -> [project_id, ...]``. A picture with no membership is
+        absent from the mapping.
+    """
+    ids = {int(pid) for pid in picture_ids if pid is not None}
+    if not ids:
+        return {}
+    scope = scope_id_subquery(session, ids, name="_pixlstash_picture_project_ids")
+    rows = session.exec(
+        select(PictureProjectMember.picture_id, PictureProjectMember.project_id).where(
+            PictureProjectMember.picture_id.in_(scope)
+        )
+    ).all()
+    grouped: dict[int, list[int]] = {}
+    for picture_id, project_id in rows:
+        if picture_id is None or project_id is None:
+            continue
+        grouped.setdefault(int(picture_id), []).append(int(project_id))
+    for project_list in grouped.values():
+        project_list.sort()
+    return grouped
+
+
+def narrow_picture_project_ids(server, request, payloads: Iterable[dict]) -> None:
+    """Narrow the scalar ``project_id`` on serialised picture rows, in place.
+
+    The picture-row twin of :func:`narrow_project_fields`, minus the
+    ``project_ids`` list a picture payload does not carry. ``Picture.project_id``
+    is a real column and rides in ``Picture.metadata_fields()``, so every payload
+    built from that projection serialises the picture's *primary* project id
+    straight off the model. That is a fact a token scoped to the picture, to a
+    set, or to a *secondary* project has no grant to learn, and cannot obtain
+    from ``GET /projects/{id}``, which 403s it (issue #719, backend architecture
+    §16.6).
+
+    Owners and unscoped tokens return on the first line: their payload is
+    untouched and no membership query runs, so neither the response nor the cost
+    of their request changes.
+
+    Args:
+        server: The server instance, used to run the membership read.
+        request: The current FastAPI request.
+        payloads: Serialised picture rows, mutated in place. A row without a
+            ``project_id`` key is left alone; a row that has one must also carry
+            its ``id``, or the scalar is cleared rather than guessed.
+    """
+    visible = visible_project_ids(server, request)
+    if visible is None:
+        return
+    rows = [row for row in payloads if isinstance(row, dict) and "project_id" in row]
+    if not rows:
+        return
+    picture_ids = {int(row["id"]) for row in rows if row.get("id") is not None}
+    membership = (
+        server.vault.db.run_immediate_read_task(picture_project_ids_map, picture_ids)
+        if picture_ids
+        else {}
+    )
+    for row in rows:
+        row_id = row.get("id")
+        if row_id is None:
+            logger.warning(
+                "narrow_picture_project_ids: picture row carries project_id but no"
+                " id; clearing the scalar rather than disclosing it unnarrowed"
+            )
+            row["project_id"] = None
+            continue
+        narrowed = filter_visible_project_ids(membership.get(int(row_id), []), visible)
+        row["project_id"] = narrowed[0] if narrowed else None
 
 
 def narrow_project_assignments(

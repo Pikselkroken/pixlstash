@@ -1471,18 +1471,18 @@ Deliberately **not** equalised — that is a runtime change to a hot read path, 
 
 **Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
 
-#### Known gap (open): a picture's scalar `project_id` is still serialised raw
+#### CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row payload
 
-**Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it):
+**Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
 
-| Route | Where the id appears | Status |
+| Route | Where the id appears | Narrowed in |
 |---|---|---|
-| `GET /pictures/{id}/metadata` | `$.project_id` | reproduced |
-| `GET /pictures/{id}/{field}` (`field=project_id`) | `$.project_id` | reproduced |
-| `GET /picture_sets/{id}` | `$.pictures[N].project_id` | reproduced |
-| `GET /stacks/{stack_id}/pictures?fields=full` | `$[N].project_id` | reproduced |
-| `GET /pictures/search` | `$[N].project_id` | reproduced (needs a vault with embeddings; the reviewer's env returned `[]`) |
-| `GET /pictures/likeness-groups` | `$[N].project_id` | reproduced (needs a `picturelikeness` edge and at least one *unstacked* member, or no group forms) |
+| `GET /pictures/{id}/metadata` | `$.project_id` | `routes/pictures/_crud.py::get_picture_metadata` |
+| `GET /pictures/{id}/{field}` (`field=project_id`) | `$.project_id` | `routes/pictures/_crud.py::get_picture_field` |
+| `GET /picture_sets/{id}` | `$.pictures[N].project_id` | `routes/picture_sets.py::get_picture_set` (all three return paths: default, `sort=SMART_SCORE`, `sort=CHARACTER_LIKENESS`) |
+| `GET /stacks/{stack_id}/pictures?fields=full` | `$[N].project_id` | `routes/stacks.py::get_stack_pictures` |
+| `GET /pictures/search` | `$[N].project_id` | `routes/pictures/_search.py::search_pictures` |
+| `GET /pictures/likeness-groups` | `$[N].project_id` | `routes/pictures/_misc.py::get_likeness_groups` |
 
 `GET /picture_sets/{id}` is the instructive one: the **same handler** narrows the *set's* own `project_id` correctly and then emits the raw id on every embedded picture row. The narrowing is per-payload-shape, so getting one shape right says nothing about the next.
 
@@ -1492,10 +1492,20 @@ The common cause is `Picture.metadata_fields()` = every scalar column minus the 
 
 **Why the clean routes are clean is not one reason, and the difference matters for the fix.** `Picture.grid_fields()` omits `project_id`, so `fields=grid` never selects it. But `GET /pictures?fields=full` and `GET /pictures/stream` *do* select `metadata_fields()`, `project_id` included — they are clean because they declare `response_model=list[GridPicture]` / `StreamPicturesResponse` (`routes/pictures/_listing.py`), and FastAPI validates every row against that model and drops keys it does not declare (`GridPicture` sets no `extra="allow"`; verified by round-tripping a row carrying `project_id` through the model, which comes back without it). The projection and the response model are two independent filters, and only the second one is enforced on the `fields=full` path. Any change that widens `GridPicture`, or drops the `response_model=` on those routes, re-opens them without touching a single query.
 
-Unlike characters and picture sets, picture payloads have **no narrowing site at all** — they are built from `Picture.find(select_fields=…)` across the metadata, listing, stream, search, stack and export paths — so closing this is a serialisation-layer change (drop `project_id` from `metadata_fields()` and re-add it through a narrowing helper), not six call-site patches.
+**The fix is `narrow_picture_project_ids(server, request, rows)`** in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py): the picture-row twin of `narrow_project_fields`, minus the `project_ids` list a picture payload does not carry. It re-derives the scalar from the picture's *narrowed* `PictureProjectMember` membership (batched, one query per request via `picture_project_ids_map`) instead of letting the model's own column reach the wire. Owners and unscoped tokens return on the first line, so their payload and their query count are both unchanged; only a scoped token pays for the extra read.
 
-- **Owner:** backend (`senior-backend-developer`), tracked on issue #708 as a follow-up; it was deliberately not fixed with the inbound/outbound work because the fix is a different shape.
-- **Revisit trigger — any of:** (a) a picture-scoped or set-scoped share link is exposed outside the owner's own devices (multi-user, or the hosted demo handing out resource-scoped tokens); (b) `Picture.metadata_fields()` gains another membership-bearing column; (c) a seventh route joins the table above. Until then the exposure is bounded to "a token the owner minted learns a project id it was 403'd on by name", with no cross-picture reach — the inbound filter rule already denies the *query* half of the class, so the id cannot be turned back into a listing.
+Deriving from the join table rather than intersecting the raw scalar is deliberate and matches R1b: a P2 token reading a picture whose stored primary is P1 gets `project_id: 2`, not `null`. Intersecting the raw scalar would have been safe too, but it makes a picture the token legitimately shares look unassigned, which is the over-blocking half of the regression pair.
+
+`Picture.metadata_fields()` was **not** changed. Dropping `project_id` from it would fail closed for future routes, but it is also the default `select_fields` of `Picture.find` (`db_models/picture.py`) and feeds `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py`, so removing the column changes what internal callers load, not just what six handlers serialise. Tracked as the residual below.
+
+**Both directions are pinned** in the R1e section of `tests/test_multi_project_membership_authz.py`: the scoped token's scalar comes from its own narrowed membership, an entity-scoped token gets `null`, and the owner keeps the stored primary, and over-blocking is asserted as its own failure. Every site/token combination asserted there was confirmed to leak before the fix, so none of the assertions is vacuous. Two probes are **not** pinned by a live row and are recorded as such in the test: `GET /picture_sets/{id}?sort=SMART_SCORE` and `?sort=CHARACTER_LIKENESS` return no rows without a smart-score anchor / an assigned reference face, which that fixture does not build. Their narrowing is one line on each of the handler's other two return paths and is asserted opportunistically if a row ever appears.
+
+**The column set itself is now pinned.** `tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned` holds the exact 42 names `Picture.metadata_fields()` returns, so a new `picture` column fails the build until someone decides whether a scoped token may learn it. That is the part of #719 that generalises: the leak was not that one narrowing was forgotten, it was that "every column minus blobs" makes forgetting the default. Both mutants (a name dropped from the pin, a name added to it) were confirmed to fail the assertion.
+
+- **Residual (open): `metadata_fields()` is still "every column minus blobs", it is only *watched*.** The pin above turns a silent addition into a build failure; it does not make the projection an allowlist, and it cannot narrow anything by itself. Inverting it is the durable fix and was deliberately not attempted here: `metadata_fields()` is also the default `select_fields` of `Picture.find`, so removing a column changes what `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py` load, not only what six handlers serialise.
+- **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
+- **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
 
 ---
 
