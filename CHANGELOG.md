@@ -1,3 +1,9 @@
+# [1.8.5]
+
+- Fixed: opening a picture and then reloading the page, or following a link straight to a picture, could leave the overlay showing a broken-image icon instead of the picture. The overlay now waits until it knows the file's format before loading it, and a stale error no longer hides the picture once it does load.
+- Save, Save as… and Copy are now available on pictures and videos from both the image overlay and the grid's right-click menu, with keyboard shortcuts. Save as… keeps the original file extension so the saved file still opens as what it is.
+- Update the undici HTTP library (to 6.28.0 and 7.29.0) and fast-uri (to 3.1.5) that our build and test tooling pulls in, picking up upstream security fixes, one of them rated high. This release carries no security tag: both are build and test dependencies only, neither is part of the app you run, so no installed version was ever exposed.
+
 # [1.8.4]
 
 - Fix issue #694 (Database Query Error): Sometimes a query failed due to too many bound variables in a SQL statement.
