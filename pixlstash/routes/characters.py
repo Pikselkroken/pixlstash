@@ -81,6 +81,38 @@ _LIKENESS_SEARCH_MAX_POOL_M = 2000
 _MAX_REFS_PER_CHARACTER = 10
 
 
+def _may_learn_a_project_scoped_count(visible_projects: set[int] | None) -> bool:
+    """Whether a project-scoped aggregate may be serialised to this caller.
+
+    This is the exact complement of the refusal that guards a caller-supplied
+    ``project_id`` filter: a token may name a project scope (an id, or the
+    ``UNASSIGNED`` sentinel) precisely when it has some project visibility, and
+    :func:`visible_project_ids` returns ``None`` for the owner and a non-empty
+    set for a project-scoped token. Writing the outbound rule as the complement
+    of the inbound one is what makes the list endpoint and
+    ``GET /characters/{id}/summary`` agree BY CONSTRUCTION: no number is
+    serialised here that the caller could not have asked that endpoint for
+    directly, so neither can drift into being the more generous of the two.
+
+    The suppression has to key off the *token*, not off whether a particular row
+    turned out to have hidden memberships. A per-row rule would answer for the
+    genuinely unassigned character and stay silent for the one filed under an
+    invisible project, and the presence of an answer would then be the oracle
+    the suppression exists to remove (issue #718).
+
+    Args:
+        visible_projects: The result of :func:`visible_project_ids`: ``None``
+            for an owner / unscoped token, otherwise the project ids the token
+            may learn about.
+
+    Returns:
+        ``True`` for an owner or a project-scoped token; ``False`` for a
+        character-, picture_set- or picture-scoped token, which has no project
+        visibility at all.
+    """
+    return visible_projects is None or bool(visible_projects)
+
+
 def characters_with_reference_faces_query():
     """Select every character id that has at least one embedded face.
 
@@ -269,7 +301,10 @@ class CharacterListItemResponse(BaseModel):
             "request passes ``include_counts=true``; ``null`` otherwise. Same "
             "number as ``GET /characters/{id}/summary?project_id=<project_id>`` "
             "(or ``project_id=UNASSIGNED``) returns, again without any "
-            "hidden-tag filtering."
+            "hidden-tag filtering. Also ``null`` for a credential with no "
+            "project visibility at all (a character-, set- or picture-scoped "
+            "token), which may name no project scope on that endpoint either; "
+            "such a caller reads ``image_count`` and renders no project view."
         ),
     )
 
@@ -482,7 +517,8 @@ def create_router(server) -> APIRouter:
         session: Session,
         characters,
         narrowed_by_char: dict[int, list[int]],
-    ) -> tuple[dict[int, int], dict[int, int]]:
+        visible_projects: set[int] | None,
+    ) -> tuple[dict[int, int], dict[int, int] | None]:
         """Global and primary-project picture counts for every listed character.
 
         Serves the sidebar's counts from the list response so it no longer
@@ -499,6 +535,13 @@ def create_router(server) -> APIRouter:
         every caller and never scopes a count to a project the caller cannot
         see.
 
+        A caller with no project visibility at all gets no project-scoped
+        number: see :func:`_may_learn_a_project_scoped_count`. Narrowing alone
+        was not enough there, because an empty narrowed list dropped the row
+        into the "in no project whatsoever" bucket, whose ``NOT EXISTS``
+        predicate answers a question about projects the caller cannot see
+        (issue #718).
+
         Cost is a constant 1-3 queries regardless of how many characters are
         listed: one global, plus at most one per distinct *narrowed* primary
         project. The owner case correlates on ``Character.project_id`` inside
@@ -510,15 +553,24 @@ def create_router(server) -> APIRouter:
             session: Open read session.
             characters: The ``Character`` rows the endpoint is returning.
             narrowed_by_char: Each character's scope-narrowed project ids.
+            visible_projects: The result of :func:`visible_project_ids` for this
+                request.
 
         Returns:
-            ``(global_counts, project_counts)``, both ``{character_id: count}``.
+            ``(global_counts, project_counts)``. ``global_counts`` is always
+            ``{character_id: count}``. ``project_counts`` is the same shape, or
+            ``None`` when the caller may learn no project-scoped number at all,
+            which the serialiser renders as ``project_image_count: null``.
         """
         char_ids = [int(c.id) for c in characters if c.id is not None]
         if not char_ids:
             return {}, {}
 
         global_counts = _character_picture_counts(session, char_ids)
+        if not _may_learn_a_project_scoped_count(visible_projects):
+            # No project visibility: skip the bucketing entirely, so there is no
+            # project-derived aggregate to serialise and one fewer query to run.
+            return global_counts, None
 
         # Bucket by the project each row reports, so every bucket is one query.
         correlated_ids: list[int] = []  # narrowed primary == Character.project_id
@@ -1488,10 +1540,10 @@ def create_router(server) -> APIRouter:
                 # learns nothing it could not read from the per-id summary
                 # endpoint it is already granted.
                 global_counts: dict[int, int] = {}
-                project_counts: dict[int, int] = {}
+                project_counts: dict[int, int] | None = {}
                 if include_counts:
                     global_counts, project_counts = _inline_character_counts(
-                        session, characters, narrowed_by_char
+                        session, characters, narrowed_by_char, visible_projects
                     )
 
                 rows = []
@@ -1503,7 +1555,14 @@ def create_router(server) -> APIRouter:
                     if include_counts:
                         char_id = int(c.id)
                         payload["image_count"] = global_counts.get(char_id, 0)
-                        payload["project_image_count"] = project_counts.get(char_id, 0)
+                        # ``None`` means "you may learn no project-scoped number",
+                        # which is NOT the same answer as 0 and must not collapse
+                        # into one via ``.get(char_id, 0)``.
+                        payload["project_image_count"] = (
+                            None
+                            if project_counts is None
+                            else project_counts.get(char_id, 0)
+                        )
                     rows.append(
                         narrow_project_fields(
                             payload,
