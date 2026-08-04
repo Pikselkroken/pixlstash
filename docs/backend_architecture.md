@@ -1076,7 +1076,9 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 
 #### Engine and connection settings
 
-The engine is built once in `VaultDatabase.__init__` (`database.py`) and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py`). **Both must stay identical** — they share the `SQLITE_BUSY_TIMEOUT_S` constant and the `init_database` connect listener, so a setting added in one place applies to both. A restore that left the rebuilt engine better configured than the startup engine was a real bug (#651).
+**Every SQLite engine in the codebase is built by `database.create_configured_engine(path, *, wal=True, foreign_keys=True)`.** A bare `create_engine` call is a bug: the configuration comes in two halves (`connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S}` and the `init_database` connect listener), and a call site that writes its own `create_engine` gets neither, so it silently runs on SQLite's defaults (5 s busy timeout, 2 MiB page cache, rollback journal, `foreign_keys=OFF`). That drift has been a real bug twice: the restore path once left the rebuilt engine *better* configured than the startup engine (#651), and nine engines in `services/restore/` ran with no settings at all (#709). `tests/test_restore.py::test_no_bare_create_engine_in_the_restore_package` is the guardrail.
+
+The engine is built in `VaultDatabase.__init__` and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py::_swap_database`); both are plain `create_configured_engine(path)` calls with the defaults, so they cannot drift.
 
 | Setting | Value | Where | Why |
 |---|---|---|---|
@@ -1093,6 +1095,13 @@ Deliberately **not** set:
 - **`temp_store=MEMORY`** — measured on a 905 MB dev vault it was 24–29 % *slower* for a large temp b-tree (Linux keeps the unlinked temp file in page cache anyway, so `MEMORY` only adds allocator overhead) and made no measurable difference at the sizes PixlStash endpoints actually produce. `cache_size` does **not** bound an in-memory temp database, so it also removes the only ceiling on a runaway sort.
 
 Settings are asserted against real pooled connections in `tests/test_database_engine_config.py`.
+
+##### Snapshot engines: the one sanctioned deviation
+
+Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.snapshot_engine`, which is `create_configured_engine(path, wal=False)`. It is the single entry point for every restore-path engine (preview ×5, full restore ×2, resource restore ×2) so the busy timeout, page cache and custom SQL functions match the vault engine; it deviates in exactly one way, and the deviation is stated once rather than inherited by omission:
+
+- **`wal=False`**: a snapshot must stay a **self-contained single file**. `journal_mode` is a persistent property of the database header, so an engine that set WAL would rewrite the snapshot's header and start a `-wal` sidecar beside it, while every path that handles a snapshot copies, replaces or compresses the **main file by name** (`_backfill_snapshot`'s `shutil.copy2`, `compress_snapshot`, `materialize_snapshot`) and would drop it. The two `wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` conversions in the restore package exist precisely to force snapshots *out* of WAL, and could not do so reliably against a live pooled WAL connection (SQLite refuses to leave WAL while another connection has the file open). `synchronous` consequently stays at SQLite's `FULL` default too, because `NORMAL` is only crash-safe under WAL, so the two always travel together.
+- **`foreign_keys` stays ON** (the shared default). Eight of the nine snapshot engines are read-only, where FK enforcement has no effect whatsoever; the ninth (`preview._fill_snapshot_hashes_at`, the only restore path that writes to a snapshot) only updates `picture.metadata_hash`, which is neither a child key nor a parent key, so SQLite runs no FK check for it. Pre-existing violations inside a snapshot (legitimate, since a snapshot is restored as a unit) are never scanned for. Asserted by `tests/test_restore.py::test_snapshot_hash_backfill_survives_foreign_key_violations`.
 
 ### Vector storage
 

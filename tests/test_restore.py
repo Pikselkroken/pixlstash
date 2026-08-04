@@ -2984,6 +2984,161 @@ def test_backfill_all_snapshot_hashes_repairs_intermediate_schema_snapshot(serve
 
 
 # ---------------------------------------------------------------------------
+# Snapshot engine configuration (issue #709): every engine the restore package
+# opens on a snapshot file goes through ``snapshot_engine``, which pairs the
+# vault engine's busy timeout / page cache / custom functions with the one
+# deliberate deviation a snapshot needs (no WAL, so it stays a single file).
+# ---------------------------------------------------------------------------
+
+
+def _make_legacy_snapshot(server, filename: str):
+    """Create a picture, snapshot it, and register a plain ``.sqlite`` copy."""
+    _create_file(server, filename)
+    pic = _add_picture(server, filename=filename)
+    cp = server.vault.snapshot_service.create_snapshot("MANUAL")
+    snap_id, legacy_abs = _register_legacy_uncompressed_snapshot(
+        server, cp, with_sidecar=False
+    )
+    return pic, snap_id, legacy_abs
+
+
+def test_snapshot_engine_is_configured_like_the_vault_engine(server):
+    """A snapshot engine is not a bare ``create_engine``.
+
+    Before #709 these nine engines ran on SQLite's defaults: a 5 s busy
+    timeout, a 2 MiB page cache and no FK enforcement.
+    """
+    from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, SQLITE_CACHE_SIZE_KIB
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    _pic, _snap_id, legacy_abs = _make_legacy_snapshot(server, "engine_cfg.jpg")
+
+    engine = snapshot_engine(legacy_abs)
+    try:
+        with engine.connect() as conn:
+            assert (
+                conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
+                == SQLITE_BUSY_TIMEOUT_S * 1000
+            )
+            assert (
+                conn.exec_driver_sql("PRAGMA cache_size").scalar()
+                == SQLITE_CACHE_SIZE_KIB
+            )
+            assert conn.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+            # The deviation: a snapshot must stay a single file.
+            assert conn.exec_driver_sql("PRAGMA journal_mode").scalar() != "wal"
+    finally:
+        engine.dispose()
+
+    for suffix in ("-wal", "-shm"):
+        assert not os.path.exists(legacy_abs + suffix), (
+            f"snapshot engine must not leave a {suffix} companion behind"
+        )
+
+
+def test_restore_paths_open_snapshots_through_the_shared_engine_helper(server):
+    """The preview / compare paths must all route through ``snapshot_engine``.
+
+    Asserted behaviourally: each engine they open is counted, so a call site
+    that goes back to a bare ``create_engine`` shows up as a miss.
+    """
+    import pixlstash.services.restore.preview as preview_mod
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, snap_id, _legacy_abs = _make_legacy_snapshot(server, "engine_routing.jpg")
+
+    calls = []
+
+    def _counting(db_path):
+        calls.append(db_path)
+        return snapshot_engine(db_path)
+
+    original = preview_mod.snapshot_engine
+    preview_mod.snapshot_engine = _counting
+    try:
+        svc = server.vault.restore_service
+        svc.preview_full(snap_id)
+        svc.preview_resource(snap_id, "picture", pic.id)
+        svc.preview_batch(snap_id, [{"type": "picture", "id": pic.id}])
+        svc.compare_hashes(snap_id, [pic.id])
+    finally:
+        preview_mod.snapshot_engine = original
+
+    # Three previews plus the legacy in-file read in compare_hashes.
+    assert len(calls) >= 4, calls
+
+
+def test_no_bare_create_engine_in_the_restore_package():
+    """Arithmetic completeness, not judgement: the package builds no engine of
+    its own. Every one comes from ``create_configured_engine`` (via
+    ``snapshot_engine`` for snapshot files), so a new engine cannot inherit
+    SQLite's defaults by omission the way the original nine did (#709)."""
+    import pixlstash.services.restore as restore_pkg
+
+    package_dir = os.path.dirname(restore_pkg.__file__)
+    offenders = []
+    for name in sorted(os.listdir(package_dir)):
+        if not name.endswith(".py"):
+            continue
+        path = os.path.join(package_dir, name)
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "create_engine(" in line and "create_configured_engine(" not in line:
+                    offenders.append(f"{name}:{lineno}: {stripped}")
+    assert not offenders, (
+        "restore code must build engines through create_configured_engine/"
+        "snapshot_engine:\n" + "\n".join(offenders)
+    )
+
+
+def test_snapshot_hash_backfill_survives_foreign_key_violations(server):
+    """The only restore path that WRITES to a snapshot runs with FKs enforced.
+
+    A snapshot is restored as a unit and may legitimately hold rows that
+    violate constraints (an orphaned tag, a dangling parent reference). The
+    hash backfill only ever updates ``picture.metadata_hash``, which is
+    neither a child key nor a parent key, so SQLite runs no FK check and the
+    write must still succeed. This is the assertion that made it safe to leave
+    FK enforcement ON for snapshot engines rather than silently off (#709).
+    """
+    from pixlstash.services.restore.schema_upgrade import snapshot_engine
+
+    pic, _snap_id, legacy_abs = _make_legacy_snapshot(server, "fk_violation.jpg")
+
+    with closing(sqlite3.connect(legacy_abs)) as conn:
+        conn.execute("UPDATE picture SET metadata_hash = NULL")
+        # An orphaned child row: tag.picture_id has a real FK to picture.id.
+        conn.execute(
+            "INSERT INTO tag (picture_id, tag) VALUES (?, ?)", (999999, "orphan")
+        )
+        conn.commit()
+        violations_before = conn.execute("PRAGMA foreign_key_check").fetchall()
+    assert violations_before, "pre-test invariant: the snapshot really is violating"
+
+    server.vault.restore_service._backfill_snapshot(legacy_abs)
+
+    engine = snapshot_engine(legacy_abs)
+    try:
+        with engine.connect() as conn:
+            stored = conn.exec_driver_sql(
+                f"SELECT metadata_hash FROM picture WHERE id = {pic.id}"
+            ).scalar()
+    finally:
+        engine.dispose()
+    assert stored is not None, "the backfill must still write through FK enforcement"
+
+    with closing(sqlite3.connect(legacy_abs)) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        # The backfill must not have silently "repaired" the snapshot either.
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == violations_before
+    for suffix in ("-wal", "-shm"):
+        assert not os.path.exists(legacy_abs + suffix)
+
+
+# ---------------------------------------------------------------------------
 # Data-loss regression: restore must not resurrect a scrapheap "ghost" that
 # shadows a file re-added after the snapshot, or emptying the scrapheap would
 # hard-delete that live file.

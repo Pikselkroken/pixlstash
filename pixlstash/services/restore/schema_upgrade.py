@@ -18,6 +18,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from pixlstash.database import create_configured_engine
 from pixlstash.db_models.snapshot import Snapshot
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.snapshot_compression import (
@@ -31,6 +32,49 @@ logger = get_logger(__name__)
 # Alembic's EnvironmentContext is not thread-safe (uses module globals).
 # Serialise all snapshot schema upgrades with this lock.
 _ALEMBIC_UPGRADE_LOCK = threading.Lock()
+
+
+def snapshot_engine(db_path: str):
+    """Return the engine every restore path uses for a snapshot ``.sqlite``.
+
+    The single entry point for opening a snapshot file, so the busy timeout,
+    the page cache and the custom SQL functions match the live vault engine
+    (§13) instead of each call site silently inheriting SQLite's defaults
+    (issue #709). It differs from the vault engine in exactly one deliberate
+    way:
+
+    **``wal=False``.** A snapshot must remain a *self-contained single file*.
+    ``journal_mode`` is a persistent property of the database header, so an
+    engine that set WAL would rewrite the snapshot's header and start writing
+    a ``-wal`` sidecar next to it. Every path that handles a snapshot
+    copies, replaces or compresses the **main file by name**
+    (``shutil.copy2(upgraded, abs_snapshot)`` in ``_backfill_snapshot``,
+    ``compress_snapshot``, ``materialize_snapshot``). Any of those would drop
+    the sidecar and silently lose the pages it held. The two
+    ``wal_checkpoint(TRUNCATE)`` + ``journal_mode=DELETE`` conversions in this
+    package (``_upgrade_snapshot_schema`` below and
+    ``preview._fill_snapshot_hashes_at``) exist precisely to force snapshots
+    *out* of WAL, and could not reliably do so against a live pooled WAL
+    connection, because SQLite refuses to leave WAL while another connection
+    has the database open. ``synchronous`` therefore also stays at SQLite's ``FULL``
+    default, since ``NORMAL`` is only crash-safe under WAL.
+
+    Foreign-key enforcement is left **on** (the shared default): all but one
+    of these engines are read-only, where FK enforcement has no effect at all,
+    and the one writer (``_fill_snapshot_hashes_at``) only ever updates
+    ``picture.metadata_hash``, which is neither a child key nor a parent key,
+    so SQLite runs no FK check for it. Pre-existing violations inside a
+    snapshot are never scanned for, so a snapshot restored "as a unit" from an
+    intermediate state still opens fine.
+
+    Args:
+        db_path: Absolute path to a snapshot ``.sqlite`` file (the archive
+            materialised into scratch, or a legacy uncompressed snapshot).
+
+    Returns:
+        A configured SQLAlchemy ``Engine``. Callers own ``dispose()``.
+    """
+    return create_configured_engine(db_path, wal=False)
 
 
 @lru_cache(maxsize=1)
