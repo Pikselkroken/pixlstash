@@ -505,17 +505,18 @@
                 </template>
                 <template v-else>
                   <img
-                    v-if="!fullImageError"
+                    v-if="fullImageSrc && !fullImageError"
+                    :key="fullImageSrc"
                     ref="imgRef"
-                    :src="getFullImageUrl(image)"
+                    :src="fullImageSrc"
                     :alt="image.description || 'Full Image'"
                     class="overlay-img"
                     :draggable="!isZoomed"
                     @dragstart="handleMediaDragStart"
-                    @load="updateOverlayDims"
+                    @load="handleFullImageLoad"
                     @error="handleFullImageError"
                   />
-                  <div v-else class="overlay-image-error">
+                  <div v-else-if="fullImageError" class="overlay-image-error">
                     <v-icon size="64" color="grey-lighten-1"
                       >mdi-image-broken-variant</v-icon
                     >
@@ -2743,6 +2744,18 @@ const videoSrc = computed(() => {
     `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`,
   );
 });
+// A cold overlay route initially knows only the picture id. An extension-less
+// `/pictures/{id}` is the JSON detail endpoint, not media: mounting it as an
+// <img> yields a successful HTTP response followed by a decode error. Wait for
+// the metadata/grid record to provide the real format before creating the
+// native image element.
+const fullImageSrc = computed(() => {
+  const data = image.value;
+  const id = data?.id;
+  const fmt = MediaFormat(data);
+  if (!id || !fmt || isSupportedVideoFile(`file.${fmt}`)) return "";
+  return getFullImageUrl(data);
+});
 const overlayDims = ref({
   width: 1,
   height: 1,
@@ -2934,11 +2947,32 @@ function updateOverlayDims() {
 
 watch(image, () => scheduleOverlayDimsUpdate());
 
-const fullImageError = ref(false); // full-size <img> fired @error (e.g. undecodable source)
+// Record the URL that failed rather than a picture-wide boolean. Metadata and
+// pixel updates can revise the media URL without changing the picture id; an
+// error from the superseded URL must not hide the replacement image.
+const fullImageErrorSrc = ref("");
+const fullImageError = computed(
+  () =>
+    Boolean(fullImageSrc.value) &&
+    fullImageErrorSrc.value === fullImageSrc.value,
+);
+
+function mediaEventSrc(event) {
+  return event?.target?.getAttribute?.("src") || "";
+}
+
+function handleFullImageLoad(event) {
+  // Ignore a late event from the element replaced by a reactive src change.
+  if (mediaEventSrc(event) !== fullImageSrc.value) return;
+  fullImageErrorSrc.value = "";
+  updateOverlayDims();
+}
 
 function handleFullImageError(event) {
-  console.warn("Full image load error for", event?.target?.src);
-  fullImageError.value = true;
+  const failedSrc = mediaEventSrc(event);
+  if (!failedSrc || failedSrc !== fullImageSrc.value) return;
+  console.warn("Full image load error for", event?.target?.src || failedSrc);
+  fullImageErrorSrc.value = failedSrc;
 }
 
 function handleVideoError(event) {
@@ -3524,7 +3558,7 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
-      fullImageError.value = false;
+      fullImageErrorSrc.value = "";
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchDetections(newId);
@@ -3535,7 +3569,7 @@ watch(
       faceBboxes.value = [];
       detectionBboxes.value = [];
       videoError.value = null;
-      fullImageError.value = false;
+      fullImageErrorSrc.value = "";
       comfyMetadata.value = null;
     }
   },

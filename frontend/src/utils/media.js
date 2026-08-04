@@ -253,10 +253,12 @@ export function getPictureId(id) {
 export function buildMediaUrl({backendUrl, image, format} = {}) {
   if (!backendUrl || !image || !image.id) return '';
   const ext = MediaFormat(format || image);
-  const suffix = ext ? `.${ext}` : '';
+  // The extension selects the native-media route. Without it this URL points
+  // at the JSON picture-detail resource, whose 200 response cannot be decoded
+  // by <img>/<video> elements.
+  if (!ext) return '';
   const cacheBuster = image.pixel_sha ? `?v=${image.pixel_sha}` : '';
-  const url = `${backendUrl}/pictures/${image.id}${suffix}${cacheBuster}`;
-  return url;
+  return `${backendUrl}/pictures/${image.id}.${ext}${cacheBuster}`;
 }
 
 export function getOverlayFormat(overlayImage) {
