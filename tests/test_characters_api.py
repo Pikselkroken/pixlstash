@@ -195,7 +195,19 @@ def test_get_characters_invalid_project_id_returns_400():
         gc.collect()
 
 
-def test_character_scoped_token_respects_project_id_filter():
+def test_character_scoped_token_may_not_filter_by_project():
+    """Issue #708 F3 — this test previously pinned the vulnerability.
+
+    It used to assert that a character-scoped token filtering
+    ``/characters?project_id=<id>`` got its character back, and that the same
+    request with ``UNASSIGNED`` did not. Comparing those two answers *is* the
+    disclosure: it tells a token that is 403'd on ``GET /projects/{id}`` that the
+    project exists and that its character is filed under it. Both requests are
+    now refused by the authz gate (``enforce_project_filter_scope``), which is
+    the behaviour this test pins instead. The unfiltered listing, which is what
+    the share UI actually issues, must keep working — over-blocking would be its
+    own regression.
+    """
     temp_dir, client, server = _setup()
     try:
         resp = client.post("/projects", json={"name": "ScopedTokenProject"})
@@ -221,24 +233,31 @@ def test_character_scoped_token_respects_project_id_filter():
         char_token = resp.json()["token"]
 
         token_client = TestClient(server.api)
+        headers = {"Authorization": f"Bearer {char_token}"}
 
-        # Filter by the correct project: character should be returned
-        resp = token_client.get(
-            f"/characters?project_id={project_id}",
-            headers={"Authorization": f"Bearer {char_token}"},
-        )
-        assert resp.status_code == 200
-        ids = [c["id"] for c in resp.json()]
-        assert char_id in ids
+        # Naming the project it is filed under, the UNASSIGNED sentinel, and a
+        # project id that does not exist all get the same 403 — so the refusal
+        # itself answers nothing.
+        for probe in (str(project_id), "UNASSIGNED", "99999999"):
+            resp = token_client.get(f"/characters?project_id={probe}", headers=headers)
+            assert resp.status_code == 403, (
+                f"project_id={probe} must be refused for a character token; got "
+                f"{resp.status_code} {resp.text}"
+            )
 
-        # Filter by UNASSIGNED: character belongs to a project, so it must not appear
-        resp = token_client.get(
-            "/characters?project_id=UNASSIGNED",
-            headers={"Authorization": f"Bearer {char_token}"},
-        )
-        assert resp.status_code == 200
-        ids = [c["id"] for c in resp.json()]
-        assert char_id not in ids
+        # In-scope direction: without the filter the token still reads its own
+        # character, and learns no project ids from the payload.
+        resp = token_client.get("/characters", headers=headers)
+        assert resp.status_code == 200, resp.text
+        listed = {c["id"]: c for c in resp.json()}
+        assert char_id in listed
+        assert listed[char_id]["project_ids"] == []
+        assert listed[char_id]["project_id"] is None
+
+        # The owner is never restricted by any of it.
+        resp = client.get(f"/characters?project_id={project_id}")
+        assert resp.status_code == 200, resp.text
+        assert char_id in [c["id"] for c in resp.json()]
     finally:
         server.vault.close()
         temp_dir.cleanup()

@@ -16,7 +16,10 @@ from sqlalchemy import delete, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_project_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_project_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -39,7 +42,12 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.utils.service.caption_utils import normalize_hidden_tags
 from pixlstash.utils.path_utils import resolve_path_within
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    narrow_project_assignments,
+    narrow_project_fields,
+    visible_project_ids,
+)
 
 logger = get_logger(__name__)
 
@@ -309,6 +317,13 @@ def create_router(server) -> APIRouter:
             if not picture_ids:
                 return {"project_assignments": {}, "unassigned_picture_ids": []}
 
+        # Filtering the picture ids is only half the guard: every *key* of this
+        # payload is a project id, which is membership metadata about projects
+        # the token may not be allowed to learn about at all (issue #125 / R1b,
+        # #708 F1). Narrow the keys on the same ladder every other serialisation
+        # of a project id uses.
+        visible_projects = visible_project_ids(server, request)
+
         def fetch(session, ids: list[int]):
             rows = session.exec(
                 select(
@@ -318,11 +333,16 @@ def create_router(server) -> APIRouter:
                 )
             ).all()
             assignments: dict[int, list[int]] = {}
-            assigned_ids: set[int] = set()
             for project_id, pid in rows:
-                assigned_ids.add(int(pid))
                 if project_id is not None:
                     assignments.setdefault(int(project_id), []).append(int(pid))
+            assignments = narrow_project_assignments(assignments, visible_projects)
+            # "Unassigned" is derived from the *narrowed* mapping, so it means
+            # "in no project you can see". Deriving it from the raw membership
+            # would re-leak what the narrowing just removed: a picture missing
+            # from both lists would tell the token some invisible project holds
+            # it.
+            assigned_ids = {pid for pids in assignments.values() for pid in pids}
             unassigned = sorted(set(ids) - assigned_ids)
             return {
                 "project_assignments": assignments,
@@ -376,6 +396,11 @@ def create_router(server) -> APIRouter:
     )
     def list_project_picture_sets(request: Request, id_or_name: str):
         server.auth.require_user_id(request)
+        # A set listed under this project may *also* belong to others, and its
+        # stored scalar ``project_id`` names its primary project — which is not
+        # necessarily this one. Serialising it raw hands a project-scoped token
+        # another project's id (issue #125 / R1b, #708 F4).
+        visible_projects = visible_project_ids(server, request)
 
         def fetch(session: Session, pid_or_name: str):
             # Resolve by numeric ID first, then fall back to case-insensitive name.
@@ -394,21 +419,42 @@ def create_router(server) -> APIRouter:
                         func.lower(Project.name) == pid_or_name.lower()
                     )
                 ).first()
+            # Resolve first, then refuse identically (#708 condition 2). The old
+            # order raised 404 "Project not found" for a project that does not
+            # exist and 403 for one the token may not see, which made this route
+            # an existence oracle by numeric id and by name alike.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             sets = session.exec(
                 select(PictureSet)
                 .where(picture_set_in_project(project.id))
                 .order_by(PictureSet.name)
             ).all()
+            # One query for every listed set's membership, so the narrowing
+            # costs no N+1 (issue #125).
+            listed_ids = [int(s.id) for s in sets if s.id is not None]
+            project_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                for sid, pid in session.exec(
+                    select(
+                        PictureSetProjectMember.set_id,
+                        PictureSetProjectMember.project_id,
+                    ).where(PictureSetProjectMember.set_id.in_(listed_ids))
+                ).all():
+                    project_ids_by_set.setdefault(int(sid), []).append(int(pid))
             return [
-                {
-                    "id": s.id,
-                    "name": s.name,
-                    "description": s.description,
-                    "project_id": s.project_id,
-                }
+                narrow_project_fields(
+                    {
+                        "id": s.id,
+                        "name": s.name,
+                        "description": s.description,
+                    },
+                    project_ids_by_set.get(int(s.id), []),
+                    visible_projects,
+                )
                 for s in sets
             ]
 
@@ -436,9 +482,13 @@ def create_router(server) -> APIRouter:
                 project = session.exec(
                     select(Project).where(func.lower(Project.name) == value.lower())
                 ).first()
+            # Same reordering as list_project_picture_sets (#708 condition 2):
+            # 403-for-existing / 404-for-missing was a project existence oracle.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             return project
 
         return server.vault.db.run_task(

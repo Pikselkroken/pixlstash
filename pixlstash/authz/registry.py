@@ -701,7 +701,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "The gate cannot resolve name->id without duplicating the handler's "
             "lookup (divergence risk, D2); the inline _require_scope_allows_character "
             "check remains the live enforcement until a shared name->id resolver "
-            "exists — do not remove it in Step 5 before then."
+            "exists — do not remove it in Step 5 before then. The {project_name} "
+            "half is enforced inline too, by enforce_project_path_scope, which the "
+            "query-param chokepoint cannot see (#708 condition 2, §16.6)."
         ),
     ),
     (
@@ -748,7 +750,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "gate cannot resolve name->id without duplicating the handler's lookup "
             "(divergence risk, D2); the inline _require_scope_allows_picture_set "
             "check remains the live enforcement until a shared name->id resolver "
-            "exists — do not remove it in Step 5 before then."
+            "exists — do not remove it in Step 5 before then. The {project_name} "
+            "half is enforced inline too, by enforce_project_path_scope, which the "
+            "query-param chokepoint cannot see (#708 condition 2, §16.6)."
         ),
     ),
     (
@@ -788,9 +792,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification=(
             "§N3 id-or-name: {id_or_name} may be a numeric id OR a project name. "
             "The gate cannot resolve it without duplicating the handler's "
-            "int-or-name lookup (divergence risk, D2); the inline "
-            "_require_scope_allows_project check remains the live enforcement until "
-            "a shared resolver exists — do not remove it in Step 5 before then."
+            "int-or-name lookup (divergence risk, D2); the inline check remains the "
+            "live enforcement until a shared resolver exists — do not remove it in "
+            "Step 5 before then. It is enforce_project_path_scope, NOT "
+            "_require_scope_allows_project: the refusal must be identical whether "
+            "the project exists or not, or the route is an existence oracle "
+            "(#708 condition 2, §16.6)."
         ),
     ),
     ("GET", "/api/v1/projects/{id_or_name}/picture_sets"): RoutePolicy(
@@ -800,9 +807,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification=(
             "§N3 id-or-name: {id_or_name} may be a numeric id OR a project name. "
             "The gate cannot resolve it without duplicating the handler's "
-            "int-or-name lookup (divergence risk, D2); the inline "
-            "_require_scope_allows_project check remains the live enforcement until "
-            "a shared resolver exists — do not remove it in Step 5 before then."
+            "int-or-name lookup (divergence risk, D2); the inline check remains the "
+            "live enforcement until a shared resolver exists — do not remove it in "
+            "Step 5 before then. It is enforce_project_path_scope, NOT "
+            "_require_scope_allows_project: the refusal must be identical whether "
+            "the project exists or not, or the route is an existence oracle "
+            "(#708 condition 2, §16.6)."
         ),
     ),
     ("GET", "/api/v1/projects/{project_id}/summary"): RoutePolicy(

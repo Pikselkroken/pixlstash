@@ -414,12 +414,30 @@ def test_project_count_queries_do_not_grow_with_the_number_of_projects(env):
 def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env):
     """In-scope 200 with the right number; nothing else in the list.
 
-    The count must equal what the *same token* gets from
+    ``image_count`` must equal what the *same token* gets from
     ``/characters/{id}/summary`` — the endpoint it is already granted — which
-    is the whole authorization argument for serving it inline: no new fact is
-    disclosed. ``project_image_count`` is asserted against the UNASSIGNED
-    scope, because a character-scoped token may learn no project id at all
-    (issue #125 / R1b), so the row it receives reports ``project_id: null``.
+    is the authorization argument for serving it inline: no new fact is
+    disclosed. That argument holds for the global count and is asserted below.
+
+    **It does NOT hold for ``project_image_count`` — known gap, issue #718.**
+    A character-scoped token may learn no project id at all (#125 / R1b), so
+    its narrowed project list is always empty, so every row lands in the
+    "unassigned" bucket — and that bucket counts ``NOT EXISTS(any membership)``,
+    i.e. "in no project *at all*", not "in no project *you can see*". So
+    ``image_count - project_image_count`` tells this token how many of its own
+    pictures are held by projects invisible to it. One integer, not iterable,
+    but a real disclosure, and the inverse of the rule
+    ``routes/projects.py::project_membership`` states for its own unassigned
+    bucket. The fix is to serialise the field as ``None`` when the token has no
+    project visibility; when that lands, the pin below becomes ``is None``.
+
+    The value cannot be cross-checked against the per-id summary any more.
+    Since #708, passing ``project_id`` at all — including the ``UNASSIGNED``
+    sentinel — is refused for a token with no project visibility, because
+    choosing which project to name was itself the membership oracle. So the
+    value is pinned literally below and the refusal is pinned beside it. Do not
+    read that pairing as a settled design: it records that the list still
+    answers a question the summary now refuses, which is #718.
     """
     client, server = env["client"], env["server"]
     shared = env["characters"]["shared"]
@@ -439,12 +457,17 @@ def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env)
     assert row["project_id"] is None
     assert row["project_ids"] == []
     assert row["image_count"] == _summary_count(anon, shared, headers=headers)
-    assert row["project_image_count"] == _summary_count(
-        anon, shared, project_id="UNASSIGNED", headers=headers
-    )
-    # ... and the reported number is genuinely the narrowed one, not the
-    # character's real primary project (P1) leaking through a different name.
+    # The reported number is genuinely the narrowed one, not the character's
+    # real primary project (P1) leaking through a different name.
     assert row["project_image_count"] == 1
+    # The same question asked directly is refused (#708). Pinned so that
+    # relaxing the filter gate shows up here as well as in the authz suite.
+    refused = anon.get(
+        f"{API}/characters/{shared}/summary",
+        params={"project_id": "UNASSIGNED"},
+        headers=headers,
+    )
+    assert refused.status_code == 403, refused.text
 
     # Out of scope: the sibling summary for another character is still refused.
     other = anon.get(

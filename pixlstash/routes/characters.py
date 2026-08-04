@@ -24,7 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_character_scope
+from pixlstash.authz.membership import (
+    enforce_character_scope,
+    enforce_project_path_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -1075,6 +1078,15 @@ def create_router(server) -> APIRouter:
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path — the picture-set twin
+            # in picture_sets.py::get_picture_set_by_name has the same guard for
+            # the same reason (#708 condition 2): the 404 branches below answer
+            # from the project space, which a character-scoped token may not
+            # probe. One uniform 403 for a project it may not see; an owner is
+            # unaffected and still gets the 404s.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             character = session.exec(
@@ -1317,6 +1329,26 @@ def create_router(server) -> APIRouter:
                 crop.save(buf, format="PNG")
                 return Response(content=buf.getvalue(), media_type="image/png")
         try:
+            if field == "project_id":
+                # The stored scalar names the character's *primary* project,
+                # which a token scoped to the character (or to a secondary
+                # project) has no grant to learn. Derive it from the narrowed
+                # membership list like every other serialisation site does
+                # (issue #125 / R1b, #708 F5).
+                visible_projects = visible_project_ids(server, request)
+
+                def fetch_project_ids(session: Session):
+                    if session.get(Character, id) is None:
+                        raise KeyError("Character not found")
+                    return character_project_ids(session, id)
+
+                payload: dict = {}
+                narrow_project_fields(
+                    payload,
+                    server.vault.db.run_immediate_read_task(fetch_project_ids),
+                    visible_projects,
+                )
+                return {"project_id": payload["project_id"]}
             char = server.vault.db.run_immediate_read_task(
                 Character.find, select_fields=[field], id=id
             )
