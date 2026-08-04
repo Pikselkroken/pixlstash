@@ -16,7 +16,10 @@ from sqlalchemy import (
     update as sa_update,
 )
 
-from pixlstash.database import _compute_picture_metadata_hash
+from pixlstash.database import (
+    _compute_picture_metadata_hash,
+    _compute_picture_metadata_hashes,
+)
 from pixlstash.db_models import (
     Character,
     DeletedFileLog,
@@ -542,14 +545,24 @@ class PreviewMixin:
                 )
                 if not null_pids:
                     return
-                for pid in null_pids:
-                    new_hash = _compute_picture_metadata_hash(session, pid)
-                    if new_hash is not None:
-                        session.execute(
-                            sa_update(Picture)
-                            .where(Picture.id == pid)
-                            .values(metadata_hash=new_hash)
-                        )
+                # Whole-file backfill: one batched hash read plus one
+                # executemany UPDATE instead of six statements per picture.
+                # A legacy snapshot can hold the entire library, so the old
+                # per-row loop was the dominant cost of a first-time compare.
+                new_hashes = _compute_picture_metadata_hashes(session, null_pids)
+                if new_hashes:
+                    stmt = (
+                        sa_update(Picture.__table__)
+                        .where(Picture.__table__.c.id == sa_bindparam("_pid"))
+                        .values(metadata_hash=sa_bindparam("_hash"))
+                    )
+                    session.execute(
+                        stmt,
+                        [
+                            {"_pid": pid, "_hash": new_hash}
+                            for pid, new_hash in new_hashes.items()
+                        ],
+                    )
                 session.commit()
             # Flush WAL to main file for a clean single-file snapshot.
             # NB: ``sqlite3.Connection.__exit__`` commits but does NOT close the
