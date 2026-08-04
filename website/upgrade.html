@@ -207,11 +207,25 @@
         color: var(--text);
       }
 
+      /* Sits above the changelog panel, and only when the user's upgrade range
+         actually contains a security badge, so nobody reads a disclaimer about
+         fixes they are not getting. */
+      .security-context {
+        margin: 0 0 24px;
+        padding: 14px 18px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--hover-wash);
+        font-size: 0.9rem;
+        line-height: 1.55;
+        color: var(--text);
+      }
+
       .change-entry {
         display: flex;
         gap: 18px;
-        align-items: baseline;
-        padding: 8px 0;
+        align-items: flex-start;
+        padding: 10px 0;
         border-bottom: 1px solid rgba(34, 38, 44, 0.07);
       }
 
@@ -349,6 +363,14 @@
           steps to get the latest version.
         </p>
       </div>
+
+      <p id="security-context" class="security-context" style="display: none">
+        Most security fixes only matter if someone else can reach your
+        PixlStash, through a share link, an API token, or a server open to the
+        internet. If yours only ever runs on your own machine, most of them are
+        housekeeping. Not all of them: a few protect your library from losing
+        pictures on its own, so it is still worth updating.
+      </p>
 
       <div id="changes-since" style="display: none" class="changes-since">
         <p class="changes-since-heading">
@@ -764,10 +786,22 @@
         return marker ? body.slice(0, marker.index) : body || "";
       }
 
+      function hasSecurityTag(entry) {
+        return (
+          /\[Security:/i.test(entry.security || "") ||
+          /\[Security:/i.test(entry.note || "") ||
+          entry.items.some(function (item) {
+            return /\[Security:/i.test(item);
+          })
+        );
+      }
+
       function renderEntries(entries) {
         if (!entries.length) return;
         document.getElementById("changes-since-version").textContent =
           userVersionStr;
+        document.getElementById("security-context").style.display =
+          entries.some(hasSecurityTag) ? "block" : "none";
         document.getElementById("changes-since-list").innerHTML = entries
           .map(function (e) {
             var note = e.note
