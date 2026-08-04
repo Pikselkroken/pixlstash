@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   ipcMain,
   Menu,
   nativeImage,
@@ -11,14 +12,16 @@ import {
 } from 'electron';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { cp, mkdir, rename, rm } from 'node:fs/promises';
+import { cp, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { detectHardware, gpuUpgrades, Hardware } from './backend/HardwareDetector';
 import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './backend/BackendManager';
+import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import { ServerProcess } from './backend/ServerProcess';
 import {
   Accel,
@@ -90,6 +93,10 @@ let teardownComplete = false;
 // (keeping the backend / remote server alive) instead of quitting. Loaded from
 // disk at startup and toggled from Settings → Backend.
 let hideToTrayOnClose = true;
+const pendingMediaSaves = new Map<
+  string,
+  { filePath: string; webContentsId: number; timeout: NodeJS.Timeout }
+>();
 
 // Cached during boot so the renderer/backend manager can reuse them.
 let hardware: Hardware | null = null;
@@ -856,6 +863,64 @@ function registerIpc(): void {
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
+
+  // The renderer fetches through its authenticated Axios/session path (also
+  // preserving read-only share tokens), then hands opaque bytes to these two
+  // narrowly-scoped native capabilities. It never supplies a filesystem path.
+  ipcMain.handle('media:beginSaveAs', async (event, requestedName: unknown) => {
+    const suggestedName = safeMediaFilename(requestedName);
+    const extension = suggestedName.includes('.')
+      ? suggestedName.split('.').pop()?.toLowerCase() || ''
+      : '';
+    const filterExtension = /^[a-z0-9]{1,16}$/.test(extension) ? extension : '';
+    const options: Electron.SaveDialogOptions = {
+      title: 'Save media as',
+      defaultPath: suggestedName,
+      ...(filterExtension
+        ? { filters: [{ name: 'Media', extensions: [filterExtension] }] }
+        : {}),
+    };
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return { canceled: true };
+    const saveId = randomUUID();
+    const timeout = setTimeout(() => pendingMediaSaves.delete(saveId), 10 * 60 * 1000);
+    timeout.unref();
+    pendingMediaSaves.set(saveId, {
+      filePath: result.filePath,
+      webContentsId: event.sender.id,
+      timeout,
+    });
+    return { canceled: false, saveId };
+  });
+  ipcMain.handle(
+    'media:completeSaveAs',
+    async (event, request: { saveId?: unknown; data?: unknown }) => {
+      const saveId = typeof request?.saveId === 'string' ? request.saveId : '';
+      const pending = pendingMediaSaves.get(saveId);
+      if (!pending || pending.webContentsId !== event.sender.id) {
+        throw new Error('That save request is no longer available.');
+      }
+      pendingMediaSaves.delete(saveId);
+      clearTimeout(pending.timeout);
+      await writeFile(pending.filePath, ipcBytes(request?.data), { flag: 'w' });
+      return { saved: true };
+    },
+  );
+  ipcMain.handle('media:cancelSaveAs', (event, saveId: unknown) => {
+    if (typeof saveId !== 'string') return;
+    const pending = pendingMediaSaves.get(saveId);
+    if (!pending || pending.webContentsId !== event.sender.id) return;
+    pendingMediaSaves.delete(saveId);
+    clearTimeout(pending.timeout);
+  });
+  ipcMain.handle('media:copyPng', (_e, data: unknown) => {
+    const image = nativeImage.createFromBuffer(pngClipboardPayload(data));
+    if (image.isEmpty()) throw new Error('The PNG image could not be decoded.');
+    clipboard.writeImage(image);
+    return { copied: true };
+  });
 
   // Desktop-shell preferences (e.g. hide-to-tray-on-close).
   ipcMain.handle('desktop:getPrefs', () => ({ hideToTrayOnClose }));
