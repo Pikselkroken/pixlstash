@@ -874,16 +874,24 @@ _PROJECT_PARAM_RE = re.compile(r"project", re.IGNORECASE)
 # reviewable claim rather than a loosened regex.
 _NON_PROJECT_FILTER_QUERY_PARAMS: dict[str, str] = {}
 
-# Routes that take a project in a request BODY or FORM field. These are outside
-# `enforce_project_filter_scope` entirely (it reads the query string only), and
-# nothing else checks the payload half. Today every one of them is a write, and a
-# resource-scoped token can only be minted READ, so `auth.py`'s "block non-GET for
-# a READ token" refuses them before the payload is ever read — unless the path is
-# in `auth.READ_SAFE_POST_PATHS`, which none of these is. That is the whole of the
-# argument for their safety, which is why they are enumerated rather than
-# described: a sixth entry, or one of these appearing in READ_SAFE_POST_PATHS, is
-# a decision to make consciously. See docs/backend_architecture.md §16.6.
-_PROJECT_REFS_IN_BODY = frozenset(
+# Routes that take a project in a request BODY or FORM field **and declare it in
+# the annotation**, so introspection can see it. `_iter_body_project_refs` reads
+# each body parameter's declared type: it enumerates a *typed* body (a Pydantic
+# request model, a `project_id: int | None = Form(...)`) exactly, and it sees
+# NOTHING inside a body declared `payload: dict = Body(...)`. The opaque half is
+# a real and acknowledged blind spot — see _PROJECT_REFS_IN_OPAQUE_BODY below.
+# This set is therefore **not** the complete list of routes that take a project
+# in a body; it is the complete list of the ones a machine can find.
+#
+# All of them are outside `enforce_project_filter_scope` (which reads the query
+# string only), and nothing else checks the payload half. Today every one is a
+# write, and a resource-scoped token can only be minted READ, so `auth.py`'s
+# "block non-GET for a READ token" refuses them before the payload is ever read —
+# unless the path is in `auth.READ_SAFE_POST_PATHS`, which none of these is. That
+# argument is what the READ-reachability assertion below actually tests; the
+# enumeration exists so a NEW typed body field has to be looked at.
+# See docs/backend_architecture.md §16.6.
+_PROJECT_REFS_IN_TYPED_BODY = frozenset(
     {
         ("POST", "/api/v1/pictures/import", "project_id"),
         ("POST", "/api/v1/pictures/import/staging", "payload.project_id"),
@@ -893,45 +901,120 @@ _PROJECT_REFS_IN_BODY = frozenset(
     }
 )
 
+# Routes whose body is an OPAQUE mapping (`payload: dict = Body(...)`) and which
+# read a project id out of it.
+#
+# **This list is hand-made, and no test can tell you it is complete.** A `dict`
+# annotation declares no keys, so nothing about the payload of these routes is
+# visible to introspection; the set was built by reading the handlers on
+# 2026-08-04 and it will go stale silently as handlers change. It is written down
+# so the known cases are known, NOT so the set can be treated as exhaustive. Do
+# not build an argument that rests on this being everything.
+#
+# (A source grep for `project_id` over the opaque-bodied handlers was tried as a
+# machine substitute and rejected: on the current tree it returns 8 routes, of
+# which 3 — POST /characters/{id}/faces, POST+PUT /picture_sets/{id}/members —
+# never read a project from the body at all and only mention the word while
+# reconciling membership they derive themselves. A check with a 38% false-positive
+# rate that still cannot prove absence buys the appearance of coverage, not
+# coverage.)
+_PROJECT_REFS_IN_OPAQUE_BODY = frozenset(
+    {
+        ("PATCH", "/api/v1/pictures/project", "payload.project_id"),
+        ("POST", "/api/v1/characters", "payload.project_ids|payload.project_id"),
+        ("POST", "/api/v1/picture_sets", "payload.project_ids|payload.project_id"),
+        (
+            "PATCH",
+            "/api/v1/picture_sets/{id}",
+            "payload.project_ids|payload.project_id",
+        ),
+        ("POST", "/api/v1/comfyui/run_t2i", "payload.project_id"),
+    }
+)
 
-def _iter_body_project_refs(app):
-    """Yield ``(method, path, dotted_field)`` for project-ish body/form fields.
+# The one thing about opaque bodies that IS arithmetic: which routes have one,
+# and which of those a READ (resource-scoped) token can actually reach. For a
+# route a READ token cannot reach, "we cannot see inside the body" costs nothing —
+# the payload is never read. For a route it CAN reach, the blind spot is live, so
+# every such route is hand-vetted here with what its handler actually reads. The
+# intersection is enumerable even though the payloads are not, which is what keeps
+# the blind spot bounded instead of open-ended.
+_READ_REACHABLE_OPAQUE_BODY_ROUTES: dict[tuple[str, str], str] = {
+    ("POST", "/api/v1/pictures/thumbnails"): (
+        "reads payload['ids'] only — a picture id list, narrowed by the gate's "
+        "picture-scope policy. Names no project. Hand-checked 2026-08-04."
+    ),
+}
 
-    Walks each route's flattened body parameters, descending into Pydantic
-    models so a field on a request schema is found under its dotted path. Only
-    the leaf name is matched against :data:`_PROJECT_PARAM_RE`, so a model merely
-    *called* ``ProjectFoo`` does not trip it — only a field that names a project.
+
+def _models_in(annotation):
+    """Return EVERY Pydantic model reachable in ``annotation``, in no order.
+
+    Returning only the *first* model made unions order-dependent: a stack-based
+    walk of ``WithProject | Plain`` popped ``Plain`` first and stopped, so the
+    project field on the other branch was never visited, while
+    ``Plain | WithProject`` was caught. A caller may send either branch, so every
+    branch has to be walked.
     """
     import typing
 
-    from fastapi.dependencies.utils import get_flat_dependant
     from pydantic import BaseModel
+
+    found = []
+    pending = [annotation]
+    while pending:
+        current = pending.pop()
+        if current is None:
+            continue
+        args = typing.get_args(current)
+        if args:
+            pending.extend(args)
+        elif isinstance(current, type) and issubclass(current, BaseModel):
+            if current not in found:
+                found.append(current)
+    return found
+
+
+def _iter_body_project_refs(app):
+    """Yield ``(method, path, dotted_field)`` for project-ish TYPED body fields.
+
+    Walks each route's flattened body parameters, descending into every Pydantic
+    model reachable from the declared annotation so a field on a request schema is
+    found under its dotted path. Only the leaf name is matched against
+    :data:`_PROJECT_PARAM_RE`, so a model merely *called* ``ProjectFoo`` does not
+    trip it — only a field that names a project.
+
+    **What it cannot see.** It reads ``field_info.annotation`` and nothing else, so
+    a body declared ``payload: dict = Body(...)`` (or ``Any``, or ``list[dict]``)
+    contributes nothing at all: the annotation declares no keys, so a project id
+    read as ``payload["project_id"]`` is invisible here. That is the blind spot
+    recorded in :data:`_PROJECT_REFS_IN_OPAQUE_BODY`, and it is why the
+    exact-equality assertion below is scoped to *typed* bodies rather than claimed
+    over all of them.
+
+    Nesting is unbounded (recursion terminates on models already open on the
+    current path, so a self-referential schema is safe). An earlier ``depth <= 4``
+    cap descended through at most five nested models and silently dropped anything
+    below that; a ``project_id`` six models down was measured as missed.
+    """
+    from fastapi.dependencies.utils import get_flat_dependant
 
     from pixlstash.route_inventory import iter_api_route_contexts
 
-    def _model_in(annotation):
-        pending = [annotation]
-        while pending:
-            current = pending.pop()
-            if current is None:
+    def _walk(name, annotation, out, seen=frozenset()):
+        descended = False
+        for model in _models_in(annotation):
+            if model in seen:
                 continue
-            args = typing.get_args(current)
-            if args:
-                pending.extend(args)
-            elif isinstance(current, type) and issubclass(current, BaseModel):
-                return current
-        return None
-
-    def _walk(name, annotation, out, depth=0):
-        model = _model_in(annotation) if depth <= 4 else None
-        if model is not None:
+            descended = True
             for sub_name, sub_field in model.model_fields.items():
                 _walk(
                     f"{name}.{sub_name}" if name else sub_name,
                     sub_field.annotation,
                     out,
-                    depth + 1,
+                    seen | {model},
                 )
+        if descended:
             return
         if _PROJECT_PARAM_RE.search(name.rsplit(".", 1)[-1]):
             out.append(name)
@@ -948,6 +1031,47 @@ def _iter_body_project_refs(app):
             yield (method, path, dotted)
 
 
+def _iter_opaque_body_routes(app):
+    """Yield ``(method, path)`` for routes whose body admits keys nothing declares.
+
+    A body parameter annotated ``dict`` / ``dict[...]`` / ``Any`` (directly or
+    inside a container or union) carries arbitrary keys, so
+    :func:`_iter_body_project_refs` can say nothing about its contents. Which
+    *routes* are in that state is still perfectly enumerable, and that is what this
+    yields.
+    """
+    import typing
+
+    from fastapi.dependencies.utils import get_flat_dependant
+
+    from pixlstash.route_inventory import iter_api_route_contexts
+
+    def _is_opaque(annotation):
+        pending = [annotation]
+        while pending:
+            current = pending.pop()
+            if current is None:
+                continue
+            if current is typing.Any or current is dict:
+                return True
+            if typing.get_origin(current) is dict:
+                return True
+            pending.extend(typing.get_args(current))
+        return False
+
+    for method, path, route in iter_api_route_contexts(app):
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for field in get_flat_dependant(dependant, skip_repeats=True).body_params:
+            annotation = getattr(getattr(field, "field_info", None), "annotation", None)
+            if _models_in(annotation):
+                continue
+            if _is_opaque(annotation):
+                yield (method, path)
+                break
+
+
 def test_project_filter_params_are_declared(built_app):
     """Every project-ish QUERY parameter is known to the project-filter gate.
 
@@ -960,6 +1084,34 @@ def test_project_filter_params_are_declared(built_app):
     One-directional on purpose: declaring a name no route takes is harmless
     (``project_ids`` is declared ahead of a route using it), while a route taking
     an undeclared name is the bug.
+
+    **What "machine-checked" does NOT mean here.** This walks *declared* query
+    parameters and matches their *wire* names. Three shapes defeat it, and the
+    third also weakens the anti-vacuity assertion below:
+
+    1. **A wire name that does not say "project".** ``project_id: str =
+       Query(None, alias="proj")`` is enumerated as ``proj``, which this regex does
+       not match — and the gate is defeated by the same fact, because it matches
+       ``request.query_params`` against ``PROJECT_FILTER_QUERY_PARAMS`` and the
+       wire name really is ``proj``. Guardrail and gate fail together, which is
+       precisely the case where a guardrail is worth nothing.
+    2. **An undeclared parameter read straight off the request.** A handler doing
+       ``request.query_params.get("owning_project")`` declares nothing, so it is
+       invisible to this enumeration. Not hypothetical: ``routes/pictures/
+       _misc.py`` and ``routes/pictures/_listing.py`` already read ``project_id``
+       directly off ``request.query_params``, so the pattern is in-tree and
+       available to copy. (Those two are covered *by the gate*, which reads the
+       raw query string — but only because they kept the declared spelling.)
+    3. **The nested-``Depends`` capability is not what the anti-vacuity assertion
+       protects.** ``iter_api_query_params`` flattens the dependency tree so a
+       parameter contributed one level down is enumerated, and §16.6 advertises
+       that. But the assertion only requires ``project_id`` to be found *somewhere*,
+       and ``project_id`` is taken at top level by a dozen routes: stub
+       ``get_flat_dependant`` to a no-op and the assertion still passes while every
+       nested parameter silently vanishes. No route today contributes a
+       project-ish parameter *only* via a nested ``Depends``, so nothing but a
+       synthetic test exercises that capability. If you add one, do not assume this
+       test would notice it disappearing.
     """
     from pixlstash.authz.membership import PROJECT_FILTER_QUERY_PARAMS
     from pixlstash.route_inventory import iter_api_query_params
@@ -1021,26 +1173,44 @@ def test_project_references_outside_the_query_chokepoint(built_app):
     ``_KNOWN_WEBSOCKET_ROUTES``: it gates nothing, it just makes a new one
     impossible to add without someone looking at it.
 
-    Exact equality in both directions — a new body project field fails the build,
-    and so does a stale entry (which would otherwise silently mean the
-    introspection stopped working).
+    **Read the scope of each assertion; they are deliberately different.**
+
+    1. Exact equality on **typed** bodies only (:data:`_PROJECT_REFS_IN_TYPED_BODY`).
+       ``_iter_body_project_refs`` reads declared annotations, so this half is
+       arithmetic over routes whose body has a declared shape, and nothing more.
+       A body declared ``payload: dict = Body(...)`` declares no keys and
+       contributes nothing — see assertion 3.
+    2. **READ-reachability, over typed *and* known-opaque project routes.** This is
+       the assertion that carries the actual safety argument: the paths yielded by
+       the inventory are the same ``/api/v1/…`` strings ``READ_SAFE_POST_PATHS``
+       holds and ``auth.py`` compares ``request.url.path`` against, so a project
+       body field becoming READ-reachable fails here.
+    3. Every route with an **opaque** body that a READ token can reach is on a
+       hand-vetted list. Nothing can enumerate a ``dict`` body's keys, so this does
+       not claim to know what those handlers read; it claims only that the set of
+       routes where the blind spot is *live* stays small and looked-at. Today it is
+       one route.
+
+    What none of this covers: which opaque-bodied WRITE routes take a project.
+    :data:`_PROJECT_REFS_IN_OPAQUE_BODY` names the five found by reading the
+    handlers, and that list cannot be machine-verified in either direction.
     """
     live = frozenset(_iter_body_project_refs(built_app))
-    assert live == _PROJECT_REFS_IN_BODY, (
-        "The set of routes taking a project in a request BODY/FORM changed. "
-        "These are outside enforce_project_filter_scope (§16.6): confirm the new "
-        "route cannot be reached by a resource-scoped token (it must be a "
-        "non-GET that is NOT in auth.READ_SAFE_POST_PATHS), then update "
-        "_PROJECT_REFS_IN_BODY and the §16.6 boundary list.\n"
-        f"  added:   {sorted(live - _PROJECT_REFS_IN_BODY)}\n"
-        f"  removed: {sorted(_PROJECT_REFS_IN_BODY - live)}"
+    assert live == _PROJECT_REFS_IN_TYPED_BODY, (
+        "The set of routes taking a project in a DECLARED (typed) request "
+        "BODY/FORM field changed. These are outside enforce_project_filter_scope "
+        "(§16.6): confirm the new route cannot be reached by a resource-scoped "
+        "token (it must be a non-GET that is NOT in auth.READ_SAFE_POST_PATHS), "
+        "then update _PROJECT_REFS_IN_TYPED_BODY and the §16.6 boundary list.\n"
+        f"  added:   {sorted(live - _PROJECT_REFS_IN_TYPED_BODY)}\n"
+        f"  removed: {sorted(_PROJECT_REFS_IN_TYPED_BODY - live)}"
     )
 
     from pixlstash.auth import READ_SAFE_POST_PATHS
 
     reachable = sorted(
         f"{method} {path}"
-        for method, path, _field in live
+        for method, path, _field in live | _PROJECT_REFS_IN_OPAQUE_BODY
         if method in ("GET", "HEAD") or path in READ_SAFE_POST_PATHS
     )
     assert not reachable, (
@@ -1050,6 +1220,33 @@ def test_project_references_outside_the_query_chokepoint(built_app):
         "token can now use it as a membership oracle. Either narrow the project "
         "id in the handler against visible_project_ids, or keep the route out of "
         "READ_SAFE_POST_PATHS:\n" + "\n".join(f"  {entry}" for entry in reachable)
+    )
+
+    opaque_reachable = {
+        (method, path)
+        for method, path in _iter_opaque_body_routes(built_app)
+        if method in ("GET", "HEAD") or path in READ_SAFE_POST_PATHS
+    }
+    unvetted = sorted(opaque_reachable - set(_READ_REACHABLE_OPAQUE_BODY_ROUTES))
+    assert not unvetted, (
+        "Route(s) with an OPAQUE body (dict/Any — no declared keys) are reachable "
+        "by a READ token. Introspection cannot see what the handler reads out of "
+        "such a payload, so the 'it is a write a READ token cannot reach' argument "
+        "that covers every other body-borne project reference does not apply here "
+        "(§16.6). Read the handler; if it names no project, add it to "
+        "_READ_REACHABLE_OPAQUE_BODY_ROUTES in this file WITH what it actually "
+        "reads and the date you checked. If it does name a project, it is a "
+        "membership oracle for a resource-scoped token — narrow it against "
+        "visible_project_ids or take the path out of READ_SAFE_POST_PATHS:\n"
+        + "\n".join(f"  {method} {path}" for method, path in unvetted)
+    )
+
+    stale_vetted = sorted(set(_READ_REACHABLE_OPAQUE_BODY_ROUTES) - opaque_reachable)
+    assert not stale_vetted, (
+        "Entr(y/ies) in _READ_REACHABLE_OPAQUE_BODY_ROUTES no longer describe a "
+        "READ-reachable opaque-bodied route. Prune them so the vetting note cannot "
+        "rot into cover for a future route of the same name:\n"
+        + "\n".join(f"  {method} {path}" for method, path in stale_vetted)
     )
 
 

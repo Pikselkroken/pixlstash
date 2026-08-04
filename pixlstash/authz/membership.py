@@ -285,9 +285,12 @@ def enforce_project_scope(server, request: Request, project_id: int) -> None:
 
 # The single refusal a scoped token gets for a project it may not see, whatever
 # the reason it may not see it. It is deliberately ONE constant: the whole point
-# of :func:`enforce_project_path_scope` is that the answer carries no information
-# about the project space, so "no such project", "another project" and "a project
-# that does not hold the resource you named" must be spelled identically.
+# of :func:`enforce_project_path_scope` is that the *content* of the answer
+# carries no information about the project space, so "no such project", "another
+# project" and "a project that does not hold the resource you named" must be
+# spelled identically. That covers status, body and headers — it does NOT make the
+# refusal constant-time; see the residual timing channel in that function's
+# docstring.
 PROJECT_PATH_REFUSAL_DETAIL = "Token is not authorised for this project"
 
 
@@ -320,6 +323,39 @@ def enforce_project_path_scope(
     three cases. An owner / unscoped token (``visible_project_ids`` returns
     ``None``) is not restricted and the caller's own 404 branch still runs, so
     the owner-facing behaviour of these routes is unchanged.
+
+    **Residual: the refusal is uniform in content, not in time (accepted risk).**
+    "Indistinguishable" above means status, body and headers — it does *not* mean
+    constant-time, and the difference is measurable. Both ``id_or_name`` routes
+    (``GET /projects/{id_or_name}`` and ``.../picture_sets``) resolve a numeric
+    segment with ``session.get(Project, int(v))`` and, when that returns nothing,
+    fall through to a second name-based ``SELECT``. So a numeric segment naming a
+    project that exists costs one query and one naming no project costs two,
+    before both arrive at the same 403. Reproduced with a ``picture_set``-scoped
+    token, 400 interleaved request pairs, status and body identical in every
+    pair: the missing-project median ran +141 µs (+6.5 %) and +210 µs (+9.6 %)
+    over two runs here, and +416 µs (+19.8 %) in the second #708 review's
+    800-sample run. The magnitude is machine- and load-dependent; the *direction*
+    is structural and reproduces.
+
+    This is **not** equalised, deliberately: making the lookup constant-time is a
+    runtime change to a hot read path, and the channel is worth far less than the
+    content oracle it replaced. Reading it needs many samples per bit against a
+    local, single-user server, and what it leaks is one bit — "is there a project
+    with this id" — not the membership fact. A project that exists and holds the
+    caller's resource and one that exists and does not cost the same single
+    query, so the ``P1``/``P3`` distinction that motivated this function is not
+    recoverable through the timing channel.
+
+    - **Owner:** backend (``senior-backend-developer``), tracked on issue #708.
+    - **Revisit trigger — any of:** (a) a resource-scoped share token becomes
+      reachable by someone other than the owner (multi-user, or a hosted demo
+      handing out scoped tokens), which turns a local timing channel into a remote
+      one; (b) these routes gain a lookup whose cost varies with *membership*
+      rather than mere existence, which would widen the channel from one bit of
+      existence to the membership fact itself; (c) the name lookup becomes
+      materially more expensive than the id lookup (an index change, a growing
+      project table), which raises the signal above the noise floor.
 
     Args:
         server: The server instance (unused; kept for signature symmetry with the
@@ -362,7 +398,12 @@ def enforce_project_path_scope(
 # added here, or the gate will not see it. That is machine-checked:
 # ``tests/test_architecture_guardrails.py::test_project_filter_params_are_declared``
 # walks every mounted route's declared query parameters and fails the build on a
-# project-ish name that is not listed here.
+# project-ish name that is not listed here. It is a check over *declared* params
+# with *project-ish wire names*; a parameter aliased to something that does not
+# say "project", or read straight off ``request.query_params`` without being
+# declared, is invisible to it — and in the alias case, to the gate as well. The
+# three blind spots are enumerated in that test's docstring; read them before
+# treating "machine-checked" as "total".
 #
 # ``project_ids`` is declared ahead of any route using it; listing a name no
 # route takes costs nothing, whereas a route taking a name not listed here is a
@@ -401,13 +442,18 @@ def enforce_project_filter_scope(server, request: Request) -> None:
 
     * **Body / form.** ``POST /pictures/import``, ``POST /pictures/import/staging``,
       ``POST /reviews``, ``POST /tag_suggestions/bulk-accept`` and
-      ``POST /tag_suggestions/scan`` all take a project in their payload. None is
-      reachable by a resource-scoped token today, but only because a
-      resource-scoped token can only be minted ``READ`` (§16.2 item 4) and the
-      auth middleware blocks a non-``GET`` for a ``READ`` token unless the path
-      is in ``auth.READ_SAFE_POST_PATHS`` — which none of these is. **Adding one
-      of them to that frozenset would open the hole**; the payload half is not
-      checked anywhere.
+      ``POST /tag_suggestions/scan`` declare a project in their payload, and
+      ``PATCH /pictures/project``, ``POST /characters``, ``POST /picture_sets``,
+      ``PATCH /picture_sets/{id}`` and ``POST /comfyui/run_t2i`` read one out of an
+      untyped ``payload: dict`` body. **The second list is hand-made and cannot be
+      shown complete** — a ``dict`` annotation declares no keys, so nothing can
+      enumerate what those handlers read; treat it as "the ones we know about",
+      not "the ones there are". None of the ten is reachable by a resource-scoped
+      token today, but only because a resource-scoped token can only be minted
+      ``READ`` (§16.2 item 4) and the auth middleware blocks a non-``GET`` for a
+      ``READ`` token unless the path is in ``auth.READ_SAFE_POST_PATHS`` — which
+      none of these is. **Adding one of them to that frozenset would open the
+      hole**; the payload half is not checked anywhere.
     * **Path segment.** Handled separately by :func:`enforce_project_path_scope`
       for the name-derived routes, and by the registry's ``PROJECT_SCOPED``
       declarations for the ``/projects/{project_id}/...`` family.
@@ -417,7 +463,10 @@ def enforce_project_filter_scope(server, request: Request) -> None:
       an argument for keeping the discriminator pattern off read-filter routes.
 
     ``tests/test_architecture_guardrails.py::test_project_references_outside_the_query_chokepoint``
-    pins the body/form list above so a sixth such route has to be looked at.
+    pins the *declared* half of the body/form list above so a new typed field has
+    to be looked at, and separately asserts that no opaque-bodied route becomes
+    ``READ``-reachable without being hand-vetted. Read that test's docstring for
+    which of its assertions are arithmetic and which are acknowledgments.
 
     Args:
         server: The server instance (unused; kept for signature symmetry with the

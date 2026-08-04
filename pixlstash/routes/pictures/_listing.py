@@ -55,9 +55,17 @@ class GridPicture(BaseModel):
     Fields are the projection used when ``fields=grid``; all are optional
     because the exact set returned depends on the requested ``fields`` and on
     server-side enrichment (stack counts, guest-score overlay, thumbnail/face
-    data added by ``POST /pictures/thumbnails``). Documented for the OpenAPI
-    schema only — responses are not filtered against this model, so additional
-    fields may be present.
+    data added by ``POST /pictures/thumbnails``).
+
+    **This model is enforced, not just documented.** It is the declared
+    ``response_model`` of the grid listing routes, so FastAPI validates every row
+    against it and — since the config does not set ``extra="allow"`` — **drops any
+    key not declared here**. That is load-bearing beyond tidiness: ``fields=full``
+    selects ``Picture.metadata_fields()``, which includes ``project_id``, and the
+    only reason those rows do not leak a project id to a token that cannot see it
+    is that this model has no ``project_id`` field to serialise it into (§16.6).
+    Adding a field here widens what the route returns; removing one silently
+    stops returning it.
     """
 
     model_config = ConfigDict(
