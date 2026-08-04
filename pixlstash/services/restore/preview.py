@@ -10,7 +10,7 @@ import os
 import shutil
 import sqlite3
 
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 from sqlalchemy import (
     bindparam as sa_bindparam,
     update as sa_update,
@@ -43,6 +43,7 @@ from .schema_upgrade import (
     _alembic_head_revisions,
     _snapshot_schema_is_current,
     _snapshot_schema_revision,
+    snapshot_engine,
 )
 
 logger = get_logger(__name__)
@@ -89,7 +90,7 @@ class PreviewMixin:
             return preview
 
         try:
-            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            snap_engine = snapshot_engine(upgraded_snapshot)
             try:
                 with Session(snap_engine) as snap_session:
                     self._compute_full_preview(
@@ -163,7 +164,7 @@ class PreviewMixin:
             return preview
 
         try:
-            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            snap_engine = snapshot_engine(upgraded_snapshot)
             try:
                 with Session(snap_engine) as snap_session:
                     self._compute_resource_preview(
@@ -233,7 +234,7 @@ class PreviewMixin:
             return preview
 
         try:
-            snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+            snap_engine = snapshot_engine(upgraded_snapshot)
             try:
                 with Session(snap_engine) as snap_session:
                     for item in resources:
@@ -374,9 +375,7 @@ class PreviewMixin:
                 # Read hashes from the (possibly just backfilled) file.
                 _snap_engine = None
                 try:
-                    _snap_engine = create_engine(
-                        f"sqlite:///{snapshot_path}", echo=False
-                    )
+                    _snap_engine = snapshot_engine(snapshot_path)
                     with Session(_snap_engine) as snap_session:
                         snap_rows = snap_session.execute(
                             select(Picture.id, Picture.metadata_hash).where(
@@ -522,15 +521,17 @@ class PreviewMixin:
 
         Opens a standalone SQLite session on *db_path* (independent of the
         vault DB), computes SHA-256 metadata hashes, and commits the results.
-        A WAL snapshot is issued afterwards to keep the snapshot as a
-        self-contained single file.
+        This is the **only** restore path that writes to a snapshot file; it
+        uses ``snapshot_engine`` (non-WAL, see there) and checkpoints/converts
+        the file back to a rollback journal afterwards, because the caller may
+        ``copy2`` the main file by name over the real snapshot.
 
         Args:
             db_path: Absolute path to a writable SQLite file.
             reset_all: When True, reset all existing hashes to NULL first so
                 every picture is recomputed (use after algorithm changes).
         """
-        engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        engine = snapshot_engine(db_path)
         try:
             with Session(engine) as session:
                 if reset_all:

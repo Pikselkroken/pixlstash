@@ -617,18 +617,91 @@ SQLITE_BUSY_TIMEOUT_S = 30
 SQLITE_CACHE_SIZE_KIB = -16384
 
 
-def init_database(dbapi_conn, conn_record):
+def _apply_sqlite_settings(dbapi_conn, *, wal: bool, foreign_keys: bool) -> None:
+    """Apply the documented SQLite connection settings to a raw DBAPI connection.
+
+    Registers the custom SQL functions the ORM queries rely on and sets the
+    per-connection PRAGMAs from §13 of docs/backend_architecture.md.
+
+    Args:
+        dbapi_conn: The sqlite3 connection handed over by SQLAlchemy's
+            ``connect`` event.
+        wal: When True, put the file in WAL mode and pair it with
+            ``synchronous=NORMAL``. The two travel together: ``NORMAL`` is only
+            crash-safe under WAL, so with ``wal=False`` ``synchronous`` is left
+            at SQLite's ``FULL`` default rather than silently weakening
+            durability in rollback-journal mode.
+        foreign_keys: Whether to enable FK enforcement (SQLite defaults it off).
+    """
     dbapi_conn.create_function("levenshtein", 2, levenshtein)
     dbapi_conn.create_function("levenshtein_with_id", 3, levenshtein_with_id)
     dbapi_conn.create_function("cosine_similarity", 2, ImageUtils.cosine_similarity)
     dbapi_conn.create_function("character_face_likeness", 2, character_face_likeness)
 
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
-    cursor.execute("PRAGMA foreign_keys=ON")
+    if wal:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+    cursor.execute(f"PRAGMA foreign_keys={'ON' if foreign_keys else 'OFF'}")
     cursor.execute(f"PRAGMA cache_size={SQLITE_CACHE_SIZE_KIB}")
     cursor.close()
+
+
+def init_database(dbapi_conn, conn_record):
+    """SQLAlchemy ``connect`` listener for the live vault engine.
+
+    Kept as a named listener because the vault engine is the fully configured
+    case (WAL + FK on); ``create_configured_engine`` attaches it for the
+    default settings.
+    """
+    _apply_sqlite_settings(dbapi_conn, wal=True, foreign_keys=True)
+
+
+def create_configured_engine(
+    db_path,
+    *,
+    wal: bool = True,
+    foreign_keys: bool = True,
+    echo: bool = False,
+):
+    """Build a SQLite engine with the settings documented in §13.
+
+    **This is the only supported way to build a SQLite engine in PixlStash.**
+    The busy timeout (``connect_args``) and the PRAGMAs (the ``connect``
+    listener) are one configuration in two halves; a bare ``create_engine``
+    call gets neither, and that drift has been a real bug twice (#651, #709).
+    Anything other than the defaults is a deliberate deviation and must be
+    justified where it is requested.
+
+    Args:
+        db_path: Filesystem path to the SQLite database file.
+        wal: Whether to use WAL journalling (with ``synchronous=NORMAL``).
+            Pass ``False`` for a database that must stay a **single file** on
+            disk. WAL is a persistent property of the file header and spawns
+            ``-wal``/``-shm`` companions, which a path that copies the main
+            file by name would silently truncate away. See
+            ``services/restore/schema_upgrade.snapshot_engine``.
+        foreign_keys: Whether to enforce foreign keys. Reads are unaffected
+            either way; this only matters for a connection that writes.
+        echo: SQLAlchemy statement echo.
+
+    Returns:
+        A configured SQLAlchemy ``Engine``.
+    """
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        echo=echo,
+        connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
+    )
+    if wal and foreign_keys:
+        event.listen(engine, "connect", init_database)
+    else:
+
+        def _listener(dbapi_conn, conn_record):
+            _apply_sqlite_settings(dbapi_conn, wal=wal, foreign_keys=foreign_keys)
+
+        event.listen(engine, "connect", _listener)
+    return engine
 
 
 def _run_migrations(engine, db_path: str, db_exists: bool) -> None:
@@ -760,12 +833,7 @@ class VaultDatabase:
         db_exists = os.path.exists(self._db_path)
         logger.debug(f"Vault init, db_path={self._db_path}, db_exists={db_exists}")
 
-        self._engine = create_engine(
-            f"sqlite:///{self._db_path}",
-            echo=False,
-            connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
-        )
-        event.listen(self._engine, "connect", init_database)
+        self._engine = create_configured_engine(self._db_path)
 
         _run_migrations(self._engine, self._db_path, db_exists)
         _ensure_user_stack_strictness(self._engine)

@@ -11,7 +11,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 from sqlalchemy import (
     delete as sa_delete,
     inspect as sa_inspect,
@@ -39,6 +39,7 @@ from ._models import (
     RestoreReport,
     _SUPPORTED_RESOURCE_TYPES,
 )
+from .schema_upgrade import snapshot_engine
 
 logger = get_logger(__name__)
 
@@ -336,7 +337,7 @@ class ResourceRestoreMixin:
             resource_id=resource_id,
         )
 
-        snap_engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+        snap_engine = snapshot_engine(abs_snapshot)
         try:
             with Session(snap_engine) as snap_session:
                 if resource_type == "picture":
@@ -484,7 +485,7 @@ class ResourceRestoreMixin:
             "projects": [],
         }
 
-        snap_engine = create_engine(f"sqlite:///{upgraded_snapshot}", echo=False)
+        snap_engine = snapshot_engine(upgraded_snapshot)
         try:
             with Session(snap_engine) as snap_session:
                 for item in resources:

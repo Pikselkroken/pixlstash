@@ -13,13 +13,14 @@ import shutil
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 from sqlalchemy import (
     delete as sa_delete,
     select as sa_select,
     update as sa_update,
 )
 
+from pixlstash.database import create_configured_engine
 from pixlstash.db_models import (
     DeletedFileLog,
     Face,
@@ -46,6 +47,7 @@ from ._models import (
     _MAX_MISSING_RATIO_FOR_CLEANUP,
     _MIN_PICTURES_FOR_MISSING_RATIO_CHECK,
 )
+from .schema_upgrade import snapshot_engine
 
 logger = get_logger(__name__)
 
@@ -862,7 +864,7 @@ class FullRestoreMixin:
         missing: list[int] = []
         total: int = 0
         try:
-            engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            engine = snapshot_engine(abs_snapshot)
             try:
                 with Session(engine) as session:
                     pictures = session.exec(select(Picture)).all()
@@ -987,7 +989,7 @@ class FullRestoreMixin:
         if not path_shas and not pixel_shas:
             return set()
         try:
-            engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            engine = snapshot_engine(abs_snapshot)
             try:
                 with Session(engine) as session:
                     return self._match_deleted_picture_ids(
@@ -1059,16 +1061,10 @@ class FullRestoreMixin:
                         os.fsync(live_dir_fd)
                     finally:
                         os.close(live_dir_fd)
-                # Recreate engine
-                from sqlalchemy import event as sa_event
-                from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, init_database
-
-                db._engine = create_engine(
-                    f"sqlite:///{live_db_path}",
-                    echo=False,
-                    connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
-                )
-                sa_event.listen(db._engine, "connect", init_database)
+                # Recreate the engine through the shared helper so the
+                # swapped-in live DB gets exactly the startup engine's
+                # configuration (§13). The two drifting apart was #651.
+                db._engine = create_configured_engine(live_db_path)
             logger.info("RestoreService: DB swap complete, engine re-created.")
         except Exception as exc:
             logger.error("RestoreService: DB swap failed: %s", exc, exc_info=True)
