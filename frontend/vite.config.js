@@ -6,8 +6,16 @@ import { fileURLToPath } from 'url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Read the PixlStash version from the root pyproject.toml
+// Read the PixlStash version from the root pyproject.toml.
+//
+// PIXLSTASH_VERSION_OVERRIDE pins it instead. Only the screenshot harness sets
+// it (`npm run screenshots 1.9.0`, see e2e/screenshots/run.js), so marketing
+// captures can be stamped with a release number while the tree is still on an
+// rc or dev version. A normal `npm run build` never sets it and always reports
+// what the tree actually is.
 function readPixlStashVersion() {
+  const pinned = process.env.PIXLSTASH_VERSION_OVERRIDE?.trim()
+  if (pinned) return pinned
   try {
     const toml = readFileSync(resolve(__dirname, '../pyproject.toml'), 'utf-8')
     const match = toml.match(/^version\s*=\s*"([^"]+)"/m)

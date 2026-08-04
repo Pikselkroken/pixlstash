@@ -31,6 +31,21 @@ const IGNORE = new Set([
   'VideoHat.webp',
 ])
 
+// Set by `npm run screenshots <version>` (e2e/screenshots/run.js). Vite has
+// already baked it into the title bar's __APP_VERSION__ by the time the server
+// boots; this covers the *other* source, App.vue's runtime GET /version, which
+// feeds the telemetry-consent dialog. Both must agree or one capture shows two
+// different versions.
+const VERSION_OVERRIDE = process.env.PIXLSTASH_VERSION_OVERRIDE || ''
+
+async function pinRuntimeVersion(page) {
+  await page.route('**/version', async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    await route.fulfill({ json: { ...body, version: VERSION_OVERRIDE } })
+  })
+}
+
 mkdirSync(OUT_DIR, { recursive: true })
 
 // Always emit JPEG (the site uses .jpg), named after the asset basename.
@@ -73,6 +88,7 @@ test.describe('reproduce website screenshots', () => {
       // the scene opts out (e.g. a recipient browser view). A scene may supply
       // `bridge` overrides (e.g. a CUDA/ROCm accelerator list) for the capture.
       if (!scene.browser) await useDesktopBridge(page, scene.bridge)
+      if (VERSION_OVERRIDE) await pinRuntimeVersion(page)
       const ctx = ctxFor(page)
       ctx.api = apiContext
       const target = await scene.setup(ctx)
