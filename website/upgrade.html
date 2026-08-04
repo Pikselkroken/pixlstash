@@ -20,6 +20,15 @@
     <style>
       /* ── upgrade.html page-specific ── */
 
+      /* This hero is a single short sentence that fits on one line inside the
+         1320px shell, but the shared 800px cap wrapped it and left a two-word
+         orphan. Balance keeps the two lines even when a narrow viewport does
+         have to wrap it. */
+      .page-hero p {
+        max-width: 62rem;
+        text-wrap: balance;
+      }
+
       .method-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
