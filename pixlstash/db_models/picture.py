@@ -325,15 +325,30 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("metadata_hash", String, default=None, nullable=True),
     )
-    # Whether this picture is a video. Replaces a non-sargable CASE over five
+    # Whether this picture is a video. Replaces the CASE over five
     # ``file_path ILIKE '%.ext'`` tests that ``fetch_best_picture_id`` used to
-    # sort on, which defeated its LIMIT 1.
+    # sort on. That is a constant-factor win (five LIKEs per row, not one column
+    # read) and NOT a sargability fix: the ordering still needs a temp B-tree,
+    # because that query drives from ``face`` while the ordering key lives on
+    # ``picture``, so no index on ``picture`` alone can serve it. Measured on
+    # 200k pictures, 45k faces on one character: 82 ms to 48 ms, temp B-tree in
+    # both plans. Do not read this column as having made that endpoint O(1).
     #
     # NOT NULL with a server default is load-bearing, not tidiness. SQLite sorts
     # NULL FIRST, so a NULL here would outrank ``False`` and hand the character
-    # thumbnail to a row of unknown type ahead of a genuine still image — the
-    # CASE it replaces could only ever yield 0 or 1. A NULL would also be
-    # invisible to the ``= 0`` backfill guard in 0096 and so never repaired.
+    # thumbnail to a row of unknown type ahead of a genuine still image, which
+    # the CASE it replaces could never do since it only ever yielded 0 or 1. A
+    # NULL would also be invisible to the ``= 0`` backfill guard in 0096 and so
+    # never repaired.
+    #
+    # Best-effort, and deliberately not one definition. Three writers disagree
+    # at the edges: the main import path (``create_picture_from_bytes``) sets it
+    # when PIL fails to decode the bytes, the reference-folder scan sets it from
+    # the extension, and 0096's backfill used the extension list of the day. So
+    # a ``.wmv`` is True on import and False from a scan, and a HEIC that PIL
+    # cannot open is True. Read it as "the decode path treated this as a video",
+    # not as a content-type. Fine for ordering preference; check before relying
+    # on it for anything that must be exact.
     is_video: bool = Field(
         default=False,
         sa_column=Column(
