@@ -35,6 +35,7 @@ This is acceptable because WS routes are acknowledged, not gated, in Phase 1.
 from collections.abc import Iterator
 
 import fastapi
+import fastapi.dependencies.utils
 import fastapi.routing
 from fastapi.routing import APIWebSocketRoute
 from starlette.routing import WebSocketRoute
@@ -65,6 +66,24 @@ if iter_route_contexts is None:  # pragma: no cover - import-time invariant
         "docs/backend_architecture.md §16.2."
     )
 
+# Flattens a route's dependency tree so parameters contributed by nested
+# ``Depends(...)`` are enumerated alongside the handler's own. Resolved with
+# getattr for the same reason as ``iter_route_contexts`` above: a bare import
+# would raise on the import line and this message — the point of the guard —
+# could never be reached. Used by :func:`iter_api_query_params`, on which the
+# ``project_id``-filter coverage guardrail rests (§16.6); a silent fallback to
+# "no query parameters found" would report false completeness.
+get_flat_dependant = getattr(fastapi.dependencies.utils, "get_flat_dependant", None)
+if get_flat_dependant is None:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        "fastapi.dependencies.utils.get_flat_dependant is missing (installed "
+        f"FastAPI {getattr(fastapi, '__version__', 'unknown')}). The route "
+        "inventory needs it to enumerate every declared query parameter, which "
+        "is what makes the project-filter coverage check (§16.6) arithmetic "
+        "rather than a human-remembered rule. Fix pixlstash/route_inventory.py "
+        "before trusting any parameter-coverage claim."
+    )
+
 # HTTP methods FastAPI/Starlette add automatically for a declared handler. They
 # are not endpoints an author declares a policy for, so the inventory omits them
 # to keep ``(method, path)`` pairs aligned with the coverage matrix's cells.
@@ -79,6 +98,7 @@ ROUTE_MODULE_PREFIX = "pixlstash.routes."
 Endpoint = tuple[str, str]  # (method, path_template), e.g. ("GET", "/pictures/{id}")
 RouteContext = tuple[str, str, object]  # (method, path_template, original_route)
 WebSocketEndpoint = tuple[str, str]  # (name, path_template)
+QueryParam = tuple[str, str, str]  # (method, path_template, query_param_name)
 
 
 def iter_api_route_contexts(app) -> Iterator[RouteContext]:
@@ -130,6 +150,35 @@ def iter_api_endpoints(app) -> Iterator[Endpoint]:
 def api_endpoint_set(app) -> set[Endpoint]:
     """Return the set of ``(method, path_template)`` HTTP endpoints on ``app``."""
     return set(iter_api_endpoints(app))
+
+
+def iter_api_query_params(app) -> Iterator[QueryParam]:
+    """Yield ``(method, path_template, name)`` for every declared query parameter.
+
+    The name is the wire name (the ``alias`` when the handler declares one),
+    because that is what arrives in ``request.query_params`` and therefore what
+    ``authz.membership.enforce_project_filter_scope`` matches on. Parameters
+    contributed by nested ``Depends(...)`` are included: the dependency tree is
+    flattened with FastAPI's own ``get_flat_dependant``, so a filter parameter
+    hidden one level down in a shared dependency is still enumerated.
+
+    Routes without a ``dependant`` (FastAPI's own ``/docs`` and
+    ``/openapi.json``, which are plain Starlette routes) declare no parameters
+    and are skipped. Shares the walk in :func:`iter_api_route_contexts`, so this
+    and the endpoint inventory can never disagree about which routes exist.
+    """
+    for method, path, route in iter_api_route_contexts(app):
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        flat = get_flat_dependant(dependant, skip_repeats=True)
+        for field in flat.query_params:
+            yield (method, path, getattr(field, "alias", None) or field.name)
+
+
+def api_query_param_names(app) -> set[str]:
+    """Return the distinct query-parameter names declared anywhere on ``app``."""
+    return {name for _method, _path, name in iter_api_query_params(app)}
 
 
 def route_module_names(app) -> set[str]:
