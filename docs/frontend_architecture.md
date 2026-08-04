@@ -114,6 +114,7 @@ frontend/src/
 │   ├── keepCoverOnly.js         # Keep-cover-only: the copy + the two selection computations, pure (+ *.test.js)
 │   ├── media.js                 # File extension lists, file-type predicates, drop-target helpers
 │   ├── setAppearance.js         # Picture-set icon/colour palette constants (kept in sync with backend)
+│   ├── sidebarCounts.js         # Which count field the sidebar reads per view mode, pure (+ *.test.js)
 │   ├── snapshots.js             # Snapshot kind→chip-colour and relative-date helpers (shared by snapshot UIs)
 │   ├── stack.js                 # Pure stack-ordering and leader-selection utilities
 │   ├── tags.js                  # Tag normalisation, deduplication, penalty scoring

@@ -53,6 +53,10 @@ import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
 import { extractSupportedImportFilesFromDataTransfer } from "../../utils/media.js";
 import {
+  characterCountUpdates,
+  projectCountUpdates,
+} from "../../utils/sidebarCounts.js";
+import {
   entityBelongsToProject,
   getEntityProjectIds,
   toggleEntityProjectPatch,
@@ -2530,30 +2534,23 @@ async function fetchSidebarData() {
   const shouldFlash = flashCountsNextFetch.value;
   // Per-character counts come off the list rows fetched above: one read for
   // the whole tree instead of a `/characters/{id}/summary` per row (#651). Both
-  // scopes ship on every row, so a mode switch is a re-read of the same shape:
-  // `project_image_count` is already scoped to the character's own project (or
-  // to "in no project" when it has none), which is exactly what the per-request
-  // `project_id` param used to ask for. Written before the category summaries
-  // below so the tree's numbers do not wait on those round-trips.
+  // scopes ship on every row, so a mode switch is a re-read of the same shape;
+  // which of the two a mode reads (and which rows have no answer yet) is pinned
+  // in `utils/sidebarCounts.js`. Written before the category summaries below so
+  // the tree's numbers do not wait on those round-trips.
   if (isCurrentRequest()) {
-    for (const char of characterRows) {
-      const count =
-        projectViewMode.value === "project"
-          ? char.project_image_count
-          : char.image_count;
-      // Absent (older backend) or null (list read without the counts) leaves
-      // the previous number in place rather than blanking the row; a real 0
-      // still writes.
-      if (count == null) continue;
-      setCategoryCount(char.id, count, shouldFlash);
+    for (const { id, count } of characterCountUpdates(
+      characterRows,
+      projectViewMode.value,
+    )) {
+      setCategoryCount(id, count, shouldFlash);
     }
   }
   // Same for the projects. The unassigned bucket is not a row in that list, so
   // it stays a single summary request (below).
   if (isCurrentRequest()) {
-    for (const project of projectRows) {
-      if (project.image_count == null) continue;
-      projectCounts.value[project.id] = project.image_count;
+    for (const { id, count } of projectCountUpdates(projectRows)) {
+      projectCounts.value[id] = count;
     }
   }
   // Fetch total image count for END key logic
