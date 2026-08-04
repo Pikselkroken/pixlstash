@@ -16,7 +16,10 @@ from sqlalchemy import delete, exists, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_project_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_project_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -416,9 +419,15 @@ def create_router(server) -> APIRouter:
                         func.lower(Project.name) == pid_or_name.lower()
                     )
                 ).first()
+            # Resolve first, then refuse identically (#708 condition 2). The old
+            # order raised 404 "Project not found" for a project that does not
+            # exist and 403 for one the token may not see, which made this route
+            # an existence oracle by numeric id and by name alike.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             sets = session.exec(
                 select(PictureSet)
                 .where(picture_set_in_project(project.id))
@@ -473,9 +482,13 @@ def create_router(server) -> APIRouter:
                 project = session.exec(
                     select(Project).where(func.lower(Project.name) == value.lower())
                 ).first()
+            # Same reordering as list_project_picture_sets (#708 condition 2):
+            # 403-for-existing / 404-for-missing was a project existence oracle.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
-            _require_scope_allows_project(request, project.id)
             return project
 
         return server.vault.db.run_task(

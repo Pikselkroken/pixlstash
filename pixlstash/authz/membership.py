@@ -280,13 +280,93 @@ def enforce_project_scope(server, request: Request, project_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Project *path* scope: a project named in a path segment (issue #708)
+# ---------------------------------------------------------------------------
+
+# The single refusal a scoped token gets for a project it may not see, whatever
+# the reason it may not see it. It is deliberately ONE constant: the whole point
+# of :func:`enforce_project_path_scope` is that the answer carries no information
+# about the project space, so "no such project", "another project" and "a project
+# that does not hold the resource you named" must be spelled identically.
+PROJECT_PATH_REFUSAL_DETAIL = "Token is not authorised for this project"
+
+
+def enforce_project_path_scope(
+    server, request: Request, project_id: int | None
+) -> None:
+    """Refuse — identically — a project named in the path that the token cannot see.
+
+    The four name-derived routes (§16.1 residual inline exception) take a project
+    in a **path segment** rather than in the ``project_id`` query parameter, so
+    :func:`enforce_project_filter_scope` (which reads ``request.query_params``)
+    cannot see it. Each one resolves that segment to a row *before* any scope
+    check runs, and its ordinary error branches then answer from the project
+    space the token is not allowed to probe (#708 condition 2)::
+
+        GET /projects/Alpha/picture_sets/SharedSet        -> 200
+        GET /projects/Gamma/picture_sets/SharedSet        -> 404 "Picture set not found"
+        GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 "Project not found"
+
+    Three distinguishable answers told a picture_set-scoped token which projects
+    exist and which of them hold its set — the exact disclosure
+    ``visible_project_ids`` exists to prevent, arriving through a path segment
+    instead of a query parameter. ``GET /projects/{id_or_name}`` had the same
+    shape one rung up (403 for an existing project, 404 for a missing one, by
+    numeric id *and* by name).
+
+    So this is called with the **resolved** id — or ``None`` when the segment
+    resolved to nothing — before the handler asks any membership question, and a
+    token that may not see the project gets one indistinguishable 403 in all
+    three cases. An owner / unscoped token (``visible_project_ids`` returns
+    ``None``) is not restricted and the caller's own 404 branch still runs, so
+    the owner-facing behaviour of these routes is unchanged.
+
+    Args:
+        server: The server instance (unused; kept for signature symmetry with the
+            other membership helpers).
+        request: The current FastAPI request.
+        project_id: The id the path segment resolved to, or ``None`` if it
+            resolved to no row. ``None`` is refused for a scoped token precisely
+            so that "does not exist" cannot be told apart from "you may not see
+            it".
+
+    Raises:
+        HTTPException: 403 with :data:`PROJECT_PATH_REFUSAL_DETAIL` when the
+            caller is scoped and ``project_id`` is not among the ids it may see.
+    """
+    visible = visible_project_ids(server, request)
+    if visible is None:
+        return
+    if project_id is None or project_id not in visible:
+        logger.warning(
+            "enforce_project_path_scope: scoped token named a project it may not "
+            "see on %s %s (resolved id %r, visible %s); refusing with the uniform "
+            "403 so existence is not disclosed",
+            request.method,
+            request.url.path,
+            project_id,
+            sorted(visible),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=PROJECT_PATH_REFUSAL_DETAIL,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Project *filter* scope: the `project_id` query parameter (issue #708)
 # ---------------------------------------------------------------------------
 
 # Query parameters that name a project the caller wants to filter by. Every
 # route that takes one takes it under one of these names; a new spelling must be
-# added here, or the gate will not see it (the CI guardrail
-# ``test_project_filter_params_are_declared`` fails the build on a new one).
+# added here, or the gate will not see it. That is machine-checked:
+# ``tests/test_architecture_guardrails.py::test_project_filter_params_are_declared``
+# walks every mounted route's declared query parameters and fails the build on a
+# project-ish name that is not listed here.
+#
+# ``project_ids`` is declared ahead of any route using it; listing a name no
+# route takes costs nothing, whereas a route taking a name not listed here is a
+# hole. The guardrail is deliberately one-directional for that reason.
 PROJECT_FILTER_QUERY_PARAMS: tuple[str, ...] = ("project_id", "project_ids")
 
 
@@ -313,6 +393,31 @@ def enforce_project_filter_scope(server, request: Request) -> None:
 
     An owner / unscoped token (``visible_project_ids`` returns ``None``) is never
     restricted, and a request that carries no project filter is a no-op.
+
+    **Boundary — this reads ``request.query_params`` and nothing else.** A new
+    route is covered the day it mounts only if it takes its project in the *query
+    string*. A project named in a JSON body, a form field, or a path segment is
+    outside this chokepoint:
+
+    * **Body / form.** ``POST /pictures/import``, ``POST /pictures/import/staging``,
+      ``POST /reviews``, ``POST /tag_suggestions/bulk-accept`` and
+      ``POST /tag_suggestions/scan`` all take a project in their payload. None is
+      reachable by a resource-scoped token today, but only because a
+      resource-scoped token can only be minted ``READ`` (§16.2 item 4) and the
+      auth middleware blocks a non-``GET`` for a ``READ`` token unless the path
+      is in ``auth.READ_SAFE_POST_PATHS`` — which none of these is. **Adding one
+      of them to that frozenset would open the hole**; the payload half is not
+      checked anywhere.
+    * **Path segment.** Handled separately by :func:`enforce_project_path_scope`
+      for the name-derived routes, and by the registry's ``PROJECT_SCOPED``
+      declarations for the ``/projects/{project_id}/...`` family.
+    * **Value-typed discriminators.** A pair such as
+      ``?resource_type=project&resource_id=N`` names a project without any
+      parameter *called* project. No name-based check can see that shape; it is
+      an argument for keeping the discriminator pattern off read-filter routes.
+
+    ``tests/test_architecture_guardrails.py::test_project_references_outside_the_query_chokepoint``
+    pins the body/form list above so a sixth such route has to be looked at.
 
     Args:
         server: The server instance (unused; kept for signature symmetry with the

@@ -24,7 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import exists, func
 from sqlmodel import Session, select
 
-from pixlstash.authz.membership import enforce_character_scope
+from pixlstash.authz.membership import (
+    enforce_character_scope,
+    enforce_project_path_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -1075,6 +1078,15 @@ def create_router(server) -> APIRouter:
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path — the picture-set twin
+            # in picture_sets.py::get_picture_set_by_name has the same guard for
+            # the same reason (#708 condition 2): the 404 branches below answer
+            # from the project space, which a character-scoped token may not
+            # probe. One uniform 403 for a project it may not see; an owner is
+            # unaffected and still gets the 404s.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             character = session.exec(

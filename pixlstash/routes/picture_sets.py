@@ -10,7 +10,10 @@ from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from pixlstash.authz.membership import enforce_set_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_set_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -675,6 +678,17 @@ def create_router(server) -> APIRouter:
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path, before the membership
+            # query below can answer from it (#708 condition 2). Without it the
+            # three outcomes — set in this project (200), project exists but does
+            # not hold it (404 "Picture set not found"), project does not exist
+            # (404 "Project not found") — told a set-scoped token which projects
+            # exist and which hold its set. A token that may not see the project
+            # now gets the same 403 in all three cases; an owner is unaffected
+            # and still gets the 404s below.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             picture_set = session.exec(

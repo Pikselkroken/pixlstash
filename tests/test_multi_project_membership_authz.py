@@ -998,6 +998,195 @@ def test_character_project_id_field_route_is_narrowed(env):
 
 
 # ---------------------------------------------------------------------------
+# R1d (issue #708, sign-off condition 2) — the project named in a PATH segment
+# ---------------------------------------------------------------------------
+#
+# ``enforce_project_filter_scope`` reads ``request.query_params``, so it cannot
+# see a project named in the URL path. The four name-derived routes (§16.1's
+# residual ``resolved_inline`` exception) do exactly that, and each resolved the
+# project *before* any scope check ran. Their ordinary error branches then
+# answered from the project space:
+#
+#     GET /projects/P1/picture_sets/SharedSet        -> 200
+#     GET /projects/P3/picture_sets/SharedSet        -> 404 "Picture set not found"
+#     GET /projects/Nope/picture_sets/SharedSet      -> 404 "Project not found"
+#     GET /projects/{existing}                       -> 403
+#     GET /projects/{missing}                        -> 404
+#
+# Three (respectively two) distinguishable answers are a project-existence and
+# project-membership oracle for a token that ``GET /projects/N`` deliberately
+# 403s — the same disclosure R1/R1c close, arriving through a path segment.
+# ``enforce_project_path_scope`` now runs on the resolved id first, so every
+# refusal is byte-identical.
+#
+# The over-blocking direction matters just as much here: a token that CAN see
+# the project must still reach these routes, and the owner's 404s must survive.
+
+# (method, path template) of the four routes, with the concrete probes used
+# below. Kept as one list so a fifth name-derived route is added in one place.
+_PROJECT_PATH_ROUTES = (
+    "/projects/{project}/picture_sets/SharedSet",
+    "/projects/{project}/characters/SharedChar",
+    "/projects/{project}",
+    "/projects/{project}/picture_sets",
+)
+
+
+def _path_probes(env):
+    """Return the (label, project path segment) probes for the path routes.
+
+    Deliberately three shapes with the SAME expected answer for a token that
+    cannot see the project: a project that exists and holds the entity, a
+    project that exists and does not, and a project that does not exist at all
+    (by name and by numeric id). If any two of them differ, the route is an
+    oracle again.
+    """
+    return [
+        ("exists, holds the entity", str(env["projects"]["P1"])),
+        ("exists, holds the entity (by name)", "P1"),
+        ("exists, does not hold it", str(env["projects"]["P3"])),
+        ("exists, does not hold it (by name)", "P3"),
+        ("does not exist (numeric)", "99999999"),
+        ("does not exist (name)", "NoSuchProjectHere"),
+    ]
+
+
+def test_project_path_routes_are_not_an_existence_oracle(env):
+    """Out-of-scope direction: for a token with no project visibility at all,
+    every one of the four path routes answers identically for a project that
+    holds its entity, a project that does not, and a project that does not
+    exist. Status *and* body, because the body used to carry the distinction
+    ("Picture set not found" vs "Project not found")."""
+    anon, mint = env["anon"], env["mint"]
+
+    with _enforcing(env["server"]):
+        for scope, resource_id in (
+            ("picture_set", env["set_id"]),
+            ("character", env["char_id"]),
+            ("picture", env["pic_a"]),
+        ):
+            headers = _bearer(mint(scope, resource_id))
+            for template in _PROJECT_PATH_ROUTES:
+                answers = {}
+                for label, segment in _path_probes(env):
+                    path = f"{API}{template.format(project=segment)}"
+                    assert_real_route(env["server"].api, "GET", path)
+                    r = anon.get(path, headers=headers)
+                    assert r.status_code == 403, (
+                        f"{scope} token on {path} got {r.status_code}; a token "
+                        f"with no project visibility must be refused: {r.text[:200]}"
+                    )
+                    answers[label] = (r.status_code, r.text)
+                distinct = set(answers.values())
+                assert len(distinct) == 1, (
+                    f"{scope} token can tell the probes apart on {template} — "
+                    f"that is the oracle: "
+                    + "; ".join(
+                        f"{k} -> {v[0]} {v[1][:80]}" for k, v in answers.items()
+                    )
+                )
+
+
+def test_project_token_is_not_told_which_other_projects_exist(env):
+    """A *project* token has visibility of exactly one project, so the same
+    indistinguishability must hold for every project that is not its own —
+    including one that does not exist."""
+    anon, tokens = env["anon"], env["tokens"]
+
+    with _enforcing(env["server"]):
+        headers = _bearer(tokens["P1"])
+        for template in _PROJECT_PATH_ROUTES:
+            answers = {}
+            for label, segment in (
+                ("another project (id)", str(env["projects"]["P2"])),
+                ("another project (name)", "P2"),
+                ("unrelated project (id)", str(env["projects"]["P3"])),
+                ("missing project (id)", "99999999"),
+                ("missing project (name)", "NoSuchProjectHere"),
+            ):
+                path = f"{API}{template.format(project=segment)}"
+                r = anon.get(path, headers=headers)
+                assert r.status_code == 403, (
+                    f"P1 token on {path} got {r.status_code}: {r.text[:200]}"
+                )
+                answers[label] = (r.status_code, r.text)
+            assert len(set(answers.values())) == 1, (
+                f"the P1 token can tell another project from a missing one on "
+                f"{template}: "
+                + "; ".join(f"{k} -> {v[0]} {v[1][:80]}" for k, v in answers.items())
+            )
+
+
+def test_project_path_routes_still_serve_a_token_that_sees_the_project(env):
+    """In-scope direction — over-blocking is its own regression. A project token
+    still reads its own project, its own project's set listing, and both
+    name-derived routes under its own project's name."""
+    anon, tokens, projects = env["anon"], env["tokens"], env["projects"]
+
+    with _enforcing(env["server"]):
+        for label in ("P1", "P2"):
+            headers = _bearer(tokens[label])
+
+            path = f"{API}/projects/{projects[label]}"
+            r = anon.get(path, headers=headers)
+            assert r.status_code == 200, f"{label} token lost its own project: {r.text}"
+            assert r.json()["id"] == projects[label]
+
+            path = f"{API}/projects/{label}"
+            r = anon.get(path, headers=headers)
+            assert r.status_code == 200, (
+                f"{label} token lost its own project by name: {r.text}"
+            )
+
+            path = f"{API}/projects/{projects[label]}/picture_sets"
+            r = anon.get(path, headers=headers)
+            assert r.status_code == 200, r.text
+            assert env["set_id"] in {s["id"] for s in r.json()}, (
+                f"{label} token lost the shared set from its own project listing"
+            )
+
+            path = f"{API}/projects/{label}/picture_sets/SharedSet"
+            r = anon.get(path, headers=headers)
+            assert r.status_code == 200, (
+                f"{label} token lost the by-name set route: {r.text}"
+            )
+            assert r.json()["id"] == env["set_id"]
+
+            path = f"{API}/projects/{label}/characters/SharedChar"
+            r = anon.get(path, headers=headers)
+            assert r.status_code == 200, (
+                f"{label} token lost the by-name character route: {r.text}"
+            )
+            assert r.json()["id"] == env["char_id"]
+
+
+def test_owner_keeps_the_404s_on_the_project_path_routes(env):
+    """The uniform 403 is for *scoped* tokens only. The owner is unrestricted, so
+    the routes keep their ordinary, informative 404s — turning those into 403s
+    for everyone would be a usability regression, not a fix."""
+    owner = env["owner"]
+
+    with _enforcing(env["server"]):
+        r = owner.get(f"{API}/projects/P1/picture_sets/SharedSet")
+        assert r.status_code == 200, r.text
+
+        r = owner.get(f"{API}/projects/P3/picture_sets/SharedSet")
+        assert r.status_code == 404 and "Picture set not found" in r.text, r.text
+
+        r = owner.get(f"{API}/projects/NoSuchProjectHere/picture_sets/SharedSet")
+        assert r.status_code == 404 and "Project not found" in r.text, r.text
+
+        r = owner.get(f"{API}/projects/P3/characters/SharedChar")
+        assert r.status_code == 404 and "Character not found" in r.text, r.text
+
+        r = owner.get(f"{API}/projects/NoSuchProjectHere")
+        assert r.status_code == 404 and "Project not found" in r.text, r.text
+
+        r = owner.get(f"{API}/projects/99999999/picture_sets")
+        assert r.status_code == 404 and "Project not found" in r.text, r.text
+
+
+# ---------------------------------------------------------------------------
 # R2 — a picture added to an already-multi-project entity joins *every* project
 # ---------------------------------------------------------------------------
 #
