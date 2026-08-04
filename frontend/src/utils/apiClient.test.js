@@ -37,6 +37,7 @@ import {
   newOperationBatchId,
   onSessionReset,
   operationBatchHeaders,
+  sessionContext,
   setRequestClientId,
   toBackendWebSocketUrl,
 } from "./apiClient";
@@ -119,6 +120,58 @@ describe("onSessionReset", () => {
     stopFirst();
     stopSecond();
     error.mockRestore();
+  });
+});
+
+// Issue #655 item 4. The transport's own identity outlived a credential change:
+// `_shareToken` and `sessionContext` were set by `activateShareToken` and never
+// cleared by anything.
+describe("the transport's own identity is dropped on a session reset", () => {
+  const relativeUrl = "/pictures/1/thumbnail";
+
+  it("stops attaching a share token after a logout", async () => {
+    activateShareToken("share-token-abc");
+    expect(appendShareToken(relativeUrl)).toContain("token=share-token-abc");
+    await logout();
+    expect(appendShareToken(relativeUrl)).toBe(relativeUrl);
+  });
+
+  // The reachable path: Root.vue calls activateShareToken BEFORE validating the
+  // token, so an invalid ?token= left it set while the login screen rendered.
+  // The owner's login then attached that dead token to every request.
+  it("stops attaching a rejected share token once the owner logs in", async () => {
+    activateShareToken("invalid-token-from-a-bad-link");
+    await login("owner", "hunter2");
+    expect(appendShareToken(relativeUrl)).toBe(relativeUrl);
+  });
+
+  it("clears the session context, so a stale scope cannot suppress the next one's lists", async () => {
+    activateShareToken("share-token-abc");
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    await logout();
+    expect(sessionContext.value).toBeNull();
+  });
+
+  // The other direction: entering a share token must still leave that token
+  // attached. `activateShareToken` announces the transition and assigns after,
+  // and clearing in the wrong order would wipe the token it just set.
+  it("keeps the NEW token when a share link is what caused the reset", () => {
+    activateShareToken("first-token");
+    activateShareToken("second-token");
+    expect(appendShareToken(relativeUrl)).toContain("token=second-token");
+  });
+
+  // Handlers may read sessionContext while deciding what to drop
+  // (useEntityListsStore.canFetch), so it must still be readable during the
+  // handler loop and only be cleared afterwards.
+  it("clears the context AFTER the handlers, not before", async () => {
+    const seen = [];
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    const stop = onSessionReset(() => seen.push(sessionContext.value));
+    await logout();
+    expect(seen).toEqual([{ scope: "READ", resource_type: "character" }]);
+    expect(sessionContext.value).toBeNull();
+    stop();
   });
 });
 

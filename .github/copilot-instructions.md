@@ -130,6 +130,14 @@ Decompose by domain first, then fan out. **Independent** sub-tasks should run co
 - **Build frontend:** `npm run build` (in `frontend/`)
 - **Dev frontend:** `npm run dev` (in `frontend/`)
 
+## New test files must be gated in CI
+
+Every file under `tests/` must be either listed in the `backend` job's file list in `.github/workflows/ci.yml` (preferred, since it then blocks PRs) or listed in `DEFERRED_FROM_GATE` in `tests/test_ci_shards.py` with a reason if it is not green yet. `tests/test_ci_shards.py::test_every_test_file_is_classified` fails the build on anything unclassified, so a new suite that is written and passing locally still breaks CI until it is listed. Add the file in alphabetical position as part of the same change that adds the test.
+
+**Do not try to place a test in a particular shard.** The blocking gate runs `--ci-shard N/8`, which deals every collected test round-robin by position (`tests/conftest.py`), so all eight shards share one file list and a single file's tests spread across all of them. There is no per-shard list to pick, and assignment shifts for every test collected after an insertion point, so per-shard timings reshuffle on each run anyway.
+
+Shards are therefore equal in test *count*, never in test *time*, and the residual imbalance (measured at 1.62x, roughly 460 s of idle runner) cannot be improved by where a file is added. Closing it needs time-aware assignment fed by real per-test durations, which the gate does not currently record: `PYTEST_FLAGS` carries no `--durations`, so CI exposes per-shard step totals only. That is its own change, not something to improvise while adding a test.
+
 ## Reviews
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md

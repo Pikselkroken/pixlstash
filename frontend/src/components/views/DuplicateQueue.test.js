@@ -86,6 +86,7 @@ vi.mock("../../utils/apiClient", async () => {
   const { ref: makeRef } = await import("vue");
   return {
     isReadOnly: makeRef(false),
+    onSessionReset: () => () => {},
     API_BASE_URL: "http://backend.test/api/v1",
     newOperationBatchId: () => `cli-test-${(batchCounter += 1)}`,
   };

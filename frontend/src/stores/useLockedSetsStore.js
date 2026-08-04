@@ -13,9 +13,10 @@
 // uses (a sidebar refresh / a CHANGED_PICTURES → pictures_changed ws event),
 // wired from App.vue.
 
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
 import { getLockedMembers } from "../api/pictureSets";
+import { onSessionReset } from "../utils/apiClient";
 
 // The single source of truth for the lock tooltip copy. Reused verbatim by the
 // grid badge, the overlay chip, and the context-menu gating so the "why is this
@@ -56,6 +57,13 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
   // trailing refetch, never a fetch storm.
   let inFlight = false;
   let refetchQueued = false;
+
+  // Bumped by reset(). `GET /picture_sets/locked-members` is a scope-aware list
+  // (`_LIST_AWARE` in pixlstash/authz/registry.py), so a response that was
+  // already on the wire when the credential changed describes the PREVIOUS
+  // one's locked sets. Tagging each request with the epoch it started in lets
+  // the late response be dropped instead of written into the new session.
+  let epoch = 0;
 
   // pictureId (Number) -> [locking set name, ...]. Built once per `sets`
   // change; every lookup below is then O(1).
@@ -101,8 +109,12 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
       return;
     }
     inFlight = true;
+    const requestEpoch = epoch;
     try {
       const data = (await getLockedMembers()) ?? {};
+      // The credential changed while this was in flight — these are the
+      // previous session's locked sets and must not be shown to the next one.
+      if (requestEpoch !== epoch) return;
       sets.value = Array.isArray(data.sets) ? data.sets : [];
     } catch (e) {
       // Lock badges/gating are advisory over a hard server-side 423 guard, so a
@@ -113,17 +125,33 @@ export const useLockedSetsStore = defineStore("lockedSets", () => {
         e,
       );
     } finally {
-      inFlight = false;
-      if (refetchQueued) {
-        refetchQueued = false;
-        fetch();
+      if (requestEpoch === epoch) {
+        inFlight = false;
+        if (refetchQueued) {
+          refetchQueued = false;
+          fetch();
+        }
       }
     }
   }
 
+  /**
+   * Drop the cached locked sets. Called on every auth-context transition.
+   *
+   * The epoch bump is the load-bearing half: without it a read that was already
+   * on the wire would repopulate `sets` moments after the clear.
+   */
   function reset() {
+    epoch += 1;
+    inFlight = false;
+    refetchQueued = false;
     sets.value = [];
   }
+
+  // Logout / login / share-token entry all funnel through the one chokepoint in
+  // apiClient, so there is no second mechanism to keep in sync (issue #655).
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
 
   return {
     sets,

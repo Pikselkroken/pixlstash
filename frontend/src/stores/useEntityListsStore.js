@@ -15,6 +15,21 @@
 // NOT to be confused with `useEntityNamesStore`, which holds id → name maps for
 // the breadcrumb only. This store holds the full row objects.
 //
+// ── Why the sidebar's counts ride along (issue #651) ────────────────────────
+// `characters` and `projects` are read with `include_counts=true`, so every row
+// carries its `image_count` (and, for characters, `project_image_count`). That
+// replaces the sidebar's per-entity `/{id}/summary` fan-out, one request per
+// character on every refresh, with two list reads it was making anyway.
+//
+// The counts live on the SHARED list rather than in a second "list with counts"
+// cache on purpose: two shapes for one entity would mean two caches to keep
+// coherent, two invalidation paths and two epochs, and the flyout/scope-picker
+// consumers would race the sidebar for the same rows. They simply ignore the
+// extra fields. Both count fields are also independent of the sidebar's current
+// project selection (the backend scopes `project_image_count` to the
+// character's OWN `project_id`), so one cached response is valid in BOTH
+// sidebar view modes and a mode switch never invalidates it.
+//
 // ── Security (see the review on issue #646) ─────────────────────────────────
 // `GET /characters`, `/picture_sets` and `/projects` are `SCOPED_LIST` authz
 // routes: their CONTENT is an authorization decision, filtered to the calling
@@ -42,11 +57,19 @@ import { isReadOnly, onSessionReset, sessionContext } from "../utils/apiClient";
 /** The three lists this store owns. */
 export const ENTITY_KINDS = ["characters", "sets", "projects"];
 
-/** kind → the api module function that reads the whole list. */
+/**
+ * kind → the api module function that reads the whole list.
+ *
+ * Characters and projects ask for `include_counts` so the sidebar can render
+ * its per-row image counts off this list instead of one `/{id}/summary` request
+ * per row (see the header note).
+ */
 const FETCHERS = {
-  characters: listCharacters,
+  characters: ({ baseUrl }) =>
+    listCharacters({ baseUrl, params: { include_counts: true } }),
   sets: listPictureSets,
-  projects: listProjects,
+  projects: ({ baseUrl }) =>
+    listProjects({ baseUrl, params: { include_counts: true } }),
 };
 
 function emptyLists() {

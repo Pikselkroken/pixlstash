@@ -801,6 +801,13 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 
+**Probe cost (#651)**: the planner sweeps every finder on a short interval and resets to `MIN_INTERVAL_S` whenever anything was submitted, so a finder's query runs continuously while any pipeline is active — including on a fully-processed library, where it matches nothing. Two rules follow, and a new finder must obey both:
+
+- **Never select the whole ORM `Picture`.** Narrow to the columns the task actually reads (`load_only`, plus `load_only` on any `selectinload`). `image_embedding`, `text_embedding`, `likeness_parameters` and `Face.features` are `LargeBinary`; dragging them through a probe evicts the pages the API endpoints need, several times a second. Keep it an ORM select though — `BaseTaskFinder._filter_and_claim` claims via `getattr(picture, "id", None)`, so a scalar/tuple select silently claims nothing. The session is closed before the task runs, so anything not loaded raises `DetachedInstanceError`.
+- **Give the predicate an index, and lead it with the nullable column.** PixlStash never runs `ANALYZE`, so there is no `sqlite_stat1` and SQLite scores a partial index by the table's default row estimate rather than by how few rows it covers. A partial index only wins when it can claim *more* equality terms than the index it competes with; `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted`, while an `(id)`-only partial index ties and loses on a creation-order tie-break that `create_all` randomises. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
+
+Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
+
 **User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
@@ -1009,7 +1016,11 @@ Selected milestones:
 
 | 0090 | `usertoken.public_id` — a stable, never-reused identity for a token (#666, see §12.2). Additive: add the column, backfill every row with `lower(hex(randomblob(16)))`, then add the unique index. Existing tokens keep their integer ids, hashes, foreign key and all three pre-existing indexes |
 
-Current head: `0094_add_telemetry_consent`.
+| 0095 | `ix_picture_thumbnail_missing` / `ix_picture_smart_score_missing` — partial indexes for the two hottest idle work probes (#651). Schema-only, no `NULL` reset. Column order is load-bearing: see §7's note on probe cost |
+
+| 0096 | `picture.is_video` — persists what used to be a `CASE` over five `file_path ILIKE '%.ext'` tests in the character-thumbnail ordering (#651). Additive, `NOT NULL DEFAULT 0`, with a set-based extension backfill. NOT NULL is a correctness constraint, not tidiness: SQLite sorts `NULL` first, so a nullable column would let an unclassified row outrank a still image in the very ordering the column exists to serve, and would slip past the backfill's `= 0` guard |
+
+Current head: `0096_add_picture_is_video`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 

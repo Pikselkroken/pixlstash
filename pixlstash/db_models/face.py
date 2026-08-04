@@ -4,12 +4,14 @@ import math
 from sqlmodel import (
     Column,
     ForeignKey,
+    Index,
     Integer,
     select,
     String,
     SQLModel,
     Field,
     Relationship,
+    text,
     UniqueConstraint,
 )
 from typing import List, Optional, TYPE_CHECKING
@@ -53,7 +55,32 @@ class Face(SQLModel, table=True):
         back_populates="faces", sa_relationship_kwargs={"overlaps": "picture"}
     )
 
-    __table_args__ = (UniqueConstraint("picture_id", "frame_index", "face_index"),)
+    __table_args__ = (
+        UniqueConstraint("picture_id", "frame_index", "face_index"),
+        # "Which characters have a face that carries an embedding?", behind
+        # ``GET /characters``. Plain ``ix_face_character_id`` covers every face,
+        # embedded or not, and needs a table lookup per row to test ``features``;
+        # scoped to the embedded faces the answer comes out of the index alone.
+        # Issue #651.
+        #
+        # ONLY RELY ON THIS FOR ONE-PASS SHAPES: ``GROUP BY character_id`` or
+        # ``DISTINCT character_id`` over ``features IS NOT NULL``. For those the
+        # planner picks it unconditionally. A PER-CHARACTER probe
+        # (``character_id = ?`` / ``IN (...)``) is a coin flip against
+        # ``ix_face_character_id``: this database never runs ``ANALYZE``, so with
+        # no ``sqlite_stat1`` the two indexes tie on cost, and the tie is
+        # broken by index-creation order — which ``metadata.create_all()``
+        # iterates from a set, so it varies per process. Making the per-character
+        # probe deterministic would mean adding ``features`` itself as a second
+        # index column, i.e. duplicating every face embedding into the index.
+        # Answer the question in one grouped pass instead; that is also the fix
+        # for the N+1 the per-character form implies.
+        Index(
+            "ix_face_character_features",
+            "character_id",
+            sqlite_where=text("features IS NOT NULL"),
+        ),
+    )
 
     def __init__(self, *args, bbox=None, **kwargs):
         super().__init__(*args, **kwargs)

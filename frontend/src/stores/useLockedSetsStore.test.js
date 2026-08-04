@@ -5,6 +5,7 @@ import { setActivePinia, createPinia } from "pinia";
 // we can drive the locked-members payload.
 vi.mock("../utils/apiClient", () => ({
   apiClient: { get: vi.fn() },
+  onSessionReset: () => () => {},
 }));
 
 import { apiClient } from "../utils/apiClient";

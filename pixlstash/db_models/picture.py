@@ -6,10 +6,11 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import Float, String, desc, func, or_, text
+from sqlalchemy import Float, Index, String, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
+    Boolean,
     Column,
     DateTime,
     SQLModel,
@@ -324,6 +325,36 @@ class Picture(SQLModel, table=True):
         default=None,
         sa_column=Column("metadata_hash", String, default=None, nullable=True),
     )
+    # Whether this picture is a video. Replaces the CASE over five
+    # ``file_path ILIKE '%.ext'`` tests that ``fetch_best_picture_id`` used to
+    # sort on. That is a constant-factor win (five LIKEs per row, not one column
+    # read) and NOT a sargability fix: the ordering still needs a temp B-tree,
+    # because that query drives from ``face`` while the ordering key lives on
+    # ``picture``, so no index on ``picture`` alone can serve it. Measured on
+    # 200k pictures, 45k faces on one character: 82 ms to 48 ms, temp B-tree in
+    # both plans. Do not read this column as having made that endpoint O(1).
+    #
+    # NOT NULL with a server default is load-bearing, not tidiness. SQLite sorts
+    # NULL FIRST, so a NULL here would outrank ``False`` and hand the character
+    # thumbnail to a row of unknown type ahead of a genuine still image, which
+    # the CASE it replaces could never do since it only ever yielded 0 or 1. A
+    # NULL would also be invisible to the ``= 0`` backfill guard in 0096 and so
+    # never repaired.
+    #
+    # Best-effort, and deliberately not one definition. Three writers disagree
+    # at the edges: the main import path (``create_picture_from_bytes``) sets it
+    # when PIL fails to decode the bytes, the reference-folder scan sets it from
+    # the extension, and 0096's backfill used the extension list of the day. So
+    # a ``.wmv`` is True on import and False from a scan, and a HEIC that PIL
+    # cannot open is True. Read it as "the decode path treated this as a video",
+    # not as a content-type. Fine for ordering preference; check before relying
+    # on it for anything that must be exact.
+    is_video: bool = Field(
+        default=False,
+        sa_column=Column(
+            "is_video", Boolean, nullable=False, server_default="0", index=False
+        ),
+    )
 
     # Relationships
     quality: Optional["Quality"] = Relationship(
@@ -394,6 +425,42 @@ class Picture(SQLModel, table=True):
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
+    )
+
+    # Partial indexes for the two hottest idle work probes (issue #651). The
+    # WorkPlanner sweeps every finder on a short interval, so both of these run
+    # continuously even on a fully-processed library, where they match nothing.
+    # Without them SQLite serves both from ``ix_picture_deleted`` and walks EVERY
+    # non-deleted row to prove there is no work; scoped to the matching rows the
+    # probe is O(rows that actually need work), i.e. free when idle.
+    #
+    # Column order is load-bearing, not cosmetic. The obvious ``(id)``-only form
+    # does NOT get chosen: this database never runs ``ANALYZE``, so there is no
+    # ``sqlite_stat1``, and without statistics SQLite scores a partial index by the
+    # table's default row estimate. It only wins when it can claim MORE equality
+    # terms than the index it competes with. Leading with the nullable column makes
+    # ``<col> IS NULL`` a usable equality term (SQLite treats ``IS NULL`` as one),
+    # and ``deleted`` a second, which beats single-term ``ix_picture_deleted``
+    # outright rather than tying with it and losing on a creation-order tie-break.
+    # Trailing ``id`` keeps ``ORDER BY picture.id`` free (no temp B-tree).
+    # Measured on 200k rows with 3 matching: 17.9 ms -> under 0.01 ms per probe.
+    __table_args__ = (
+        # MissingThumbnailFinder: thumbnail_width IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_thumbnail_missing",
+            "thumbnail_width",
+            "deleted",
+            "id",
+            sqlite_where=text("thumbnail_width IS NULL"),
+        ),
+        # MissingSmartScoreFinder: smart_score IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_smart_score_missing",
+            "smart_score",
+            "deleted",
+            "id",
+            sqlite_where=text("smart_score IS NULL"),
+        ),
     )
 
     class Config:

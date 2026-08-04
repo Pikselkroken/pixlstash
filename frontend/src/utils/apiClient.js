@@ -42,6 +42,24 @@ function onSessionReset(handler) {
 /**
  * Announce that the credential changed. Handlers run synchronously; one that
  * throws is logged and never stops the others.
+ *
+ * The transport's own identity — the share token it attaches to every request,
+ * and the session context that `isReadOnly` is derived from — is dropped here
+ * too, AFTER the handlers. Both outlived a credential change before (issue
+ * #655 item 4): `Root.vue` calls `activateShareToken()` before validating the
+ * token, so an invalid `?token=` left `_shareToken` set while the login screen
+ * rendered, and the owner's subsequent login then attached a stale `token=`
+ * query param to every request. The stale `resource_type` that came with it
+ * suppressed the owner's own project list.
+ *
+ * Order is load-bearing, in both directions:
+ *
+ *   * AFTER the handlers, because a handler may read `sessionContext` while it
+ *     decides what to drop (`useEntityListsStore.canFetch`). Clearing first
+ *     would flip `isReadOnly` to false underneath them mid-reset.
+ *   * BEFORE `activateShareToken` assigns the new token, which is why that
+ *     function announces the transition first and assigns second.
+ *
  * @param {string} reason - what changed, for the log line.
  */
 function notifySessionReset(reason) {
@@ -53,6 +71,8 @@ function notifySessionReset(reason) {
           `Session-reset handler failed after ${reason}:`, error);
     }
   }
+  _shareToken = null;
+  sessionContext.value = null;
 }
 
 function activateShareToken(token) {
