@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime
 
 from enum import Enum, auto, IntEnum
-from sqlalchemy import Float, String, desc, func, or_, text
+from sqlalchemy import Float, Index, String, desc, func, or_, text
 from sqlalchemy.orm import aliased, load_only, selectinload
 from sqlalchemy.types import LargeBinary
 from sqlmodel import (
@@ -394,6 +394,42 @@ class Picture(SQLModel, table=True):
             "cascade": "all, delete-orphan",
             "passive_deletes": True,
         },
+    )
+
+    # Partial indexes for the two hottest idle work probes (issue #651). The
+    # WorkPlanner sweeps every finder on a short interval, so both of these run
+    # continuously even on a fully-processed library, where they match nothing.
+    # Without them SQLite serves both from ``ix_picture_deleted`` and walks EVERY
+    # non-deleted row to prove there is no work; scoped to the matching rows the
+    # probe is O(rows that actually need work), i.e. free when idle.
+    #
+    # Column order is load-bearing, not cosmetic. The obvious ``(id)``-only form
+    # does NOT get chosen: this database never runs ``ANALYZE``, so there is no
+    # ``sqlite_stat1``, and without statistics SQLite scores a partial index by the
+    # table's default row estimate. It only wins when it can claim MORE equality
+    # terms than the index it competes with. Leading with the nullable column makes
+    # ``<col> IS NULL`` a usable equality term (SQLite treats ``IS NULL`` as one),
+    # and ``deleted`` a second, which beats single-term ``ix_picture_deleted``
+    # outright rather than tying with it and losing on a creation-order tie-break.
+    # Trailing ``id`` keeps ``ORDER BY picture.id`` free (no temp B-tree).
+    # Measured on 200k rows with 3 matching: 17.9 ms -> under 0.01 ms per probe.
+    __table_args__ = (
+        # MissingThumbnailFinder: thumbnail_width IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_thumbnail_missing",
+            "thumbnail_width",
+            "deleted",
+            "id",
+            sqlite_where=text("thumbnail_width IS NULL"),
+        ),
+        # MissingSmartScoreFinder: smart_score IS NULL AND deleted IS 0.
+        Index(
+            "ix_picture_smart_score_missing",
+            "smart_score",
+            "deleted",
+            "id",
+            sqlite_where=text("smart_score IS NULL"),
+        ),
     )
 
     class Config:
