@@ -238,7 +238,7 @@
              found a better answer — Decided and Auto-stack compress to
              icon forms, the size slider simply hides at ≤720 (the value
              persists in the store), and the app-wide tail never folds. -->
-        <UndoControl v-if="!readOnly" />
+        <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -514,6 +514,23 @@
          trusted. -->
     <div v-else-if="store.loadingMore" class="dq-state" role="status">
       Loading the next groups.
+    </div>
+
+    <!-- A read-only session reaches this destination only by URL (the sidebar
+         row is inert), and every /dedup/* route is owner-only, so it asked for
+         nothing and holds no rows. It must not fall through to the states
+         below: "Confirming whether the queue is clear" never resolves without
+         counts, and "Queue clear" would assert a library-wide fact this session
+         cannot know. Placed AFTER the row branches on purpose, so a read-only
+         render that does have groups still shows them, verdicts disabled. -->
+    <div v-else-if="readOnly" class="qdone" data-testid="dedup-read-only">
+      <v-icon size="48">mdi-content-duplicate</v-icon>
+      <h3>Duplicate review</h3>
+      <p>
+        Duplicate review is only available in your own library. There, PixlStash
+        groups the pictures that are the same shot, strongest match first, and
+        each group is one keystroke to stack or keep separate.
+      </p>
     </div>
 
     <div v-else-if="!store.countsLoaded" class="dq-state" role="status">
@@ -2815,15 +2832,21 @@ function syncQueueToRoute() {
 // (which requires held rows) into a full openQueue, which force-reset the
 // Decided flip the mirror was in the middle of recording: the decided rows
 // flashed and were replaced by "Queue clear".
-watch([() => route.query.scope, () => route.query.scope_id], syncQueueToRoute);
+watch([() => route.query.scope, () => route.query.scope_id], () => {
+  if (readOnly.value) return;
+  syncQueueToRoute();
+});
 
 onMounted(() => {
-  syncQueueToRoute();
+  // Every read this destination makes is owner-only, so a read-only session
+  // asks for none of them: the whole body is the explanatory state, and the
+  // fetches would only be a row of 403s behind it.
+  if (!readOnly.value) syncQueueToRoute();
   // The queue is a keyboard surface. Taking focus on mount is what makes the
   // first Enter work without the user hunting for a click target first.
   rootEl.value?.focus?.();
   nextTick(measureRowPitch);
-  prefetchNextGroup();
+  if (!readOnly.value) prefetchNextGroup();
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", onDocumentPointerDown);
     document.addEventListener("keydown", onKeydown);

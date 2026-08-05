@@ -27,6 +27,7 @@
  */
 import { computed, nextTick, ref, watch } from "vue";
 
+import { isReadOnly } from "../../utils/apiClient";
 import {
   formatOperationTime,
   iconForOpType,
@@ -66,8 +67,19 @@ const future = computed(() => store.future);
 const undoKeys = undoKeyHint();
 const redoKeys = redoKeyHint();
 
-const canUndo = computed(() => store.canUndo && !store.busy);
-const canRedo = computed(() => store.canRedo && !store.busy);
+// A read-only (share-token) session keeps the control MOUNTED and inert rather
+// than hiding it: the demo has to show that undo exists. There is nothing to
+// soften here — `/operations*` is owner-only, so the store never reads a stack
+// and every affordance below states that reason instead of implying an empty
+// history. Same `aria-disabled` treatment as "nothing to undo", so the buttons
+// stay tabbable and keep explaining themselves.
+const UNAVAILABLE = "only available in your own library";
+const canUndo = computed(
+  () => store.canUndo && !store.busy && !isReadOnly.value,
+);
+const canRedo = computed(
+  () => store.canRedo && !store.busy && !isReadOnly.value,
+);
 
 /** What one Ctrl+Z would take back right now, for the tooltip. */
 const undoLabel = computed(() =>
@@ -82,15 +94,17 @@ const redoLabel = computed(() =>
 // client's own work), so the affordance has to say so before it reverts
 // something the user never did.
 const undoTitle = computed(() => {
+  if (isReadOnly.value) return `Undo is ${UNAVAILABLE}`;
   if (!store.nextUndo) return `Nothing to undo (${undoKeys.join("+")})`;
   const where = store.nextUndoIsExternal ? "Changed elsewhere: " : "";
   return `Undo: ${where}${undoLabel.value} (${undoKeys.join("+")})`;
 });
-const redoTitle = computed(() =>
-  store.nextRedo
+const redoTitle = computed(() => {
+  if (isReadOnly.value) return `Redo is ${UNAVAILABLE}`;
+  return store.nextRedo
     ? `Redo: ${redoLabel.value} (${redoKeys.join("+")})`
-    : `Nothing to redo (${redoKeys.join("+")})`,
-);
+    : `Nothing to redo (${redoKeys.join("+")})`;
+});
 
 // The standard attribute for "this control has a keyboard shortcut". It
 // survives the visual keycaps being aria-hidden and is read on focus, which
@@ -263,14 +277,21 @@ defineExpose({
             <v-icon size="18" class="tbm-header-icon">mdi-history</v-icon>
             <span class="tbm-title">History</span>
             <span class="tbm-spacer"></span>
-            <span class="uc-count"
+            <!-- No tally in a read-only session: the stack was never read, so
+                 "0 steps" would be a claim about the library rather than a
+                 count of what is on screen. -->
+            <span v-if="!isReadOnly" class="uc-count"
               >{{ store.historyCount }} step{{
                 store.historyCount === 1 ? "" : "s"
               }}</span
             >
           </div>
           <div ref="listEl" class="uc-list">
-            <p v-if="!rows.length" class="uc-empty">
+            <p v-if="isReadOnly" class="uc-empty">
+              History is only available in your own library. There, every change
+              is listed here newest first, and you can step back to any of them.
+            </p>
+            <p v-else-if="!rows.length" class="uc-empty">
               Nothing recorded yet. Your next change lands here.
             </p>
             <button
@@ -303,7 +324,9 @@ defineExpose({
               <span class="uc-row-time">{{ rowTime(row.op) }}</span>
             </button>
           </div>
-          <div class="tbm-footer">
+          <!-- The footer teaches the one gesture the list answers to. A
+               read-only session has no list, so it would be teaching nothing. -->
+          <div v-if="!isReadOnly" class="tbm-footer">
             <v-icon size="16">mdi-gesture-tap</v-icon>
             <span>{{ footerText }}</span>
           </div>

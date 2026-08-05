@@ -1001,11 +1001,13 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // Undo is owner-only on the server; reading the queue is not.
-  it("drops undo/redo in a read-only session but keeps Settings", async () => {
+  // Undo is owner-only on the server, but the control stays mounted and inert
+  // in a read-only session so the feature is still visible; UndoControl owns
+  // the disabled state.
+  it("keeps undo/redo and Settings in a read-only session", async () => {
     readOnlyRef.value = true;
     const { wrapper } = await mountQueue([group("g1")]);
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
     expect(wrapper.find('button[title="Settings"]').exists()).toBe(true);
     wrapper.unmount();
   });

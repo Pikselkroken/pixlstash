@@ -6,7 +6,7 @@
 // History popover's row states, and that the hover/focus preview and the
 // undo-to-step call describe the same range.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { mount } from "@vue/test-utils";
@@ -32,6 +32,7 @@ vi.mock("../../api/operations", () => ({
 }));
 
 import UndoControl from "./UndoControl.vue";
+import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { getUndoState, listOperations } from "../../api/operations";
 import { useOperationStore } from "../../stores/useOperationStore";
 
@@ -191,6 +192,64 @@ describe("UndoControl — enablement", () => {
     await wrapper.find(".uc-btn--redo").trigger("click");
     expect(undo).toHaveBeenCalledTimes(1);
     expect(redo).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A share-token session keeps the control visible and inert rather than
+// unmounting it: the read-only demo has to show that undo exists. Nothing is
+// softened by an empty stack here — /operations* is owner-only, so the store
+// never read one, and the affordances must say that instead of implying the
+// library has no history.
+describe("UndoControl — a read-only session", () => {
+  beforeEach(() => {
+    readOnlyRef.value = true;
+  });
+  afterEach(() => {
+    readOnlyRef.value = false;
+  });
+
+  it("inerts both buttons and says why, even with a stack already in hand", () => {
+    const store = useOperationStore();
+    seed(store, [op()]);
+    const wrapper = mount(UndoControl, globalOpts);
+
+    const undo = wrapper.find(".uc-btn--undo");
+    const redo = wrapper.find(".uc-btn--redo");
+    expect(undo.attributes("aria-disabled")).toBe("true");
+    expect(redo.attributes("aria-disabled")).toBe("true");
+    expect(undo.attributes("title")).toBe(
+      "Undo is only available in your own library",
+    );
+    expect(redo.attributes("title")).toBe(
+      "Redo is only available in your own library",
+    );
+    // Still tabbable and still tooltip-bearing, the same rule as "nothing to
+    // undo": the tooltip is the only place the reason is stated.
+    expect(undo.attributes("disabled")).toBeUndefined();
+  });
+
+  it("never calls the server", async () => {
+    const store = useOperationStore();
+    seed(store, [op(), op({ id: 9, status: "undone" })]);
+    const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
+    const redo = vi.spyOn(store, "redo").mockResolvedValue(null);
+    const wrapper = mount(UndoControl, globalOpts);
+
+    await wrapper.find(".uc-btn--undo").trigger("click");
+    await wrapper.find(".uc-btn--redo").trigger("click");
+    expect(undo).not.toHaveBeenCalled();
+    expect(redo).not.toHaveBeenCalled();
+  });
+
+  it("explains the History popover instead of counting steps", async () => {
+    const { wrapper } = await mountOpen([]);
+    expect(wrapper.find(".uc-empty").text()).toContain(
+      "History is only available in your own library",
+    );
+    // A tally would be a claim about the library, not a count of what is shown.
+    expect(wrapper.find(".uc-count").exists()).toBe(false);
+    // The footer teaches a gesture that has no list to act on here.
+    expect(wrapper.find(".tbm-footer").exists()).toBe(false);
   });
 });
 
