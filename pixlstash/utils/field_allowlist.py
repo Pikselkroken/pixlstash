@@ -13,6 +13,13 @@ that, which is why a picture-scoped token could read ``/pictures/{id}/projects``
 full ``Picture`` rows off the relationship, bypassing every projection and every
 narrowing site in the codebase.
 
+Relationships that a consumer genuinely needs get a **dedicated, projected
+route** instead of an exception here. ``faces`` was the one such case and is now
+served by ``GET /pictures/{id}/faces`` and ``GET /characters/{id}/faces``
+(``routes/pictures/_faces.py`` and ``routes/characters.py``), which return the
+same ``{"faces": [...]}`` wire shape minus the ``features`` embedding. Both
+exception sets below are now down to the single synthetic ``thumbnail``.
+
 **What this module bounds, and what it does not.** The AuthzGate (§16.2) answers
 "may this token reach this *object*". It runs before the handler and never sees
 the response, so it cannot bound *which of the object's attributes* come back.
@@ -51,28 +58,28 @@ logger = get_logger(__name__)
 # grows without one. Keep it tiny; the point of the allowlist is that the default
 # answer is "no".
 
-#: ``faces`` is a ``Picture`` **relationship**, and it is the SPA's live face-box
-#: overlay: ``frontend/src/api/pictures.js::listPictureFaces`` calls
-#: ``GET /pictures/{id}/faces`` (consumed by ``ImageOverlay.vue``), and
-#: ``tests/utils.py::wait_for_faces`` polls the same URL. There is **no dedicated
-#: ``GET /pictures/{id}/faces`` route** to route those callers at, only
-#: ``POST /pictures/{id}/face``, so denying the name here would break a shipping
-#: feature. It is kept servable pending the decision recorded on #721: give the
-#: overlay a dedicated, projected endpoint and then drop this exception. The rows
-#: it serves are ``Face`` rows of the caller's *own* picture (``picture_id``,
-#: ``character_id``, ``bbox``, and the ``features`` embedding), which is a far
-#: narrower disclosure than the project/set/character relationships this module
-#: refuses, but it is not nothing, and it is the reason this set is not empty.
-PICTURE_EXTRA_SERVABLE_FIELDS = frozenset({"faces"})
+#: Empty, and that is the goal state: every ``Picture`` relationship is refused.
+#:
+#: ``faces`` used to sit here, because the SPA's face-box overlay
+#: (``frontend/src/api/pictures.js::listPictureFaces``) and
+#: ``tests/utils.py::wait_for_faces`` both read it and there was no other route
+#: serving it. It was removed once ``GET /pictures/{id}/faces`` shipped as a
+#: dedicated, projected endpoint (``routes/pictures/_faces.py``), which serves
+#: the same ``{"faces": [...]}`` wire shape minus the ``features`` embedding.
+#: That is the pattern for anything that lands here: give the consumer a real
+#: endpoint, then empty the exception back out.
+PICTURE_EXTRA_SERVABLE_FIELDS: frozenset[str] = frozenset()
 
 #: ``thumbnail`` is not a ``Character`` column at all: the handler generates a
 #: 64x64 face crop and returns image bytes. It is a live frontend consumer
 #: (``frontend/src/api/characters.js::getCharacterThumbnail``, and the server
 #: hands the SPA ``/characters/{id}/thumbnail`` URLs itself), so it must stay
-#: servable. ``faces`` is a ``Character`` relationship kept for the same reason
-#: as its picture twin above (``tests/test_server.py`` reads it; there is no
-#: dedicated ``GET /characters/{id}/faces``, only ``POST``/``DELETE``).
-CHARACTER_EXTRA_SERVABLE_FIELDS = frozenset({"thumbnail", "faces"})
+#: servable. It is *synthetic*, not a relationship: it discloses no related
+#: rows, which is why it is the one member that does not need retiring.
+#:
+#: ``faces`` also used to sit here and was removed for the same reason as its
+#: picture twin above: ``GET /characters/{id}/faces`` now serves it projected.
+CHARACTER_EXTRA_SERVABLE_FIELDS = frozenset({"thumbnail"})
 
 
 def servable_field_names(model, extra_servable: Iterable[str] = ()) -> frozenset[str]:
