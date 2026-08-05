@@ -20,9 +20,11 @@ implementation drifts:
 * a **soft-deleted** picture, which counts nowhere.
 
 Scope is pinned in both directions, because over-blocking is its own regression:
-a character-scoped token still sees its own row *with* a count that matches the
-summary it is already granted, a picture_set-scoped token still gets ``[]``, and
-a project-scoped token's counts stay consistent with the list it already gets.
+a character-scoped token still sees its own row *with* a global count that
+matches the summary it is already granted (and no project-scoped number, which
+it may ask for nowhere, issue #718), a picture_set-scoped token still gets
+``[]``, and a project-scoped token still gets a real number counted over its own
+project, consistent with the list it already gets.
 """
 
 import gc
@@ -412,32 +414,30 @@ def test_project_count_queries_do_not_grow_with_the_number_of_projects(env):
 
 
 def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env):
-    """In-scope 200 with the right number; nothing else in the list.
+    """In-scope 200 with the right global number; nothing else in the list.
 
     ``image_count`` must equal what the *same token* gets from
     ``/characters/{id}/summary`` — the endpoint it is already granted — which
-    is the authorization argument for serving it inline: no new fact is
-    disclosed. That argument holds for the global count and is asserted below.
+    is the whole authorization argument for serving it inline: no new fact is
+    disclosed. That cross-check is the point of this test and must keep
+    working.
 
-    **It does NOT hold for ``project_image_count`` — known gap, issue #718.**
-    A character-scoped token may learn no project id at all (#125 / R1b), so
-    its narrowed project list is always empty, so every row lands in the
-    "unassigned" bucket — and that bucket counts ``NOT EXISTS(any membership)``,
-    i.e. "in no project *at all*", not "in no project *you can see*". So
-    ``image_count - project_image_count`` tells this token how many of its own
-    pictures are held by projects invisible to it. One integer, not iterable,
-    but a real disclosure, and the inverse of the rule
-    ``routes/projects.py::project_membership`` states for its own unassigned
-    bucket. The fix is to serialise the field as ``None`` when the token has no
-    project visibility; when that lands, the pin below becomes ``is None``.
+    ``project_image_count`` is ``null``, and the rule is the complement of the
+    one above: a character-scoped token may learn no project id at all (issue
+    #125 / R1b), so it may name no project scope on that summary endpoint, so
+    there is no project-scoped number it could have obtained there and none is
+    served here (issue #718).
 
-    The value cannot be cross-checked against the per-id summary any more.
-    Since #708, passing ``project_id`` at all — including the ``UNASSIGNED``
-    sentinel — is refused for a token with no project visibility, because
-    choosing which project to name was itself the membership oracle. So the
-    value is pinned literally below and the refusal is pinned beside it. Do not
-    read that pairing as a settled design: it records that the list still
-    answers a question the summary now refuses, which is #718.
+    **Both halves of that complement are asserted, on purpose.** Suppressing
+    here is only sound while the summary endpoint really does refuse the same
+    question, so the 403 is pinned below beside the ``None``. An adversarial
+    review of #718 caught this test asserting only its own half: on the base it
+    ran against, ``enforce_project_filter_scope`` had not landed yet and that
+    summary call still answered ``1``, so the "complement" argument in
+    ``_may_learn_a_project_scoped_count`` was false and nothing here said so.
+    Keep the pair. If a future change relaxes the filter gate, this test is
+    where the two endpoints stop agreeing.
+
     """
     client, server = env["client"], env["server"]
     shared = env["characters"]["shared"]
@@ -457,11 +457,15 @@ def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env)
     assert row["project_id"] is None
     assert row["project_ids"] == []
     assert row["image_count"] == _summary_count(anon, shared, headers=headers)
-    # The reported number is genuinely the narrowed one, not the character's
-    # real primary project (P1) leaking through a different name.
-    assert row["project_image_count"] == 1
-    # The same question asked directly is refused (#708). Pinned so that
-    # relaxing the filter gate shows up here as well as in the authz suite.
+    # In-scope and still correct: 5 non-deleted pictures, one of them via two
+    # faces. Over-blocking the global count would be its own regression.
+    assert row["image_count"] == 5
+    assert row["project_image_count"] is None, (
+        "a token with no project visibility must be told nothing about projects"
+    )
+    # The other half of the complement: the same question asked directly is
+    # refused (#708). Without this, suppressing above would look sound while the
+    # summary endpoint quietly served the number anyway.
     refused = anon.get(
         f"{API}/characters/{shared}/summary",
         params={"project_id": "UNASSIGNED"},
@@ -474,6 +478,60 @@ def test_character_scoped_token_sees_only_its_own_row_with_a_matching_count(env)
         f"{API}/characters/{env['characters']['loner']}/summary", headers=headers
     )
     assert other.status_code == 403, other.text
+
+
+def test_character_scoped_token_learns_nothing_about_invisible_projects(env):
+    """The suppression keys off the TOKEN, not off what the row turned out to be.
+
+    ``SharedChar`` is in P1 and P2; ``LonerChar`` is in no project at all. A
+    character-scoped token must get the same answer for both, which is no
+    answer, because a rule that suppressed only the row with hidden memberships
+    would make the *presence* of a number the oracle it was meant to remove: a
+    served count would say "no project you cannot see holds this character".
+
+    It must also be impossible to recover the hidden number by arithmetic:
+    ``image_count - project_image_count`` was previously the count of the
+    token's own pictures held by projects invisible to it (issue #718).
+    """
+    client, server = env["client"], env["server"]
+    anon = TestClient(server.api)
+
+    for name in ("shared", "loner"):
+        character_id = env["characters"][name]
+        headers = _mint(client, "character", character_id)
+        resp = anon.get(
+            f"{API}/characters", params={"include_counts": "true"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert [row["id"] for row in rows] == [character_id]
+        assert rows[0]["project_image_count"] is None, (
+            f"{name}: a project-derived aggregate reached a token with no "
+            "project visibility"
+        )
+        assert rows[0]["image_count"] is not None, (
+            f"{name}: the global count is in scope and must still be served"
+        )
+
+
+def test_owner_still_gets_every_project_count_including_the_unassigned_one(env):
+    """The complement direction: full visibility keeps every number it had.
+
+    The owner's ``visible_project_ids`` is ``None`` (no restriction), so the
+    suppression must not fire, including for ``LonerChar``, whose count comes
+    from the genuine "in no project at all" bucket that the fix leaves intact
+    for callers entitled to it.
+    """
+    client = env["client"]
+    rows = client.get(f"{API}/characters", params={"include_counts": "true"}).json()
+    by_name = {row["name"]: row for row in rows}
+
+    assert all(row["project_image_count"] is not None for row in rows), (
+        "the owner lost a project count it is entitled to"
+    )
+    assert by_name["LonerChar"]["project_image_count"] == 2
+    assert by_name["SharedChar"]["project_image_count"] == 2
+    assert by_name["P2OnlyChar"]["project_image_count"] == 1
 
 
 def test_picture_set_scoped_token_still_gets_an_empty_list(env):
@@ -523,6 +581,11 @@ def test_project_scoped_token_counts_match_its_own_summaries(env):
     for row in rows:
         assert row["project_id"] == p2, (
             "a project token may only learn its own project id"
+        )
+        # A project token HAS project visibility, so the #718 suppression must
+        # not fire for it: this is the number a careless fix blanks.
+        assert row["project_image_count"] is not None, (
+            "a project-scoped token lost the count for its own project"
         )
         assert row["image_count"] == _summary_count(anon, row["id"], headers=headers)
         assert row["project_image_count"] == _summary_count(
