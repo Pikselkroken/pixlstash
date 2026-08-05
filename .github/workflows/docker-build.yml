@@ -4,6 +4,12 @@ name: Build Docker Images (no push)
 # without pushing to any registry and without logging in, so you can confirm both
 # Dockerfiles build (e.g. before tagging a release) without consuming anything.
 # The publish path lives in docker-publish.yml and stays tag-driven.
+#
+# The CPU leg additionally BOOTS what it just built (see the smoke steps below).
+# A Dockerfile that builds is not a Dockerfile that runs: the entrypoint writes
+# the first-run config, the non-root pixlstash user has to own its volume, and
+# uvicorn has to bind — none of which a build exercises. That gap is why
+# docs/release-test-plan.md §1.2 was a hand-run `docker run` on release day.
 on:
   workflow_dispatch:
 
@@ -18,11 +24,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: CPU, file: Dockerfile, scope: cpu }
-          - { name: GPU, file: Dockerfile.gpu, scope: gpu }
+          # `smoke: true` also loads the image into the local daemon and runs it.
+          # Only the CPU leg can: hosted runners have no NVIDIA device, so the
+          # GPU image would fall back to CPU and prove nothing about the thing
+          # that makes it the GPU image.
+          - { name: CPU, file: Dockerfile, scope: cpu, smoke: true }
+          - { name: GPU, file: Dockerfile.gpu, scope: gpu, smoke: false }
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # `load: true` exports the built image into the docker daemon, so the
+      # layers land on disk a second time on top of the buildx cache. The CPU
+      # image is multi-GB (torch, transformers, insightface, spacy), and a
+      # stock ubuntu-latest runner has ~14 GB free — not enough for both
+      # copies. This frees ~30 GB before the build rather than after, because
+      # once buildx has filled the disk the failure is a confusing mid-layer
+      # write error rather than an honest "no space left".
+      - name: Free disk space
+        if: matrix.smoke
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -33,5 +60,122 @@ jobs:
           context: .
           file: ${{ matrix.file }}
           push: false
+          load: ${{ matrix.smoke }}
+          tags: ${{ matrix.smoke && 'pixlstash:ci-smoke' || '' }}
           cache-from: type=gha,scope=${{ matrix.scope }}
           cache-to: type=gha,scope=${{ matrix.scope }},mode=max
+
+      # ── Smoke: boot the image we just built ──────────────────────────────
+      #
+      # Deliberately runs the DEFAULT entrypoint path with no config mounted,
+      # because that first-run path is what a new user hits and what the
+      # entrypoint's config-writing branch exists for. Nothing here needs an ML
+      # model: the server binds and serves before any background work starts.
+      - name: Start the container
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/pixlstash-home"
+          # The image runs as uid 10001; the bind mount inherits the host owner,
+          # so it must be world-writable or the entrypoint cannot create its
+          # config dir. This mirrors the documented `-v ~/Pictures/pixlstash`
+          # usage rather than avoiding the volume entirely.
+          chmod 777 "${RUNNER_TEMP}/pixlstash-home"
+          docker run -d --name pixlstash-smoke \
+            -e PIXLSTASH_HOST=0.0.0.0 \
+            -p 19537:9537 \
+            -v "${RUNNER_TEMP}/pixlstash-home:/home/pixlstash" \
+            pixlstash:ci-smoke
+
+      - name: Wait for the API to serve /version
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          # Boots in ~25 s on a warm laptop; 180 s is headroom for a cold
+          # runner, not an expectation.
+          for i in $(seq 1 180); do
+            if curl -fsS -o /tmp/version.json http://127.0.0.1:19537/version; then
+              echo "API ready after ${i}s"
+              cat /tmp/version.json
+              exit 0
+            fi
+            # A container that has already died will never become ready, so
+            # stop waiting out the full timeout and surface why.
+            if [ -z "$(docker ps -q -f name=pixlstash-smoke)" ]; then
+              echo "::error::Container exited before serving /version."
+              docker logs pixlstash-smoke
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::/version did not respond within 180s."
+          docker logs pixlstash-smoke
+          exit 1
+
+      - name: Assert the built image reports the CPU variant
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          variant=$(python3 -c "import json;print(json.load(open('/tmp/version.json')).get('docker_variant'))")
+          echo "docker_variant=${variant}"
+          # Guards the tag/Dockerfile pairing in docker-publish.yml. The
+          # published :latest is currently a GPU-variant image, so this
+          # assertion is not hypothetical.
+          if [ "$variant" != "cpu" ]; then
+            echo "::error::Dockerfile produced docker_variant='${variant}', expected 'cpu'."
+            exit 1
+          fi
+
+      - name: Assert the SPA is served
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          # The frontend is baked in by the builder stage; if that COPY path
+          # ever drifts the API still answers and only the UI 404s, which is
+          # exactly the failure a build-only check cannot see.
+          code=$(curl -s -o /tmp/index.html -w '%{http_code}' http://127.0.0.1:19537/)
+          echo "GET / -> ${code}"
+          test "$code" = "200"
+          grep -qi '<div id="app"' /tmp/index.html || {
+            echo "::error::/ did not return the built SPA shell."
+            head -c 500 /tmp/index.html
+            exit 1
+          }
+
+      - name: Assert uvicorn logged a clean start
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          docker logs pixlstash-smoke > /tmp/boot.log 2>&1
+          grep -q "Uvicorn running" /tmp/boot.log || {
+            echo "::error::No 'Uvicorn running' line in container logs."
+            cat /tmp/boot.log
+            exit 1
+          }
+          if grep -qi "Traceback (most recent call last)" /tmp/boot.log; then
+            echo "::error::Container logged a traceback during startup."
+            cat /tmp/boot.log
+            exit 1
+          fi
+
+      - name: Assert the container stops cleanly
+        if: matrix.smoke
+        run: |
+          set -euo pipefail
+          docker stop -t 30 pixlstash-smoke
+          exit_code=$(docker inspect pixlstash-smoke --format '{{.State.ExitCode}}')
+          oom=$(docker inspect pixlstash-smoke --format '{{.State.OOMKilled}}')
+          echo "exit=${exit_code} oom=${oom}"
+          # SIGTERM handled = 0. 137 means it ignored SIGTERM and was killed,
+          # which is the "orphaned process on quit" class the release plan
+          # checks for by hand.
+          test "$oom" = "false"
+          test "$exit_code" = "0"
+
+      - name: Container logs (on failure)
+        if: ${{ failure() && matrix.smoke }}
+        run: docker logs pixlstash-smoke || true
+
+      - name: Clean up
+        if: ${{ always() && matrix.smoke }}
+        run: docker rm -f pixlstash-smoke || true

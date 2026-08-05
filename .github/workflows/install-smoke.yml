@@ -1,0 +1,110 @@
+name: Install smoke (pip, 3 OSes)
+
+# Builds the wheel exactly as the release does, installs it into a clean venv on
+# each supported OS, and boots it. This is the automated half of
+# docs/release-test-plan.md §1.1 and §1.4 — the "does it install and come up"
+# rows, which were previously hand-run on three machines on release day.
+#
+# NOT on every PR. Installing torch three times is minutes of runner per run,
+# and the fast PR gate is deliberately kept fast; this fires on release prep and
+# on demand, which is when packaging can actually have broken.
+#
+# What stays manual (and why): importing a picture and looking at the grid needs
+# a human or a browser harness, GPU/overlay behaviour needs real hardware, and
+# the Windows installer's Authenticode signature and SmartScreen prompt cannot
+# be asserted from a runner. Those rows remain in the release plan.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'release-**'
+      - 'rc-prep-**'
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: ubuntu / py3.12, os: ubuntu-latest, python: '3.12' }
+          - { name: macos / py3.12, os: macos-latest, python: '3.12' }
+          - { name: windows / py3.12, os: windows-latest, python: '3.12' }
+          # The floor the README and the release plan both promise. A dependency
+          # that quietly requires 3.11+ is invisible on the version everyone
+          # develops against, and only surfaces as a user's failed install.
+          - { name: ubuntu / py3.10 (floor), os: ubuntu-latest, python: '3.10' }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # The wheel carries the built SPA via [tool.setuptools.package-data]
+      # (pixlstash/frontend/dist/**). Without this step the wheel still builds
+      # and still installs — it just serves a 404 where the UI should be, which
+      # is precisely the packaging regression the smoke asserts against.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build
+          python -m build --wheel --outdir dist
+
+      - name: Install the wheel into a clean venv
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A fresh venv, not the runner's Python: this has to exercise real
+          # dependency resolution from the wheel's own metadata, the same thing
+          # `pip install pixlstash` does for a user.
+          python -m venv .smokevenv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            VENV_PY=".smokevenv/Scripts/python.exe"
+          else
+            VENV_PY=".smokevenv/bin/python"
+          fi
+          "$VENV_PY" -m pip install --upgrade pip
+          wheel=$(ls dist/*.whl)
+          echo "Installing ${wheel}"
+          "$VENV_PY" -m pip install "$wheel"
+
+      - name: Boot the installed server and assert it serves
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Derive the expected version from the artifact that was actually
+          # built, so a wheel reporting a stale version fails here rather than
+          # shipping.
+          version=$(python -c "
+          import glob, os
+          wheel = os.path.basename(glob.glob('dist/*.whl')[0])
+          print(wheel.split('-')[1])
+          ")
+          echo "Expecting /version to report ${version}"
+          python scripts/smoke_install.py \
+            --venv .smokevenv \
+            --port 19538 \
+            --expected-version "$version"
