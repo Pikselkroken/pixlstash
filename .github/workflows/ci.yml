@@ -276,6 +276,7 @@ jobs:
           tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_generic_field_reader_allowlist.py
           tests/test_image_embedding_worker.py
           tests/test_import_scrapheap_match.py
           tests/test_impossible_clear_authz.py
