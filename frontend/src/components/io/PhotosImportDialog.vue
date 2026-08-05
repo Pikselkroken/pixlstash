@@ -72,7 +72,13 @@ async function fetchProjects() {
   try {
     const rows = await listProjects();
     projects.value = Array.isArray(rows) ? rows : [];
-  } catch {
+  } catch (e) {
+    // The picker degrades to "No project" + "New project…", which is the right
+    // visible outcome: a session with no project scope is offered no projects
+    // rather than an error. But the failure itself is never swallowed silently:
+    // a 403 here and a backend outage look identical on screen, and the log
+    // line is the only thing that tells them apart.
+    console.warn("Couldn't list projects for the import dialog", e);
     projects.value = [];
   }
 }

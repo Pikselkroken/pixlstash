@@ -389,4 +389,61 @@ describe("useEntityListsStore", () => {
     expect(listProjects).toHaveBeenCalledTimes(1);
     expect(store.projects).toEqual(PROJECTS);
   });
+
+  // ── `canSeeProjects`: the one gate the UI reads ───────────────────────────
+  //
+  // The project affordances (the context menus' Project row, the sidebar's
+  // mode switcher) render off this getter, so it has to be exactly as narrow as
+  // the server's own rule in `routes/projects.py`: 403 for a token whose
+  // `resource_type` is set to anything other than "project". Anything broader
+  // takes project controls away from someone entitled to them, which is its own
+  // regression; anything narrower leaves a dead control on screen.
+
+  it("reports no project visibility for a token scoped to another resource", () => {
+    isReadOnly.value = true;
+    const store = useEntityListsStore();
+    for (const resourceType of ["character", "picture_set", "picture"]) {
+      sessionContext.value = { scope: "READ", resource_type: resourceType };
+      expect(
+        store.canSeeProjects,
+        `a ${resourceType}-scoped token must see no projects`,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps project visibility for the owner and every unscoped session", () => {
+    const store = useEntityListsStore();
+
+    // Owner: no token at all.
+    isReadOnly.value = false;
+    sessionContext.value = null;
+    expect(store.canSeeProjects).toBe(true);
+
+    // Owner session that reported its context explicitly.
+    sessionContext.value = { scope: "ALL", resource_type: null };
+    expect(store.canSeeProjects).toBe(true);
+
+    // An unscoped READ token can read every project, so it keeps the controls.
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: null };
+    expect(store.canSeeProjects).toBe(true);
+
+    // A project-scoped token sees its own project.
+    sessionContext.value = { scope: "READ", resource_type: "project" };
+    expect(store.canSeeProjects).toBe(true);
+  });
+
+  it("tracks the session it is derived from without a refetch", () => {
+    // The getter is reactive because the gate has to close the moment a share
+    // token is activated, not on the next list read.
+    const store = useEntityListsStore();
+    expect(store.canSeeProjects).toBe(true);
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    expect(store.canSeeProjects).toBe(false);
+    transitionAuthContext();
+    isReadOnly.value = false;
+    sessionContext.value = null;
+    expect(store.canSeeProjects).toBe(true);
+  });
 });
