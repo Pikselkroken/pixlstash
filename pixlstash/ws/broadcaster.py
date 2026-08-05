@@ -342,6 +342,7 @@ class WsBroadcasterMixin:
                 await websocket.close(code=1013, reason="Library unavailable")
                 return
             client = None
+            admission_lease = None
             try:
                 # The HTTP auth middleware does not run for WebSocket connections,
                 # so authenticate here BEFORE accepting. Without this, any reachable
@@ -356,6 +357,10 @@ class WsBroadcasterMixin:
                 ws_auth = self.auth.authenticate_websocket(websocket)
                 if ws_auth is None:
                     await websocket.close(code=1008)
+                    return
+                admission_lease = self.auth.register_authenticated_websocket(websocket)
+                if admission_lease is None:
+                    await websocket.close(code=1012)
                     return
                 await websocket.accept()
                 # Always refresh _ws_loop so it tracks the currently-running event loop.
@@ -383,6 +388,11 @@ class WsBroadcasterMixin:
                 # injected accept/lock failures) releases exactly once.
                 self.library_coordinator.release_read(lease)
             if client is None:
+                # Admission can be granted before a later step in the leased
+                # block fails. The receive loop's ``finally`` never runs on this
+                # path, so release the admission lease here instead.
+                if admission_lease is not None:
+                    self.auth.unregister_authenticated_websocket(admission_lease)
                 return
             try:
                 while True:
@@ -414,5 +424,6 @@ class WsBroadcasterMixin:
                 logger.debug("WebSocket client disconnected normally.")
             finally:
                 with self._ws_clients_lock:
-                    if client in self._ws_clients:
+                    if client is not None and client in self._ws_clients:
                         self._ws_clients.remove(client)
+                self.auth.unregister_authenticated_websocket(admission_lease)

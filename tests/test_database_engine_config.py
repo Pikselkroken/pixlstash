@@ -12,6 +12,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import closing
 
 import pytest
 
@@ -19,6 +20,7 @@ from pixlstash.database import (
     SQLITE_BUSY_TIMEOUT_S,
     SQLITE_CACHE_SIZE_KIB,
     VaultDatabase,
+    create_configured_engine,
 )
 
 
@@ -127,3 +129,97 @@ def test_writer_waits_past_the_sqlite_default_instead_of_failing(vault_db):
         f"write returned after {elapsed:.2f}s; it cannot have waited out the "
         f"{hold_seconds}s lock, so the busy timeout is not in effect"
     )
+
+
+# ---------------------------------------------------------------------------
+# create_configured_engine: the single way engines are built (issue #709)
+# ---------------------------------------------------------------------------
+
+
+def test_configured_engine_defaults_match_the_vault_engine(tmp_path, vault_db):
+    """A default helper engine is indistinguishable from the vault engine.
+
+    Both halves of the configuration (``connect_args`` and the connect
+    listener) have to arrive together; asserting them side by side is what
+    catches one of the two being dropped.
+    """
+    engine = create_configured_engine(tmp_path / "configured.db")
+    try:
+        for name in ("journal_mode", "synchronous", "foreign_keys", "cache_size"):
+            assert _pragma(engine, name) == _pragma(vault_db._engine, name), name
+        assert _pragma(engine, "busy_timeout") == SQLITE_BUSY_TIMEOUT_S * 1000
+        assert _pragma(engine, "journal_mode") == "wal"
+        assert _pragma(engine, "foreign_keys") == 1
+    finally:
+        engine.dispose()
+
+
+def test_non_wal_engine_keeps_every_other_setting(tmp_path):
+    """``wal=False`` is the snapshot deviation and must deviate in that alone.
+
+    The busy timeout, the page cache and FK enforcement still apply; only the
+    journal changes, and ``synchronous`` falls back to FULL because NORMAL is
+    only crash-safe under WAL.
+    """
+    engine = create_configured_engine(tmp_path / "snapshot.sqlite", wal=False)
+    try:
+        assert _pragma(engine, "journal_mode") == "delete"
+        assert _pragma(engine, "synchronous") == 2  # FULL
+        assert _pragma(engine, "foreign_keys") == 1
+        assert _pragma(engine, "cache_size") == SQLITE_CACHE_SIZE_KIB
+        assert _pragma(engine, "busy_timeout") == SQLITE_BUSY_TIMEOUT_S * 1000
+    finally:
+        engine.dispose()
+
+
+def test_non_wal_engine_writes_leave_no_wal_sidecar(tmp_path):
+    """The reason ``wal=False`` exists: the DB must stay a single file.
+
+    A ``-wal``/``-shm`` companion is invisible to the snapshot paths that copy
+    or compress the main file by name, so anything it still held would be lost.
+    """
+    db_path = tmp_path / "single-file.sqlite"
+    engine = create_configured_engine(db_path, wal=False)
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE t (x INTEGER)")
+            conn.exec_driver_sql("INSERT INTO t VALUES (1)")
+    finally:
+        engine.dispose()
+
+    for suffix in ("-wal", "-shm"):
+        companion = tmp_path / (db_path.name + suffix)
+        assert not companion.exists(), f"{companion} must not exist"
+
+    # And the committed row really is in the main file. ``closing`` because
+    # sqlite3's context manager commits but does not close the handle.
+    with closing(sqlite3.connect(db_path)) as probe:
+        assert probe.execute("SELECT x FROM t").fetchall() == [(1,)]
+
+
+def test_foreign_key_enforcement_can_be_waived_explicitly(tmp_path):
+    """The knob exists so a deviation is spelled out, never inherited."""
+    engine = create_configured_engine(tmp_path / "no-fk.sqlite", foreign_keys=False)
+    try:
+        assert _pragma(engine, "foreign_keys") == 0
+        assert _pragma(engine, "cache_size") == SQLITE_CACHE_SIZE_KIB
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"wal": False}, {"foreign_keys": False}])
+def test_custom_sql_functions_are_registered_on_every_variant(tmp_path, kwargs):
+    """The custom SQL functions are part of the configuration, not a side effect
+    of the vault engine's listener."""
+    engine = create_configured_engine(tmp_path / "fns.sqlite", **kwargs)
+    try:
+        with engine.connect() as conn:
+            # An unregistered function raises "no such function" here; the
+            # returned score itself is the search code's business, not ours.
+            for sql in (
+                "SELECT levenshtein('kitten sitting', 'sitting')",
+                "SELECT levenshtein_with_id('kitten sitting', 'sitting', 1)",
+            ):
+                assert isinstance(conn.exec_driver_sql(sql).scalar(), float), sql
+    finally:
+        engine.dispose()

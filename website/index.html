@@ -7,7 +7,7 @@
     <title>PixlStash | Image Library for Creators</title>
     <meta
       name="description"
-      content="PixlStash is an image library for photographers and AI creators with search, tagging, dataset exports, and a clean UI."
+      content="PixlStash is a local image library for photographers and AI creators with full undo and redo, duplicate review, search, tagging, and dataset exports."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -226,7 +226,7 @@
 
       .whatsnew-teaser-wrap {
         display: grid;
-        grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr);
+        grid-template-columns: minmax(260px, 1.65fr) minmax(160px, 0.65fr);
         gap: 0;
         align-items: stretch;
       }
@@ -273,6 +273,16 @@
         height: 100%;
         object-fit: cover;
         object-position: top;
+      }
+
+      .whatsnew-teaser-media--contain {
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+        max-height: 210px;
+      }
+
+      .whatsnew-teaser-media--contain img {
+        object-fit: contain;
+        max-height: 210px;
       }
 
       .comfy-teaser {
@@ -550,22 +560,20 @@
         <div class="whatsnew-teaser-wrap">
           <div class="whatsnew-teaser-copy">
             <span class="whatsnew-label">What's New</span>
-            <h2>PixlStash 1.8: a justified grid layout</h2>
+            <h2>PixlStash 1.9: full undo and redo</h2>
             <p>
-              Thumbnails can keep their own aspect ratio and fill each row to
-              the full grid width, instead of being cropped to squares, with one
-              size control for both layouts. This release also adds background
-              imports, a Scrapheap that only auto-empties if you set a retention
-              window, and a chart comparing your star ratings with the Smart
-              Score.
+              Reverse everyday library changes from one shared history, one step
+              or several at once. Even decisions in the new Duplicates workflow
+              can be undone, giving serious library work a dependable safety
+              net. Version 1.9 also adds safer stack cleanup, multi-project
+              characters and sets, and faster person assignment.
             </p>
-            <p><strong>Signed Windows installers since 1.8.2</strong></p>
             <span class="whatsnew-link">See the full update →</span>
           </div>
-          <div class="whatsnew-teaser-media">
+          <div class="whatsnew-teaser-media whatsnew-teaser-media--contain">
             <img
-              src="assets/ScreenshotsJustified.jpg"
-              alt="The PixlStash justified grid layout"
+              src="assets/ScreenshotUndoHistory.jpg"
+              alt="PixlStash history showing several recent library changes and multi-step undo"
             />
           </div>
         </div>

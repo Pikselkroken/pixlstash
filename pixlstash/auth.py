@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import ipaddress
 import os
@@ -74,6 +75,11 @@ AUTH_EXCLUDED_PREFIXES: tuple[str, ...] = (
     "/docs/",
 )
 AUTH_API_PREFIXES: tuple[str, ...] = ("/api/v1",)
+# Credential-bearing paths that must share the full-restore admission barrier.
+# Public share links bypass normal API authentication because the credential is
+# embedded in the URL, but their token and resource lookups still read the live
+# database and therefore cannot cross a whole-file restore cutover.
+RESTORE_ADMISSION_PREFIXES: tuple[str, ...] = (*AUTH_API_PREFIXES, "/share/")
 
 # POST paths that are semantically read-only (large request bodies preclude GET).
 # These are exempted from the "block non-GET for READ tokens" check.
@@ -358,6 +364,18 @@ class AuthService:
         # this before reading and re-checks it before writing, see
         # _token_from_value. Guarded by _token_cache_lock.
         self._token_cache_epoch: int = 0
+        # A full restore replaces the database file underneath this service.
+        # From immediately before that cutover until the restored database has
+        # been cleaned and every in-memory credential cache has been rebuilt,
+        # no request may authenticate against either side of the swap.  The
+        # restore path closes this gate before submitting the swap control task
+        # and only reopens it after reset_after_restore() succeeds.
+        self._restore_admission_condition = threading.Condition()
+        self._restore_auth_gate_closed = False
+        self._restore_admission_serial = 0
+        self._active_restore_http_leases: set[int] = set()
+        self._active_restore_websockets: dict[int, tuple] = {}
+        self._RESTORE_DRAIN_TIMEOUT_SECONDS = 30.0
         # In-memory guest session tracking: session_id → last_active_at (monotonic seconds).
         # Entries expire after _GUEST_SESSION_INACTIVE_TTL (30 days) and are pruned lazily
         # in record_guest_activity().  When the cache reaches _guest_max_tracked_sessions
@@ -372,6 +390,143 @@ class AuthService:
         )  # 4 hours — min age to evict under cap
         self._guest_max_tracked_sessions: int = int(
             self._server_config.get("guest_max_stored_sessions", 1000)
+        )
+
+    def _next_restore_admission_id(self) -> int:
+        self._restore_admission_serial += 1
+        return self._restore_admission_serial
+
+    def _acquire_restore_http_lease(self) -> Optional[int]:
+        """Atomically admit one API request, or reject it during a restore."""
+        with self._restore_admission_condition:
+            if self._restore_auth_gate_closed:
+                return None
+            lease = self._next_restore_admission_id()
+            self._active_restore_http_leases.add(lease)
+            return lease
+
+    def _release_restore_http_lease(self, lease: Optional[int]) -> None:
+        if lease is None:
+            return
+        with self._restore_admission_condition:
+            self._active_restore_http_leases.discard(lease)
+            self._restore_admission_condition.notify_all()
+
+    def register_authenticated_websocket(self, websocket) -> Optional[int]:
+        """Register an authenticated WebSocket for its entire handler lifetime.
+
+        Authentication and registration are deliberately separate: token
+        verification may touch the database and must not hold the admission
+        condition. Registration is the final, atomic admission check before
+        ``accept()``; a restore that closed the barrier in the meantime wins.
+        """
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        with self._restore_admission_condition:
+            if self._restore_auth_gate_closed:
+                return None
+            lease = self._next_restore_admission_id()
+            self._active_restore_websockets[lease] = (websocket, loop, task)
+            return lease
+
+    def unregister_authenticated_websocket(self, lease: Optional[int]) -> None:
+        if lease is None:
+            return
+        with self._restore_admission_condition:
+            self._active_restore_websockets.pop(lease, None)
+            self._restore_admission_condition.notify_all()
+
+    @staticmethod
+    async def _terminate_authenticated_websocket(websocket, handler_task) -> None:
+        """Close one established socket, then cancel its owning handler."""
+        try:
+            await websocket.close(code=1012, reason="Database restore in progress")
+        finally:
+            current = asyncio.current_task()
+            if (
+                handler_task is not None
+                and handler_task is not current
+                and not handler_task.done()
+            ):
+                handler_task.cancel()
+
+    def close_auth_for_restore(
+        self, restore_request_lease: Optional[int] = None
+    ) -> None:
+        """Close admissions and drain authenticated traffic before DB cutover.
+
+        The restore endpoint itself entered through the HTTP middleware, so its
+        lease must be removed from the drain set after admissions close. Its
+        middleware ``finally`` releases the same id again harmlessly. Every
+        other API request remains counted through ``call_next`` and every
+        authenticated WebSocket remains counted through handler teardown.
+
+        A timeout raises while leaving admissions closed. Proceeding to a
+        whole-file swap without proving that the old authenticated world has
+        drained would be fail-open.
+        """
+        deadline = time.monotonic() + self._RESTORE_DRAIN_TIMEOUT_SECONDS
+        with self._restore_admission_condition:
+            self._restore_auth_gate_closed = True
+            if restore_request_lease is not None:
+                self._active_restore_http_leases.discard(restore_request_lease)
+            sockets = list(self._active_restore_websockets.items())
+            self._restore_admission_condition.notify_all()
+
+        for lease, (websocket, loop, handler_task) in sockets:
+            if loop.is_closed() or not loop.is_running():
+                self.unregister_authenticated_websocket(lease)
+                continue
+            termination = self._terminate_authenticated_websocket(
+                websocket, handler_task
+            )
+            try:
+                asyncio.run_coroutine_threadsafe(termination, loop)
+            except Exception as exc:
+                termination.close()
+                self._logger.error(
+                    "Could not schedule WebSocket termination for restore: %s",
+                    exc,
+                )
+
+        with self._restore_admission_condition:
+            while self._active_restore_http_leases or self._active_restore_websockets:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    http_count = len(self._active_restore_http_leases)
+                    websocket_count = len(self._active_restore_websockets)
+                    self._logger.critical(
+                        "Restore admission drain timed out with %d HTTP request(s) "
+                        "and %d WebSocket(s) still active; authentication remains "
+                        "closed.",
+                        http_count,
+                        websocket_count,
+                    )
+                    raise RuntimeError(
+                        "Timed out draining authenticated traffic before database "
+                        "restore; authentication remains disabled."
+                    )
+                self._restore_admission_condition.wait(timeout=remaining)
+
+    def reopen_auth_after_restore(self) -> None:
+        """Re-enable authentication after a fully successful restore."""
+        with self._restore_admission_condition:
+            self._restore_auth_gate_closed = False
+            self._restore_admission_condition.notify_all()
+
+    def is_auth_closed_for_restore(self) -> bool:
+        """Return whether authentication is fail-closed for a database restore."""
+        with self._restore_admission_condition:
+            return self._restore_auth_gate_closed
+
+    @staticmethod
+    def _restore_unavailable_response() -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Authentication is temporarily unavailable during restore."
+            },
+            headers={"Retry-After": "5"},
         )
 
     def record_guest_activity(self, session_id: str) -> None:
@@ -1316,6 +1471,12 @@ class AuthService:
             cookie session or an ALL-scope token with no resource restriction —
             or ``None`` if the connection is unauthenticated.
         """
+        # WebSocket handshakes bypass HTTP middleware. Keep them behind the
+        # same restore gate so a pre-swap cookie or cached bearer token cannot
+        # authenticate in the queue gap after the database has been replaced.
+        if self.is_auth_closed_for_restore():
+            return None
+
         # Cookie session — full owner (the browser SPA sends this on the
         # handshake, same-origin).
         session_id = websocket.cookies.get("session_id")
@@ -2135,6 +2296,36 @@ class AuthService:
     async def auth_middleware(
         self, request: Request, call_next, allow_origins, allow_origin_regex
     ):
+        """Admit credential-bearing traffic and hold its lease through response.
+
+        Admission happens before credential lookup, including for public auth
+        endpoints such as login/check-session and ``/share/{token_slug}``.
+        Otherwise a request could begin token or owner/resource-row verification
+        just before the restore closes the gate, miss the boolean check, and
+        enter its handler after the database swap.
+        """
+        requires_restore_admission = any(
+            request.url.path.startswith(prefix) for prefix in RESTORE_ADMISSION_PREFIXES
+        )
+        lease = (
+            self._acquire_restore_http_lease() if requires_restore_admission else None
+        )
+        if requires_restore_admission and lease is None:
+            return self._restore_unavailable_response()
+        if lease is not None:
+            request.state.restore_admission_lease = lease
+        try:
+            return await self._auth_middleware_admitted(
+                request, call_next, allow_origins, allow_origin_regex
+            )
+        finally:
+            self._release_restore_http_lease(lease)
+
+    async def _auth_middleware_admitted(
+        self, request: Request, call_next, allow_origins, allow_origin_regex
+    ):
+        """Run the existing authentication policy under an admission lease."""
+
         if request.method == "OPTIONS":
             return await call_next(request)
 

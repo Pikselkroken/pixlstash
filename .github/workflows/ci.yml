@@ -44,7 +44,19 @@ env:
   # stays at INFO, so a *failing* test still reports its full captured log —
   # the debugging signal is unchanged, only the noise from passing tests is
   # gone. `-ra` lists every non-passing outcome in the trailing summary.
-  PYTEST_FLAGS: -q -ra --log-level=INFO --fast-captions --force-cpu
+  #
+  # `--durations=0 --durations-min=0` is the data source for the time-balanced
+  # `--ci-shard` deal (tests/conftest.py). It reports every test's setup/call/
+  # teardown time, which `scripts/record_test_durations.py` turns back into the
+  # committed tests/ci_test_durations.json. `--durations-min=0` (rather than
+  # pytest's 0.005 s default) is what makes the map COMPLETE: a test omitted
+  # for being fast would be indistinguishable from a test that is new, and the
+  # sharder charges an unknown test the median cost, which for a 2 ms test is
+  # wrong by two orders of magnitude. The price is ~3 extra log lines per test.
+  # This changes no test's behaviour and adds no runtime — it only prints.
+  PYTEST_FLAGS: >-
+    -q -ra --log-level=INFO --fast-captions --force-cpu
+    --durations=0 --durations-min=0
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -103,13 +115,77 @@ jobs:
           npm ci
           npm test
 
+      # `npm run lint` is `tsc --noEmit`. `npm test` compiles with
+      # tsconfig.test.json, which only covers src/ + test/; the lint pass is
+      # what type-checks the main-process build as electron-builder will.
+      - name: Test Electron shell
+        working-directory: electron
+        run: |
+          npm ci
+          npm run lint
+          npm test
+
+      - name: Install telemetry Worker dependencies
+        working-directory: website/telemetry-worker
+        run: npm ci
+
       - name: Test telemetry Worker
         working-directory: website/telemetry-worker
         run: npm test
 
+      - name: Validate telemetry Worker config and D1 binding
+        working-directory: website/telemetry-worker
+        run: npm run check:config
+
   # ---------------------------------------------------------------------------
-  # The backend gate. Split across 8 runners instead of one job with 22
+  # The backend gate. Split across 4 runners instead of one job with 22
   # sequential steps.
+  #
+  # Four, not eight. The binding constraint is the account's 20-concurrent-job
+  # budget, and it binds ACROSS RUNS, not within one. Measured on 2026-08-05
+  # between 16:09 and 18:35, seven CI runs were in flight simultaneously at
+  # 17:47; at the then-current 17 jobs per run that is ~119 jobs demanded
+  # against 20 slots. The cap was directly observable in run 30981632678
+  # (tag v1.9.0rc1): exactly 20 jobs started at +0-4 min and the 21st,
+  # `backend shard 1`, waited 8.2 min for a slot. In run 30981629822 every one
+  # of the 14 test jobs was created at 06:40:28 and started between 06:48:14
+  # and 06:57:20 — an 8-17 min queue before any test ran. The same saturation
+  # shows up at the other end of a run: the trivial `build` aggregator queued
+  # 13m 00s in run 31031336234 and `build-windows` 16m 47s in run 31023904354,
+  # and both runs ended within 3 seconds of that job finally starting.
+  #
+  # Under a hard slot cap, jobs-per-run is the lever, not seconds-per-test.
+  # Eight shards cannot spend the parallelism they ask for, and each one pays
+  # its own ~4 min of setup-backend (free-disk-space + setup-python + pip
+  # install + HuggingFace cache restore). At eight that is ~32 min of runner
+  # time per run before a single test executes, all of it competing for the
+  # same scarce slots as real work. Halving the matrix halves that fixed cost
+  # and returns four slots per run. Together with the two Windows shards this
+  # takes ci.yml from 16 jobs to 10, so two concurrent runs now fit inside the
+  # budget where one used to fill it.
+  #
+  # The trade-off is real and was taken deliberately, and the number is not
+  # small. LPT over the committed map puts 1360 s of recorded load on each of
+  # four shards (vs 680 s on each of eight); CI measures ~1.77x the recorded
+  # local time (shard 7 of run 31031336234: 1202 s in CI against a ~680 s
+  # recorded share), so expect roughly 40 min of tests per shard plus ~4 min
+  # setup, against ~20 min before. An UNCONTENDED run therefore gets slower —
+  # ~45 min instead of ~25. It wins only because runs overlap, which is the
+  # normal state here, and because a failed shard now costs one slot for 45
+  # min instead of eight slots for 20.
+  #
+  # If that is too long, 6 is the middle setting (~27 min per shard, 12 jobs
+  # per run) and the balance guardrail
+  # (test_ci_shards.py::test_recorded_durations_actually_balance_the_gate)
+  # reads N from this matrix, so it re-proves the split on any resize. If the
+  # concurrency budget is ever raised, revisit this number FIRST — it is the
+  # cheapest thing here to tune.
+  #
+  # The durable fix is not the shard count: 43 files boot a full Server with
+  # the ML worker fleet per test function and account for ~73% of suite time
+  # (~5.6 s/test against ~1.5 s/test for the files that pass
+  # disable_background_workers). Bring that down and both the shard count and
+  # its wall clock stop mattering.
   #
   # The list below is the GATED set. The ~52 files that are not in it are not
   # forgotten — they are declared as DEFERRED in tests/test_ci_shards.py, and
@@ -136,10 +212,10 @@ jobs:
   # Cost of gating them, measured rather than assumed (2026-07-26): the seven
   # files are 151 tests in 182 s wall clock on a machine calibrated against this
   # runner (gate shard 6/8 = 238 s locally vs 257 s in CI, so ~1.08x). That is
-  # ~3.3 min of extra test time spread over 8 shards — roughly +25 s per shard,
-  # not the ~20 min the block was previously assumed to cost. Gate wall clock
-  # goes from ~13 min to ~13.5 min. This does NOT approach the widened
-  # release-prep budget, and it must not: regular PRs stay fast.
+  # ~3.3 min of extra test time; spread over the four shards below it is
+  # roughly +50 s per shard, not the ~20 min the block was previously assumed
+  # to cost. This does NOT approach the widened release-prep budget, and it
+  # must not: regular PRs stay fast.
   #
   # Why the rest of the deferred set is not simply gated too: it is not yet
   # known green, and some of it is not deterministic. Measured 2026-07-26,
@@ -157,14 +233,27 @@ jobs:
   # below keeps it
   # visible in the meantime.
   #
-  # `--ci-shard i/N` (implemented in tests/conftest.py) deals the collected
-  # tests round-robin, so each file's tests are spread evenly and no single slow
-  # file becomes one shard's critical path — splitting by *test* rather than by
-  # file is what breaks up the authz suites and the 6-minute test_server.py.
-  # Measured with the authz files gated: 684 tests deal out 85-86 per shard,
-  # with the 151 authz tests landing 18-20 per shard, so no shard absorbs the
-  # block. tests/test_ci_shards.py asserts the matrix below and the `/N` in the
-  # command agree.
+  # `--ci-shard i/N` (implemented in tests/conftest.py) splits by *test* rather
+  # than by file, which is what breaks up the authz suites and the 6-minute
+  # test_server.py, and it balances the shards by RECORDED TIME
+  # (longest-processing-time-first over the committed
+  # tests/ci_test_durations.json). It used to deal round-robin by position:
+  # that equalises test count perfectly and test time not at all, and the
+  # measured result on run 30925279472 was 744 s to 1205 s across the then
+  # eight shards — a 1.62x spread, with the gate waiting on shard 7 while
+  # shard 6 had been idle for ~460 s. Time balancing matters MORE at four
+  # shards than at eight: with fewer, larger buckets a single misplaced slow
+  # file moves the critical path further.
+  #
+  # The durations map is committed rather than cached because all four shards
+  # must compute the SAME partition without communicating; see the module
+  # docstring of scripts/record_test_durations.py, which also regenerates it.
+  # A test missing from the map keeps its old round-robin position and a
+  # missing or corrupt map degrades the whole deal back to round-robin, so
+  # stale data costs wall clock and never coverage.
+  # tests/test_ci_shards.py asserts the matrix below and the `/N` in the
+  # command agree, and that the split stays an exact partition under all of
+  # those degraded inputs.
   #
   # Parallelism is deliberately across runners only, NOT pytest-xdist inside a
   # runner. xdist is installed (and is a good local `-n auto`), but two attempts
@@ -182,10 +271,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       # Every shard must report: one shard failing tells you nothing about the
-      # other seven, and a partial picture costs another full round trip.
+      # other three, and a partial picture costs another full round trip.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     # HF_TOKEN lifts HuggingFace's anonymous-download rate limit, which was
     # throttling cold model fetches past the import tests' 10s timeout. Use a
     # READ-ONLY, public-scope fine-grained token: that minimal scope is the
@@ -200,11 +289,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-backend
 
-      - name: Backend tests (shard ${{ matrix.shard }} of 8)
+      - name: Backend tests (shard ${{ matrix.shard }} of 4)
         env:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
-          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/8"
+          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
           tests/test_anomaly_region_scope.py
           tests/test_architecture_guardrails.py
           tests/test_async_import_staging.py
@@ -217,6 +306,7 @@ jobs:
           tests/test_backend_order_stability.py
           tests/test_batch_character_likeness_scope.py
           tests/test_character_face_assignment.py
+          tests/test_characters_api.py
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
@@ -236,8 +326,10 @@ jobs:
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py
           tests/test_find_orphaned_files.py
+          tests/test_finder_query_cost.py
           tests/test_florence.py
           tests/test_florence_model_variant.py
+          tests/test_generic_field_reader_allowlist.py
           tests/test_hub_bootstrap.py
           tests/test_hub_engine.py
           tests/test_hub_registry.py
@@ -254,35 +346,45 @@ jobs:
           tests/test_library_generation_coordinator.py
           tests/test_library_settings.py
           tests/test_library_switch.py
-          tests/test_share_link_library_pin.py
+          tests/test_likeness_and_face_search.py
           tests/test_likeness_worker.py
           tests/test_many_to_many_face_data.py
           tests/test_metadata_hash.py
+          tests/test_metadata_hash_batching.py
           tests/test_migrations.py
           tests/test_multi_project_membership_authz.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
           tests/test_pending_score_invalidation.py
+          tests/test_picture_is_video.py
           tests/test_picture_mutation_scope.py
           tests/test_picture_plugins.py
           tests/test_picture_set_locking.py
           tests/test_picture_sets.py
+          tests/test_picture_sets_query_cost.py
           tests/test_picture_stack_utils.py
           tests/test_pictures_stream.py
+          tests/test_project_membership_service.py
+          tests/test_projects_api.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
           tests/test_repair_copied_face_rows.py
           tests/test_restore.py
+          tests/test_reviews_api.py
           tests/test_scope_table.py
           tests/test_score_agreement_stats.py
           tests/test_scrapheap_retention.py
           tests/test_server.py
+          tests/test_share_link_library_pin.py
+          tests/test_sidebar_counts_query_cost.py
           tests/test_smart_score_consistency.py
           tests/test_snapshots.py
           tests/test_snapshots_auth.py
           tests/test_ssl_generation.py
           tests/test_stack_leader_scope.py
           tests/test_stack_state_filter.py
+          tests/test_stacks_api.py
+          tests/test_stacks_membership.py
           tests/test_tag_prediction_scope.py
           tests/test_tag_worker.py
           tests/test_thumbnail_cache_headers.py
@@ -293,7 +395,9 @@ jobs:
           tests/test_vram_batch_budget.py
           tests/test_watch_folder_worker.py
           tests/test_websocket_auth.py
+          tests/test_workers_api.py
           tests/test_work_planner.py
+          tests/test_ws_broadcaster.py
 
   # ---------------------------------------------------------------------------
   # RELEASE-PREP ONLY — informational ordering sweep, sharded by contiguous
@@ -341,17 +445,18 @@ jobs:
   #    already been signed off, and it puts a 50-min serial job on the tag
   #    build's critical path.
   #
-  # N=6, not 8. Two reasons, and the second is the binding one. (1) Concurrency:
-  # this workflow alone already queues 14 jobs (checks 1 + backend 8 + e2e 1 +
-  # backend_windows 4) against the account's 20-concurrent-job budget, so 6 is
-  # what fits without the sweep queueing behind the gate it is supposed to run
-  # alongside. (2) Diminishing returns: the fixed per-runner cost here (disk
+  # N=6. Two reasons, and the second is the binding one. (1) Concurrency: the
+  # rest of this workflow queues 10 jobs (checks 1 + backend 4 + e2e 1 +
+  # backend_windows 2 + the two aggregators) against the account's
+  # 20-concurrent-job budget, so 6 fits without the sweep queueing behind the
+  # gate it is supposed to run alongside — and unlike the gate it runs only
+  # during release prep, when there is rarely a queue of feature-branch runs
+  # competing. (2) Diminishing returns: the fixed per-runner cost here (disk
   # reclaim + pip install + HuggingFace cache restore) is ~10 min and does not
   # shard, so past ~6 shards each extra runner buys a minute or two of test
   # time and pays a full setup for it. Expected wall clock ~16-20 min: ~10 min
   # setup plus the slowest block. Blocks are equal in test COUNT, not in test
-  # TIME — that imbalance is the price of preserving order, and it is why this
-  # lands near the 8-shard gate's 13-16 min rather than below it.
+  # TIME — that imbalance is the price of preserving order.
   #
   # The per-shard check name is NOT stable across a resize, by design: this job
   # is informational and must never be a required check. Branch protection
@@ -397,7 +502,7 @@ jobs:
   build:
     name: build
     if: always()
-    needs: [checks, backend, backend_release_sweep]
+    needs: [checks, backend, backend_release_sweep, e2e]
     runs-on: ubuntu-latest
     steps:
       # Each dependency is checked against what IT is allowed to report, not
@@ -426,15 +531,17 @@ jobs:
           CHECKS_RESULT: ${{ needs.checks.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           SWEEP_RESULT: ${{ needs.backend_release_sweep.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
         run: |
           set -euo pipefail
-          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT"
+          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT"
 
           failed=0
-          for job in checks backend; do
+          for job in checks backend e2e; do
             case "$job" in
               checks) result="$CHECKS_RESULT" ;;
               backend) result="$BACKEND_RESULT" ;;
+              e2e) result="$E2E_RESULT" ;;
             esac
             if [ "$result" != "success" ]; then
               echo "::error::Blocking job '$job' reported '$result' (must be 'success')."
@@ -458,8 +565,8 @@ jobs:
   e2e:
     # Playwright UI tests drive the real SPA against a backend booted on a
     # throwaway copy of the committed test-data/ fixture (browse-only: workers
-    # disabled, no ML models needed). Skips cleanly until the fixture is
-    # committed, so CI stays green in the meantime.
+    # disabled, no ML models needed). The fixture is committed release input:
+    # its absence is a coverage failure, never permission to skip the lane.
     runs-on: ubuntu-latest
     steps:
       - name: Remove unused tools
@@ -473,15 +580,13 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: Detect e2e fixture
+      - name: Require committed e2e fixture
         id: fixture
         run: |
-          if [ -f test-data/images/vault.db ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::test-data/ fixture not committed — skipping Playwright e2e."
-          fi
+          set -euo pipefail
+          git ls-files --error-unmatch test-data/images/vault.db
+          test -f test-data/images/vault.db
+          echo "present=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: steps.fixture.outputs.present == 'true'
@@ -546,6 +651,15 @@ jobs:
   # than by file) is what actually breaks that up. Job-level sharding adds no
   # intra-process concurrency, so it introduces no new flake surface on the
   # platform that is hardest to debug remotely.
+  #
+  # Two shards, not four, for the concurrency reason spelled out on the
+  # `backend` job above. Windows pays the worst fixed cost per shard of any
+  # job here — `pip install .[test,dev]` alone was ~3-4 min on every one of
+  # the four (run 31031336234: 3m09s, 3m22s, 2m57s, 3m17s) — so extra shards
+  # buy proportionally less here than on Linux while costing the same scarce
+  # slot. This is also a deliberate SUBSET rather than a gate, so it is the
+  # cheaper place to give up parallelism: the completeness guarantee lives on
+  # Linux.
   # ---------------------------------------------------------------------------
   backend_windows:
     name: backend-windows shard ${{ matrix.shard }}
@@ -553,7 +667,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2]
     # See the `backend` job for the rationale and the read-only token requirement.
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -604,12 +718,12 @@ jobs:
           key: hf-models-${{ runner.os }}-${{ hashFiles('pixlstash/tagger_plugins/wd14.py', 'pixlstash/tagger_plugins/pixlstash_tagger.py', 'pixlstash/tagger_plugins/florence2.py') }}
           restore-keys: hf-models-${{ runner.os }}-
 
-      - name: OS-sensitive backend tests (shard ${{ matrix.shard }} of 4)
+      - name: OS-sensitive backend tests (shard ${{ matrix.shard }} of 2)
         shell: bash
         env:
           CI_SHARD: ${{ matrix.shard }}
         run: >-
-          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/4"
+          python -m pytest $PYTEST_FLAGS --ci-shard "$CI_SHARD/2"
           tests/test_migrations.py
           tests/test_snapshots.py
           tests/test_restore.py

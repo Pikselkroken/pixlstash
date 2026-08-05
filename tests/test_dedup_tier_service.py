@@ -55,6 +55,7 @@ from pixlstash.services.dedup_tier_service import (
 from pixlstash.tasks import dedup_scan_task as dedup_scan_task_module
 from pixlstash.tasks.dedup_scan_task import DedupScanTask
 from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
+from pixlstash.tasks.task_type import TaskType
 from pixlstash.task_runner import TaskRunner
 
 _BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
@@ -332,7 +333,7 @@ def test_group_evidence_reports_both_directions():
     ]
     pills = tiers.build_group_evidence(DedupTier.NEAR, 0.96, members)
     texts = {pill["text"]: pill["against"] for pill in pills}
-    assert texts["96% visual match"] is False
+    assert "96% visual match" not in texts
     assert texts["Different resolution"] is True
     assert texts["Different aspect ratio"] is True
     assert texts["Different file format"] is True
@@ -2000,3 +2001,215 @@ def test_stack_members_is_none_for_a_stack_with_no_live_members(server):
     ids = _seed(server, [{"pixel_sha": "gone", "deleted": True}])
     stack_id = _stack(server, ids)
     assert _run(server, tiers.stack_members_in_session, stack_id, 0, 10) is None
+
+
+# ── release-candidate scan generation and bounded-work regressions ───────────
+
+
+def _run_requested_scan(server, policy=None, scope=None):
+    progress = _run(
+        server,
+        tiers.request_scan_in_session,
+        policy or TierPolicy(),
+        scope,
+    )
+    return DedupScanTask(server.vault.db, progress["scan_id"])._run_task()
+
+
+def test_completed_rescan_retires_obsolete_exact_evidence(server):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "same", "size_bytes": 100},
+            {"pixel_sha": "same", "size_bytes": 100},
+        ],
+    )
+    first = _run_requested_scan(server)
+    assert first["status"] == "complete"
+    assert len(_run(server, lambda s: s.exec(select(DedupGroup)).all())) == 1
+
+    def make_distinct(session):
+        picture = session.get(Picture, ids[1])
+        picture.pixel_sha = "different"
+        session.add(picture)
+        session.commit()
+
+    _run(server, make_distinct)
+    second = _run_requested_scan(server)
+
+    assert second["status"] == "complete"
+    assert second["retired_groups"] == 1
+    assert _run(server, lambda s: s.exec(select(DedupGroup)).all()) == []
+
+
+def test_failed_and_cancelled_rescans_preserve_prior_complete_evidence(
+    server, monkeypatch
+):
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "same", "size_bytes": 100},
+            {"pixel_sha": "same", "size_bytes": 100},
+        ],
+    )
+    _run_requested_scan(server)
+
+    def make_distinct(session):
+        picture = session.get(Picture, ids[1])
+        picture.pixel_sha = "different"
+        session.add(picture)
+        session.commit()
+
+    _run(server, make_distinct)
+    cancelled = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
+    _run(server, DedupScanTask._start_scan_slice, cancelled["scan_id"])
+    _run(server, DedupScanTask._mark_pending_after_cancel, cancelled["scan_id"])
+    assert len(_run(server, lambda s: s.exec(select(DedupGroup)).all())) == 1
+
+    # Allow a fresh request, then fail before a successful finalisation. Neither
+    # path is allowed to erase the last complete generation's queue evidence.
+    def make_complete(session):
+        scan = session.get(DedupScan, cancelled["scan_id"])
+        scan.status = "complete"
+        session.add(scan)
+        session.commit()
+
+    _run(server, make_complete)
+    failed = _run(server, tiers.request_scan_in_session, TierPolicy(), None)
+
+    def fail_exact(_session, _scope):
+        raise RuntimeError("forced exact scan failure")
+
+    monkeypatch.setattr(tiers, "find_exact_groups_in_session", fail_exact)
+    with pytest.raises(RuntimeError, match="forced exact scan failure"):
+        DedupScanTask(server.vault.db, failed["scan_id"])._run_task()
+    progress = _run(server, tiers.scan_progress_in_session, None)
+    assert progress["status"] == "failed"
+    assert len(_run(server, lambda s: s.exec(select(DedupGroup)).all())) == 1
+
+
+def test_scan_retirement_covers_all_complete_tiers_but_not_sibling_evidence(server):
+    def seed_generations(session):
+        first = DedupScan(scope_key="set:1", scope_type="set", scope_id="1")
+        sibling = DedupScan(scope_key="set:2", scope_type="set", scope_id="2")
+        session.add(first)
+        session.add(sibling)
+        session.flush()
+        owned = [
+            DedupGroup(
+                signature=f"owned-stale-{tier}",
+                tier=tier,
+                confidence=1.0,
+                member_count=2,
+                scan_id=int(first.id),
+            )
+            for tier in ("exact", "near", "embedding")
+        ]
+        protected = DedupGroup(
+            signature="sibling-current",
+            tier="exact",
+            confidence=1.0,
+            member_count=2,
+            scan_id=int(sibling.id),
+        )
+        session.add_all(owned)
+        session.add(protected)
+        session.commit()
+        return int(first.id)
+
+    scan_id = _run(server, seed_generations)
+
+    def retire_and_commit(session):
+        removed = tiers.retire_obsolete_scan_groups_in_session(
+            session,
+            scan_id,
+            {"exact": set(), "near": set(), "embedding": set()},
+            {"exact", "near", "embedding"},
+        )
+        session.commit()
+        return removed
+
+    removed = _run(server, retire_and_commit)
+    remaining = _run(
+        server, lambda s: [row.signature for row in s.exec(select(DedupGroup)).all()]
+    )
+    assert removed == 3
+    assert remaining == ["sibling-current"]
+
+
+def test_incomplete_tier_is_omitted_from_generation_retirement(server):
+    def seed_partial_generation(session):
+        scan = DedupScan(scope_key="global", scope_type="global")
+        session.add(scan)
+        session.flush()
+        session.add(
+            DedupGroup(
+                signature="prior-complete-near",
+                tier="near",
+                confidence=0.95,
+                member_count=2,
+                scan_id=int(scan.id),
+            )
+        )
+        session.commit()
+        return int(scan.id)
+
+    scan_id = _run(server, seed_partial_generation)
+
+    def retire_complete_tiers(session):
+        removed = tiers.retire_obsolete_scan_groups_in_session(
+            session,
+            scan_id,
+            {"exact": set(), "near": set()},
+            {"exact"},
+        )
+        session.commit()
+        return removed
+
+    assert _run(server, retire_complete_tiers) == 0
+    assert _run(
+        server, lambda s: [row.signature for row in s.exec(select(DedupGroup)).all()]
+    ) == ["prior-complete-near"]
+
+
+def test_exact_only_scan_does_not_depend_on_embedding_work(server):
+    _run(server, tiers.request_scan_in_session, TierPolicy(), None)
+    finder = DedupScanFinder(server.vault.db)
+    assert finder.depends_on() == [TaskType.PIXEL_SHA]
+
+
+def test_4001_member_bucket_keeps_the_boundary_member(monkeypatch):
+    rows = [(picture_id, 1, None, None, None) for picture_id in range(1, 4002)]
+    monkeypatch.setattr(tiers, "_bucket_rows", lambda _session, _scope: rows)
+
+    buckets = tiers.build_near_buckets(object(), DedupScope())
+
+    assert [len(bucket.picture_ids) for bucket in buckets] == [4000, 2]
+    assert buckets[0].picture_ids[-1] == buckets[1].picture_ids[0] == 4000
+    assert set().union(*(set(bucket.picture_ids) for bucket in buckets)) == set(
+        range(1, 4002)
+    )
+    assert all(bucket.oversized for bucket in buckets)
+
+
+def test_pair_cap_marks_scan_partial_and_preserves_near_evidence(server, monkeypatch):
+    _seed(
+        server,
+        [
+            {"perceptual_hash": PHASH_ZERO},
+            {"perceptual_hash": PHASH_ZERO},
+            {"perceptual_hash": PHASH_ZERO},
+        ],
+    )
+    monkeypatch.setattr(tiers, "MAX_PAIRS_PER_BUCKET", 1)
+
+    summary = _run_requested_scan(server, TierPolicy(near_enabled=True))
+    progress = _run(server, tiers.scan_progress_in_session, None)
+
+    assert summary["status"] == "partial"
+    assert progress["status"] == "partial"
+    assert "pair cap" in progress["error"]
+    assert any(
+        row.tier == "near"
+        for row in _run(server, lambda s: s.exec(select(DedupGroup)).all())
+    )

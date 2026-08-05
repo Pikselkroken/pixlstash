@@ -10,7 +10,11 @@ import { mount } from "@vue/test-utils";
 
 import DedupConfidencePill from "./DedupConfidencePill.vue";
 
-const globalOpts = { global: { stubs: { "v-icon": true } } };
+const globalOpts = {
+  global: {
+    stubs: { "v-icon": { template: "<i><slot /></i>" } },
+  },
+};
 
 function mountPill(group) {
   return mount(DedupConfidencePill, { ...globalOpts, props: { group } });
@@ -21,8 +25,8 @@ describe("DedupConfidencePill", () => {
     // The whole reason this component exists: an exact match is a different
     // kind of claim from a similarity score.
     const wrapper = mountPill({ kind: "exact", confidence: 1 });
-    expect(wrapper.text()).toBe("Exact");
-    expect(wrapper.text()).not.toMatch(/%/);
+    expect(wrapper.find(".conf-pill__label").text()).toBe("Exact");
+    expect(wrapper.find(".conf-pill__label").text()).not.toMatch(/%/);
   });
 
   it("gives the exact tier its own filled treatment", () => {
@@ -35,19 +39,30 @@ describe("DedupConfidencePill", () => {
   it("renders a near group as a rounded percentage", () => {
     // The score is a measurement and reads as one.
     const wrapper = mountPill({ kind: "near", confidence: 0.943 });
-    expect(wrapper.text()).toBe("94% similar");
+    expect(wrapper.find(".conf-pill__label").text()).toBe("94% similar");
   });
 
-  it("gives the near tier the quiet outlined treatment", () => {
-    // A near match must not borrow the settled look of an exact one.
-    expect(
-      mountPill({ kind: "near", confidence: 0.9 }).find(".conf-pill").classes(),
-    ).toContain("conf-pill--near");
+  it("marks a measured near match as supporting evidence", () => {
+    const pill = mountPill({ kind: "near", confidence: 0.98 }).find(
+      ".conf-pill",
+    );
+    expect(pill.classes()).toContain("conf-pill--near");
+    expect(pill.html()).toContain("mdi-check");
+    expect(pill.attributes("title")).toBe(
+      "98% similar. Supports stacking.",
+    );
+    expect(pill.attributes("aria-label")).toBe(
+      "98% similar. Supports stacking.",
+    );
   });
 
-  it("falls back to Similar when no score came through", () => {
-    // A missing score must not render as "NaN% similar".
-    expect(mountPill({ kind: "near" }).text()).toBe("Similar");
+  it("falls back to neutral Similar when no score came through", () => {
+    // A missing score must render neither "NaN% similar" nor a measured check.
+    const pill = mountPill({ kind: "near" }).find(".conf-pill");
+    expect(pill.find(".conf-pill__label").text()).toBe("Similar");
+    expect(pill.classes()).toContain("conf-pill--unknown");
+    expect(pill.html()).toContain("mdi-blur");
+    expect(pill.html()).not.toContain("mdi-check");
   });
 
   it("keeps the label in the element that carries the tabular figures", () => {

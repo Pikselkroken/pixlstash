@@ -7,14 +7,15 @@
  * far the comparison has got, so a short list reads as "not finished yet"
  * rather than as "you have almost no duplicates".
  *
- * It removes itself when the durable scan status becomes terminal. Counters
- * may reach their totals while a final comparison phase is still running, so
- * status — not a locally derived percentage — decides when the queue is done.
+ * It removes itself only when the durable scan completed successfully. A
+ * partial or failed terminal scan stays visible because hiding that state can
+ * make an incomplete empty queue look clear.
  */
 import { computed } from "vue";
 
 /** Statuses in which a scan is genuinely still comparing pictures. */
 const RUNNING_STATES = new Set(["pending", "running"]);
+const WARNING_STATES = new Set(["partial", "failed"]);
 
 const props = defineProps({
   /**
@@ -37,8 +38,14 @@ const percent = computed(() => {
 });
 
 const status = computed(() => props.scan?.status ?? "idle");
-const visible = computed(() => RUNNING_STATES.has(status.value));
+const visible = computed(
+  () => RUNNING_STATES.has(status.value) || WARNING_STATES.has(status.value),
+);
 const pending = computed(() => status.value === "pending");
+const partial = computed(() => status.value === "partial");
+const failed = computed(() => status.value === "failed");
+const terminalWarning = computed(() => partial.value || failed.value);
+const warningDetail = computed(() => String(props.scan?.error ?? "").trim());
 
 /**
  * Tier 2 streams its groups in as each candidate bucket finishes, so a scope
@@ -87,12 +94,22 @@ const totalText = computed(() =>
   <div
     v-if="visible"
     class="scan-banner"
-    role="status"
+    :class="{ 'scan-banner--warning': terminalWarning }"
+    :role="terminalWarning ? 'alert' : 'status'"
     aria-live="polite"
     aria-atomic="true"
   >
     <v-icon class="scan-banner__ico" size="18">mdi-radar</v-icon>
-    <p v-if="pending" class="scan-banner__line">
+    <p v-if="partial" class="scan-banner__line">
+      Duplicate scan incomplete. Some comparisons were omitted, so the queue
+      cannot be marked clear.<span v-if="warningDetail"> {{ warningDetail }}</span>
+    </p>
+    <p v-else-if="failed" class="scan-banner__line">
+      Duplicate scan failed. The queue may be incomplete.<span v-if="warningDetail">
+        {{ warningDetail }}</span
+      >
+    </p>
+    <p v-else-if="pending" class="scan-banner__line">
       Duplicate scan queued. Waiting for earlier scan work to finish.
     </p>
     <p v-else-if="countsBuckets" class="scan-banner__line">
@@ -108,8 +125,9 @@ const totalText = computed(() =>
     <p v-else class="scan-banner__line">
       Duplicate scan is starting. Preparing pictures to compare.
     </p>
-    <span class="scan-banner__meta">{{ metaText }}</span>
+    <span class="scan-banner__meta">{{ terminalWarning ? "Incomplete" : metaText }}</span>
     <span
+      v-if="!terminalWarning"
       class="scan-banner__track"
       role="progressbar"
       :aria-label="progressLabel"
@@ -148,6 +166,11 @@ const totalText = computed(() =>
 .scan-banner__ico {
   color: rgb(var(--v-theme-on-panel));
   flex-shrink: 0;
+}
+
+.scan-banner--warning .scan-banner__ico,
+.scan-banner--warning .scan-banner__meta {
+  color: rgb(var(--v-theme-warning));
 }
 
 .scan-banner__line {

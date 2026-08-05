@@ -23,10 +23,9 @@
  *     (`picturesMoving`), not merely from one endpoint, so they can never
  *     disagree. That is the failure the neighbouring auto-stack dialog shipped
  *     when it reported "62 stacks to create" for work that would create 3.
- *   * **Nothing is freed.** The originals-deleted-from-disk zero is stated out
- *     loud, and the byte figure is a sentence rather than a figure block,
- *     because a soft delete frees nothing until the Scrapheap is emptied, and
- *     with the default retention it never empties on its own.
+ *   * **Nothing is freed now.** The recovery copy explains when files can
+ *     actually leave disk; a redundant `Originals deleted: 0` statistic does
+ *     not compete with the consequence the user is confirming.
  *   * **No type-to-confirm.** That gate belongs to `DeleteForeverDialog`, where
  *     an on-disk original dies. This is a recoverable soft delete, one op-log
  *     batch and one Ctrl+Z; borrowing the heavier ceremony would flatten the
@@ -115,54 +114,25 @@ const confirmLabel = computed(() =>
   keepCoverOnlyConfirmLabel(picturesMoving.value),
 );
 
-// The rows are declared once so their order is fixed and matches the design's,
-// and so neither the metadata row nor the disk row can be dropped by a later
-// edit: the first is the whole reason collapsing is safe, and stating the
-// second's zero out loud is the point of showing it.
-const ROWS = [
-  { key: "stacksCollapsed", icon: "mdi-layers-minus", label: "Stacks collapsed" },
-  { key: "coversKept", icon: "mdi-image-outline", label: "Covers kept" },
-  {
-    key: "coversGainingMetadata",
-    icon: "mdi-tag-multiple-outline",
-    label: "Covers gaining metadata from copies",
-  },
-  { key: "stacksSkipped", icon: "mdi-cancel", label: "Stacks skipped" },
-  {
-    key: "originalsDeleted",
-    icon: "mdi-delete-off-outline",
-    label: "Originals deleted from disk",
-  },
-];
-
-/**
- * One row's value.
- *
- * While the dry run is in flight every server-derived row shows an en dash
- * rather than a spinner, so the dialog keeps its height and the confirm button
- * does not move out from under the pointer when the counts land.
- */
-function rowValue(key) {
-  // Not a number the server has to be asked for: this action has no path to
-  // disk at all. Stating the zero out loud, in every state, is the row's job,
-  // exactly as the auto-stack dialog states its own "Files deleted: 0".
-  if (key === "originalsDeleted") return "0";
-  if (figuresUnknown.value) return UNKNOWN_FIGURE;
-  const p = props.preview;
-  if (key === "stacksCollapsed") return (stacksEligible.value ?? 0).toLocaleString();
-  if (key === "coversKept") return (Number(p.covers_kept) || 0).toLocaleString();
-  if (key === "coversGainingMetadata") {
-    return (Number(p.covers_gaining_metadata) || 0).toLocaleString();
-  }
-  if (key === "stacksSkipped") {
-    return keepCoverOnlySkippedCount(p).toLocaleString();
-  }
-  return UNKNOWN_FIGURE;
-}
+/** Metadata transfer is useful only when it will actually happen. */
+const coversGainingMetadata = computed(() =>
+  figuresUnknown.value
+    ? 0
+    : Number(props.preview.covers_gaining_metadata) || 0,
+);
 
 const skipReasons = computed(() =>
   figuresUnknown.value ? [] : keepCoverOnlySkipReasons(props.preview),
 );
+
+const skippedCount = computed(() =>
+  figuresUnknown.value ? 0 : keepCoverOnlySkippedCount(props.preview),
+);
+
+const skippedSummary = computed(() => {
+  const count = skippedCount.value;
+  return `${count.toLocaleString()} ${count === 1 ? "stack" : "stacks"} won't change`;
+});
 
 /**
  * The recovery window, read from the response.
@@ -251,19 +221,31 @@ watch(
       <p class="kco-figure-label">pictures move to the Scrapheap</p>
     </div>
 
-    <dl class="kco-rows">
-      <div v-for="row in ROWS" :key="row.key" class="kco-row">
-        <dt class="kco-term">
-          <v-icon size="16" class="kco-icon">{{ row.icon }}</v-icon>
-          {{ row.label }}
-        </dt>
-        <dd class="kco-value">{{ rowValue(row.key) }}</dd>
-      </div>
-    </dl>
+    <p v-if="coversGainingMetadata > 0" class="kco-metadata">
+      <v-icon size="16" class="kco-icon">mdi-tag-multiple-outline</v-icon>
+      <span>
+        {{ coversGainingMetadata.toLocaleString() }}
+        {{ coversGainingMetadata === 1 ? "cover gains" : "covers gain" }}
+        metadata from copies before they move.
+      </span>
+    </p>
 
-    <ul v-if="skipReasons.length" class="kco-skips">
-      <li v-for="reason in skipReasons" :key="reason.key">{{ reason.text }}</li>
-    </ul>
+    <section
+      v-if="skipReasons.length"
+      class="kco-skips"
+      role="status"
+      aria-labelledby="keep-cover-skips-title"
+    >
+      <p id="keep-cover-skips-title" class="kco-skips-title">
+        <v-icon size="16" class="kco-icon">mdi-cancel</v-icon>
+        {{ skippedSummary }}
+      </p>
+      <ul>
+        <li v-for="reason in skipReasons" :key="reason.key">
+          {{ reason.text }}
+        </li>
+      </ul>
+    </section>
 
     <!-- Info-tinted, not error-tinted: recovery is the reassuring half, and
          DeleteForeverDialog's lock note already made this call for the same
@@ -356,31 +338,13 @@ watch(
   color: rgba(var(--v-theme-on-surface), 0.8);
 }
 
-.kco-rows {
-  margin: var(--space-5) 0 0;
-  padding: 0;
+.kco-metadata {
   display: flex;
-  flex-direction: column;
-}
-
-.kco-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: baseline;
-  gap: var(--space-4);
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid rgb(var(--v-theme-divider));
-}
-
-.kco-row:last-child {
-  border-bottom: none;
-}
-
-.kco-term {
-  display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
+  margin: var(--space-5) 0 0;
   font-size: var(--text-sm);
+  line-height: var(--leading-body);
   color: rgba(var(--v-theme-on-surface), 0.8);
 }
 
@@ -389,23 +353,33 @@ watch(
   flex-shrink: 0;
 }
 
-.kco-value {
+.kco-skips {
+  margin: var(--space-5) 0 0;
+  padding: var(--space-3);
+  border: 1px solid rgba(var(--v-theme-warning), 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-warning), 0.08);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  color: rgba(var(--v-theme-on-surface), 0.8);
+}
+
+.kco-skips-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
   color: rgb(var(--v-theme-on-surface));
 }
 
-.kco-skips {
-  margin: var(--space-4) 0 0;
+.kco-skips ul {
+  margin: var(--space-2) 0 0;
   padding-left: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-  color: rgba(var(--v-theme-on-surface), 0.8);
 }
 
 .kco-recovery {

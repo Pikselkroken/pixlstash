@@ -55,6 +55,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   autoStackExact,
   listMixedStacks,
@@ -80,11 +81,14 @@ import {
   lockedSets,
   mixedStackEngineMarks,
 } from "../utils/dedup";
-import { newOperationBatchId } from "../utils/apiClient";
+import { newOperationBatchId, onSessionReset } from "../utils/apiClient";
 import { useOperationStore } from "./useOperationStore";
 
 /** How many groups one queue page holds. */
 export const QUEUE_PAGE_SIZE = 20;
+
+/** Rows retained ahead of an in-place undo reload's viewport anchor. */
+const WINDOW_RELOAD_CONTEXT = QUEUE_PAGE_SIZE;
 
 /**
  * How close to the tail the focus may walk before the next page is fetched.
@@ -1299,6 +1303,106 @@ export const useDedupStore = defineStore("dedup", () => {
   }
 
   /**
+   * Re-read a bounded window around an absolute queue index without sending a
+   * reviewer back to the head of the queue.
+   *
+   * This is deliberately narrower than {@link loadFirstPage}: it is the
+   * reconciliation path for a successful undo that inserted a resolved group
+   * back into the ordered queue. The view owns the pixel/signature viewport
+   * anchor; this store owns replacing the server window while retaining the
+   * focused group and any still-present multi-selection.
+   *
+   * @param {number} anchorIndex - absolute row currently at the viewport edge.
+   * @param {Object} [options]
+   * @param {string|null} [options.focusSignature] - focused group before reload.
+   * @returns {Promise<void>}
+   */
+  async function reloadWindowAround(
+    anchorIndex,
+    { focusSignature = null } = {},
+  ) {
+    loading.value = true;
+    error.value = null;
+    windowEpoch += 1;
+    const epoch = windowEpoch;
+    cancelEndChase();
+
+    // Use the server's largest legal page. A bulk verdict can restore many
+    // adjacent groups ahead of the old anchor; the wide read keeps both that
+    // restored run and the group that held keyboard focus in one coherent
+    // window, while the component still mounts only its small virtual slice.
+    const pageSize = Math.max(
+      1,
+      Number(bounds.value?.max_page_size) || QUEUE_PAGE_SIZE,
+    );
+    const before = Math.min(WINDOW_RELOAD_CONTEXT, pageSize - 1);
+    const requestedIndex = Math.max(0, Math.floor(Number(anchorIndex) || 0));
+    const offset = Math.max(0, requestedIndex - before);
+    const selectedBefore = new Set(selectedSignatures.value);
+
+    try {
+      const data = await listGroups({
+        ...policyArgs.value,
+        scopeType: scopeType.value,
+        scopeId: scopeId.value,
+        decided: showingDecided.value,
+        verdicts: verdictArgs.value,
+        offset,
+        limit: pageSize,
+      });
+      if (epoch !== windowEpoch) return;
+
+      adoptVerdictCounts(data);
+      groups.value = Array.isArray(data?.groups) ? data.groups : [];
+      windowStart.value = offset;
+      total.value = Number(data?.total) || groups.value.length;
+      nextOffset.value = offset + groups.value.length;
+      nextCursor.value = cursorFrom(data);
+      hasMore.value =
+        nextCursor.value !== null || nextOffset.value < total.value;
+      scan.value = normalizeScan(data?.scan);
+
+      const heldSignatures = new Set(groups.value.map((g) => g.signature));
+      selectedSignatures.value = new Set(
+        [...selectedBefore].filter((signature) =>
+          heldSignatures.has(signature),
+        ),
+      );
+      selectionAnchor = null;
+
+      const focusedLocal = focusSignature
+        ? groups.value.findIndex((g) => g.signature === focusSignature)
+        : -1;
+      if (focusedLocal >= 0) {
+        focusIndex.value = offset + focusedLocal;
+      } else if (groups.value.length) {
+        focusIndex.value = Math.max(
+          offset,
+          Math.min(offset + groups.value.length - 1, requestedIndex),
+        );
+      } else {
+        focusIndex.value = -1;
+      }
+    } catch (err) {
+      // The undo itself has already succeeded. A failed reconciliation must
+      // leave the still-usable local window, focus and selection in place;
+      // clearing them would turn a transient read failure into a second UI
+      // failure and lose the reviewer's context anyway.
+      if (epoch !== windowEpoch) {
+        console.warn(
+          "[dedup] discarding a superseded anchored reload's failure",
+          err,
+        );
+        return;
+      }
+      error.value = err;
+      console.warn("[dedup] failed to reload the duplicate queue in place", err);
+    } finally {
+      if (epoch === windowEpoch) loading.value = false;
+    }
+  }
+
+  /**
    * Append the next page, if there is one.
    *
    * Cursor first: a keyset cursor over `(confidence DESC, signature)` cannot
@@ -2050,36 +2154,42 @@ export const useDedupStore = defineStore("dedup", () => {
     if (showingDecided.value) return null;
     const targets = verdictTargets(group);
     if (targets.length > 1) {
-      // One gesture, one Ctrl+Z: every selected group shares a client batch
-      // id, so the operation log coalesces the verdicts into one undo step.
       const gestureId = batchId || newOperationBatchId();
-      let last = null;
-      let recorded = false;
-      const stackedTargets = [];
-      const gestureSkipped = [];
-      for (const target of targets) {
-        last = await stackOne(target, {
-          batchId: gestureId,
-          deferCommit: true,
-        });
-        // Stop on the first failure rather than half-applying silently; the
-        // failed group and the rest stay selected and in the queue. A PARTIAL
-        // success is not a failure: the group was decided, so the run carries
-        // on and the skips are reported once for the whole gesture.
-        if (!last) {
-          commitStackedGroups(stackedTargets);
-          if (recorded) narrateVerdictOperation();
-          return null;
+      busy.value = true;
+      try {
+        const result = await applyVerdictBatch(
+          targets.map((target) => ({
+            verdict: "stacked",
+            signature: target.signature,
+            coverPictureId: coverIdFor(target),
+            excludedPictureIds: effectiveExcludedFor(target),
+          })),
+          { batchId: gestureId },
+        );
+        commitStackedGroups(targets);
+        clearSelection();
+        if (result?.batch_id) narrateVerdictOperation();
+        return {
+          ...result,
+          gesture_skipped: (result?.results ?? []).flatMap(
+            (item) => item.skipped ?? [],
+          ),
+        };
+      } catch (err) {
+        error.value = err;
+        console.warn("[dedup] failed to apply the bulk stack gesture", err);
+        if (isAmbiguousMutationError(err)) {
+          await reconcileAfterUncertainMutation(err);
         }
-        stackedTargets.push(target);
-        if (last.batch_id) recorded = true;
-        gestureSkipped.push(...(last.skipped ?? []));
+        return {
+          failed: true,
+          uncertain: isAmbiguousMutationError(err),
+          completed: 0,
+          requested: targets.length,
+        };
+      } finally {
+        busy.value = false;
       }
-      commitStackedGroups(stackedTargets);
-      clearSelection();
-      // One receipt per GESTURE, not per group: the batch is one undo step.
-      if (recorded) narrateVerdictOperation();
-      return { ...last, gesture_skipped: gestureSkipped };
     }
     const result = await stackOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
@@ -2088,7 +2198,7 @@ export const useDedupStore = defineStore("dedup", () => {
       : result;
   }
 
-  async function stackOne(group, { batchId, deferCommit = false } = {}) {
+  async function stackOne(group, { batchId } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
@@ -2101,11 +2211,14 @@ export const useDedupStore = defineStore("dedup", () => {
         excludedPictureIds: effectiveExcludedFor(group),
         batchId,
       });
-      if (!deferCommit) commitStackedGroups([group]);
+      commitStackedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
       console.warn(`[dedup] failed to stack group ${group.signature}`, err);
+      if (isAmbiguousMutationError(err)) {
+        await reconcileAfterUncertainMutation(err);
+      }
       return null;
     } finally {
       busy.value = false;
@@ -2115,12 +2228,9 @@ export const useDedupStore = defineStore("dedup", () => {
   /**
    * Apply one settled stack gesture to the visible queue in one assignment.
    *
-   * Bulk requests stay sequential for the server's operation ordering, but a
-   * response is not permission to make the list jump while more selected rows
-   * are still being processed. Successful targets are therefore collected and
-   * committed together after the sequence settles. On a refusal, only the
-   * successes leave; the failed target and every unattempted target remain
-   * selected for an honest retry.
+   * A bulk gesture commits atomically on the server and is reflected here in
+   * one assignment only after that response lands, so selected rows never jump
+   * while their shared transaction is in flight.
    *
    * @param {Object[]} stackedGroups
    */
@@ -2186,39 +2296,58 @@ export const useDedupStore = defineStore("dedup", () => {
    * @param {Object} group
    * @returns {Promise<Object|null>} the verdict response, or null on failure.
    */
-  async function keepSeparate(group) {
+  async function keepSeparate(group, { batchId } = {}) {
     if (showingDecided.value) return null;
     const targets = verdictTargets(group);
     if (targets.length > 1) {
-      let last = null;
-      for (const target of targets) {
-        last = await keepSeparateOne(target);
-        if (!last) return null;
+      const gestureId = batchId || newOperationBatchId();
+      busy.value = true;
+      try {
+        const result = await applyVerdictBatch(
+          targets.map((target) => ({
+            verdict: "keep_separate",
+            signature: target.signature,
+          })),
+          { batchId: gestureId },
+        );
+        commitSeparatedGroups(targets);
+        clearSelection();
+        if (result?.batch_id) narrateVerdictOperation();
+        return {
+          ...result,
+          completed: targets.length,
+          requested: targets.length,
+        };
+      } catch (err) {
+        error.value = err;
+        console.warn(
+          "[dedup] failed to apply the bulk keep-separate gesture",
+          err,
+        );
+        if (isAmbiguousMutationError(err)) {
+          await reconcileAfterUncertainMutation(err);
+        }
+        return {
+          failed: true,
+          uncertain: isAmbiguousMutationError(err),
+          completed: 0,
+          requested: targets.length,
+        };
+      } finally {
+        busy.value = false;
       }
-      clearSelection();
-      // A backend that has made keep-separate undoable mirrors the stack
-      // response and carries a batch_id; an older one returns null there and
-      // the gesture stays receipt-less, exactly as before.
-      if (last?.batch_id) narrateVerdictOperation();
-      return last;
     }
-    const result = await keepSeparateOne(group);
+    const result = await keepSeparateOne(group, { batchId });
     if (result?.batch_id) narrateVerdictOperation();
     return result;
   }
 
-  async function keepSeparateOne(group) {
+  async function keepSeparateOne(group, { batchId } = {}) {
     if (!group || busy.value) return null;
     busy.value = true;
     try {
-      const result = await keepGroupSeparate(group.signature);
-      separatedCount.value += 1;
-      removeGroup(group.signature);
-      openCount.value = Math.max(0, openCount.value - 1);
-      invalidateScopeCounts();
-      // This verdict raises no WebSocket event at all, so this refetch is the
-      // only thing that will ever correct the tick above.
-      reconcileCounts();
+      const result = await keepGroupSeparate(group.signature, { batchId });
+      commitSeparatedGroups([group]);
       return result;
     } catch (err) {
       error.value = err;
@@ -2226,10 +2355,60 @@ export const useDedupStore = defineStore("dedup", () => {
         `[dedup] failed to keep group ${group.signature} separate`,
         err,
       );
+      if (isAmbiguousMutationError(err)) {
+        await reconcileAfterUncertainMutation(err);
+      }
       return null;
     } finally {
       busy.value = false;
     }
+  }
+
+  function commitSeparatedGroups(separatedGroups) {
+    const signatures = new Set(
+      separatedGroups.map((group) => group?.signature).filter(Boolean),
+    );
+    if (!signatures.size) return;
+    const removed = groups.value.filter((group) =>
+      signatures.has(group.signature),
+    ).length;
+    groups.value = groups.value.filter(
+      (group) => !signatures.has(group.signature),
+    );
+    selectedSignatures.value = new Set(
+      [...selectedSignatures.value].filter(
+        (signature) => !signatures.has(signature),
+      ),
+    );
+    separatedCount.value += signatures.size;
+    if (removed) {
+      if (nextCursor.value === null) {
+        nextOffset.value = Math.max(0, nextOffset.value - removed);
+      }
+      total.value = Math.max(0, total.value - removed);
+      openCount.value = Math.max(0, openCount.value - removed);
+    }
+    invalidateScopeCounts();
+    reconcileCounts();
+    if (!groups.value.length) {
+      focusIndex.value = -1;
+      if (hasMore.value) loadMore();
+      else if (windowStart.value > 0) loadPrevious();
+    } else if (focusIndex.value >= windowStart.value + groups.value.length) {
+      setFocus(windowStart.value + groups.value.length - 1);
+    }
+  }
+
+  function isAmbiguousMutationError(err) {
+    return Number(err?.response?.status) >= 500;
+  }
+
+  async function reconcileAfterUncertainMutation(mutationError) {
+    // A 5xx can arrive after the transaction committed. Re-read before a retry
+    // so the user never submits the same verdict against a stale row.
+    await loadFirstPage();
+    await refreshCounts();
+    error.value = mutationError;
   }
 
   /**
@@ -2446,6 +2625,7 @@ export const useDedupStore = defineStore("dedup", () => {
     const pending = (async () => {
       try {
         const data = await startScan(request);
+        error.value = null;
         scan.value = normalizeScan(data);
         startScanPoll();
         return data;
@@ -2457,6 +2637,7 @@ export const useDedupStore = defineStore("dedup", () => {
           startScanPoll();
           return active;
         }
+        error.value = err;
         console.warn("[dedup] failed to start a duplicate scan", err);
         return null;
       }
@@ -2496,9 +2677,12 @@ export const useDedupStore = defineStore("dedup", () => {
       if (scanPollTickGeneration === generation) return;
       scanPollTickGeneration = generation;
       try {
+        const wasScanning = isScanning.value;
         await refreshCounts();
         if (generation !== scanPollGeneration) return;
-        if (!groups.value.length) await loadFirstPage();
+        if (!groups.value.length || (wasScanning && !isScanning.value)) {
+          await loadFirstPage();
+        }
         if (generation !== scanPollGeneration) return;
         if (!isScanning.value) {
           const deferred = deferredScanRequest;
@@ -2979,6 +3163,102 @@ export const useDedupStore = defineStore("dedup", () => {
     }
   }
 
+  /**
+   * Drop every trace of the previous credential's dedup state (issue #655).
+   *
+   * Dedup is an owner-only surface, so this is hygiene rather than a
+   * cross-scope leak — but the queue holds picture ids, thumbnails and group
+   * signatures read under one credential, and none of it survived a logout by
+   * design. It survived only because nothing cleared it.
+   *
+   * Three things have to go together, in this order:
+   *
+   *   1. The scan poll and the end-chase, so no TIMER re-enters the store and
+   *      repopulates it a second after the clear. `stopScanPoll` already owns
+   *      the interval and the deferred request, so it is reused rather than
+   *      re-implemented.
+   *   2. The in-flight bookkeeping, so a caller cannot JOIN a request that
+   *      belongs to the previous session.
+   *   3. The state itself.
+   *
+   * `windowEpoch` is bumped for the same reason it is bumped on a window
+   * rebase: a page request still on the wire must discard its result instead
+   * of appending the previous session's rows into an empty window.
+   *
+   * `sizeLevel` deliberately stays. It is a persisted VIEW preference backed by
+   * localStorage (like the review overlay's sticker shelf), not server data.
+   */
+  function reset() {
+    stopScanPoll();
+    cancelEndChase();
+    windowEpoch += 1;
+    pageInFlight = null;
+    prevInFlight = null;
+    scopeCountsInFlight.clear();
+    openQueueInFlight.clear();
+    scanRequestInFlight.clear();
+
+    policyDefaults.value = null;
+    bounds.value = null;
+    policyLoaded.value = false;
+
+    openCount.value = 0;
+    byTier.value = {};
+    scan.value = { ...IDLE_SCAN };
+    countsLoaded.value = false;
+    scopeCounts.value = {};
+
+    scopeType.value = GLOBAL_SCOPE;
+    scopeId.value = null;
+    scopeLabel.value = "";
+    scopeIcon.value = "";
+
+    groups.value = [];
+    windowStart.value = 0;
+    total.value = 0;
+    nextOffset.value = 0;
+    nextCursor.value = null;
+    hasMore.value = false;
+    focusIndex.value = 0;
+    loading.value = false;
+    loadingMore.value = false;
+    error.value = null;
+    busy.value = false;
+    stackedCount.value = 0;
+    separatedCount.value = 0;
+
+    hiddenVerdicts.value = new Set();
+    decidedByVerdict.value = {};
+    showingDecided.value = false;
+
+    nearEnabled.value = false;
+    embeddingEnabled.value = false;
+    threshold.value = null;
+    filtersRestored.value = false;
+
+    coverChoices.value = {};
+    exclusions.value = {};
+
+    selectedSignatures.value = new Set();
+    selectionAnchor = null;
+
+    showingMixed.value = false;
+    mixedStacks.value = [];
+    mixedTotal.value = 0;
+    mixedKeptTotal.value = 0;
+    mixedLiveStackCount.value = 0;
+    mixedThreshold.value = null;
+    mixedNextOffset.value = null;
+    mixedLoading.value = false;
+    mixedLoaded.value = false;
+    mixedError.value = null;
+    mixedBusyStackId.value = null;
+    mixedFocusStackId.value = null;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
+
   return {
     // policy
     policyDefaults,
@@ -3031,6 +3311,7 @@ export const useDedupStore = defineStore("dedup", () => {
     openQueue,
     clearScope,
     loadFirstPage,
+    reloadWindowAround,
     loadMore,
     loadPrevious,
     windowStart,
@@ -3105,5 +3386,6 @@ export const useDedupStore = defineStore("dedup", () => {
     resolveMixedStack,
     keepMixed,
     unkeepMixedStack,
+    reset,
   };
 });

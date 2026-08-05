@@ -26,6 +26,52 @@
            lightbox chrome or is multi-select-only, so it is hidden here.
            ════════════════════════════════════════════════════════════ -->
       <template v-if="overlayMode">
+        <button
+          v-if="contextImage?.id"
+          class="ctx-item"
+          role="menuitem"
+          :title="`Save this ${overlayMediaNoun} to your device (${saveShortcutHint})`"
+          :aria-keyshortcuts="saveAriaShortcut"
+          @click="onAction('save-picture')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-download</v-icon>
+          <span>Save {{ overlayMediaNoun }}</span>
+          <span class="ctx-shortcut" aria-hidden="true">{{ saveShortcutHint }}</span>
+        </button>
+        <button
+          v-if="contextImage?.id"
+          class="ctx-item"
+          role="menuitem"
+          :title="`Choose where to save this ${overlayMediaNoun}`"
+          @click="onAction('save-picture-as')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-content-save-edit-outline</v-icon>
+          Save {{ overlayMediaNoun }} as…
+        </button>
+        <button
+          v-if="contextImage?.id"
+          class="ctx-item"
+          role="menuitem"
+          :disabled="contextImage?.copyAvailable !== true"
+          :title="copyPictureTitle"
+          :aria-keyshortcuts="copyAriaShortcut"
+          :aria-describedby="
+            contextImage?.copyAvailable === true ? undefined : overlayCopyReasonId
+          "
+          @click="onAction('copy-picture')"
+        >
+          <v-icon class="ctx-icon" size="15">mdi-content-copy</v-icon>
+          <span>{{ copyPictureLabel }}</span>
+          <span class="ctx-shortcut" aria-hidden="true">{{ copyShortcutHint }}</span>
+        </button>
+        <span
+          v-if="contextImage?.id && contextImage?.copyAvailable !== true"
+          :id="overlayCopyReasonId"
+          class="visually-hidden"
+        >
+          {{ copyPictureTitle }}
+        </span>
+        <div class="ctx-sep" role="separator" />
         <template v-if="!isScrapheapView">
           <!-- 1. Share -->
           <button
@@ -200,6 +246,7 @@
       <!-- ── Set / Character / Project ─────────────────────────────── -->
       <template v-if="!isScrapheapView">
         <AddToEntityControl
+          v-if="entityLists.canSeeProjects"
           type="project"
           placement="right"
           :backend-url="backendUrl"
@@ -582,11 +629,13 @@ import { isReadOnly } from "../../utils/apiClient";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
+import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -640,6 +689,34 @@ const props = defineProps({
 // The dark-surface skin is tied to overlay invocation — the menu renders over
 // the dark lightbox there and nowhere else.
 const onDark = computed(() => props.overlayMode);
+const isOverlayVideo = computed(() => props.contextImage?.mediaKind === "video");
+const overlayMediaNoun = computed(() =>
+  isOverlayVideo.value ? "video" : "picture",
+);
+const copyPictureLabel = computed(() =>
+  isOverlayVideo.value ? "Copy current frame" : "Copy picture",
+);
+const saveShortcutHint = computed(() =>
+  isApplePlatform() ? "⌘S" : "Ctrl+S",
+);
+const copyShortcutHint = computed(() =>
+  isApplePlatform() ? "⌘C" : "Ctrl+C",
+);
+const saveAriaShortcut = computed(() =>
+  isApplePlatform() ? "Meta+S" : "Control+S",
+);
+const copyAriaShortcut = computed(() =>
+  isApplePlatform() ? "Meta+C" : "Control+C",
+);
+const copyPictureTitle = computed(() =>
+  props.contextImage?.copyAvailable === true
+    ? `${copyPictureLabel.value} as PNG (${copyShortcutHint.value})`
+    : props.contextImage?.copyUnavailableReason ||
+      "This picture is not ready to copy.",
+);
+const overlayCopyReasonId = computed(
+  () => `overlay-copy-reason-${props.contextImage?.id ?? "media"}`,
+);
 
 const emit = defineEmits([
   "close",
@@ -662,6 +739,9 @@ const emit = defineEmits([
   "segment",
   "auto-tag",
   "generate-description",
+  "save-picture",
+  "save-picture-as",
+  "copy-picture",
   "share-picture",
   "remove-picture-shares",
   "reverse-image-search",
@@ -715,6 +795,10 @@ watch(restoreSubmenuOpen, async (isOpen) => {
 });
 
 const snapshotsStore = useSnapshotsStore();
+// A token scoped to a character / picture / set was granted no project scope,
+// so the Project row would open a flyout that lists nothing and POSTs a
+// membership read the server 403s. Omit the row instead of offering a dead one.
+const entityLists = useEntityListsStore();
 const recentSnapshots = computed(() =>
   snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
 );
@@ -903,6 +987,27 @@ watch(
 // the user is driving the menu. (Escape is intercepted earlier, in the
 // capture-phase document handler.)
 function onMenuKeydown(event) {
+  if (
+    props.overlayMode &&
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.repeat
+  ) {
+    const key = event.key?.toLowerCase();
+    if (key === "s" && props.contextImage?.id) {
+      event.preventDefault();
+      event.stopPropagation();
+      onAction("save-picture");
+      return;
+    }
+    if (key === "c" && props.contextImage?.copyAvailable === true) {
+      event.preventDefault();
+      event.stopPropagation();
+      onAction("copy-picture");
+      return;
+    }
+  }
   if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     const items = Array.from(
       menuRef.value?.querySelectorAll(".ctx-item:not([disabled])") || [],

@@ -21,6 +21,8 @@ Two surfaces live here, and every route is owner-only.
 * ``POST /dedup/verdicts/keep-separate`` — remember that a group is not
   duplicates; undoable through the operation log (owner override, 2026-07-30)
   and reopenable from the Stacks view.
+* ``POST /dedup/verdicts/batch``       — apply one multi-group UI gesture in one
+  transaction and one contiguous undo unit.
 * ``POST /dedup/verdicts/reopen``   — return a decided group to the queue.
 * ``POST /dedup/auto-stack``        — the exact tier's bulk action, one
   operation-log batch id so N stacks reverse with one undo.
@@ -49,7 +51,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import dedup_sweep_service, dedup_tier_service
@@ -1008,7 +1010,11 @@ class ScanProgressModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str = Field(
-        description="`idle`, `pending`, `running`, `complete` or `failed`."
+        description=(
+            "`idle`, `pending`, `running`, `complete`, `partial` or `failed`. "
+            "`partial` means bounded near-scan work omitted comparisons and "
+            "the prior complete near evidence was preserved."
+        )
     )
     scanned_pictures: int = Field(description="Pictures covered so far.")
     total_pictures: int = Field(description="Pictures in scope.")
@@ -1018,7 +1024,8 @@ class ScanProgressModel(BaseModel):
     total_buckets: int = Field(description="Tier-2 candidate buckets in total.")
     groups_found: int = Field(description="Unresolved groups this scan produced.")
     error: Optional[str] = Field(
-        default=None, description="Why the scan failed, when it did."
+        default=None,
+        description="Why the scan failed or is partial, when applicable.",
     )
 
 
@@ -1262,6 +1269,40 @@ class VerdictResponse(BaseModel):
             "`{code: 'set_locked', action, sets, picture_ids}`."
         ),
     )
+
+
+class VerdictBatchItemModel(BaseModel):
+    """One stack or keep-separate decision in an atomic UI gesture."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: DedupVerdictKind
+    signature: str = Field(min_length=1)
+    cover_picture_id: Optional[int] = None
+    excluded_picture_ids: list[int] = Field(default_factory=list)
+
+
+class VerdictBatchRequestModel(BaseModel):
+    """A bounded, all-or-nothing set of duplicate verdicts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actions: list[VerdictBatchItemModel] = Field(min_length=1, max_length=500)
+    batch_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def unique_signatures(self):
+        signatures = [action.signature for action in self.actions]
+        if len(signatures) != len(set(signatures)):
+            raise ValueError("a verdict batch cannot contain a signature twice")
+        return self
+
+
+class VerdictBatchResponse(BaseModel):
+    """The single undo handle and per-group outcomes of an atomic gesture."""
+
+    batch_id: str
+    results: list[VerdictResponse]
 
 
 class ReopenResponse(BaseModel):
@@ -1600,7 +1641,9 @@ class MixedStackModel(BaseModel):
             "duplicate group carries, so the shipped pill component renders it "
             "unchanged. Only the content differs: the strangers named by how "
             "unlike the rest they measure (`1 picture is only 89% like the "
-            "rest`), the component structure (`2 groups (2 + 1)`), and the "
+            "rest`), the qualitative component structure (`1 picture differs "
+            "from the rest`, `Most pictures differ`, or `All pictures differ`), "
+            "and the "
             "weakest surviving edge (`Weakest match 97%`), plus `1 picture not "
             "comparable yet` when a member has no hash. A stranger is never "
             "described as matching nothing: at a 6-bit cut a member 7 bits from "
@@ -1610,7 +1653,9 @@ class MixedStackModel(BaseModel):
             "it argues for waiting, not for breaking the stack up, and it is "
             "subtracted from the stranger count for the same reason. When fewer "
             "than two members can be compared at all the only pill is `Nothing "
-            "here can be compared yet`."
+            "here can be compared yet`. The component-structure pill also "
+            "carries an optional `accessible_text` expansion; the structured "
+            "`component_sizes` and `components` fields remain authoritative."
         ),
     )
     suggested_action: str = Field(
@@ -2259,6 +2304,40 @@ def create_router(server) -> APIRouter:
             logger.info("[dedup] keep-separate verdict rejected: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return result.as_dict()
+
+    @router.post(
+        "/dedup/verdicts/batch",
+        summary="Apply one atomic multi-group duplicate gesture",
+        description=(
+            "Applies every Stack or Keep Separate action in one database task "
+            "and one transaction. All recorded operations share one contiguous "
+            "batch, so another client cannot interleave a write into the middle "
+            "of this undo unit. Any refused action rolls back the whole gesture."
+        ),
+        response_model=VerdictBatchResponse,
+    )
+    def post_verdict_batch(request: Request, payload: VerdictBatchRequestModel):
+        context = operation_log_service.request_context(request)
+        header_batch_id = context.pop("batch_id", None)
+        actions = [
+            {
+                "verdict": action.verdict.value,
+                "signature": action.signature,
+                "cover_picture_id": action.cover_picture_id,
+                "excluded_picture_ids": list(action.excluded_picture_ids),
+            }
+            for action in payload.actions
+        ]
+        try:
+            return dedup_verdict_service.apply_verdict_batch(
+                server.vault,
+                actions,
+                _batch_id(payload.batch_id) or header_batch_id,
+                **context,
+            )
+        except DedupVerdictError as exc:
+            logger.info("[dedup] verdict batch rejected: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post(
         "/dedup/verdicts/reopen",

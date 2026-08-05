@@ -640,6 +640,7 @@ class ReferenceFolderScanTask(BaseTask):
             size_bytes=size_bytes,
             imported_at=datetime.now(timezone.utc),
             original_file_name=os.path.basename(file_path),
+            is_video=VideoUtils.is_video_file(file_path),
             **thumb_cols,
         )
         if created_at:

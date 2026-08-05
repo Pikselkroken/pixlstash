@@ -8,6 +8,7 @@ vi.mock("../api/dedup", () => ({
   startScan: vi.fn(),
   stackGroup: vi.fn(),
   keepGroupSeparate: vi.fn(),
+  applyVerdictBatch: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
   // The third page's contract (design D5). It is lazy: a cold all-stack score
@@ -35,6 +36,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   autoStackExact,
   listMixedStacks,
@@ -119,6 +121,7 @@ beforeEach(() => {
     startScan,
     stackGroup,
     keepGroupSeparate,
+    applyVerdictBatch,
     reopenGroup,
     autoStackExact,
     listMixedStacks,
@@ -1139,14 +1142,17 @@ describe("useDedupStore — the verdict receipt", () => {
 
   it("narrates a bulk stack once — one gesture, one receipt", async () => {
     servePage([group("g1"), group("g2"), group("g3")], { total: 3 });
-    stackGroup.mockResolvedValue({ batch_id: "cli-1" });
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-1",
+      results: [{ skipped: [] }, { skipped: [] }],
+    });
     const store = useDedupStore();
     await store.loadPolicy();
     await store.loadFirstPage();
     store.toggleSelected(0);
     store.toggleSelected(1);
     await store.stack(store.groups[0]);
-    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
     expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -1699,59 +1705,54 @@ describe("useDedupStore — multi-select", () => {
     expect(useOperationStore().refresh).not.toHaveBeenCalled();
   });
 
-  it("stacks every selected group under one client batch id", async () => {
+  it("stacks every selected group in one atomic server request", async () => {
     const store = await openWith([group("g1"), group("g2"), group("g3")]);
     store.toggleSelected(0);
     store.toggleSelected(2);
-    stackGroup.mockResolvedValue({});
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-gesture-1",
+      results: [{ skipped: [] }, { skipped: [] }],
+    });
 
     const result = await store.stack(
       store.groups.find((g) => g.signature === "g3"),
     );
     expect(result).toBeTruthy();
-    expect(stackGroup).toHaveBeenCalledTimes(2);
-    expect(stackGroup.mock.calls.map((c) => c[0])).toEqual(["g1", "g3"]);
-    const ids = stackGroup.mock.calls.map((c) => c[1].batchId);
-    expect(ids[0]).toMatch(/^cli-/);
-    expect(ids[1]).toBe(ids[0]);
+    expect(stackGroup).not.toHaveBeenCalled();
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
+    const [actions, options] = applyVerdictBatch.mock.calls[0];
+    expect(actions.map((action) => action.signature)).toEqual(["g1", "g3"]);
+    expect(actions.every((action) => action.verdict === "stacked")).toBe(true);
+    expect(options.batchId).toMatch(/^cli-/);
     // The gesture is over: nothing stays selected, and the rows are gone.
     expect(store.selectionCount).toBe(0);
     expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
   });
 
-  it("keeps the selected queue stable until every bulk stack request settles", async () => {
+  it("keeps the selected queue stable until the atomic bulk stack settles", async () => {
     const store = await openWith([group("g1"), group("g2"), group("g3")]);
     store.toggleSelected(0);
     store.toggleSelected(2);
     const before = store.groups.map((g) => g.signature);
     const beforeFocus = store.focusIndex;
-    let resolveFirst;
-    let resolveSecond;
-    stackGroup
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
+    let resolveBatch;
+    applyVerdictBatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBatch = resolve;
+        }),
+    );
 
     const pending = store.stack(store.groups[2]);
-    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
-    resolveFirst({ signature: "g1", batch_id: "cli-one", skipped: [] });
-    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(resolveBatch).toBeTypeOf("function"));
 
-    // The first server verdict landed, but the visible gesture has not.
+    // The server transaction is still in flight, so the visible gesture has
+    // not landed either.
     expect(store.groups.map((g) => g.signature)).toEqual(before);
     expect(store.selectionCount).toBe(2);
     expect(store.focusIndex).toBe(beforeFocus);
 
-    resolveSecond({ signature: "g3", batch_id: "cli-one", skipped: [] });
+    resolveBatch({ batch_id: "cli-one", results: [] });
     await pending;
     expect(store.groups.map((g) => g.signature)).toEqual(["g2"]);
     expect(store.selectionCount).toBe(0);
@@ -1760,15 +1761,43 @@ describe("useDedupStore — multi-select", () => {
     expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps every selected group separate in one gesture", async () => {
+  it("keeps every selected group separate in one atomic request", async () => {
     const store = await openWith([group("g1"), group("g2")]);
     store.toggleSelected(0);
     store.toggleSelected(1);
-    keepGroupSeparate.mockResolvedValue({});
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-keep-1",
+      results: [{}, {}],
+    });
     const result = await store.keepSeparate(store.groups[0]);
     expect(result).toBeTruthy();
-    expect(keepGroupSeparate).toHaveBeenCalledTimes(2);
+    expect(keepGroupSeparate).not.toHaveBeenCalled();
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
+    const [actions, options] = applyVerdictBatch.mock.calls[0];
+    expect(actions).toEqual([
+      { verdict: "keep_separate", signature: "g1" },
+      { verdict: "keep_separate", signature: "g2" },
+    ]);
+    expect(options.batchId).toMatch(/^cli-/);
     expect(store.selectionCount).toBe(0);
+  });
+
+  it("keeps the whole selection when an atomic Keep Separate is refused", async () => {
+    const store = await openWith([group("g1"), group("g2"), group("g3")]);
+    store.toggleSelected(0);
+    store.selectRange(2);
+    applyVerdictBatch.mockRejectedValue({ response: { status: 409 } });
+
+    const result = await store.keepSeparate(store.groups[0]);
+
+    expect(result).toMatchObject({
+      failed: true,
+      uncertain: false,
+      completed: 0,
+      requested: 3,
+    });
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2", "g3"]);
+    expect(store.selectionCount).toBe(3);
   });
 
   it("a verdict on a group outside the selection stays single", async () => {
@@ -1782,47 +1811,40 @@ describe("useDedupStore — multi-select", () => {
     expect(store.selectionCount).toBe(2);
   });
 
-  it("commits earlier successes once after a bulk failure and keeps unresolved groups selected", async () => {
+  it("commits nothing after an atomic bulk failure", async () => {
     const store = await openWith([group("g1"), group("g2"), group("g3")]);
     store.toggleSelected(0);
     store.selectRange(2);
-    let resolveFirst;
-    let rejectSecond;
-    stackGroup
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            rejectSecond = reject;
-          }),
-      );
+    let rejectBatch;
+    applyVerdictBatch.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectBatch = reject;
+        }),
+    );
 
     const pending = store.stack(store.groups[0]);
-    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
-    resolveFirst({ signature: "g1", batch_id: "cli-partial" });
-    await vi.waitFor(() => expect(rejectSecond).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(rejectBatch).toBeTypeOf("function"));
     expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2", "g3"]);
     expect(store.selectionCount).toBe(3);
     expect(store.focusIndex).toBe(2);
 
-    rejectSecond(new Error("locked"));
+    rejectBatch(new Error("locked"));
     const result = await pending;
-    expect(result).toBeNull();
-    // g1 landed; g2 failed and g3 was never attempted. Both remain selected.
-    expect(stackGroup).toHaveBeenCalledTimes(2);
-    expect(store.groups.map((g) => g.signature)).toEqual(["g2", "g3"]);
+    expect(result).toMatchObject({
+      failed: true,
+      uncertain: false,
+      completed: 0,
+      requested: 3,
+    });
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
+    expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2", "g3"]);
+    expect(store.isSelected("g1")).toBe(true);
     expect(store.isSelected("g2")).toBe(true);
     expect(store.isSelected("g3")).toBe(true);
-    expect(store.focusIndex).toBe(0);
-    expect(getCounts).toHaveBeenCalledTimes(1);
-    // The successful first verdict is still one undoable batch and earns one
-    // receipt even though a later selected group was refused.
-    expect(useOperationStore().refresh).toHaveBeenCalledTimes(1);
+    expect(store.focusIndex).toBe(2);
+    expect(getCounts).not.toHaveBeenCalled();
+    expect(useOperationStore().refresh).not.toHaveBeenCalled();
   });
 
   it("clears the selection when the list reloads", async () => {
@@ -1968,6 +1990,48 @@ describe("useDedupStore — the Decided flip vs the scan poll", () => {
 });
 
 describe("useDedupStore — scans and bulk auto-stack", () => {
+  it("reloads a populated queue once when a scan becomes terminal", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = {
+        status: "running",
+        tiers: ["exact"],
+        threshold: 0.9,
+        scanned_pictures: 1,
+        total_pictures: 2,
+      };
+      servePage([group("g1")], { scan: running });
+      getCounts.mockResolvedValue({
+        unresolved_groups: 1,
+        by_tier: {},
+        scopes: [],
+        scan: running,
+      });
+      const store = useDedupStore();
+      await store.openQueue({});
+      await Promise.resolve();
+
+      getCounts.mockResolvedValue({
+        unresolved_groups: 2,
+        by_tier: {},
+        scopes: [],
+        scan: { status: "complete", scanned_pictures: 2, total_pictures: 2 },
+      });
+      listGroups.mockResolvedValueOnce({
+        groups: [group("g1"), group("g2")],
+        total: 2,
+        scan: { status: "complete", scanned_pictures: 2, total_pictures: 2 },
+      });
+      await vi.advanceTimersByTimeAsync(2100);
+
+      expect(store.groups.map((g) => g.signature)).toEqual(["g1", "g2"]);
+      expect(listGroups).toHaveBeenCalledTimes(2);
+      store.stopScanPoll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a pending person scan queued with unknown totals", async () => {
     vi.useFakeTimers();
     try {
@@ -2542,30 +2606,28 @@ describe("locked-set candidates", () => {
     const store = await openWith([a, b]);
     store.toggleSelected(0);
     store.toggleSelected(1);
-    stackGroup
-      .mockResolvedValueOnce({
-        signature: "g1",
-        batch_id: "cli-1",
-        picture_ids: [100, 101],
-        skipped: [
-          {
-            picture_id: 102,
-            reason: "set_locked",
-            sets: [{ id: 91, name: "Evaluation Set" }],
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        signature: "g2",
-        batch_id: "cli-1",
-        picture_ids: [200, 201],
-        skipped: [],
-      });
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-1",
+      results: [
+        {
+          signature: "g1",
+          picture_ids: [100, 101],
+          skipped: [
+            {
+              picture_id: 102,
+              reason: "set_locked",
+              sets: [{ id: 91, name: "Evaluation Set" }],
+            },
+          ],
+        },
+        { signature: "g2", picture_ids: [200, 201], skipped: [] },
+      ],
+    });
 
     const result = await store.stack(a);
 
     // Both groups were decided: a partial success is a success.
-    expect(stackGroup).toHaveBeenCalledTimes(2);
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
     expect(result.gesture_skipped).toHaveLength(1);
     expect(result.gesture_skipped[0].picture_id).toBe(102);
   });

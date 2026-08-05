@@ -86,7 +86,7 @@
              that badge means "groups to review", and it is the one number in
              the app that has to stay trusted. -->
         <button
-          v-if="!store.showingDecided && mixedToggleVisible"
+          v-if="!store.showingDecided"
           type="button"
           class="qdecided"
           :class="{ 'qdecided--on': store.showingMixed }"
@@ -238,7 +238,7 @@
              found a better answer — Decided and Auto-stack compress to
              icon forms, the size slider simply hides at ≤720 (the value
              persists in the store), and the app-wide tail never folds. -->
-        <UndoControl v-if="!readOnly" />
+        <UndoControl />
         <TbGlobalActions @open-settings="emit('open-settings')" />
       </div>
     </div>
@@ -410,6 +410,18 @@
       Opening duplicate queue.
     </div>
 
+    <div
+      v-else-if="store.error && !store.hasGroups"
+      class="dq-state"
+      role="alert"
+    >
+      Could not confirm the duplicate queue. Nothing has been marked clear.
+      <button type="button" class="qdecided" @click="store.loadFirstPage()">
+        <v-icon size="15">mdi-refresh</v-icon>
+        Try again
+      </button>
+    </div>
+
     <div v-else-if="store.hasGroups" class="queue">
       <!-- The bulk-scope statement: while ≥2 groups are selected, a verdict on
            any of them takes all of them. The only thing left on a second bar,
@@ -502,6 +514,40 @@
          trusted. -->
     <div v-else-if="store.loadingMore" class="dq-state" role="status">
       Loading the next groups.
+    </div>
+
+    <!-- A read-only session reaches this destination only by URL (the sidebar
+         row is inert), and every /dedup/* route is owner-only, so it asked for
+         nothing and holds no rows. It must not fall through to the states
+         below: "Confirming whether the queue is clear" never resolves without
+         counts, and "Queue clear" would assert a library-wide fact this session
+         cannot know. Placed AFTER the row branches on purpose, so a read-only
+         render that does have groups still shows them, verdicts disabled. -->
+    <div v-else-if="readOnly" class="qdone" data-testid="dedup-read-only">
+      <v-icon size="48">mdi-content-duplicate</v-icon>
+      <h3>Duplicate review</h3>
+      <p>
+        Duplicate review is only available in your own library. There, PixlStash
+        groups the pictures that are the same shot, strongest match first, and
+        each group is one keystroke to stack or keep separate.
+      </p>
+    </div>
+
+    <div v-else-if="!store.countsLoaded" class="dq-state" role="status">
+      Confirming whether the queue is clear.
+    </div>
+
+    <div
+      v-else-if="scanIncomplete && !store.showingDecided"
+      class="qdone"
+      role="alert"
+    >
+      <v-icon size="48">mdi-alert-circle-outline</v-icon>
+      <h3>{{ store.scan.status === "failed" ? "Scan failed" : "Scan incomplete" }}</h3>
+      <p>
+        Some duplicate comparisons were not completed, so this queue cannot be
+        marked clear. Review any available groups and run the scan again.
+      </p>
     </div>
 
     <!-- The empty DECIDED page keeps its own copy and, crucially, its own way
@@ -786,6 +832,7 @@ const noticeStore = useNoticeStore();
 // made in setup, so Pinia removes it when the view unmounts.
 
 const UNDO_REDO_ACTIONS = new Set(["undo", "redo", "undoTo", "undoBatchById"]);
+const STACK_UNDO_ACTIONS = new Set(["undo", "undoTo", "undoBatchById"]);
 
 /**
  * The operations an undo/redo action is ABOUT to touch, read before the
@@ -814,13 +861,130 @@ function opsUndoActionTouches(name, args) {
   return [];
 }
 
+/**
+ * Capture semantic anchors before an undo can insert rows into the queue.
+ * A raw scrollTop is not sufficient: rows ahead of the viewport can return,
+ * changing the absolute pixel position while the same group should remain at
+ * the same place on screen.
+ */
+function stackUndoViewportSnapshot(touched) {
+  const list = listEl.value;
+  const top = Number(list?.scrollTop) || 0;
+  const topIndex = Math.max(
+    store.windowStart,
+    Math.floor(top / rowPitchPx.value),
+  );
+  const anchor = store.groups[topIndex - store.windowStart] ?? null;
+  return {
+    top,
+    topIndex,
+    anchorSignature: anchor?.signature ?? null,
+    anchorOffset: top - topIndex * rowPitchPx.value,
+    focusSignature: store.focusedGroup?.signature ?? null,
+    signatures: new Set(store.groups.map((group) => group.signature)),
+    targetIds: new Set(
+      touched
+        .flatMap((operation) => operation?.target_ids ?? [])
+        .map((id) => String(id)),
+    ),
+  };
+}
+
+/** Whether an operation-store action actually changed server state. */
+function undoActionSucceeded(name, result) {
+  if (name === "undoTo") return Number(result) > 0;
+  return result !== null && result !== undefined;
+}
+
+/**
+ * Reconcile a restored stack verdict without losing the reviewer's place.
+ * The store preserves the row/focus signatures; this final DOM pass preserves
+ * the anchor's intra-row offset and applies `nearest` semantics to the returned
+ * group, so it visibly pops back into its old context.
+ */
+async function reloadStackUndoInPlace(snapshot) {
+  store.invalidateScopeCounts();
+  await store.reloadWindowAround(snapshot.topIndex, {
+    focusSignature: snapshot.focusSignature,
+  });
+  await nextTick();
+
+  const list = listEl.value;
+  if (!list) {
+    store.refreshCounts();
+    return;
+  }
+
+  const anchorLocal = snapshot.anchorSignature
+    ? store.groups.findIndex(
+        (group) => group.signature === snapshot.anchorSignature,
+      )
+    : -1;
+  if (anchorLocal >= 0) {
+    const anchorIndex = store.windowStart + anchorLocal;
+    list.scrollTop = Math.max(
+      0,
+      anchorIndex * rowPitchPx.value + snapshot.anchorOffset,
+    );
+  } else {
+    // Honest degradation when the old anchor no longer belongs to the active
+    // lens: keep the old pixel place, clamped by the browser's scrollport.
+    list.scrollTop = snapshot.top;
+  }
+  onListScroll();
+  await nextTick();
+
+  const returned = store.groups
+    .map((group, local) => ({
+      group,
+      index: store.windowStart + local,
+    }))
+    .filter(({ group }) => {
+      if (snapshot.signatures.has(group.signature)) return false;
+      if (!snapshot.targetIds.size) return true;
+      return (group.candidates ?? []).some((candidate) =>
+        snapshot.targetIds.has(String(candidateId(candidate))),
+      );
+    })
+    .sort(
+      (a, b) =>
+        Math.abs(a.index - snapshot.topIndex) -
+        Math.abs(b.index - snapshot.topIndex),
+    );
+  const restored = returned[0];
+  if (restored) {
+    const top = restored.index * rowPitchPx.value;
+    const bottom = top + rowPitchPx.value;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
+    onListScroll();
+  }
+  store.refreshCounts();
+}
+
 operationStore.$onAction(({ name, args, after }) => {
   if (readOnly.value || !UNDO_REDO_ACTIONS.has(name)) return;
   const touched = opsUndoActionTouches(name, args);
   if (!touched.some((op) => String(op?.op_type || "").startsWith("dedup."))) {
     return;
   }
-  after(async () => {
+  const preserveStackUndo =
+    STACK_UNDO_ACTIONS.has(name) &&
+    !store.showingDecided &&
+    !store.showingMixed &&
+    touched.some((op) => op?.op_type === "dedup.stack");
+  const snapshot = preserveStackUndo
+    ? stackUndoViewportSnapshot(touched)
+    : null;
+  after(async (result) => {
+    if (snapshot) {
+      if (undoActionSucceeded(name, result)) {
+        await reloadStackUndoInPlace(snapshot);
+      }
+      return;
+    }
     // Same sequence as reopen(): the group is back in the server's unresolved
     // set, so the list, the per-scope caches and the badge all re-read.
     store.invalidateScopeCounts();
@@ -850,6 +1014,9 @@ const flashSignature = ref("");
 let flashTimer = null;
 
 const readOnly = computed(() => Boolean(isReadOnly.value));
+const scanIncomplete = computed(() =>
+  ["partial", "failed"].includes(store.scan?.status),
+);
 
 // ── The row's stack expansion (D4) ────────────────────────────────────────
 // One band in the whole queue, on the focused row, with its members read
@@ -1079,19 +1246,6 @@ const mixedToggleTitle = computed(() => {
     ? `Mixed stacks: ${n.toLocaleString()} ${n === 1 ? "stack holds" : "stacks hold"} pictures that don't all match`
     : "Mixed stacks: stacks whose pictures don't all match";
 });
-
-/**
- * Whether the toggle is offered at all.
- *
- * Withheld until the list has been read once, and then only when there is
- * something on it or the user is standing on the page. A control that opens an
- * empty page it never had to open is a control that costs a press to learn
- * nothing; the empty state exists for the case where the last row is drained
- * while the page is open, which is a different moment.
- */
-const mixedToggleVisible = computed(
-  () => store.showingMixed || (store.mixedLoaded && store.mixedTotal > 0),
-);
 
 /** The row pitch a given picture height implies, before anything is measured. */
 function estimatedPitch() {
@@ -1513,6 +1667,14 @@ async function onStack(group) {
   if (targets.length > 1) {
     const pictures = targets.reduce((n, g) => n + store.stackSizeFor(g), 0);
     const result = await store.stack(group);
+    if (result?.failed) {
+      const sentence = result.uncertain
+        ? `The server outcome became uncertain after ${result.completed} of ${result.requested} confirmed stacks. The queue was reloaded from the server before you retry.`
+        : `Stacked ${result.completed} of ${result.requested} groups. The remaining groups stayed in the queue.`;
+      announcement.value = sentence;
+      noticeStore.error(sentence);
+      return;
+    }
     if (result) {
       announcement.value = `Stacked ${targets.length} groups (${pictures} pictures). One undo reverses them all.`;
       reportPartialStack(result, pictures);
@@ -1613,6 +1775,14 @@ async function onKeepSeparate(group) {
     reportVerdictFailure("record that decision", store.error);
     return;
   }
+  if (result.failed) {
+    const sentence = result.uncertain
+      ? `The server outcome became uncertain after ${result.completed} of ${result.requested} confirmed decisions. The queue was reloaded from the server before you retry.`
+      : `Kept ${result.completed} of ${result.requested} groups separate. The remaining groups stayed selected in the queue.`;
+    announcement.value = sentence;
+    noticeStore.error(sentence);
+    return;
+  }
   const sentence =
     targets.length > 1
       ? `Kept ${targets.length} groups (${size} pictures) separate. Change your mind under Decided.`
@@ -1672,6 +1842,13 @@ async function onClearDecision(group) {
  * @param {*} [err] - the rejection, for its `detail`.
  */
 function reportVerdictFailure(what, err, group = null) {
+  if (Number(err?.response?.status) >= 500) {
+    announcement.value = `Could not confirm whether the server completed the request. The queue was reloaded before retry is offered.`;
+    noticeStore.error(
+      `The outcome is uncertain. The queue was reloaded from the server; check the current row before retrying.`,
+    );
+    return;
+  }
   const detail = serverDetail(err);
   const because = detail ? ` ${detail}` : "";
   announcement.value = `Could not ${what}.${because} The group is still in the queue, so nothing was lost.`;
@@ -2655,15 +2832,21 @@ function syncQueueToRoute() {
 // (which requires held rows) into a full openQueue, which force-reset the
 // Decided flip the mirror was in the middle of recording: the decided rows
 // flashed and were replaced by "Queue clear".
-watch([() => route.query.scope, () => route.query.scope_id], syncQueueToRoute);
+watch([() => route.query.scope, () => route.query.scope_id], () => {
+  if (readOnly.value) return;
+  syncQueueToRoute();
+});
 
 onMounted(() => {
-  syncQueueToRoute();
+  // Every read this destination makes is owner-only, so a read-only session
+  // asks for none of them: the whole body is the explanatory state, and the
+  // fetches would only be a row of 403s behind it.
+  if (!readOnly.value) syncQueueToRoute();
   // The queue is a keyboard surface. Taking focus on mount is what makes the
   // first Enter work without the user hunting for a click target first.
   rootEl.value?.focus?.();
   nextTick(measureRowPitch);
-  prefetchNextGroup();
+  if (!readOnly.value) prefetchNextGroup();
   if (typeof document !== "undefined") {
     document.addEventListener("mousedown", onDocumentPointerDown);
     document.addEventListener("keydown", onKeydown);

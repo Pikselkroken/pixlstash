@@ -39,13 +39,14 @@ vi.mock("../../api/dedup", () => ({
   startScan: vi.fn(),
   stackGroup: vi.fn(),
   keepGroupSeparate: vi.fn(),
+  applyVerdictBatch: vi.fn(),
   reopenGroup: vi.fn(),
   autoStackExact: vi.fn(),
   // The lazy half of the stack contract: a row's expansion reads its members
   // only when the user opens one.
   listStackMembers: vi.fn(),
-  // The third page (design D5). The queue reads this list on open even when
-  // the page is never shown, because the flagged deck badge is built from it.
+  // The third page (design D5). Its potentially expensive list stays lazy
+  // until the user opens the page.
   listMixedStacks: vi.fn(),
   splitMixedStack: vi.fn(),
   unstackMixedStack: vi.fn(),
@@ -85,6 +86,7 @@ vi.mock("../../utils/apiClient", async () => {
   const { ref: makeRef } = await import("vue");
   return {
     isReadOnly: makeRef(false),
+    onSessionReset: () => () => {},
     API_BASE_URL: "http://backend.test/api/v1",
     newOperationBatchId: () => `cli-test-${(batchCounter += 1)}`,
   };
@@ -132,6 +134,7 @@ import {
   startScan,
   stackGroup,
   keepGroupSeparate,
+  applyVerdictBatch,
   reopenGroup,
   listStackMembers,
   listMixedStacks,
@@ -298,6 +301,7 @@ beforeEach(() => {
     getCounts,
     stackGroup,
     keepGroupSeparate,
+    applyVerdictBatch,
     reopenGroup,
     listStackMembers,
     listMixedStacks,
@@ -548,6 +552,31 @@ describe("DuplicateQueue — the filter on the Decided page", () => {
 });
 
 describe("DuplicateQueue — when a verdict does not land", () => {
+  it.each(["partial", "failed"])(
+    "never renders Queue clear when the latest scan is %s",
+    async (status) => {
+      const { wrapper, store } = await mountQueue([]);
+      store.scan = { ...store.scan, status, error: "comparison work omitted" };
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.text()).toContain(
+        status === "failed" ? "Scan failed" : "Scan incomplete",
+      );
+      expect(wrapper.text()).not.toContain("Queue clear");
+      wrapper.unmount();
+    },
+  );
+
+  it("never renders Queue clear when the queue state failed to load", async () => {
+    const { wrapper, store } = await mountQueue([]);
+    store.error = new Error("network down");
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain("Could not confirm the duplicate queue");
+    expect(wrapper.text()).not.toContain("Queue clear");
+    wrapper.unmount();
+  });
+
   // A failed verdict leaves the row where it was, which on a queue whose whole
   // promise is auto-advance reads as a dead keypress.
   it("raises a notice rather than swallowing the failure", async () => {
@@ -972,11 +1001,13 @@ describe("DuplicateQueue — the shell chrome", () => {
     wrapper.unmount();
   });
 
-  // Undo is owner-only on the server; reading the queue is not.
-  it("drops undo/redo in a read-only session but keeps Settings", async () => {
+  // Undo is owner-only on the server, but the control stays mounted and inert
+  // in a read-only session so the feature is still visible; UndoControl owns
+  // the disabled state.
+  it("keeps undo/redo and Settings in a read-only session", async () => {
     readOnlyRef.value = true;
     const { wrapper } = await mountQueue([group("g1")]);
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(false);
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
     expect(wrapper.find('button[title="Settings"]').exists()).toBe(true);
     wrapper.unmount();
   });
@@ -984,12 +1015,12 @@ describe("DuplicateQueue — the shell chrome", () => {
 
 describe("DuplicateQueue — undo puts the queue back", () => {
   /** Drive the queue's operation-store subscription as Pinia would. */
-  async function runUndoAction(name, args = []) {
+  async function runUndoAction(name, args = [], result = {}) {
     const afters = [];
     for (const listener of __actionListeners) {
       listener({ name, args, after: (cb) => afters.push(cb) });
     }
-    for (const cb of afters) await cb();
+    for (const cb of afters) await cb(result);
   }
 
   // The regression this pins: undoing a stack verdict reopened the group
@@ -1021,6 +1052,78 @@ describe("DuplicateQueue — undo puts the queue back", () => {
     expect(listGroups).toHaveBeenCalledTimes(1);
     expect(listGroups.mock.calls[0][0].offset).toBe(0);
     expect(store.groups.map((g) => g.signature)).toContain("g9");
+    wrapper.unmount();
+  });
+
+  it("restores a stacked group inside the virtual window without losing the viewport or focus", async () => {
+    const first = Array.from({ length: 200 }, (_, i) => group(`g${i + 1}`));
+    const { wrapper, store } = await mountQueue(first, { total: 240 });
+    const list = wrapper.find(".qlist");
+    Object.defineProperty(list.element, "clientHeight", {
+      configurable: true,
+      value: 6 * PITCH,
+    });
+
+    // Work far enough down the queue that a first-page reload cannot preserve
+    // context. The focused row is the one that slid into the stacked row's old
+    // place; two still-open rows are multi-selected around it.
+    store.setFocus(174);
+    store.toggleSelected(173);
+    store.setFocus(174);
+    await flushPromises();
+    expect(store.focusedGroup.signature).toBe("g175");
+    list.element.scrollTop = 170 * PITCH + 7;
+    list.element.dispatchEvent(new window.Event("scroll"));
+
+    __operationStoreMock.nextUndo = {
+      id: 9,
+      op_type: "dedup.stack",
+      batch_id: "b1",
+      target_ids: [9900, 9901],
+    };
+    const restored = group("g99-restored");
+    // Requested at offset 150: the old focus (g175) shifts down one when the
+    // restored group returns immediately before it.
+    const refreshed = [
+      ...Array.from({ length: 24 }, (_, i) => group(`g${151 + i}`)),
+      restored,
+      ...Array.from({ length: 66 }, (_, i) => group(`g${175 + i}`)),
+    ];
+    listGroups.mockClear();
+    listGroups.mockResolvedValue({
+      groups: refreshed,
+      total: 241,
+      offset: 150,
+      limit: 200,
+      scan: { status: "complete", scanned_pictures: 1, total_pictures: 1 },
+    });
+
+    await runUndoAction("undo");
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(listGroups).toHaveBeenCalledTimes(1);
+    expect(listGroups.mock.calls[0][0]).toMatchObject({ offset: 150, limit: 200 });
+    expect(store.windowStart).toBe(150);
+    expect(store.focusedGroup.signature).toBe("g175");
+    expect(store.isSelected("g174")).toBe(true);
+    expect(store.isSelected("g175")).toBe(true);
+    expect(list.element.scrollTop).toBe(170 * PITCH + 7);
+    expect(wrapper.find('[data-testid="dedup-group-g99-restored"]').exists()).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it("does not reconcile the queue when a stack undo fails", async () => {
+    const { wrapper } = await mountQueue([group("g1"), group("g2")]);
+    __operationStoreMock.nextUndo = { id: 9, op_type: "dedup.stack" };
+    listGroups.mockClear();
+
+    await runUndoAction("undo", [], null);
+    await flushPromises();
+
+    expect(listGroups).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -1950,16 +2053,18 @@ describe("DuplicateQueue — multi-select", () => {
     const stackBtn = wrapper.findAll(".grow")[0].find(".gbtn--stack");
     expect(stackBtn.text()).toContain("Stack 2 groups");
 
-    stackGroup.mockResolvedValue({});
+    applyVerdictBatch.mockResolvedValue({
+      batch_id: "cli-visible",
+      results: [{}, {}],
+    });
     await stackBtn.trigger("click");
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
 
-    expect(stackGroup).toHaveBeenCalledTimes(2);
-    const batchIds = stackGroup.mock.calls.map((call) => call[1].batchId);
-    // One gesture, one Ctrl+Z: both verdicts share one client batch id.
-    expect(batchIds[0]).toMatch(/^cli-/);
-    expect(batchIds[1]).toBe(batchIds[0]);
+    expect(applyVerdictBatch).toHaveBeenCalledTimes(1);
+    const [actions, options] = applyVerdictBatch.mock.calls[0];
+    expect(actions.map((action) => action.signature)).toEqual(["g1", "g2"]);
+    expect(options.batchId).toMatch(/^cli-/);
   });
 
   it("keeps rows and announcement stable until the selected stack gesture settles", async () => {
@@ -1971,26 +2076,16 @@ describe("DuplicateQueue — multi-select", () => {
     const rows = wrapper.findAll(".grow");
     await rows[0].trigger("click", { ctrlKey: true });
     await rows[2].trigger("click", { ctrlKey: true });
-    let resolveFirst;
-    let resolveSecond;
-    stackGroup
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveFirst = resolve;
-          }),
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            resolveSecond = resolve;
-          }),
-      );
+    let resolveBatch;
+    applyVerdictBatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveBatch = resolve;
+        }),
+    );
 
     await wrapper.findAll(".grow")[0].find(".gbtn--stack").trigger("click");
-    await vi.waitFor(() => expect(resolveFirst).toBeTypeOf("function"));
-    resolveFirst({ signature: "g1", batch_id: "cli-visible" });
-    await vi.waitFor(() => expect(resolveSecond).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(resolveBatch).toBeTypeOf("function"));
     await wrapper.vm.$nextTick();
 
     expect(store.groups.map((entry) => entry.signature)).toEqual([
@@ -2003,7 +2098,7 @@ describe("DuplicateQueue — multi-select", () => {
       "Stacked",
     );
 
-    resolveSecond({ signature: "g3", batch_id: "cli-visible" });
+    resolveBatch({ batch_id: "cli-visible", results: [{}, {}] });
     await flushPromises();
     await wrapper.vm.$nextTick();
     expect(store.groups.map((entry) => entry.signature)).toEqual(["g2"]);
@@ -2630,19 +2725,30 @@ async function openMixedPage(wrapper, store) {
 }
 
 describe("DuplicateQueue: the Mixed stacks page", () => {
-  // The count rides on the page toggle and never on the sidebar badge, which
-  // has to keep meaning "groups to review".
-  it("offers the third page from the header, carrying its own count", async () => {
+  // The list is deliberately lazy because its first read can score the whole
+  // library. Its entry cannot depend on that unread list, though: the first
+  // press is what requests it, then the returned rows and count appear here.
+  it("offers the third page cold and loads it on the first press", async () => {
     listMixedStacks.mockResolvedValue(
       mixedPage([mixedStack({ stack_id: 1 }), mixedStack({ stack_id: 2 })]),
     );
-    const { wrapper, store } = await mountQueue([group("g1")]);
-    await store.loadMixedStacks();
-    await wrapper.vm.$nextTick();
+    const { wrapper } = await mountQueue([group("g1")]);
+
     const toggle = wrapper.find('[data-testid="mixed-toggle"]');
     expect(toggle.exists()).toBe(true);
     expect(toggle.text()).toContain("Mixed stacks");
-    expect(toggle.text()).toContain("2");
+    expect(listMixedStacks).not.toHaveBeenCalled();
+
+    await toggle.trigger("click");
+    await flushPromises();
+
+    expect(listMixedStacks).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-testid="mixed-stacks"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-testid^="mixed-stack-"]')).toHaveLength(2);
+    expect(wrapper.find(".qtitle").text()).toBe("2 mixed stacks");
+    expect(wrapper.find('[data-testid="mixed-toggle"]').text()).toContain(
+      "Back to review",
+    );
   });
 
   // Ranked worst first by the server, and printed in that order with no

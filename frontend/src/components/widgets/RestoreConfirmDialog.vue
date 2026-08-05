@@ -17,6 +17,11 @@ import { computed, ref, watch } from "vue";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { formatUserDate } from "../../utils/utils";
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
+import {
+  beginFullRestoreRequest,
+  endFullRestoreRequest,
+  reloadAfterFullRestore,
+} from "../../utils/fullRestoreTransition";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -172,6 +177,10 @@ async function handleRestore(opts = {}) {
   const closeOnDispatch = isFullVaultRestore.value;
   if (closeOnDispatch) {
     dialogOpen.value = false;
+    // Lets the updates socket preserve this tab's request/response-driven
+    // transition while every other tab reloads from the pre-drain STARTED
+    // event. Cleared in finally for failures where the page stays alive.
+    beginFullRestoreRequest();
   }
 
   try {
@@ -180,10 +189,15 @@ async function handleRestore(opts = {}) {
       props.resources,
       { confirmRestoreDependencies },
     );
-    emit("confirmed", report);
-    if (!closeOnDispatch) {
-      dialogOpen.value = false;
+    if (closeOnDispatch) {
+      // A full restore replaces credentials and invalidates every pre-swap
+      // read. Bootstrap from a hard reload; never ask the old app instance to
+      // incrementally reconcile the new vault.
+      reloadAfterFullRestore();
+      return;
     }
+    emit("confirmed", report);
+    dialogOpen.value = false;
   } catch (err) {
     const detail = err?.response?.data?.detail;
     // 409 with code=missing_dependencies — switch to the confirm prompt
@@ -202,6 +216,13 @@ async function handleRestore(opts = {}) {
       (typeof detail === "string" ? detail : null) ||
       err?.message ||
       "Restore failed.";
+    if (closeOnDispatch && err?.response?.status === 503) {
+      // The restore gate is still closed. Reloading re-runs authentication
+      // once the backend is available instead of issuing stale incremental
+      // reads from this app instance.
+      reloadAfterFullRestore();
+      return;
+    }
     if (closeOnDispatch) {
       // The dialog is already gone — surface the failure on the store banner.
       store.error = message;
@@ -209,6 +230,7 @@ async function handleRestore(opts = {}) {
       restoreError.value = message;
     }
   } finally {
+    if (closeOnDispatch) endFullRestoreRequest();
     restoring.value = false;
   }
 }

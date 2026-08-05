@@ -36,12 +36,14 @@ export async function listOperations({
   batchId,
   opType,
   baseUrl = "",
+  signal,
 } = {}) {
   const params = { limit };
   if (status) params.status = status;
   if (batchId) params.batch_id = batchId;
   if (opType) params.op_type = opType;
-  const res = await apiClient.get(`${baseUrl}/operations`, { params });
+  const config = signal ? { params, signal } : { params };
+  const res = await apiClient.get(`${baseUrl}/operations`, config);
   return res.data;
 }
 
@@ -57,8 +59,11 @@ export async function listOperations({
  *   `{ can_undo, can_redo, next_undo, next_redo }`, where the two operations
  *   are `null` when there is nothing to act on.
  */
-export async function getUndoState({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/operations/undo-state`);
+export async function getUndoState({ baseUrl = "", signal } = {}) {
+  const url = `${baseUrl}/operations/undo-state`;
+  const res = signal
+    ? await apiClient.get(url, { signal })
+    : await apiClient.get(url);
   return res.data;
 }
 
@@ -82,12 +87,20 @@ export async function getUndoState({ baseUrl = "" } = {}) {
 export async function undoLastOperation({
   operationId = null,
   baseUrl = "",
+  signal,
 } = {}) {
   const url = `${baseUrl}/operations/undo`;
-  const res =
-    operationId === null
-      ? await apiClient.post(url)
-      : await apiClient.post(url, { operation_id: operationId });
+  let res;
+  if (operationId === null) {
+    res = signal
+      ? await apiClient.post(url, undefined, { signal })
+      : await apiClient.post(url);
+  } else {
+    const body = { operation_id: operationId };
+    res = signal
+      ? await apiClient.post(url, body, { signal })
+      : await apiClient.post(url, body);
+  }
   return res.data;
 }
 
@@ -104,8 +117,11 @@ export async function undoLastOperation({
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
-export async function redoOperation({ baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/operations/redo`);
+export async function redoOperation({ baseUrl = "", signal } = {}) {
+  const url = `${baseUrl}/operations/redo`;
+  const res = signal
+    ? await apiClient.post(url, undefined, { signal })
+    : await apiClient.post(url);
   return res.data;
 }
 
@@ -121,8 +137,14 @@ export async function redoOperation({ baseUrl = "" } = {}) {
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
-export async function undoOperation(operationId, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/operations/${operationId}/undo`);
+export async function undoOperation(
+  operationId,
+  { baseUrl = "", signal } = {},
+) {
+  const url = `${baseUrl}/operations/${operationId}/undo`;
+  const res = signal
+    ? await apiClient.post(url, undefined, { signal })
+    : await apiClient.post(url);
   return res.data;
 }
 
@@ -140,9 +162,10 @@ export async function undoOperation(operationId, { baseUrl = "" } = {}) {
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
-export async function undoBatch(batchId, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    `${baseUrl}/operations/batches/${encodeURIComponent(batchId)}/undo`,
-  );
+export async function undoBatch(batchId, { baseUrl = "", signal } = {}) {
+  const url = `${baseUrl}/operations/batches/${encodeURIComponent(batchId)}/undo`;
+  const res = signal
+    ? await apiClient.post(url, undefined, { signal })
+    : await apiClient.post(url);
   return res.data;
 }

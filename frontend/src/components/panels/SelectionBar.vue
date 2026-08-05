@@ -242,6 +242,7 @@
             @open-plugin-panel="openPluginPanel()"
             @open-comfyui-panel="openComfyuiPanel()"
             @reverse-image-search="$emit('reverse-image-search')"
+            @segment="$emit('segment')"
             @remove-from-group="$emit('remove-from-group')"
             @keep-cover-only="$emit('keep-cover-only')"
             @delete-selected="$emit('delete-selected')"
@@ -389,6 +390,7 @@ const emit = defineEmits([
   "auto-tag",
   "generate-description",
   "reverse-image-search",
+  "segment",
   "selection-menu-open",
   "clear-impossible-tags",
 ]);

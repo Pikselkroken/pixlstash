@@ -156,7 +156,7 @@ class PictureImportTask(BaseTask):
         # catches files already committed; the batch is committed after the
         # loop, so two byte-identical staged files would both pass the DB check.
         # Track them here so an intra-batch duplicate is counted, not imported.
-        seen_shas: set[str] = set()
+        seen_fingerprints: set[tuple[int, str]] = set()
 
         for index, entry in enumerate(self._staged_files):
             if self._stop_event.is_set():
@@ -193,6 +193,8 @@ class PictureImportTask(BaseTask):
 
             try:
                 pixel_sha = ImageUtils.calculate_hash_from_file_path(file_path)
+                size_bytes = os.path.getsize(file_path)
+                full_sha = ImageUtils.calculate_full_hash_from_file_path(file_path)
             except Exception as exc:
                 logger.warning(
                     "PictureImportTask: failed to hash staged file %s "
@@ -205,7 +207,10 @@ class PictureImportTask(BaseTask):
                 self._processed_count += 1
                 continue
 
-            def find_existing(session: Session, hash_value: str):
+            content_key = (pixel_sha, size_bytes)
+            fingerprint = (pixel_sha, size_bytes, full_sha)
+
+            def find_candidates(session: Session, key):
                 # Deliberately matches soft-deleted rows too: a scrapheaped
                 # picture used to be invisible to import dedup on the one-shot
                 # path, which re-imported its file as a second row. Here the
@@ -213,14 +218,17 @@ class PictureImportTask(BaseTask):
                 # filter) but was reported as an ordinary duplicate, which hid
                 # from the user that their file is sitting in the Scrapheap.
                 # The service classifies it instead of silently collapsing it.
-                return import_dedup_service.match_one_by_pixel_sha_in_session(
-                    session, hash_value
+                return import_dedup_service.load_match_candidates_in_session(
+                    session, [key]
                 )
 
             # Submitted on the writer queue, not the immediate read path, so a
             # picture inserted by an earlier batch of this same import is
             # already visible.
-            match = self._db.run_task(find_existing, pixel_sha)
+            candidates = self._db.run_task(find_candidates, content_key)
+            match = import_dedup_service.confirmed_match(
+                candidates, fingerprint, self._db.image_root
+            )
             if match is not None and match.deleted:
                 logger.info(
                     "PictureImportTask: staged file %s matches scrapheaped "
@@ -237,7 +245,8 @@ class PictureImportTask(BaseTask):
                     scrapheaped_picture_ids.append(match.id)
                 self._processed_count += 1
                 continue
-            if match is not None or pixel_sha in seen_shas:
+            intra_batch_key = (size_bytes, full_sha)
+            if match is not None or intra_batch_key in seen_fingerprints:
                 logger.debug(
                     "PictureImportTask: duplicate sha %s already imported; "
                     "skipping staged file %s",
@@ -261,7 +270,7 @@ class PictureImportTask(BaseTask):
                 if original_file_name:
                     pic.original_file_name = original_file_name
                 new_pictures.append(pic)
-                seen_shas.add(pixel_sha)
+                seen_fingerprints.add(intra_batch_key)
             except Exception as exc:
                 logger.warning(
                     "PictureImportTask: failed to ingest staged file %s "

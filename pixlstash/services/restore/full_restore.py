@@ -13,13 +13,14 @@ import shutil
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, select
 from sqlalchemy import (
     delete as sa_delete,
     select as sa_select,
     update as sa_update,
 )
 
+from pixlstash.database import create_configured_engine
 from pixlstash.db_models import (
     DeletedFileLog,
     Face,
@@ -46,6 +47,7 @@ from ._models import (
     _MAX_MISSING_RATIO_FOR_CLEANUP,
     _MIN_PICTURES_FOR_MISSING_RATIO_CHECK,
 )
+from .schema_upgrade import snapshot_engine
 
 logger = get_logger(__name__)
 
@@ -61,6 +63,7 @@ class FullRestoreMixin:
         snapshot_id: int,
         dry_run: bool = False,
         allow_without_safety: bool = False,
+        restore_request_lease: int | None = None,
     ) -> RestoreReport:
         """Replace the live database with a snapshot snapshot.
 
@@ -70,12 +73,13 @@ class FullRestoreMixin:
         3. Scan snapshot Picture rows; collect missing-file IDs.
         4. Dispose the live engine, copy the snapshot over the live DB, and
            re-open it.
-        5. Clear every API token (see ``_clear_api_tokens``) — a restore always
-           leaves the vault with no tokens, whatever the snapshot held.
-        6. Reset the in-memory authentication state the swap invalidated (see
+        5. Clear every API token (see ``_clear_hub_api_tokens``) and the vault's
+           guest state (see ``_clear_guest_state``) — a restore always leaves the
+           vault with no tokens, whatever the snapshot held.
+        6. Delete rows whose files are missing and perform post-swap cleanup.
+        7. Reset the in-memory authentication state the swap invalidated (see
            ``_reset_auth_state``); clients sign in again afterwards.
-        7. Delete rows whose files are missing.
-        8. NULL-reset derived columns so the WorkPlanner regenerates them.
+        8. Reopen authentication only after every finalisation step succeeds.
         9. Resume the TaskRunner and emit ``RESTORE_COMPLETED``.
 
         Args:
@@ -89,6 +93,10 @@ class FullRestoreMixin:
                 explicitly acknowledged that there will be no rollback (e.g.
                 disk is full and they want to restore *because* the live DB
                 is broken).
+            restore_request_lease: Admission lease held by an authenticated
+                HTTP restore request. The barrier excludes it from the drain
+                after closing new admissions, avoiding a self-deadlock. Direct
+                service callers leave this as ``None``.
 
         Returns:
             A ``RestoreReport`` summarising the operation.
@@ -124,6 +132,7 @@ class FullRestoreMixin:
                     vault_root,
                     report,
                     allow_without_safety,
+                    restore_request_lease,
                 )
             finally:
                 self._active_job = None
@@ -137,6 +146,7 @@ class FullRestoreMixin:
         vault_root: str,
         report: "RestoreReport",
         allow_without_safety: bool,
+        restore_request_lease: int | None,
     ) -> "RestoreReport":
         """Inner implementation of full restore (called from restore_full).
 
@@ -169,6 +179,7 @@ class FullRestoreMixin:
                 report,
                 allow_without_safety,
                 abs_snapshot,
+                restore_request_lease,
             )
         except Exception as exc:
             self._emit_lifecycle(
@@ -185,6 +196,7 @@ class FullRestoreMixin:
         report: "RestoreReport",
         allow_without_safety: bool,
         abs_snapshot: str,
+        restore_request_lease: int | None,
     ) -> "RestoreReport":
         """The body of full restore steps 1-9 (separated so the lifecycle
         wrapper in ``_restore_full_inner`` stays narrow)."""
@@ -678,7 +690,18 @@ class FullRestoreMixin:
                     reinserted_deleted,
                 )
 
-        # Steps 4-6 wrapped in try/finally so the planner always restarts —
+        # Close authentication before the database cutover.  The swap and
+        # token deletion are separate writer-queue jobs; without this gate, an
+        # old cookie or cached token can authenticate in the gap between them.
+        # The gate deliberately stays closed after any swap/finalisation
+        # failure.  At that point the process cannot prove its in-memory auth
+        # state matches the live database, so only a successful recovery/reset
+        # (or a process restart) may admit credentials again.
+        auth_service = getattr(self._vault, "auth_service", None)
+        if auth_service is not None:
+            auth_service.close_auth_for_restore(restore_request_lease)
+
+        # Steps 4-8 wrapped in try/finally so the planner always restarts —
         # if _do_swap or the cleanup raises, leaving the planner stopped
         # would silently halt every background worker (daily snapshots,
         # missing-file detection, embedding generation, ...) until restart.
@@ -691,12 +714,13 @@ class FullRestoreMixin:
             # writer task opens its session on the re-created engine.
             db.run_task(self._clear_guest_state, priority=0)
             self._clear_hub_api_tokens()
-            # Then drop the in-memory authentication state the swap invalidated.
-            # Ordered after the token clear on purpose: once the swapped-in
-            # database holds no token rows, a request arriving in the gap cannot
-            # re-populate the cache with a restored token.
-            self._reset_auth_state()
             db.run_task(_post_restore_cleanup, priority=0)
+            # Rebuild process-local auth state only after the restored database
+            # is in its final form. A reset failure is fatal and intentionally
+            # leaves the gate closed; reporting success would be fail-open.
+            self._reset_auth_state()
+            if auth_service is not None:
+                auth_service.reopen_auth_after_restore()
         finally:
             if planner is not None:
                 planner.start()
@@ -735,16 +759,17 @@ class FullRestoreMixin:
         **Where it runs, and why that is safe.** After
         ``run_control_task(_do_swap)`` has returned, so the swap has finished
         and released ``exclusive_engine_access()`` and the engine has been
-        re-created; and after ``_clear_api_tokens``, so the swapped-in database
-        already holds no token rows and a request landing in the gap cannot
-        re-populate the cache from one. ``reset_after_restore`` re-reads the
+        re-created; and after the token clear, so the swapped-in database
+        already holds no token rows. The restore authentication gate has been
+        closed since before the swap, so no request can repopulate the cache in
+        the queue gap. ``reset_after_restore`` re-reads the
         owner row through the ordinary writer queue, which is exactly why it
         must not be called from inside the swap — doing so would take the
         writer queue while the engine lock is held and hang the request path.
 
-        Failure is logged, not raised: the restore itself has already
-        succeeded by this point, and aborting it here would leave the caller
-        believing the swap did not happen.
+        Failure is raised: although the database swap has happened, restore
+        finalisation has not succeeded and authentication remains fail-closed.
+        The caller must never receive a successful restore report in that state.
         """
         auth_service = getattr(self._vault, "auth_service", None)
         if auth_service is None:
@@ -758,14 +783,17 @@ class FullRestoreMixin:
         try:
             auth_service.reset_after_restore()
         except Exception as exc:
-            logger.error(
+            logger.critical(
                 "RestoreService: failed to reset in-memory authentication "
-                "state after the restore. Sessions and cached tokens from "
-                "before the swap may still authenticate until the server is "
-                "restarted: %s",
+                "state after the restore; authentication remains disabled "
+                "until recovery or process restart: %s",
                 exc,
                 exc_info=True,
             )
+            raise RuntimeError(
+                "Database restore completed its swap but authentication state "
+                "could not be reset; authentication remains disabled."
+            ) from exc
 
     @staticmethod
     def _clear_guest_state(session: Session) -> None:
@@ -858,7 +886,7 @@ class FullRestoreMixin:
         missing: list[int] = []
         total: int = 0
         try:
-            engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            engine = snapshot_engine(abs_snapshot)
             try:
                 with Session(engine) as session:
                     pictures = session.exec(select(Picture)).all()
@@ -983,7 +1011,7 @@ class FullRestoreMixin:
         if not path_shas and not pixel_shas:
             return set()
         try:
-            engine = create_engine(f"sqlite:///{abs_snapshot}", echo=False)
+            engine = snapshot_engine(abs_snapshot)
             try:
                 with Session(engine) as session:
                     return self._match_deleted_picture_ids(
@@ -1055,16 +1083,10 @@ class FullRestoreMixin:
                         os.fsync(live_dir_fd)
                     finally:
                         os.close(live_dir_fd)
-                # Recreate engine
-                from sqlalchemy import event as sa_event
-                from pixlstash.database import SQLITE_BUSY_TIMEOUT_S, init_database
-
-                db._engine = create_engine(
-                    f"sqlite:///{live_db_path}",
-                    echo=False,
-                    connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S},
-                )
-                sa_event.listen(db._engine, "connect", init_database)
+                # Recreate the engine through the shared helper so the
+                # swapped-in live DB gets exactly the startup engine's
+                # configuration (§13). The two drifting apart was #651.
+                db._engine = create_configured_engine(live_db_path)
             logger.info("RestoreService: DB swap complete, engine re-created.")
         except Exception as exc:
             logger.error("RestoreService: DB swap failed: %s", exc, exc_info=True)

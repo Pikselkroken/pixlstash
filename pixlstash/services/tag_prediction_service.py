@@ -64,8 +64,10 @@ def confirm_tag_prediction_in_session(
     tag: str,
     registry: "InteractiveRescoreRegistry | None" = None,
     origin_client_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> None:
-    """Mark a prediction as CONFIRMED and ensure the Tag row exists. Commits.
+    """Mark a prediction as CONFIRMED and ensure the Tag row exists.
 
     Session-level so the route can hand it to
     :func:`~pixlstash.services.operation_log_service.run_recorded_metadata_task`,
@@ -74,11 +76,13 @@ def confirm_tag_prediction_in_session(
     written, so a refused confirm records no operation.
 
     Args:
-        session: Active DB session; this function commits it.
+        session: Active DB session.
         pic_id: Picture ID owning the prediction.
         tag: Tag value to confirm.
         registry: The vault's interactive rescore registry (see :func:`confirm_tag_prediction`).
         origin_client_id: The originating tab's ``X-Client-Id``.
+        commit: Commit before returning. The operation-log wrapper passes
+            ``False`` so it owns the mutation and receipt transaction.
 
     Raises:
         KeyError: If no prediction with the given tag exists for the picture.
@@ -116,7 +120,10 @@ def confirm_tag_prediction_in_session(
 
         session.flush()
         recompute_anomaly_tag_uncertainty(session, pic_id)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
 
 
 def confirm_tag_prediction(
@@ -157,8 +164,10 @@ def reject_tag_prediction_in_session(
     tag: str,
     registry: "InteractiveRescoreRegistry | None" = None,
     origin_client_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> None:
-    """Mark a prediction as REJECTED (or create a synthetic REJECTED row). Commits.
+    """Mark a prediction as REJECTED (or create a synthetic REJECTED row).
 
     Session-level for the same reason as
     :func:`confirm_tag_prediction_in_session`: the route wraps it in a recorded
@@ -166,11 +175,13 @@ def reject_tag_prediction_in_session(
     refused reject records nothing.
 
     Args:
-        session: Active DB session; this function commits it.
+        session: Active DB session.
         pic_id: Picture ID owning the prediction.
         tag: Tag value to reject.
         registry: The vault's interactive rescore registry (see :func:`reject_tag_prediction`).
         origin_client_id: The originating tab's ``X-Client-Id``.
+        commit: Commit before returning. The operation-log wrapper passes
+            ``False`` so it owns the mutation and receipt transaction.
     """
     # Rejecting writes a human NEG onto the picture — label data frozen when
     # the picture is in a locked set.
@@ -190,7 +201,10 @@ def reject_tag_prediction_in_session(
         record_human_label(session, pic_id, tag, NEG)
         session.flush()
         recompute_anomaly_tag_uncertainty(session, pic_id)
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
 
 
 def reject_tag_prediction(

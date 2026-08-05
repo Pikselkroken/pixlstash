@@ -12,12 +12,15 @@ from fastapi import HTTPException
 from sqlmodel import select
 
 from pixlstash.db_models import Face, Picture
+from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.utils.service.filter_helpers import (
     fetch_set_candidate_ids,
     project_membership_exists_clause,
     project_unassigned_clause,
 )
+
+logger = get_logger(__name__)
 
 
 def fetch_set_filter_candidate_ids(
@@ -105,6 +108,7 @@ def fetch_character_candidate_ids(db, char_id: int) -> set[int]:
 def fetch_face_candidates(
     db,
     candidate_ids: set[int] | None,
+    model_pack: str | None = None,
 ) -> list[tuple[int, list[tuple[int, np.ndarray]]]]:
     """Return ``(picture_id, [(face_id, embedding), ...])`` pairs for ArcFace search.
 
@@ -129,7 +133,7 @@ def fetch_face_candidates(
         from sqlalchemy import select as sa_select
 
         query = (
-            sa_select(Face.picture_id, Face.id, Face.features)
+            sa_select(Face.picture_id, Face.id, Face.features, Face.model_pack)
             .join(Picture, Face.picture_id == Picture.id)
             .where(
                 Face.features.is_not(None),
@@ -142,9 +146,20 @@ def fetch_face_candidates(
             query = query.where(Face.picture_id.in_(candidate_ids))
 
         rows = session.execute(query).all()
+        if model_pack:
+            active_rows = [row for row in rows if row.model_pack == model_pack]
+            if active_rows:
+                rows = active_rows
+            elif rows and all(row.model_pack is None for row in rows):
+                logger.warning(
+                    "face-search: candidate embeddings have no model-pack "
+                    "provenance; using the wholly legacy set"
+                )
+            else:
+                rows = []
 
         pic_embs: dict[int, list[tuple[int, np.ndarray]]] = {}
-        for pic_id, face_id, features in rows:
+        for pic_id, face_id, features, _row_pack in rows:
             pic_id = int(pic_id)
             emb = np.frombuffer(features, dtype=np.float32).copy()
             if emb.size > 0:
@@ -155,7 +170,9 @@ def fetch_face_candidates(
     return db.run_immediate_read_task(_fetch)
 
 
-def fetch_character_reference_embeddings(db, character_id: int) -> list[np.ndarray]:
+def fetch_character_reference_embeddings(
+    db, character_id: int, model_pack: str | None = None
+) -> list[np.ndarray]:
     """Return the ArcFace embeddings of a character's reference faces.
 
     Delegates the *choice* of reference faces to
@@ -179,8 +196,25 @@ def fetch_character_reference_embeddings(db, character_id: int) -> list[np.ndarr
             select_reference_faces_for_character,
         )
 
+        faces = [
+            face
+            for face in select_reference_faces_for_character(session, char_id)
+            if face.features
+        ]
+        if model_pack:
+            active_faces = [face for face in faces if face.model_pack == model_pack]
+            if active_faces:
+                faces = active_faces
+            elif faces and all(face.model_pack is None for face in faces):
+                logger.warning(
+                    "face-search: character %s references have no model-pack "
+                    "provenance; using the wholly legacy set",
+                    char_id,
+                )
+            else:
+                faces = []
         result = []
-        for face in select_reference_faces_for_character(session, char_id):
+        for face in faces:
             if not face.features:
                 continue
             emb = np.frombuffer(face.features, dtype=np.float32).copy()
@@ -191,7 +225,9 @@ def fetch_character_reference_embeddings(db, character_id: int) -> list[np.ndarr
     return db.run_immediate_read_task(_fetch, character_id)
 
 
-def fetch_face_embeddings_by_picture(db, picture_id: int) -> list[np.ndarray]:
+def fetch_face_embeddings_by_picture(
+    db, picture_id: int, model_pack: str | None = None
+) -> list[np.ndarray]:
     """Return the ArcFace embeddings stored for *picture_id*.
 
     Args:
@@ -206,12 +242,18 @@ def fetch_face_embeddings_by_picture(db, picture_id: int) -> list[np.ndarray]:
         from sqlalchemy import select as sa_select
 
         rows = session.execute(
-            sa_select(Face.features).where(
+            sa_select(Face.features, Face.model_pack).where(
                 Face.picture_id == pic_id, Face.features.is_not(None)
             )
         ).all()
+        if model_pack:
+            active_rows = [row for row in rows if row.model_pack == model_pack]
+            if active_rows:
+                rows = active_rows
+            elif not all(row.model_pack is None for row in rows):
+                rows = []
         result = []
-        for (features,) in rows:
+        for features, _row_pack in rows:
             emb = np.frombuffer(features, dtype=np.float32).copy()
             if emb.size > 0:
                 result.append(emb)
@@ -220,7 +262,9 @@ def fetch_face_embeddings_by_picture(db, picture_id: int) -> list[np.ndarray]:
     return db.run_immediate_read_task(_fetch, picture_id)
 
 
-def fetch_face_embedding_by_face_id(db, face_id: int) -> list[np.ndarray]:
+def fetch_face_embedding_by_face_id(
+    db, face_id: int, model_pack: str | None = None
+) -> list[np.ndarray]:
     """Return the ArcFace embedding(s) for a specific *face_id*.
 
     Args:
@@ -235,10 +279,18 @@ def fetch_face_embedding_by_face_id(db, face_id: int) -> list[np.ndarray]:
         from sqlalchemy import select as sa_select
 
         rows = session.execute(
-            sa_select(Face.features).where(Face.id == fid, Face.features.is_not(None))
+            sa_select(Face.features, Face.model_pack).where(
+                Face.id == fid, Face.features.is_not(None)
+            )
         ).all()
+        if model_pack:
+            active_rows = [row for row in rows if row.model_pack == model_pack]
+            if active_rows:
+                rows = active_rows
+            elif not all(row.model_pack is None for row in rows):
+                rows = []
         result = []
-        for (features,) in rows:
+        for features, _row_pack in rows:
             emb = np.frombuffer(features, dtype=np.float32).copy()
             if emb.size > 0:
                 result.append(emb)

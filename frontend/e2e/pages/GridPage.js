@@ -40,6 +40,14 @@ export class GridPage {
     this.searchHistoryChips = page.locator('.gb-recent-row')
     // Right-click context menu (§3.5) — ImageGridContextMenu.vue.
     this.contextMenu = page.locator('.image-ctx-menu')
+    // Selection ▾ dropdown — SelectionBar.vue's activator (`.stack-btn` inside
+    // `.selection-ctx-bar`) opening SelectionMenu.vue's `.selection-menu-panel`.
+    // The activator is disabled until something is selected.
+    this.selectionMenuButton = page.locator('.selection-ctx-bar .stack-btn')
+    this.selectionMenuPanel = page.locator('.selection-menu-panel')
+    this.selectionCountLabel = page.locator(
+      '.selection-ctx-bar .bar-btn-apply-label',
+    )
     // Statistics sidebar — toggled from the toolbar. Its title flips with state
     // ("Show"/"Hide stats sidebar"), so target the (single) chart-bar button by
     // icon, which is stable across both states.
@@ -153,5 +161,66 @@ export class GridPage {
   /** A context-menu action item by its visible label. */
   contextMenuItem(label) {
     return this.contextMenu.locator('.ctx-item', { hasText: label }).first()
+  }
+
+  /**
+   * Ctrl-click the first `count` cards to build a multi-picture selection.
+   *
+   * Ctrl (or Meta) toggles selection instead of opening the lightbox — see
+   * handleImageCardClick/handleThumbnailClick in ImageGrid.vue. The click
+   * targets `.thumbnail-card`, which stops propagation and owns the real
+   * handler; clicking the outer `.image-card` would work too but is a larger
+   * hit area that overlaps stack affordances.
+   *
+   * Returns the number selected, confirmed from the SelectionBar's own count
+   * label rather than a CSS class, so the assertion rides on what the user
+   * actually sees.
+   */
+  async selectCards(count) {
+    const available = await this.thumbnails.count()
+    const target = Math.min(count, available)
+    for (let i = 0; i < target; i += 1) {
+      await this.thumbnails.nth(i).click({ modifiers: ['ControlOrMeta'] })
+    }
+    await expect(this.selectionCountLabel).toHaveText(`${target} selected`, {
+      timeout: 5_000,
+    })
+    return target
+  }
+
+  /** Open the Selection ▾ dropdown from the toolbar activator. */
+  async openSelectionMenu() {
+    await expect(this.selectionMenuButton).toBeEnabled()
+    await this.selectionMenuButton.click()
+    await expect(this.selectionMenuPanel).toBeVisible()
+  }
+
+  /**
+   * Close the Selection ▾ dropdown, leaving the selection intact.
+   *
+   * Escape is what a user presses, and it is the only dismissal that does not
+   * risk toggling a card: clicking outside the panel lands on the grid, which
+   * would clear the selection this spec is about to reuse.
+   */
+  async closeSelectionMenu() {
+    await this.page.keyboard.press('Escape')
+    await expect(this.selectionMenuPanel).toBeHidden()
+  }
+
+  /**
+   * Right-click an already-selected card so the context menu is driven by the
+   * same selection as the Selection ▾ dropdown. Right-clicking an unselected
+   * card would replace the selection with that one picture and quietly turn a
+   * multi-select comparison into a single-select one.
+   */
+  async openContextMenuOnSelected(index = 0) {
+    await this.thumbnails.nth(index).click({ button: 'right' })
+    await expect(this.contextMenu).toBeVisible()
+  }
+
+  /** Dismiss the context menu. */
+  async closeContextMenu() {
+    await this.page.keyboard.press('Escape')
+    await expect(this.contextMenu).toBeHidden()
   }
 }

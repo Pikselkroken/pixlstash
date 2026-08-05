@@ -15,6 +15,7 @@
     <!-- ── Set / Character / Project ─────────────────────── -->
     <template v-if="!isScrapheapView">
       <AddToEntityControl
+        v-if="entityLists.canSeeProjects"
         ref="ateProjectRef"
         type="project"
         placement="right"
@@ -275,6 +276,23 @@
         <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
         Reverse image search
       </button>
+      <!-- ── Segment ───────────────────────────────────────
+           Selection-scoped in the context menu too (gated on
+           `selectedImageIds.length`), so it belongs here as well. Unlike
+           Reverse image search it writes bounding boxes, hence the read-only
+           gate. -->
+      <button
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly"
+        title="Detect objects and store bounding boxes"
+        @click="
+          $emit('segment');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+        Segment
+      </button>
       <div class="ctx-sep" />
     </template>
 
@@ -331,6 +349,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
@@ -380,6 +399,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "open-comfyui-panel",
   "reverse-image-search",
+  "segment",
   "remove-from-group",
   "keep-cover-only",
   "delete-selected",
@@ -388,6 +408,10 @@ const emit = defineEmits([
 
 const snapshotsStore = useSnapshotsStore();
 const lockedSetsStore = useLockedSetsStore();
+// A token scoped to a character / picture / set was granted no project scope,
+// so the Project row would open a flyout that lists nothing and POSTs a
+// membership read the server 403s. Omit the row instead of offering a dead one.
+const entityLists = useEntityListsStore();
 
 const selectionMenuPanelRef = ref(null);
 const selectionPanelFlipped = ref(false);

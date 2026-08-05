@@ -10,7 +10,12 @@ import { resolve } from 'node:path'
 // dark theme + sensible grid density to match the originals.
 //
 // Run:  npm run screenshots          (from frontend/)
+//       npm run screenshots v1.9.0   (stamp the captures with a version)
 const PORT = process.env.PIXLSTASH_SHOTS_PORT || '9610'
+// Set by e2e/screenshots/run.js. Forwarded to the webServer command so vite
+// bakes it into __APP_VERSION__ for the title bar; capture.spec.js serves the
+// same string on /version for the dialogs that fetch it at runtime.
+const VERSION_OVERRIDE = process.env.PIXLSTASH_VERSION_OVERRIDE || ''
 const BASE_URL = `http://127.0.0.1:${PORT}`
 const DEMO_DATA = resolve(process.cwd(), '..', 'demo-data')
 
@@ -44,6 +49,7 @@ export default defineConfig({
     env: {
       PIXLSTASH_E2E_PORT: PORT,
       PIXLSTASH_E2E_DATA: DEMO_DATA,
+      ...(VERSION_OVERRIDE ? { PIXLSTASH_VERSION_OVERRIDE: VERSION_OVERRIDE } : {}),
     },
   },
 })

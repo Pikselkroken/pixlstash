@@ -21,6 +21,12 @@ vi.mock("../../utils/apiClient", async () => {
   return {
     apiClient: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
     isReadOnly: ref(false), // a real ref so the menu template unwraps it
+    onSessionReset: () => () => {},
+    // Both menus read `useEntityListsStore.canSeeProjects` to decide whether to
+    // render the Project row at all, and that getter derives from the session's
+    // scope. An owner session (no share token, no resource scope) is the
+    // baseline every assertion in this file was written against.
+    sessionContext: ref(null),
   };
 });
 

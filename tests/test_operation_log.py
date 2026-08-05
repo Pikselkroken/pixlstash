@@ -29,6 +29,7 @@ import io
 import json
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pytest
@@ -470,6 +471,91 @@ def test_no_op_mutation_records_nothing():
         _teardown(temp_dir, server)
 
 
+@pytest.mark.parametrize("failure_stage", ["capture", "record", "serialize"])
+def test_recording_failure_rolls_back_the_tag_mutation(monkeypatch, failure_stage):
+    """The receipt is part of the write: no receipt means no domain mutation."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        before_operations = len(_operations(server))
+
+        def add_tag(session, pid):
+            session.add(Tag(picture_id=pid, tag="atomic"))
+            session.flush()
+
+        if failure_stage == "capture":
+            real_capture = operation_log_service.capture_state_in_session
+            calls = 0
+
+            def fail_second_capture(session, picture_ids):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("after capture failed")
+                return real_capture(session, picture_ids)
+
+            monkeypatch.setattr(
+                operation_log_service,
+                "capture_state_in_session",
+                fail_second_capture,
+            )
+        elif failure_stage == "record":
+            monkeypatch.setattr(
+                operation_log_service,
+                "record_operation_in_session",
+                lambda *args, **kwargs: (_ for _ in ()).throw(
+                    RuntimeError("record failed")
+                ),
+            )
+        else:
+            monkeypatch.setattr(
+                operation_log_service,
+                "serialize",
+                lambda *args, **kwargs: (_ for _ in ()).throw(
+                    RuntimeError("serialize failed")
+                ),
+            )
+
+        with pytest.raises(RuntimeError):
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                add_tag,
+                picture_id,
+                op_type="test.atomic-tag",
+                picture_ids=[picture_id],
+            )
+
+        assert _tags(server, picture_id) == []
+        assert len(_operations(server)) == before_operations
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_recorded_callback_cannot_commit_independently():
+    """Fail closed if a future callback reintroduces a premature commit."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+
+        def bad_callback(session, pid):
+            session.add(Tag(picture_id=pid, tag="escaped"))
+            session.commit()
+
+        with pytest.raises(RuntimeError, match="attempted to commit independently"):
+            operation_log_service.run_recorded_metadata_task(
+                server.vault,
+                bad_callback,
+                picture_id,
+                op_type="test.bad-commit",
+                picture_ids=[picture_id],
+            )
+
+        assert _tags(server, picture_id) == []
+        assert _operations(server, op_type="test.bad-commit") == []
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_an_empty_diff_is_recorded_only_when_targets_are_declared():
     """The empty-diff escape hatch for operations with no picture facet.
 
@@ -569,6 +655,40 @@ def test_set_membership_is_recorded_and_undone():
         assert server.vault.db.run_task(members) == []
         assert client.post(f"{API}/operations/redo").status_code == 200
         assert server.vault.db.run_task(members) == [picture_id]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_record_failure_rolls_back_set_membership(monkeypatch):
+    """Membership joins cannot commit without their operation receipt."""
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        created = client.post(f"{API}/picture_sets", json={"name": "atomic-set"})
+        set_id = created.json()["picture_set"]["id"]
+        monkeypatch.setattr(
+            operation_log_service,
+            "record_operation_in_session",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("membership receipt failed")
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="membership receipt failed"):
+            client.post(f"{API}/picture_sets/{set_id}/members/{picture_id}")
+
+        members = server.vault.db.run_task(
+            lambda session: list(
+                session.exec(
+                    select(PictureSetMember).where(
+                        PictureSetMember.set_id == set_id,
+                        PictureSetMember.picture_id == picture_id,
+                    )
+                ).all()
+            )
+        )
+        assert members == []
+        assert _operations(server, op_type="picture_sets.members.add") == []
     finally:
         _teardown(temp_dir, server)
 
@@ -776,6 +896,121 @@ def test_undo_is_last_in_first_out():
         _teardown(temp_dir, server)
 
 
+def test_named_undo_rejects_a_stale_operation_without_writes():
+    temp_dir, client, server = _setup()
+    try:
+        picture_id = _upload(client)
+        client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "one"})
+        older = _operations(server)[0]
+        client.post(f"{API}/pictures/{picture_id}/tags", json={"tag": "two"})
+
+        response = client.post(f"{API}/operations/{older['id']}/undo")
+
+        assert response.status_code == 409, response.text
+        assert "must be undone first" in response.json()["detail"]
+        assert _tags(server, picture_id) == ["one", "two"]
+        assert [op["status"] for op in _operations(server)[:2]] == [
+            "applied",
+            "applied",
+        ]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_batch_undo_rejects_an_interleaved_newer_operation_without_writes():
+    """A latest batch id is still stale when another unit landed inside it."""
+    temp_dir, client, server = _setup()
+    try:
+        first, second, unrelated = [_upload(client) for _ in range(3)]
+        batch_id = operation_log_service.new_batch_id()
+
+        def add_tag(session, picture_id, tag):
+            session.add(Tag(picture_id=picture_id, tag=tag))
+            session.flush()
+
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            add_tag,
+            first,
+            "batched",
+            op_type="test.batch",
+            picture_ids=[first],
+            batch_id=batch_id,
+        )
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            add_tag,
+            unrelated,
+            "newer",
+            op_type="test.unrelated",
+            picture_ids=[unrelated],
+        )
+        operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            add_tag,
+            second,
+            "batched",
+            op_type="test.batch",
+            picture_ids=[second],
+            batch_id=batch_id,
+        )
+
+        response = client.post(f"{API}/operations/batches/{batch_id}/undo")
+
+        assert response.status_code == 409, response.text
+        assert client.post(f"{API}/operations/undo").status_code == 409
+        assert _tags(server, first) == ["batched"]
+        assert _tags(server, second) == ["batched"]
+        assert _tags(server, unrelated) == ["newer"]
+        assert all(op["status"] == "applied" for op in _operations(server)[:3])
+    finally:
+        _teardown(temp_dir, server)
+
+
+@pytest.mark.parametrize("address", ["operation", "batch"])
+def test_concurrent_explicit_undo_has_one_winner_and_one_409(address):
+    temp_dir, first_client, server = _setup()
+    second_client = TestClient(server.api)
+    try:
+        login = second_client.post(
+            "/login", json={"username": "testuser", "password": "testpassword"}
+        )
+        assert login.status_code == 200
+        picture_id = _upload(first_client)
+        batch_id = operation_log_service.new_batch_id()
+
+        def add_tag(session, pid):
+            session.add(Tag(picture_id=pid, tag="once"))
+            session.flush()
+
+        _result, operation = operation_log_service.run_recorded_metadata_task(
+            server.vault,
+            add_tag,
+            picture_id,
+            op_type="test.concurrent",
+            picture_ids=[picture_id],
+            batch_id=batch_id,
+        )
+        path = (
+            f"{API}/operations/{operation['id']}/undo"
+            if address == "operation"
+            else f"{API}/operations/batches/{batch_id}/undo"
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(lambda c: c.post(path), [first_client, second_client])
+            )
+
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        assert _tags(server, picture_id) == []
+        rows = _operations(server, batch_id=batch_id)
+        assert [row["status"] for row in rows] == ["undone"]
+    finally:
+        second_client.close()
+        _teardown(temp_dir, server)
+
+
 def test_recording_a_new_operation_invalidates_the_redo_stack():
     temp_dir, client, server = _setup()
     try:
@@ -820,7 +1055,7 @@ def test_batch_undo_reverts_the_whole_bulk_action_in_one_call():
 
         def _tag_one(session, picture_id, tag):
             session.add(Tag(picture_id=picture_id, tag=tag))
-            session.commit()
+            session.flush()
 
         for picture_id in ids:
             operation_log_service.run_recorded_metadata_task(
@@ -865,7 +1100,7 @@ def test_undoing_one_member_of_a_batch_reverts_the_whole_batch():
 
         def _tag_one(session, picture_id, tag):
             session.add(Tag(picture_id=picture_id, tag=tag))
-            session.commit()
+            session.flush()
 
         for picture_id in ids:
             operation_log_service.run_recorded_metadata_task(
@@ -1892,7 +2127,7 @@ def test_a_post_restore_hook_runs_once_per_restore_with_its_whole_batch():
 
         def _tag_one(session, picture_id, tag):
             session.add(Tag(picture_id=picture_id, tag=tag))
-            session.commit()
+            session.flush()
 
         for picture_id in ids:
             operation_log_service.run_recorded_metadata_task(
@@ -1941,7 +2176,7 @@ def test_a_failing_post_restore_hook_aborts_the_whole_undo():
 
         def _tag_one(session, pid, tag):
             session.add(Tag(picture_id=pid, tag=tag))
-            session.commit()
+            session.flush()
 
         operation_log_service.run_recorded_metadata_task(
             server.vault,

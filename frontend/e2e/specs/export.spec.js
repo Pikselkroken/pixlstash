@@ -24,7 +24,11 @@ function zipEntryNames(buf) {
 
 /** Open the toolbar Export panel and run an export with captions disabled. */
 async function downloadExportZip(page, testInfo) {
-  await page.locator('button[title="Export current grid to zip"]').click()
+  // Select by class, not by title: the title is a live label that names the
+  // current selection ("Export 3 pictures to zip"), so a title selector breaks
+  // as soon as anything is selected. `.tb-export-btn` is the stable handle and
+  // is what Toolbar.test.js already uses.
+  await page.locator('button.tb-export-btn').click()
   const panel = page.locator('.tb-export-panel')
   await expect(panel).toBeVisible()
   await panel

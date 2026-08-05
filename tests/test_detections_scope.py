@@ -12,12 +12,14 @@ through a real resource-scoped READ token and the auth middleware.
 """
 
 import gc
+import io
 import json
 import os
 import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import pixlstash.routes.pictures._crud as crud_module
 from pixlstash.auth import READ_SAFE_POST_PATHS
@@ -33,15 +35,25 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 def _good_picture_files():
-    pictures_dir = os.path.join(os.path.dirname(__file__), "..", "pictures", "good")
+    """A small generated picture library for the scope assertions below.
+
+    Generated in-memory rather than read from ``pictures/good/``: that
+    directory is 19 MB of real photographs, ``_setup_server_with_pictures``
+    runs per test function, and every assertion in this module is a status
+    code (200/403/400/422) or ``isinstance(payload, list)``. No test reads
+    detection *content*, so the only thing the real photographs bought was
+    19 MB through the import pipeline per test. Three distinct images clear
+    the ``len(picture_ids) >= 2`` requirement with one to spare; sizes and
+    colours differ so the importer keeps them as separate pictures.
+    """
     results = []
-    for name in sorted(os.listdir(pictures_dir)):
-        path = os.path.join(pictures_dir, name)
-        ext = os.path.splitext(name)[1].lower()
-        if ext in {".png", ".jpg", ".jpeg", ".webp"}:
-            ct = "image/png" if ext == ".png" else "image/jpeg"
-            with open(path, "rb") as fh:
-                results.append((name, fh.read(), ct))
+    for index in range(3):
+        img = Image.new(
+            "RGB", (32 + index * 8, 32 + index * 4), color=(30 + index * 60, 70, 180)
+        )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        results.append((f"fixture_{index:02d}.png", buf.getvalue(), "image/png"))
     return results
 
 

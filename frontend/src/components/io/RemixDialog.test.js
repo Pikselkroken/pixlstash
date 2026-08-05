@@ -124,6 +124,14 @@ const IMPORTED_RECIPE = {
   source_label: "Watched folder",
 };
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function mountDialog(props = {}) {
   return mount(RemixDialog, {
     props: { open: true, image: IMAGE, ...props },
@@ -431,6 +439,35 @@ describe("RemixDialog unreachable ComfyUI", () => {
 });
 
 describe("RemixDialog prompt prefill", () => {
+  it("ignores loaders from the previous image when the prop changes", async () => {
+    const oldRecipe = deferred();
+    const newRecipe = deferred();
+    const oldMetadata = deferred();
+    const newMetadata = deferred();
+    getPictureRecipe.mockImplementation((id) =>
+      id === 42 ? oldRecipe.promise : newRecipe.promise,
+    );
+    getPictureMetadata.mockImplementation((id) =>
+      id === 42 ? oldMetadata.promise : newMetadata.promise,
+    );
+
+    const w = mountDialog({ image: { id: 42, file_name: "old.png" } });
+    await nextTick();
+    await w.setProps({ image: { id: 43, file_name: "new.png" } });
+    newRecipe.resolve({ available: false, reason: "no_prompt_chunk" });
+    newMetadata.resolve({ description: "new description" });
+    await settle(w);
+
+    oldRecipe.resolve(CLEAN_RECIPE);
+    oldMetadata.resolve({ description: "stale description" });
+    await settle(w);
+
+    expect(w.find("textarea").element.value).toBe("new description");
+    expect(rowFor(w, "Pick a template").attributes("aria-checked")).toBe(
+      "true",
+    );
+  });
+
   it("prefills from the image description and marks its provenance", async () => {
     getPictureRecipe.mockResolvedValue({
       available: false,

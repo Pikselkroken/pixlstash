@@ -662,6 +662,48 @@ def test_a_stack_verdict_records_exactly_one_operation(server):
     assert "Stacked 2 duplicates" in (rows[0].summary or "")
 
 
+def test_record_failure_rolls_back_the_whole_dedup_verdict(server, monkeypatch):
+    """Stack pointers, verdict state and receipt share one transaction."""
+    ids = _seed(
+        server,
+        [
+            {"pixel_sha": "aaa", "size_bytes": 100},
+            {"pixel_sha": "aaa", "size_bytes": 100},
+        ],
+    )
+    _scan(server)
+    signature = _one_signature(server)
+    monkeypatch.setattr(
+        operation_log_service,
+        "record_operation_in_session",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("dedup receipt failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="dedup receipt failed"):
+        _run(
+            server,
+            verdicts.apply_stack_verdict_in_session,
+            signature,
+            None,
+            [],
+            None,
+        )
+
+    assert all(_picture(server, picture_id).stack_id is None for picture_id in ids)
+    verdict_rows = _run(
+        server,
+        lambda session: list(
+            session.exec(
+                select(DedupVerdict).where(DedupVerdict.signature == signature)
+            ).all()
+        ),
+    )
+    assert verdict_rows == []
+    assert _operations(server) == []
+
+
 def test_undoing_a_stack_verdict_reverses_the_stacking(server):
     ids = _seed(
         server,
@@ -2452,7 +2494,39 @@ def test_auto_stack_still_plans_a_group_that_folds_a_stack_in(server):
 
     report = _run(server, verdicts.bulk_auto_stack_in_session, None, None, False, None)
     assert report["groups"] == 1
+    assert report["event_picture_ids"] == sorted(ids)
     assert {_picture(server, pid).stack_id for pid in ids} == {stack_id}
+
+
+def test_bulk_wrapper_emits_aggregated_ids_and_keeps_them_out_of_response():
+    notifications = []
+
+    class FakeDatabase:
+        def run_task(self, func, *args):
+            assert func is verdicts.bulk_auto_stack_in_session
+            return {
+                "dry_run": False,
+                "results": [{"picture_ids": [1, 2]}],
+                "event_picture_ids": [1, 2, 3],
+            }
+
+    class FakeVault:
+        db = FakeDatabase()
+
+        def notify(self, event_type, payload):
+            notifications.append((event_type, payload))
+
+    report = verdicts.bulk_auto_stack(
+        FakeVault(), source="test", origin_client_id="tab-1"
+    )
+
+    assert "event_picture_ids" not in report
+    assert notifications[0][1] == {
+        "picture_ids": [1, 2, 3],
+        "origin_client_id": "tab-1",
+        "change_kind": "updated",
+        "source": "test",
+    }
 
 
 # ── B2: the cover may be a folded stack's leader ──────────────────────────────

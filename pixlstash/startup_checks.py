@@ -9,15 +9,46 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-try:
-    import onnxruntime as ort
-except Exception:
-    ort = None
+_UNSET: Any = object()
+_torch_mod: Any = _UNSET
+_ort_mod: Any = _UNSET
 
-try:
-    import torch
-except Exception:
-    torch = None
+
+def _torch():
+    """Return the ``torch`` module, or ``None`` when it cannot be imported.
+
+    Imported on demand rather than at module scope. ``torch`` costs seconds to
+    import and this module is reached from ``pixlstash.server``, so importing
+    it eagerly would make server startup — and every test — pay for it before a
+    single check runs. A ``None`` result is never swallowed: callers surface it
+    as a hard failure or a forced-CPU note.
+    """
+    global _torch_mod
+    if _torch_mod is _UNSET:
+        try:
+            import torch
+        except Exception:
+            _torch_mod = None
+        else:
+            _torch_mod = torch
+    return _torch_mod
+
+
+def _ort():
+    """Return the ``onnxruntime`` module, or ``None`` when unavailable.
+
+    Deferred for the same reason as :func:`_torch`; a ``None`` result is
+    reported by the caller as a hard startup failure.
+    """
+    global _ort_mod
+    if _ort_mod is _UNSET:
+        try:
+            import onnxruntime as ort
+        except Exception:
+            _ort_mod = None
+        else:
+            _ort_mod = ort
+    return _ort_mod
 
 
 class StartupCheckError(Exception):
@@ -90,6 +121,8 @@ class StartupChecks:
         }
 
     def _check_config_sanity(self, outcome: StartupCheckOutcome) -> None:
+        ort = _ort()
+
         host = self._server_config.get("host")
         if not isinstance(host, str) or not host.strip():
             outcome.hard_failures.append("Invalid server host in config.")
@@ -311,6 +344,9 @@ class StartupChecks:
         return cpu_installed and gpu_installed
 
     def _check_device_and_vram(self, outcome: StartupCheckOutcome) -> None:
+        torch = _torch()
+        ort = _ort()
+
         device_value = str(self._server_config.get("default_device", "cpu")).lower()
         if device_value == "gpu":
             device_value = "cuda"
@@ -494,6 +530,8 @@ class StartupChecks:
 
     def _detect_gpu_arch_note(self) -> str:
         """Return a human-readable note if the GPU arch may be unsupported by ORT."""
+        torch = _torch()
+
         if torch is None or not torch.cuda.is_available():
             return ""
         try:

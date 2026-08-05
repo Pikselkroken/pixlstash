@@ -40,6 +40,7 @@ VERDICT_KEEP_SEPARATE = "keep_separate"
 SCAN_PENDING = "pending"
 SCAN_RUNNING = "running"
 SCAN_COMPLETE = "complete"
+SCAN_PARTIAL = "partial"
 SCAN_FAILED = "failed"
 
 
@@ -255,6 +256,7 @@ __all__ = [
     "DedupVerdict",
     "SCAN_COMPLETE",
     "SCAN_FAILED",
+    "SCAN_PARTIAL",
     "SCAN_PENDING",
     "SCAN_RUNNING",
     "TIER_EMBEDDING",

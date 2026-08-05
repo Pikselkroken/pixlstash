@@ -1,6 +1,7 @@
 import time
 
 from sqlalchemy import bindparam, desc, func, update
+from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
@@ -329,12 +330,27 @@ class SmartScoreTask(BaseTask):
 
     @staticmethod
     def find_pictures_missing_smart_score(session: Session, limit: int) -> list:
-        """Fetch pictures that need smart score computation."""
+        """Fetch pictures that need smart score computation.
+
+        Only the ids are loaded. This is an idle probe the WorkPlanner runs on
+        every sweep, and the full-ORM form read every column of every candidate —
+        including ``image_embedding``, ``text_embedding`` and
+        ``likeness_parameters``, three LargeBinary columns worth kilobytes each.
+        Nothing downstream needs them here: :meth:`SmartScoreTask.__init__` and
+        :meth:`_run_task` read only ``pic.id``, and :meth:`_fetch_score_data`
+        re-selects the scorer inputs by id inside its own read transaction.
+
+        Deliberately still an ORM ``select(Picture)`` rather than
+        ``select(Picture.id)``: ``BaseTaskFinder._filter_and_claim`` selects
+        candidates with ``getattr(picture, "id", None)``, so a scalar/tuple result
+        would silently claim nothing and the finder would never produce a task.
+        """
         return session.exec(
             select(Picture)
             .where(Picture.image_embedding.is_not(None))
             .where(Picture.smart_score.is_(None))
             .where(Picture.deleted.is_(False))
+            .options(load_only(Picture.id))
             .order_by(Picture.id)
             .limit(limit)
         ).all()

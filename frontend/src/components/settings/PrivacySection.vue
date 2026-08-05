@@ -112,19 +112,31 @@ const checkForUpdatesModel = computed({
   get: () => prefs.checkForUpdates ?? false,
   set: async (value) => {
     const next = Boolean(value);
+    const previous = prefs.checkForUpdates;
+    error.value = "";
     prefs.checkForUpdates = next;
     try {
       await patchUserConfig({ check_for_updates: next });
     } catch (e) {
       console.error("Failed to persist check_for_updates:", e);
+      prefs.checkForUpdates = previous;
+      error.value =
+        "Could not save the update-check preference. Your previous choice was restored.";
     }
   },
 });
 
 const installIdModel = computed({
   get: () => prefs.telemetrySendInstallId,
-  set: (value) => {
-    prefs.saveTelemetry({ telemetry_send_install_id: Boolean(value) });
+  set: async (value) => {
+    error.value = "";
+    const saved = await prefs.saveTelemetry({
+      telemetry_send_install_id: Boolean(value),
+    });
+    if (!saved) {
+      error.value =
+        "Could not save the install-ID preference. Your previous choice was kept.";
+    }
   },
 });
 

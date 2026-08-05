@@ -24,6 +24,7 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
+import { useNoticeStore } from "./stores/useNoticeStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -81,6 +82,7 @@ const librarySwitchStore = useLibrarySwitchStore();
 const { activeLibrary } = storeToRefs(librariesStore);
 const { overlayOpen: librarySwitchOverlayOpen } =
   storeToRefs(librarySwitchStore);
+const noticeStore = useNoticeStore();
 // Owns route → view resolution (the app's single route watcher). Route pushing
 // stays here in App.vue; see stores/useViewStore.js.
 // Keycap labels for the shortcuts dialog. The binding accepts Ctrl and Meta
@@ -205,8 +207,15 @@ const {
 });
 
 async function handleTelemetryDecision(patch) {
-  telemetryConsentOpen.value = false;
-  await userPrefsStore.saveTelemetry(patch);
+  const saved = await userPrefsStore.saveTelemetry(patch);
+  if (saved) {
+    telemetryConsentOpen.value = false;
+    return;
+  }
+  noticeStore.error(
+    "Couldn’t save your privacy choices. The dialog is still open so you can retry.",
+    { key: "telemetry-consent-save" },
+  );
 }
 
 const { fetchConfig } = useAppConfig({
@@ -398,7 +407,13 @@ onMounted(async () => {
     // before the tab existed.
     operationStore.refresh({ narrate: false });
   }
-  // Navigate to the scoped resource when a share token is active
+  // Select the scoped resource when a share token is active. This normalises
+  // what is SELECTED only; what the grid is scoped BY is
+  // `useViewStore.scopeProjectToSession`, which runs on every route tick rather
+  // than once here (issue #717 — a share link carries whatever pathname the
+  // owner minted it from, and a mount-time write loses to the next navigation).
+  // The project branch below therefore agrees with that store rather than
+  // competing with it, and still covers the routes it parses no view from.
   const ctx = sessionContext.value;
   if (ctx && ctx.scope !== "ALL") {
     if (ctx.resource_type === "picture_set") {

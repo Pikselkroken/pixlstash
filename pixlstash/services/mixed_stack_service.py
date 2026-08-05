@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterable, Optional
@@ -433,6 +433,98 @@ def _stranger_pill_text(count: int, percents: list[int]) -> str:
     )
 
 
+def _component_structure_pill(
+    component_count: int,
+    component_sizes: Iterable[Any] | None,
+    member_count: int | None = None,
+) -> dict[str, Any] | None:
+    """Describe component structure qualitatively, with exact accessible detail.
+
+    ``component_sizes`` remains the structured wire value. The visible label
+    describes the decision-relevant shape without making the user parse a long
+    arithmetic expression; ``accessible_text`` retains the exact distribution
+    in natural language. Invalid data never earns a majority claim. A valid
+    cohesive one-component report omits the structure pill altogether.
+    """
+    valid_component_count = isinstance(component_count, int) and not isinstance(
+        component_count, bool
+    )
+    if valid_component_count and component_count == 1:
+        return None
+
+    if valid_component_count and component_count > 1:
+        fallback_text = f"{component_count} groups don't overlap"
+    else:
+        fallback_text = "Pictures don't all match"
+    fallback = {
+        "text": fallback_text,
+        "against": True,
+        "accessible_text": f"{fallback_text}.",
+    }
+    if not valid_component_count or component_count <= 1 or component_sizes is None:
+        return fallback
+
+    sizes = list(component_sizes)
+    valid_sizes = all(
+        isinstance(size, int) and not isinstance(size, bool) and size > 0
+        for size in sizes
+    )
+    valid_member_count = (
+        valid_sizes
+        and isinstance(member_count, int)
+        and not isinstance(member_count, bool)
+        and member_count > 0
+        and sum(sizes) == member_count
+    )
+    if len(sizes) != component_count or not valid_sizes or not valid_member_count:
+        return fallback
+
+    member_total = int(member_count)
+    frequencies = Counter(sizes)
+    ordered = sorted(frequencies.items(), reverse=True)
+    singleton_count = frequencies.get(1, 0)
+    largest_size = max(sizes)
+    if singleton_count == component_count:
+        text = "All pictures differ"
+    elif singleton_count > member_total / 2:
+        text = "Most pictures differ"
+    elif largest_size > member_total / 2:
+        outlier_count = member_total - largest_size
+        if outlier_count == 1:
+            text = "1 picture differs from the rest"
+        else:
+            text = f"{outlier_count} pictures differ from the main group"
+    elif component_count == 2:
+        text = "2 groups don't match each other"
+    else:
+        text = "Several groups don't overlap"
+
+    spoken_terms = []
+    for size, frequency in ordered:
+        if size == 1:
+            spoken_terms.append(
+                f"{frequency} single-picture {'group' if frequency == 1 else 'groups'}"
+            )
+        else:
+            spoken_terms.append(
+                f"{_plural(frequency, 'group', 'groups')} of "
+                f"{_plural(size, 'picture', 'pictures')}"
+            )
+    if len(spoken_terms) == 1:
+        spoken_distribution = spoken_terms[0]
+    elif len(spoken_terms) == 2:
+        spoken_distribution = " and ".join(spoken_terms)
+    else:
+        spoken_distribution = ", ".join(spoken_terms[:-1]) + f", and {spoken_terms[-1]}"
+    return {
+        "text": text,
+        "against": True,
+        "accessible_text": (
+            f"{_plural(component_count, 'group', 'groups')}: {spoken_distribution}."
+        ),
+    }
+
+
 def build_mixed_stack_evidence(report: "CohesionReport") -> list[dict[str, Any]]:
     """The row-level why-pills for one mixed stack, in the shipped pill shape.
 
@@ -453,9 +545,10 @@ def build_mixed_stack_evidence(report: "CohesionReport") -> list[dict[str, Any]]
     * **the strangers**, members with no edge at this threshold, named by *how
       unlike the rest they actually are* (``1 picture is only 89% like the
       rest``), which is the strong case D5 marks on a tile;
-    * **the component structure**, ``2 groups (2 + 1)``, the definition of the
-      row and the one fact a count of strangers cannot convey (two clusters of
-      three strand nobody at all);
+    * **the component structure**, for example ``1 picture differs from the
+      rest`` or ``All pictures differ``, the definition of the row and the one
+      fact a count of strangers cannot convey (two clusters of three strand
+      nobody at all); the exact distribution remains in accessible text;
     * **the weakest surviving edge**, the thinnest thread still holding the
       stack together, the same weakest-link reading a duplicate group's
       ``confidence`` carries, or the flat statement that there is no thread.
@@ -539,20 +632,13 @@ def build_mixed_stack_evidence(report: "CohesionReport") -> list[dict[str, Any]]
                 )
             )
 
-    sizes = [len(component) for component in report.components]
-    if report.component_count > 1:
-        pills.append(
-            _pill(
-                f"{report.component_count} groups "
-                f"({' + '.join(str(size) for size in sizes)})",
-                against=True,
-            )
-        )
-    else:
-        # Not reachable from the list (a cohesive stack is not listed), but the
-        # builder is called from as_dict() and must stay truthful if a caller
-        # scores a stack that turns out to hang together.
-        pills.append(_pill(f"All {report.member_count} match each other"))
+    structure_pill = _component_structure_pill(
+        report.component_count,
+        (len(component) for component in report.components),
+        report.member_count,
+    )
+    if structure_pill is not None:
+        pills.append(structure_pill)
 
     if report.weakest_edge is not None:
         pills.append(_pill(f"Weakest match {_percent(report.weakest_edge)}%"))

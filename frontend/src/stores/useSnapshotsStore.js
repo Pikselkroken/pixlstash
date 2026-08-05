@@ -1,10 +1,21 @@
-import { ref } from "vue";
+// useSnapshotsStore.js — the vault's snapshot list and the live restore job.
+//
+// ── Security (issue #655 item 3) ────────────────────────────────────────────
+// Snapshots are an owner-only surface, so the realistic exposure is "the
+// previous owner's snapshot labels linger in memory until the next login"
+// rather than cross-scope leakage. It is still server-sourced state that
+// outlived the credential that produced it, which is the whole class, so
+// `reset()` is wired to the `onSessionReset` chokepoint in `utils/apiClient.js`
+// like every other store holding server rows.
+
+import { ref, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
 import * as snapshotsApi from "../api/snapshots";
 import {
   getSnapshotSettings,
   setDailySnapshotsEnabled as patchDailySnapshotsEnabled,
 } from "../api/serverConfig";
+import { onSessionReset } from "../utils/apiClient";
 
 export const useSnapshotsStore = defineStore("snapshots", () => {
   // ── State ─────────────────────────────────────────────────────────────────
@@ -20,24 +31,34 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
 
   const dailySnapshotsEnabled = ref(true);
 
+  // Bumped by reset(); a read still on the wire when the credential changed is
+  // dropped rather than written into the next session's list.
+  let epoch = 0;
+
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function fetchSnapshots() {
     loading.value = true;
     error.value = null;
+    const requestEpoch = epoch;
     try {
-      snapshots.value = await snapshotsApi.listSnapshots();
+      const rows = await snapshotsApi.listSnapshots();
+      if (requestEpoch !== epoch) return;
+      snapshots.value = rows;
     } catch (err) {
+      if (requestEpoch !== epoch) return;
       error.value =
         err?.response?.data?.detail || err?.message || "Failed to load snapshots.";
     } finally {
-      loading.value = false;
+      if (requestEpoch === epoch) loading.value = false;
     }
   }
 
   async function fetchStatus() {
+    const requestEpoch = epoch;
     try {
       const status = await snapshotsApi.getSnapshotStatus();
+      if (requestEpoch !== epoch) return;
       activeJob.value = status?.active_job ?? null;
     } catch (err) {
       // Non-fatal; leave activeJob as-is.
@@ -150,14 +171,38 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
   }
 
   async function fetchSnapshotSettings() {
+    const requestEpoch = epoch;
     try {
       const settings = await getSnapshotSettings();
+      if (requestEpoch !== epoch) return;
       dailySnapshotsEnabled.value = settings?.daily_snapshots ?? true;
     } catch (err) {
       // Non-fatal; leave current value as-is.
       console.warn("Failed to fetch snapshot settings:", err);
     }
   }
+
+  /**
+   * Drop every trace of the previous session's snapshots.
+   *
+   * `dailySnapshotsEnabled` returns to its shipped default rather than being
+   * left at the previous owner's choice: the toggle would otherwise assert a
+   * policy for an account that has not been read yet.
+   */
+  function reset() {
+    epoch += 1;
+    snapshots.value = [];
+    loading.value = false;
+    activeJob.value = null;
+    error.value = null;
+    restoreDialogOpen.value = false;
+    restoreDialogSnapshotId.value = null;
+    restoreDialogResources.value = null;
+    dailySnapshotsEnabled.value = true;
+  }
+
+  const unsubscribeSessionReset = onSessionReset(reset);
+  onScopeDispose(() => unsubscribeSessionReset());
 
   async function setDailySnapshotsEnabled(enabled) {
     const previous = dailySnapshotsEnabled.value;
@@ -191,6 +236,7 @@ export const useSnapshotsStore = defineStore("snapshots", () => {
     openRestoreDialog,
     fetchSnapshotSettings,
     setDailySnapshotsEnabled,
+    reset,
     // ws handlers
     onSnapshotCreated,
     onSnapshotDeleted,

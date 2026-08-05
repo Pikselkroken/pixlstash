@@ -22,6 +22,8 @@ import gc
 import json
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from datetime import datetime, timedelta
 
 import pytest
@@ -34,6 +36,7 @@ from pixlstash.db_models.dedup import DedupGroup, DedupScan, DedupVerdict
 from pixlstash.db_models.tag import Tag
 from pixlstash.server import Server
 from pixlstash.services import dedup_tier_service as tiers
+from pixlstash.services import dedup_verdict_service as verdicts
 from pixlstash.services.dedup_tier_service import TierPolicy
 from pixlstash.routes.dedup import MAX_COUNT_SCOPES
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -46,6 +49,7 @@ COUNTS_URL = f"{API}/dedup/counts"
 SCAN_URL = f"{API}/dedup/scan"
 STACK_URL = f"{API}/dedup/verdicts/stack"
 KEEP_SEPARATE_URL = f"{API}/dedup/verdicts/keep-separate"
+BATCH_VERDICTS_URL = f"{API}/dedup/verdicts/batch"
 REOPEN_URL = f"{API}/dedup/verdicts/reopen"
 AUTO_STACK_URL = f"{API}/dedup/auto-stack"
 
@@ -176,6 +180,16 @@ def test_scoped_read_token_is_denied_on_every_route():
         )
         assert (
             scoped.post(
+                BATCH_VERDICTS_URL,
+                json={
+                    "actions": [{"verdict": "keep_separate", "signature": signature}]
+                },
+                headers=headers,
+            ).status_code
+            == 403
+        )
+        assert (
+            scoped.post(
                 REOPEN_URL, json={"signature": signature}, headers=headers
             ).status_code
             == 403
@@ -206,6 +220,16 @@ def test_scoped_read_token_is_denied_on_every_route():
                 KEEP_SEPARATE_URL,
                 params={"token": token},
                 json={"signature": signature},
+            ).status_code
+            == 403
+        )
+        assert (
+            scoped.post(
+                BATCH_VERDICTS_URL,
+                params={"token": token},
+                json={
+                    "actions": [{"verdict": "keep_separate", "signature": signature}]
+                },
             ).status_code
             == 403
         )
@@ -258,6 +282,7 @@ def test_unauthenticated_is_denied():
         assert anonymous.get(GROUPS_URL).status_code in (401, 403)
         assert anonymous.post(COUNTS_URL, json={}).status_code in (401, 403)
         assert anonymous.post(SCAN_URL, json={}).status_code in (401, 403)
+        assert anonymous.post(BATCH_VERDICTS_URL, json={}).status_code in (401, 403)
         assert anonymous.post(AUTO_STACK_URL, json={}).status_code in (401, 403)
     finally:
         _teardown(temp_dir, server)
@@ -1512,6 +1537,143 @@ def test_an_undo_of_a_shared_gesture_reverses_both_verdict_kinds():
         assert _verdict_row(server, kept_separate).reopened_at is None
         assert _verdict_row(server, stacked).reopened_at is None
     finally:
+        _teardown(temp_dir, server)
+
+
+def test_a_failed_atomic_verdict_batch_rolls_back_every_action():
+    """A refusal after a valid first action leaves no verdict or undo fragment."""
+    temp_dir, client, server, _ids, _token, _set_id = _env()
+    try:
+        _add_exact_groups(server, count=1)
+        _rescan(server)
+        signatures = sorted(_signatures(client))
+        gesture = "cli-atomic-rollback"
+
+        response = client.post(
+            BATCH_VERDICTS_URL,
+            json={
+                "batch_id": gesture,
+                "actions": [
+                    {"verdict": "stacked", "signature": signatures[0]},
+                    {"verdict": "stacked", "signature": "missing-signature"},
+                ],
+            },
+        )
+
+        assert response.status_code == 400, response.text
+        assert _signatures(client) == set(signatures)
+        assert (
+            client.get(f"{API}/operations", params={"batch_id": gesture}).json() == []
+        )
+        assert all(_verdict_row(server, signature) is None for signature in signatures)
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_two_clients_cannot_interleave_inside_an_atomic_verdict_gesture(
+    monkeypatch,
+):
+    """A queued B lands after A1/A2, leaving strict LIFO with a legal frontier."""
+    temp_dir, client_a, server, _ids, _token, _set_id = _env()
+    client_b = TestClient(server.api)
+    try:
+        assert (
+            client_b.post(
+                f"{API}/login",
+                json={"username": "owner", "password": "ownerpass1"},
+            ).status_code
+            == 200
+        )
+        _add_exact_groups(server, count=2)
+        _rescan(server)
+        first, second, foreign = sorted(_signatures(client_a))
+        gesture = "cli-two-client-atomic"
+
+        first_action_finished = Event()
+        foreign_task_queued = Event()
+        original_stack = verdicts.apply_stack_verdict_in_session
+        original_submit = server.vault.db.submit_task
+        stack_calls = 0
+
+        def pause_between_batch_actions(*args, **kwargs):
+            nonlocal stack_calls
+            result = original_stack(*args, **kwargs)
+            stack_calls += 1
+            if stack_calls == 1:
+                first_action_finished.set()
+                assert foreign_task_queued.wait(5), (
+                    "second client never queued its write"
+                )
+            return result
+
+        def observe_submit(func, *args, **kwargs):
+            future = original_submit(func, *args, **kwargs)
+            if func is verdicts.apply_keep_separate_in_session:
+                # Set only after PriorityQueue.put returned: B is genuinely
+                # waiting behind A's still-running database task.
+                foreign_task_queued.set()
+            return future
+
+        monkeypatch.setattr(
+            verdicts, "apply_stack_verdict_in_session", pause_between_batch_actions
+        )
+        monkeypatch.setattr(server.vault.db, "submit_task", observe_submit)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            batch_future = pool.submit(
+                client_a.post,
+                BATCH_VERDICTS_URL,
+                json={
+                    "batch_id": gesture,
+                    "actions": [
+                        {"verdict": "stacked", "signature": first},
+                        {"verdict": "stacked", "signature": second},
+                    ],
+                },
+            )
+            assert first_action_finished.wait(5), "batch never reached its midpoint"
+            foreign_future = pool.submit(
+                client_b.post,
+                KEEP_SEPARATE_URL,
+                json={"signature": foreign},
+            )
+            batch_response = batch_future.result(timeout=10)
+            foreign_response = foreign_future.result(timeout=10)
+
+        assert batch_response.status_code == 200, batch_response.text
+        assert foreign_response.status_code == 200, foreign_response.text
+        foreign_batch = foreign_response.json()["batch_id"]
+        batch_rows = client_a.get(
+            f"{API}/operations", params={"batch_id": gesture}
+        ).json()
+        assert len(batch_rows) == 2
+        batch_ids = sorted(row["id"] for row in batch_rows)
+        assert batch_ids[1] == batch_ids[0] + 1
+
+        history = client_a.get(f"{API}/operations", params={"limit": 3}).json()
+        assert [row["batch_id"] for row in history] == [
+            foreign_batch,
+            gesture,
+            gesture,
+        ]
+        # Strict LIFO still rejects skipping B; after B is undone, the whole
+        # real frontend gesture is exactly one legal undo.
+        stale = client_a.post(f"{API}/operations/batches/{gesture}/undo", json={})
+        assert stale.status_code == 409, stale.text
+        first_undo = client_a.post(f"{API}/operations/undo", json={})
+        assert first_undo.status_code == 200, first_undo.text
+        assert {row["batch_id"] for row in first_undo.json()["operations"]} == {
+            foreign_batch
+        }
+        second_undo = client_a.post(f"{API}/operations/undo", json={})
+        assert second_undo.status_code == 200, second_undo.text
+        assert len(second_undo.json()["operations"]) == 2
+        assert {row["batch_id"] for row in second_undo.json()["operations"]} == {
+            gesture
+        }
+        assert _signatures(client_a) == {first, second, foreign}
+    finally:
+        client_b.close()
         _teardown(temp_dir, server)
 
 

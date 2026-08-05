@@ -43,6 +43,7 @@ Coming from 1.8.0 or earlier, updating to 1.9 clears every API token, exactly as
 - New Privacy pane in Settings, holding the update check and a new option to send an anonymous install ID. Both are off unless you turn them on, and upgrading leaves them off. The ID is a random number stored next to your server config, never derived from anything about your computer, and you can replace it whenever you like. It lets us tell whether people keep using PixlStash rather than just downloading it, which plain download counts cannot. When it is on, PixlStash sends that number, your version and your install type once a day, and nothing else. PRIVACY.md shows the exact message.
 - Characters and picture sets can belong to more than one project at a time, so a character you use across two shoots no longer has to be duplicated or moved back and forth. Their pictures show up in every project they are shared with, and removing them from one project leaves the others alone. Existing single-project assignments carry over untouched.
 - Filter your views on stacked or unstacked images, and collapse a stack down to the copy you want to keep with **Keep cover only**. The rest go to the Scrapheap, so you can change your mind.
+- Easily assign pictures to a person by using the new context menu "Suggest More Pictures" which shows you a view of all pictures that look like that person. An easy to use button lets you assign all found (or all selected) items to the person.
 
 # [1.8.2]
 

@@ -217,7 +217,7 @@ def create_router(server) -> APIRouter:
                         record_human_label_if_relevant(session, pic_id, tag, POS)
                         session.flush()
                         recompute_anomaly_tag_uncertainty(session, pic_id)
-                    session.commit()
+                    session.flush()
                     session.refresh(pic)
                     return pic
 
@@ -342,7 +342,7 @@ def create_router(server) -> APIRouter:
                     session.delete(target)
                     session.flush()
                     recompute_anomaly_tag_uncertainty(session, pic_id)
-                session.commit()
+                session.flush()
                 session.refresh(pic)
                 return pic
 
@@ -425,7 +425,7 @@ def create_router(server) -> APIRouter:
                     session.exec(delete(Tag).where(Tag.id.in_(tag_ids)))
                 session.flush()
                 recompute_anomaly_tag_uncertainty(session, pic_id)
-            session.commit()
+            session.flush()
             session.refresh(pic)
             return pic
 
@@ -493,7 +493,7 @@ def create_router(server) -> APIRouter:
                 session.exec(delete(Tag).where(Tag.picture_id == pic_id))
                 session.flush()
                 recompute_anomaly_tag_uncertainty(session, pic_id)
-            session.commit()
+            session.flush()
             session.refresh(pic)
             return pic
 

@@ -125,9 +125,12 @@ Order:
    would be the loudest object in the app. While the preview is in flight or has
    failed it shows an en dash at the same size and the confirm is disabled:
    never a zero, never a stale number.
-3. **The rows** (`<dl>`, neutral, no hue): stacks collapsed, covers kept, covers
-   gaining metadata from copies, stacks skipped, and **originals deleted from
-   disk: 0**, stated out loud exactly as the sibling states its own zero.
+3. **Conditional details only.** When metadata will move, say how many covers
+   gain it. When stacks cannot change, show **`N stacks won't change`** followed
+   by the concrete reasons. Do not repeat `stacks collapsed` / `covers kept`
+   (they are the same eligible-stack count), do not show a zero skip row, and do
+   not promote the permanent invariant `originals deleted from disk: 0` into a
+   statistic.
 4. **The recovery panel**, info-tinted rather than error. Recovery is
    reassuring, and `DeleteForeverDialog` already made this call for the same
    reason.

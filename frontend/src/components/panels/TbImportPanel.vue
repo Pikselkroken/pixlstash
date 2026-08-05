@@ -1,6 +1,6 @@
 <template>
   <div class="tbm tb-import-panel">
-    <span class="tbm-caret tbm-caret--end"></span>
+    <span class="tbm-caret tbm-caret--icon-center-end"></span>
     <div class="tbm-header tb-import-header">
       <v-icon size="18" class="tbm-header-icon"
         >mdi-cloud-upload-outline</v-icon

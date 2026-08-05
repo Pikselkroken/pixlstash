@@ -13,6 +13,7 @@ import { mount } from "@vue/test-utils";
 
 vi.mock("../../utils/apiClient", () => ({
   apiClient: { get: vi.fn().mockResolvedValue({ data: { sets: [] } }) },
+  onSessionReset: () => () => {},
 }));
 
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";

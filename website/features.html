@@ -7,7 +7,7 @@
     <title>Features | PixlStash</title>
     <meta
       name="description"
-      content="Explore all the features of PixlStash: AI tagging, semantic search, smart scoring, face detection, and more."
+      content="Explore PixlStash features including full undo and redo, duplicate review, AI tagging, semantic search, smart scoring, face detection, and more."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -51,6 +51,10 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         gap: 16px;
+      }
+
+      .feature-grid--primary {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
 
       .feature-card {
@@ -274,6 +278,16 @@
         .demo-teaser-wrap {
           grid-template-columns: 1fr;
         }
+
+        .feature-grid--primary {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (min-width: 701px) and (max-width: 1000px) {
+        .feature-grid--primary {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
     </style>
   </head>
@@ -308,9 +322,120 @@
 
       <section class="section">
         <div class="section-header">
+          <h2 class="section-title">Work with confidence</h2>
+          <p class="section-subtitle">
+            Reverse everyday edits across your library, review duplicate
+            candidates, and keep people and sets organised across projects.
+          </p>
+        </div>
+        <div class="feature-grid feature-grid--primary">
+          <div class="feature-card">
+            <h3>Undo, redo, and history</h3>
+            <p>
+              Reverse soft-deletion, tagging, description edits, image
+              assignments, moves, and duplicate decisions with standard keyboard
+              shortcuts or toolbar controls. Open the history to inspect recent
+              changes or step back through several at once. It is a dependable
+              safety net for professional library work, not just the last button
+              you clicked.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Duplicate review</h3>
+            <p>
+              Work through likely duplicate groups in a dedicated queue. Compare
+              candidates, choose the cover, exclude a mismatch, stack the group,
+              or keep it separate—and undo the decision if it was not right.
+              Optional near-duplicate tiers and a similarity threshold put you
+              in control of how broadly PixlStash searches.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Stack cleanup</h3>
+            <p>
+              Filter a view to stacked or unstacked pictures. Keep cover only
+              previews a stack cleanup, keeps its cover, and sends the other
+              copies to the recoverable Scrapheap without deleting originals
+              from disk.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Multi-project organisation</h3>
+            <p>
+              Add one character or picture set to several projects at the same
+              time. Its pictures appear in each project, while removing one
+              membership leaves every other project alone.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Suggest more pictures</h3>
+            <p>
+              Start from a person and rank the library by face likeness. Adjust
+              the match, review the result, and assign all found pictures or
+              only your current selection in one action.
+            </p>
+          </div>
+          <div class="feature-card">
+            <h3>Privacy controls</h3>
+            <p>
+              Update checks and anonymous install telemetry have their own
+              independent controls. Both are off until you enable them, and the
+              Privacy pane states what is and is not sent.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
           <h2 class="section-title">A UI focused on the work</h2>
         </div>
         <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Full undo and redo</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotUndoHistory.jpg"
+                data-full="assets/ScreenshotUndoHistory.jpg"
+                alt="PixlStash history showing several recent library changes and multi-step undo"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Inspect named changes, undo one or several steps, and redo them
+              across metadata edits, assignments, moves, and stack decisions.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Duplicate review</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotDuplicates.jpg"
+                data-full="assets/ScreenshotDuplicates.jpg"
+                alt="PixlStash Duplicates view with likely copies grouped for review"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Compare likely copies, choose a cover, stack the group, keep it
+              separate, and undo the decision when it was not right.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>Multi-project organisation</h4></div>
+            <button class="shot-image-btn" type="button">
+              <img
+                src="assets/ScreenshotMultiProject.jpg"
+                data-full="assets/ScreenshotMultiProject.jpg"
+                alt="One PixlStash character assigned to more than one project"
+                loading="lazy"
+              />
+            </button>
+            <p>
+              Keep one person or picture set in several projects without
+              duplicating it or moving it back and forth.
+            </p>
+          </div>
           <div class="shot">
             <div class="shot-label"><h4>Image grid</h4></div>
             <button class="shot-image-btn" type="button">

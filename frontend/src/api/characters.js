@@ -217,6 +217,23 @@ export async function addCharacterFacesByFaceId(
 }
 
 /**
+ * Assign the exact face/picture pairs returned by character face search.
+ * This is intentionally distinct from the manual picture-id fallback: a
+ * suggestion has already identified its winning face and must not be rescored
+ * between review and assignment.
+ */
+export async function addCharacterFaceAssignments(
+  id,
+  faceAssignments,
+  { baseUrl = "" } = {},
+) {
+  const res = await apiClient.post(charactersUrl(`/${id}/faces`, baseUrl), {
+    face_assignments: faceAssignments,
+  });
+  return res.data;
+}
+
+/**
  * Read a character's summary counts.
  *
  * The sidebar's pseudo-characters (all pictures, unassigned, scrapheap) are

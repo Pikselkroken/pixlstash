@@ -6,7 +6,7 @@
 // History popover's row states, and that the hover/focus preview and the
 // undo-to-step call describe the same range.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 import { mount } from "@vue/test-utils";
@@ -32,6 +32,7 @@ vi.mock("../../api/operations", () => ({
 }));
 
 import UndoControl from "./UndoControl.vue";
+import { isReadOnly as readOnlyRef } from "../../utils/apiClient";
 import { getUndoState, listOperations } from "../../api/operations";
 import { useOperationStore } from "../../stores/useOperationStore";
 
@@ -41,18 +42,30 @@ import { useOperationStore } from "../../stores/useOperationStore";
 // rendered inline (rather than teleported) while the menu is open.
 const VMenuStub = {
   name: "VMenu",
-  props: { modelValue: { type: Boolean, default: false } },
+  props: {
+    modelValue: { type: Boolean, default: false },
+    location: { type: String, default: "" },
+    origin: { type: String, default: "" },
+  },
   emits: ["update:modelValue"],
   setup(props, { slots, emit }) {
     return () =>
-      h("div", { class: "v-menu-stub" }, [
-        slots.activator?.({
-          props: {
-            onClick: () => emit("update:modelValue", !props.modelValue),
-          },
-        }),
-        props.modelValue ? slots.default?.() : null,
-      ]);
+      h(
+        "div",
+        {
+          class: "v-menu-stub",
+          "data-location": props.location,
+          "data-origin": props.origin,
+        },
+        [
+          slots.activator?.({
+            props: {
+              onClick: () => emit("update:modelValue", !props.modelValue),
+            },
+          }),
+          props.modelValue ? slots.default?.() : null,
+        ],
+      );
   },
 };
 
@@ -182,7 +195,78 @@ describe("UndoControl — enablement", () => {
   });
 });
 
+// A share-token session keeps the control visible and inert rather than
+// unmounting it: the read-only demo has to show that undo exists. Nothing is
+// softened by an empty stack here — /operations* is owner-only, so the store
+// never read one, and the affordances must say that instead of implying the
+// library has no history.
+describe("UndoControl — a read-only session", () => {
+  beforeEach(() => {
+    readOnlyRef.value = true;
+  });
+  afterEach(() => {
+    readOnlyRef.value = false;
+  });
+
+  it("inerts both buttons and says why, even with a stack already in hand", () => {
+    const store = useOperationStore();
+    seed(store, [op()]);
+    const wrapper = mount(UndoControl, globalOpts);
+
+    const undo = wrapper.find(".uc-btn--undo");
+    const redo = wrapper.find(".uc-btn--redo");
+    expect(undo.attributes("aria-disabled")).toBe("true");
+    expect(redo.attributes("aria-disabled")).toBe("true");
+    expect(undo.attributes("title")).toBe(
+      "Undo is only available in your own library",
+    );
+    expect(redo.attributes("title")).toBe(
+      "Redo is only available in your own library",
+    );
+    // Still tabbable and still tooltip-bearing, the same rule as "nothing to
+    // undo": the tooltip is the only place the reason is stated.
+    expect(undo.attributes("disabled")).toBeUndefined();
+  });
+
+  it("never calls the server", async () => {
+    const store = useOperationStore();
+    seed(store, [op(), op({ id: 9, status: "undone" })]);
+    const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
+    const redo = vi.spyOn(store, "redo").mockResolvedValue(null);
+    const wrapper = mount(UndoControl, globalOpts);
+
+    await wrapper.find(".uc-btn--undo").trigger("click");
+    await wrapper.find(".uc-btn--redo").trigger("click");
+    expect(undo).not.toHaveBeenCalled();
+    expect(redo).not.toHaveBeenCalled();
+  });
+
+  it("explains the History popover instead of counting steps", async () => {
+    const { wrapper } = await mountOpen([]);
+    expect(wrapper.find(".uc-empty").text()).toContain(
+      "History is only available in your own library",
+    );
+    // A tally would be a claim about the library, not a count of what is shown.
+    expect(wrapper.find(".uc-count").exists()).toBe(false);
+    // The footer teaches a gesture that has no list to act on here.
+    expect(wrapper.find(".tbm-footer").exists()).toBe(false);
+  });
+});
+
 describe("UndoControl — the History popover", () => {
+  it("anchors its viewport-clamped panel and caret to the History button", async () => {
+    const { wrapper } = await mountOpen([op({ id: 13 })]);
+    const menu = wrapper.find(".v-menu-stub");
+
+    // History lives at the toolbar's right edge. End anchoring lets Vuetify
+    // keep the wide panel on-screen without leaving the caret at panel-left.
+    expect(menu.attributes("data-location")).toBe("bottom end");
+    expect(menu.attributes("data-origin")).toBe("top end");
+    expect(wrapper.find(".tbm-caret").classes()).toContain(
+      "tbm-caret--icon-center-end",
+    );
+  });
+
   it("lists the stack newest first with the redo side above it", async () => {
     const { wrapper } = await mountOpen([
       op({ id: 13, status: "undone", summary: "Scored" }),

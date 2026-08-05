@@ -1,7 +1,7 @@
 // The Keep-cover-only confirm is the single consent for hundreds of soft
 // deletions, so these tests pin what the user is promised before they give it:
 // one figure that the button cannot contradict, no number at all until the
-// preview lands, a zero for disk stated out loud, a retention sentence read
+// preview lands, only actionable exception details, a retention sentence read
 // from the server, and a keyboard that deliberately refuses Enter.
 
 import { describe, it, expect, vi } from "vitest";
@@ -154,29 +154,25 @@ describe("KeepCoverOnlyDialog: before the numbers land", () => {
   });
 });
 
-describe("KeepCoverOnlyDialog: nothing is freed", () => {
-  it("states the zero originals deleted from disk out loud", () => {
-    const rows = mountDialog().findAll(".kco-row");
-    expect(rows).toHaveLength(5);
-    expect(rows[4].find(".kco-term").text()).toContain(
-      "Originals deleted from disk",
-    );
-    expect(rows[4].find(".kco-value").text()).toBe("0");
+describe("KeepCoverOnlyDialog: concise consequence summary", () => {
+  it("does not repeat counts already guaranteed by the action", () => {
+    const text = mountDialog().text();
+    expect(text).not.toContain("Stacks collapsed");
+    expect(text).not.toContain("Covers kept");
+    expect(text).not.toContain("Originals deleted from disk");
+    expect(mountDialog().find(".kco-rows").exists()).toBe(false);
   });
 
-  // Stated even while the counts are unknown: it is a property of the feature,
-  // not a number the server has to be asked for.
-  it("keeps stating it while the preview is in flight", () => {
-    const rows = mountDialog({ preview: null, loading: true }).findAll(
-      ".kco-row",
+  it("shows metadata transfer only when it will happen", () => {
+    const wrapper = mountDialog();
+    expect(wrapper.find(".kco-metadata").text()).toContain(
+      "12 covers gain metadata from copies",
     );
-    expect(rows.map((r) => r.find(".kco-value").text())).toEqual([
-      "–",
-      "–",
-      "–",
-      "–",
-      "0",
-    ]);
+
+    const withoutTransfer = mountDialog({
+      preview: { ...PREVIEW, covers_gaining_metadata: 0 },
+    });
+    expect(withoutTransfer.find(".kco-metadata").exists()).toBe(false);
   });
 
   it("keeps the byte figure a sentence and never claims space was freed", () => {
@@ -221,11 +217,11 @@ describe("KeepCoverOnlyDialog: the retention window is read, not assumed", () =>
 });
 
 describe("KeepCoverOnlyDialog: the skips", () => {
-  it("counts skipped stacks by summing the buckets, and names them", () => {
+  it("names stacks that will not change and explains why", () => {
     const wrapper = mountDialog();
-    const rows = wrapper.findAll(".kco-row");
-    expect(rows[3].find(".kco-term").text()).toContain("Stacks skipped");
-    expect(rows[3].find(".kco-value").text()).toBe("3");
+    expect(wrapper.find(".kco-skips-title").text()).toContain(
+      "3 stacks won't change",
+    );
     const skips = wrapper.findAll(".kco-skips li").map((li) => li.text());
     expect(skips).toHaveLength(2);
     // A locked set refuses the WHOLE stack; the dialog has to say so, because a
@@ -242,7 +238,20 @@ describe("KeepCoverOnlyDialog: the skips", () => {
       },
     });
     expect(wrapper.find(".kco-skips").exists()).toBe(false);
-    expect(wrapper.findAll(".kco-row")[3].find(".kco-value").text()).toBe("0");
+    expect(wrapper.text()).not.toContain("Stacks skipped");
+  });
+
+  it("uses singular copy when exactly one stack cannot change", () => {
+    const wrapper = mountDialog({
+      preview: {
+        ...PREVIEW,
+        stacks_skipped_locked: 1,
+        stacks_skipped_character_on_copy: 0,
+      },
+    });
+    expect(wrapper.find(".kco-skips-title").text()).toContain(
+      "1 stack won't change",
+    );
   });
 });
 

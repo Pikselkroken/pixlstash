@@ -10,7 +10,10 @@ from sqlmodel import Session, select
 from sqlalchemy import desc, exists, func, nullslast
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from pixlstash.authz.membership import enforce_set_scope
+from pixlstash.authz.membership import (
+    enforce_project_path_scope,
+    enforce_set_scope,
+)
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
     Character,
@@ -40,6 +43,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     filter_visible_project_ids,
+    narrow_picture_project_ids,
     narrow_project_fields,
     visible_project_ids,
 )
@@ -374,6 +378,32 @@ def create_router(server) -> APIRouter:
         normalized = normalize_hidden_tags(getattr(user, "hidden_tags", None))
         return normalized or []
 
+    def _hidden_tag_condition(hidden_tags: list[str]):
+        """SQL predicate: the correlated ``Picture`` carries no hidden tag.
+
+        The in-SQL counterpart of ``_filter_hidden_picture_ids``, for query
+        paths that must not read a picture id list into Python first (issue
+        #651). Same matching rule: a picture is hidden when it has ANY tag whose
+        lowercased value is in ``hidden_tags``.
+
+        Args:
+            hidden_tags: Tag names to hide, matched case-insensitively.
+
+        Returns:
+            A correlated ``NOT EXISTS`` expression, or ``None`` when there is
+            nothing to hide and the caller should add no condition at all.
+        """
+        hidden_tag_set = {str(tag).strip().lower() for tag in hidden_tags or [] if tag}
+        if not hidden_tag_set:
+            return None
+        return ~exists(
+            select(Tag.picture_id).where(
+                Tag.picture_id == Picture.id,
+                Tag.tag.is_not(None),
+                func.lower(Tag.tag).in_(hidden_tag_set),
+            )
+        )
+
     def _filter_hidden_picture_ids(
         session, picture_ids: list[int], hidden_tags: list[str]
     ) -> list[int]:
@@ -477,45 +507,94 @@ def create_router(server) -> APIRouter:
                     ).where(PictureSetProjectMember.set_id.in_(listed_ids))
                 ).all():
                     project_ids_by_set.setdefault(int(sid), []).append(int(pid))
+            # Counts and previews for EVERY listed set in two queries, not two
+            # per set (issue #651). The previous shape read the complete member
+            # id list of every set into Python, passed it back as an `IN` bind
+            # list to filter hidden tags, counted it with `len(set(...))`, and
+            # passed it back a third time to pick the top 3. On a large library
+            # that is the dominant cost of the sidebar's set list, and the bind
+            # list is unbounded: past SQLITE_LIMIT_VARIABLE_NUMBER (a
+            # compile-time constant, 250k on the build this was measured on,
+            # but as low as 32766 elsewhere) the endpoint fails outright.
+            #
+            # Nothing here materialises a member id in Python any more, so the
+            # only `IN` list left is over the LISTED SETS, which is bounded by
+            # what the sidebar can show.
+            counts_by_set: dict[int, int] = {}
+            top_ids_by_set: dict[int, list[int]] = {}
+            if listed_ids:
+                member_conditions = [
+                    PictureSetMember.set_id.in_(listed_ids),
+                    Picture.deleted.is_(False),
+                ]
+                if project_filter is not None:
+                    member_conditions.append(project_filter)
+                hidden_condition = _hidden_tag_condition(hidden_tags)
+                if hidden_condition is not None:
+                    member_conditions.append(hidden_condition)
+
+                # DISTINCT in its own subquery, not on the ranked select: a
+                # window function is evaluated BEFORE DISTINCT, so duplicate
+                # member rows would each receive a different row_number and
+                # survive the de-duplication. The old code de-duplicated
+                # implicitly (`len(set(...))`, and `IN` collapsing repeats), so
+                # this preserves the counts it produced.
+                visible_members = (
+                    select(
+                        PictureSetMember.set_id.label("set_id"),
+                        PictureSetMember.picture_id.label("picture_id"),
+                    )
+                    .join(Picture, Picture.id == PictureSetMember.picture_id)
+                    .where(*member_conditions)
+                    .distinct()
+                    .subquery()
+                )
+
+                for set_id, member_count in session.exec(
+                    select(visible_members.c.set_id, func.count())
+                    .select_from(visible_members)
+                    .group_by(visible_members.c.set_id)
+                ).all():
+                    counts_by_set[int(set_id)] = int(member_count)
+
+                ranked_members = (
+                    select(
+                        visible_members.c.set_id,
+                        visible_members.c.picture_id,
+                        func.row_number()
+                        .over(
+                            partition_by=visible_members.c.set_id,
+                            order_by=(
+                                nullslast(desc(Picture.score)),
+                                nullslast(desc(Picture.aesthetic_score)),
+                                nullslast(desc(Picture.imported_at)),
+                                desc(Picture.id),
+                            ),
+                        )
+                        .label("rank"),
+                    )
+                    .select_from(visible_members)
+                    .join(Picture, Picture.id == visible_members.c.picture_id)
+                    .subquery()
+                )
+
+                for set_id, picture_id in session.exec(
+                    select(ranked_members.c.set_id, ranked_members.c.picture_id)
+                    .where(ranked_members.c.rank <= 3)
+                    .order_by(ranked_members.c.set_id, ranked_members.c.rank)
+                ).all():
+                    if picture_id is None:
+                        continue
+                    top_ids_by_set.setdefault(int(set_id), []).append(int(picture_id))
+
             result = []
             for s in sets:
-                members_query = (
-                    select(PictureSetMember.picture_id)
-                    .join(Picture, Picture.id == PictureSetMember.picture_id)
-                    .where(
-                        PictureSetMember.set_id == s.id,
-                        Picture.deleted.is_(False),
-                    )
-                )
-                if project_filter is not None:
-                    members_query = members_query.where(project_filter)
-                members = session.exec(members_query).all()
-                filtered_ids = _filter_hidden_picture_ids(
-                    session,
-                    [m for m in members if m is not None],
-                    hidden_tags,
-                )
-                count = len(set(filtered_ids))
                 set_dict = safe_model_dict(s)
                 narrow_project_fields(
                     set_dict, project_ids_by_set.get(int(s.id), []), visible_projects
                 )
-                set_dict["picture_count"] = count
-                top_picture_ids = []
-                if filtered_ids:
-                    top_rows = session.exec(
-                        select(Picture.id)
-                        .where(Picture.id.in_(filtered_ids))
-                        .order_by(
-                            nullslast(desc(Picture.score)),
-                            nullslast(desc(Picture.aesthetic_score)),
-                            nullslast(desc(Picture.imported_at)),
-                            desc(Picture.id),
-                        )
-                        .limit(3)
-                    ).all()
-                    top_picture_ids = [row for row in top_rows if row is not None]
-                set_dict["top_picture_ids"] = top_picture_ids
+                set_dict["picture_count"] = counts_by_set.get(int(s.id), 0)
+                set_dict["top_picture_ids"] = top_ids_by_set.get(int(s.id), [])
                 set_dict["thumbnail_url"] = f"/picture_sets/{s.id}/thumbnail"
                 result.append(set_dict)
             return result
@@ -600,6 +679,17 @@ def create_router(server) -> APIRouter:
             project = session.exec(
                 select(Project).where(func.lower(Project.name) == project_name.lower())
             ).first()
+            # Scope guard on the PROJECT half of the path, before the membership
+            # query below can answer from it (#708 condition 2). Without it the
+            # three outcomes — set in this project (200), project exists but does
+            # not hold it (404 "Picture set not found"), project does not exist
+            # (404 "Project not found") — told a set-scoped token which projects
+            # exist and which hold its set. A token that may not see the project
+            # now gets the same 403 in all three cases; an owner is unaffected
+            # and still gets the 404s below.
+            enforce_project_path_scope(
+                server, request, int(project.id) if project is not None else None
+            )
             if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             picture_set = session.exec(
@@ -868,25 +958,22 @@ def create_router(server) -> APIRouter:
             set_id: int,
             active_hidden_tags: list[str],
         ):
-            member_rows = session.exec(
-                select(PictureSetMember.picture_id)
-                .join(Picture, Picture.id == PictureSetMember.picture_id)
-                .where(
-                    PictureSetMember.set_id == set_id,
-                    Picture.deleted.is_(False),
-                )
-            ).all()
-            member_ids = [row for row in member_rows if row is not None]
-            filtered_ids = _filter_hidden_picture_ids(
-                session,
-                member_ids,
-                active_hidden_tags,
-            )
-            if not filtered_ids:
-                return []
+            # One query, and no member id list in Python. The list endpoint's
+            # per-set scan was the same shape and had the same unbounded `IN`
+            # (issue #651); this is that fix applied to the single-set path,
+            # picking the same top 3 by the same ordering.
+            conditions = [
+                PictureSetMember.set_id == set_id,
+                Picture.deleted.is_(False),
+            ]
+            hidden_condition = _hidden_tag_condition(active_hidden_tags)
+            if hidden_condition is not None:
+                conditions.append(hidden_condition)
             rows = session.exec(
                 select(Picture.id)
-                .where(Picture.id.in_(filtered_ids))
+                .join(PictureSetMember, PictureSetMember.picture_id == Picture.id)
+                .where(*conditions)
+                .distinct()
                 .order_by(
                     nullslast(desc(Picture.score)),
                     nullslast(desc(Picture.aesthetic_score)),
@@ -1243,6 +1330,7 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
+            narrow_picture_project_ids(server, request, pictures)
             return {
                 "pictures": pictures,
                 "set": narrow_project_fields(
@@ -1268,6 +1356,7 @@ def create_router(server) -> APIRouter:
             if deduplicate_stacks:
                 pictures = deduplicate_by_stack(pictures)
             pictures = _enrich_with_stack_counts(pictures)
+            narrow_picture_project_ids(server, request, pictures)
             return {
                 "pictures": pictures,
                 "set": narrow_project_fields(
@@ -1307,6 +1396,10 @@ def create_router(server) -> APIRouter:
 
         pictures = server.vault.db.run_immediate_read_task(fetch_pics, picture_ids)
         pictures = _enrich_with_stack_counts(pictures)
+        # The set's own scalar is narrowed just below; the member rows carry the
+        # raw `Picture.project_id` from `metadata_fields()` and need the same
+        # treatment, one payload shape at a time (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, pictures)
         set_payload = safe_model_dict(picture_set)
         narrow_project_fields(set_payload, set_project_ids, visible_projects)
         return {"pictures": pictures, "set": set_payload}
@@ -1640,7 +1733,7 @@ def create_router(server) -> APIRouter:
                 remove_project_ids=[],
             )
             session.add(picture_set)
-            session.commit()
+            session.flush()
             return added_any
 
         # Set membership is stack-atomic, so the snapshot expands to the whole
@@ -1718,7 +1811,7 @@ def create_router(server) -> APIRouter:
                 return False
             for m in members:
                 session.delete(m)
-            session.commit()
+            session.flush()
             return True
 
         # Stack-atomic like the add above: the removal takes the whole stack out,
@@ -1803,7 +1896,7 @@ def create_router(server) -> APIRouter:
                 ensure_project_ids=picture_set_project_ids(session, set_id),
                 remove_project_ids=[],
             )
-            session.commit()
+            session.flush()
             return added
 
         added, _operation = operation_log_service.run_recorded_metadata_task(
@@ -1889,7 +1982,7 @@ def create_router(server) -> APIRouter:
                 ensure_project_ids=picture_set_project_ids(session, set_id),
                 remove_project_ids=[],
             )
-            session.commit()
+            session.flush()
             return added
 
         def _current_members(session):

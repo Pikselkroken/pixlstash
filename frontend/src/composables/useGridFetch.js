@@ -506,6 +506,7 @@ export function useGridFetch(
     const fetchStartedAt = getNowMs();
     let fetchMode = "default";
     let fetchSucceeded = false;
+    let fetchError = null;
     let sortedFetchStartedAt = 0;
     const fetchPhaseTimings = {
       countMs: null,
@@ -644,9 +645,15 @@ export function useGridFetch(
             ? cached.matches
             : null;
         if (!ranked) {
-          const raw = await characterFaceSearch(character.id, {
-            baseUrl: props.backendUrl,
-          });
+          let raw;
+          try {
+            raw = await characterFaceSearch(character.id, {
+              baseUrl: props.backendUrl,
+            });
+          } catch (error) {
+            error.gridFetchPhase = "character-face-search-request";
+            throw error;
+          }
           if (fetchAllGridImages.lastRequestId !== requestId) {
             if (isSortedFetch && options?.showProgress === true)
               completeSmartScoreProgress(loadId, 0, false);
@@ -1406,6 +1413,7 @@ export function useGridFetch(
           completeSmartScoreProgress(loadId, 0, false);
         return;
       }
+      fetchError = e;
       imagesError.value = e.message;
       // Don't wipe the grid on a transient error while the overlay is open —
       // the user would see the grid flash empty behind the overlay.
@@ -1450,6 +1458,7 @@ export function useGridFetch(
         updateVisibleThumbnails();
       });
     }
+    return { success: fetchSucceeded, fetchMode, error: fetchError };
   }
 
   async function fetchAllPicturesCount() {

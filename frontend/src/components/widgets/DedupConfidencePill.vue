@@ -10,8 +10,12 @@
  *   • Exact: a filled accent chip with the equals glyph. A settled fact, and the
  *              glyph has to say so — an approximately-equals sign here would
  *              hedge the one claim in this queue that is not a measurement.
- *   • Near: a quiet outlined chip with the blur glyph. A measurement, with
- *              the percentage in tabular figures so a column of them lines up.
+ *   • Near, measured: the one visual-similarity claim, with a green check.
+ *              The check says that this measurement supports stacking; red Xs
+ *              remain reserved for actual counter-evidence in `why`.
+ *   • Near, unmeasured: a quiet outlined `Similar` fallback. It carries no
+ *              check, because a missing percentage must not masquerade as a
+ *              measured positive.
  *
  * `confidenceLabel` in `utils/dedup` owns the wording, because the compare view
  * and the auto-stack dialog have to say the same thing about the same group.
@@ -26,15 +30,33 @@ const props = defineProps({
 });
 
 const confidence = computed(() => confidenceLabel(props.group));
+
+const measured = computed(() => {
+  const raw = props.group?.confidence;
+  return raw !== null && raw !== undefined && Number.isFinite(Number(raw));
+});
+
+const treatment = computed(() => {
+  if (confidence.value.exact) return "exact";
+  return measured.value ? "near" : "unknown";
+});
+
+const title = computed(() => {
+  if (confidence.value.exact) return "Exact match.";
+  if (measured.value) return `${confidence.value.label}. Supports stacking.`;
+  return "Similar. No similarity percentage is available.";
+});
 </script>
 
 <template>
   <span
     class="conf-pill"
-    :class="confidence.exact ? 'conf-pill--exact' : 'conf-pill--near'"
+    :class="`conf-pill--${treatment}`"
+    :title="title"
+    :aria-label="title"
   >
-    <v-icon class="conf-pill__ico" size="12">{{
-      confidence.exact ? "mdi-equal" : "mdi-blur"
+    <v-icon class="conf-pill__ico" size="12" aria-hidden="true">{{
+      confidence.exact ? "mdi-equal" : measured ? "mdi-check" : "mdi-blur"
     }}</v-icon>
     <span class="conf-pill__label">{{ confidence.label }}</span>
   </span>
@@ -61,8 +83,22 @@ const confidence = computed(() => confidenceLabel(props.group));
   color: rgb(var(--v-theme-on-accent));
 }
 
-/* Outlined and quiet: a measurement, not a verdict. */
+/* Similarity passed the active criterion, so it is supporting evidence. This
+   is not an aggregate verdict: actual counter-evidence keeps its own red X in
+   DedupWhyPills. */
 .conf-pill--near {
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-color: rgba(var(--v-theme-primary), 0.35);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.conf-pill--near .conf-pill__ico {
+  color: rgb(var(--v-theme-primary));
+}
+
+/* An older/incomplete payload can name the classification without supplying a
+   number. Keep that fallback neutral rather than drawing a measured check. */
+.conf-pill--unknown {
   background: transparent;
   border-color: rgb(var(--v-theme-border));
   color: rgba(var(--v-theme-on-surface), 0.8);

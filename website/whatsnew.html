@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>What's New in PixlStash 1.8</title>
+    <title>What's New in PixlStash 1.9</title>
     <meta
       name="description"
-      content="What's new in PixlStash 1.8: a justified grid layout with a single thumbnail-size control, background imports, Scrapheap delete and auto-empty changes, an Agreement chart comparing star ratings with the Smart Score, and one deny-by-default authorization gate for the API."
+      content="What's new in PixlStash 1.9: full undo and redo across your library, a dedicated duplicate-review queue, safer stack cleanup, multi-project characters and sets, faster person assignment, and optional privacy-conscious telemetry."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,7 +15,12 @@
       href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <script>
+      try {
+        if (localStorage.getItem("pixlstash-theme") === "light")
+          document.documentElement.setAttribute("data-theme", "light");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="pixlstash.css" />
     <style>
       /* -- whatsnew.html page-specific -- */
@@ -116,6 +121,14 @@
         cursor: zoom-in;
       }
 
+      .release-hero-media--contain {
+        background: color-mix(in srgb, var(--text) 4%, transparent);
+      }
+
+      .release-hero-media--contain img {
+        object-fit: contain;
+      }
+
       .section-grid {
         margin-top: 28px;
         display: grid;
@@ -162,6 +175,20 @@
         object-fit: contain;
         display: block;
         cursor: zoom-in;
+      }
+
+      .update-card-media-pair {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--border);
+      }
+
+      .update-card-media-pair img {
+        height: 360px;
+        max-height: none;
+        object-fit: contain;
+        background: var(--panel);
       }
 
       /* The grid-layout clip is 1600x1024; cap the card so the video keeps its
@@ -536,6 +563,14 @@
           max-height: 300px;
         }
 
+        .update-card-media-pair {
+          grid-template-columns: 1fr;
+        }
+
+        .update-card-media-pair img {
+          height: auto;
+        }
+
         .stats-card {
           grid-template-columns: 1fr;
         }
@@ -565,49 +600,51 @@
       <div id="nav-placeholder"></div>
       <script src="nav.js"></script>
 
-      <!-- ── PixlStash 1.8 ──────────────────────────────────────────── -->
       <section class="release-hero">
         <div class="release-hero-inner">
           <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.8</span>
-            <h1>A justified grid layout</h1>
+            <span class="release-kicker">PixlStash 1.9</span>
+            <h1>Fix your mistake with one CTRL-Z</h1>
             <p>
-              PixlStash 1.8 adds a <strong>justified grid</strong>. Thumbnails
-              keep their own aspect ratio and each row is filled to the full
-              width of the grid, instead of every picture being cropped to a
-              square. A single thumbnail-size control, from Tiny to Huge,
-              replaces the columns slider and sets the size in both layouts. The
-              square grid is still available.
+              PixlStash 1.9 brings <strong>full undo and redo</strong> across
+              the app. Soft-deletion, tags, descriptions, assignments, moves,
+              and duplicate decisions all join one shared history. Step back
+              through one change or several, then redo them when you change your
+              mind again. Work quickly without making every decision final.
             </p>
             <ul class="release-bullets">
               <li>
-                A justified thumbnail layout, and one Tiny to Huge size control
-                in place of the columns slider
+                Full undo and redo, including a history menu for stepping back
+                through more than one change. It is database backed and survives
+                server restarts
               </li>
               <li>
-                Imports stream to the server and finish in the background, so
-                closing the tab does not cancel them
+                A dedicated Duplicates view for reviewing, comparing, stacking,
+                or keeping likely copies separate
               </li>
               <li>
-                Delete forever in the Scrapheap now removes the files from disk,
-                behind a preview and a type-to-confirm dialog
+                Stack filters and <strong>Keep cover only</strong> for moving
+                unwanted copies to the recoverable Scrapheap
               </li>
               <li>
-                An Agreement chart in the stats panel plots your star ratings
-                against the Smart Score
+                Characters and picture sets can belong to several projects at
+                the same time
               </li>
               <li>
-                Every API route goes through one deny-by-default authorization
-                gate
+                Suggest more pictures of a person, then assign all results or
+                only the ones you select
               </li>
-              <li><strong>Signed Windows installers since 1.8.2</strong></li>
+              <li>
+                A new Privacy pane with two independent, off-by-default options:
+                update checks and an anonymous install ID
+              </li>
             </ul>
           </div>
-          <div class="release-hero-media">
+          <div class="release-hero-media release-hero-media--contain">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotsJustified.jpg"
-              alt="The PixlStash justified grid, with thumbnails at their own aspect ratios filling each row to the full grid width"
+              src="assets/ScreenshotUndoHistory.jpg"
+              alt="PixlStash history showing several recent library changes with Undo and Redo controls"
             />
           </div>
         </div>
@@ -617,38 +654,78 @@
         <article class="update-card update-card--video">
           <video
             class="zoomable-video"
-            src="assets/NewGridView.mp4"
+            src="assets/DuplicatesReview.mp4"
             autoplay
             loop
             muted
             playsinline
+            preload="metadata"
           ></video>
           <div class="update-card-body">
-            <h2>The justified grid while scrolling</h2>
+            <h2>Undo reaches whole workflows</h2>
             <p>
-              Rows are filled to the grid width at every scroll position, and
-              the date pill shows the date range of the pictures currently on
-              screen. Selection, rating, and keyboard navigation work the same
-              as in the square grid.
+              Use the toolbar, Ctrl+Z and Ctrl+Y on Windows and Linux, or the
+              standard shortcuts on macOS. Soft-deleting pictures, changing tags
+              or descriptions, assigning and moving images, and duplicate
+              decisions all join the same history. Open the history menu when
+              you want to inspect recent work or undo several steps at once. The
+              safety net reaches whole workflows, not just simple field edits,
+              including stacking duplicates or keeping them separate.
             </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>A queue for duplicate decisions</h2>
+            <p>
+              Duplicates has a permanent place in the sidebar and scans the view
+              you are working in. Each group keeps its candidates together,
+              explains why they match, and lets you compare them full-screen
+              before you stack them or keep them separate. Exact copies are the
+              starting point; optional near-duplicate tiers and a similarity
+              threshold let you decide how far the scan should reach. Decided
+              groups stay available, and Mixed stacks flags existing stacks
+              whose pictures no longer hang together at the chosen threshold.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotDuplicates.jpg"
+              alt="PixlStash Duplicates view with likely copies grouped for review"
+              loading="lazy"
+            />
           </div>
         </article>
       </section>
 
       <section class="section-grid">
         <article class="update-card update-card--solo">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotsJustifiedSettings.jpg"
-            alt="The PixlStash Appearance settings with a Square and Justified thumbnail layout picker"
-          />
+          <div class="update-card-media-pair">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotKeepCoverOnly.jpg"
+              alt="PixlStash picture menu with Keep cover only available for a selected stack"
+              loading="lazy"
+            />
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotKeepCoverOnly2.jpg"
+              alt="Keep cover only preview showing three pictures moving to the recoverable Scrapheap in one undoable step"
+              loading="lazy"
+            />
+          </div>
           <div class="update-card-body">
-            <h2>Choosing the layout</h2>
+            <h2>Clean up stacks without deleting originals</h2>
             <p>
-              The layout is set in Settings under Appearance. The same pane sets
-              the sidebar thumbnail size and switches the sidebar between full
-              width and a narrow icon dock. The grid thumbnail size is in the
-              toolbar, next to the sort and filter controls.
+              Filter any grid to stacked or unstacked pictures. When a stack is
+              settled, Keep cover only previews exactly what will happen, keeps
+              the cover, and moves every other picture in the stack to the
+              Scrapheap. No original is deleted from disk by the action, and you
+              can undo it or restore a picture from the Scrapheap.
             </p>
           </div>
         </article>
@@ -656,38 +733,124 @@
 
       <section class="section-grid">
         <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotMultiProject.jpg"
+            alt="One PixlStash character assigned to more than one project"
+            loading="lazy"
+          />
           <div class="update-card-body">
-            <h2>Scrapheap delete and auto-empty</h2>
+            <h2>One person or set, several projects</h2>
             <p>
-              Delete forever in the Scrapheap now removes the files from disk.
-              It lists what will be deleted and asks you to type to confirm.
-              Auto-empty is off by default: nothing is removed on a timer until
-              you set a retention window of 30, 60, 90, or 120 days in Settings.
-              Installs upgrading from 1.7 stay off until you set one. Originals
-              in reference folders are never auto-purged.
+              Characters and picture sets no longer have to be duplicated or
+              moved back and forth when they belong in more than one project.
+              Add the same item to several projects, see its pictures in every
+              one, and remove one membership without disturbing the others.
+              Existing project assignments carry over unchanged.
             </p>
           </div>
         </article>
 
         <article class="update-card">
+          <video
+            class="zoomable-video"
+            src="assets/SuggestMorePictures.mp4"
+            autoplay
+            loop
+            muted
+            playsinline
+            preload="metadata"
+          ></video>
           <div class="update-card-body">
-            <h2>Background imports</h2>
+            <h2>Suggest more pictures of a person</h2>
             <p>
-              Imports stream to the server and complete there. Closing the tab
-              or navigating away does not cancel them. A running import appears
-              in the task manager with progress, and can be aborted from there.
+              Open a person's context menu and ask PixlStash to rank the library
+              by face likeness. Review the result in the grid, adjust the match
+              if needed, then assign every result or just your current selection
+              to that person in one action.
             </p>
           </div>
         </article>
 
         <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotPrivacy.jpg"
+            alt="PixlStash Privacy settings with independent controls for update checks and anonymous install telemetry"
+            loading="lazy"
+          />
           <div class="update-card-body">
-            <h2>Agreement chart</h2>
+            <h2>Optional, limited telemetry</h2>
             <p>
-              The stats panel has a new chart that plots your star ratings
-              against the Smart Score. Cells off the diagonal are pictures where
-              the two differ: rated high and scored low, or the reverse.
-              Clicking a cell opens those pictures in the grid.
+              The new Privacy pane can send a random anonymous install ID once a
+              day, together with your install type and whether this was a new
+              install. It never includes your images, tags, captions, filenames,
+              searches, or file paths, and the ID can be replaced whenever you
+              like. It is off by default, stays off when you upgrade, and can be
+              turned off again at any time. If you are comfortable enabling it,
+              we hope you will: it gives us a much clearer picture of whether
+              PixlStash remains useful after the download. The
+              <a class="whatsnew-link" href="privacy.html">privacy policy</a>
+              shows the exact message and retention details.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--feature">
+          <div class="update-card-body">
+            <h2>A clear choice when you upgrade</h2>
+            <p>
+              Existing users who already enabled update checks see a one-time
+              explanation of the anonymous install ID. The dialog shows the
+              complete request, explains every field, and makes declining as
+              straightforward as opting in. Nothing about the existing update
+              check changes either way, and the choice remains available in
+              Settings → Privacy.
+            </p>
+          </div>
+          <div class="update-card-media">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotInstallId.jpg"
+              alt="PixlStash upgrade dialog explaining the optional anonymous install ID and offering No thanks or Add the random number"
+              loading="lazy"
+            />
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotMixedStacks.jpg"
+            alt="PixlStash Mixed stacks view showing stacks flagged for review"
+            loading="lazy"
+          />
+          <div class="update-card-body">
+            <h2>Review stacks that no longer fit</h2>
+            <p>
+              Mixed stacks finds existing stacks whose pictures fall below your
+              chosen similarity threshold. Compare the members, keep the stack
+              when it is intentional, or separate pictures that do not belong.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card">
+          <img
+            class="zoomable-image"
+            src="assets/ScreenshotStackFilter.jpg"
+            alt="PixlStash grid filtered to show stacked pictures"
+            loading="lazy"
+          />
+          <div class="update-card-body">
+            <h2>Show stacked or unstacked pictures</h2>
+            <p>
+              Filter any grid by stack state to focus on pictures that have
+              already been grouped or find the ones that still need attention.
             </p>
           </div>
         </article>
@@ -695,39 +858,20 @@
 
       <article class="update-card" style="margin-top: 20px">
         <div class="update-card-body">
-          <h2>Smart Scores are recomputed on upgrade</h2>
+          <h2>Upgrading from 1.8.0 or earlier</h2>
           <p>
-            The whole library is re-scored in the background the first time you
-            open 1.8, so the grid may re-order compared to 1.7. Two things
-            changed. The built-in reference points used to score a library with
-            few ratings of its own had stopped loading and now load again, so if
-            you have rated only a handful of pictures your scores will change
-            more than most. The scoring weights are also rebalanced so the top
-            of the 1 to 5 range is reachable. The recompute runs in small
-            batches and does not re-run any AI models. Originals and snapshots
-            are not modified.
-          </p>
-        </div>
-      </article>
-
-      <article class="update-card" style="margin-top: 20px">
-        <div class="update-card-body">
-          <h2>One authorization gate for the API</h2>
-          <p>
-            Every API route now goes through a single deny-by-default
-            authorization gate that enforces object access from a declared
-            policy. A route with no declared policy is refused rather than
-            served, so a share link or API token can only reach what it was
-            granted. This release also fixes snapshot restore hard-deleting
-            files that were added after the snapshot was taken, and stops
-            deletions removing pictures in locked sets.
+            PixlStash clears every API token as part of the security change
+            released in 1.8.1. Create replacement tokens in Settings, recreate
+            any share links, and enter your public URL and ComfyUI URL again. If
+            you already upgraded to 1.8.1 or later, this has already happened
+            and your current tokens are left alone.
           </p>
         </div>
       </article>
 
       <section class="release-cta">
         <div>
-          <h3>Get PixlStash 1.8</h3>
+          <h3>Get PixlStash 1.9</h3>
           <p>
             Download the desktop app for Windows, macOS, or Linux. Or keep using
             pip, Docker, or the source build.
@@ -743,149 +887,332 @@
         </div>
       </section>
 
-      <!-- ── PixlStash 1.7 (previous release) ────────────────────────── -->
+      <div class="prev-release">
+        <span class="prev-release-label">Previous release: PixlStash 1.8</span>
+
+        <!-- ── PixlStash 1.8 ──────────────────────────────────────────── -->
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.8</span>
+              <h1>A justified grid layout</h1>
+              <p>
+                PixlStash 1.8 adds a <strong>justified grid</strong>. Thumbnails
+                keep their own aspect ratio and each row is filled to the full
+                width of the grid, instead of every picture being cropped to a
+                square. A single thumbnail-size control, from Tiny to Huge,
+                replaces the columns slider and sets the size in both layouts.
+                The square grid is still available.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  A justified thumbnail layout, and one Tiny to Huge size
+                  control in place of the columns slider
+                </li>
+                <li>
+                  Imports stream to the server and finish in the background, so
+                  closing the tab does not cancel them
+                </li>
+                <li>
+                  Delete forever in the Scrapheap now removes the files from
+                  disk, behind a preview and a type-to-confirm dialog
+                </li>
+                <li>
+                  An Agreement chart in the stats panel plots your star ratings
+                  against the Smart Score
+                </li>
+                <li>
+                  Every API route goes through one deny-by-default authorization
+                  gate
+                </li>
+                <li><strong>Signed Windows installers since 1.8.2</strong></li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotsJustified.jpg"
+                alt="The PixlStash justified grid, with thumbnails at their own aspect ratios filling each row to the full grid width"
+              />
+            </div>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--video">
+            <video
+              class="zoomable-video"
+              src="assets/NewGridView.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+            ></video>
+            <div class="update-card-body">
+              <h2>The justified grid while scrolling</h2>
+              <p>
+                Rows are filled to the grid width at every scroll position, and
+                the date pill shows the date range of the pictures currently on
+                screen. Selection, rating, and keyboard navigation work the same
+                as in the square grid.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--solo">
+            <img
+              class="zoomable-image"
+              src="assets/ScreenshotsJustifiedSettings.jpg"
+              alt="The PixlStash Appearance settings with a Square and Justified thumbnail layout picker"
+            />
+            <div class="update-card-body">
+              <h2>Choosing the layout</h2>
+              <p>
+                The layout is set in Settings under Appearance. The same pane
+                sets the sidebar thumbnail size and switches the sidebar between
+                full width and a narrow icon dock. The grid thumbnail size is in
+                the toolbar, next to the sort and filter controls.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Scrapheap delete and auto-empty</h2>
+              <p>
+                Delete forever in the Scrapheap now removes the files from disk.
+                It lists what will be deleted and asks you to type to confirm.
+                Auto-empty is off by default: nothing is removed on a timer
+                until you set a retention window of 30, 60, 90, or 120 days in
+                Settings. Installs upgrading from 1.7 stay off until you set
+                one. Originals in reference folders are never auto-purged.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Background imports</h2>
+              <p>
+                Imports stream to the server and complete there. Closing the tab
+                or navigating away does not cancel them. A running import
+                appears in the task manager with progress, and can be aborted
+                from there.
+              </p>
+            </div>
+          </article>
+
+          <article class="update-card">
+            <div class="update-card-body">
+              <h2>Agreement chart</h2>
+              <p>
+                The stats panel has a new chart that plots your star ratings
+                against the Smart Score. Cells off the diagonal are pictures
+                where the two differ: rated high and scored low, or the reverse.
+                Clicking a cell opens those pictures in the grid.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>Smart Scores are recomputed on upgrade</h2>
+            <p>
+              The whole library is re-scored in the background the first time
+              you open 1.8, so the grid may re-order compared to 1.7. Two things
+              changed. The built-in reference points used to score a library
+              with few ratings of its own had stopped loading and now load
+              again, so if you have rated only a handful of pictures your scores
+              will change more than most. The scoring weights are also
+              rebalanced so the top of the 1 to 5 range is reachable. The
+              recompute runs in small batches and does not re-run any AI models.
+              Originals and snapshots are not modified.
+            </p>
+          </div>
+        </article>
+
+        <article class="update-card" style="margin-top: 20px">
+          <div class="update-card-body">
+            <h2>One authorization gate for the API</h2>
+            <p>
+              Every API route now goes through a single deny-by-default
+              authorization gate that enforces object access from a declared
+              policy. A route with no declared policy is refused rather than
+              served, so a share link or API token can only reach what it was
+              granted. This release also fixes snapshot restore hard-deleting
+              files that were added after the snapshot was taken, and stops
+              deletions removing pictures in locked sets.
+            </p>
+          </div>
+        </article>
+
+        <section class="release-cta">
+          <div>
+            <h3>Get PixlStash 1.8</h3>
+            <p>
+              Download the desktop app for Windows, macOS, or Linux. Or keep
+              using pip, Docker, or the source build.
+            </p>
+          </div>
+          <div class="release-cta-actions">
+            <a class="release-btn release-btn-primary" href="install.html"
+              >Download</a
+            >
+            <a class="release-btn release-btn-secondary" href="upgrade.html"
+              >Upgrade guide</a
+            >
+          </div>
+        </section>
+
+        <!-- ── PixlStash 1.7 (previous release) ────────────────────────── -->
+      </div>
+
       <div class="prev-release">
         <span class="prev-release-label">Previous release: PixlStash 1.7</span>
 
-      <section class="release-hero">
-        <div class="release-hero-inner">
-          <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.7</span>
-            <h1>Fix your tags, one clear decision at a time</h1>
-            <p>
-              PixlStash 1.7 adds a <strong>tag review queue</strong>. It finds
-              the tags most likely to be wrong or missing in your library and
-              walks you through them picture by picture. Each card shows why
-              the picture was flagged and asks one question: should this
-              picture have the tag or not. Answer with a click or a single
-              key, and the tagger learns from your decisions.
-            </p>
-            <ul class="release-bullets">
-              <li>
-                A ranked queue of the tags most worth reviewing, with
-                estimated wrong and missing counts per tag
-              </li>
-              <li>
-                Lockable picture sets: freeze a set as a read-only eval or
-                training set
-              </li>
-              <li>
-                Object detection that draws labelled boxes and exports them as
-                COCO or Ideogram JSON
-              </li>
-              <li>
-                A smarter, calibrated Smart Score with new checks for
-                compression artifacts, noise, and watermarks
-              </li>
-              <li>A refreshed visual design across the whole app</li>
-            </ul>
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.7</span>
+              <h1>Fix your tags, one clear decision at a time</h1>
+              <p>
+                PixlStash 1.7 adds a <strong>tag review queue</strong>. It finds
+                the tags most likely to be wrong or missing in your library and
+                walks you through them picture by picture. Each card shows why
+                the picture was flagged and asks one question: should this
+                picture have the tag or not. Answer with a click or a single
+                key, and the tagger learns from your decisions.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  A ranked queue of the tags most worth reviewing, with
+                  estimated wrong and missing counts per tag
+                </li>
+                <li>
+                  Lockable picture sets: freeze a set as a read-only eval or
+                  training set
+                </li>
+                <li>
+                  Object detection that draws labelled boxes and exports them as
+                  COCO or Ideogram JSON
+                </li>
+                <li>
+                  A smarter, calibrated Smart Score with new checks for
+                  compression artifacts, noise, and watermarks
+                </li>
+                <li>A refreshed visual design across the whole app</li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotReview1.jpg"
+                alt="PixlStash 1.7 tag review card asking whether a picture should have a tag, with similar images shown for context"
+              />
+            </div>
           </div>
-          <div class="release-hero-media">
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>See which tags need attention</h2>
+              <p>
+                The tag health view ranks every tag in your library by how much
+                a review is likely to fix. It estimates how many pictures have
+                the tag wrongly, how many are missing it, and where the tagger
+                disagrees with your past decisions. Start a review straight from
+                the row, and filter by project, set, or character to keep the
+                session focused.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotReview3.jpg"
+                alt="Tag health table ranking tags by review priority with estimated wrong and missing counts"
+              />
+            </div>
+          </article>
+        </section>
+
+        <section class="section-grid">
+          <article class="update-card">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotReview1.jpg"
-              alt="PixlStash 1.7 tag review card asking whether a picture should have a tag, with similar images shown for context"
+              src="assets/ScreenshotLockSets.jpg"
+              alt="Sidebar context menu locking a picture set in PixlStash"
             />
-          </div>
-        </div>
-      </section>
+            <div class="update-card-body">
+              <h2>Lock a set when it is done</h2>
+              <p>
+                Lock a picture set to freeze its pictures' tags, descriptions,
+                and scores. Locked sets are read-only until you unlock them, and
+                a lock badge shows wherever the pictures appear. Useful for eval
+                sets and training data that must not drift after you have
+                curated them.
+              </p>
+            </div>
+          </article>
 
-      <section class="section-grid">
-        <article class="update-card update-card--feature">
-          <div class="update-card-body">
-            <h2>See which tags need attention</h2>
-            <p>
-              The tag health view ranks every tag in your library by how much
-              a review is likely to fix. It estimates how many pictures have
-              the tag wrongly, how many are missing it, and where the tagger
-              disagrees with your past decisions. Start a review straight from
-              the row, and filter by project, set, or character to keep the
-              session focused.
-            </p>
-          </div>
-          <div class="update-card-media">
+          <article class="update-card">
             <img
               class="zoomable-image"
-              src="assets/ScreenshotReview3.jpg"
-              alt="Tag health table ranking tags by review priority with estimated wrong and missing counts"
+              src="assets/ScreenshotSegmentation.jpg"
+              alt="Object detection in PixlStash drawing labelled bounding boxes around a camera, a car, and starfish"
             />
-          </div>
-        </article>
-      </section>
+            <div class="update-card-body">
+              <h2>Find the objects in your pictures</h2>
+              <p>
+                A new Segment action detects objects and draws labelled boxes in
+                the grid and the picture view. Export the boxes as COCO or
+                Ideogram JSON to use them in your own training and annotation
+                pipelines.
+              </p>
+            </div>
+          </article>
+        </section>
 
-      <section class="section-grid">
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotLockSets.jpg"
-            alt="Sidebar context menu locking a picture set in PixlStash"
-          />
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>A cleaner look across the app</h2>
+              <p>
+                The whole app has been restyled on a design token system, with
+                consistent type, colour, spacing, and icons. Dialogs, menus, and
+                settings follow one visual language, in both light and dark
+                themes.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotSettings.jpg"
+                alt="The refreshed PixlStash settings dialog in the new visual design"
+              />
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
           <div class="update-card-body">
-            <h2>Lock a set when it is done</h2>
+            <h2>A Smart Score you can trust more</h2>
             <p>
-              Lock a picture set to freeze its pictures' tags, descriptions,
-              and scores. Locked sets are read-only until you unlock them, and
-              a lock badge shows wherever the pictures appear. Useful for eval
-              sets and training data that must not drift after you have
-              curated them.
+              Smart Score is now calibrated and precision aware. It weighs each
+              defect tag by how confident the tagger is, groups related defects
+              so correlated flaws do not count twice, and adds three new
+              full-image checks for compression blockiness, noise, and
+              watermarks. Your whole library is re-scored in the background the
+              first time you open 1.7, so the grid may re-order compared to 1.6.
+              That is expected. Your originals and snapshots are untouched.
             </p>
           </div>
         </article>
-
-        <article class="update-card">
-          <img
-            class="zoomable-image"
-            src="assets/ScreenshotSegmentation.jpg"
-            alt="Object detection in PixlStash drawing labelled bounding boxes around a camera, a car, and starfish"
-          />
-          <div class="update-card-body">
-            <h2>Find the objects in your pictures</h2>
-            <p>
-              A new Segment action detects objects and draws labelled boxes in
-              the grid and the picture view. Export the boxes as COCO or
-              Ideogram JSON to use them in your own training and annotation
-              pipelines.
-            </p>
-          </div>
-        </article>
-      </section>
-
-      <section class="section-grid">
-        <article class="update-card update-card--feature">
-          <div class="update-card-body">
-            <h2>A cleaner look across the app</h2>
-            <p>
-              The whole app has been restyled on a design token system, with
-              consistent type, colour, spacing, and icons. Dialogs, menus, and
-              settings follow one visual language, in both light and dark
-              themes.
-            </p>
-          </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotSettings.jpg"
-              alt="The refreshed PixlStash settings dialog in the new visual design"
-            />
-          </div>
-        </article>
-      </section>
-
-      <article class="update-card" style="margin-top: 20px">
-        <div class="update-card-body">
-          <h2>A Smart Score you can trust more</h2>
-          <p>
-            Smart Score is now calibrated and precision aware. It weighs each
-            defect tag by how confident the tagger is, groups related defects
-            so correlated flaws do not count twice, and adds three new
-            full-image checks for compression blockiness, noise, and
-            watermarks. Your whole library is re-scored in the background the
-            first time you open 1.7, so the grid may re-order compared to 1.6.
-            That is expected. Your originals and snapshots are untouched.
-          </p>
-        </div>
-      </article>
-
       </div>
       <!-- end prev-release 1.7 -->
 
@@ -893,103 +1220,102 @@
       <div class="prev-release">
         <span class="prev-release-label">Previous release: PixlStash 1.6</span>
 
-      <section class="release-hero">
-        <div class="release-hero-inner">
-          <div class="release-copy">
-            <span class="release-kicker">PixlStash 1.6</span>
-            <h1>PixlStash comes to the desktop</h1>
-            <p>
-              PixlStash 1.6 introduces the <strong>PixlStash Desktop</strong>
-              app for Windows, macOS, and Linux: one download that wraps the
-              local server in a native window. It runs offline out of the box
-              and opens straight into your library. No terminal, no Docker, no
-              login screen.
-            </p>
-            <p>
-              Already running PixlStash from pip, Docker, or the Windows
-              installer? The desktop app picks up your existing library, so
-              nothing moves and nothing is lost.
-            </p>
-            <ul class="release-bullets">
-              <li>
-                A native app for Windows, macOS (Apple Silicon), and Linux: one
-                download, simple install.
-              </li>
-              <li>
-                Runs offline out of the box and opens straight into your
-                library, no login
-              </li>
-              <li>
-                GPU acceleration added on demand. NVIDIA CUDA and experimental
-                AMD ROCm
-              </li>
-              <li>
-                Lives in the system tray and keeps serving in the background
-                when you close the window
-              </li>
-              <li>
-                Optional remote access so other devices on your network can open
-                your library
-              </li>
-              <li>
-                Don't worry: PixlStash server isn't going anywhere. It remains
-                and will remain a clear focus.
-              </li>
-            </ul>
+        <section class="release-hero">
+          <div class="release-hero-inner">
+            <div class="release-copy">
+              <span class="release-kicker">PixlStash 1.6</span>
+              <h1>PixlStash comes to the desktop</h1>
+              <p>
+                PixlStash 1.6 introduces the <strong>PixlStash Desktop</strong>
+                app for Windows, macOS, and Linux: one download that wraps the
+                local server in a native window. It runs offline out of the box
+                and opens straight into your library. No terminal, no Docker, no
+                login screen.
+              </p>
+              <p>
+                Already running PixlStash from pip, Docker, or the Windows
+                installer? The desktop app picks up your existing library, so
+                nothing moves and nothing is lost.
+              </p>
+              <ul class="release-bullets">
+                <li>
+                  A native app for Windows, macOS (Apple Silicon), and Linux:
+                  one download, simple install.
+                </li>
+                <li>
+                  Runs offline out of the box and opens straight into your
+                  library, no login
+                </li>
+                <li>
+                  GPU acceleration added on demand. NVIDIA CUDA and experimental
+                  AMD ROCm
+                </li>
+                <li>
+                  Lives in the system tray and keeps serving in the background
+                  when you close the window
+                </li>
+                <li>
+                  Optional remote access so other devices on your network can
+                  open your library
+                </li>
+                <li>
+                  Don't worry: PixlStash server isn't going anywhere. It remains
+                  and will remain a clear focus.
+                </li>
+              </ul>
+            </div>
+            <div class="release-hero-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotApp.jpg"
+                alt="PixlStash 1.6: the desktop app showing the library grid in a native window"
+              />
+            </div>
           </div>
-          <div class="release-hero-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotApp.jpg"
-              alt="PixlStash 1.6: the desktop app showing the library grid in a native window"
-            />
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section class="section-grid">
-        <article class="update-card update-card--feature">
+        <section class="section-grid">
+          <article class="update-card update-card--feature">
+            <div class="update-card-body">
+              <h2>Match the speed to your hardware</h2>
+              <p>
+                The app ships with a built-in runtime that works on any machine:
+                CPU on Windows and Linux, and Apple Silicon GPU acceleration
+                (Metal) on macOS out of the box. On Windows and Linux, if you
+                have a discrete GPU, add acceleration on demand from the
+                <strong>Backend</strong> settings and choose from NVIDIA CUDA or
+                experimental AMD ROCm libraries download straight from PyPI into
+                a private overlay, and the bundled runtime is never touched. The
+                same panel turns on optional <strong>remote access</strong> so
+                other devices on your network can open the library in a browser
+                in the same way as PixlStash server.
+              </p>
+            </div>
+            <div class="update-card-media">
+              <img
+                class="zoomable-image"
+                src="assets/ScreenshotBackend.jpg"
+                alt="PixlStash desktop Backend settings: compute acceleration and remote access"
+              />
+            </div>
+          </article>
+        </section>
+
+        <article class="update-card" style="margin-top: 20px">
           <div class="update-card-body">
-            <h2>Match the speed to your hardware</h2>
+            <h2>Runs offline, lives in your tray</h2>
             <p>
-              The app ships with a built-in runtime that works on any machine:
-              CPU on Windows and Linux, and Apple Silicon GPU acceleration
-              (Metal) on macOS out of the box. On Windows and Linux, if you have
-              a discrete GPU, add acceleration on demand from the
-              <strong>Backend</strong> settings and choose from NVIDIA CUDA or
-              experimental AMD ROCm libraries download straight from PyPI into a
-              private overlay, and the bundled runtime is never touched. The
-              same panel turns on optional <strong>remote access</strong> so
-              other devices on your network can open the library in a browser in
-              the same way as PixlStash server.
+              Everything is local. The bundled runtime means the app works with
+              no internet connection, and it opens directly into your library
+              with no login prompt because it talks to its own private local
+              server. Close the window and PixlStash keeps running in the system
+              tray, so your library, and any remote access you enabled, stays a
+              click away. The pip, Docker, and source installs are all still
+              fully supported; the desktop app is simply the easiest way to run
+              PixlStash on your own machine.
             </p>
-          </div>
-          <div class="update-card-media">
-            <img
-              class="zoomable-image"
-              src="assets/ScreenshotBackend.jpg"
-              alt="PixlStash desktop Backend settings: compute acceleration and remote access"
-            />
           </div>
         </article>
-      </section>
-
-      <article class="update-card" style="margin-top: 20px">
-        <div class="update-card-body">
-          <h2>Runs offline, lives in your tray</h2>
-          <p>
-            Everything is local. The bundled runtime means the app works with no
-            internet connection, and it opens directly into your library with no
-            login prompt because it talks to its own private local server. Close
-            the window and PixlStash keeps running in the system tray, so your
-            library, and any remote access you enabled, stays a click away.
-            The pip, Docker, and source installs are all still fully supported;
-            the desktop app is simply the easiest way to run PixlStash on your
-            own machine.
-          </p>
-        </div>
-      </article>
-
       </div>
       <!-- end prev-release 1.6 -->
 
@@ -1085,8 +1411,8 @@
                 Reorganise on the fly: grab a character or picture set in the
                 sidebar and drop it onto another project. Their pictures are
                 re-assigned for you. The move is reference-aware, so a picture
-                that still belongs elsewhere stays put. Reshaping large libraries is now a
-                drag away.
+                that still belongs elsewhere stays put. Reshaping large
+                libraries is now a drag away.
               </p>
             </div>
           </article>
@@ -1100,8 +1426,8 @@
               never the image files, which would be wildly impractical to
               duplicate over and over. That database is compressed with
               <strong>zstd</strong> for roughly a 3× saving, yet still keeps the
-              expensive parts, CLIP embeddings and face data, so a restore
-              comes back fully populated with no re-tagging or re-embedding pass
+              expensive parts, CLIP embeddings and face data, so a restore comes
+              back fully populated with no re-tagging or re-embedding pass
               afterwards. Retention follows a true grandfather-father-son
               policy: the most recent <strong>7 daily</strong>,
               <strong>4 weekly</strong>, and
@@ -1438,8 +1764,9 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
               <p>
                 The settings page now lets you choose which plugin handles
                 automatic tagging and which generates image descriptions. Each
-                engine has its own parameter controls, so you can tweak precision, prompt
-                style, and thresholds without leaving the settings panel.
+                engine has its own parameter controls, so you can tweak
+                precision, prompt style, and thresholds without leaving the
+                settings panel.
               </p>
             </div>
           </article>
@@ -1453,10 +1780,10 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
             <div class="update-card-body">
               <h2>Persistent view URLs</h2>
               <p>
-                Every view, whether grid, character, picture set, or project, has its
-                own URL. Bookmark it, share it with a teammate, or simply
-                refresh and land exactly where you left off. No more navigating
-                back from scratch after an accidental reload.
+                Every view, whether grid, character, picture set, or project,
+                has its own URL. Bookmark it, share it with a teammate, or
+                simply refresh and land exactly where you left off. No more
+                navigating back from scratch after an accidental reload.
               </p>
             </div>
           </article>
@@ -1488,11 +1815,11 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
             <h2>Snappy grid loading</h2>
             <p>
               The image grid renders the visual content immediately and fills in
-              metadata such as scores, tags, and faces asynchronously in the background.
-              The result is a dramatically snappier feel: thumbnails appear
-              before the first server response has even finished, and the grid
-              stays responsive while data loads in. This is the single biggest
-              day-to-day improvement in 1.3.
+              metadata such as scores, tags, and faces asynchronously in the
+              background. The result is a dramatically snappier feel: thumbnails
+              appear before the first server response has even finished, and the
+              grid stays responsive while data loads in. This is the single
+              biggest day-to-day improvement in 1.3.
             </p>
           </div>
         </article>
@@ -1538,9 +1865,9 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
               <h2>Picture Sharing</h2>
               <p>
                 Share individual pictures, sets, characters, and projects with
-                anyone using a read-only link. No account is required for viewers.
-                Tokens are scoped, revocable, and never expose your full
-                library. Ideal for sharing work-in-progress with clients or
+                anyone using a read-only link. No account is required for
+                viewers. Tokens are scoped, revocable, and never expose your
+                full library. Ideal for sharing work-in-progress with clients or
                 collaborators. Optionally add your own watermarks to shared
                 pictures for branding.
               </p>
@@ -1566,8 +1893,7 @@ print(r.json())  <span class="tok-comment"># {'snapshot_id': 42, 'upserted_count
               <h2>Recipient view</h2>
               <p>
                 Recipients see a clean, read-only view of exactly what you
-                shared. No login, no noise, just the content you chose to
-                share.
+                shared. No login, no noise, just the content you chose to share.
               </p>
             </div>
           </article>

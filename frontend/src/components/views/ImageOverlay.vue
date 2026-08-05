@@ -511,17 +511,18 @@
                 </template>
                 <template v-else>
                   <img
-                    v-if="!fullImageError"
+                    v-if="fullImageSrc && !fullImageError"
+                    :key="fullImageSrc"
                     ref="imgRef"
-                    :src="getFullImageUrl(image)"
+                    :src="fullImageSrc"
                     :alt="image.description || 'Full Image'"
                     class="overlay-img"
                     :draggable="!isZoomed"
                     @dragstart="handleMediaDragStart"
-                    @load="updateOverlayDims"
+                    @load="handleFullImageLoad"
                     @error="handleFullImageError"
                   />
-                  <div v-else class="overlay-image-error">
+                  <div v-else-if="fullImageError" class="overlay-image-error">
                     <v-icon size="64" color="grey-lighten-1"
                       >mdi-image-broken-variant</v-icon
                     >
@@ -781,6 +782,15 @@
       @close="handleCreatePersonClose"
       @saved="handleCreatePersonSaved"
     />
+    <OverlaySaveAsDialog
+      v-if="fallbackSaveDialog.open"
+      :open="fallbackSaveDialog.open"
+      :suggested-name="fallbackSaveDialog.suggestedName"
+      :original-extension="fallbackSaveDialog.originalExtension"
+      :media-noun="fallbackSaveDialog.mediaNoun"
+      @close="closeFallbackSaveDialog"
+      @save="confirmFallbackSaveDialog"
+    />
   </div>
 </template>
 
@@ -809,6 +819,7 @@ import {
   listPictureFaces,
   listPictureDetections,
   addPictureFace,
+  downloadPicture,
 } from "../../api/pictures";
 import {
   listCharacters,
@@ -829,7 +840,6 @@ import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
-import { copyText } from "../../utils/clipboard";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import CharacterEditor from "../editors/CharacterEditor.vue";
@@ -838,6 +848,7 @@ import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
+import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
@@ -850,6 +861,43 @@ const noticeStore = useNoticeStore();
 // (OverlayActionReceipt, in the lightbox's own dark chrome).
 const operationStore = useOperationStore();
 const receiptRef = ref(null);
+const fallbackSaveDialog = ref({
+  open: false,
+  suggestedName: "",
+  originalExtension: "",
+  mediaNoun: "picture",
+});
+let fallbackSaveResolver = null;
+
+function closeFallbackSaveDialog() {
+  fallbackSaveDialog.value = { ...fallbackSaveDialog.value, open: false };
+  const resolve = fallbackSaveResolver;
+  fallbackSaveResolver = null;
+  resolve?.(null);
+}
+
+function confirmFallbackSaveDialog(filename) {
+  fallbackSaveDialog.value = { ...fallbackSaveDialog.value, open: false };
+  const resolve = fallbackSaveResolver;
+  fallbackSaveResolver = null;
+  resolve?.(filename);
+}
+
+function requestFallbackSaveFilename(info) {
+  closeFallbackSaveDialog();
+  fallbackSaveDialog.value = {
+    open: true,
+    suggestedName: info.filename,
+    // Keep the suffix the user already recognises from the original filename.
+    // The stored media format can be an equivalent alias (jpg vs jpeg), but
+    // Save As should never rewrite the visible default name behind their back.
+    originalExtension: MediaFormat(info.filename) || info.format,
+    mediaNoun: info.noun,
+  };
+  return new Promise((resolve) => {
+    fallbackSaveResolver = resolve;
+  });
+}
 /** A receipt is on screen: the two bottom-centre hints stand down while it is. */
 const hasReceipt = computed(() => Boolean(operationStore.receipt));
 
@@ -1103,7 +1151,6 @@ const descriptionPanelRef = ref(null);
 const isDescriptionEditing = computed(
   () => descriptionPanelRef.value?.isEditingDescription ?? false,
 );
-const overlayCopyState = ref("idle");
 const imagePlaceholderLabel = "{{image_path}}";
 const captionPlaceholderLabel = "{{caption}}";
 const descriptionTeaser = computed(() => {
@@ -1991,14 +2038,13 @@ watch(image, (newImage, oldImage) => {
   if (newImage?.id === oldImage?.id) return;
   comfyuiCaptionTouched.value = false;
   comfyuiCaption.value = "";
-  resetOverlayCopyState();
 });
 
 watch(open, (isOpen) => {
   if (!isOpen) {
     descriptionPanelRef.value?.cancelEditDescription();
     descriptionPanelRef.value?.resetCopyState();
-    resetOverlayCopyState();
+    closeFallbackSaveDialog();
   }
 });
 
@@ -2092,6 +2138,12 @@ function isTypingTarget(target) {
   );
 }
 
+function hasNativeCopyContext(target) {
+  if (isTypingTarget(target)) return true;
+  const selection = typeof window === "undefined" ? null : window.getSelection?.();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
+}
+
 function handleKeydown(e) {
   if (!open.value) return;
   // Prevent other window keydown listeners (e.g. ImageGrid) from seeing this
@@ -2137,16 +2189,31 @@ function handleKeydown(e) {
     (e.ctrlKey || e.metaKey) &&
     !e.altKey &&
     !e.repeat &&
-    !isReadOnly.value &&
     !isTypingTarget(e.target)
   ) {
-    const undoKey = e.key?.toLowerCase();
-    if (undoKey === "z" && !e.shiftKey) {
+    const commandKey = e.key?.toLowerCase();
+    if (!e.shiftKey && commandKey === "s" && image.value?.id) {
+      e.preventDefault();
+      saveMedia(buildContextMenuImage());
+      return;
+    }
+    if (
+      !e.shiftKey &&
+      commandKey === "c" &&
+      !hasNativeCopyContext(e.target) &&
+      copyAvailability().available
+    ) {
+      e.preventDefault();
+      copyMedia(buildContextMenuImage());
+      return;
+    }
+    if (isReadOnly.value) return;
+    if (commandKey === "z" && !e.shiftKey) {
       e.preventDefault();
       operationStore.undo();
       return;
     }
-    if (undoKey === "y" || (undoKey === "z" && e.shiftKey)) {
+    if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
       e.preventDefault();
       operationStore.redo();
       return;
@@ -2246,19 +2313,6 @@ function handleKeydown(e) {
     } else {
       return;
     }
-  }
-
-  if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C")) {
-    const isEditable =
-      target &&
-      (target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target.isContentEditable);
-    if (!isEditable) {
-      e.preventDefault();
-      copyOverlayImage();
-    }
-    return;
   }
 
   if (e.key === "Escape") {
@@ -2406,10 +2460,15 @@ function handleBackdropClick() {
 // / spellcheck in the description and tag fields).
 function buildContextMenuImage() {
   if (!image.value?.id) return null;
+  const copy = copyAvailability();
+  const video = isSupportedVideoFile(getOverlayFormat(image.value));
   return {
     ...image.value,
     format: getOverlayFormat(image.value),
     faces: Array.isArray(faceBboxes.value) ? faceBboxes.value : [],
+    mediaKind: video ? "video" : "picture",
+    copyAvailable: copy.available,
+    copyUnavailableReason: copy.reason,
   };
 }
 
@@ -2842,6 +2901,76 @@ const videoSrc = computed(() => {
     `${backendUrl.value}/pictures/${id}.${fmt.toLowerCase()}`,
   );
 });
+// A cold overlay route initially knows only the picture id. An extension-less
+// `/pictures/{id}` is the JSON detail endpoint, not media: mounting it as an
+// <img> yields a successful HTTP response followed by a decode error. Wait for
+// the metadata/grid record to provide the real format before creating the
+// native image element.
+function buildFullImageSrc(data) {
+  const id = data?.id;
+  const fmt = MediaFormat(data);
+  if (!id || !fmt || isSupportedVideoFile(`file.${fmt}`)) return "";
+  return getFullImageUrl(data);
+}
+
+// The media URL carries `?v=<pixel_sha>` so an in-place pixel edit busts any
+// cached copy. `pixel_sha` is not part of the grid payload, though, so on a
+// normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
+// <img> has already started (usually finished) loading the un-busted URL.
+// Letting that late arrival rewrite the src remounts the element
+// (`:key="fullImageSrc"`) and refetches a URL the HTTP cache has never seen:
+// the blank-then-reload flash on the first view of a picture in a session. It
+// also wasted the neighbour preloads, which build the un-busted URL from the
+// same grid records.
+//
+// Learning the sha is not a pixel change, so the buster baked into the shown
+// URL is pinned for as long as that picture keeps displaying the same bytes. It
+// only moves when the picture changes, when nothing was on screen yet (the cold
+// route, still waiting on the format), or when the sha goes from one KNOWN
+// value to another — a genuine in-place edit, where the reload is the point.
+// Freshness is not at risk in between: the media route answers `no-cache,
+// must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
+// every load regardless of the buster.
+const displayedPixelSha = ref(null); // baked into the URL currently rendered
+const knownPixelSha = ref(null); // latest sha observed for that picture
+
+watch(
+  () => {
+    const data = image.value;
+    return {
+      id: data?.id ?? null,
+      sha: data?.pixel_sha ?? null,
+      hasMedia: Boolean(buildFullImageSrc(data)),
+    };
+  },
+  (next, prev) => {
+    const samePicture =
+      prev && next.id !== null && String(next.id) === String(prev.id);
+    if (!samePicture || !prev.hasMedia) {
+      displayedPixelSha.value = next.sha;
+      knownPixelSha.value = next.sha;
+      return;
+    }
+    // A record that simply doesn't carry the field (any grid-shaped refresh of
+    // the same picture) says nothing about the pixels — keep what we know.
+    if (next.sha === null || next.sha === knownPixelSha.value) return;
+    const firstSighting = knownPixelSha.value === null;
+    knownPixelSha.value = next.sha;
+    if (!firstSighting) displayedPixelSha.value = next.sha;
+  },
+  { immediate: true },
+);
+
+const fullImageSrc = computed(() => {
+  const data = image.value;
+  if (!data) return "";
+  const pinned = displayedPixelSha.value;
+  // Rebuilt from the live record so a backend-url, format or share-token change
+  // still flows through; only the cache-buster is held back.
+  return buildFullImageSrc(
+    pinned === (data.pixel_sha ?? null) ? data : { ...data, pixel_sha: pinned },
+  );
+});
 const overlayDims = ref({
   width: 1,
   height: 1,
@@ -3056,11 +3185,32 @@ function syncZoomMeasurements() {
 
 watch(image, () => scheduleOverlayDimsUpdate());
 
-const fullImageError = ref(false); // full-size <img> fired @error (e.g. undecodable source)
+// Record the URL that failed rather than a picture-wide boolean. Metadata and
+// pixel updates can revise the media URL without changing the picture id; an
+// error from the superseded URL must not hide the replacement image.
+const fullImageErrorSrc = ref("");
+const fullImageError = computed(
+  () =>
+    Boolean(fullImageSrc.value) &&
+    fullImageErrorSrc.value === fullImageSrc.value,
+);
+
+function mediaEventSrc(event) {
+  return event?.target?.getAttribute?.("src") || "";
+}
+
+function handleFullImageLoad(event) {
+  // Ignore a late event from the element replaced by a reactive src change.
+  if (mediaEventSrc(event) !== fullImageSrc.value) return;
+  fullImageErrorSrc.value = "";
+  updateOverlayDims();
+}
 
 function handleFullImageError(event) {
-  console.warn("Full image load error for", event?.target?.src);
-  fullImageError.value = true;
+  const failedSrc = mediaEventSrc(event);
+  if (!failedSrc || failedSrc !== fullImageSrc.value) return;
+  console.warn("Full image load error for", event?.target?.src || failedSrc);
+  fullImageErrorSrc.value = failedSrc;
 }
 
 function handleVideoError(event) {
@@ -3110,8 +3260,8 @@ onUnmounted(() => {
     clearTimeout(swipeHintTimer);
     swipeHintTimer = null;
   }
-  resetOverlayCopyState();
   clearCharacterThumbnails();
+  closeFallbackSaveDialog();
 });
 
 watch(open, (isOpen) => {
@@ -3809,7 +3959,7 @@ watch(
         offsetY: 0,
       };
       videoError.value = null;
-      fullImageError.value = false;
+      fullImageErrorSrc.value = "";
       scheduleOverlayDimsUpdate();
       fetchFaceBboxes(newId);
       fetchDetections(newId);
@@ -3820,7 +3970,7 @@ watch(
       faceBboxes.value = [];
       detectionBboxes.value = [];
       videoError.value = null;
-      fullImageError.value = false;
+      fullImageErrorSrc.value = "";
       comfyMetadata.value = null;
     }
   },
@@ -3983,98 +4133,263 @@ function handleDescriptionUpdate(imageId, newDescription) {
   emit("update-description", imageId, newDescription);
 }
 
-async function copyOverlayImage() {
-  if (!image.value) return;
-  const url = getFullImageUrl(image.value);
-  let copied;
-  try {
-    if (isSupportedVideoFile(getOverlayFormat(image.value))) {
-      copied = await copyVideoFrameToClipboard();
-    } else {
-      copied = await copyImageElementToClipboard();
-    }
-    if (!copied) {
-      copied = await copyImageByFetch(url);
-    }
-    if (!copied) {
-      await copyTextToClipboard(url);
-    }
-    overlayCopyState.value = "copied";
-    if (overlayCopyResetTimer) {
-      clearTimeout(overlayCopyResetTimer);
-    }
-    overlayCopyResetTimer = window.setTimeout(() => {
-      resetOverlayCopyState();
-    }, 2000);
-  } catch (err) {
-    try {
-      await copyTextToClipboard(url);
-      overlayCopyState.value = "copied";
-    } catch (fallbackErr) {
-      console.warn("Failed to copy overlay image:", fallbackErr || err);
-    }
-  }
+function mediaActionInfo(target = null) {
+  const media = target || image.value;
+  const format = MediaFormat(media);
+  if (!media?.id || !format) return null;
+  const video = isSupportedVideoFile(`file.${format}`);
+  return {
+    ...media,
+    format,
+    mediaKind: video ? "video" : "picture",
+    noun: video ? "video" : "picture",
+    filename: safeDownloadName(
+      media.original_file_name,
+      `${media.id}.${format}`,
+    ),
+  };
 }
 
-async function copyImageElementToClipboard() {
-  const imgEl = imgRef.value;
-  if (!imgEl || !imgEl.complete) return false;
-  const canvas = document.createElement("canvas");
-  canvas.width = imgEl.naturalWidth || imgEl.width;
-  canvas.height = imgEl.naturalHeight || imgEl.height;
-  if (!canvas.width || !canvas.height) return false;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return false;
+function mediaActionError(err, fallback = "Please try again.") {
+  return (
+    err?.response?.data?.detail || err?.message || String(err || fallback)
+  );
+}
+
+function triggerMediaDownload(blob, filename) {
+  const link = document.createElement("a");
+  const objectUrl = URL.createObjectURL(blob);
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+    link.remove();
+  }, 2000);
+}
+
+async function fetchOriginalMedia(info) {
+  return downloadPicture(info.id, info.format, {
+    version: info.pixel_sha,
+    baseUrl: backendUrl.value,
+  });
+}
+
+async function saveMedia(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
   try {
-    ctx.drawImage(imgEl, 0, 0);
-    const blob = await canvasToBlob(canvas, "image/png");
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
+    const blob = await fetchOriginalMedia(info);
+    triggerMediaDownload(blob, info.filename);
+    noticeStore.success(`Download started for ${info.filename}.`, {
+      key: "save-overlay-media",
+    });
+    return true;
+  } catch (err) {
+    console.error("Failed to save overlay media", err);
+    noticeStore.error(
+      `Couldn't save that ${info.noun}. ${mediaActionError(err)}`,
+      { key: "save-overlay-media" },
+    );
     return false;
   }
 }
 
-async function copyVideoFrameToClipboard() {
-  const videoEl = videoRef.value;
-  if (!videoEl || videoEl.readyState < 2) return false;
-  const width = videoEl.videoWidth || videoEl.clientWidth;
-  const height = videoEl.videoHeight || videoEl.clientHeight;
-  if (!width || !height) return false;
+function savePickerOptions(info) {
+  const mime = mediaMimeType(info);
+  const validType =
+    /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(mime) &&
+    /^[a-z0-9]{1,16}$/i.test(info.format);
+  return {
+    suggestedName: info.filename,
+    ...(validType
+      ? {
+          types: [
+            {
+              description: info.mediaKind === "video" ? "Video" : "Picture",
+              accept: { [mime]: [`.${info.format}`] },
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
+async function saveMediaAs(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
+  const desktop = window.pixlstashDesktop;
+  let pickerOpened = false;
+  try {
+    if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
+      const choice = await desktop.beginMediaSaveAs(info.filename);
+      if (choice?.canceled) return false;
+      if (!choice?.saveId) throw new Error("The desktop save dialog did not return a save request.");
+      try {
+        const blob = await fetchOriginalMedia(info);
+        const result = await desktop.completeMediaSaveAs(
+          choice.saveId,
+          await blob.arrayBuffer(),
+        );
+        if (!result?.saved) throw new Error("The desktop app did not write the file.");
+      } catch (err) {
+        await desktop.cancelMediaSaveAs?.(choice.saveId);
+        throw err;
+      }
+      noticeStore.success(`Saved ${info.filename}.`, {
+        key: "save-overlay-media-as",
+      });
+      return true;
+    }
+
+    if (typeof window.showSaveFilePicker === "function") {
+      // The picker must be opened before the media fetch: the web API requires
+      // transient user activation, while the later writable stream does not.
+      const handle = await window.showSaveFilePicker(savePickerOptions(info));
+      pickerOpened = true;
+      const savedFilename = safeDownloadName(handle?.name, info.filename);
+      const blob = await fetchOriginalMedia(info);
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      noticeStore.success(`Saved ${savedFilename}.`, {
+        key: "save-overlay-media-as",
+      });
+      return true;
+    }
+
+    const fallbackFilename = await requestFallbackSaveFilename(info);
+    if (!fallbackFilename) return false;
+    // A direct backend URL can override the anchor's download name through its
+    // response headers (observed in Firefox). Reuse regular Save's authenticated
+    // blob path so the filename chosen in our dialog remains authoritative.
+    const blob = await fetchOriginalMedia(info);
+    triggerMediaDownload(blob, fallbackFilename);
+    noticeStore.info(
+      `Download started as ${fallbackFilename}. Your browser controls the download folder.`,
+      { key: "save-overlay-media-as" },
+    );
+    return true;
+  } catch (err) {
+    // Dismissing the picker is not an error. Once a handle exists, an AbortError
+    // can instead mean the write was interrupted and should be reported.
+    if (!pickerOpened && err?.name === "AbortError") return false;
+    console.error("Failed to save overlay media as", err);
+    noticeStore.error(
+      `Couldn't save that ${info.noun}. ${mediaActionError(err)}`,
+      { key: "save-overlay-media-as" },
+    );
+    return false;
+  }
+}
+
+function copyAvailability() {
+  const desktopCapable =
+    typeof window.pixlstashDesktop?.copyPngToClipboard === "function";
+  const browserCapable = Boolean(
+    navigator?.clipboard?.write && typeof window.ClipboardItem === "function",
+  );
+  if (!desktopCapable && !browserCapable) {
+    return {
+      available: false,
+      reason:
+        "This browser cannot copy image pixels. Save the media instead.",
+    };
+  }
+  const video = isSupportedVideoFile(getOverlayFormat(image.value));
+  if (video) {
+    const el = videoRef.value;
+    if (!el || el.readyState < 2 || !el.videoWidth || !el.videoHeight) {
+      return {
+        available: false,
+        reason: "The video frame is still loading and cannot be copied yet.",
+      };
+    }
+  } else {
+    const el = imgRef.value;
+    if (!el?.complete || !el.naturalWidth || !el.naturalHeight) {
+      return {
+        available: false,
+        reason: "The picture is still loading and cannot be copied yet.",
+      };
+    }
+  }
+  return { available: true, reason: "" };
+}
+
+async function renderMediaPng(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info || String(info.id) !== String(image.value?.id)) {
+    throw new Error("That media is no longer displayed.");
+  }
+  const source = info.mediaKind === "video" ? videoRef.value : imgRef.value;
+  const width =
+    info.mediaKind === "video" ? source?.videoWidth : source?.naturalWidth;
+  const height =
+    info.mediaKind === "video" ? source?.videoHeight : source?.naturalHeight;
+  if (!source || !width || !height) {
+    throw new Error(
+      info.mediaKind === "video"
+        ? "The current video frame is not ready."
+        : "The picture is not ready.",
+    );
+  }
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return false;
+  if (!ctx) throw new Error("This browser cannot create a PNG image.");
   try {
-    ctx.drawImage(videoEl, 0, 0, width, height);
-    const blob = await canvasToBlob(canvas, "image/png");
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
-    return false;
+    ctx.drawImage(source, 0, 0, width, height);
+  } catch (err) {
+    throw new Error(
+      `The media pixels could not be read. ${mediaActionError(err)}`,
+      { cause: err },
+    );
   }
+  const blob = await canvasToBlob(canvas, "image/png");
+  if (!blob) throw new Error("This browser could not encode the pixels as PNG.");
+  return blob;
 }
 
-async function copyImageByFetch(url) {
-  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
-  try {
-    const response = await fetch(url, { credentials: "include" });
-    if (!response.ok) return false;
-    const blob = await response.blob();
-    if (!blob) return false;
-    return await copyBlobToClipboard(blob);
-  } catch {
+async function copyMedia(target = null) {
+  const info = mediaActionInfo(target);
+  if (!info) return false;
+  const availability = copyAvailability();
+  if (!availability.available) {
+    noticeStore.error(availability.reason, { key: "copy-overlay-media" });
     return false;
   }
-}
-
-async function copyBlobToClipboard(blob) {
-  if (!navigator?.clipboard?.write || !window.ClipboardItem) return false;
-  const mime = blob.type || "image/png";
-  const item = new ClipboardItem({ [mime]: blob });
-  await navigator.clipboard.write([item]);
-  return true;
+  try {
+    const pngPromise = renderMediaPng(info);
+    if (window.pixlstashDesktop?.copyPngToClipboard) {
+      const png = await pngPromise;
+      const result = await window.pixlstashDesktop.copyPngToClipboard(
+        await png.arrayBuffer(),
+      );
+      if (!result?.copied) throw new Error("The desktop clipboard rejected the image.");
+    } else {
+      // Pass the pending PNG promise to ClipboardItem and call write immediately;
+      // this preserves the transient user activation required by some browsers.
+      const item = new ClipboardItem({ "image/png": pngPromise });
+      await navigator.clipboard.write([item]);
+    }
+    noticeStore.success(
+      info.mediaKind === "video"
+        ? "Copied the current frame as PNG."
+        : "Copied the picture as PNG.",
+      { key: "copy-overlay-media" },
+    );
+    return true;
+  } catch (err) {
+    console.warn("Failed to copy overlay media pixels", err);
+    noticeStore.error(
+      `Couldn't copy the ${info.mediaKind === "video" ? "current frame" : "picture"}. ${mediaActionError(err, "Check clipboard permission and try again.")}`,
+      { key: "copy-overlay-media" },
+    );
+    return false;
+  }
 }
 
 function canvasToBlob(canvas, type) {
@@ -4093,1282 +4408,6 @@ function canvasToBlob(canvas, type) {
   });
 }
 
-async function copyTextToClipboard(text) {
-  const ok = await copyText(text);
-  if (!ok) throw new Error("Copy failed");
-}
-
-let overlayCopyResetTimer = null;
-function resetOverlayCopyState() {
-  if (overlayCopyResetTimer) {
-    clearTimeout(overlayCopyResetTimer);
-    overlayCopyResetTimer = null;
-  }
-  overlayCopyState.value = "idle";
-}
+defineExpose({ saveMedia, saveMediaAs, copyMedia });
 </script>
-
-<style scoped>
-.image-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(var(--v-theme-scrim), 0.92);
-  z-index: 1000;
-}
-
-.overlay-shell {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  --rail-width: 52px;
-  --rail-open-width: 170px;
-  --sidebar-width: 0px;
-  --topbar-height: 40px;
-  position: relative;
-}
-
-.overlay-shell.sidebar-open {
-  --sidebar-width: 320px;
-}
-
-.overlay-topbar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-2) 10px;
-  min-height: var(--topbar-height);
-  background: rgba(var(--v-theme-dark-surface), 0.9);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: opacity 0.2s ease;
-  z-index: 5;
-}
-
-.overlay-topbar.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.overlay-progress {
-  position: absolute;
-  right: calc(16px + var(--sidebar-width));
-  z-index: 6;
-  background: rgba(var(--v-theme-dark-surface), 0.75);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: var(--space-3) 10px;
-  border-radius: var(--radius-md);
-  box-shadow: 0 4px 12px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(6px);
-}
-
-.overlay-progress--comfyui {
-  bottom: 64px;
-  min-width: 180px;
-}
-
-.overlay-progress--plugin {
-  bottom: 128px;
-  min-width: 220px;
-}
-
-.overlay-progress--error {
-  background: rgba(var(--v-theme-error), 0.95);
-}
-
-.overlay-progress-title {
-  font-size: var(--text-2xs);
-  margin-bottom: 6px;
-  white-space: pre-line;
-}
-
-.overlay-progress-bar {
-  width: 100%;
-  height: 6px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.2);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-}
-
-.overlay-progress-fill {
-  height: 100%;
-  background: rgb(var(--v-theme-accent));
-  width: 0;
-  transition: width 0.2s ease;
-}
-
-.overlay-progress-meta {
-  margin-top: 6px;
-  font-size: var(--text-2xs);
-  opacity: 0.85;
-}
-
-.overlay-close {
-  border: none;
-  background: rgba(var(--v-theme-primary), 0.7);
-  color: rgb(var(--v-theme-on-primary));
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-}
-.overlay-close:hover {
-  background: rgba(var(--v-theme-accent), 0.85);
-}
-
-.overlay-title {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-}
-
-.overlay-desc-teaser {
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.7);
-  text-align: left;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  padding: 0;
-}
-
-.overlay-desc-teaser:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.overlay-top-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* Persistent translucent lock chip — signals the picture is frozen by a locked
-   set. Same warm-shadow translucency the overlay chrome uses elsewhere. */
-.overlay-lock-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 32px;
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-shadow), 0.4);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  line-height: var(--leading-snug);
-}
-
-.overlay-top-actions .star-overlay {
-  position: static;
-  top: auto;
-  right: auto;
-  z-index: auto;
-  padding: 6px 14px;
-  height: 32px;
-  background: none;
-  border-radius: var(--radius-sm);
-}
-
-.star-overlay:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
-}
-
-.overlay-icon-btn {
-  border: none;
-  background: none;
-  color: rgb(var(--v-theme-on-dark-surface));
-  height: 32px;
-  padding: 6px 14px;
-  min-width: 32px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: var(--text-base);
-}
-.overlay-icon-btn:hover {
-  background: rgba(var(--v-theme-primary), 0.6);
-}
-
-.overlay-icon-btn--active {
-  background: rgba(var(--v-theme-primary), 0.25);
-  color: rgb(var(--v-theme-primary));
-}
-
-.overlay-star-mobile-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.overlay-star-mobile-label {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-bold);
-  color: rgb(var(--v-theme-on-dark-surface));
-  min-width: 10px;
-}
-
-.overlay-star-menu {
-  background: rgba(var(--v-theme-dark-surface), 0.97);
-  border-radius: 10px;
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  box-shadow: var(--elevation-4);
-}
-
-.overlay-star-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--space-3) var(--space-4);
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  color: rgb(var(--v-theme-on-dark-surface));
-  width: 100%;
-  text-align: left;
-}
-
-.overlay-star-menu-item:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-
-.overlay-star-menu-item--active {
-  background: rgba(var(--v-theme-accent), 0.15);
-}
-
-.overlay-star-menu-stars {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.overlay-star-menu-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-}
-
-.overlay-comfy-activator {
-  gap: 6px;
-}
-
-.overlay-comfy-activator-label {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-panel {
-  padding: var(--space-4);
-  min-width: 420px;
-  background: rgba(var(--v-theme-dark-surface), 0.96);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: 10px;
-  box-shadow: var(--elevation-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-header {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-field-label {
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.overlay-comfy-checkbox-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-dark-surface));
-  cursor: pointer;
-}
-
-.overlay-comfy-checkbox-row input {
-  cursor: pointer;
-}
-
-.overlay-comfy-select,
-.overlay-comfy-textarea {
-  width: 100%;
-  background: rgba(var(--v-theme-shadow), 0.45);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.18);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-md);
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-}
-
-.overlay-comfy-textarea-wrap {
-  position: relative;
-}
-
-.overlay-comfy-help {
-  position: absolute;
-  left: 12px;
-  top: 10px;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  pointer-events: none;
-}
-
-.overlay-comfy-textarea {
-  resize: vertical;
-  min-height: 220px;
-}
-
-.overlay-comfy-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
-}
-
-.overlay-comfy-run {
-  border: none;
-  background: rgba(var(--v-theme-primary), 0.8);
-  color: rgb(var(--v-theme-on-primary));
-  padding: 6px var(--space-4);
-  border-radius: var(--radius-pill);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-}
-
-.overlay-comfy-run:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.overlay-comfy-warning,
-.overlay-comfy-error,
-.overlay-comfy-success {
-  border-radius: var(--radius-md);
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-}
-
-/* These chips are a 20% TINT on the dark lightbox, not a solid status fill, so
-   `on-warning` / `on-error` are the wrong tokens here — they are authored for a
-   solid fill and resolve to a near-black that vanishes into the tint (1.4:1).
-   The right foreground is the surface's own, matching `.overlay-comfy-note` and
-   `.overlay-comfy-status` directly above; the hue comes from the dark-surface
-   status set because the lightbox is dark in both themes. 9.18:1 – 11.24:1. */
-.overlay-comfy-warning {
-  background: rgba(var(--v-theme-dark-surface-warning), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-note {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.overlay-comfy-status {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.overlay-comfy-error {
-  background: rgba(var(--v-theme-dark-surface-error), 0.2);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.overlay-comfy-success {
-  background: rgba(var(--v-theme-primary), 0.18);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.zoom-btn {
-  width: auto;
-  min-width: 84px;
-  padding: 6px 14px;
-  gap: var(--space-2);
-  justify-content: flex-start;
-  /* Width reserved once (the 5ch label below): the toolbar never jumps. */
-  flex-shrink: 0;
-}
-
-.zoom-btn .v-icon {
-  flex: 0 0 18px;
-}
-
-.zoom-btn-label {
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  min-width: 5ch;
-  text-align: center;
-}
-
-.overlay-main {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr;
-  height: 100%;
-  min-height: 0;
-  position: relative;
-}
-
-.overlay-canvas {
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 0;
-  user-select: none;
-}
-
-.overlay-media {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transform-origin: center;
-  /* No transform transition: the continuous wheel zoom is cursor-anchored
-     per event, and an easing tween would drag the anchored point around
-     between frames. The exponential steps are the animation. */
-  cursor: grab;
-}
-
-.overlay-media-inner {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  z-index: 1;
-}
-
-.overlay-media.panning {
-  transition: none;
-  cursor: grabbing;
-}
-
-.overlay-img,
-.overlay-video {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  background: rgb(var(--v-theme-dark-surface));
-  box-shadow: 0 12px 30px rgba(var(--v-theme-shadow), 0.45);
-  position: relative;
-  z-index: 1;
-}
-
-.overlay-img {
-  border-radius: 0;
-}
-
-.overlay-video {
-  border-radius: var(--radius-lg);
-}
-
-.overlay-video-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: 40px;
-  border-radius: var(--radius-lg);
-  background: rgba(var(--v-theme-dark-surface), 0.8);
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
-  min-width: 280px;
-}
-
-.overlay-video-error-msg {
-  margin: 0;
-  font-size: var(--text-sm);
-  opacity: 0.75;
-  max-width: 300px;
-}
-
-.overlay-image-error {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-5);
-  padding: 40px;
-  border-radius: var(--radius-lg);
-  background: rgba(var(--v-theme-dark-surface), 0.8);
-  color: rgb(var(--v-theme-on-dark-surface));
-  text-align: center;
-  min-width: 280px;
-}
-
-.overlay-image-error-msg {
-  margin: 0;
-  font-size: var(--text-sm);
-  opacity: 0.75;
-}
-
-.overlay-video-download-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: var(--space-3) 20px;
-  border-radius: 6px;
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  text-decoration: none;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.overlay-video-download-btn:hover {
-  opacity: 0.85;
-}
-
-.overlay-nav {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius-pill);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-  z-index: 4;
-}
-
-.overlay-nav.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.overlay-nav-left {
-  left: calc(16px + var(--filmstrip-rail-width));
-}
-
-.overlay-nav-right {
-  right: calc(16px + var(--sidebar-width));
-}
-
-.overlay-swipe-hint {
-  position: absolute;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px var(--space-4);
-  background: rgba(var(--v-theme-shadow), 0.55);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-  z-index: 4;
-}
-.overlay-chrome-hint {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 3px 10px;
-  background: rgba(var(--v-theme-scrim), 0.35);
-  color: rgba(var(--v-theme-on-dark-surface), 0.55);
-  border-radius: var(--radius-pill);
-  font-size: var(--text-2xs);
-  pointer-events: none;
-  z-index: 4;
-  white-space: nowrap;
-}
-.overlay-chrome-hint kbd {
-  font-family: inherit;
-  font-size: inherit;
-  background: rgba(var(--v-theme-on-dark-surface), 0.15);
-  border-radius: 3px;
-  padding: 0 var(--space-2);
-}
-
-.overlay-sidebar {
-  position: absolute;
-  top: var(--topbar-height);
-  right: 0;
-  bottom: 0;
-  width: var(--sidebar-width);
-  background: rgba(var(--v-theme-dark-surface), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  transition: width 0.2s ease;
-  overflow: hidden;
-  padding: 0;
-  height: calc(100% - var(--topbar-height));
-  z-index: 4;
-}
-
-.overlay-sidebar.open {
-  width: 320px;
-  padding: 10px var(--space-4) 44px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.overlay-sidebar.hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sidebar-section {
-  margin-bottom: 6px;
-}
-
-.sidebar-section--description {
-  flex: 1 1 114px;
-  display: flex;
-  flex-direction: column;
-  min-height: 114px;
-  overflow: visible;
-}
-
-.sidebar-section--description.sidebar-section--collapsed {
-  flex: 0 0 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* The Tags / Rejected Tags section layout lives in OverlayTagsPanel's own
-   scoped block: that component has multiple root nodes, so this file's scope id
-   is never stamped onto them and rules written here would not match. */
-
-.section-header--collapsible {
-  cursor: pointer;
-  user-select: none;
-}
-
-.section-header--collapsible:hover {
-  opacity: 0.85;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-bottom: var(--space-2);
-  padding: var(--space-1) 0;
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.rejected-threshold-label {
-  margin-left: 6px;
-  font-size: 0.64rem;
-  opacity: 0.5;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-}
-
-.section-header-title-with-meta {
-  display: inline-flex;
-  align-items: baseline;
-}
-
-.section-meta {
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.description-editor {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.description-editor textarea {
-  flex: 1;
-  width: 100%;
-  min-height: 56px;
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.2);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  padding: 6px;
-  resize: vertical;
-}
-
-.description-actions {
-  margin-top: 6px;
-  display: flex;
-  gap: var(--space-3);
-}
-
-.face-assign-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  max-height: 210px;
-  overflow-y: auto;
-  padding-right: var(--space-1);
-  /* Same treatment as the two tag lists in OverlayTagsPanel: this sidebar's
-     three scroll regions share one bar, keyed to the dark surface. */
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
-}
-
-.face-assign-grid:hover {
-  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.55) transparent;
-}
-
-.face-assign-card {
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
-  border-radius: 6px;
-  padding: 3px;
-}
-
-.face-assign-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.face-assign-thumb {
-  border-radius: 2px;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-}
-
-.face-assign-crop {
-  border-radius: 2px;
-  border: 1px solid transparent;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: cover;
-  margin: 0 auto;
-}
-
-.face-assign-meta {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  flex: 1;
-}
-
-.face-assign-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.9);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The person menu's trigger keeps the exact look and metrics of the <select>
-   it replaced. Only the trigger: the menu rows themselves stay at the shared
-   --text-xs of the .ate-item family rather than inheriting this row's
-   --text-2xs. */
-.face-assign-person {
-  width: 100%;
-}
-
-.face-assign-person :deep(.ate) {
-  width: 100%;
-}
-
-.face-assign-person :deep(.ate-btn) {
-  width: 100%;
-  background: rgba(var(--v-theme-shadow), 0.45);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  color: rgb(var(--v-theme-on-dark-surface));
-  border-radius: var(--radius-md);
-  padding: 1px var(--space-2);
-  font-size: var(--text-2xs);
-  height: 22px;
-}
-
-.face-assign-person :deep(.ate-label) {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: left;
-}
-
-.face-assign-person :deep(.ate-btn:disabled) {
-  opacity: 0.6;
-}
-
-.face-assign-empty {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  padding: var(--space-2) 6px;
-}
-
-.metadata-empty {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-tabbox {
-  display: flex;
-  flex-direction: column;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-  overflow: hidden;
-}
-
-.metadata-tab-strip {
-  display: flex;
-  border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
-}
-
-.metadata-tab-btn {
-  flex: 1;
-  padding: 6px var(--space-3);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.5);
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.metadata-tab-btn:first-child {
-  border-radius: 10px 0 0 0;
-}
-
-.metadata-tab-btn:last-child {
-  border-radius: 0 10px 0 0;
-}
-
-.metadata-tab-btn:only-child {
-  border-radius: 10px 10px 0 0;
-}
-
-.metadata-tab-btn.active {
-  color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.08);
-}
-
-.metadata-tab-btn:hover:not(.active) {
-  color: rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.04);
-}
-
-.metadata-tab-panel {
-  padding: 10px;
-}
-
-.metadata-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.metadata-info-card,
-.metadata-comfy-card {
-  display: flex;
-  flex-direction: column;
-  padding: 10px;
-  border-radius: 10px;
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
-}
-
-.metadata-info-card {
-  gap: var(--space-3);
-}
-
-.metadata-info-header {
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-
-.metadata-info-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3) var(--space-4);
-}
-
-.metadata-info-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.metadata-info-item--full-width {
-  grid-column: 1 / -1;
-}
-
-.metadata-info-item--clickable {
-  cursor: pointer;
-}
-
-.metadata-info-item--clickable:hover .metadata-info-value {
-  text-decoration: underline;
-}
-
-.metadata-info-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-info-value {
-  font-size: var(--text-2xs);
-  color: rgb(var(--v-theme-on-dark-surface));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.metadata-comfy-card {
-  gap: 10px;
-}
-
-.metadata-comfy-header {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-}
-
-.metadata-comfy-subtitle {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-  color: rgba(var(--v-theme-on-dark-surface), 0.65);
-}
-
-.metadata-comfy-details {
-  background: rgba(var(--v-theme-shadow), 0.25);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) 10px;
-}
-
-.metadata-comfy-details summary {
-  cursor: pointer;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-}
-
-.metadata-comfy-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.metadata-comfy-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.metadata-comfy-summary-left {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.metadata-comfy-workflow-action {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  border: none;
-  background: transparent;
-  color: rgba(var(--v-theme-on-dark-surface), 0.75);
-  font-size: var(--text-2xs);
-  padding: var(--space-1) var(--space-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.metadata-comfy-workflow-action:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  color: rgb(var(--v-theme-on-dark-surface));
-}
-
-.metadata-comfy-textarea {
-  width: 100%;
-  max-width: 100%;
-  box-sizing: border-box;
-  min-height: 160px;
-  max-height: 280px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.15);
-  background: rgba(var(--v-theme-shadow), 0.35);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  line-height: 1.4;
-  padding: var(--space-3);
-  resize: vertical;
-  overflow: auto;
-  white-space: pre;
-  word-break: normal;
-}
-
-.metadata-comfy-details:not([open]) .metadata-comfy-textarea {
-  display: none;
-}
-
-.metadata-comfy-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-field-label {
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-dark-surface), 0.6);
-}
-
-.metadata-comfy-field-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.metadata-comfy-prompt-block {
-  display: flex;
-  flex-direction: column;
-}
-
-.metadata-comfy-prompt {
-  min-height: 70px;
-  max-height: 160px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.metadata-comfy-chips-block {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.metadata-comfy-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.metadata-comfy-chip {
-  display: inline-block;
-  font-size: var(--text-2xs);
-  background: rgba(var(--v-theme-on-dark-surface), 0.1);
-  color: rgba(var(--v-theme-on-dark-surface), 0.85);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) 6px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.face-bbox-empty {
-  position: absolute;
-  left: 8px;
-  top: 8px;
-  color: rgb(var(--v-theme-dark-surface-error));
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  z-index: 1001;
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-}
-
-.face-bbox-label {
-  position: absolute;
-  left: 0;
-  top: 0;
-  background: rgba(var(--v-theme-scrim), 0.6);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  padding: 1px var(--space-2);
-  border-bottom-right-radius: 6px;
-}
-
-.face-bbox-overlay {
-  box-sizing: border-box;
-  position: absolute;
-  pointer-events: none;
-  z-index: 1000 !important;
-}
-
-.overlay-draw-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: auto;
-  z-index: 5000;
-  cursor: crosshair;
-}
-
-.overlay-draw-rect {
-  position: absolute;
-  border: 2px dashed rgba(var(--v-theme-on-dark-surface), 0.8);
-  background: rgba(var(--v-theme-on-dark-surface), 0.12);
-  box-sizing: border-box;
-  z-index: 2001;
-}
-
-.overlay-draw-hint {
-  position: absolute;
-  left: 50%;
-  top: 72px;
-  transform: translateX(-50%);
-  padding: var(--space-3) 14px;
-  border-radius: var(--radius-pill);
-  background: rgba(var(--v-theme-scrim), 0.85);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  box-shadow: var(--elevation-3);
-  pointer-events: none;
-  z-index: 2002;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.overlay-draw-cancel {
-  pointer-events: auto;
-  border: 0;
-  background: rgb(var(--v-theme-error));
-  color: rgb(var(--v-theme-on-error));
-  font-weight: var(--weight-semibold);
-  font-size: var(--text-xs);
-  padding: var(--space-2) 10px;
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  box-shadow: var(--elevation-2);
-}
-
-.overlay-draw-cancel:hover {
-  filter: brightness(0.95);
-}
-
-@media (max-width: 900px) {
-  .overlay-sidebar {
-    display: none !important;
-  }
-
-  .overlay-topbar-sidebar-toggle {
-    display: none !important;
-  }
-
-  .overlay-close span {
-    display: none;
-  }
-
-  .overlay-comfy-activator-label {
-    display: none;
-  }
-
-  .overlay-title {
-    display: none;
-  }
-
-  .overlay-character-names {
-    display: none;
-  }
-
-  :deep(.add-to-set-label) {
-    display: none;
-  }
-
-  .zoom-btn {
-    min-width: 32px;
-    width: 32px;
-    padding: 6px;
-  }
-
-  /* Touch is unchanged (swipe/tap, no pinch yet): the compact icon-only
-     button drops the percent label rather than squeezing it. */
-  .zoom-btn-label {
-    display: none;
-  }
-}
-
-@media (max-width: 720px) {
-  .overlay-shell.sidebar-open {
-    --sidebar-width: 78%;
-  }
-
-  .overlay-main {
-    grid-template-columns: 1fr;
-  }
-
-  .overlay-sidebar {
-    position: absolute;
-    top: var(--topbar-height);
-    right: 0;
-    height: calc(100% - var(--topbar-height));
-    width: 0;
-  }
-
-  .overlay-sidebar.open {
-    width: 78%;
-  }
-
-  .overlay-nav {
-    display: none;
-  }
-}
-</style>
+<style scoped src="./ImageOverlay.css"></style>

@@ -49,6 +49,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Union
 
 from fastapi import HTTPException
+from sqlalchemy import event as sa_event
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -569,11 +571,12 @@ def record_operation_in_session(
     undoable: bool = True,
     target_type: str = TARGET_PICTURE,
     empty_diff_target_ids: Optional[Iterable[Any]] = None,
+    commit: bool = True,
 ) -> Optional[Operation]:
     """Append one operation row for the diff between two snapshots.
 
     Args:
-        session: Pre-opened DB session; the row is added and committed here.
+        session: Pre-opened DB session.
         op_type: Dotted verb naming the change (``"pictures.tags"``).
         before: Full or already-diffed before snapshot.
         after: The matching after snapshot.
@@ -595,6 +598,9 @@ def record_operation_in_session(
             payloads and these target ids, so undo/redo still find it and its
             registered post-restore hook performs the whole restore. Ignored
             when the diff is non-empty.
+        commit: Commit the mutation and operation row before returning. Recorded
+            wrappers pass ``False`` so serialization also remains inside their
+            transaction; direct domain services retain the historical default.
 
     Returns:
         The persisted :class:`Operation`, or ``None`` when nothing changed and
@@ -652,7 +658,9 @@ def record_operation_in_session(
         summary=summary,
     )
     session.add(operation)
-    session.commit()
+    session.flush()
+    if commit:
+        session.commit()
     session.refresh(operation)
     logger.info(
         "operation_log: recorded %s id=%s batch=%s targets=%d undoable=%s",
@@ -722,31 +730,58 @@ def run_recorded_metadata_task(
     """
 
     def _task(session: Session):
-        ids = _normalize_ids(picture_ids)
-        if resolve_picture_ids is not None:
-            ids = _normalize_ids([*ids, *(resolve_picture_ids(session) or ())])
-        if expand_stacks and ids:
-            ids = _normalize_ids(
-                expand_picture_ids_to_stacks(
-                    session, ids, include_deleted=expand_stacks_include_deleted
-                )
+        commit_guard_installed = False
+
+        def _forbid_callback_commit(_session) -> None:
+            raise RuntimeError(
+                "A recorded metadata callback attempted to commit independently"
             )
-        before = capture_state_in_session(session, ids)
-        result = work(session, *args, **kwargs)
-        after = capture_state_in_session(session, ids)
-        operation = record_operation_in_session(
-            session,
-            op_type=op_type,
-            before=before,
-            after=after,
-            actor=actor,
-            source=source,
-            origin_client_id=origin_client_id,
-            batch_id=batch_id,
-            summary=summary,
-            undoable=undoable,
-        )
-        return result, (serialize(operation) if operation is not None else None)
+
+        try:
+            ids = _normalize_ids(picture_ids)
+            if resolve_picture_ids is not None:
+                ids = _normalize_ids([*ids, *(resolve_picture_ids(session) or ())])
+            if expand_stacks and ids:
+                ids = _normalize_ids(
+                    expand_picture_ids_to_stacks(
+                        session, ids, include_deleted=expand_stacks_include_deleted
+                    )
+                )
+            before = capture_state_in_session(session, ids)
+            # Prevent a newly-added callback (or a helper it calls) from quietly
+            # reintroducing the split transaction this wrapper exists to avoid.
+            # Raising in before_commit leaves the transaction open, so the
+            # rollback below can still erase every pending domain write.
+            sa_event.listen(session, "before_commit", _forbid_callback_commit)
+            commit_guard_installed = True
+            result = work(session, *args, **kwargs)
+            after = capture_state_in_session(session, ids)
+            operation = record_operation_in_session(
+                session,
+                op_type=op_type,
+                before=before,
+                after=after,
+                actor=actor,
+                source=source,
+                origin_client_id=origin_client_id,
+                batch_id=batch_id,
+                summary=summary,
+                undoable=undoable,
+                commit=False,
+            )
+            serialized = serialize(operation) if operation is not None else None
+            sa_event.remove(session, "before_commit", _forbid_callback_commit)
+            commit_guard_installed = False
+            session.commit()
+            return result, serialized
+        except BaseException:
+            # The wrapper owns the only transaction boundary. Capture, domain
+            # mutation, diff/JSON construction, Operation insertion and receipt
+            # serialization either all succeed or none of them survive.
+            if commit_guard_installed:
+                sa_event.remove(session, "before_commit", _forbid_callback_commit)
+            session.rollback()
+            raise
 
     return vault.db.run_task(_task)
 
@@ -1578,6 +1613,7 @@ def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operat
                 f"Operation {operation_id} ({operation.op_type}) is recorded for "
                 "audit but is not reversible"
             )
+        _enforce_latest_undo_unit(session, operation)
         return operation
     operation = session.exec(
         select(Operation)
@@ -1587,7 +1623,65 @@ def _select_undo_target(session: Session, operation_id: Optional[int]) -> Operat
     ).first()
     if operation is None:
         raise OperationLogError("Nothing to undo")
+    _enforce_latest_undo_unit(session, operation)
     return operation
+
+
+def _enforce_latest_undo_unit(session: Session, operation: Operation) -> None:
+    """Reject a named undo that is no longer the top reversible history unit.
+
+    A batch is one unit, but it must also be contiguous at the top of the
+    applied history. Otherwise restoring an older member can overwrite a newer,
+    unrelated mutation while leaving that newer operation marked applied.
+    """
+    latest = session.exec(
+        select(Operation)
+        .where(Operation.status == STATUS_APPLIED)
+        .where(Operation.undoable.is_(True))
+        .order_by(Operation.id.desc())
+    ).first()
+    if latest is None:
+        raise OperationLogError("Nothing to undo")
+
+    if operation.batch_id is None:
+        if operation.id != latest.id:
+            raise OperationLogError(
+                f"Operation {operation.id} is stale; operation {latest.id} "
+                "must be undone first"
+            )
+        return
+
+    members = list(
+        session.exec(
+            select(Operation)
+            .where(Operation.batch_id == operation.batch_id)
+            .where(Operation.status == STATUS_APPLIED)
+            .where(Operation.undoable.is_(True))
+            .order_by(Operation.id.desc())
+        ).all()
+    )
+    if not members:
+        raise OperationLogError(f"Batch {operation.batch_id} has nothing to undo")
+    oldest_id = min(int(member.id) for member in members if member.id is not None)
+    conflict = session.exec(
+        select(Operation)
+        .where(Operation.status == STATUS_APPLIED)
+        .where(Operation.undoable.is_(True))
+        .where(Operation.id >= oldest_id)
+        .where(
+            or_(
+                Operation.batch_id.is_(None),
+                Operation.batch_id != operation.batch_id,
+            )
+        )
+        .order_by(Operation.id.desc())
+    ).first()
+    if latest.batch_id != operation.batch_id or conflict is not None:
+        blocker = conflict or latest
+        raise OperationLogError(
+            f"Batch {operation.batch_id} is stale; operation {blocker.id} "
+            "must be undone first"
+        )
 
 
 def _mark_undone(session: Session, members: list[Operation]) -> None:
@@ -1645,6 +1739,7 @@ def undo_batch_in_session(
     )
     if not members:
         raise OperationLogError(f"Batch {batch_id} has nothing to undo")
+    _enforce_latest_undo_unit(session, members[0])
     touched, facets, lifecycle = _restore(
         session,
         members,

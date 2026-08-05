@@ -4,8 +4,12 @@ Receives anonymous install pings and publishes aggregate cohort numbers. This is
 the first PixlStash endpoint that accepts unauthenticated writes from the public
 internet, so it is built as an attack surface rather than as plumbing.
 
-**Not deployed.** Everything here runs and is tested locally. Deployment needs
-CSO sign-off on both the endpoint and the Cloudflare API credential.
+**Production:** deployed at `https://t.pixlstash.dev` on Cloudflare Workers. It
+uses an EU-jurisdiction D1 database, the `RATE_LIMITER` binding, and a
+five-minute scheduled trigger. `GET /v1/aggregates` is protected by
+`AGGREGATES_TOKEN`, which
+is mirrored as the `TELEMETRY_AGGREGATE_TOKEN` Actions secret in the private
+`pixlstash-metrics` repository.
 
 ## Where the data lives
 
@@ -14,7 +18,7 @@ Three places, and only the first two ever hold an identifier.
 | Where | What | Retention |
 |---|---|---|
 | The user's own machine | `install-id.json` beside `server-config.json`: one random UUIDv4 | Until the user hits Recreate, or deletes it |
-| Cloudflare D1 | One row per install: the UUID, first-seen and last-seen **dates**, a 63-bit activity bitmap, a sticky resurrection flag, a new-install flag, one of four install-type buckets | 400 days since last seen, then pruned by the daily cron |
+| Cloudflare D1 | One row per install: the UUID, first-seen and last-seen **dates**, a 63-bit activity bitmap, a sticky resurrection flag, a new-install flag, one of four install-type buckets | 400 days since last seen, then pruned in bounded scheduled slices |
 | `pixlstash-metrics` (private git) | Aggregates only: counts and percentages | Forever, which is exactly why no identifier may ever go there |
 
 Nothing touches the PixlStash library database. The install ID deliberately
@@ -30,29 +34,39 @@ not "we never request it". The Worker does read `CF-Connecting-IP`, and an
 absolute that the code does not honour literally is the first thing a hostile
 reader attacks.
 
-### Choosing the D1 region, which is a one-shot decision
+### D1 location
 
 D1's physical location is fixed at creation and **cannot be changed afterwards**.
 Recovering from the wrong choice means creating a new database and migrating.
 
 The rows are a persistent identifier tied to first-seen and last-seen dates, so
-they are personal data under GDPR and the primary belongs in the EU:
+the production database was created with Cloudflare's binding EU jurisdiction:
 
 ```sh
-wrangler d1 create pixlstash-telemetry --location=weur
+npx wrangler@4.118.0 d1 create pixlstash-telemetry \
+  --jurisdiction=eu --binding=DB --update-config
 ```
 
-`--location` is a **hint**: Cloudflare uses "the nearest possible location (by
-latency) to your preference" and does not guarantee placement. D1 also supports a
-**jurisdiction** constraint, which is binding rather than best-effort and is
-likewise creation-only. For an EEA user base the jurisdiction is the stronger
-choice. Confirm the exact flag against `wrangler d1 create --help` before
-running it, because there is no second attempt.
+`--jurisdiction=eu` is a binding compliance constraint, not the best-effort
+latency hint provided by `--location`. It is creation-only. The command writes
+the real database UUID into the local `wrangler.jsonc`; never commit that
+environment-specific edit. The deploy script disables automatic provisioning,
+so a missing UUID fails closed instead of silently creating an unconstrained
+database.
 
-Then apply the schema:
+Capture the complete create-command output in the release ticket, then attach
+the D1 dashboard's database details showing the EU jurisdiction and database
+UUID. Record the reviewer, UTC time, Wrangler version, and the schema command's
+successful output. This is the release evidence for the one-shot placement
+decision; do not rely on a prose assertion made before creation.
+
+Apply the schema and deploy from this directory:
 
 ```sh
-wrangler d1 execute pixlstash-telemetry --file=./schema.sql --remote
+npx wrangler@4.118.0 d1 execute pixlstash-telemetry \
+  --file=./schema.sql --remote
+npm run deploy
+npx wrangler secret put AGGREGATES_TOKEN
 ```
 
 ## Endpoints
@@ -107,8 +121,12 @@ afterwards; lazy shifting is idempotent and self-correcting.
 
 **Compute daily, never backfill.** A life-week cell is only answerable while its
 bits are still inside the 63-day window, so each day's cells are computed while
-they exist and stored immutably in `aggregate_snapshot`. A month of missed crons
-is a month of permanently missing cells, not a month to be reconstructed later.
+they exist and stored immutably in `aggregate_snapshot`. The scan and prune are
+split into bounded, five-minute scheduled slices. The accumulator and cursor
+are checkpointed in D1; the immutable snapshot is committed before pruning can
+begin. A failed slice is replayed without dropping rows or double-counting its
+durable accumulator. A month of missed triggers is still a month of permanently
+missing cells, not a month to be reconstructed later.
 
 **Weekly buckets, not daily points.** Only Docker installs ping every day.
 Desktop and pip installs ping when someone runs them, so a weekend-only user
@@ -140,10 +158,23 @@ the metrics README when the numbers first appear.
 ## Development
 
 ```sh
-npm test          # 71 tests, no install required beyond Node
-npm run dev       # wrangler dev, needs the D1 binding
+npm ci
+npm test               # unit tests plus Miniflare/workerd D1 integration
+npm run check:config   # Wrangler schema validation and local dry-run bundle
+npm run dev            # Wrangler local development with local D1
 ```
 
-Tests run against an in-memory D1 stub that recognises only the statements this
-Worker actually issues, and throws on anything else. A new query cannot pass
-tests without the stub being taught about it first.
+The D1 integration suite runs the schema and admission/checkpoint SQL in
+Miniflare's workerd-backed D1 implementation. This is intentional: a Map stub
+cannot reproduce SQLite transactions, `changes()`, `RETURNING`, constraints, or
+concurrent admission at the final capacity slot.
+
+## Plan and service limits
+
+This Worker requires **Workers Paid**. Free-plan Cron Triggers have a 10 ms CPU
+limit and 50 D1 queries per invocation, which is not a credible envelope for a
+population that can grow to five million rows. The tracked `cpu_ms: 30000`
+setting makes that requirement explicit. Each five-minute slice remains bounded
+to at most 20 two-thousand-row scan pages or five ten-thousand-row prune pages,
+so failure recovery and cost are predictable; Paid is a prerequisite, not
+permission for an unbounded daily sweep.

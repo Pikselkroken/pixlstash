@@ -79,8 +79,11 @@ def test_get_or_init_passes_model_pack_name(pack, cpu_spillover):
         mock.patch(
             "pixlstash.tasks.face_extraction_task.ensure_model_pack_available"
         ) as ensure_in_task,
+        # FaceAnalysis is imported inside get_or_init_insightface (the ML libs
+        # are function-local so the server does not pay for them at import —
+        # backend_architecture §3), so the source module is the patch target.
         mock.patch(
-            "pixlstash.tasks.face_extraction_task.FaceAnalysis",
+            "insightface.app.FaceAnalysis",
             return_value=fake_app,
         ) as fa,
         mock.patch("torch.cuda.is_available", return_value=False),
@@ -111,7 +114,8 @@ def test_get_or_init_unknown_pack_raises():
     _reset_face_globals()
     engine = _make_engine("bogus_pack")
     with (
-        mock.patch("pixlstash.tasks.face_extraction_task.FaceAnalysis") as fa,
+        # Patch the source module: the import is function-local (see above).
+        mock.patch("insightface.app.FaceAnalysis") as fa,
         mock.patch("torch.cuda.is_available", return_value=False),
     ):
         with pytest.raises(ValueError, match="Unknown InsightFace model pack"):

@@ -26,8 +26,26 @@ import { orderEvidence, evidenceLabel } from "../../utils/dedup";
 /** The pill's rendered text. The server calls the field `text`. */
 const labelOf = evidenceLabel;
 
+/**
+ * Compact distribution evidence can carry its expanded, natural-language
+ * reading separately. Ordinary evidence simply reads as its visible label.
+ */
+const accessibleLabelOf = (pill) =>
+  String(pill?.accessible_text ?? pill?.accessible_label ?? labelOf(pill));
+
+const sentenceOf = (pill) => accessibleLabelOf(pill).trim().replace(/[.\s]+$/, "");
+
+const titleOf = (pill) =>
+  `${sentenceOf(pill)}. ${
+    pill.against ? "Argues against stacking." : "Supports stacking."
+  }`;
+
+/** Old scan results can still carry the confidence's former duplicate pill. */
+const isRedundantVisualMatch = (pill) =>
+  /^\d+%\s+visual match$/i.test(labelOf(pill).trim());
+
 const props = defineProps({
-  /** Evidence entries, the server's `[{ text, against }]`, in its order. */
+  /** Evidence entries, optionally with expanded `accessible_text`. */
   why: { type: Array, default: () => [] },
   /** Maximum pills to render. 0 means show every one. */
   limit: { type: Number, default: 0 },
@@ -39,7 +57,7 @@ const props = defineProps({
    * because the user is being asked to weigh them.
    *
    * `fact` is the Mixed stacks row: the stack already exists and the pills
-   * describe what was measured about it (`2 groups (2 + 1)`,
+   * describe what was measured about it (`1 picture differs from the rest`,
    * `Weakest match 97%`). Nothing there is arguing for a verdict the user has
    * not given yet, and a row of red chips over an existing stack would read as
    * an accusation. The glyph and the title still carry the for/against split,
@@ -59,7 +77,10 @@ const props = defineProps({
  * unanimously safe when it is not.
  */
 const pills = computed(() => {
-  const ordered = orderEvidence(props.why);
+  const evidence = Array.isArray(props.why) ? props.why : [];
+  const ordered = orderEvidence(
+    evidence.filter((pill) => !isRedundantVisualMatch(pill)),
+  );
   return props.limit > 0 ? ordered.slice(0, props.limit) : ordered;
 });
 </script>
@@ -77,11 +98,10 @@ const pills = computed(() => {
             ? 'why-pill--neg'
             : 'why-pill--pos'
       "
-      :title="`${labelOf(pill)}. ${
-        pill.against ? 'Argues against stacking.' : 'Supports stacking.'
-      }`"
+      :title="titleOf(pill)"
+      :aria-label="titleOf(pill)"
     >
-      <v-icon class="why-pill__ico" size="12">{{
+      <v-icon class="why-pill__ico" size="12" aria-hidden="true">{{
         pill.against ? "mdi-close" : "mdi-check"
       }}</v-icon>
       <span class="why-pill__label">{{ labelOf(pill) }}</span>

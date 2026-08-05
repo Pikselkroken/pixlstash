@@ -154,6 +154,64 @@ describe("useEntityListsStore", () => {
     expect(store.projects).toEqual([]);
   });
 
+  // ── The sidebar's counts ride along (#651) ────────────────────────────────
+  //
+  // Dropping `include_counts` fails silently in the worst possible way: the
+  // request still succeeds, the lists still render, and every count in the
+  // sidebar tree just stops updating. Nothing throws and nothing logs. So the
+  // param is asserted on the request itself, not inferred from a response.
+
+  it("asks for the row counts when reading characters", async () => {
+    const store = useEntityListsStore();
+    await store.refresh("characters", { baseUrl: "http://backend:8000" });
+    expect(listCharacters).toHaveBeenCalledWith({
+      baseUrl: "http://backend:8000",
+      params: { include_counts: true },
+    });
+  });
+
+  it("asks for the row counts when reading projects", async () => {
+    const store = useEntityListsStore();
+    await store.refresh("projects", { baseUrl: "http://backend:8000" });
+    expect(listProjects).toHaveBeenCalledWith({
+      baseUrl: "http://backend:8000",
+      params: { include_counts: true },
+    });
+  });
+
+  it("still asks for the counts on a ws-driven refetch", async () => {
+    // The wrapper fetchers are the ONLY place the param is applied, so every
+    // path into a read has to go through them — including invalidate().
+    const store = useEntityListsStore();
+    await store.invalidate();
+    expect(listCharacters).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { include_counts: true } }),
+    );
+    expect(listProjects).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { include_counts: true } }),
+    );
+  });
+
+  it("does not ask picture sets for counts they do not serve", async () => {
+    // Only the two lists the sidebar tree counts from opt in; `picture_count`
+    // is already on every set row unconditionally.
+    const store = useEntityListsStore();
+    await store.refresh("sets");
+    expect(listPictureSets).toHaveBeenCalledWith({ baseUrl: "" });
+  });
+
+  it("keeps the count fields on the cached rows", async () => {
+    const store = useEntityListsStore();
+    listCharacters.mockResolvedValueOnce([
+      { id: 1, name: "Ada", image_count: 40, project_image_count: 7 },
+    ]);
+    await store.refresh("characters");
+    expect(store.characters[0]).toMatchObject({
+      image_count: 40,
+      project_image_count: 7,
+    });
+  });
+
   // ── Invalidation is refetch-only (C2) ─────────────────────────────────────
 
   it("refetches every list on invalidate, taking contents only from the server", async () => {
@@ -182,6 +240,28 @@ describe("useEntityListsStore", () => {
     pendingRead.resolve([]);
     await running;
     expect(store.characters).toEqual([]);
+  });
+
+  it("queues one authoritative refresh when invalidated during a read", async () => {
+    const store = useEntityListsStore();
+    const oldRead = deferred();
+    const authoritativeRead = deferred();
+    listCharacters
+      .mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(authoritativeRead.promise);
+
+    const reading = store.refresh("characters");
+    const firstInvalidation = store.invalidate(["characters"]);
+    const secondInvalidation = store.invalidate(["characters"]);
+    oldRead.resolve([{ id: 1, name: "Before mutation" }]);
+    await reading;
+
+    expect(listCharacters).toHaveBeenCalledTimes(2);
+    authoritativeRead.resolve([{ id: 2, name: "After mutation" }]);
+    await Promise.all([firstInvalidation, secondInvalidation]);
+
+    expect(listCharacters).toHaveBeenCalledTimes(2);
+    expect(store.characters).toEqual([{ id: 2, name: "After mutation" }]);
   });
 
   it("refetches only the kind a local mutation touched", async () => {
@@ -308,5 +388,62 @@ describe("useEntityListsStore", () => {
     await store.refresh("projects");
     expect(listProjects).toHaveBeenCalledTimes(1);
     expect(store.projects).toEqual(PROJECTS);
+  });
+
+  // ── `canSeeProjects`: the one gate the UI reads ───────────────────────────
+  //
+  // The project affordances (the context menus' Project row, the sidebar's
+  // mode switcher) render off this getter, so it has to be exactly as narrow as
+  // the server's own rule in `routes/projects.py`: 403 for a token whose
+  // `resource_type` is set to anything other than "project". Anything broader
+  // takes project controls away from someone entitled to them, which is its own
+  // regression; anything narrower leaves a dead control on screen.
+
+  it("reports no project visibility for a token scoped to another resource", () => {
+    isReadOnly.value = true;
+    const store = useEntityListsStore();
+    for (const resourceType of ["character", "picture_set", "picture"]) {
+      sessionContext.value = { scope: "READ", resource_type: resourceType };
+      expect(
+        store.canSeeProjects,
+        `a ${resourceType}-scoped token must see no projects`,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps project visibility for the owner and every unscoped session", () => {
+    const store = useEntityListsStore();
+
+    // Owner: no token at all.
+    isReadOnly.value = false;
+    sessionContext.value = null;
+    expect(store.canSeeProjects).toBe(true);
+
+    // Owner session that reported its context explicitly.
+    sessionContext.value = { scope: "ALL", resource_type: null };
+    expect(store.canSeeProjects).toBe(true);
+
+    // An unscoped READ token can read every project, so it keeps the controls.
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: null };
+    expect(store.canSeeProjects).toBe(true);
+
+    // A project-scoped token sees its own project.
+    sessionContext.value = { scope: "READ", resource_type: "project" };
+    expect(store.canSeeProjects).toBe(true);
+  });
+
+  it("tracks the session it is derived from without a refetch", () => {
+    // The getter is reactive because the gate has to close the moment a share
+    // token is activated, not on the next list read.
+    const store = useEntityListsStore();
+    expect(store.canSeeProjects).toBe(true);
+    isReadOnly.value = true;
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    expect(store.canSeeProjects).toBe(false);
+    transitionAuthContext();
+    isReadOnly.value = false;
+    sessionContext.value = null;
+    expect(store.canSeeProjects).toBe(true);
   });
 });

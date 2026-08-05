@@ -247,6 +247,28 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | NLP | **spacy** ≥ 3.8 |
 | Tensor utils | **einops** ≥ 0.8 |
 
+#### ML import discipline — these libraries are imported *inside functions*
+
+**Never `import torch` (or `torchvision` / `transformers` / `sentence_transformers` / `open_clip` / `insightface` / `onnxruntime`) at module scope in any module reachable from `pixlstash.server`.** Import it in the function that uses it.
+
+The reason is measured, not stylistic. The ML stack costs **~2.8 s** to import; the web stack (FastAPI, SQLModel, PIL, NumPy, cv2) costs **0.29 s**. Because `tests/conftest.py` imports `Server`, *every* test process paid the full ML cost before running a single assertion:
+
+| | before | after |
+|---|---|---|
+| `from pixlstash.server import Server` | 3.84 s | **0.96 s** |
+| `pytest --collect-only` (one file) | 4.29 s | **1.80 s** |
+| `pytest -k <one test>` | 4.17 s | **1.38 s** |
+
+This is explicitly the exception the import policy in `CLAUDE.md` allows ("to reduce startup time for rarely used modules"). Three things make it work:
+
+- **The cost is shared, so partial fixes buy nothing.** These libraries pull a common base — deferring only `sentence_transformers` saved 0.15 s, because `open_clip` still dragged in torch, torchvision *and* transformers. The win only appears when **no** ML library loads.
+- **Watch the indirect pullers.** The last offenders found were not obvious: `clip_service.py` imported `open_clip` merely so another module could read the `CLIP_MODEL_NAME` *string constant*, and `startup_checks.py` hid `import torch` inside a module-scope `try:` block (invisible to a column-0 grep). Scan with an AST walk over module-level statements, descending into `try`/`if`, not with `grep '^import'`.
+- **Annotations.** Signatures referencing ML types need `from __future__ import annotations` plus an `if TYPE_CHECKING:` import. `pixlstash/utils/model_utils.py`, `tagger_plugins/florence2.py` and `tagger_plugins/pixlstash_tagger.py` are the worked examples.
+
+`utils/vram_utils.empty_cuda_cache()` is the shared cache-flush helper and deliberately reads `sys.modules.get("torch")` instead of importing: if torch was never imported, the process cannot hold CUDA allocations, so there is nothing to free and importing torch to learn that would cost seconds on every teardown.
+
+Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugins/joycaption.py`, `image_loading_dataset_prepper.py`) may still import ML at module scope; they are only ever reached through function-local imports. `image_loading_dataset_prepper.py` in particular *must* keep its module-scope `torch`, since it subclasses `torch.utils.data.Dataset`.
+
 ### Image & Video
 
 | Capability | Library |
@@ -441,6 +463,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
 | GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
@@ -458,6 +481,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/dedup/stacks/{stack_id}/members                                       | dedup           | One page of an existing stack's members                    |
 | POST   | /api/v1/dedup/sweep/dry-run                                                   | dedup           | Plan a vault-wide near-duplicate sweep                     |
 | GET    | /api/v1/dedup/sweep/policy                                                    | dedup           | Near-duplicate sweep policy defaults                       |
+| POST   | /api/v1/dedup/verdicts/batch                                                  | dedup           | Apply one atomic multi-group duplicate gesture             |
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                      |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                        |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                    |
@@ -519,6 +543,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
@@ -800,6 +825,13 @@ Snapshot: id, kind, created_at, relative_path,
 
 **Re-processing**: setting a work column to `NULL` (e.g. via an Alembic migration) makes the corresponding finder pick the row up on the next pass — this is how data regenerations are triggered.
 
+**Probe cost (#651)**: the planner sweeps every finder on a short interval and resets to `MIN_INTERVAL_S` whenever anything was submitted, so a finder's query runs continuously while any pipeline is active — including on a fully-processed library, where it matches nothing. Two rules follow, and a new finder must obey both:
+
+- **Never select the whole ORM `Picture`.** Narrow to the columns the task actually reads (`load_only`, plus `load_only` on any `selectinload`). `image_embedding`, `text_embedding`, `likeness_parameters` and `Face.features` are `LargeBinary`; dragging them through a probe evicts the pages the API endpoints need, several times a second. Keep it an ORM select though — `BaseTaskFinder._filter_and_claim` claims via `getattr(picture, "id", None)`, so a scalar/tuple select silently claims nothing. The session is closed before the task runs, so anything not loaded raises `DetachedInstanceError`.
+- **Give the predicate an index, and lead it with the nullable column.** PixlStash never runs `ANALYZE`, so there is no `sqlite_stat1` and SQLite scores a partial index by the table's default row estimate rather than by how few rows it covers. A partial index only wins when it can claim *more* equality terms than the index it competes with; `<col> IS NULL` counts as one, so `(work_col, deleted, id) WHERE work_col IS NULL` beats single-term `ix_picture_deleted`, while an `(id)`-only partial index ties and loses on a creation-order tie-break that `create_all` randomises. Measured on 200k rows: 17.9 ms → under 0.01 ms per probe.
+
+Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
+
 **User-triggered tasks** (e.g. `DETECTION`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column.
 
 ---
@@ -1015,7 +1047,11 @@ Selected milestones:
 
 | 0090 | `usertoken.public_id` — a stable, never-reused identity for a token (#666, see §12.2). Additive: add the column, backfill every row with `lower(hex(randomblob(16)))`, then add the unique index. Existing tokens keep their integer ids, hashes, foreign key and all three pre-existing indexes |
 
-Current head: `0094_add_telemetry_consent`.
+| 0095 | `ix_picture_thumbnail_missing` / `ix_picture_smart_score_missing` — partial indexes for the two hottest idle work probes (#651). Schema-only, no `NULL` reset. Column order is load-bearing: see §7's note on probe cost |
+
+| 0096 | `picture.is_video` — persists what used to be a `CASE` over five `file_path ILIKE '%.ext'` tests in the character-thumbnail ordering (#651). Additive, `NOT NULL DEFAULT 0`, with a set-based extension backfill. NOT NULL is a correctness constraint, not tidiness: SQLite sorts `NULL` first, so a nullable column would let an unclassified row outrank a still image in the very ordering the column exists to serve, and would slip past the backfill's `= 0` guard |
+
+Current head: `0096_add_picture_is_video`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 
@@ -1125,7 +1161,16 @@ values cannot be recovered without a hub backup.
 
 #### Engine and connection settings
 
-The engine is built once in `VaultDatabase.__init__` (`database.py`) and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py`). **Both must stay identical** — they share the `SQLITE_BUSY_TIMEOUT_S` constant and the `init_database` connect listener, so a setting added in one place applies to both. A restore that left the rebuilt engine better configured than the startup engine was a real bug (#651).
+**Every SQLite engine that serves the application is built by `database.create_configured_engine(path, *, wal=True, foreign_keys=True)`**: `VaultDatabase.__init__`, the post-swap rebuild in `services/restore/full_restore.py::_swap_database`, and all nine restore-package snapshot engines (through `schema_upgrade.snapshot_engine`). A bare `create_engine` call at any of those sites is a bug: the configuration comes in two halves (`connect_args={"timeout": SQLITE_BUSY_TIMEOUT_S}` and the `init_database` connect listener), and a call site that writes its own `create_engine` gets neither, so it silently runs on SQLite's defaults (5 s busy timeout, 2 MiB page cache, rollback journal, `foreign_keys=OFF`). That drift has been a real bug twice: the restore path once left the rebuilt engine *better* configured than the startup engine (#651), and nine engines in `services/restore/` ran with no settings at all (#709).
+
+Two in-tree engines are **deliberately not** built by the helper, and neither is a defect:
+
+- **`pixlstash/migrations/env.py`**: Alembic owns its own connection. It builds an engine with `engine_from_config` from `alembic.ini` and runs migrations with foreign keys **off**, and its `render_as_batch=True` table recreation (copy into a new table, drop, rename) would be hazardous with FK enforcement on. Routing it through `create_configured_engine` would be wrong, so it is an allowlisted exception with that reason recorded next to the guardrail.
+- **`frontend/e2e/seed_dedup_fixture.py`**: a standalone e2e seeding script outside the application package. It never runs in the server process and is out of the guardrail's scope.
+
+`tests/test_architecture_guardrails.py::test_no_engine_is_built_outside_create_configured_engine` is the guardrail: **AST-based and recursive over all of `pixlstash/`**, so an aliased import (`create_engine as _ce`), a qualified call (`sa.create_engine(...)`), a `getattr` lookup, an indirect binding, an `engine_from_config`, or a brand-new subpackage cannot slip past it. Every one of those escaped the first, text-grep version. `_ENGINE_FACTORY_ALLOWLIST` carries a reason per entry and `test_engine_factory_allowlist_has_no_dead_entries` fails if an entry stops naming a real engine build, so a stale exception cannot quietly re-open a file.
+
+The engine is built in `VaultDatabase.__init__` and rebuilt by the restore path after a live-DB swap (`services/restore/full_restore.py::_swap_database`); both are plain `create_configured_engine(path)` calls with the defaults, so they cannot drift. That the *rebuilt* one really does match is asserted end to end by `tests/test_restore.py::test_full_restore_rebuilds_the_live_engine_with_the_startup_configuration`, which runs a full restore and reads `journal_mode`, `foreign_keys`, `cache_size` and `busy_timeout` back off a real pooled connection of the swapped-in engine. That test is what pins #651; without it, reverting `_swap_database` to a bare `create_engine` passes the whole suite.
 
 | Setting | Value | Where | Why |
 |---|---|---|---|
@@ -1142,6 +1187,20 @@ Deliberately **not** set:
 - **`temp_store=MEMORY`** — measured on a 905 MB dev vault it was 24–29 % *slower* for a large temp b-tree (Linux keeps the unlinked temp file in page cache anyway, so `MEMORY` only adds allocator overhead) and made no measurable difference at the sizes PixlStash endpoints actually produce. `cache_size` does **not** bound an in-memory temp database, so it also removes the only ceiling on a runaway sort.
 
 Settings are asserted against real pooled connections in `tests/test_database_engine_config.py`.
+
+##### Snapshot engines: the one sanctioned deviation
+
+Snapshot `.sqlite` files are opened through `services/restore/schema_upgrade.snapshot_engine`, which is `create_configured_engine(path, wal=False)`. It is the single entry point for every restore-path engine (preview ×5, full restore ×2, resource restore ×2) so the busy timeout, page cache and custom SQL functions match the vault engine; it deviates in exactly one way, and the deviation is stated once rather than inherited by omission:
+
+- **`wal=False`**: a snapshot must stay a **self-contained single file**. `journal_mode` is a persistent property of the database header, so an engine that set WAL would rewrite the snapshot's header and start a `-wal` sidecar beside it, while every path that handles a snapshot copies, replaces or compresses the **main file by name** (`_backfill_snapshot`'s `shutil.copy2`, `compress_snapshot`, `materialize_snapshot`) and would drop it. The two `wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` conversions in the restore package exist precisely to force snapshots *out* of WAL, and could not do so reliably against a live pooled WAL connection (SQLite refuses to leave WAL while another connection has the file open). `synchronous` consequently stays at SQLite's `FULL` default too, because `NORMAL` is only crash-safe under WAL, so the two always travel together.
+- **`foreign_keys` stays ON** (the shared default). Eight of the nine snapshot engines are read-only, where FK enforcement has no effect whatsoever; the ninth (`preview._fill_snapshot_hashes_at`, the only restore path that writes to a snapshot) only updates `picture.metadata_hash`, which is neither a child key nor a parent key, so SQLite runs no FK check for it. Pre-existing violations inside a snapshot (legitimate, since a snapshot is restored as a unit) are never scanned for. Asserted **in both directions** by `tests/test_restore.py::test_snapshot_hash_backfill_survives_foreign_key_violations`: the backfill still writes through a violating snapshot, *and* the same connection rejects a genuinely violating `INSERT`. The positive direction alone passes with FK off too, which would leave the setting pinned by nothing but one PRAGMA read.
+
+**What the deviation costs.** Measured, so it is a decision rather than an assumption:
+
+- **Page cache**: raising a snapshot connection from SQLite's 2 MiB default to `cache_size = -16384` cost about **+9 MB peak RSS per connection** on a 92 MB snapshot. The pool ceiling applies here as it does to the vault engine, so the worst case is roughly 15 concurrent previews × 14 MiB of resident page cache. Acceptable against a preview that would otherwise re-read pages continuously; revisit if snapshot previews ever become a bulk background job rather than a user-initiated one.
+- **Busy timeout**: 5 s → 30 s only bites **cross-process** contention. In-process snapshot access is already serialised by `_snapshot_file_lock`, so the only way to reach the timeout is another process holding the file. When that happens the request now stalls 30 s before erroring rather than 5 s. That is the intended trade (a slow restore beats a spurious "database is locked"), but it is a user-visible latency change, not a free win.
+
+**Known edge, unreachable today.** `wal=False` means "do not *set* WAL", not "force a single file". `journal_mode` is a persistent header property, so against a database file whose header **already** says WAL, a `wal=False` engine reports `wal` and creates a `-wal` sidecar, which is exactly the outcome the flag exists to prevent. No path reaches it: every snapshot is produced by `VACUUM INTO` from the live WAL vault, and `VACUUM INTO` emits a `delete`-mode file. **Do not "fix" this by having the connect listener run `PRAGMA journal_mode=DELETE`.** SQLite refuses to leave WAL while another connection holds the file, so the second pooled connection raises "database is locked", and the pragma is a *write*: it would fail, or mutate the file, on read-only preview opens, which are eight of the nine snapshot engines. If a WAL-header snapshot ever becomes reachable, convert the **file** once at materialisation time (`wal_checkpoint(TRUNCATE)` + `journal_mode=DELETE` on a single exclusive connection, which is what `_upgrade_snapshot_schema` and `preview._fill_snapshot_hashes_at` already do), never per connection.
 
 ### Vector storage
 
@@ -1369,11 +1428,11 @@ Both are follow-up work. Do not read rule 2 as covering them.
 - **Do NOT put authorization code in the handler.** No inline `enforce_picture_scope`, `require_unscoped_owner`, or `token_scope` ladder — the gate owns object authorization on every return path by construction. Copy a *sibling route's declaration*, not a per-handler check.
 - **An undeclared data route is denied at runtime (403) and fails the build.** The startup assertion (`AuthzGate.enforce_startup`) aborts boot and the CI guardrail (`tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy`) goes red on any undeclared route. There is no "I forgot" state.
 - `PUBLIC` / `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` declarations require a machine-checked `justification=`. Exemptions are recorded decisions, not blanks.
-- The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
+- The coverage matrix (`docs/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
 
 **Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
 
-**Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline `_require_scope_allows_{character,picture_set,project}` check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
+**Residual inline exception — 4 name-derived routes.** Four `*_SCOPED` routes resolve their object id from a *name* rather than a numeric path id: `GET /projects/{project_name}/characters/{character_name}`, `GET /projects/{project_name}/picture_sets/{picture_set_name}`, `GET /projects/{id_or_name}`, and `GET /projects/{id_or_name}/picture_sets`. The gate cannot resolve name→id without duplicating each handler's own int-or-name lookup — a gate/handler divergence risk, the exact defect this refactor exists to kill. These carry `resolved_inline=True` in the registry and KEEP their inline check as the live enforcement. This is the only place an inline object check remains; it retires when a shared name→id resolver exists. Two of the four (`GET /projects/{id_or_name}` and `GET /projects/{id_or_name}/picture_sets`) had their inline `_require_scope_allows_project` **replaced** by `enforce_project_path_scope`, and the other two gained it *in addition to* their `_require_scope_allows_{character,picture_set}` check: all four also name a **project** in the path, which is a second question the gate cannot see, and answering it after resolving the project made the routes a project-existence oracle (#708 condition 2 — see §16.6 for the reproduction and the uniform-refusal rule). (Two aggregate-summary handlers, `get_characters_summary` and `get_project_summary`, also retain a small inline `ALL`/`UNASSIGNED` guard that doubles as input validation; the gate independently fails those closed for a scoped token, so the inline guard is defence-in-depth, not the sole enforcement.)
 
 ### 16.2 Centralised authorization chokepoint (SHIPPED — the authz gate)
 
@@ -1391,7 +1450,7 @@ Both are follow-up work. Do not read rule 2 as covering them.
 **Migration path (completed, incremental — not a big-bang rewrite).**
 
 1. **✅ done** — Built the route-declaration registry (`authz/registry.py`) and the startup/CI assertion in report-only mode, enumerating every data route.
-2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/reviews/authz-coverage-matrix.md`.
+2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/authz-coverage-matrix.md`.
 3. **✅ done** — Introduced the central chokepoint (`authz/gate.py`) behind the declarations, calling the relocated helpers (`authz/membership.py`); proved equivalent with both-direction tests (`tests/test_authz_gate_step3.py` / `test_authz_gate_step4.py`), then removed the now-redundant per-handler `enforce_picture_scope` / `require_unscoped_owner` / `require_user_id` / `_require_scope_allows_*` calls (Step 5). The 4 name-derived routes keep their inline check (§16.1 residual exception).
 4. **✅ done** — Closed the `ALL`+`resource_type` footgun (item 4 above) and collapsed the duplicated `token_scope` ladder into the single `authz/membership.py` home.
 5. **✅ done** — Flipped the startup assertion + CI guardrail to **fail-closed** (`AUTHZ_GATE_ENFORCING = True`): an undeclared data route is 403 at runtime and a boot failure + red CI. The constant is the one-line per-release rollback (flip to `False` for report-only).
@@ -1504,6 +1563,178 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 **All of it is dropped after a full restore**, via `AuthService.reset_after_restore()` — see §18.5. Keying on a never-reused id and resetting after a restore are independent fixes; neither replaces the other.
 
 **Known follow-up.** `delete_token`/`update_token`/`revoke_tokens_for_resource` still flush the *entire* token cache rather than evicting one entry, because the cache is keyed on a digest of the raw token value and nothing maps a token back to that digest. `public_id` does not supply the digest either, so precise eviction needs a second index maintained at insert time (`public_id → {digest}`) rather than falling out of this change. Left as-is: the flush is correct, just coarse.
+
+### 16.6 Project ids are a second axis the policy registry does not cover (#125 R1b, #708)
+
+**A route can carry the right `AccessPolicy` and still disclose a project id.** The registry answers "may this token reach this *object*"; it says nothing about the *project ids named inside the answer*, and nothing about a `project_id` **filter** the caller supplies. `visible_project_ids` (in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py)) is the single ladder for both: a `project` token may learn its own project id, and a `character` / `picture_set` / `picture` token may learn none at all — `GET /projects/{other_id}` 403s them, so no sibling route may answer it either. There are therefore two rules, enforced in two different places, and a new endpoint has to satisfy both.
+
+**Outbound — narrow every project id you serialise (handler responsibility).** Any payload carrying project membership passes through the shared helpers before it is returned:
+
+- `narrow_project_fields(payload, project_ids, visible)` — sets both `project_ids` and the legacy scalar `project_id`, the scalar always *derived from the narrowed list*, never read off the model (the stored scalar names the entity's primary project, which a token scoped to a secondary project must not learn).
+- `filter_visible_project_ids(project_ids, visible)` — the list on its own.
+- `narrow_project_assignments(assignments, visible)` — for the one payload shape *keyed* by project id, `POST /projects/membership`. Anything derived from such a mapping (its `unassigned_picture_ids`) must be computed from the **narrowed** mapping, or the derivation re-leaks what the narrowing removed.
+
+This is not gate-enforceable today: the gate runs before the handler and never sees the response. Treat a raw `s.project_id` / `char.project_id` in a payload as a defect on sight — that spelling is what #708 F1/F4/F5 were.
+
+**An aggregate is a payload too.** A count, a flag or a bucket derived from a project-membership predicate discloses membership just as a raw id does, and it does not look like an id in review. The rule for those: a predicate that partitions by project must be driven by the token's *narrowed* project set, never by the absence of one. An empty narrowed set means "you may not see this", which is **not** the same fact as "there is nothing here" — collapsing the two turns the narrowing itself into the disclosure. `routes/projects.py::project_membership` states this correctly for its own unassigned bucket, and `routes/characters.py::_inline_character_counts` now does too (issue #718: it used to serve `project_image_count` over the *global* unassigned partition, so `image_count - project_image_count` told a token with no project visibility how many of its pictures sat in projects it could not see). When a token's narrowed set is empty, serialise the project-scoped aggregate as `null` rather than computing it over the global partition. The predicate is `routes/characters.py::_may_learn_a_project_scoped_count`, written as the exact complement of the inbound refusal so the two directions cannot drift apart; suppress per **token**, never per **row**, because a rule that answers for the genuinely unassigned row and stays silent for the hidden one makes the presence of an answer the oracle.
+
+**Inbound — the `project_id` filter is enforced centrally by the gate.** `AuthzGate._enforce_policy` calls `enforce_project_filter_scope` (in [`authz/membership.py`](../pixlstash/authz/membership.py)) for **every declared route, before any policy branch**, because a project filter is a question about the project space rather than about the object the route is named after. A resource-scoped token may name only a project id it can already see; another project's id, a non-existent id and the `UNASSIGNED` sentinel all get the same 403, so the refusal is not itself an oracle. Owner and unscoped tokens are never restricted.
+
+Without it, a filter needs no payload to answer the hidden question: `GET /picture_sets?project_id=7` returning a row told a set-scoped token that project 7 exists and holds its set, and the same channel existed on `/pictures`, `/pictures/count`, `/pictures/stream`, `/pictures/stats`, `/pictures/export`, `/pictures/likeness-groups`, `/pictures/face-search`, `/characters`, `/characters/likeness-search`, `/characters/{id}/summary`, `/picture_sets/{id}` and `/tag_suggestions` — twelve-plus routes, which is exactly why it is one chokepoint and not twelve patches. **Do not re-add a per-handler `project_id` scope check.** The handler-side "force `project_id` to the token's own project" lines that predate this remain as defence in depth; new code does not need them. A new *spelling* of the parameter must be added to `PROJECT_FILTER_QUERY_PARAMS`, or the gate will miss it — and that much is machine-checked: `tests/test_architecture_guardrails.py::test_project_filter_params_are_declared` walks every mounted route's declared query parameters (including ones contributed by nested `Depends(...)`) and fails the build on a project-ish name that is not listed. It carries an anti-vacuity assertion, because a parameter enumeration that silently collapses to empty would report false completeness.
+
+**Read that as "declared parameters with project-ish wire names", not "every way a route can take a project".** Three shapes get past it, enumerated in full in the test's own docstring: (a) a parameter *aliased* to a name that does not say project (`project_id: str = Query(None, alias="proj")`) — the guardrail sees `proj` and so does the gate, which matches `request.query_params` against `PROJECT_FILTER_QUERY_PARAMS`, so **guardrail and gate fail together**; (b) a value read straight off `request.query_params` without being declared, which the enumeration cannot see (the gate still catches it, since it reads the raw query string — but only if the spelling is declared elsewhere; `routes/pictures/_misc.py` and `routes/pictures/_listing.py` already read `project_id` this way, so the pattern is in-tree and copyable); (c) the nested-`Depends` capability advertised above is real but **exercised by no route today**, and the anti-vacuity assertion does not protect it — `project_id` is taken at top level by a dozen routes, so stubbing `flatten_dependant_fields` to a no-op still passes the assertion while every nested parameter vanishes; `test_query_parameter_enumeration_descends_nested_depends` covers the flattening synthetically instead (a no-descent, a one-level-only and a Python-name-instead-of-alias mutant were each verified to fail it).
+
+#### The chokepoint's boundary: query parameters, and nothing else
+
+`enforce_project_filter_scope` reads `request.query_params`. **A new route is covered the day it mounts only if it takes its project in the query string.** Three shapes are outside it, and each is handled — or accepted — somewhere else:
+
+| Shape | Where a project can be named | Covered by |
+|---|---|---|
+| Query parameter | `?project_id=7` | `enforce_project_filter_scope` (the gate, every declared route) |
+| Path segment, numeric | `/projects/{project_id}/summary` | the registry's `PROJECT_SCOPED` declaration; the gate resolves the id before the handler, so a missing project and an invisible one both 403 |
+| Path segment, name or id-or-name | `/projects/{project_name}/picture_sets/{set_name}`, `/projects/{id_or_name}` | `enforce_project_path_scope`, inline in the 4 `resolved_inline` handlers (§16.1) — see below |
+| Body / form field, **declared** | `POST /pictures/import`, `POST /pictures/import/staging`, `POST /reviews`, `POST /tag_suggestions/bulk-accept`, `POST /tag_suggestions/scan` | **nothing.** They are safe only because they are writes: a resource-scoped token can only be minted `READ` (§16.2 item 4) and `auth.py` blocks a non-`GET` for a `READ` token unless the path is in `READ_SAFE_POST_PATHS`, which none of these is. Adding one of them to that frozenset opens the hole. |
+| Body / form field, **opaque (`payload: dict`)** | known: `PATCH /pictures/project`, `POST /characters`, `POST /picture_sets`, `PATCH /picture_sets/{id}`, `POST /comfyui/run_t2i` — **and this list cannot be shown complete** | **nothing, and nothing can enumerate them.** Same write-only argument as the row above, but the *set* is a blind spot: see below. |
+| Value-typed discriminator | `?resource_type=project&resource_id=7` | **nothing, and nothing name-based can.** An argument for keeping that pattern off read-filter routes. |
+
+**The opaque-body blind spot (acknowledged, not closed).** `test_project_references_outside_the_query_chokepoint` finds body-borne project fields by walking each body parameter's declared **annotation**. A route declared `payload: dict = Body(...)` declares no keys, so a `payload["project_id"]` read inside the handler is invisible to it — and because the test asserted exact equality against what that walk found, it was self-consistent and could never notice. On the current tree **31 mounted routes have an opaque (`dict`/`Any`/`list[dict]`) body**; five of them read a project id out of it, found by reading the handlers on 2026-08-04 and listed in the table row above.
+
+That list is hand-made and **no test can verify it in either direction**. A source grep over the opaque-bodied handlers for `project_id` was evaluated as a machine substitute and rejected: it returns 8 routes, of which 3 (`POST /characters/{id}/faces`, `POST` and `PUT /picture_sets/{id}/members`) read no project from the body at all and merely mention the word while reconciling membership they derive themselves. A heuristic with a 38 % false-positive rate that still cannot prove absence restores the *appearance* of completeness, which is the failure mode this section exists to stop repeating.
+
+What **is** arithmetic, and what the test now asserts:
+
+1. **Exact equality on typed bodies** (`_PROJECT_REFS_IN_TYPED_BODY`, the first row of the table). Complete over routes whose body has a declared shape.
+2. **`READ`-reachability, over typed *and* known-opaque project routes.** This carries the actual safety argument: the inventory yields the same `/api/v1/…` strings `READ_SAFE_POST_PATHS` holds and `auth.py` compares `request.url.path` against, so a project-bearing body field becoming `READ`-reachable fails the build.
+3. **Every opaque-bodied route a `READ` token can reach is hand-vetted.** Which routes have an opaque body, and which of those are `READ`-reachable, is enumerable even though their payloads are not — and that intersection is where the blind spot is actually *live* (for a write a `READ` token cannot reach, not knowing the payload costs nothing). Today it is exactly one route: `POST /pictures/thumbnails`, which reads `payload["ids"]` only. A new one fails the build until someone reads the handler and records what it reads.
+
+The walker itself had two further gaps, both reproduced against planted fields and both now fixed: an arbitrary `depth <= 4` cap descended through at most five nested models, so a `project_id` six models down was silently dropped (now unbounded, terminating on models already open on the current path so a self-referential schema is still safe); and `WithProject | Plain` was missed while `Plain | WithProject` was caught, because the union walk returned the first model its stack popped instead of descending into every branch a caller might actually send.
+
+**Path segments — `enforce_project_path_scope` (#708 condition 2).** The four name-derived routes resolved the project from the path *before* any scope check ran, so their ordinary error branches answered from the project space the token may not probe. Reproduced with a `picture_set`-scoped token whose set is in P1 and P2:
+
+```
+GET /projects/P1/picture_sets/SharedSet         -> 200
+GET /projects/P3/picture_sets/SharedSet         -> 404 {"detail":"Picture set not found"}
+GET /projects/DoesNotExist/picture_sets/SharedSet -> 404 {"detail":"Project not found"}
+GET /projects/{existing_id}                     -> 403      GET /projects/999999 -> 404
+```
+
+Three distinguishable answers = which projects exist, and which hold the token's set. `enforce_project_path_scope(server, request, resolved_id_or_None)` now runs on the **resolved** id before the membership query on all four routes, and refuses with one constant 403 body whether the project holds the resource, exists but does not, or does not exist at all. An owner (`visible_project_ids` returns `None`) is not restricted and keeps the informative 404s. Both directions are pinned in the R1d section of `tests/test_multi_project_membership_authz.py`, including the over-blocking direction (a project token still reads its own project and both by-name routes under its own project's name).
+
+**Residual: the refusal is uniform in content, not in time (accepted risk).** Uniform means status, body and headers; it does *not* mean constant-time. Both `id_or_name` routes resolve a numeric segment with `session.get(Project, int(v))` and, when that returns nothing, fall through to a second name-based `SELECT` — so an id naming an existing project costs one query and an id naming none costs two, before both reach the same 403. Reproduced with a `picture_set`-scoped token over 400 interleaved request pairs (status and body identical in every pair): the missing-project median ran **+141 µs (+6.5 %)** and **+210 µs (+9.6 %)** across two runs, and **+416 µs (+19.8 %)** in the second #708 review's 800-sample run. Magnitude is machine- and load-dependent; the direction is structural.
+
+Deliberately **not** equalised — that is a runtime change to a hot read path, and the channel leaks strictly less than the content oracle it replaced: one bit ("is there a project with this id"), needing many samples, against a local single-user server. The membership fact is *not* recoverable, because a project that exists and holds the caller's resource and one that exists and does not cost the same single query — the `P1`/`P3` distinction that motivated the function is unaffected.
+
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #708.
+- **Revisit trigger — any of:** (a) a resource-scoped share token becomes reachable by someone other than the owner (multi-user, or a hosted demo handing out scoped tokens), turning a local channel into a remote one; (b) these routes gain a lookup whose cost varies with *membership* rather than mere existence, which widens the leak from existence to the membership fact; (c) the name lookup becomes materially more expensive than the id lookup (an index change, a growing project table), raising the signal above the noise floor.
+
+**Both directions are pinned** in `tests/test_multi_project_membership_authz.py` (R1/R1c/R1d sections): the invisible project stays invisible on every route, and a project token keeps filtering by, and reading, its own project.
+
+#### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
+
+**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. On its own it did **not** close the confidentiality boundary those routes are named after, because the two generic field readers also served the ORM **relationship** namespace, which no projection constrains. That second half is #721, closed below. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it", and read §*The generic by-name readers serve the column namespace only* for why the sibling name no longer reaches around them.
+
+**Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
+
+| Route | Where the id appears | Narrowed in |
+|---|---|---|
+| `GET /pictures/{id}/metadata` | `$.project_id` | `routes/pictures/_crud.py::get_picture_metadata` |
+| `GET /pictures/{id}/{field}` (`field=project_id`) | `$.project_id` | `routes/pictures/_crud.py::get_picture_field` |
+| `GET /picture_sets/{id}` | `$.pictures[N].project_id` | `routes/picture_sets.py::get_picture_set` (all three return paths: default, `sort=SMART_SCORE`, `sort=CHARACTER_LIKENESS`) |
+| `GET /stacks/{stack_id}/pictures?fields=full` | `$[N].project_id` | `routes/stacks.py::get_stack_pictures` |
+| `GET /pictures/search` | `$[N].project_id` | `routes/pictures/_search.py::search_pictures` |
+| `GET /pictures/likeness-groups` | `$[N].project_id` | `routes/pictures/_misc.py::get_likeness_groups` |
+
+`GET /picture_sets/{id}` is the instructive one: the **same handler** narrows the *set's* own `project_id` correctly and then emits the raw id on every embedded picture row. The narrowing is per-payload-shape, so getting one shape right says nothing about the next.
+
+Verified **clean** in the same run, which is what makes the list of six exhaustive rather than illustrative: `GET /picture_sets/{id}?info=true`, `GET /stacks/{stack_id}/pictures` (default fields), `GET /pictures` (default, `fields=full`, `fields=grid`), `GET /pictures/stream`, `GET /pictures/count`, `GET /pictures/stats`, `GET /picture_sets`, `GET /picture_sets/{id}/members`, and `GET /pictures/export` (which returns a task id, not picture rows — the generated archive's contents were not inspected).
+
+The common cause is `Picture.metadata_fields()` = every scalar column minus the large binaries, which includes `project_id`.
+
+**Why the clean routes are clean is not one reason, and the difference matters for the fix.** `Picture.grid_fields()` omits `project_id`, so `fields=grid` never selects it. But `GET /pictures?fields=full` and `GET /pictures/stream` *do* select `metadata_fields()`, `project_id` included — they are clean because they declare `response_model=list[GridPicture]` / `StreamPicturesResponse` (`routes/pictures/_listing.py`), and FastAPI validates every row against that model and drops keys it does not declare (`GridPicture` sets no `extra="allow"`; verified by round-tripping a row carrying `project_id` through the model, which comes back without it). The projection and the response model are two independent filters, and only the second one is enforced on the `fields=full` path. Any change that widens `GridPicture`, or drops the `response_model=` on those routes, re-opens them without touching a single query.
+
+**The fix is `narrow_picture_project_ids(server, request, rows)`** in [`filter_helpers.py`](../pixlstash/utils/service/filter_helpers.py): the picture-row twin of `narrow_project_fields`, minus the `project_ids` list a picture payload does not carry. It re-derives the scalar from the picture's *narrowed* `PictureProjectMember` membership (batched, one query per request via `picture_project_ids_map`) instead of letting the model's own column reach the wire. Owners and unscoped tokens return on the first line, so their payload and their query count are both unchanged; only a scoped token pays for the extra read.
+
+Deriving from the join table rather than intersecting the raw scalar is deliberate and matches R1b: a P2 token reading a picture whose stored primary is P1 gets `project_id: 2`, not `null`. Intersecting the raw scalar would have been safe too, but it makes a picture the token legitimately shares look unassigned, which is the over-blocking half of the regression pair.
+
+`Picture.metadata_fields()` was **not** changed. Dropping `project_id` from it would fail closed for future routes, but it is also the default `select_fields` of `Picture.find` (`db_models/picture.py`) and feeds `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py`, so removing the column changes what internal callers load, not just what six handlers serialise. Tracked as the residual below.
+
+**Both directions are pinned** in the R1e section of `tests/test_multi_project_membership_authz.py`: the scoped token's scalar comes from its own narrowed membership, an entity-scoped token gets `null`, and the owner keeps the stored primary, and over-blocking is asserted as its own failure. Every site/token combination asserted there was confirmed to leak before the fix, so none of the assertions is vacuous. Two probes are **not** pinned by a live row and are recorded as such in the test: `GET /picture_sets/{id}?sort=SMART_SCORE` and `?sort=CHARACTER_LIKENESS` return no rows without a smart-score anchor / an assigned reference face, which that fixture does not build. Their narrowing is one line on each of the handler's other two return paths and is asserted opportunistically if a row ever appears.
+
+**The column set itself is now pinned.** `tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned` holds the exact 42 names `Picture.metadata_fields()` returns, so a new `picture` column fails the build until someone decides whether a scoped token may learn it. That is the part of #719 that generalises: the leak was not that one narrowing was forgotten, it was that "every column minus blobs" makes forgetting the default. Both mutants (a name dropped from the pin, a name added to it) were confirmed to fail the assertion.
+
+- **Residual (open): `metadata_fields()` is still "every column minus blobs", it is only *watched*.** The pin above turns a silent addition into a build failure; it does not make the projection an allowlist, and it cannot narrow anything by itself. Inverting it is the durable fix and was deliberately not attempted here: `metadata_fields()` is also the default `select_fields` of `Picture.find`, so removing a column changes what `scoring/smart_score.py`, `scoring/character_likeness.py` and `utils/service/export_utils.py` load, not only what six handlers serialise.
+- **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
+- **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
+
+#### CLOSED (#721): the generic by-name readers serve the column namespace only
+
+`GET /pictures/{id}/{field}` and `GET /characters/{id}/{field}` hand back an attribute by name and end in `safe_model_dict(getattr(obj, field))`, which recurses into SQLModel instances, lists and `CollectionAdapter`s. `select_fields=[field]` therefore did **not** bound the response: a *relationship* name was served as whole related rows, reaching past every projection and every narrowing site in the codebase. Reproduced 2026-08-05 with the gate enforcing (`picture`-scoped token on picture 1, `character`-scoped token on character 1), each alongside the `403` the same token gets on `GET /projects/1`:
+
+```
+GET /pictures/1/project_id    -> {"project_id": null}                       # closed by #719
+GET /pictures/1/projects      -> {"projects":[{"id":1,"name":"P1",...},…]}  # was OPEN
+GET /pictures/1/picture_sets  -> [{"name":"SharedSet","project_id":1,…}]    # was OPEN
+GET /pictures/1/characters    -> [{"name":"SharedChar","project_id":1,…}]   # was OPEN
+GET /characters/1/project     -> {"project":{"id":1,"name":"P1",…}}         # was OPEN
+GET /characters/1/pictures    -> full Picture rows: project_id, file_path,  # was OPEN
+                                 pixel_sha, original_file_name, metadata_hash,
+                                 comfyui_positive_prompt, comfyui_loras, …
+```
+
+The last is the largest single payload in the class: served straight off `Character.pictures`, it bypasses `Picture.metadata_fields()`, every response model and `narrow_picture_project_ids` alike. `GET /pictures/{id}/characters` was not in the original report and was found while reproducing.
+
+**The fix is a deny-by-default allowlist, not another `if field == …` branch**: [`utils/field_allowlist.py`](../pixlstash/utils/field_allowlist.py), called as the **first statement** of both handlers. The servable set is `Model.scalar_fields()` (the model's own column namespace) plus a small pinned exception set, so a future relationship is refused with no code change and a future column needs none either. This mirrors the gate's own posture (§16.2) at the level the gate cannot reach: the gate answers "may this token reach this *object*", runs before the handler and never sees the response, so it cannot bound *which attributes* come back. **This is response-shape validation, not authorization**: it takes no request, no token and no session, and must never grow into a second scope ladder.
+
+The refusal is **`400`**, deliberately, and the three properties are asserted rather than assumed:
+
+- **Not an object-existence oracle.** The check runs before any database read, so `GET /pictures/999999/projects` and `GET /pictures/1/projects` return byte-identical responses. The cross-token case was never this handler's: the gate 403s an out-of-scope object before the handler runs, whatever the field name.
+- **Not a namespace oracle.** A relationship name and a typo get the same status and the same body template, so the response does not enumerate the model's relationships.
+- **Distinguishable for a client, which `404` would not be.** `400` = not a readable field (render nothing, do not raise), `404` = object does not exist, `403` = not in this token's scope, `5xx` = server fault. `404` would have collided with "Picture not found" and forced clients to string-match `detail`; `403` would have been wrong twice over (not an authorization decision, and it collides with the gate's own 403).
+
+**The full contract, both readers.** A client can branch on the status alone; no `detail` string-matching is required. `{field}` is whatever the caller put in the path segment.
+
+| Field category | Status | Body |
+|---|---|---|
+| Column, ordinary (`width`, `name`, `file_path`, `description`, …) | `200` | `{"<field>": <value>}` |
+| Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`), value present | `200` | `{"<field>": "<base64>"}` |
+| Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
+| `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
+| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
+| Object does not exist, **denied** field | `400` | identical to the denied-field row; the check runs before the lookup |
+| Object outside the token's scope, any field | `403` | the AuthzGate's own body, e.g. `{"detail": "Token is not authorised for this picture"}` |
+
+Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
+
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
+
+`faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
+
+| New route | Policy | Serves | Withholds |
+|---|---|---|---|
+| `GET /pictures/{id}/faces` (`routes/pictures/_faces.py`) | `PICTURE_SCOPED`, `id_param="id"` | `{"faces": [{id, picture_id, character_id, frame_index, face_index, bbox}]}` | `features` (the ArcFace embedding), `model_pack` |
+| `GET /characters/{id}/faces` (`routes/characters.py`) | `CHARACTER_SCOPED`, `id_param="id"` | same shape | same |
+
+Design notes, each of which is a trap someone will otherwise re-open:
+
+- **The wire shape is unchanged** (`{"faces": [...]}`), so no frontend change was needed. The SPA reads only `frame_index`, `bbox` and `character_id`.
+- **`model_pack` is withheld deliberately.** It is not biometric, but it names the embedding model (`buffalo_l` / `auraface`) and so tells a caller how embeddings obtained elsewhere could be compared against these. No consumer reads it (verified across `frontend/src`, `tests/`, `pixlstash/`, `scripts/`: every hit is server-side model loading). Add it back only with a named consumer.
+- **Registration order is load-bearing.** FastAPI matches in registration order, so a dedicated route registered *after* the `/{id}/{field}` catch-all is dead code that silently never runs. `_faces` is registered before `_crud` in `routes/pictures/__init__.py`; on the character side `server.py` includes `characters` **before** `characters_faces`, so the GET had to be declared in `characters.py` itself, above the by-name route, rather than alongside its `POST`/`DELETE` siblings. Pinned by `test_dedicated_faces_routes_are_declared_and_not_shadowed`, which was confirmed to fail when `_faces` is moved after `_crud`.
+- **Sentinel rows are still served.** `Face.find` filters out `face_index == -1`, the relationship did not, and `wait_for_faces` returns as soon as the list is non-empty; using `Face.find` would turn a picture with no detectable face into a full poll timeout in three suites. The routes use a plain `select` ordered by `Face.id`, reproducing the old row set and order.
+- **`bbox` is unchanged on the wire.** It comes off the `bbox_` text column through the `Face.bbox` property, which does the same `json.loads` that `safe_model_dict`'s trailing-underscore branch did.
+- **The projection is filtered twice**, by `Face.to_public_dict()` and again by `response_model=FaceListResponse` (`extra="ignore"`). That redundancy hides bugs from wire-level tests: putting `features` back into `to_public_dict` still yields a clean HTTP response, verified. `test_face_to_public_dict_is_the_first_filter` asserts the projection directly for that reason.
+
+**One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
+
+**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+
+- **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
+- **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
+- **Closed during #721: `faces` no longer serves the face embedding.** It is a denied relationship name on both by-name readers and is served instead by the two projected routes above, which withhold `features` and `model_pack`.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #721.
 
 ---
 
@@ -1887,6 +2118,7 @@ sequenceDiagram
 3. **CPU / GPU queue separation** — `TaskRunner` keeps GPU work single-threaded to avoid CUDA contention while keeping CPU work parallel.
 4. **VRAM gating** — GPU-heavy tasks are blocked when free VRAM is below a threshold (`User.max_vram_gb`).
 5. **Lazy ML loading** — models are loaded on first use and may be unloaded after idle, controlled by `keep_models_in_memory`.
+5b. **Lazy ML *imports*** — the ML libraries themselves (`torch`, `torchvision`, `transformers`, `sentence_transformers`, `open_clip`, `insightface`, `onnxruntime`) are **never imported at module scope on the server's import path**. They are imported inside the function that first needs them; annotations that reference their types use `from __future__ import annotations` plus a `TYPE_CHECKING` block. See §3 → *ML import discipline*.
 6. **Event bus** — `EventType`-tagged broadcasts let the frontend stay reactive without polling.
 7. **Embeddings in-database** — all vectors live in SQLite as `BLOB`s; similarity search is in-process NumPy.
 8. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.
@@ -2998,7 +3230,7 @@ member are each refused with nothing written; the locked stack still answers
 
 All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
 (§16.1); the rationale and the both-direction test coverage are in
-`docs/reviews/authz-coverage-matrix.md`.
+`docs/authz-coverage-matrix.md`.
 
 ### 22.12 Keep cover only: collapsing a stack to its cover
 
@@ -3129,7 +3361,7 @@ soft-deleted to the Scrapheap.
 Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 (§16.1); the rationale and the both-direction test coverage
 (`tests/test_keep_cover_only.py`) are in
-`docs/reviews/authz-coverage-matrix.md`.
+`docs/authz-coverage-matrix.md`.
 
 ---
 

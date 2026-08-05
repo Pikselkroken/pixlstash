@@ -19,7 +19,7 @@ import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useDedupStore } from "../../stores/useDedupStore.js";
-import { ref, computed } from "vue";
+import { ref } from "vue";
 
 const { dedupStoreMock } = vi.hoisted(() => ({
   dedupStoreMock: { scan: { status: "idle" } },
@@ -37,9 +37,14 @@ const apiPatch = vi.fn();
 const apiPut = vi.fn();
 const apiDelete = vi.fn();
 
-vi.mock("../../utils/apiClient", () => {
-  const isAuthenticated = ref(true);
-  const sessionContext = ref({ scope: "ALL" });
+// Async factory with a local `await import("vue")`: the store imports above
+// pull in apiClient, so this factory runs BEFORE the file's own top-level `vue`
+// import has initialised. Closing over that binding throws "Cannot access
+// __vi_import__ before initialization".
+vi.mock("../../utils/apiClient", async () => {
+  const { ref: makeRef, computed: makeComputed } = await import("vue");
+  const isAuthenticated = makeRef(true);
+  const sessionContext = makeRef({ scope: "ALL" });
   return {
     apiClient: {
       get: (...args) => apiGet(...args),
@@ -56,7 +61,7 @@ vi.mock("../../utils/apiClient", () => {
     checkLoginStatus: vi.fn(),
     checkSession: vi.fn(),
     isAuthenticated,
-    isReadOnly: computed(() => false),
+    isReadOnly: makeComputed(() => false),
     login: vi.fn(),
     logout: vi.fn(),
     sessionContext,
@@ -227,6 +232,73 @@ describe("the person suggestion search is dropped by a view change", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(wrapper.vm.searchResultsActive).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe("completing the person suggestion search", () => {
+  it("returns to the view underneath when the refreshed suggestions are empty", async () => {
+    let suggestionRequestCount = 0;
+    apiPost.mockImplementation((url) => {
+      const requestUrl = String(url ?? "");
+      if (requestUrl.includes("/pictures/face-search")) {
+        suggestionRequestCount += 1;
+        return Promise.resolve({
+          data:
+            suggestionRequestCount === 1
+              ? [
+                  {
+                    picture_id: 101,
+                    face_id: 201,
+                    likeness: 0.91,
+                    reference_likeness: [0.91],
+                  },
+                ]
+              : [],
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    apiGet.mockImplementation((url) => {
+      const requestUrl = String(url ?? "");
+      if (requestUrl.includes("/pictures?id=101")) {
+        return Promise.resolve({
+          data: [{ id: 101, format: "JPG", width: 100, height: 100 }],
+        });
+      }
+      return Promise.resolve({ data: { pictures: [], count: 0, total: 0 } });
+    });
+
+    const wrapper = mountGrid();
+    useSelectionStore().selectedCharacter = 42;
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await armSuggestion(wrapper);
+
+    expect(wrapper.vm.faceSearchAssignIds).toEqual([101]);
+    apiGet.mockClear();
+
+    await wrapper.vm.handleAssignFaceSearchResults();
+
+    expect(suggestionRequestCount).toBe(2);
+    const assignment = apiPost.mock.calls.find(([url]) =>
+      String(url ?? "").includes("/characters/9/faces"),
+    );
+    expect(assignment?.[1]).toEqual({
+      face_assignments: [{ picture_id: 101, face_id: 201 }],
+    });
+    expect(wrapper.vm.searchResultsActive).toBe(false);
+    expect(useSelectionStore().selectedCharacter).toBe(42);
+    const gridUrls = apiGet.mock.calls.map(([url]) => String(url ?? ""));
+    expect(
+      gridUrls.some(
+        (url) =>
+          (url.includes("/pictures/count") ||
+            url.includes("/pictures/stream")) &&
+          url.includes("character_id=42"),
+      ),
+    ).toBe(true);
+
     wrapper.unmount();
   });
 });

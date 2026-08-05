@@ -72,6 +72,39 @@ describe("DedupWhyPills", () => {
     expect(pills[1].attributes("title")).toBe(
       "Same size. Supports stacking.",
     );
+    expect(pills[0].attributes("aria-label")).toBe(
+      "Different capture time. Argues against stacking.",
+    );
+  });
+
+  it("announces a qualitative mixed-stack summary with its exact detail", () => {
+    const wrapper = mountPills({
+      why: [
+        {
+          text: "All pictures differ",
+          accessible_text:
+            "34 groups: 34 single-picture groups.",
+          against: true,
+        },
+      ],
+    });
+    const pill = wrapper.find(".why-pill");
+    expect(pill.text()).toContain("All pictures differ");
+    expect(pill.text()).not.toContain("34 single-picture groups");
+    expect(pill.attributes("aria-label")).toBe(
+      "34 groups: 34 single-picture groups. Argues against stacking.",
+    );
+  });
+
+  it("hides a cached visual-match pill now that confidence owns the percentage", () => {
+    const wrapper = mountPills({
+      why: [
+        { text: "98% visual match", against: false },
+        { text: "Different resolution", against: true },
+      ],
+    });
+    expect(wrapper.text()).not.toContain("visual match");
+    expect(wrapper.text()).toContain("Different resolution");
   });
 
   it("renders nothing when a group has no evidence", () => {

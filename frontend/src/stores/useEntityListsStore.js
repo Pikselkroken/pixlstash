@@ -15,6 +15,21 @@
 // NOT to be confused with `useEntityNamesStore`, which holds id → name maps for
 // the breadcrumb only. This store holds the full row objects.
 //
+// ── Why the sidebar's counts ride along (issue #651) ────────────────────────
+// `characters` and `projects` are read with `include_counts=true`, so every row
+// carries its `image_count` (and, for characters, `project_image_count`). That
+// replaces the sidebar's per-entity `/{id}/summary` fan-out, one request per
+// character on every refresh, with two list reads it was making anyway.
+//
+// The counts live on the SHARED list rather than in a second "list with counts"
+// cache on purpose: two shapes for one entity would mean two caches to keep
+// coherent, two invalidation paths and two epochs, and the flyout/scope-picker
+// consumers would race the sidebar for the same rows. They simply ignore the
+// extra fields. Both count fields are also independent of the sidebar's current
+// project selection (the backend scopes `project_image_count` to the
+// character's OWN `project_id`), so one cached response is valid in BOTH
+// sidebar view modes and a mode switch never invalidates it.
+//
 // ── Security (see the review on issue #646) ─────────────────────────────────
 // `GET /characters`, `/picture_sets` and `/projects` are `SCOPED_LIST` authz
 // routes: their CONTENT is an authorization decision, filtered to the calling
@@ -42,11 +57,19 @@ import { isReadOnly, onSessionReset, sessionContext } from "../utils/apiClient";
 /** The three lists this store owns. */
 export const ENTITY_KINDS = ["characters", "sets", "projects"];
 
-/** kind → the api module function that reads the whole list. */
+/**
+ * kind → the api module function that reads the whole list.
+ *
+ * Characters and projects ask for `include_counts` so the sidebar can render
+ * its per-row image counts off this list instead of one `/{id}/summary` request
+ * per row (see the header note).
+ */
 const FETCHERS = {
-  characters: listCharacters,
+  characters: ({ baseUrl }) =>
+    listCharacters({ baseUrl, params: { include_counts: true } }),
   sets: listPictureSets,
-  projects: listProjects,
+  projects: ({ baseUrl }) =>
+    listProjects({ baseUrl, params: { include_counts: true } }),
 };
 
 function emptyLists() {
@@ -74,6 +97,11 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   // Deliberately a plain Map: nothing renders off it (mirrors useDedupStore's
   // `scopeCountsInFlight`).
   const inFlight = new Map();
+
+  // An invalidation is stronger than an ordinary cache read: when it arrives
+  // during an in-flight read, that response may predate the mutation/event.
+  // Remember one trailing read per kind so the final cache is authoritative.
+  const trailingInvalidations = new Map();
 
   // Bumped by reset(). A response tagged with a stale epoch is dropped instead
   // of being written into the cache — otherwise a list fetched under the
@@ -121,6 +149,24 @@ export const useEntityListsStore = defineStore("entityLists", () => {
       resourceType !== "project"
     );
   }
+
+  /**
+   * Does this session have any project information at all?
+   *
+   * The reactive form of `canFetch("projects")`, and the ONE definition of
+   * "this credential was granted no project scope" that the UI reads. A token
+   * scoped to a character, a picture or a set is 403'd by `GET /projects`
+   * (`routes/projects.py` checks `resource_type` before it reads anything), so
+   * its project list is not merely empty; it does not exist. Surfaces that
+   * would otherwise render a project control, a project row or a project count
+   * gate on this and render NOTHING instead: absent project information is
+   * omitted, never shown as an empty menu or an error.
+   *
+   * Deliberately false ONLY for a resource-scoped token. An owner and an
+   * unscoped read-only token both keep every project affordance they had,
+   * because over-blocking is its own regression.
+   */
+  const canSeeProjects = computed(() => canFetch("projects"));
 
   function writeList(kind, rows) {
     lists.value = { ...lists.value, [kind]: rows };
@@ -213,7 +259,24 @@ export const useEntityListsStore = defineStore("entityLists", () => {
    */
   function invalidate(kinds = ENTITY_KINDS, options = {}) {
     const targets = Array.isArray(kinds) ? kinds : [kinds];
-    return Promise.all(targets.map((kind) => refresh(kind, options)));
+    return Promise.all(
+      targets.map((kind) => {
+        const existing = inFlight.get(kind);
+        if (!existing) return refresh(kind, options);
+
+        trailingInvalidations.set(kind, options);
+        return existing.then(() => {
+          // Another invalidation callback may already have started the shared
+          // trailing read. Join it instead of creating a third request.
+          const successor = inFlight.get(kind);
+          if (successor) return successor;
+          const trailing = trailingInvalidations.get(kind);
+          if (!trailing) return lists.value[kind] ?? [];
+          trailingInvalidations.delete(kind);
+          return refresh(kind, trailing);
+        });
+      }),
+    );
   }
 
   /**
@@ -226,6 +289,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
   function reset() {
     epoch += 1;
     inFlight.clear();
+    trailingInvalidations.clear();
     lists.value = emptyLists();
     fetchedAt.value = zeroed();
     pending.value = falsed();
@@ -246,6 +310,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
     characters,
     pictureSets,
     projects,
+    canSeeProjects,
     has,
     isLoading,
     // actions

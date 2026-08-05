@@ -1,5 +1,10 @@
 import { onUnmounted, watch } from "vue";
-import { API_BASE_URL, appendShareToken, isReadOnly } from "../utils/apiClient";
+import {
+  API_BASE_URL,
+  appendShareToken,
+  isReadOnly,
+  toBackendWebSocketUrl,
+} from "../utils/apiClient";
 import { useGridRealtimeSync } from "./useGridRealtimeSync";
 import { useWsStore } from "../stores/useWsStore";
 import { useGridStore } from "../stores/useGridStore";
@@ -10,6 +15,11 @@ import { useSearchStore } from "../stores/useSearchStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSnapshotsStore } from "../stores/useSnapshotsStore";
 import { useDedupStore } from "../stores/useDedupStore";
+import {
+  isFullRestoreRequestInFlight,
+  prepareForFullRestoreTransition,
+  reloadAfterFullRestore,
+} from "../utils/fullRestoreTransition";
 
 const BACKEND_URL = API_BASE_URL;
 
@@ -64,7 +74,10 @@ export function useUpdatesSocket({
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
+  let reconnectEnabled = false;
   let gridWsCoalesceTimer = null;
+  let fullRestorePending = false;
+  let fullRestoreTransitioning = false;
 
   // --- WebSocket ---
   // Event types that can carry a recorded operation (the reversible metadata
@@ -79,12 +92,13 @@ export function useUpdatesSocket({
 
   function buildUpdatesSocketUrl() {
     if (!BACKEND_URL) return "";
-    const wsBase = BACKEND_URL.replace(/^http/i, "ws");
     // The backend authenticates the WebSocket handshake (the HTTP auth
     // middleware does not cover WebSockets). A full session authenticates via
     // the same-origin session cookie; a share/read-only session has no cookie,
     // so append its READ token as ?token= the same way HTTP requests do.
-    return appendShareToken(`${wsBase}/ws/updates`);
+    return appendShareToken(
+      toBackendWebSocketUrl(`${BACKEND_URL}/ws/updates`),
+    );
   }
 
   // A `pictures_changed` event may carry a `fields` list naming the columns that
@@ -187,11 +201,23 @@ export function useUpdatesSocket({
   });
 
   function connectUpdatesSocket() {
+    reconnectEnabled = true;
     if (updatesSocket) return;
     const url = buildUpdatesSocketUrl();
     if (!url) return;
     const ws = new WebSocket(url);
     updatesSocket = ws;
+
+    // A full restore replaces both the database and the authentication context.
+    // The STARTED frame reaches established tabs before the server drains their
+    // sockets; close code 1012 is the fallback for a tab that missed that frame.
+    // Disconnect first so the reload cannot race the ordinary reconnect timer.
+    function transitionAfterFullRestore() {
+      if (fullRestoreTransitioning) return;
+      fullRestoreTransitioning = true;
+      disconnectUpdatesSocket();
+      reloadAfterFullRestore();
+    }
 
     ws.onopen = () => {
       sendUpdatesFilters();
@@ -319,13 +345,38 @@ export function useUpdatesSocket({
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
         snapshotsStore.onSnapshotDeleted(payload);
       } else if (payload?.type === "restore_started" && !isReadOnly.value) {
+        if (payload?.resource_type === "full") {
+          if (isFullRestoreRequestInFlight()) {
+            // Preserve the initiating tab's established behavior: its open POST
+            // reports success/failure and RestoreConfirmDialog reloads only once
+            // that response settles.
+            snapshotsStore.onRestoreStarted(payload);
+          } else {
+            // Clear every store that contains reads made under the old
+            // credential immediately, but keep the socket alive until the
+            // server's 1012 drain close. Reloading before the barrier closes
+            // could let the new document reconnect to the old database and
+            // then reload a second time at cutover.
+            fullRestorePending = true;
+            prepareForFullRestoreTransition();
+          }
+          return;
+        }
         snapshotsStore.onRestoreStarted(payload);
       } else if (payload?.type === "restore_completed" && !isReadOnly.value) {
+        if (payload?.resource_type === "full") {
+          transitionAfterFullRestore();
+          return;
+        }
         snapshotsStore.onRestoreCompleted();
         gridStore.wsUpdateKey = Date.now();
         gridStore.refreshGridVersion();
         refreshSidebar();
       } else if (payload?.type === "restore_failed" && !isReadOnly.value) {
+        if (payload?.resource_type === "full") {
+          transitionAfterFullRestore();
+          return;
+        }
         snapshotsStore.onRestoreFailed(payload);
         gridStore.wsUpdateKey = Date.now();
         gridStore.refreshGridVersion();
@@ -334,7 +385,35 @@ export function useUpdatesSocket({
     };
 
     ws.onclose = (event) => {
-      updatesSocket = null;
+      if (updatesSocket === ws) updatesSocket = null;
+      // Close code 1012 is overloaded. A library switch sends it with an
+      // explicit "Library switched" reason; the restore barrier and the
+      // WebSocket admission refusal send it with no reason at all. Only the
+      // reason separates them, so match the switch before the restore branches
+      // or a switch would be transitioned as though it were a restore.
+      const isLibrarySwitch =
+        event?.code === 1012 && event?.reason === "Library switched";
+      if (!isLibrarySwitch) {
+        if (event?.code === 1012) {
+          // The restore barrier deliberately uses Service Restart (1012). The
+          // initiating tab must keep its long-running HTTP request alive; every
+          // other tab immediately clears session stores and bootstraps afresh.
+          if (isFullRestoreRequestInFlight()) {
+            reconnectEnabled = false;
+            return;
+          }
+          transitionAfterFullRestore();
+          return;
+        }
+        if (fullRestorePending) {
+          // Once STARTED was observed, even a network-shaped close cannot make
+          // incremental reconnection safe: the tab has already discarded its
+          // pre-restore state and must bootstrap a coherent session.
+          transitionAfterFullRestore();
+          return;
+        }
+        if (!reconnectEnabled) return;
+      }
       if (updatesReconnectTimer) {
         clearTimeout(updatesReconnectTimer);
       }
@@ -351,6 +430,7 @@ export function useUpdatesSocket({
   }
 
   function disconnectUpdatesSocket() {
+    reconnectEnabled = false;
     if (updatesReconnectTimer) {
       clearTimeout(updatesReconnectTimer);
       updatesReconnectTimer = null;

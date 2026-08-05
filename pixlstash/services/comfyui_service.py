@@ -33,6 +33,7 @@ from pixlstash.db_models import (
     TAG_PENDING_SENTINEL,
 )
 from pixlstash.event_types import EventType
+from pixlstash.services import import_dedup_service
 from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
@@ -543,38 +544,42 @@ def _import_comfyui_outputs(
     if not image_entries:
         return [], []
 
-    shas = [
-        ImageUtils.calculate_hash_from_bytes(img_bytes)
-        for img_bytes, _ in image_entries
+    fingerprints = [
+        (
+            ImageUtils.calculate_hash_from_bytes(img_bytes),
+            len(img_bytes),
+            ImageUtils.calculate_full_hash_from_bytes(img_bytes),
+        )
+        for img_bytes, _ext in image_entries
     ]
 
-    existing_pictures = server.vault.db.run_immediate_read_task(
-        lambda session: Picture.find(session, pixel_shas=shas, include_unimported=True)
+    candidates = server.vault.db.run_immediate_read_task(
+        import_dedup_service.load_match_candidates_in_session,
+        [(sampled, size) for sampled, size, _full in fingerprints],
+        False,
     )
-    existing_map = {pic.pixel_sha: pic for pic in existing_pictures}
+    existing_map, _scrapheaped_map = import_dedup_service.partition_confirmed_matches(
+        candidates, fingerprints, server.vault.image_root
+    )
 
-    new_entries = [
-        (entry, sha)
-        for entry, sha in zip(image_entries, shas)
-        if sha not in existing_map
-    ]
-
-    new_pictures = []
-    for (img_bytes, ext), sha in new_entries:
+    new_picture_map = {}
+    for (img_bytes, ext), fingerprint in zip(image_entries, fingerprints):
+        if fingerprint in existing_map or fingerprint in new_picture_map:
+            continue
+        sampled_sha, _size_bytes, _full_sha = fingerprint
         if output_dir and source_file_stem:
             pic_uuid = _unique_edit_filename(output_dir, source_file_stem, ext)
         else:
             pic_uuid = f"{uuid.uuid4()}{ext}"
-        new_pictures.append(
-            ImageUtils.create_picture_from_bytes(
-                image_root_path=server.vault.image_root,
-                image_bytes=img_bytes,
-                picture_uuid=pic_uuid,
-                pixel_sha=sha,
-                output_dir=output_dir,
-                reference_folder_id=reference_folder_id,
-            )
+        new_picture_map[fingerprint] = ImageUtils.create_picture_from_bytes(
+            image_root_path=server.vault.image_root,
+            image_bytes=img_bytes,
+            picture_uuid=pic_uuid,
+            pixel_sha=sampled_sha,
+            output_dir=output_dir,
+            reference_folder_id=reference_folder_id,
         )
+    new_pictures = list(new_picture_map.values())
 
     def import_task(session):
         if new_pictures:
@@ -607,11 +612,19 @@ def _import_comfyui_outputs(
         server.vault.db.run_task(mark_imported, [pic.id for pic in new_pictures])
 
     new_ids = [pic.id for pic in new_pictures if pic.id is not None]
-    duplicate_ids = [
-        pic.id
-        for sha in shas
-        if (pic := existing_map.get(sha)) is not None and pic.id is not None
-    ]
+    duplicate_ids = []
+    seen_new = set()
+    for fingerprint in fingerprints:
+        pic = existing_map.get(fingerprint)
+        if pic is not None and pic.id is not None:
+            duplicate_ids.append(pic.id)
+            continue
+        if fingerprint in seen_new:
+            pic = new_picture_map.get(fingerprint)
+            if pic is not None and pic.id is not None:
+                duplicate_ids.append(pic.id)
+        else:
+            seen_new.add(fingerprint)
     return new_ids, duplicate_ids
 
 

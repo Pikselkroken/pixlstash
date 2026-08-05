@@ -1,4 +1,4 @@
-"""Remove face rows that were copied onto a differently-sized picture.
+"""Report face rows that were copied onto generated pictures.
 
 Plugin and ComfyUI I2I outputs used to inherit their source picture's face rows
 without always remapping the bounding box. A bbox is pixel coordinates, so on a
@@ -13,11 +13,11 @@ Both copy paths now fail closed and copy nothing they cannot place
 (``image_plugins/service.py`` and ``comfyui_service._copy_face_assignments``),
 so this script is a one-off repair for rows written before that fix.
 
-**This is deliberately not an Alembic migration.** The detection below is a
-heuristic over embeddings, and deleting face rows costs any character assignment
-made on them. That is a judgement call about one library's data, not a schema
-change every vault should have applied to it unattended. Run it yourself, read
-the report, then pass --apply.
+**This is deliberately report-only.** Detection remains partly heuristic, and
+deleting face rows costs character assignments and manually drawn boxes. Safe
+repair requires loading the real output image and running the configured face
+model so the server can reconcile real detections. A standalone SQLite script
+cannot do that, so ``--apply`` fails loudly instead of deleting guessed rows.
 
 Detection works in two steps.
 
@@ -38,17 +38,16 @@ reference crop with box ``[0, 11, 178, 218]`` produced copies carrying
 still describing a region only a ~178x218 canvas has, and covering 1.9% of the
 picture in the top-left corner.
 
-It deletes **every** face row on an affected picture, not only the copied ones:
-``MissingFaceExtractionFinder`` selects on ``~Picture.faces.any()``, so a
-picture that keeps even one face row is never re-detected and would be left with
-a partial, wrong face set. Once the rows are gone the finder re-detects those
-pictures the next time the server runs.
+``Picture.source_picture_id`` generation provenance additionally catches the
+cases embedding grouping cannot: same-size generated copies and historical rows
+with ``features IS NULL``. These are reported for real whole-picture
+re-extraction; provenance does not make blind deletion safe.
 
 Usage:
     python scripts/repair_copied_face_rows.py [path/to/vault.db]
     python scripts/repair_copied_face_rows.py [path/to/vault.db] --apply
 
-Reports and does nothing without --apply. Take a backup first; there is no undo.
+Always reports only. ``--apply`` exits with an explanation and changes nothing.
 """
 
 import argparse
@@ -104,50 +103,65 @@ def find_affected(conn: sqlite3.Connection):
         A ``(set_of_picture_ids, list_of_row_tuples)`` pair, where each row
         tuple is ``(face_id, picture_id, bbox, character_id, width, height)``.
     """
+    picture_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(picture)").fetchall()
+    }
+    face_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(face)").fetchall()
+    }
+    source_expr = (
+        "p.source_picture_id" if "source_picture_id" in picture_columns else "NULL"
+    )
+    frame_expr = "f.frame_index" if "frame_index" in face_columns else "0"
+    index_expr = "f.face_index" if "face_index" in face_columns else "0"
     rows = conn.execute(
-        """
+        f"""
         SELECT f.id, f.picture_id, f.bbox, f.features, f.character_id,
-               p.width, p.height, p.created_at
+               p.width, p.height, p.created_at, {source_expr},
+               {frame_expr}, {index_expr}
         FROM face f
         JOIN picture p ON p.id = f.picture_id
-        WHERE f.features IS NOT NULL AND f.bbox IS NOT NULL
+        WHERE f.bbox IS NOT NULL
         """
     ).fetchall()
 
     by_embedding = defaultdict(list)
-    for face_id, pic_id, bbox, features, char_id, width, height, created in rows:
-        if not width or not height:
+    for row in rows:
+        features = row[3]
+        if not row[5] or not row[6] or features is None:
             continue
-        key = hashlib.sha1(features).digest()
-        by_embedding[key].append(
-            (face_id, pic_id, bbox, char_id, width, height, created or "")
-        )
+        by_embedding[hashlib.sha1(features).digest()].append(row)
 
     copied = []
+    copied_face_ids: set[int] = set()
+
+    def add_report(entry) -> None:
+        if int(entry[0]) in copied_face_ids:
+            return
+        copied_face_ids.add(int(entry[0]))
+        copied.append((entry[0], entry[1], entry[2], entry[4], entry[5], entry[6]))
+
     for group in by_embedding.values():
         if len(group) < 2:
             continue
-        if len({(entry[4], entry[5]) for entry in group}) < 2:
-            # Same embedding on same-sized pictures is a duplicate import, not a
-            # cross-canvas copy. Leave it alone.
+        if len({(entry[5], entry[6]) for entry in group}) < 2:
+            # Without generation provenance, same-size byte-identical rows can
+            # be legitimate duplicate imports. The provenance pass below handles
+            # generated copies without widening this heuristic.
             continue
-        # The earliest picture is the original; the rest inherited its face.
-        # Creation time rather than canvas size, because copies run both ways
-        # (a small reference crop feeding a large generation, and a large
-        # generation feeding a larger upscale).
-        original = min(group, key=lambda entry: (entry[6], entry[1]))
+        original = min(group, key=lambda entry: (entry[7] or "", entry[1]))
         origin_box = _parse_bbox(original[2])
         for entry in group:
             if entry is original:
                 continue
-            if (entry[4], entry[5]) == (original[4], original[5]):
+            if (entry[5], entry[6]) == (original[5], original[6]):
                 continue
             actual = _parse_bbox(entry[2])
             if actual is None or origin_box is None:
-                copied.append(entry[:6])
+                add_report(entry)
                 continue
-            scale_x = entry[4] / original[4]
-            scale_y = entry[5] / original[5]
+            scale_x = entry[5] / original[5]
+            scale_y = entry[6] / original[6]
             expected = [
                 origin_box[0] * scale_x,
                 origin_box[1] * scale_y,
@@ -155,8 +169,33 @@ def find_affected(conn: sqlite3.Connection):
                 origin_box[3] * scale_y,
             ]
             if _iou(actual, expected) < MIN_IOU:
-                copied.append(entry[:6])
+                add_report(entry)
 
+    # Provenance catches same-size generated copies and old copied manual rows
+    # with NULL features. These are re-extraction candidates, not deletion
+    # targets: only inference over the target image can establish its real faces.
+    faces_by_picture: dict[int, list[tuple]] = defaultdict(list)
+    for row in rows:
+        faces_by_picture[int(row[1])].append(row)
+    for entry in rows:
+        source_picture_id = entry[8]
+        if source_picture_id is None:
+            continue
+        for source in faces_by_picture.get(int(source_picture_id), []):
+            same_slot = (entry[9], entry[10]) == (source[9], source[10])
+            same_features = (
+                entry[3] is not None and source[3] is not None and entry[3] == source[3]
+            )
+            same_null_box = (
+                entry[3] is None
+                and source[3] is None
+                and _parse_bbox(entry[2]) == _parse_bbox(source[2])
+            )
+            if same_slot and (same_features or same_null_box):
+                add_report(entry)
+                break
+
+    copied.sort(key=lambda entry: (int(entry[1]), int(entry[0])))
     return {int(entry[1]) for entry in copied}, copied
 
 
@@ -166,7 +205,7 @@ def main() -> None:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually delete. Without it the script only reports.",
+        help="Refused: safe repair requires real model re-extraction.",
     )
     args = parser.parse_args()
 
@@ -190,12 +229,12 @@ def main() -> None:
 
         print(f"copied face rows found      : {len(copied)}")
         print(f"pictures affected           : {len(picture_ids)}")
-        print(f"face rows that will be gone : {total_on_pictures}")
+        print(f"face rows needing review    : {total_on_pictures}")
         print(
-            "   (every row on those pictures, not just the copies: the extraction "
-            "finder only picks up a picture with no faces at all)"
+            "   (re-extract each whole picture with the configured face model; "
+            "do not delete only the reported rows)"
         )
-        print(f"character assignments lost  : {len(assigned)}")
+        print(f"assigned copied candidates  : {len(assigned)}")
         for face_id, pic_id, bbox, char_id, width, height in assigned:
             print(
                 f"   face={face_id} picture={pic_id} ({width}x{height}) "
@@ -203,18 +242,16 @@ def main() -> None:
             )
 
         if not args.apply:
-            print("\nReport only. Re-run with --apply to delete (back up first).")
+            print("\nReport only. No rows were changed.")
             return
 
-        conn.execute(
-            f"DELETE FROM face WHERE picture_id IN ({placeholders})",
-            ids,
-        )
-        conn.commit()
         print(
-            f"\nDeleted {total_on_pictures} face row(s) across {len(picture_ids)} "
-            "picture(s). Face extraction will re-detect them on the next server run."
+            "\nRefusing --apply: safe repair requires real face re-extraction "
+            "and assignment reconciliation in the running server; this SQLite "
+            "script cannot prove which legitimate/manual rows to preserve.",
+            file=sys.stderr,
         )
+        sys.exit(2)
     finally:
         conn.close()
 

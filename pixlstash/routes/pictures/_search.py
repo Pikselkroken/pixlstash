@@ -20,6 +20,7 @@ from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
     fetch_scope_allowed_picture_ids,
     fetch_set_candidate_ids,
+    narrow_picture_project_ids,
     normalize_set_mode,
     project_membership_exists_clause,
     project_unassigned_clause,
@@ -454,4 +455,10 @@ def register_routes(router, server):
                     if result[0] is not None
                     and getattr(result[0], "id", None) not in hidden_ids
                 ]
-        return [Picture.serialize_with_likeness(r) for r in results]
+        rows = [Picture.serialize_with_likeness(r) for r in results]
+        # Rows come from `metadata_fields()`, which carries the raw
+        # `Picture.project_id`, and `PictureMetadataResponse` sets
+        # `extra="allow"` so the response model filters nothing (issue #719,
+        # §16.6).
+        narrow_picture_project_ids(server, request, rows)
+        return rows

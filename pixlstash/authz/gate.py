@@ -64,6 +64,7 @@ from pixlstash.authz.membership import (
     ID_RESOLVERS,
     enforce_character_scope,
     enforce_picture_scope,
+    enforce_project_filter_scope,
     enforce_project_scope,
     enforce_set_scope,
 )
@@ -456,6 +457,17 @@ class AuthzGate:
         delegate to the existing ``AuthService`` helpers so the ``token_scope``
         ladder lives in exactly one place. The object-scoped classes are handled
         by :meth:`_enforce_scoped_policy` (Step 4).
+
+        **The library checks run first, then the project-filter check, for every
+        declared route and every policy class (issue #708).** The project filter
+        is deliberately policy-independent: a ``project_id`` filter is a question
+        about the *project space*, not about the object the route is named after,
+        so which ``AccessPolicy`` the route carries says nothing about whether the
+        filter is allowed. Placing it here rather than in each handler is what
+        makes it inherited — a new route that accepts ``project_id`` is covered
+        the day it is mounted, with no declaration to remember (the omission class
+        of §16.2). It resolves project ids against the server, so it must run
+        *after* the library checks have settled which vault is being read.
         """
         # Mid-swap the server's vault is being replaced, so a request served now
         # could read from one library and write to another. Refused before any
@@ -476,6 +488,8 @@ class AuthzGate:
         # can sidestep it and a route added without thinking about libraries is
         # pinned by default.
         self._enforce_library_pin(request, route_policy)
+
+        enforce_project_filter_scope(self._server, request)
 
         policy = route_policy.policy
         if policy in (AccessPolicy.PUBLIC, AccessPolicy.ANY_TOKEN):

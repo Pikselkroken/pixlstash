@@ -681,7 +681,7 @@ def test_a_member_without_a_hash_reports_no_edge_without_being_a_stranger():
             "a picture nothing has compared yet must never be described by how "
             f"unlike the others it is: {texts}"
         )
-        assert ("2 groups (2 + 1)", True) in texts
+        assert ("1 picture differs from the rest", True) in texts
         assert ("Weakest match 98%", False) in texts
     finally:
         _teardown(temp_dir, server)
@@ -959,14 +959,79 @@ def test_why_pills_name_the_strong_case():
             # cut, and "matches nothing else" is not a statement about a
             # picture at all, only about a threshold.
             ("1 picture is only 50% like the rest", True),
-            ("2 groups (2 + 1)", True),
+            ("1 picture differs from the rest", True),
             ("Weakest match 98%", False),
         ]
         # Same contract as a duplicate group's `why`, so the shipped pill
         # component renders it with no second code path.
-        assert all(set(pill) == {"text", "against"} for pill in row["why"])
+        assert all({"text", "against"} <= set(pill) for pill in row["why"])
+        structure = next(
+            pill
+            for pill in row["why"]
+            if pill["text"] == "1 picture differs from the rest"
+        )
+        assert structure["accessible_text"] == (
+            "2 groups: 1 group of 2 pictures and 1 single-picture group."
+        )
     finally:
         _teardown(temp_dir, server)
+
+
+@pytest.mark.parametrize(
+    ("sizes", "member_count", "expected"),
+    [
+        ([1, 1, 1], 3, "All pictures differ"),
+        ([2, 1, 1, 1], 5, "Most pictures differ"),
+        ([5, 1], 6, "1 picture differs from the rest"),
+        ([5, 2, 1], 8, "3 pictures differ from the main group"),
+        ([3, 3], 6, "2 groups don't match each other"),
+        # Exactly half is deliberately not a majority.
+        ([3, 2, 1], 6, "Several groups don't overlap"),
+    ],
+)
+def test_component_structure_uses_qualitative_majority_rules(
+    sizes, member_count, expected
+):
+    pill = mixed_stack_service._component_structure_pill(
+        len(sizes), sizes, member_count
+    )
+    assert pill is not None
+    assert pill["text"] == expected
+    assert pill["against"] is True
+
+
+def test_component_structure_keeps_the_exact_distribution_accessible():
+    sizes = [5, 5, 3, 2, 2, *([1] * 29)]
+    pill = mixed_stack_service._component_structure_pill(34, sizes, 46)
+    assert pill is not None
+    assert pill["text"] == "Most pictures differ"
+    assert pill["accessible_text"] == (
+        "34 groups: 2 groups of 5 pictures, 1 group of 3 pictures, "
+        "2 groups of 2 pictures, and 29 single-picture groups."
+    )
+
+
+@pytest.mark.parametrize(
+    ("sizes", "member_count"),
+    [
+        (None, 3),
+        ([2], 2),
+        ([2, 1], 4),
+        ([2, 0], 2),
+        ([2, True], 3),
+    ],
+)
+def test_component_structure_does_not_infer_from_malformed_sizes(sizes, member_count):
+    pill = mixed_stack_service._component_structure_pill(2, sizes, member_count)
+    assert pill == {
+        "text": "2 groups don't overlap",
+        "against": True,
+        "accessible_text": "2 groups don't overlap.",
+    }
+
+
+def test_component_structure_omits_a_valid_cohesive_report():
+    assert mixed_stack_service._component_structure_pill(1, [3], 3) is None
 
 
 def test_why_pills_name_the_soft_case_without_calling_anyone_a_stranger():
@@ -987,7 +1052,7 @@ def test_why_pills_name_the_soft_case_without_calling_anyone_a_stranger():
         assert row["stranded_picture_ids"] == []
         assert row["component_sizes"] == [2, 2]
         assert _pill_texts(row) == [
-            ("2 groups (2 + 2)", True),
+            ("2 groups don't match each other", True),
             ("Weakest match 98%", False),
         ]
     finally:
@@ -1005,7 +1070,7 @@ def test_why_pills_say_so_when_no_two_pictures_match_at_all():
         assert row["weakest_edge"] is None
         assert _pill_texts(row) == [
             ("2 pictures are only 50% like the rest", True),
-            ("2 groups (1 + 1)", True),
+            ("All pictures differ", True),
             ("No two pictures match", True),
         ]
     finally:

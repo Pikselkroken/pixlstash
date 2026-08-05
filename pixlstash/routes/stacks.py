@@ -24,7 +24,10 @@ from pixlstash.picture_scoring import (
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.request_origin import require_client_batch_id
 from pixlstash.utils.serialization_utils import safe_model_dict
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    narrow_picture_project_ids,
+)
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.pixl_logging import get_logger
 
@@ -718,10 +721,15 @@ def create_router(server) -> APIRouter:
         # this also persists positions for stacks that haven't been ordered yet.
         if sort_mech is None:
             pictures = _ensure_stack_positions(request, stack_id, pictures)
-        return [
+        rows = [
             {field: safe_model_dict(pic).get(field) for field in select_fields}
             for pic in pictures
         ]
+        # `fields=grid` never selects `project_id`; anything else goes through
+        # `metadata_fields()`, which does, and the route's `list[dict]` response
+        # model filters nothing (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, rows)
+        return rows
 
     @router.get(
         "/pictures/{picture_id}/stack",
@@ -868,7 +876,7 @@ def create_router(server) -> APIRouter:
                     orphan_stack = session.get(PictureStack, orphan_stack_id)
                     if orphan_stack is not None:
                         session.delete(orphan_stack)
-                session.commit()
+                session.flush()
             elif existing_stack_ids:
                 stack_id = existing_stack_ids.pop()
                 stack = session.get(PictureStack, stack_id)
@@ -877,7 +885,7 @@ def create_router(server) -> APIRouter:
             else:
                 stack = PictureStack(name=name)
                 session.add(stack)
-                session.commit()
+                session.flush()
                 session.refresh(stack)
 
             existing_positions = []
@@ -908,7 +916,7 @@ def create_router(server) -> APIRouter:
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)
-            session.commit()
+            session.flush()
             if stack.id is None:
                 raise HTTPException(status_code=500, detail="Failed to create stack")
             return stack.id
@@ -1155,7 +1163,7 @@ def create_router(server) -> APIRouter:
                     pic.stack_position = None
                     session.add(pic)
                 session.delete(stack)
-                session.commit()
+                session.flush()
                 return None
 
             # Compact to close gaps left by the removed pictures.
@@ -1163,7 +1171,7 @@ def create_router(server) -> APIRouter:
 
             stack.updated_at = datetime.utcnow()
             session.add(stack)
-            session.commit()
+            session.flush()
             return stack
 
         # Expanding to the whole stack is what makes the dissolve branch

@@ -118,7 +118,12 @@ def register_routes(router, server):
                             return Response(status_code=304)
                         resp = FileResponse(wm_cache_path, media_type=media_type)
                         resp.headers["ETag"] = etag
-                        resp.headers["Cache-Control"] = "public, max-age=86400"
+                        # Revalidate like every other branch of this route. The
+                        # ETag makes the repeat cost a 304, while a max-age here
+                        # would be the one media response that can serve stale
+                        # pixels after an in-place edit: the client cannot know
+                        # a picture was rewritten, so it must be allowed to ask.
+                        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
                         return resp
                 except OSError as exc:
                     logger.warning(

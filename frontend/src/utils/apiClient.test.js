@@ -5,30 +5,49 @@
 // batch and a single Ctrl+Z reverses the whole gesture
 // (docs/backend_architecture.md §21.2).
 
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+
+const { axiosInstance, requestInterceptors } = vi.hoisted(() => {
+  const requestInterceptors = [];
+  return {
+    requestInterceptors,
+    axiosInstance: {
+      get: vi.fn().mockResolvedValue({ data: {} }),
+      post: vi.fn().mockResolvedValue({ data: {} }),
+      interceptors: {
+        request: { use: vi.fn((handler) => requestInterceptors.push(handler)) },
+        response: { use: vi.fn() },
+      },
+    },
+  };
+});
 
 // The module builds an axios instance at import time; stub it so the session
 // tests below can call logout() without a real request.
 vi.mock("axios", () => {
-  const instance = {
-    get: vi.fn().mockResolvedValue({ data: {} }),
-    post: vi.fn().mockResolvedValue({ data: {} }),
-    interceptors: {
-      request: { use: vi.fn() },
-      response: { use: vi.fn() },
-    },
-  };
-  return { default: { create: () => instance } };
+  return { default: { create: () => axiosInstance } };
 });
 
 import {
+  API_BASE_URL,
   activateShareToken,
+  appendShareToken,
   login,
   logout,
   newOperationBatchId,
   onSessionReset,
   operationBatchHeaders,
+  sessionContext,
+  setRequestClientId,
+  toBackendWebSocketUrl,
 } from "./apiClient";
+
+const requestInterceptor = requestInterceptors[0];
+
+beforeEach(() => {
+  activateShareToken(null);
+  setRequestClientId(null);
+});
 
 describe("newOperationBatchId", () => {
   // Load-bearing: the backend accepts client ids only in the `cli-` namespace
@@ -104,6 +123,58 @@ describe("onSessionReset", () => {
   });
 });
 
+// Issue #655 item 4. The transport's own identity outlived a credential change:
+// `_shareToken` and `sessionContext` were set by `activateShareToken` and never
+// cleared by anything.
+describe("the transport's own identity is dropped on a session reset", () => {
+  const relativeUrl = "/pictures/1/thumbnail";
+
+  it("stops attaching a share token after a logout", async () => {
+    activateShareToken("share-token-abc");
+    expect(appendShareToken(relativeUrl)).toContain("token=share-token-abc");
+    await logout();
+    expect(appendShareToken(relativeUrl)).toBe(relativeUrl);
+  });
+
+  // The reachable path: Root.vue calls activateShareToken BEFORE validating the
+  // token, so an invalid ?token= left it set while the login screen rendered.
+  // The owner's login then attached that dead token to every request.
+  it("stops attaching a rejected share token once the owner logs in", async () => {
+    activateShareToken("invalid-token-from-a-bad-link");
+    await login("owner", "hunter2");
+    expect(appendShareToken(relativeUrl)).toBe(relativeUrl);
+  });
+
+  it("clears the session context, so a stale scope cannot suppress the next one's lists", async () => {
+    activateShareToken("share-token-abc");
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    await logout();
+    expect(sessionContext.value).toBeNull();
+  });
+
+  // The other direction: entering a share token must still leave that token
+  // attached. `activateShareToken` announces the transition and assigns after,
+  // and clearing in the wrong order would wipe the token it just set.
+  it("keeps the NEW token when a share link is what caused the reset", () => {
+    activateShareToken("first-token");
+    activateShareToken("second-token");
+    expect(appendShareToken(relativeUrl)).toContain("token=second-token");
+  });
+
+  // Handlers may read sessionContext while deciding what to drop
+  // (useEntityListsStore.canFetch), so it must still be readable during the
+  // handler loop and only be cleared afterwards.
+  it("clears the context AFTER the handlers, not before", async () => {
+    const seen = [];
+    sessionContext.value = { scope: "READ", resource_type: "character" };
+    const stop = onSessionReset(() => seen.push(sessionContext.value));
+    await logout();
+    expect(seen).toEqual([{ scope: "READ", resource_type: "character" }]);
+    expect(sessionContext.value).toBeNull();
+    stop();
+  });
+});
+
 describe("operationBatchHeaders", () => {
   it("builds the header only when there is a gesture to correlate", () => {
     expect(operationBatchHeaders("cli-abcd1234")).toEqual({
@@ -112,5 +183,133 @@ describe("operationBatchHeaders", () => {
     expect(operationBatchHeaders()).toBeUndefined();
     expect(operationBatchHeaders("")).toBeUndefined();
     expect(operationBatchHeaders(null)).toBeUndefined();
+  });
+});
+
+describe("exact backend-origin credential policy", () => {
+  const backend = new URL(API_BASE_URL);
+  const backendOrigin = backend.origin;
+
+  function intercept(url, method = "post") {
+    return requestInterceptor({ url, method, headers: {} });
+  }
+
+  beforeEach(() => {
+    activateShareToken("share-secret");
+    setRequestClientId("client-tab");
+  });
+
+  it("attaches credentials to relative API URLs", () => {
+    const config = intercept("/pictures/7");
+    expect(config.url).toBe("/api/v1/pictures/7");
+    expect(config.params).toEqual({ token: "share-secret" });
+    expect(config.headers["X-Client-Id"]).toBe("client-tab");
+    expect(config.withCredentials).toBe(true);
+  });
+
+  it("attaches credentials to the exact configured backend origin", () => {
+    const url = `${backendOrigin}/api/v1/pictures/7`;
+    const config = intercept(url);
+    expect(config.url).toBe(url);
+    expect(config.params).toEqual({ token: "share-secret" });
+    expect(config.headers["X-Client-Id"]).toBe("client-tab");
+    expect(config.withCredentials).toBe(true);
+  });
+
+  it("accepts a protocol-relative URL only for the configured backend", () => {
+    const trusted = intercept(`//${backend.host}/api/v1/pictures/7`);
+    const external = intercept("//cdn.example.test/image.webp");
+    expect(trusted.params).toEqual({ token: "share-secret" });
+    expect(trusted.headers["X-Client-Id"]).toBe("client-tab");
+    expect(external.params).toBeUndefined();
+    expect(external.headers["X-Client-Id"]).toBeUndefined();
+    expect(external.withCredentials).toBe(false);
+  });
+
+  it.each([
+    ["suffix host", `${backend.protocol}//${backend.hostname}.evil.test:${backend.port || "80"}/steal`],
+    ["userinfo", `${backend.protocol}//${backend.host}@evil.test/steal`],
+    ["alternate port", `${backend.protocol}//${backend.hostname}:${Number(backend.port || 80) + 1}/steal`],
+    ["different scheme", `${backend.protocol === "https:" ? "http:" : "https:"}//${backend.host}/steal`],
+    ["external absolute", "https://cdn.example.test/image.webp"],
+    ["malformed absolute", "http://[::1/steal"],
+  ])("fails closed for a %s URL", (_label, url) => {
+    const config = intercept(url);
+    expect(config.params).toBeUndefined();
+    expect(config.headers["X-Client-Id"]).toBeUndefined();
+    expect(config.withCredentials).toBe(false);
+  });
+
+  it("does not trust the SPA origin when it differs from the backend", () => {
+    expect(window.location.origin).not.toBe(backendOrigin);
+    const config = intercept(`${window.location.origin}/api/v1/pictures/7`);
+    expect(config.params).toBeUndefined();
+    expect(config.headers["X-Client-Id"]).toBeUndefined();
+  });
+
+  it("never attaches the mutating client id to a trusted GET", () => {
+    const config = intercept(`${backendOrigin}/api/v1/pictures/7`, "get");
+    expect(config.params).toEqual({ token: "share-secret" });
+    expect(config.headers["X-Client-Id"]).toBeUndefined();
+  });
+});
+
+describe("appendShareToken for ImageOverlay media URLs", () => {
+  const backend = new URL(API_BASE_URL);
+
+  beforeEach(() => activateShareToken("overlay-secret"));
+
+  it("credentials relative and exact-origin absolute media URLs", () => {
+    expect(appendShareToken("/pictures/1.webp")).toBe(
+      "/pictures/1.webp?token=overlay-secret",
+    );
+    expect(
+      appendShareToken(`${backend.origin}/pictures/1.webp#frame`),
+    ).toBe(`${backend.origin}/pictures/1.webp?token=overlay-secret#frame`);
+  });
+
+  it.each([
+    `${backend.protocol}//${backend.hostname}.evil.test:${backend.port || "80"}/image.webp`,
+    `${backend.protocol}//${backend.host}@evil.test/image.webp`,
+    `${backend.protocol}//${backend.hostname}:${Number(backend.port || 80) + 1}/image.webp`,
+    `${backend.protocol === "https:" ? "http:" : "https:"}//${backend.host}/image.webp`,
+    "//cdn.example.test/image.webp",
+    "https://cdn.example.test/image.webp",
+    "http://[::1/image.webp",
+  ])("leaves an untrusted or malformed media URL unchanged", (url) => {
+    expect(appendShareToken(url)).toBe(url);
+  });
+});
+
+describe("backend WebSocket URL normalization", () => {
+  const backend = new URL(API_BASE_URL);
+
+  it("maps only a trusted backend HTTP URL to ws/wss", () => {
+    const socket = new URL(
+      toBackendWebSocketUrl(`${backend.origin}/api/v1/ws/updates`),
+    );
+    expect(socket.protocol).toBe(backend.protocol === "https:" ? "wss:" : "ws:");
+    expect(socket.host).toBe(backend.host);
+    expect(socket.pathname).toBe("/api/v1/ws/updates");
+  });
+
+  it.each([
+    "https://external.example/ws",
+    "//external.example/ws",
+    "ws://external.example/ws",
+    "http://[::1/ws",
+  ])("refuses to normalize an untrusted socket source", (url) => {
+    expect(toBackendWebSocketUrl(url)).toBe("");
+  });
+
+  it("allows appendShareToken only on the mapped backend socket origin", () => {
+    activateShareToken("socket-secret");
+    const trusted = toBackendWebSocketUrl(
+      `${backend.origin}/api/v1/ws/updates`,
+    );
+    expect(appendShareToken(trusted)).toContain("token=socket-secret");
+    expect(appendShareToken("wss://external.example/ws")).toBe(
+      "wss://external.example/ws",
+    );
   });
 });

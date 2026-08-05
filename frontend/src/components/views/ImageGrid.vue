@@ -1,5 +1,6 @@
 <template>
   <ImageOverlay
+    ref="imageOverlayRef"
     :open="overlayOpen"
     :initialImageId="overlayImageId"
     :initialExpandedStackIds="overlayInitialExpandedStackIds"
@@ -175,6 +176,9 @@
       :lock-reason="overlayCtxLockReason"
       :context-image="overlayCtxImage"
       @close="overlayCtxVisible = false"
+      @save-picture="handleOverlaySave"
+      @save-picture-as="handleOverlaySaveAs"
+      @copy-picture="handleOverlayCopy"
       @share-picture="handleOverlayShare"
       @find-similar-faces="handleOverlayFindSimilarFaces"
       @reverse-image-search="handleOverlayReverseImageSearch"
@@ -1104,6 +1108,7 @@
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
+          @segment="openSegmentDialog"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
         />
       </template>
@@ -1234,6 +1239,7 @@ import {
   getCharacter,
   listCharacters,
   addCharacterFaces,
+  addCharacterFaceAssignments,
   addCharacterFacesByFaceId,
   removeCharacterFaces,
   removeCharacterFacesByFaceId,
@@ -1458,6 +1464,7 @@ const overlayCtxVisible = ref(false);
 const overlayCtxX = ref(0);
 const overlayCtxY = ref(0);
 const overlayCtxImage = ref(null);
+const imageOverlayRef = ref(null);
 // The overlay menu acts on exactly one picture: the one on screen.
 const overlayCtxSelectedIds = computed(() =>
   overlayCtxImage.value?.id != null ? [overlayCtxImage.value.id] : [],
@@ -5465,6 +5472,84 @@ const {
   },
 );
 
+// ── Character membership undo/redo must reconcile a character grid ───
+// The history endpoint changes the face metadata and the operation store updates
+// its history/receipt, but the resulting pictures_changed event carries this
+// tab's own origin and is deliberately suppressed by the realtime grid sync.
+// That leaves a character view showing pictures whose assignment was just
+// undone or redone until an unrelated full refresh. Subscribe to the completed
+// shared history action, as DuplicateQueue does for its domain state, and
+// re-read only when character membership can affect the active grid.
+const CHARACTER_MEMBERSHIP_HISTORY_ACTIONS = new Set([
+  "undo",
+  "undoTo",
+  "undoBatchById",
+  "redo",
+]);
+const CHARACTER_MEMBERSHIP_OP_TYPES = new Set([
+  "characters.assign",
+  "characters.unassign",
+]);
+
+const isCharacterScopedView = computed(() => {
+  if (normalizedSelectedCharacterIds.value.length > 0) return true;
+  const selected = selectionStore.selectedCharacter;
+  if (selected == null) return false;
+  const key = String(selected).toUpperCase();
+  return ![
+    String(ALL_PICTURES_ID).toUpperCase(),
+    String(UNASSIGNED_PICTURES_ID).toUpperCase(),
+    String(SCRAPHEAP_PICTURES_ID).toUpperCase(),
+  ].includes(key);
+});
+
+/** Operations a history action is about to touch, before its stack moves. */
+function characterMembershipHistoryTargets(name, args) {
+  if (name === "undo") {
+    return operationStore.nextUndo ? [operationStore.nextUndo] : [];
+  }
+  if (name === "undoTo") {
+    const past = operationStore.past ?? [];
+    const index = past.findIndex((op) => op?.id === args?.[0]);
+    return index < 0 ? [] : past.slice(0, index + 1);
+  }
+  if (name === "undoBatchById") {
+    return (operationStore.operations ?? []).filter(
+      (op) => op?.batch_id === args?.[0],
+    );
+  }
+  if (name === "redo") {
+    return operationStore.nextRedo ? [operationStore.nextRedo] : [];
+  }
+  return [];
+}
+
+operationStore.$onAction(({ name, args, after }) => {
+  if (!CHARACTER_MEMBERSHIP_HISTORY_ACTIONS.has(name)) return;
+  const targets = characterMembershipHistoryTargets(name, args);
+  if (
+    !targets.some((op) =>
+      CHARACTER_MEMBERSHIP_OP_TYPES.has(String(op?.op_type || "")),
+    )
+  ) {
+    return;
+  }
+
+  after(async (result) => {
+    // History actions return null on failure; `undoTo` returns the number of
+    // operations actually reverted, including a partial successful walk. A
+    // failed undo or redo must leave the current grid untouched.
+    const succeeded = name === "undoTo" ? Number(result) > 0 : result != null;
+    if (!succeeded || !isCharacterScopedView.value) return;
+    if (overlayOpen.value) {
+      pendingOverlayGridRefresh.value = true;
+      return;
+    }
+    preserveScrollOnNextFetch.value = true;
+    await fetchAllGridImages({ force: true });
+  });
+});
+
 // ============================================================
 // STACK ORDERING + EXPAND / COLLAPSE + REORDER DRAG
 // (moved to useStackOrdering composable)
@@ -6812,6 +6897,18 @@ function handleOverlayContextMenuRequest(payload) {
   overlayCtxVisible.value = true;
 }
 
+async function handleOverlaySave() {
+  await imageOverlayRef.value?.saveMedia?.(overlayCtxImage.value);
+}
+
+async function handleOverlaySaveAs() {
+  await imageOverlayRef.value?.saveMediaAs?.(overlayCtxImage.value);
+}
+
+async function handleOverlayCopy() {
+  await imageOverlayRef.value?.copyMedia?.(overlayCtxImage.value);
+}
+
 function handleOverlayShare() {
   const img = overlayCtxImage.value;
   if (!img?.id || !img?.format) return;
@@ -7642,7 +7739,23 @@ function handleSuggestPicturesForCharacter(character) {
   // so it must not be the one that gets dropped. Fetching here as well is safe:
   // the two calls share a fetch key and the second de-dups against the first.
   nextTick(() => {
-    fetchAllGridImages({ force: true }).then(() => updateVisibleThumbnails());
+    void (async () => {
+      const outcome = await fetchAllGridImages({ force: true });
+      if (
+        faceSearchCharacter.value?.id === id &&
+        outcome?.error?.gridFetchPhase === "character-face-search-request"
+      ) {
+        const failure = outcome.error;
+        clearCharacterFaceSearch();
+        await fetchAllGridImages({ force: true });
+        noticeStore.error(
+          `Couldn't load suggestions for ${character.name ?? "this person"}. ${errorDetail(failure)}`,
+          { key: "character-face-search-load" },
+        );
+        return;
+      }
+      updateVisibleThumbnails();
+    })();
   });
 }
 
@@ -7687,20 +7800,37 @@ const faceSearchAssignIds = computed(() =>
 /**
  * Assign the suggested (or selected) pictures to the searched person.
  *
- * Sends picture ids rather than the matches' `face_id`s on purpose: the
- * assignment endpoint expands stacks and re-picks the best face per picture
- * against the same reference faces this search used, so a stacked suggestion
- * moves as a unit. The write is recorded in the operation log, so refreshing it
- * raises the receipt that carries Undo — which is what lets this skip a
- * confirmation dialog.
+ * Sends the exact picture/face pairs the search returned. A suggestion is an
+ * explicit reviewed winner; rescoring it during assignment can attach a
+ * different face if detections or references changed in between.
  */
 async function handleAssignFaceSearchResults() {
   const character = faceSearchCharacter.value;
   const ids = faceSearchAssignIds.value;
   if (!character || !ids.length || faceSearchAssignBusy.value) return;
+  const wanted = new Set(ids.map(String));
+  const byPicture = new Map();
+  for (const match of faceSearchMatches.value) {
+    if (!wanted.has(String(match?.picture_id))) continue;
+    if (match?.picture_id == null || match?.face_id == null) continue;
+    byPicture.set(String(match.picture_id), {
+      picture_id: match.picture_id,
+      face_id: match.face_id,
+    });
+  }
+  const assignments = [...byPicture.values()];
+  if (assignments.length !== wanted.size) {
+    noticeStore.warning(
+      "Some selected suggestions no longer have a reviewed face match. Refresh suggestions before assigning.",
+      { key: "character-face-search-stale-selection" },
+    );
+    return;
+  }
   faceSearchAssignBusy.value = true;
   try {
-    await addCharacterFaces(character.id, ids, { baseUrl: props.backendUrl });
+    await addCharacterFaceAssignments(character.id, assignments, {
+      baseUrl: props.backendUrl,
+    });
     selectedImageIds.value = [];
     clearFaceSelection();
     lastSelectedImageId.value = null;
@@ -7712,11 +7842,31 @@ async function handleAssignFaceSearchResults() {
     // de-dup window and leave the grid showing what was just assigned.
     faceSearchRanked.value = null;
     await fetchAllGridImages({ force: true });
+    // Once the refreshed cut has no suggestions left, the temporary search
+    // has served its purpose. Drop it and reload the still-selected view that
+    // was underneath it instead of leaving the user in an empty suggestion
+    // grid. If any matches remain, keep the mode open for another assignment.
+    if (faceSearchMatches.value.length === 0) {
+      clearCharacterFaceSearch();
+      await fetchAllGridImages({ force: true });
+    }
     updateVisibleThumbnails();
     // Raises the "Assigned N pictures…· Undo" receipt for this client.
     operationStore.refresh();
     emit("refresh-sidebar");
   } catch (e) {
+    const status = Number(e?.response?.status);
+    if (status >= 500 || status === 422) {
+      faceSearchRanked.value = null;
+      await fetchAllGridImages({ force: true });
+    }
+    if (status >= 500) {
+      noticeStore.error(
+        `The assignment outcome is uncertain. Suggestions were reloaded from the server before you retry.`,
+        { key: "character-face-search-assign-uncertain" },
+      );
+      return;
+    }
     noticeStore.error(
       `Couldn't assign those pictures to ${character.name}. ${errorDetail(e)}`,
       { scope: "character-face-search-assign" },
@@ -7780,1176 +7930,5 @@ function handleEmptyStateReset() {
   emit("reset-to-all");
 }
 </script>
-
-<style scoped>
-.drag-overlay {
-  position: sticky;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(var(--v-theme-accent), 0.2);
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  border: 8px solid rgb(var(--v-theme-accent));
-  border-radius: 16px;
-  box-sizing: border-box;
-  transition:
-    border-color 0.2s,
-    background 0.2s;
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 3em;
-  font-weight: bold;
-}
-
-.drag-overlay-message {
-  padding: 6px 14px;
-  background: rgba(var(--v-theme-shadow), 0.35);
-  border-radius: 12px;
-}
-
-.thumbnail-badge {
-  background: rgba(var(--v-theme-surface), 0.92);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.22);
-  border-radius: 8px;
-  color: rgb(var(--v-theme-on-surface));
-  box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
-  font-size: var(--badge-font-size, 0.8em);
-  padding: var(--badge-padding, 2px 4px);
-  z-index: 30;
-  max-width: 90%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thumbnail-badge--top-left,
-.thumbnail-badge--top-right,
-.thumbnail-badge--bottom-left,
-.thumbnail-badge--bottom-right {
-  position: absolute;
-}
-
-.thumbnail-badge--top-left {
-  top: 2px;
-  left: 2px;
-}
-
-.thumbnail-badge--top-right {
-  top: 2px;
-  right: 2px;
-}
-
-.thumbnail-badge--bottom-left {
-  left: 2px;
-  bottom: 2px;
-}
-
-.thumbnail-bottom-left-badges {
-  position: absolute;
-  bottom: 2px;
-  left: 2px;
-  display: flex;
-  gap: 3px;
-  align-items: center;
-  max-width: 90%;
-}
-
-.thumbnail-bottom-left-badges > .thumbnail-badge {
-  max-width: 100%;
-}
-
-/* Raised so the permanent scrapheap purge badge keeps the bottom-left corner. */
-.thumbnail-bottom-left-badges--raised {
-  bottom: var(--space-6);
-}
-
-/* ── Scrapheap auto-purge badge ─────────────────────────────────────────────
-   Permanent status chip over an arbitrary photo, so it sits on `--scrim-photo`
-   with an `on-dark-surface` glyph (visual-language §7 "scrims"). Meaning is
-   carried by icon + text; the error tint on the last day is reinforcement, not
-   the signal. */
-.thumbnail-purge-badge {
-  position: absolute;
-  left: var(--space-1);
-  bottom: var(--space-1);
-  z-index: 30;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: calc(100% - var(--space-3));
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--leading-snug);
-  pointer-events: none;
-}
-
-.thumbnail-purge-badge__icon {
-  flex-shrink: 0;
-}
-
-.thumbnail-purge-badge__text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thumbnail-purge-badge--protected .thumbnail-purge-badge__icon {
-  color: rgb(var(--v-theme-primary));
-}
-
-/* `--locked` deliberately has no tint: its icon inherits `on-dark-surface`, the
-   same as the shipped `.thumbnail-lock-badge`, so the two lock affordances read
-   as the same thing. The distinct icon (mdi-lock-outline) and label ("Locked
-   set") carry the difference from `--protected` — no colour needed. */
-
-/* Last-day emphasis. The tint is on the ICON only: status-coloured text at 11px
-   on a translucent scrim over an unknown photo cannot be proven to clear the
-   4.5:1 body floor, while an icon only needs 3:1. The label still says "Purges
-   today" / "1 day left", so nothing depends on seeing the colour.
-   `dark-surface-error`, not `error`: the badge sits on `--scrim-photo`, which is
-   the `scrim` token and therefore dark in BOTH themes, so it needs the hue tuned
-   for a dark surface (4.12:1) rather than the light theme's deepened one
-   (3.12:1). See notice-surface.md §3.3. */
-.thumbnail-purge-badge--countdown-urgent .thumbnail-purge-badge__icon {
-  color: rgb(var(--v-theme-dark-surface-error));
-}
-
-/* Format and resolution badges are hover-only */
-.resolution-hover-overlay,
-.thumbnail-id-overlay {
-  opacity: 0;
-  transition: opacity 0.12s ease;
-}
-
-.image-card:hover .resolution-hover-overlay,
-.image-card:hover .thumbnail-id-overlay {
-  opacity: 1;
-}
-
-.thumbnail-reference-badge {
-  opacity: 1;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  padding-left: 2px;
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.thumbnail-reference-badge .v-icon {
-  color: rgb(var(--v-theme-primary)) !important;
-}
-
-.thumbnail-share-badge .v-icon {
-  color: rgb(var(--v-theme-accent)) !important;
-}
-
-/* Lock badge: styled as a sibling of the problem indicator — no scrim, zero
-   padding, same left edge and inset. See the shared
-   `.penalised-tag-indicator, .thumbnail-lock-badge` rules
-   below, which it joins rather than restating. */
-
-.thumbnail-share-badge {
-  opacity: 1;
-  display: flex;
-  align-items: center;
-  padding-left: 2px;
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.thumbnail-badge--bottom-right {
-  right: 2px;
-  bottom: 2px;
-}
-
-.thumbnail-badge--bottom-right-raised {
-  bottom: 22px;
-}
-
-.likeness-group-indicator {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.face-bbox-label {
-  font-size: 0.7em;
-  background-color: rgba(var(--v-theme-surface), 0.3);
-  color: rgb(var(--v-theme-on-surface));
-  text-overflow: ellipsis;
-  overflow-y: hidden;
-  overflow-x: hidden;
-  white-space: nowrap;
-}
-
-.grid-content-area {
-  /* Offset for the absolutely-positioned 36px toolbar. Set 2px under the toolbar
-     height so the grid content tucks right beneath the toolbar's bottom border
-     with no dark seam (the toolbar overlays the 2px, so nothing is clipped). */
-  --selbar-height: 34px;
-  /* Container context for the floating SelectionBar's `@container selbar`
-     query. The bar itself is `width: max-content` and cannot host the
-     container (inline-size containment collapses the pill — see the note in
-     SelectionBar.vue), so the query tracks the available grid-content width
-     here, on the bar's `position: relative` containing block. */
-  container: selbar / inline-size;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .grid-content-area {
-    --selbar-height: 56px;
-  }
-}
-
-/* ── Visible range pill overlay ── */
-.grid-range-pill {
-  position: absolute;
-  top: calc(var(--selbar-height, 48px) + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  padding: 4px 12px;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  pointer-events: none;
-  user-select: none;
-  z-index: 50;
-}
-
-/* Breadcrumb: translucent "you are here" path, bottom-left of the grid. */
-.grid-breadcrumb {
-  position: absolute;
-  bottom: 12px;
-  left: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  max-width: calc(100% - 24px);
-  padding: 5px 12px;
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.74em;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  user-select: none;
-  z-index: 50;
-  transition: bottom 0.15s;
-}
-/* Lift above the 36px multi-select (union/overlap) bar so the breadcrumb
-   overlaps the visible grid, not that bar. */
-.grid-breadcrumb--above-bar {
-  bottom: 48px;
-}
-.grid-breadcrumb-crumb {
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: none;
-  font: inherit;
-  /* Plain crumbs (scope labels + the current leaf) read as normal text. */
-  color: rgb(var(--v-theme-on-surface));
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Clickable ancestor crumbs look like links, not disabled text. */
-.grid-breadcrumb-crumb.is-link {
-  cursor: pointer;
-  color: rgb(var(--v-theme-primary));
-  transition: text-decoration-color 0.12s;
-}
-.grid-breadcrumb-crumb.is-link:hover {
-  text-decoration: underline;
-}
-.grid-breadcrumb-sep {
-  flex: 0 0 auto;
-  opacity: 0.5;
-}
-.grid-loading-more-pill {
-  position: absolute;
-  top: calc(var(--selbar-height, 48px) + 10px);
-  right: 16px;
-  background: rgba(var(--v-theme-surface), 0.82);
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.14);
-  border-radius: 999px;
-  color: rgb(var(--v-theme-on-surface));
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1;
-  padding: 4px 12px;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--elevation-2);
-  pointer-events: none;
-  user-select: none;
-  z-index: 50;
-}
-.grid-range-fade-enter-active,
-.grid-range-fade-leave-active {
-  transition: opacity 0.15s ease;
-}
-.grid-range-fade-enter-from,
-.grid-range-fade-leave-to {
-  opacity: 0;
-}
-
-.pending-imports-pill-anchor {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  height: 0;
-  overflow: visible;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  /* Offset the floating pill 8px from the top with a transform, not padding: a
-     sticky element reserves its box in normal flow, so padding-top here added
-     8px of height that pushed the grid down. transform doesn't affect layout,
-     so the grid stays flush while the pill still sits 8px below the top. */
-  transform: translateY(8px);
-  pointer-events: none;
-}
-
-.pending-imports-pill {
-  pointer-events: all;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(var(--v-theme-primary), 0.92);
-  color: #fff;
-  padding: 6px 18px;
-  border-radius: 9999px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  border: none;
-  user-select: none;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
-  transition: opacity 0.15s;
-}
-
-.pending-imports-pill:hover {
-  opacity: 0.88;
-}
-
-.grid-scroll-wrapper {
-  overflow-y: auto;
-  overflow-x: hidden;
-  width: 100%;
-  padding-right: 0px;
-  /* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue */
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
-  scrollbar-width: thin;
-}
-.grid-scroll-wrapper:hover {
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
-}
-.empty-state {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-  z-index: 5;
-}
-.empty-state-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 26px 30px;
-  border-radius: 18px;
-  border: 1px dashed rgba(var(--v-theme-border), 0.5);
-  background: rgba(var(--v-theme-panel), 0.72);
-  color: rgb(var(--v-theme-on-background));
-  text-align: center;
-  max-width: 420px;
-  box-shadow: 0 10px 30px rgba(var(--v-theme-shadow), 0.08);
-  pointer-events: auto;
-}
-.empty-state-illustration {
-  color: rgba(var(--v-theme-on-panel), 0.45);
-}
-.empty-state-title {
-  font-size: 1.2em;
-  font-weight: 600;
-}
-.empty-state-subtitle {
-  font-size: 0.95em;
-  opacity: 0.8;
-}
-.empty-state-action {
-  margin-top: 6px;
-}
-.image-grid {
-  height: 100%;
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  box-sizing: border-box;
-  flex: 1 1 0%;
-  /* No right padding: the scrollbar's own symmetric gutter provides the gap to
-     the thumb, so thumbnails sit an equal distance on both sides of it. */
-  padding: 0 0 2px 0 !important;
-  align-content: start;
-  justify-content: start;
-}
-.compact-mode.image-grid {
-  padding-top: 0 !important;
-  gap: 0px;
-}
-/* Justified (Google-Photos-style) mode: the grid becomes a flex-wrap row
-   layout. Every card carries an exact inline width/height from the packed
-   model (useJustifiedLayout), and the inline column/row gap on the container
-   mirrors the packing gap, so flex line breaks land exactly on the packed row
-   boundaries — the invariant the virtual-scroll spacer arithmetic relies on. */
-.image-grid.image-grid--justified {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  align-items: flex-start;
-  justify-content: flex-start;
-}
-.image-grid--justified .image-card {
-  flex: 0 0 auto;
-  width: auto;
-}
-/* The packing gap is the only spacing between cards; the square-mode padding
-   would shrink thumbnails inside their packed boxes. */
-.image-grid--justified .thumbnail-card {
-  padding: 0;
-  height: 100%;
-}
-.grid-scroll-wrapper::-webkit-scrollbar {
-  width: 8px;
-}
-.image-card-cursor .thumbnail-img {
-  outline: 2px solid rgba(var(--v-theme-primary), 0.9);
-  outline-offset: -2px;
-}
-
-.image-card {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  margin-bottom: 2.2em;
-  padding: 0px;
-  margin: 0;
-  transition:
-    box-shadow 0.2s,
-    border 0.2s,
-    z-index 0s;
-  position: relative;
-  z-index: 0;
-  border: 0px solid transparent;
-}
-
-.image-card:hover {
-  z-index: 20;
-}
-
-.image-card-stack-reorder-left::after,
-.image-card-stack-reorder-right::after {
-  content: "";
-  position: absolute;
-  top: 8px;
-  bottom: 32px;
-  width: 6px;
-  border-radius: 999px;
-  background: rgba(var(--v-theme-accent), 0.95);
-  box-shadow: 0 2px 8px rgba(var(--v-theme-accent), 0.45);
-  pointer-events: none;
-  z-index: 6;
-}
-
-.image-card-stack-reorder-left::after {
-  left: -3px;
-}
-
-.image-card-stack-reorder-right::after {
-  right: -3px;
-}
-
-.selection-overlay {
-  position: absolute;
-  inset: 0;
-  /* Amber "safelight" selection (was cold-blue info) — the brighter glow token. */
-  background: rgba(var(--v-theme-accent-bright), 0.38);
-  pointer-events: none;
-  z-index: 25;
-  border-radius: 8px;
-  transition: none;
-}
-/* Touch select mode: show a checkmark badge on each selected image */
-.touch-select-mode .image-card {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-/* Suppress Safari's image save / link callout on all image cards */
-.image-card {
-  -webkit-touch-callout: none;
-}
-/* Suppress all hover-revealed elements in touch-select mode */
-.touch-select-mode .image-card:hover .resolution-hover-overlay,
-.touch-select-mode .image-card:hover .thumbnail-id-overlay,
-.touch-select-mode .image-card:hover .thumbnail-top-right-badges > *,
-/* The permanent stack badge must also clear the corner for the ✓ that a
-   touch-selection stamps at top-right. */
-.touch-select-mode .image-card:has(.selection-overlay) .thumbnail-top-right-badges > * {
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-.touch-select-mode .image-card .selection-overlay::after {
-  content: "✓";
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-  font-size: 16px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 26px;
-  text-align: center;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-/* Empty circle on unselected images in touch-select mode */
-.touch-select-mode .image-card::after {
-  content: "";
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.85);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-  z-index: 26;
-}
-.touch-select-mode .image-card:has(.selection-overlay)::after {
-  display: none;
-}
-.thumbnail-info-row {
-  margin-top: 2px;
-  text-align: center;
-  height: 24px;
-  min-height: 24px;
-  max-height: 24px;
-  overflow: hidden;
-  background: none;
-  width: 100%;
-}
-.thumbnail-info {
-  font-size: 0.88em;
-  color: rgba(var(--v-theme-on-background), 0.78);
-  text-align: center;
-  line-height: 24px;
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  padding: 0 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-shadow: 0 1px 1px rgba(var(--v-theme-shadow), 0.12);
-}
-.thumbnail-container {
-  width: 100%;
-  height: 100%;
-  position: relative;
-  aspect-ratio: 1 / 1;
-}
-/* Justified mode: width/height come from the packed layout's inline styles;
-   the square aspect ratio must not fight them. object-fit: cover stays on the
-   image so existing square-cropped thumbnails still fill the variable-width
-   boxes until AR-preserving thumbnails are regenerated backend-side. */
-.thumbnail-container--justified,
-.thumbnail-container--justified .thumbnail-img {
-  aspect-ratio: auto;
-}
-/* Square-crop mode (thumbnail v2): the AR bitmap is sprite-cropped to the stored
-   face-weighted rectangle. The oversized, translated <img> is clipped to the
-   square cell, so the rounded corners and the card drop shadow move onto the
-   container (the img's own radius/shadow would sit off-screen and get clipped).
-   Face/detection overlays outside the crop are clipped at the cell edge here. */
-.thumbnail-container--cropped {
-  overflow: hidden;
-  border-radius: 8px;
-  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition: box-shadow 0.18s;
-}
-.thumbnail-container--cropped .thumbnail-img {
-  border-radius: 0;
-  box-shadow: none;
-  object-position: top center;
-}
-.compact-mode .thumbnail-container--cropped {
-  border-radius: 0;
-  box-shadow: none;
-}
-.thumbnail-container::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 8px;
-  box-shadow: inset 0 0 12px 4px rgba(var(--v-theme-accent), 0.3);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  z-index: 22;
-  pointer-events: none;
-}
-.image-card:hover .thumbnail-container::after,
-.stack-hover-active .thumbnail-container::after {
-  opacity: 1;
-}
-.compact-mode .thumbnail-container::after {
-  border-radius: 0;
-}
-
-.thumbnail-container-drag-source .thumbnail-img,
-.thumbnail-container-drag-source .thumbnail-placeholder {
-  filter: grayscale(1) brightness(0.65);
-  opacity: 0.75;
-}
-
-/* ── Scrapheap ghost: a tile held in place while its undo is still offered ──
-   The tile stays where it is, ghosted and hatched, for as long as the receipt
-   is live; the grid closes the gap only when that window ends.
-
-   Three signals, none of them chromatic, so none can be confused with the
-   loading placeholder or an error state: the image desaturates, the tile fades
-   toward the page, and a diagonal hatch covers it.
-
-   The veil is a `background`, not a scrim: it fades the tile toward the grid
-   canvas in BOTH themes off one token. The hatch is two-tone — `on-background`
-   against `background` at the same alpha — so its stripes contrast with EACH
-   OTHER by a fixed delta whatever photo is underneath; a single-tone hatch
-   bottoms out near 2.1:1 on a dark photo in light theme. Both tokens flip with
-   the Vuetify theme class, so there is no media query and no theme override.
-
-   `.thumbnail-container::before` and not `.image-card::after`: the latter is
-   already taken by `.touch-select-mode` (which would make the ghost vanish in
-   touch-select mode) and its box overshoots the thumbnail by the card padding
-   and the whole info row. This node is exactly the image box in square,
-   justified and cropped modes, and it is otherwise unused — zero new DOM. */
-.image-card--ghost .thumbnail-img,
-.image-card--ghost .thumbnail-placeholder {
-  /* The same desaturation the drag source uses: one value, one meaning in this
-     grid — "this tile is on its way somewhere else". The hatch and the
-     persistence are what tell the two apart. The transition is declared here
-     rather than on the shared `.thumbnail-img` rule to keep the diff local; the
-     consequence is that an undo snaps the tile back at full strength, which is
-     the clearest possible confirmation that it came back. */
-  filter: grayscale(1);
-  transition: filter var(--dur-2) var(--ease-standard);
-}
-
-.image-card--ghost .thumbnail-container::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: var(--z-raised);
-  pointer-events: none;
-  border-radius: var(--radius-md);
-  background:
-    repeating-linear-gradient(
-      45deg,
-      rgba(var(--v-theme-on-background), 0.5) 0 var(--space-1),
-      rgba(var(--v-theme-background), 0.5) var(--space-1) var(--space-2),
-      transparent var(--space-2) var(--space-3)
-    ),
-    rgba(var(--v-theme-background), 0.62);
-  /* A pseudo-element created by a class change has no from-state to transition
-     from, so the fade-in is a one-shot animation. `both` is load-bearing: under
-     the global reduced-motion reset this runs in ~0ms and the fill keeps the
-     END state, so the hatch appears instantly and FULLY rather than blank. */
-  animation: ghostHatchIn var(--dur-2) var(--ease-standard) both;
-}
-
-/* Matches the existing `.compact-mode .thumbnail-container::after` override. */
-.compact-mode .image-card--ghost .thumbnail-container::before {
-  border-radius: 0;
-}
-
-@keyframes ghostHatchIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* A departing tile does not offer the hover affordance. `inert` already stops
-   the pointer in supporting browsers; this keeps the visual honest either way. */
-.image-card--ghost:hover .thumbnail-container::after {
-  opacity: 0;
-}
-
-.thumbnail-img {
-  width: 100%;
-  height: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
-  object-position: top center;
-  display: block;
-  border-radius: 8px;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 1;
-  box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
-  transition: box-shadow 0.18s;
-}
-/* No z-index on either hover rule. The glow is a box-shadow on the image
-   itself, so it paints without any change to the stacking order, and raising
-   the image above its own overlays is what hid the stack ribbon: the ribbon
-   sits over the picture, so an image that outranks it on hover erases it.
-   `.stack-hover-active` made that worse than a normal hover, because it fires
-   for every member of the hovered stack at once, so the ribbon vanished across
-   the whole group the moment the cursor entered any of it.
-
-   Lifting a hovered tile over its NEIGHBOURS is a separate job and is already
-   done one level up by `.image-card:hover`, so nothing is lost here. */
-.thumbnail-img:hover {
-  box-shadow:
-    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-}
-.stack-hover-active .thumbnail-img {
-  box-shadow:
-    1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3),
-    inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-}
-.thumbnail-card {
-  width: 100%;
-  max-width: none;
-  min-width: none;
-  position: relative;
-  padding: 4px;
-}
-
-/* Compact mode: no info row gap, no rounded corners, no shadow */
-.compact-mode .thumbnail-card {
-  padding: 0px 0px 0px 0px;
-}
-
-.compact-mode .thumbnail-img {
-  border-radius: 0;
-  box-shadow: none;
-}
-.compact-mode .thumbnail-img:hover {
-  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-}
-
-/* Justified mode: the tiles are a wall, not a set of cards, so they drop the
-   square grid's card framing. Two things break at a JUSTIFIED_ROW_GAP seam of
-   2px: the resting shadow (3px blur + 3px spread) paints ~6px past every edge,
-   so it lands on the neighbouring photos instead of the canvas and the tiles
-   read as overlapping; and the 8px radius cuts a notch at each corner, four of
-   which meet inside a 2px seam as a light diamond. Square corners and no
-   resting elevation - the seam alone does the separating, the same argument
-   compact mode already makes above. The state affordances stay, squared so they
-   trace the real tile edge, and hover keeps only the INSET accent glow, which
-   by construction cannot spill onto a neighbour. */
-.image-grid--justified .thumbnail-img,
-.image-grid--justified .thumbnail-placeholder {
-  border-radius: 0;
-  box-shadow: none;
-}
-.image-grid--justified .thumbnail-img:hover,
-.image-grid--justified .stack-hover-active .thumbnail-img {
-  box-shadow: inset 0 0 4px 4px rgba(var(--v-theme-accent), 0.45);
-}
-.image-grid--justified .thumbnail-container::after,
-.image-grid--justified .selection-overlay,
-.image-grid--justified .image-card--ghost .thumbnail-container::before {
-  border-radius: 0;
-}
-.compact-sticky-label,
-.compact-group-label {
-  transform: translateX(-50%) translateY(4px);
-  background: rgba(var(--v-theme-surface), 0.82);
-  color: rgb(var(--v-theme-accent));
-  border: 1px solid rgba(var(--v-theme-on-surface), 0.18);
-  border-radius: 999px;
-  padding: 1px 9px;
-  font-size: 0.72em;
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-  max-width: 80%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-  z-index: 400;
-  box-shadow: 0 1px 4px rgba(var(--v-theme-shadow), 0.25);
-  backdrop-filter: blur(4px);
-}
-.compact-sticky-label {
-  position: sticky;
-  top: 0;
-  left: 50%;
-  width: fit-content;
-  transform: translateX(-50%) translateY(4px);
-  margin-bottom: -24px;
-}
-.compact-group-label {
-  position: absolute;
-  top: 0;
-  left: 30%;
-}
-
-.thumbnail-card-new {
-  animation: gridNewPulse 2.2s ease-out;
-  box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-}
-
-@keyframes gridNewPulse {
-  0% {
-    transform: translateZ(0) scale(1);
-    box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-  }
-  35% {
-    transform: translateZ(0) scale(1.015);
-    box-shadow:
-      0 0 10px rgba(var(--v-theme-accent), 0.5),
-      0 0 18px rgba(var(--v-theme-accent), 0.25);
-  }
-  100% {
-    transform: translateZ(0) scale(1);
-    box-shadow: 0 0 0 rgba(var(--v-theme-accent), 0);
-  }
-}
-/* Overlay for image index on thumbnail */
-.thumbnail-index-overlay {
-  pointer-events: none;
-}
-
-.thumbnail-drag-preview {
-  position: fixed;
-  width: 160px;
-  height: auto;
-  opacity: 0.01;
-  pointer-events: none;
-  left: -9999px;
-  top: -9999px;
-  object-fit: cover;
-  border-radius: 8px;
-}
-
-/* The lock badge joins these two so the three read as siblings in the top-left
-   column: same flex centring, same `padding: 0` (so their icons share one left
-   edge and inset), and — for the lock and problem indicators — no chrome at all.
-   Icon size is already shared: both bind `badgeIconSizes.penalised`, so they
-   track each other at every column count. */
-.penalised-tag-indicator,
-.thumbnail-lock-badge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 30;
-  pointer-events: auto;
-  padding: 0;
-}
-
-.penalised-tag-indicator,
-.thumbnail-lock-badge {
-  background: none !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.penalised-tag-indicator .v-icon {
-  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.55));
-}
-
-/* Bottom-left, on the photo scrim: the same corner and the same backing the
-   grid's other permanent chips use, so it reads as one family. */
-.stack-cover-flag {
-  position: absolute;
-  bottom: var(--space-2);
-  left: var(--space-2);
-  z-index: var(--z-raised);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  pointer-events: none;
-}
-
-/* The ribbon that groups an expanded stack. It has one required position in the
-   tile's local stacking order and both neighbours matter:
-
-     .thumbnail-img            1   the picture, which the ribbon must cover
-     .stack-band-overlay       2   here
-     .stack-cover-flag        10   --z-raised
-     .thumbnail-badge         30   resolution, format
-
-   Above the picture, because a ribbon the picture paints over is not a grouping
-   mark. Below the labels, because they name individual pictures and the ribbon
-   is about the group; a colour band across a "Cover" chip would obscure the one
-   answer an expanded stack exists to give. A raw 2 rather than a token: this is
-   ordering INSIDE one tile between siblings that ship together, which is what
-   the ladder's own note reserves local numbers for. */
-.stack-band-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  border-radius: inherit;
-}
-
-/* Top-left permanent badges column (reference, share, problem) */
-.thumbnail-top-left-badges {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  z-index: 30;
-  pointer-events: auto;
-}
-
-/* Top-right hover badges column (stars, stack) */
-.thumbnail-top-right-badges {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  z-index: 120;
-  pointer-events: none;
-}
-
-/* Hover-only members of the badge column (the stars). The stack badge
-   (.sbadge) is exempt on purpose: the count is permanent. The opacity lives on
-   the CHILDREN, not the container, precisely so one column can hold both. */
-.thumbnail-top-right-badges > :not(.sbadge) {
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
-}
-
-.image-card:hover .thumbnail-top-right-badges > :not(.sbadge) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.thumbnail-placeholder {
-  width: 100%;
-  height: 100%;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: absolute;
-  top: 0;
-  left: 0;
-  color: rgb(var(--v-theme-on-background));
-}
-
-.thumbnail-placeholder-icon {
-  font-size: 28px;
-  opacity: 0.7;
-  animation: thumbnailPlaceholderSpin 1.1s linear infinite;
-}
-
-.thumbnail-broken-icon {
-  font-size: 48px;
-  opacity: 0.5;
-}
-
-@keyframes thumbnailPlaceholderSpin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.multi-select-toolbar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 300;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  height: 36px;
-  background: rgb(var(--v-theme-surface-variant));
-  border-top: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-}
-
-.multi-select-toolbar__mode {
-  height: 100%;
-  padding: 0 10px;
-  border: none;
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  appearance: auto;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__label {
-  padding: 0 12px;
-  white-space: nowrap;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-}
-
-.multi-select-toolbar__spacer {
-  flex: 1;
-}
-
-.multi-select-toolbar__separator {
-  padding: 0 2px;
-  color: rgba(var(--v-theme-on-surface), 0.3);
-  font-size: 13px;
-  flex: 0 0 auto;
-  user-select: none;
-}
-
-.multi-select-toolbar__base-label {
-  padding: 0 6px 0 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: rgb(var(--v-theme-on-surface-variant));
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__base {
-  height: 100%;
-  padding: 0 8px;
-  border: none;
-  border-right: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-  appearance: auto;
-  flex: 0 0 auto;
-}
-
-.multi-select-toolbar__clear {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  padding: 0 14px;
-  border: none;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.12);
-  background: transparent;
-  color: rgb(var(--v-theme-on-surface-variant));
-  font-size: 13px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  transition: background 0.15s;
-}
-
-.multi-select-toolbar__clear:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
-}
-
-@media (max-width: 900px) {
-  .multi-select-toolbar {
-    height: 40px;
-    font-size: 12px;
-  }
-  .multi-select-toolbar__mode {
-    font-size: 12px;
-  }
-}
-
-/* ── Shared-link indicator on thumbnail ──────────────────────────────── */
-.thumbnail-share-badge {
-  opacity: 0.65;
-  padding: 1px 2px;
-  display: flex;
-  align-items: center;
-  color: rgb(var(--v-theme-primary));
-}
-</style>
-
-<style>
-/* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Shared subtle scrollbar treatment — keep in sync with .sidebar-scroll in SideBar.vue:
-   nearly invisible at rest, fades in on hover/use. The transparent border +
-   background-clip insets the thumb equally from both track edges so it floats
-   as a centred pill with symmetric gutters (no flush-against-the-panel edge). */
-.grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.05) !important;
-  background-clip: padding-box !important;
-  border: 2px solid transparent !important;
-  border-radius: 8px !important;
-  transition: background 0.15s ease !important;
-}
-.grid-scroll-wrapper:hover::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.3) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-track {
-  background: transparent !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-corner {
-  background: transparent !important;
-}
-</style>
+<style scoped src="./ImageGrid.css"></style>
+<style src="./ImageGrid.global.css"></style>
