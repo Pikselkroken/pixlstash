@@ -94,6 +94,12 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
             docker.io/lindkvis/pixlstash
+          # `latest` is issued ONLY by the explicit type=raw line below, which is
+          # gated on a stable release. metadata-action's default (latest=auto)
+          # would additionally synthesise a bare `latest` from any semver tag,
+          # which is how the GPU job below came to own it.
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -212,6 +218,15 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
             docker.io/lindkvis/pixlstash
+          # Every tag this job publishes is -gpu suffixed. Without this,
+          # metadata-action's default latest=auto ALSO emits a bare `latest`,
+          # and since build-cpu and build-gpu run concurrently with no ordering
+          # between them, whichever finished last owned `latest`. At v1.8.5 that
+          # was the GPU image: `latest` and `latest-gpu` are currently the same
+          # 7.7 GB CUDA manifest, so the documented CPU quickstart hands users
+          # the GPU image.
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}-gpu
             type=semver,pattern={{major}}.{{minor}}-gpu
