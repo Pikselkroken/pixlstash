@@ -17,7 +17,7 @@ non-GET block for READ tokens, ``require_local_for_write``, the ``ALL``
 handlers (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` /
 ``require_unscoped_owner`` / the ``_require_scope_allows_*`` ladders). The full
 per-route rationale and the reviewer flags live in
-``docs/reviews/authz-coverage-matrix.md`` — that document is the artifact the
+``docs/authz-coverage-matrix.md`` — that document is the artifact the
 adversarial security review consumes.
 
 **Semantics that shape the mapping (verified against the code):**

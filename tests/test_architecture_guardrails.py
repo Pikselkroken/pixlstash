@@ -807,7 +807,10 @@ def test_all_routes_declare_access_policy(built_app):
 # Guardrail: the written coverage matrix matches the registry, row for row
 # ---------------------------------------------------------------------------
 
-COVERAGE_MATRIX_MD = REPO_ROOT / "docs" / "reviews" / "authz-coverage-matrix.md"
+# Lives in docs/ rather than docs/reviews/ on purpose: docs/reviews/ is
+# gitignored so review write-ups stay local, and a blocking CI gate must not
+# read a file that a fresh checkout is not guaranteed to have.
+COVERAGE_MATRIX_MD = REPO_ROOT / "docs" / "authz-coverage-matrix.md"
 
 # Sections of the matrix document whose tables carry one row per declared route.
 # The main table plus the conditionally-mounted waiver table together must
@@ -873,7 +876,7 @@ def _parse_coverage_matrix_rows() -> list[tuple[str, str, str, int]]:
 def test_coverage_matrix_document_matches_the_registry():
     """The written matrix is machine-checked against ROUTE_POLICIES, both ways.
 
-    docs/reviews/authz-coverage-matrix.md is the human-readable coverage matrix
+    docs/authz-coverage-matrix.md is the human-readable coverage matrix
     the security process depends on ("completeness must be arithmetic, not
     judgement"). Before this test nothing read it: the sibling
     test_all_routes_declare_access_policy compares the registry against the
