@@ -247,6 +247,28 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | NLP | **spacy** ≥ 3.8 |
 | Tensor utils | **einops** ≥ 0.8 |
 
+#### ML import discipline — these libraries are imported *inside functions*
+
+**Never `import torch` (or `torchvision` / `transformers` / `sentence_transformers` / `open_clip` / `insightface` / `onnxruntime`) at module scope in any module reachable from `pixlstash.server`.** Import it in the function that uses it.
+
+The reason is measured, not stylistic. The ML stack costs **~2.8 s** to import; the web stack (FastAPI, SQLModel, PIL, NumPy, cv2) costs **0.29 s**. Because `tests/conftest.py` imports `Server`, *every* test process paid the full ML cost before running a single assertion:
+
+| | before | after |
+|---|---|---|
+| `from pixlstash.server import Server` | 3.84 s | **0.96 s** |
+| `pytest --collect-only` (one file) | 4.29 s | **1.80 s** |
+| `pytest -k <one test>` | 4.17 s | **1.38 s** |
+
+This is explicitly the exception the import policy in `CLAUDE.md` allows ("to reduce startup time for rarely used modules"). Three things make it work:
+
+- **The cost is shared, so partial fixes buy nothing.** These libraries pull a common base — deferring only `sentence_transformers` saved 0.15 s, because `open_clip` still dragged in torch, torchvision *and* transformers. The win only appears when **no** ML library loads.
+- **Watch the indirect pullers.** The last offenders found were not obvious: `clip_service.py` imported `open_clip` merely so another module could read the `CLIP_MODEL_NAME` *string constant*, and `startup_checks.py` hid `import torch` inside a module-scope `try:` block (invisible to a column-0 grep). Scan with an AST walk over module-level statements, descending into `try`/`if`, not with `grep '^import'`.
+- **Annotations.** Signatures referencing ML types need `from __future__ import annotations` plus an `if TYPE_CHECKING:` import. `pixlstash/utils/model_utils.py`, `tagger_plugins/florence2.py` and `tagger_plugins/pixlstash_tagger.py` are the worked examples.
+
+`utils/vram_utils.empty_cuda_cache()` is the shared cache-flush helper and deliberately reads `sys.modules.get("torch")` instead of importing: if torch was never imported, the process cannot hold CUDA allocations, so there is nothing to free and importing torch to learn that would cost seconds on every teardown.
+
+Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugins/joycaption.py`, `image_loading_dataset_prepper.py`) may still import ML at module scope; they are only ever reached through function-local imports. `image_loading_dataset_prepper.py` in particular *must* keep its module-scope `torch`, since it subclasses `torch.utils.data.Dataset`.
+
 ### Image & Video
 
 | Capability | Library |
@@ -1899,6 +1921,7 @@ sequenceDiagram
 3. **CPU / GPU queue separation** — `TaskRunner` keeps GPU work single-threaded to avoid CUDA contention while keeping CPU work parallel.
 4. **VRAM gating** — GPU-heavy tasks are blocked when free VRAM is below a threshold (`User.max_vram_gb`).
 5. **Lazy ML loading** — models are loaded on first use and may be unloaded after idle, controlled by `keep_models_in_memory`.
+5b. **Lazy ML *imports*** — the ML libraries themselves (`torch`, `torchvision`, `transformers`, `sentence_transformers`, `open_clip`, `insightface`, `onnxruntime`) are **never imported at module scope on the server's import path**. They are imported inside the function that first needs them; annotations that reference their types use `from __future__ import annotations` plus a `TYPE_CHECKING` block. See §3 → *ML import discipline*.
 6. **Event bus** — `EventType`-tagged broadcasts let the frontend stay reactive without polling.
 7. **Embeddings in-database** — all vectors live in SQLite as `BLOB`s; similarity search is in-process NumPy.
 8. **Plugin extensibility** — image plugins are discovered through `PluginRegistry`; new transformations drop into `image_plugins/built-in/` (or a user directory) and become available automatically.

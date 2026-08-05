@@ -1920,3 +1920,81 @@ def test_engine_guardrail_does_not_flag_the_configured_helpers(tmp_path):
         "S = snapshot_engine('/tmp/y.sqlite')\n"
     )
     assert _scan_for_engine_factories(tmp_path, tmp_path) == {}
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: the ML stack must not be imported on the server's import path
+# ---------------------------------------------------------------------------
+#
+# `torch` and friends cost ~2.8 s to import, against 0.29 s for the whole web
+# stack. Because tests/conftest.py imports Server, a single module-scope
+# `import torch` anywhere on that path makes EVERY test process pay for it
+# before running one assertion (measured: 4.17 s -> 1.38 s for a targeted run
+# once the ML imports were made function-local). See backend_architecture §3,
+# "ML import discipline". This guardrail is what stops that regressing.
+
+_ML_MODULES = (
+    "torch",
+    "torchvision",
+    "transformers",
+    "sentence_transformers",
+    "open_clip",
+    "insightface",
+    "onnxruntime",
+)
+
+_ML_PROBE = (
+    "import sys, json\n"
+    "__import__({target!r})\n"
+    "print(json.dumps([m for m in {names!r} if m in sys.modules]))\n"
+)
+
+
+def _ml_modules_loaded_by(target: str) -> list[str]:
+    """Import *target* in a FRESH interpreter, return which ML libs it pulled.
+
+    A subprocess is mandatory: by the time this test runs, some earlier test in
+    the same session has almost certainly imported torch already, so an
+    in-process check would be meaningless.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _ML_PROBE.format(target=target, names=_ML_MODULES)],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"probe failed to import {target!r}:\n{proc.stdout}\n{proc.stderr}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_server_import_pulls_no_ml_libraries():
+    """Importing the server must not drag in torch/onnxruntime/etc."""
+    loaded = _ml_modules_loaded_by("pixlstash.server")
+    assert loaded == [], (
+        "pixlstash.server imported these ML libraries at module scope: "
+        f"{loaded}. Move the import inside the function that uses it "
+        "(see docs/backend_architecture.md §3, 'ML import discipline'). "
+        "Watch for indirect pullers: importing a plain constant from a module "
+        "that itself imports open_clip is enough to trip this."
+    )
+
+
+def test_ml_import_probe_has_teeth():
+    """Meta-check: the probe must actually DETECT a module that loads torch.
+
+    Without this, `test_server_import_pulls_no_ml_libraries` could pass simply
+    because the probe never observes anything. `wd14` deliberately keeps its
+    module-scope ML imports (it is off the server's import path), so it is a
+    stable positive control.
+    """
+    loaded = _ml_modules_loaded_by("pixlstash.tagger_plugins.wd14")
+    assert "torch" in loaded and "onnxruntime" in loaded, (
+        "the ML-import probe failed to notice a module that definitely imports "
+        f"torch and onnxruntime; it reported {loaded}"
+    )

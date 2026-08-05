@@ -9,16 +9,36 @@
 
 ## Project Architecture
 
-Use the following architecture documents depending on the scope of the task:
+Use the following architecture documents depending on the scope of the task.
+
+**Read them by section, never end to end.** These are reference manuals, not
+preambles: `backend_architecture.md` is ~82k tokens, `frontend_architecture.md`
+~53k, `integration_architecture.md` ~24k. Reading all three costs ~160k tokens
+before you have looked at a single line of code, and almost all of it will be
+about subsystems you are not touching. The required move is:
+
+1. Read the **Table of Contents** at the top of the relevant document.
+2. Read **only the sections that cover the code you are about to change**, plus
+   any section the ToC or a cross-reference explicitly points you to.
+3. Widen only when what you read turns out to be insufficient.
+
+`grep -n '^## ' docs/backend_architecture.md` gives you the section map and line
+numbers; `sed -n 'START,ENDp'` reads one section. A whole-file read of any of
+these three documents is a mistake unless you are deliberately auditing the
+document itself.
+
+Scope, once you are reading by section:
 
 1. Frontend tasks:
-   Always read and follow `/docs/frontend_architecture.md`.
+   The relevant sections of `/docs/frontend_architecture.md`.
 
 2. Backend tasks:
-   Always read and follow `/docs/backend_architecture.md`.
+   The relevant sections of `/docs/backend_architecture.md`.
 
 3. Full‑stack tasks (involving both frontend and backend):
-   Read and follow both documents plus `/docs/integration_architecture.md` for guidance on how to integrate frontend and backend changes effectively.
+   The relevant sections of both documents, plus the `/docs/integration_architecture.md`
+   sections covering the contract you are changing (§2 API surface, §8 event
+   contract, and whichever feature section applies).
 
 4. Any task that adds or changes UI (a new feature, a component, a screen, a control):
    The **design manual in `/docs/design/` is mandatory, not advisory.** Read

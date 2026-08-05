@@ -1,17 +1,26 @@
 """Florence-2 captioning service, extracted from picture_tagger.py."""
 
+from __future__ import annotations
+
 import os
 import time
 import traceback
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
-import torch
 from PIL import Image
+
+if TYPE_CHECKING:  # annotations only — see the function-local import note below
+    import torch
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.utils.model_utils import from_pretrained_local_first
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+
+# ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
+# this module. They cost seconds to import, and this module sits on the API
+# server's import path — so importing them at module scope would make server
+# startup and every single test pay that cost before doing any work.
 
 logger = get_logger(__name__)
 
@@ -71,6 +80,8 @@ def _truncate_at_sentence(caption: str) -> str:
 
 def _move_inputs_to_device(inputs: dict, device, dtype) -> dict:
     """Move a HuggingFace processor output dict to *device*/*dtype*."""
+    import torch
+
     return {
         k: (
             v.to(device=device, dtype=dtype)
@@ -301,6 +312,8 @@ class Florence2Service:
         Returns:
             Dict mapping file path → caption string (or None on failure).
         """
+        import torch
+
         logger.debug(
             "_generate_florence_captions_batch called: %d images", len(image_paths)
         )
@@ -406,6 +419,8 @@ class Florence2Service:
             that fail to load are omitted; ``score`` is ``None`` for detectors
             (like Florence ``<OD>``/grounding) that emit no per-box confidence.
         """
+        import torch
+
         if self._model is None:
             logger.error("Florence-2 model is not initialised")
             return {}
@@ -503,6 +518,8 @@ class Florence2Service:
 
     def _init(self) -> None:
         """Load Florence-2 onto the best available device."""
+        import torch
+
         try:
             import transformers
 
@@ -561,6 +578,8 @@ class Florence2Service:
             logger.error("Try: pip install --upgrade transformers")
 
     def _load_model(self, device: torch.device, dtype) -> None:
+        import torch
+
         from transformers import Florence2Processor, Florence2ForConditionalGeneration
 
         if not isinstance(device, torch.device):
@@ -613,6 +632,8 @@ class Florence2Service:
         logger.warning("[FLORENCE_FALLBACK] %s", reason)
 
     def _reload_on_cpu(self, cause: Optional[Exception] = None) -> bool:
+        import torch
+
         logger.warning(
             "Florence-2 GPU inference failed; attempting to reload on CPU..."
         )
@@ -635,6 +656,8 @@ class Florence2Service:
 
     def _infer_single(self, image: Image.Image) -> Optional[str]:
         """Run inference on a single PIL image and return the caption."""
+        import torch
+
         inputs = self._processor(
             text="<MORE_DETAILED_CAPTION>",
             images=image,
@@ -715,6 +738,8 @@ class Florence2Service:
         return detections
 
     def _is_cuda_error(self, error: Exception) -> bool:
+        import torch
+
         if (
             self._model_device is None
             or getattr(self._model_device, "type", "") != "cuda"

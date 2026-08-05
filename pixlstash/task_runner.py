@@ -8,13 +8,13 @@ import traceback
 import subprocess
 import os
 import time
-import torch
 
 from typing import Any, Callable, Optional
 from datetime import datetime, UTC
 
 from .pixl_logging import get_logger
 from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
+from .utils.vram_utils import empty_cuda_cache
 
 
 logger = get_logger(__name__)
@@ -728,8 +728,7 @@ class TaskRunner:
                 # reservation.
                 if task.queue_type == QueueType.GPU:
                     try:
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                        if empty_cuda_cache():
                             with TaskRunner._vram_cache_lock:
                                 TaskRunner._vram_cache_ts = 0.0
                     except Exception:
@@ -763,8 +762,7 @@ class TaskRunner:
                             0, self._vram_reserved_mb - vram_reserved_mb
                         )
                     try:
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
+                        if empty_cuda_cache():
                             with TaskRunner._vram_cache_lock:
                                 TaskRunner._vram_cache_ts = 0.0
                     except Exception:

@@ -1,6 +1,7 @@
 """VRAM budget utilities for GPU memory-aware batch sizing."""
 
 import subprocess
+import sys
 
 from pixlstash.pixl_logging import get_logger
 
@@ -60,3 +61,27 @@ def vram_limited_batch_cap(
     if task_budget_mb <= base_mb:
         return 1
     return max(1, int((task_budget_mb - base_mb) / max(1, per_item_mb)))
+
+
+def empty_cuda_cache() -> bool:
+    """Flush PyTorch's CUDA allocator cache back to the driver.
+
+    ``torch`` is looked up in :data:`sys.modules` rather than imported. If torch
+    was never imported, this process cannot have allocated any CUDA memory, so
+    there is nothing to flush — and importing it here purely to discover that
+    would cost seconds. That matters because this module sits on the API
+    server's import path and on every best-effort teardown path in the test
+    suite, where the caller usually never touched a model at all.
+
+    Returns:
+        ``True`` if the cache was flushed, ``False`` when torch is not loaded or
+        no CUDA device is available (callers use this to skip their own cache
+        bookkeeping).
+    """
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return False
+    if not torch.cuda.is_available():
+        return False
+    torch.cuda.empty_cache()
+    return True
