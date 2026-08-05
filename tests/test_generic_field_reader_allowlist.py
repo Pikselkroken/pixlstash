@@ -1,4 +1,4 @@
-"""Issue #721 — the two generic by-name field readers serve columns only.
+"""Issue #721: the two generic by-name field readers serve columns only.
 
 ``GET /pictures/{id}/{field}`` and ``GET /characters/{id}/{field}`` used to hand
 back *any* attribute of their object by name, relationships included, because

@@ -4,12 +4,12 @@ field readers (issue #721).
 Two routes hand back *any* attribute of their object by name:
 ``GET /pictures/{id}/{field}`` and ``GET /characters/{id}/{field}``. Both end in
 ``safe_model_dict(getattr(obj, field))``, and ``safe_model_dict`` recurses into
-SQLModel instances, lists and ``CollectionAdapter``s — so an ORM **relationship**
+SQLModel instances, lists and ``CollectionAdapter``s, so an ORM **relationship**
 name is served as whole related rows. ``select_fields=[field]`` does not bound
 that, which is why a picture-scoped token could read ``/pictures/{id}/projects``
 (project names it is 403'd on by name), ``/pictures/{id}/picture_sets`` and
 ``/pictures/{id}/characters``, and a character-scoped token could read
-``/characters/{id}/project`` and ``/characters/{id}/pictures`` — the last serving
+``/characters/{id}/project`` and ``/characters/{id}/pictures``. The last serves
 full ``Picture`` rows off the relationship, bypassing every projection and every
 narrowing site in the codebase.
 
@@ -22,13 +22,13 @@ namespace, so a future relationship is refused without anyone remembering to,
 and a future column needs no code change here.
 
 **This is response-shape validation, not authorization.** It must not grow into a
-second scope ladder — per ``CLAUDE.md`` the gate owns object authorization and a
+second scope ladder: per ``CLAUDE.md`` the gate owns object authorization and a
 duplicate check is debt. ``require_servable_field`` therefore takes no request,
 no token and no session, and is called *before* any database read.
 
 **Known adjacent gap, deliberately not closed here.** Allowlisting the whole
 column namespace still serves ``pending_character_id``, ``source_picture_id`` and
-``reference_folder_id`` — cross-object ids that
+``reference_folder_id``, cross-object ids that
 ``tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned``
 already records as known disclosures. Narrowing the column set itself is the
 residual tracked in §16.6 under #719; it is a separate change because
@@ -55,17 +55,17 @@ logger = get_logger(__name__)
 #: overlay: ``frontend/src/api/pictures.js::listPictureFaces`` calls
 #: ``GET /pictures/{id}/faces`` (consumed by ``ImageOverlay.vue``), and
 #: ``tests/utils.py::wait_for_faces`` polls the same URL. There is **no dedicated
-#: ``GET /pictures/{id}/faces`` route** to route those callers at — only
-#: ``POST /pictures/{id}/face`` — so denying the name here would break a shipping
+#: ``GET /pictures/{id}/faces`` route** to route those callers at, only
+#: ``POST /pictures/{id}/face``, so denying the name here would break a shipping
 #: feature. It is kept servable pending the decision recorded on #721: give the
 #: overlay a dedicated, projected endpoint and then drop this exception. The rows
 #: it serves are ``Face`` rows of the caller's *own* picture (``picture_id``,
 #: ``character_id``, ``bbox``, and the ``features`` embedding), which is a far
 #: narrower disclosure than the project/set/character relationships this module
-#: refuses — but it is not nothing, and it is the reason this set is not empty.
+#: refuses, but it is not nothing, and it is the reason this set is not empty.
 PICTURE_EXTRA_SERVABLE_FIELDS = frozenset({"faces"})
 
-#: ``thumbnail`` is not a ``Character`` column at all — the handler generates a
+#: ``thumbnail`` is not a ``Character`` column at all: the handler generates a
 #: 64x64 face crop and returns image bytes. It is a live frontend consumer
 #: (``frontend/src/api/characters.js::getCharacterThumbnail``, and the server
 #: hands the SPA ``/characters/{id}/thumbnail`` URLs itself), so it must stay
@@ -102,7 +102,7 @@ def require_servable_field(
     1. **It cannot become an object-existence oracle.** Because no database read
        has happened, the refusal is identical whether the object exists or not:
        ``GET /pictures/999999/projects`` and ``GET /pictures/1/projects`` return
-       byte-identical responses. (The cross-token case is already handled — the
+       byte-identical responses. (The cross-token case is already handled: the
        AuthzGate 403s an out-of-scope object before the handler runs at all,
        whatever the field name.)
     2. **A relationship and a typo are indistinguishable.** Both get the same
@@ -112,7 +112,7 @@ def require_servable_field(
     The status is **400, not 403 and not 404**, and the choice is load-bearing
     for the client contract:
 
-    * ``403`` would be wrong twice over — this is not an authorization decision
+    * ``403`` would be wrong twice over: this is not an authorization decision
       (the gate already allowed the object), and it collides with the gate's own
       403, so a client would read a mis-spelled field name as an auth failure.
     * ``404`` collides with "this object does not exist"
