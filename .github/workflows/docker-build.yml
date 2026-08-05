@@ -77,16 +77,19 @@ jobs:
         if: matrix.smoke
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/pixlstash-home"
-          # The image runs as uid 10001; the bind mount inherits the host owner,
-          # so it must be world-writable or the entrypoint cannot create its
-          # config dir. This mirrors the documented `-v ~/Pictures/pixlstash`
-          # usage rather than avoiding the volume entirely.
-          chmod 777 "${RUNNER_TEMP}/pixlstash-home"
+          # No bind mount: the image already declares VOLUME /home/pixlstash
+          # owned by its uid 10001, so the entrypoint's first-run config write
+          # is exercised against an anonymous volume. Bind-mounting a runner
+          # directory instead would need it world-writable (the host owner is
+          # not uid 10001), and a chmod 777 to make a test pass is how that
+          # habit reaches production compose files.
+          #
+          # Published to 127.0.0.1 only. `-p 19537:9537` binds 0.0.0.0, which
+          # would expose an unauthenticated first-run server on every runner
+          # interface for the life of the job.
           docker run -d --name pixlstash-smoke \
             -e PIXLSTASH_HOST=0.0.0.0 \
-            -p 19537:9537 \
-            -v "${RUNNER_TEMP}/pixlstash-home:/home/pixlstash" \
+            -p 127.0.0.1:19537:9537 \
             pixlstash:ci-smoke
 
       - name: Wait for the API to serve /version
@@ -180,4 +183,6 @@ jobs:
 
       - name: Clean up
         if: ${{ always() && matrix.smoke }}
-        run: docker rm -f pixlstash-smoke || true
+        # -v also drops the anonymous volume, so a vault created by the smoke
+        # never outlives the job.
+        run: docker rm -fv pixlstash-smoke || true
