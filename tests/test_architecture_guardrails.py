@@ -1306,6 +1306,122 @@ def test_project_references_outside_the_query_chokepoint(built_app):
     )
 
 
+# `Picture.metadata_fields()` is "every scalar column minus the large binaries"
+# (`db_models/picture.py`), and six routes serialise its result to the wire
+# through response models that all set `extra="allow"`, so nothing downstream
+# filters it (§16.6). A column added to the `picture` table therefore joins those
+# payloads with no code change and no failing test, which is how the scalar
+# `project_id` reached a picture-scoped token that `GET /projects/{id}` 403s
+# (#719). Pinning the membership does not decide whether a new column is safe to
+# disclose; it forces the question to be asked once, by whoever adds it.
+_PICTURE_METADATA_FIELDS = {
+    "aesthetic_score",
+    "anomaly_tag_uncertainty",
+    "comfyui_loras",
+    "comfyui_models",
+    "comfyui_positive_prompt",
+    "created_at",
+    "deleted",
+    "deleted_at",
+    "description",
+    "description_file",
+    "description_file_mtime",
+    "file_path",
+    "format",
+    "height",
+    "id",
+    "import_source_folder",
+    "imported_at",
+    "is_video",
+    "metadata_hash",
+    "original_file_name",
+    "pending_character_id",
+    "perceptual_hash",
+    "pixel_sha",
+    "project_id",
+    "reference_folder_id",
+    "score",
+    "size_bin_index",
+    "size_bytes",
+    "smart_score",
+    "source_picture_id",
+    "square_crop_side",
+    "square_crop_x",
+    "square_crop_y",
+    "stack_id",
+    "stack_position",
+    "tag_uncertainty",
+    "tags_file",
+    "tags_file_mtime",
+    "text_score",
+    "thumbnail_height",
+    "thumbnail_width",
+    "width",
+}
+
+
+def test_picture_metadata_fields_membership_is_pinned():
+    """A new picture column cannot join the six serialised payloads unnoticed.
+
+    Adding a column is fine. Adding one that carries membership, ownership or
+    host information, and letting it ride into `GET /pictures/{id}/metadata`,
+    `GET /pictures/{id}/{field}`, `GET /pictures/search`,
+    `GET /pictures/likeness-groups`, `GET /picture_sets/{id}` and
+    `GET /stacks/{stack_id}/pictures?fields=full` without narrowing it, is the
+    #719 defect repeated. If the new column is safe for a scoped token, add it to
+    the set below. If it is not, narrow it at those six sites the way
+    `narrow_picture_project_ids` does.
+
+    **Membership in the set below does NOT certify a column as safe.** The set is
+    the *current* projection, pinned so a change is noticed; it is not a list of
+    columns anyone has cleared. Three members are known disclosures to a scoped
+    token, reproduced during the #719 review and deliberately left unnarrowed
+    pending a decision, so nothing here should be read as their having been
+    reviewed and passed:
+
+    * ``pending_character_id`` — a character FK, while ``GET /characters/{id}``
+      is ``CHARACTER_SCOPED`` and 403s the same token. Not transient: the dedup
+      verdict and keep-cover-only services set it on pictures whose face
+      extraction has already run, so it persists. Narrowing it needs a
+      ``visible_character_ids`` ladder, which does not exist yet.
+    * ``source_picture_id`` — points at a picture the token may not be granted
+      (verified: that picture's own endpoints 403 the same token).
+    * ``reference_folder_id`` — same shape, and additionally in ``grid_fields()``,
+      so it rides every listing rather than only these six routes.
+
+    ``import_source_folder``, ``pixel_sha``, ``original_file_name`` and the
+    ComfyUI prompt columns are a separate host-information question (§16.3).
+    """
+    from pixlstash.db_models import Picture
+
+    actual = set(Picture.metadata_fields())
+    # Anti-vacuity: an empty projection would make both assertions below pass
+    # while pinning nothing at all.
+    assert len(actual) > 20, (
+        f"Picture.metadata_fields() returned {len(actual)} fields; the pin is "
+        f"vacuous if the projection collapses"
+    )
+
+    added = sorted(actual - _PICTURE_METADATA_FIELDS)
+    assert not added, (
+        "New picture column(s) now ride every payload built from "
+        "Picture.metadata_fields(), including the six routes that serialise it "
+        'raw through an `extra="allow"` response model (§16.6). Decide whether '
+        "a picture-, set- or project-scoped token may learn each one. If yes, "
+        "add it here. If no, narrow it at those six sites the way "
+        "narrow_picture_project_ids does for project_id (#719):\n"
+        + "\n".join(f"  {name}" for name in added)
+    )
+
+    removed = sorted(_PICTURE_METADATA_FIELDS - actual)
+    assert not removed, (
+        "Picture column(s) disappeared from metadata_fields(), so this pin now "
+        "describes a projection that no longer exists. Prune them, and check the "
+        "six serialisation sites still return what their consumers expect:\n"
+        + "\n".join(f"  {name}" for name in removed)
+    )
+
+
 def test_matched_route_path_is_prefix_stripped(built_app):
     """Lock in the Phase-1 gate-keying fact: scope['route'].path is UNPREFIXED.
 

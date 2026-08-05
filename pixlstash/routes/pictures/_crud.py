@@ -45,6 +45,7 @@ from pixlstash.utils.service.caption_utils import (
 from pixlstash.utils.service.filter_helpers import (
     fetch_scope_allowed_picture_ids,
     fetch_scope_allowed_set_ids,
+    narrow_picture_project_ids,
 )
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.utils.serialization_utils import safe_model_dict
@@ -796,6 +797,10 @@ def register_routes(router, server):
             fetch_image_only_tags, pic.id
         )
         pic_dict = safe_model_dict(pic)
+        # `metadata_fields()` is every scalar column minus the blobs, so the raw
+        # `Picture.project_id` rides along; re-derive it from the narrowed
+        # membership before it is serialised (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, [pic_dict])
         pic_dict["tags"] = serialize_tag_objects(pic_tags)
         # Locked sets freezing this picture, so the overlay can show the reason
         # without a second request.
@@ -919,6 +924,14 @@ def register_routes(router, server):
             return Response(content=pic.thumbnail, media_type="image/png")
         if field in Picture.large_binary_fields():
             return {field: base64.b64encode(getattr(pic, field)).decode("utf-8")}
+        if field == "project_id":
+            # This route hands back any column by name, so it reaches the raw
+            # scalar without going through the metadata payload. Same narrowing,
+            # same reason (issue #719, §16.6), and the same shape the character
+            # twin `GET /characters/{id}/{field}` already uses.
+            payload = {"id": int(pic.id), "project_id": pic.project_id}
+            narrow_picture_project_ids(server, request, [payload])
+            return {"project_id": payload["project_id"]}
         return {field: safe_model_dict(getattr(pic, field))}
 
     @router.patch(

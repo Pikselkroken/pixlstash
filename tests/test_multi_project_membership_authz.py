@@ -35,18 +35,21 @@ import os
 import tempfile
 import time
 
+import numpy as np
 import pytest
 from PIL import Image
+from sqlalchemy import func
+from sqlmodel import select
 from starlette.testclient import TestClient
 
-from pixlstash.db_models import Face
+from pixlstash.db_models import Face, Picture, PictureLikeness
 from pixlstash.server import Server
 from tests.authz_guard import (  # noqa: F401
     assert_real_route,
     no_spa_fallback,
     resolves_to_real_route,
 )
-from tests.utils import upload_pictures_and_wait
+from tests.utils import seed_likeness_stable, upload_pictures_and_wait
 
 API = "/api/v1"
 
@@ -995,6 +998,470 @@ def test_character_project_id_field_route_is_narrowed(env):
         assert r.json()["project_id"] is None, (
             f"a character token has no project visibility: {r.json()}"
         )
+
+
+# ---------------------------------------------------------------------------
+# R1e (issue #719): the *picture's* own scalar `project_id`
+# ---------------------------------------------------------------------------
+#
+# R1b narrowed the scalar on characters and picture sets. A picture carries the
+# same column, and `Picture.metadata_fields()` is "every scalar column minus the
+# blobs", so it rides into every payload built from that projection. None of the
+# picture response models filters it back out: they all set `extra="allow"`, so
+# the handler's own narrowing is the only thing between the column and the wire.
+#
+# The reproduction has a trap that made the first probe of this come back clean:
+# the set/character PATCHes in the fixture write `PictureProjectMember` rows but
+# leave `Picture.project_id` NULL, so every site returns None whether it narrows
+# or not. A real membership write (`PATCH /pictures/project`) maintains the
+# scalar as a denormalised primary. Both tests below backfill it first and assert
+# the backfill landed, so a regression cannot hide behind a NULL column.
+
+# Picture-row sites that answer deterministically in this fixture. Asserted as a
+# required subset, so a site that silently stops answering cannot quietly drop
+# out of coverage.
+_PICTURE_SCALAR_SITES = {
+    "metadata",
+    "field_route",
+    "set_pictures",
+    "stack_pictures_full",
+}
+
+# The two sort variants of ``GET /picture_sets/{id}`` build their picture rows on
+# separate return paths, and each one narrows separately. They return nothing on
+# the fixture's raw uploads, so they are probed opportunistically here and pinned
+# properly, with the inputs each branch needs, by
+# ``test_picture_set_sort_variants_narrow_their_rows`` below.
+_PICTURE_SCALAR_OPPORTUNISTIC_SITES = {
+    "set_pictures_smart_sort",
+    "set_pictures_likeness_sort",
+}
+
+
+def _picture_scalar_sites(client, env, picture_id, headers=None, stack_id=None):
+    """``project_id`` for *picture_id* on every picture-row route the caller can
+    reach. A site whose route refuses the token, or which does not list the
+    picture, is omitted, so every caller asserts that the deterministic sites are
+    all present before reading their values."""
+    kw = {"headers": headers} if headers else {}
+    out = {}
+
+    r = client.get(f"{API}/pictures/{picture_id}/metadata", **kw)
+    if r.status_code == 200:
+        body = r.json()
+        assert "project_id" in body, "the metadata payload must keep the key"
+        out["metadata"] = body["project_id"]
+
+    r = client.get(f"{API}/pictures/{picture_id}/project_id", **kw)
+    if r.status_code == 200:
+        out["field_route"] = r.json()["project_id"]
+
+    def pick(rows, label):
+        row = next((item for item in rows if item.get("id") == picture_id), None)
+        if row is None:
+            return
+        assert "project_id" in row, f"{label}: the row lost its project_id key"
+        out[label] = row["project_id"]
+
+    r = client.get(f"{API}/picture_sets/{env['set_id']}", **kw)
+    if r.status_code == 200:
+        pick(r.json()["pictures"], "set_pictures")
+    r = client.get(f"{API}/picture_sets/{env['set_id']}?sort=SMART_SCORE", **kw)
+    if r.status_code == 200:
+        pick(r.json()["pictures"], "set_pictures_smart_sort")
+    r = client.get(
+        f"{API}/picture_sets/{env['set_id']}?sort=CHARACTER_LIKENESS"
+        f"&reference_character_id={env['char_id']}",
+        **kw,
+    )
+    if r.status_code == 200:
+        pick(r.json()["pictures"], "set_pictures_likeness_sort")
+
+    if stack_id is not None:
+        r = client.get(f"{API}/stacks/{stack_id}/pictures?fields=full", **kw)
+        if r.status_code == 200:
+            pick(r.json(), "stack_pictures_full")
+    return out
+
+
+def test_picture_scalar_project_id_is_narrowed(env):
+    """R1e: a picture's scalar ``project_id`` is derived from its *narrowed*
+    membership at every serialisation site: the stored primary for the owner,
+    the token's own project for a project token, ``None`` for an entity-scoped
+    token that may see no project at all."""
+    owner, anon, tokens, projects, mint = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+        env["mint"],
+    )
+    pic_a, pic_b = env["pic_a"], env["pic_b"]
+
+    # pic_b joins the shared set (and so both projects); stacking the two gives
+    # the stack route a page it can serve to every token under test.
+    r = owner.post(f"{API}/picture_sets/{env['set_id']}/members/{pic_b}")
+    assert r.status_code in (200, 201), r.text
+    r = owner.post(f"{API}/stacks", json={"picture_ids": [pic_a, pic_b]})
+    assert r.status_code in (200, 201), r.text
+    stack_id = r.json()["id"]
+
+    # Backfill the denormalised scalar the way a real membership write does.
+    r = owner.patch(
+        f"{API}/pictures/project",
+        json={
+            "picture_ids": [pic_a, pic_b],
+            "project_id": projects["P1"],
+            "mode": "add",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    for path in (
+        f"{API}/pictures/{pic_a}/metadata",
+        f"{API}/pictures/{pic_a}/project_id",
+        f"{API}/stacks/{stack_id}/pictures",
+    ):
+        assert_real_route(env["server"].api, "GET", path)
+
+    owner_sites = _picture_scalar_sites(owner, env, pic_a, stack_id=stack_id)
+    assert _PICTURE_SCALAR_SITES <= set(owner_sites), (
+        f"a picture-row site stopped answering, so its narrowing is untested: "
+        f"{sorted(owner_sites)}"
+    )
+    # State the universe explicitly: anything not answered here must be one of
+    # the two known-empty sort variants, so a third silent gap fails the build.
+    assert (_PICTURE_SCALAR_SITES | _PICTURE_SCALAR_OPPORTUNISTIC_SITES) - set(
+        owner_sites
+    ) <= _PICTURE_SCALAR_OPPORTUNISTIC_SITES, sorted(owner_sites)
+    for site, value in owner_sites.items():
+        assert value == projects["P1"], (
+            f"{site}: the owner must keep the stored primary project, and the "
+            f"scalar must actually be backfilled; got {value}"
+        )
+
+    with _enforcing(env["server"]):
+        for label in ("P1", "P2"):
+            sites = _picture_scalar_sites(
+                anon, env, pic_a, _bearer(tokens[label]), stack_id
+            )
+            assert _PICTURE_SCALAR_SITES <= set(sites), (
+                f"the {label} token must still read every picture-row site "
+                f"(over-blocking is its own regression): {sorted(sites)}"
+            )
+            for site, value in sites.items():
+                assert value == projects[label], (
+                    f"{site}: the {label} token was handed project id {value}, "
+                    f"which it is 403'd on by name"
+                )
+
+        set_sites = _picture_scalar_sites(
+            anon, env, pic_a, _bearer(mint("picture_set", env["set_id"])), stack_id
+        )
+        assert _PICTURE_SCALAR_SITES <= set(set_sites), sorted(set_sites)
+        for site, value in set_sites.items():
+            assert value is None, (
+                f"{site}: a set-scoped token has no project visibility, but was "
+                f"handed project id {value}"
+            )
+
+        pic_sites = _picture_scalar_sites(
+            anon, env, pic_a, _bearer(mint("picture", pic_a))
+        )
+        assert {"metadata", "field_route"} <= set(pic_sites), (
+            f"a picture token must still read its own picture: {sorted(pic_sites)}"
+        )
+        for site, value in pic_sites.items():
+            assert value is None, (
+                f"{site}: a picture-scoped token has no project visibility, but "
+                f"was handed project id {value}"
+            )
+
+
+def test_picture_search_and_likeness_group_rows_are_narrowed(env):
+    """R1e siblings: the two picture-row payloads that need seeded data before
+    they return anything: semantic search and the likeness groups."""
+    owner, anon, tokens, projects, mint = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+        env["mint"],
+    )
+    pic_a, pic_b = env["pic_a"], env["pic_b"]
+
+    r = owner.post(f"{API}/picture_sets/{env['set_id']}/members/{pic_b}")
+    assert r.status_code in (200, 201), r.text
+    r = owner.patch(
+        f"{API}/pictures/project",
+        json={
+            "picture_ids": [pic_a, pic_b],
+            "project_id": projects["P1"],
+            "mode": "add",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert (
+        owner.get(f"{API}/pictures/{pic_a}/project_id").json()["project_id"]
+        == projects["P1"]
+    ), "the scalar must be backfilled, or every assertion below is vacuous"
+
+    def seed(session):
+        low, high = sorted([pic_a, pic_b])
+        session.add(
+            PictureLikeness(
+                picture_id_a=low, picture_id_b=high, likeness=0.99, metric="test"
+            )
+        )
+        session.commit()
+
+    seed_likeness_stable(env["server"], seed)
+
+    for path in (f"{API}/pictures/likeness-groups", f"{API}/pictures/search"):
+        assert_real_route(env["server"].api, "GET", path)
+
+    def groups(client, headers=None):
+        kw = {"headers": headers} if headers else {}
+        r = client.get(f"{API}/pictures/likeness-groups?threshold=0.9", **kw)
+        assert r.status_code == 200, r.text
+        rows = [item for item in r.json() if item.get("id") == pic_a]
+        assert rows, f"picture {pic_a} must be in a likeness group: {r.json()}"
+        assert "project_id" in rows[0], "the group row lost its project_id key"
+        return rows[0]["project_id"]
+
+    def search(client, headers=None):
+        kw = {"headers": headers} if headers else {}
+        r = client.get(f"{API}/pictures/search?query=picture&threshold=0.0", **kw)
+        assert r.status_code == 200, r.text
+        rows = [item for item in r.json() if item.get("id") == pic_a]
+        assert rows, f"semantic search must return picture {pic_a}: {r.json()}"
+        assert "project_id" in rows[0], "the search row lost its project_id key"
+        return rows[0]["project_id"]
+
+    assert groups(owner) == projects["P1"]
+    assert search(owner) == projects["P1"]
+
+    with _enforcing(env["server"]):
+        for label in ("P1", "P2"):
+            headers = _bearer(tokens[label])
+            assert groups(anon, headers) == projects[label], (
+                f"likeness-groups handed the {label} token a project id it is "
+                f"403'd on by name"
+            )
+            assert search(anon, headers) == projects[label], (
+                f"search handed the {label} token a project id it is 403'd on by name"
+            )
+
+        set_headers = _bearer(mint("picture_set", env["set_id"]))
+        assert groups(anon, set_headers) is None
+        assert search(anon, set_headers) is None
+
+
+def _wait_faces_extracted(server, picture_ids, timeout_s=60.0):
+    """Block until background face extraction has finished with *picture_ids*.
+
+    Uploading a picture queues an extraction pass that ends by writing either
+    the detected faces or a ``face_index=-1`` sentinel, so "the picture has at
+    least one face row" is the signal that the pass is done. Waiting for it is
+    not optional: a face seeded *before* the pass lands is deleted underneath
+    the test (``Picture.faces`` cascades ``delete-orphan``), which was observed
+    here as the reference face vanishing between two requests in the same test.
+    """
+
+    def _counts(session):
+        return {
+            int(pid): int(count)
+            for pid, count in session.exec(
+                select(Face.picture_id, func.count())
+                .where(Face.picture_id.in_([int(p) for p in picture_ids]))
+                .group_by(Face.picture_id)
+            ).all()
+        }
+
+    start = time.time()
+    counts = {}
+    while time.time() - start < timeout_s:
+        counts = server.vault.db.run_immediate_read_task(_counts)
+        if all(counts.get(int(pid), 0) > 0 for pid in picture_ids):
+            return
+        time.sleep(0.25)
+    raise AssertionError(
+        f"face extraction did not finish for {list(picture_ids)} in {timeout_s}s; "
+        f"rows per picture: {counts}"
+    )
+
+
+def _seed_set_sort_inputs(server, picture_ids, character_id):
+    """Give the two sort branches of ``GET /picture_sets/{id}`` rows to return.
+
+    Neither branch emits a picture on the fixture's raw uploads, and each is
+    blocked by a different missing input:
+
+    * ``sort=SMART_SCORE`` scores only pictures whose ``image_embedding`` is
+      non-NULL (``scoring/smart_score.py``); everything else is reported as
+      unscored.
+    * ``sort=CHARACTER_LIKENESS`` needs a *reference* face for the reference
+      character, which is a ``Face`` carrying ``features`` on a non-deleted
+      picture scored 5 (``scoring/character_likeness.py``), plus a candidate
+      face on the set's members.
+
+    Both are written straight to the database rather than computed, so the test
+    does not depend on an embedding model or the face detector producing
+    anything under the CPU test profile. Two properties keep the seed alive
+    against the background pipeline, and both were established by watching it
+    delete the face mid-test:
+
+    * it runs only once extraction has settled (:func:`_wait_faces_extracted`),
+      and uses a ``face_index`` far outside the detector's range, so a late pass
+      cannot collide with the ``(picture, frame, face)`` unique constraint;
+    * it copies ``model_pack`` off a row the extractor just wrote. A face that
+      carries ``features`` with a *different* (or NULL) pack is exactly what
+      ``MissingFaceModelRefreshFinder`` selects, and ``FaceModelRefreshTask``
+      then deletes any seeded row its re-detection does not match. Adopting the
+      live pack keeps the row out of that sweep entirely.
+    """
+    _wait_faces_extracted(server, picture_ids)
+
+    def _do(session):
+        vector = np.ones(512, dtype=np.float32).tobytes()
+        model_pack = session.exec(
+            select(Face.model_pack).where(Face.model_pack.is_not(None)).limit(1)
+        ).first()
+        assert model_pack, (
+            "no extracted face carries a model_pack, so the seeded face would be "
+            "swept as stale-pack and deleted mid-test"
+        )
+        for picture_id in picture_ids:
+            pic = session.get(Picture, int(picture_id))
+            assert pic is not None, f"picture {picture_id} vanished from the fixture"
+            pic.image_embedding = vector
+            pic.score = 5
+            session.add(pic)
+            session.add(
+                Face(
+                    picture_id=int(picture_id),
+                    frame_index=0,
+                    face_index=901,
+                    character_id=int(character_id),
+                    features=vector,
+                    model_pack=model_pack,
+                )
+            )
+        session.commit()
+
+    server.vault.db.run_task(_do)
+
+    def _readback(session):
+        return session.exec(
+            select(Face.picture_id, Face.character_id)
+            .where(Face.features.is_not(None))
+            .where(Face.character_id == int(character_id))
+        ).all(), session.exec(
+            select(Picture.id, Picture.score).where(
+                Picture.image_embedding.is_not(None)
+            )
+        ).all()
+
+    faces, scored = server.vault.db.run_immediate_read_task(_readback)
+    assert len(faces) >= len(picture_ids), (
+        f"the seeded reference faces did not survive; a background stage most "
+        f"likely rewrote them. faces={faces}"
+    )
+    assert len(scored) >= len(picture_ids), (
+        f"the seeded embeddings did not survive. scored={scored}"
+    )
+
+
+def _set_sort_row_project_id(client, env, picture_id, query, marker, headers=None):
+    """``project_id`` for *picture_id* on one sort variant of the set contents.
+
+    Asserts the *marker* key that only that branch adds, because the default
+    picture path returns the same row shape without it: a sort that silently fell
+    through would otherwise satisfy every other assertion here while leaving the
+    branch under test unexecuted.
+    """
+    kw = {"headers": headers} if headers else {}
+    r = client.get(f"{API}/picture_sets/{env['set_id']}?{query}", **kw)
+    assert r.status_code == 200, r.text
+    rows = [row for row in r.json()["pictures"] if row.get("id") == picture_id]
+    assert rows, f"{query}: picture {picture_id} must be returned, got {r.json()}"
+    row = rows[0]
+    assert marker in row, (
+        f"{query}: the row carries no {marker!r} key, so this request did not "
+        f"take the sort branch it is meant to pin: {sorted(row)}"
+    )
+    assert "project_id" in row, f"{query}: the row lost its project_id key"
+    return row["project_id"]
+
+
+def test_picture_set_sort_variants_narrow_their_rows(env):
+    """R1e: ``sort=SMART_SCORE`` and ``sort=CHARACTER_LIKENESS`` build their
+    picture rows on their own return paths in ``get_picture_set``, each with its
+    own narrowing call. Deleting either one leaves the rest of this file green,
+    so both branches are pinned here with the inputs they need to emit a row."""
+    owner, anon, tokens, projects, mint = (
+        env["owner"],
+        env["anon"],
+        env["tokens"],
+        env["projects"],
+        env["mint"],
+    )
+    pic_a, pic_b = env["pic_a"], env["pic_b"]
+
+    r = owner.post(f"{API}/picture_sets/{env['set_id']}/members/{pic_b}")
+    assert r.status_code in (200, 201), r.text
+    r = owner.patch(
+        f"{API}/pictures/project",
+        json={
+            "picture_ids": [pic_a, pic_b],
+            "project_id": projects["P1"],
+            "mode": "add",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert (
+        owner.get(f"{API}/pictures/{pic_a}/project_id").json()["project_id"]
+        == projects["P1"]
+    ), "the scalar must be backfilled, or every assertion below is vacuous"
+
+    _seed_set_sort_inputs(env["server"], [pic_a, pic_b], env["char_id"])
+
+    variants = (
+        ("sort=SMART_SCORE", "smartScore"),
+        (
+            f"sort=CHARACTER_LIKENESS&reference_character_id={env['char_id']}",
+            "character_likeness",
+        ),
+    )
+
+    for query, marker in variants:
+        assert (
+            _set_sort_row_project_id(owner, env, pic_a, query, marker) == projects["P1"]
+        ), f"{query}: the owner must keep the stored primary project"
+
+    with _enforcing(env["server"]):
+        for query, marker in variants:
+            for label in ("P1", "P2"):
+                value = _set_sort_row_project_id(
+                    anon, env, pic_a, query, marker, _bearer(tokens[label])
+                )
+                assert value == projects[label], (
+                    f"{query}: the {label} token was handed project id {value}, "
+                    f"which it is 403'd on by name"
+                )
+
+            value = _set_sort_row_project_id(
+                anon,
+                env,
+                pic_a,
+                query,
+                marker,
+                _bearer(mint("picture_set", env["set_id"])),
+            )
+            assert value is None, (
+                f"{query}: a set-scoped token has no project visibility, but was "
+                f"handed project id {value}"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,10 @@ from pixlstash.picture_scoring import (
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.request_origin import require_client_batch_id
 from pixlstash.utils.serialization_utils import safe_model_dict
-from pixlstash.utils.service.filter_helpers import fetch_scope_allowed_picture_ids
+from pixlstash.utils.service.filter_helpers import (
+    fetch_scope_allowed_picture_ids,
+    narrow_picture_project_ids,
+)
 from pixlstash.utils.service.scope_table import scope_id_subquery
 from pixlstash.pixl_logging import get_logger
 
@@ -718,10 +721,15 @@ def create_router(server) -> APIRouter:
         # this also persists positions for stacks that haven't been ordered yet.
         if sort_mech is None:
             pictures = _ensure_stack_positions(request, stack_id, pictures)
-        return [
+        rows = [
             {field: safe_model_dict(pic).get(field) for field in select_fields}
             for pic in pictures
         ]
+        # `fields=grid` never selects `project_id`; anything else goes through
+        # `metadata_fields()`, which does, and the route's `list[dict]` response
+        # model filters nothing (issue #719, §16.6).
+        narrow_picture_project_ids(server, request, rows)
+        return rows
 
     @router.get(
         "/pictures/{picture_id}/stack",
