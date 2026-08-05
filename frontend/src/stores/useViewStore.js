@@ -18,7 +18,10 @@
 //   * applying is idempotent. Writing a value a ref already holds is a no-op in
 //     Vue's reactivity, and the guards below additionally skip writes that
 //     differ only by number-vs-string, so a route tick that changes nothing
-//     re-renders nothing.
+//     re-renders nothing;
+//   * a resource-scoped credential's PROJECT scope comes from the token, never
+//     from the URL (`scopeProjectToSession`, issue #717). Parsing stays pure;
+//     the narrowing happens in `applyRoute`, between the parse and the write.
 
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
@@ -26,6 +29,7 @@ import { defineStore } from "pinia";
 import { useSelectionStore } from "./useSelectionStore";
 import { useProjectStore } from "./useProjectStore";
 import { useFilterStore } from "./useFilterStore";
+import { sessionContext } from "../utils/apiClient";
 
 export const ALL_PICTURES_ID = "ALL";
 export const UNASSIGNED_PICTURES_ID = "UNASSIGNED";
@@ -226,6 +230,48 @@ function sameNumIds(a, b) {
 }
 
 /**
+ * Narrow a parsed view's PROJECT scope to what the current credential may ask
+ * for (issue #717).
+ *
+ * A share link carries whatever pathname the owner happened to be standing on
+ * when they minted it: Settings is a dialog rather than a route, so a token
+ * created while browsing `/project/5` produces `/project/5?token=…`. The route
+ * stays the single source of truth for what the grid shows, but only within
+ * what the credential can see. A `character` / `picture_set` / `picture` token
+ * has an empty visible-project set server-side, so `project_id` from such a
+ * session is a guaranteed 403 and a silently empty grid.
+ *
+ * One rule, applied on every route tick rather than once at mount: a
+ * resource-scoped credential takes its project scope from the TOKEN, never
+ * from the URL. Doing it here rather than in App.vue's mount-time block keeps
+ * this store the single writer of the grid's project scope, and survives a
+ * later navigation (Back onto the shared link would otherwise re-break it).
+ *
+ * An owner session and a whole-library READ share both have no
+ * `resource_type`, and both are left exactly as the URL says: the backend
+ * places no project restriction on them, so narrowing here would be
+ * over-blocking.
+ *
+ * @param {object|null} view the parsed view, mutated in place
+ * @param {object|null} ctx `sessionContext` from the transport
+ * @returns {object|null} the same view
+ */
+function scopeProjectToSession(view, ctx) {
+  const resourceType = ctx?.resource_type;
+  if (!view || !resourceType) return view;
+
+  const tokenProjectId = parseProjectId(ctx.resource_id);
+  if (resourceType === "project" && tokenProjectId != null) {
+    view.projectViewMode = "project";
+    view.selectedProjectId = tokenProjectId;
+  } else {
+    view.projectViewMode = "global";
+    view.selectedProjectId = null;
+  }
+  return view;
+}
+
+/**
  * Write a parsed view into the selection/project stores.
  *
  * Every write is guarded so re-applying the same route is inert. The character
@@ -296,7 +342,10 @@ export const useViewStore = defineStore("view", () => {
    * @param {object} route a (reactive) route location
    */
   function applyRoute(route) {
-    view.value = parseRouteView(route);
+    view.value = scopeProjectToSession(
+      parseRouteView(route),
+      sessionContext.value,
+    );
     applyView(view.value, selectionStore, projectStore, filterStore);
   }
 
