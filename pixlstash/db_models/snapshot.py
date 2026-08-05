@@ -21,6 +21,13 @@ class Snapshot(SQLModel, table=True):
         picture_count: Number of Picture rows at snapshot time.
         schema_version: Alembic head revision at snapshot time.
         label: Optional user-supplied label for MANUAL snapshots.
+        identity_scrubbed_at: UTC timestamp when the one-time portable-identity
+            scrub rewrote this archive, or None if it has not been scrubbed.
+            Written per archive so an interrupted migration resumes rather than
+            restarting; see
+            ``pixlstash.services.portable_identity.sanitize_historical_snapshots``.
+            Stays None on snapshots created after the migration, which never
+            carried vault-side owner identity and are never scrubbed.
     """
 
     __tablename__ = "snapshot"
@@ -36,3 +43,7 @@ class Snapshot(SQLModel, table=True):
     picture_count: int = Field(nullable=False)
     schema_version: str = Field(nullable=False)
     label: Optional[str] = Field(default=None)
+    identity_scrubbed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column("identity_scrubbed_at", DateTime, nullable=True),
+    )

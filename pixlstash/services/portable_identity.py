@@ -7,12 +7,17 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import time
+from datetime import datetime, timezone
 
+from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.snapshot_compression import (
     compress_snapshot,
     is_compressed,
     materialize_snapshot,
 )
+
+logger = get_logger(__name__)
 
 
 class PortableIdentityScrubError(RuntimeError):
@@ -485,8 +490,32 @@ def _cleanup_stale_snapshot_scrubs(vault_root: str) -> None:
         _fsync_directory(snapshots_root)
 
 
+def _snapshot_has_resume_column(raw: sqlite3.Connection) -> bool:
+    """Whether the ``snapshot`` table carries the per-archive resume marker.
+
+    The column arrives in 0102. Callers that build a minimal ``snapshot`` table
+    themselves (and a vault opened mid-upgrade) simply lose the resume
+    optimisation; the scrub is still correct, just not restartable.
+    """
+    return any(
+        row[1] == "identity_scrubbed_at"
+        for row in raw.execute("PRAGMA table_info(snapshot)").fetchall()
+    )
+
+
 def sanitize_historical_snapshots(connection, vault_root: str) -> None:
-    """Sanitize every registered archive and update its byte size."""
+    """Sanitize every registered archive and update its byte size.
+
+    Resumable by design. Each archive's completion is committed as it happens
+    (``identity_scrubbed_at``), because this loop rewrites and recompresses
+    every snapshot a library has ever taken: minutes of blocking startup on a
+    real history, during which the server is not yet listening. Without a resume
+    point an interrupted run discarded every finished archive and began again,
+    so a user who stopped what looked like a hang could never get through it.
+
+    Progress is logged per archive for the same reason: silence for several
+    minutes is indistinguishable from a crash.
+    """
     _cleanup_stale_snapshot_scrubs(vault_root)
     snapshots_root = _snapshots_root(vault_root)
     raw = _raw_connection(connection)
@@ -498,15 +527,78 @@ def sanitize_historical_snapshots(connection, vault_root: str) -> None:
     }
     if "snapshot" not in tables:
         return
-    rows = raw.execute("SELECT id, relative_path FROM snapshot ORDER BY id").fetchall()
-    for snapshot_id, relative_path in rows:
+
+    resumable = _snapshot_has_resume_column(raw)
+    if resumable:
+        rows = raw.execute(
+            "SELECT id, relative_path FROM snapshot "
+            "WHERE identity_scrubbed_at IS NULL ORDER BY id"
+        ).fetchall()
+        already_done = raw.execute(
+            "SELECT COUNT(*) FROM snapshot WHERE identity_scrubbed_at IS NOT NULL"
+        ).fetchone()[0]
+    else:
+        rows = raw.execute(
+            "SELECT id, relative_path FROM snapshot ORDER BY id"
+        ).fetchall()
+        already_done = 0
+
+    if not rows:
+        return
+
+    total = len(rows) + already_done
+    if already_done:
+        logger.info(
+            "portable identity: resuming the one-time snapshot scrub for %s, "
+            "%d of %d archive(s) already done; the server starts listening once "
+            "it finishes.",
+            vault_root,
+            already_done,
+            total,
+        )
+    else:
+        logger.info(
+            "portable identity: starting the one-time snapshot scrub for %s. "
+            "%d archive(s) must be rewritten before the server starts listening; "
+            "this runs once per library and resumes if interrupted.",
+            vault_root,
+            total,
+        )
+
+    started = time.monotonic()
+    for index, (snapshot_id, relative_path) in enumerate(rows, start=1):
         if snapshots_root is None:
             raise PortableIdentityScrubError(
                 f"Registered snapshot {snapshot_id} exists but snapshots/ is missing."
             )
         archive = _registered_snapshot_path(vault_root, snapshots_root, relative_path)
         byte_size = sanitize_snapshot_archive(archive)
-        raw.execute(
-            "UPDATE snapshot SET byte_size=? WHERE id=?", (byte_size, snapshot_id)
-        )
+        if resumable:
+            raw.execute(
+                "UPDATE snapshot SET byte_size=?, identity_scrubbed_at=? WHERE id=?",
+                (byte_size, datetime.now(timezone.utc), snapshot_id),
+            )
+        else:
+            raw.execute(
+                "UPDATE snapshot SET byte_size=? WHERE id=?", (byte_size, snapshot_id)
+            )
+        # Committed per archive: this commit *is* the resume point.
         raw.commit()
+
+        done = already_done + index
+        elapsed = time.monotonic() - started
+        remaining = (elapsed / index) * (len(rows) - index)
+        logger.info(
+            "portable identity: scrubbed %d/%d archive(s) (%s), about %d s left.",
+            done,
+            total,
+            os.path.basename(archive),
+            round(remaining),
+        )
+
+    logger.info(
+        "portable identity: snapshot scrub complete for %s (%d archive(s) in %d s).",
+        vault_root,
+        total,
+        round(time.monotonic() - started),
+    )

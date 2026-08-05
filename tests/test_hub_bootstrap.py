@@ -1228,6 +1228,76 @@ class TestPortableIdentityScrub:
             portable.sanitize_snapshot_archive(str(archive))
         assert archive.read_bytes() == original
 
+    def test_an_interrupted_scrub_resumes_instead_of_restarting(
+        self, tmp_path, monkeypatch
+    ):
+        """Each archive records its own completion, so a restart skips it.
+
+        Without this the whole loop was all-or-nothing: interrupting it (which
+        is what a user does when a silent multi-minute startup looks like a
+        hang) discarded every finished archive, so a large snapshot history
+        could never get through the migration.
+        """
+        import pixlstash.services.portable_identity as portable
+
+        root = tmp_path / "library"
+        snapshots = root / "snapshots"
+        snapshots.mkdir(parents=True)
+        live = sqlite3.connect(root / "vault.db")
+        live.execute(
+            "CREATE TABLE snapshot (id INTEGER PRIMARY KEY, relative_path TEXT, "
+            "byte_size INTEGER, identity_scrubbed_at TIMESTAMP)"
+        )
+        for index in range(3):
+            archive = snapshots / f"archive{index}.sqlite"
+            _make_portable_identity_db(archive, f"RESUME-SECRET-{index}").close()
+            live.execute(
+                "INSERT INTO snapshot (id, relative_path, byte_size) VALUES (?, ?, 0)",
+                (index + 1, os.path.join("snapshots", archive.name)),
+            )
+        live.commit()
+
+        real = portable.sanitize_snapshot_archive
+        calls = []
+
+        def fail_on_the_third(path):
+            calls.append(path)
+            if len(calls) == 3:
+                raise portable.PortableIdentityScrubError("injected interruption")
+            return real(path)
+
+        monkeypatch.setattr(portable, "sanitize_snapshot_archive", fail_on_the_third)
+        with pytest.raises(portable.PortableIdentityScrubError, match="injected"):
+            portable.sanitize_historical_snapshots(live, str(root))
+
+        marks = dict(
+            live.execute("SELECT id, identity_scrubbed_at FROM snapshot").fetchall()
+        )
+        assert marks[1] is not None and marks[2] is not None, (
+            "finished archives must record their own completion"
+        )
+        assert marks[3] is None, "the interrupted archive must stay unmarked"
+
+        # Second run: only the unfinished archive is touched.
+        resumed = []
+
+        def track(path):
+            resumed.append(path)
+            return real(path)
+
+        monkeypatch.setattr(portable, "sanitize_snapshot_archive", track)
+        portable.sanitize_historical_snapshots(live, str(root))
+
+        assert len(resumed) == 1, f"expected only the leftover archive, got {resumed}"
+        assert resumed[0].endswith("archive2.sqlite")
+        assert all(
+            value is not None
+            for value in dict(
+                live.execute("SELECT id, identity_scrubbed_at FROM snapshot").fetchall()
+            ).values()
+        )
+        live.close()
+
     def test_attached_library_scrubs_once_then_uses_durable_complete_marker(
         self, tmp_path, monkeypatch
     ):

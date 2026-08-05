@@ -665,8 +665,17 @@ def finalize_library_connection(hub: HubDatabase, library: Library, connection) 
     # Alembic has completed and the fingerprint is durable. Every existing or
     # attached legacy library is scrubbed exactly once, whether or not its owner
     # identity was the explicitly approved one copied into this hub. Historical
-    # archives finish before the hub marker advances, so crashes resume safely.
+    # archives finish before the hub marker advances; each one records its own
+    # completion, so an interrupted run resumes instead of restarting.
     if needs_scrub:
+        logger.info(
+            "Library %s needs the one-time portable-identity migration. This "
+            "rewrites the vault and every historical snapshot before the server "
+            "starts listening, so first start after upgrading takes noticeably "
+            "longer on a library with a large snapshot history. It is safe to "
+            "interrupt: the next start resumes where this one stopped.",
+            current.name,
+        )
         sanitize_vault_connection(connection, current.vault_path, restore_wal=True)
         sanitize_historical_snapshots(connection, current.path)
 

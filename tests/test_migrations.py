@@ -41,11 +41,14 @@ def test_alembic_upgrade_head_fresh_db():
 def test_alembic_downgrade_and_reupgrade_multi_library_lane():
     """The multi-library lane unwinds off develop's head and comes back cleanly.
 
-    The lane (``0097``-``0101``) is linear on top of
-    ``0096_add_picture_is_video``, so downgrading to that revision unwinds all
-    five migrations at once. Round-tripping keeps every ``downgrade()`` in the
-    lane honest, and asserting the stamped revision in both directions catches
-    a lane that silently re-merges into more than one head.
+    The lane is linear on top of ``0096_add_picture_is_video``, so downgrading
+    to that revision unwinds every migration above it at once. Round-tripping
+    keeps each ``downgrade()`` honest, and asserting a single stamped revision
+    in both directions catches a lane that silently re-merges into more than
+    one head.
+
+    The head is read back from the tree rather than named, so adding a
+    migration does not break this test.
     """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
@@ -55,6 +58,13 @@ def test_alembic_downgrade_and_reupgrade_multi_library_lane():
         assert up.returncode == 0, (
             f"alembic upgrade head failed:\nstdout: {up.stdout}\nstderr: {up.stderr}"
         )
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            head = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert len(head) == 1, f"the lane must resolve to exactly one head, got {head}"
 
         down = _run_alembic(
             ["downgrade", "0096_add_picture_is_video"],
@@ -83,7 +93,7 @@ def test_alembic_downgrade_and_reupgrade_multi_library_lane():
                 row[0]
                 for row in conn.execute("SELECT version_num FROM alembic_version")
             }
-        assert revisions == {"0101_add_settings_fingerprint"}
+        assert revisions == head
 
 
 def test_alembic_upgrade_from_v1_4_1_preserves_data():
