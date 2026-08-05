@@ -5354,8 +5354,13 @@ defineExpose({
                   ><v-icon size="18">mdi-trash-can-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Scrapheap</span>
+                <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
+                     and 0 is an answer, so it renders. Only a count that has
+                     not arrived yet is blank. This is the same distinction
+                     `utils/sidebarCounts.js` is a module to protect, and every
+                     sibling badge here already reads this way. -->
                 <span class="sidebar-list-count">{{
-                  categoryCounts[SCRAPHEAP_PICTURES_ID] || ""
+                  categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
                 }}</span>
               </div>
             </div>
