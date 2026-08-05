@@ -328,6 +328,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _PIC, id_param="id"
     ),
     ("GET", "/api/v1/pictures/{id}/detections"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/faces"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/{field}"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/anomaly_region"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
@@ -691,6 +692,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/characters/{id}/reference_pictures"): RoutePolicy(
         _CHAR, id_param="id"
     ),
+    ("GET", "/api/v1/characters/{id}/faces"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/characters/{id}/{field}"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/projects/{project_name}/characters/{character_name}"): RoutePolicy(
         _CHAR,

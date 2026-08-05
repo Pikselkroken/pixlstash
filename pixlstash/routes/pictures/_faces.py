@@ -58,6 +58,39 @@ class PictureFaceResponse(BaseModel):
     character_id: Optional[int] = None
 
 
+class FaceProjectionResponse(BaseModel):
+    """One face row as served by the dedicated face-listing routes.
+
+    Deliberately **not** ``extra="allow"``: this model is the second of the two
+    filters on these routes (the handler's ``Face.to_public_dict`` is the
+    first), so an added ``Face`` column cannot ride onto the wire by accident.
+    ``extra="allow"`` here would make the response model decorative, which is
+    the containment failure §16.6 records for the picture payload models.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: Optional[int] = None
+    picture_id: Optional[int] = None
+    character_id: Optional[int] = None
+    frame_index: Optional[int] = None
+    face_index: Optional[int] = None
+    bbox: Optional[list] = None
+
+
+class FaceListResponse(BaseModel):
+    """``{"faces": [...]}`` — the wire shape the generic by-name reader used.
+
+    Kept identical on purpose so the SPA (``api/pictures.js::listPictureFaces``)
+    and ``tests/utils.py::wait_for_faces`` need no change when #721 moved these
+    off the relationship.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    faces: list[FaceProjectionResponse]
+
+
 class FaceDeleteResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -66,6 +99,50 @@ class FaceDeleteResponse(BaseModel):
 
 
 def register_routes(router, server):
+    @router.get(
+        "/pictures/{id}/faces",
+        summary="List picture faces",
+        description=(
+            "Returns the stored face rows for a picture: `id`, `picture_id`, "
+            "`character_id`, `frame_index`, `face_index` and the pixel `xyxy` "
+            "`bbox`.\n\n"
+            "The face **embedding** (`features`) and the embedding's model pack "
+            "are not served. Rows are returned in insertion order, and include "
+            "the `face_index = -1` sentinel written when extraction found no "
+            "face, so a caller can tell 'extraction ran and found nothing' from "
+            "'extraction has not run yet'."
+        ),
+        response_model=FaceListResponse,
+    )
+    def list_picture_faces(request: Request, id: str):
+        # Dedicated, projected replacement for `GET /pictures/{id}/{field}` with
+        # field="faces", which served the ORM relationship and therefore the
+        # embedding too (issue #721).
+        #
+        # ORDERING IS LOAD-BEARING: this module is registered BEFORE `_crud` in
+        # `routes/pictures/__init__.py`, which is what stops the
+        # `/pictures/{id}/{field}` catch-all in `_crud` from swallowing this
+        # route. Moving `_faces.register_routes` after `_crud.register_routes`
+        # makes this handler dead code that silently never runs.
+        try:
+            pic_id = int(id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid picture id") from exc
+
+        def fetch_faces(session: Session):
+            # Every face row for the picture, sentinels included, ordered by id.
+            # This reproduces the row set and the order the `Picture.faces`
+            # relationship produced. `Face.find` is NOT used: it filters out
+            # `face_index == -1`, and `tests/utils.py::wait_for_faces` returns as
+            # soon as the list is non-empty, so dropping the sentinel would turn
+            # a "no face detected" picture into a full poll timeout.
+            rows = session.exec(
+                select(Face).where(Face.picture_id == pic_id).order_by(Face.id)
+            ).all()
+            return [face.to_public_dict() for face in rows]
+
+        return {"faces": server.vault.db.run_immediate_read_task(fetch_faces)}
+
     @router.post(
         "/pictures/{id}/face",
         include_in_schema=False,
