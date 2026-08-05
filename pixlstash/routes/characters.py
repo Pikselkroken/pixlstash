@@ -51,6 +51,7 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.routes.pictures import FaceListResponse
 from pixlstash.utils.field_allowlist import (
     CHARACTER_EXTRA_SERVABLE_FIELDS,
     require_servable_field,
@@ -1114,6 +1115,40 @@ def create_router(server) -> APIRouter:
         # character — the id-based twin (get_character_by_id) already does this.
         _require_scope_allows_character(request, int(result["id"]))
         return result
+
+    @router.get(
+        "/characters/{id}/faces",
+        summary="List character faces",
+        description=(
+            "Returns the face rows assigned to a character: `id`, `picture_id`, "
+            "`character_id`, `frame_index`, `face_index` and the pixel `xyxy` "
+            "`bbox`.\n\n"
+            "The face **embedding** (`features`) and the embedding's model pack "
+            "are not served."
+        ),
+        response_model=FaceListResponse,
+    )
+    def list_character_faces(request: Request, id: int):
+        # Dedicated, projected replacement for `GET /characters/{id}/{field}`
+        # with field="faces", which served the ORM relationship and therefore
+        # the embedding too (issue #721).
+        #
+        # DECLARED HERE, NOT IN characters_faces.py, AND ORDERING IS
+        # LOAD-BEARING. `server.py` includes this router BEFORE
+        # `characters_faces`, so a GET declared over there would be swallowed by
+        # the `/characters/{id}/{field}` catch-all below. Within this router the
+        # order is definition order, so this must stay ABOVE that route. Its
+        # POST/DELETE siblings live in `characters_faces.py` and are unaffected:
+        # they differ by method, and Starlette falls through a path-only match.
+        def fetch_faces(session: Session):
+            # Ordered by id to reproduce the row set and order that the
+            # `Character.faces` relationship produced on the old path.
+            rows = session.exec(
+                select(Face).where(Face.character_id == id).order_by(Face.id)
+            ).all()
+            return [face.to_public_dict() for face in rows]
+
+        return {"faces": server.vault.db.run_immediate_read_task(fetch_faces)}
 
     @router.get(
         "/characters/{id}/{field}",

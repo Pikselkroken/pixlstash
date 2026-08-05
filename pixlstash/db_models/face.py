@@ -121,6 +121,45 @@ class Face(SQLModel, table=True):
             return self.bbox[3] - self.bbox[1]
         return 0.0
 
+    def to_public_dict(self) -> dict:
+        """Return the face fields that may be served over the API.
+
+        This is an allowlist, not a dump: it is the projection behind
+        ``GET /pictures/{id}/faces`` and ``GET /characters/{id}/faces``, which
+        replaced serving the ``faces`` relationship through the generic by-name
+        readers (issue #721). Two columns are deliberately **omitted**:
+
+        * ``features`` — the ArcFace embedding. It is biometric data, and the
+          generic reader used to hand it out base64-encoded to any token that
+          could reach the picture. Nothing on the wire has ever read it: the
+          SPA's face-box overlay uses ``frame_index``, ``bbox`` and
+          ``character_id`` only.
+        * ``model_pack`` — names the InsightFace pack that produced the
+          embedding (``buffalo_l`` / ``auraface``). Not biometric in itself, but
+          it tells a caller how embeddings obtained elsewhere could be compared
+          against these, and no caller reads it (verified across
+          ``frontend/src``, ``tests/``, ``pixlstash/`` and ``scripts/``: every
+          occurrence is server-side model loading). Omitted by the same
+          least-disclosure rule; add it back only with a named consumer.
+
+        ``bbox`` is taken from the property, which parses the ``bbox_`` text
+        column. That reproduces exactly what ``safe_model_dict`` did for the
+        trailing-underscore field on the old path, so the wire value is
+        unchanged.
+
+        Returns:
+            A JSON-safe dict with ``id``, ``picture_id``, ``character_id``,
+            ``frame_index``, ``face_index`` and ``bbox``.
+        """
+        return {
+            "id": self.id,
+            "picture_id": self.picture_id,
+            "character_id": self.character_id,
+            "frame_index": self.frame_index,
+            "face_index": self.face_index,
+            "bbox": self.bbox,
+        }
+
     @classmethod
     def find(cls, session, **filters) -> Optional["Face"]:
         """
