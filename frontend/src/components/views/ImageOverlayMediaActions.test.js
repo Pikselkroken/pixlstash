@@ -1,6 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+
+// Imported statically, not lazily inside the tests. `vi.mock` is hoisted
+// above every import, so a lazy import buys no mock ordering. It only moves
+// the cost of compiling this 5.7k-line SFC (~7s on a loaded machine) inside
+// the first test's 5s timeout, which is what made this file flake in the full
+// suite while passing on its own.
+import ImageOverlay from "./ImageOverlay.vue";
+
+// A test that fails mid-way must not leave a mounted overlay behind: its
+// window-level keydown listener would answer every later test in this file.
+enableAutoUnmount(afterEach);
 
 const apiGet = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/workflow")) {
@@ -86,7 +97,6 @@ let canvasDraw;
 let anchorClick;
 
 async function openOverlay(media = {}) {
-  const { default: ImageOverlay } = await import("./ImageOverlay.vue");
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
@@ -186,7 +196,7 @@ describe("ImageOverlay local media commands", () => {
   it("Ctrl+S invokes regular Save with original bytes and filename, including read-only", async () => {
     const { isReadOnly } = await import("../../utils/apiClient");
     isReadOnly.value = true;
-    const wrapper = await openOverlay();
+    await openOverlay();
     const event = press("s", { ctrlKey: true });
     await flush();
 
@@ -196,7 +206,6 @@ describe("ImageOverlay local media commands", () => {
     });
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(document.querySelector("a")?.download).toBe("holiday.jpg");
-    wrapper.unmount();
   });
 
   it("reports regular Save download failures without claiming success", async () => {
@@ -205,7 +214,6 @@ describe("ImageOverlay local media commands", () => {
     const result = await wrapper.vm.saveMedia({ id: 7, format: "jpg" });
     expect(result).toBe(false);
     expect(anchorClick).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 
   it("Ctrl+C copies still pixels as PNG and never writes URL or text", async () => {
@@ -220,7 +228,6 @@ describe("ImageOverlay local media commands", () => {
     const item = clipboardWrite.mock.calls[0][0][0];
     expect(Object.keys(item.data)).toEqual(["image/png"]);
     expect(await item.data["image/png"]).toBeInstanceOf(Blob);
-    wrapper.unmount();
   });
 
   it("Copy current frame draws the displayed video frame into PNG", async () => {
@@ -237,7 +244,6 @@ describe("ImageOverlay local media commands", () => {
 
     expect(canvasDraw).toHaveBeenCalledWith(video, 0, 0, 1920, 1080);
     expect(clipboardWrite).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
   });
 
   it("reports clipboard failure without substituting URL text", async () => {
@@ -249,7 +255,6 @@ describe("ImageOverlay local media commands", () => {
     expect(result).toBe(false);
     expect(clipboardWrite).toHaveBeenCalledTimes(1);
     expect(apiGet.mock.calls.some(([url]) => /\/pictures\/7\.jpg/.test(url))).toBe(false);
-    wrapper.unmount();
   });
 
   it("does not own Save/Copy in text-entry or selected-text contexts", async () => {
@@ -269,7 +274,6 @@ describe("ImageOverlay local media commands", () => {
     expect(selectedCopy.defaultPrevented).toBe(false);
     expect(clipboardWrite).not.toHaveBeenCalled();
     expect(anchorClick).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 
   it("Save As uses the native writable picker when available and writes original bytes", async () => {
@@ -311,7 +315,6 @@ describe("ImageOverlay local media commands", () => {
     expect(noticeStore.notices.at(-1)?.text).toBe(
       "Saved renamed-in-chrome.jpg.",
     );
-    wrapper.unmount();
   });
 
   it("falls back honestly to a named download when no save picker exists", async () => {
@@ -341,7 +344,6 @@ describe("ImageOverlay local media commands", () => {
     expect(document.querySelector("a")?.download).toBe(
       "renamed-holiday.jpeg",
     );
-    wrapper.unmount();
   });
 
   it("silently cancels the no-picker filename dialog", async () => {
@@ -355,7 +357,6 @@ describe("ImageOverlay local media commands", () => {
     expect(await resultPromise).toBe(false);
     expect(anchorClick).not.toHaveBeenCalled();
     expect(apiGet.mock.calls.some(([url]) => /\/pictures\/7\.jpg/.test(url))).toBe(false);
-    wrapper.unmount();
   });
 
   it("treats Save As cancellation silently", async () => {
@@ -366,7 +367,6 @@ describe("ImageOverlay local media commands", () => {
     const result = await wrapper.vm.saveMediaAs({ id: 7, format: "jpg" });
     expect(result).toBe(false);
     expect(apiGet.mock.calls.some(([url]) => /\/pictures\/7\.jpg/.test(url))).toBe(false);
-    wrapper.unmount();
   });
 
   it("reports a Save As write failure after a file was chosen", async () => {
@@ -382,7 +382,6 @@ describe("ImageOverlay local media commands", () => {
     const result = await wrapper.vm.saveMediaAs({ id: 7, format: "jpg" });
     expect(result).toBe(false);
     expect(anchorClick).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 
   it("uses authenticated renderer bytes for Electron Save As and native PNG copy", async () => {
@@ -413,6 +412,5 @@ describe("ImageOverlay local media commands", () => {
     );
     expect(copyPngToClipboard).toHaveBeenCalledWith(expect.any(ArrayBuffer));
     expect(clipboardWrite).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 });

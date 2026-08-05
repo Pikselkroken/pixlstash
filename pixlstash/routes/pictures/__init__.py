@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from pixlstash.utils.service.picture_stats import clear_stats_cache  # noqa: F401
 
+from ._faces import FaceListResponse  # noqa: F401
 from ._helpers import MEDIA_TYPE_BY_FORMAT  # noqa: F401
 from ._listing import select_pictures_for_listing  # noqa: F401
 from . import (
@@ -43,4 +44,11 @@ def create_router(server) -> APIRouter:
     return router
 
 
-__all__ = ["create_router", "clear_stats_cache", "MEDIA_TYPE_BY_FORMAT"]
+__all__ = [
+    "create_router",
+    "clear_stats_cache",
+    "MEDIA_TYPE_BY_FORMAT",
+    # Re-exported so routes/characters.py can share the face-list wire shape
+    # without reaching into the private _faces module (#721).
+    "FaceListResponse",
+]

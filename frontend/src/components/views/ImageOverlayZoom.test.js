@@ -5,10 +5,21 @@
 // so the fit readout is "50%" and 100% doubles it.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { anchorZoomOffset } from "../../utils/zoomMath";
 import { ZOOM_SETTLE_MS } from "../../composables/useWheelZoom";
+
+// Imported statically, not lazily inside the tests. `vi.mock` is hoisted
+// above every import, so a lazy import buys no mock ordering. It only moves
+// the cost of compiling this 5.7k-line SFC (~7s on a loaded machine) inside
+// the first test's 5s timeout, which is what made this file flake in the full
+// suite while passing on its own.
+import ImageOverlay from "./ImageOverlay.vue";
+
+// A test that fails mid-way must not leave a mounted overlay behind: its
+// window-level keydown listener would answer every later test in this file.
+enableAutoUnmount(afterEach);
 
 let metadataResponse = [];
 
@@ -73,7 +84,6 @@ const NATURAL = { w: 1600, h: 1200 };
 const FIT = 0.5;
 
 async function openOverlay() {
-  const { default: ImageOverlay } = await import("./ImageOverlay.vue");
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
@@ -206,7 +216,6 @@ describe("ImageOverlay cold media bootstrap", () => {
       resolveMetadata = resolve;
     });
 
-    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
     const wrapper = mount(ImageOverlay, {
       props: {
         open: true,
@@ -243,7 +252,6 @@ describe("ImageOverlay cold media bootstrap", () => {
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(
       "http://replacement/pictures/7.png?v=first",
     );
-    wrapper.unmount();
   });
 
   // The flash-and-reload regression: the grid record has no pixel_sha, so the
@@ -257,7 +265,6 @@ describe("ImageOverlay cold media bootstrap", () => {
       resolveMetadata = resolve;
     });
 
-    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
     const wrapper = mount(ImageOverlay, {
       props: {
         open: true,
@@ -282,7 +289,6 @@ describe("ImageOverlay cold media bootstrap", () => {
 
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(initialSrc);
     expect(wrapper.find(".overlay-img").element).toBe(initialEl);
-    wrapper.unmount();
   });
 
   // The pin holds the buster steady, it does not disable it: once a sha is
@@ -291,7 +297,6 @@ describe("ImageOverlay cold media bootstrap", () => {
   it("does reload when a known pixel_sha changes to another", async () => {
     metadataResponse = { id: 7, format: "png", pixel_sha: "first", tags: [] };
 
-    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
     const wrapper = mount(ImageOverlay, {
       props: {
         open: true,
@@ -318,7 +323,6 @@ describe("ImageOverlay cold media bootstrap", () => {
     expect(wrapper.find(".overlay-img").attributes("src")).toBe(
       "http://test/pictures/7.png?v=second",
     );
-    wrapper.unmount();
   });
 });
 
@@ -329,7 +333,6 @@ describe("ImageOverlay zoom — the continuous wheel", () => {
     expect(wrapper.find(".zoom-hud").exists()).toBe(false); // HUD retired
     const t = mediaTransform(wrapper);
     expect(t).toEqual({ x: 0, y: 0, scale: 1 });
-    wrapper.unmount();
   });
 
   it("wheel-in zooms continuously, anchored at the cursor", async () => {
@@ -357,7 +360,6 @@ describe("ImageOverlay zoom — the continuous wheel", () => {
     expect(zoomLabel(wrapper)).toBe(
       `${Math.round(newScale * 100)}%`, // 61%
     );
-    wrapper.unmount();
   });
 
   it("a big out-wheel rests at fit — hard clamp, no exit, overlay stays open", async () => {
@@ -371,7 +373,6 @@ describe("ImageOverlay zoom — the continuous wheel", () => {
     expect(zoomLabel(wrapper)).toBe("50%");
     expect(mediaTransform(wrapper)).toEqual({ x: 0, y: 0, scale: 1 });
     expect(wrapper.emitted("close")).toBeFalsy();
-    wrapper.unmount();
   });
 });
 
@@ -390,7 +391,6 @@ describe("ImageOverlay zoom — snap stops", () => {
     press("z");
     await wrapper.vm.$nextTick();
     expect(zoomLabel(wrapper)).toBe("50%");
-    wrapper.unmount();
   });
 
   it("the button click has identical semantics to Z", async () => {
@@ -403,7 +403,6 @@ describe("ImageOverlay zoom — snap stops", () => {
     expect(zoomLabel(wrapper)).not.toBe("100%");
     await btn.trigger("click");
     expect(zoomLabel(wrapper)).toBe("50%");
-    wrapper.unmount();
   });
 
   it("double-click toggles fit ↔ 100% anchored at the click point", async () => {
@@ -422,7 +421,6 @@ describe("ImageOverlay zoom — snap stops", () => {
       .trigger("dblclick", { clientX: 0, clientY: 0 });
     expect(zoomLabel(wrapper)).toBe("50%");
     expect(mediaTransform(wrapper)).toEqual({ x: 0, y: 0, scale: 1 });
-    wrapper.unmount();
   });
 });
 
@@ -451,7 +449,6 @@ describe("ImageOverlay zoom — pan", () => {
     await wrapper.vm.$nextTick();
     t = mediaTransform(wrapper);
     expect(t).toEqual({ x: 0, y: 0, scale: 1 });
-    wrapper.unmount();
   });
 
   it("does not pan at fit (drag stays drag-out)", async () => {
@@ -467,7 +464,6 @@ describe("ImageOverlay zoom — pan", () => {
       clientY: 400,
     });
     expect(mediaTransform(wrapper)).toEqual({ x: 0, y: 0, scale: 1 });
-    wrapper.unmount();
   });
 });
 
@@ -477,7 +473,6 @@ describe("ImageOverlay zoom — the readout and the announcer", () => {
     expect(zoomLabel(wrapper)).toBe("50%");
     await measure(wrapper, { canvas: { w: 400, h: 600 } });
     expect(zoomLabel(wrapper)).toBe("25%");
-    wrapper.unmount();
   });
 
   it("reserves the label width so the toolbar never jumps", async () => {
@@ -488,7 +483,6 @@ describe("ImageOverlay zoom — the readout and the announcer", () => {
       "zoom-btn-label",
     );
     expect(wrapper.find(".zoom-btn").attributes("aria-label")).toContain("50%");
-    wrapper.unmount();
   });
 
   it("announces a wheel gesture on settle, and a snap immediately", async () => {
@@ -512,7 +506,6 @@ describe("ImageOverlay zoom — the readout and the announcer", () => {
     expect(status.text()).toBe("Zoom 100%");
     // The button itself must NOT be a live region.
     expect(wrapper.find(".zoom-btn").attributes("aria-live")).toBeUndefined();
-    wrapper.unmount();
   });
 });
 
@@ -539,7 +532,6 @@ describe("ImageOverlay zoom — overlays ride the transform", () => {
       styleAtFit,
     );
     expect(mediaTransform(wrapper).scale).toBeCloseTo(Math.exp(1), 3);
-    wrapper.unmount();
   });
 
   it("the draw rectangle maps the cursor through the transform at 100%", async () => {
@@ -578,7 +570,6 @@ describe("ImageOverlay zoom — overlays ride the transform", () => {
     expect(style).toContain("width: 50px");
     expect(style).toContain("height: 50px");
     await firePointer(wrapper, layer, "pointercancel", { pointerId: 2 });
-    wrapper.unmount();
   });
 });
 
@@ -594,6 +585,5 @@ describe("ImageOverlay zoom — what the wheel does NOT do", () => {
     expect(wrapper.findComponent({ name: "OverlayFilmstrip" }).exists()).toBe(
       true,
     );
-    wrapper.unmount();
   });
 });

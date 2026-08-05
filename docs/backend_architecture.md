@@ -463,6 +463,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
 | GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
@@ -542,6 +543,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
@@ -1292,7 +1294,7 @@ Both are follow-up work. Do not read rule 2 as covering them.
 - **Do NOT put authorization code in the handler.** No inline `enforce_picture_scope`, `require_unscoped_owner`, or `token_scope` ladder — the gate owns object authorization on every return path by construction. Copy a *sibling route's declaration*, not a per-handler check.
 - **An undeclared data route is denied at runtime (403) and fails the build.** The startup assertion (`AuthzGate.enforce_startup`) aborts boot and the CI guardrail (`tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy`) goes red on any undeclared route. There is no "I forgot" state.
 - `PUBLIC` / `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` declarations require a machine-checked `justification=`. Exemptions are recorded decisions, not blanks.
-- The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
+- The coverage matrix (`docs/authz-coverage-matrix.md`) *is* the registry. Both-direction tests (out-of-scope 403 **and** in-scope 200) and independent adversarial sign-off still apply per `CLAUDE.md` / `.github/copilot-instructions.md` (§ *Security & authorization review process*).
 
 **Project scope is membership-based since v1.9 (issue #125).** `enforce_character_scope` and `enforce_set_scope` resolve the `project` branch through `CharacterProjectMember` / `PictureSetProjectMember`, not the scalar `project_id`. A project-scoped token therefore reaches an entity that lists its project among several — the intended widening — while an entity in a different project is still refused. Both directions are pinned in `tests/test_multi_project_membership_authz.py` (in-scope 200 **and** out-of-scope 403, across by-id, by-name, list, locked-members, project-set-listing and the picture-level consequence). Reading the FK instead would *under*-grant, which is its own regression: see §6 *Grouping & scoping*.
 
@@ -1314,7 +1316,7 @@ Both are follow-up work. Do not read rule 2 as covering them.
 **Migration path (completed, incremental — not a big-bang rewrite).**
 
 1. **✅ done** — Built the route-declaration registry (`authz/registry.py`) and the startup/CI assertion in report-only mode, enumerating every data route.
-2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/reviews/authz-coverage-matrix.md`.
+2. **✅ done** — Back-filled declarations for all 207 routes to match their current §16.1 state, reconciled against the audit findings in `docs/reviews/bulk-token-scoping.md` / `v1.5.1-security-signoff.md` and recorded in `docs/authz-coverage-matrix.md`.
 3. **✅ done** — Introduced the central chokepoint (`authz/gate.py`) behind the declarations, calling the relocated helpers (`authz/membership.py`); proved equivalent with both-direction tests (`tests/test_authz_gate_step3.py` / `test_authz_gate_step4.py`), then removed the now-redundant per-handler `enforce_picture_scope` / `require_unscoped_owner` / `require_user_id` / `_require_scope_allows_*` calls (Step 5). The 4 name-derived routes keep their inline check (§16.1 residual exception).
 4. **✅ done** — Closed the `ALL`+`resource_type` footgun (item 4 above) and collapsed the duplicated `token_scope` ladder into the single `authz/membership.py` home.
 5. **✅ done** — Flipped the startup assertion + CI guardrail to **fail-closed** (`AUTHZ_GATE_ENFORCING = True`): an undeclared data route is 403 at runtime and a boot failure + red CI. The constant is the one-line per-release rollback (flip to `False` for report-only).
@@ -1495,15 +1497,7 @@ Deliberately **not** equalised — that is a runtime change to a hot read path, 
 
 #### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
 
-**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. It does **not** close the confidentiality boundary those routes are named after, because the two generic field readers also serve the ORM **relationship** namespace, which no projection constrains. Reproduced 2026-08-05 with a `picture`-scoped token:
-
-```
-GET /projects/1            -> 403
-GET /pictures/1/project_id -> {"project_id": null}          # closed by #719
-GET /pictures/1/projects   -> {"projects":[{"id":1,"name":"P1",...}]}   # still open
-```
-
-`Picture.projects` is a `Relationship` and `safe_model_dict` recurses into relationships, so `select_fields=[field]` does not bound the response. The same shape holds for `GET /pictures/{id}/picture_sets` (set names, plus `project_id` again on a sibling key) and for the character twin, `GET /characters/{id}/project` and `GET /characters/{id}/pictures` — the latter serving full `Picture` rows off the relationship, bypassing every narrowing site in the codebase. Tracked as its own issue; the durable fix is an allowlist of servable field names on both readers, not another `if field == ...` branch. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it".
+**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. On its own it did **not** close the confidentiality boundary those routes are named after, because the two generic field readers also served the ORM **relationship** namespace, which no projection constrains. That second half is #721, closed below. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it", and read §*The generic by-name readers serve the column namespace only* for why the sibling name no longer reaches around them.
 
 **Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
 
@@ -1538,6 +1532,75 @@ Deriving from the join table rather than intersecting the raw scalar is delibera
 - **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
 - **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
 - **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
+
+#### CLOSED (#721): the generic by-name readers serve the column namespace only
+
+`GET /pictures/{id}/{field}` and `GET /characters/{id}/{field}` hand back an attribute by name and end in `safe_model_dict(getattr(obj, field))`, which recurses into SQLModel instances, lists and `CollectionAdapter`s. `select_fields=[field]` therefore did **not** bound the response: a *relationship* name was served as whole related rows, reaching past every projection and every narrowing site in the codebase. Reproduced 2026-08-05 with the gate enforcing (`picture`-scoped token on picture 1, `character`-scoped token on character 1), each alongside the `403` the same token gets on `GET /projects/1`:
+
+```
+GET /pictures/1/project_id    -> {"project_id": null}                       # closed by #719
+GET /pictures/1/projects      -> {"projects":[{"id":1,"name":"P1",...},…]}  # was OPEN
+GET /pictures/1/picture_sets  -> [{"name":"SharedSet","project_id":1,…}]    # was OPEN
+GET /pictures/1/characters    -> [{"name":"SharedChar","project_id":1,…}]   # was OPEN
+GET /characters/1/project     -> {"project":{"id":1,"name":"P1",…}}         # was OPEN
+GET /characters/1/pictures    -> full Picture rows: project_id, file_path,  # was OPEN
+                                 pixel_sha, original_file_name, metadata_hash,
+                                 comfyui_positive_prompt, comfyui_loras, …
+```
+
+The last is the largest single payload in the class: served straight off `Character.pictures`, it bypasses `Picture.metadata_fields()`, every response model and `narrow_picture_project_ids` alike. `GET /pictures/{id}/characters` was not in the original report and was found while reproducing.
+
+**The fix is a deny-by-default allowlist, not another `if field == …` branch**: [`utils/field_allowlist.py`](../pixlstash/utils/field_allowlist.py), called as the **first statement** of both handlers. The servable set is `Model.scalar_fields()` (the model's own column namespace) plus a small pinned exception set, so a future relationship is refused with no code change and a future column needs none either. This mirrors the gate's own posture (§16.2) at the level the gate cannot reach: the gate answers "may this token reach this *object*", runs before the handler and never sees the response, so it cannot bound *which attributes* come back. **This is response-shape validation, not authorization**: it takes no request, no token and no session, and must never grow into a second scope ladder.
+
+The refusal is **`400`**, deliberately, and the three properties are asserted rather than assumed:
+
+- **Not an object-existence oracle.** The check runs before any database read, so `GET /pictures/999999/projects` and `GET /pictures/1/projects` return byte-identical responses. The cross-token case was never this handler's: the gate 403s an out-of-scope object before the handler runs, whatever the field name.
+- **Not a namespace oracle.** A relationship name and a typo get the same status and the same body template, so the response does not enumerate the model's relationships.
+- **Distinguishable for a client, which `404` would not be.** `400` = not a readable field (render nothing, do not raise), `404` = object does not exist, `403` = not in this token's scope, `5xx` = server fault. `404` would have collided with "Picture not found" and forced clients to string-match `detail`; `403` would have been wrong twice over (not an authorization decision, and it collides with the gate's own 403).
+
+**The full contract, both readers.** A client can branch on the status alone; no `detail` string-matching is required. `{field}` is whatever the caller put in the path segment.
+
+| Field category | Status | Body |
+|---|---|---|
+| Column, ordinary (`width`, `name`, `file_path`, `description`, …) | `200` | `{"<field>": <value>}` |
+| Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`), value present | `200` | `{"<field>": "<base64>"}` |
+| Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
+| `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
+| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
+| Object does not exist, **denied** field | `400` | identical to the denied-field row; the check runs before the lookup |
+| Object outside the token's scope, any field | `403` | the AuthzGate's own body, e.g. `{"detail": "Token is not authorised for this picture"}` |
+
+Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
+
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
+
+`faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
+
+| New route | Policy | Serves | Withholds |
+|---|---|---|---|
+| `GET /pictures/{id}/faces` (`routes/pictures/_faces.py`) | `PICTURE_SCOPED`, `id_param="id"` | `{"faces": [{id, picture_id, character_id, frame_index, face_index, bbox}]}` | `features` (the ArcFace embedding), `model_pack` |
+| `GET /characters/{id}/faces` (`routes/characters.py`) | `CHARACTER_SCOPED`, `id_param="id"` | same shape | same |
+
+Design notes, each of which is a trap someone will otherwise re-open:
+
+- **The wire shape is unchanged** (`{"faces": [...]}`), so no frontend change was needed. The SPA reads only `frame_index`, `bbox` and `character_id`.
+- **`model_pack` is withheld deliberately.** It is not biometric, but it names the embedding model (`buffalo_l` / `auraface`) and so tells a caller how embeddings obtained elsewhere could be compared against these. No consumer reads it (verified across `frontend/src`, `tests/`, `pixlstash/`, `scripts/`: every hit is server-side model loading). Add it back only with a named consumer.
+- **Registration order is load-bearing.** FastAPI matches in registration order, so a dedicated route registered *after* the `/{id}/{field}` catch-all is dead code that silently never runs. `_faces` is registered before `_crud` in `routes/pictures/__init__.py`; on the character side `server.py` includes `characters` **before** `characters_faces`, so the GET had to be declared in `characters.py` itself, above the by-name route, rather than alongside its `POST`/`DELETE` siblings. Pinned by `test_dedicated_faces_routes_are_declared_and_not_shadowed`, which was confirmed to fail when `_faces` is moved after `_crud`.
+- **Sentinel rows are still served.** `Face.find` filters out `face_index == -1`, the relationship did not, and `wait_for_faces` returns as soon as the list is non-empty; using `Face.find` would turn a picture with no detectable face into a full poll timeout in three suites. The routes use a plain `select` ordered by `Face.id`, reproducing the old row set and order.
+- **`bbox` is unchanged on the wire.** It comes off the `bbox_` text column through the `Face.bbox` property, which does the same `json.loads` that `safe_model_dict`'s trailing-underscore branch did.
+- **The projection is filtered twice**, by `Face.to_public_dict()` and again by `response_model=FaceListResponse` (`extra="ignore"`). That redundancy hides bugs from wire-level tests: putting `features` back into `to_public_dict` still yields a clean HTTP response, verified. `test_face_to_public_dict_is_the_first_filter` asserts the projection directly for that reason.
+
+**One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
+
+**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+
+- **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
+- **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
+- **Closed during #721: `faces` no longer serves the face embedding.** It is a denied relationship name on both by-name readers and is served instead by the two projected routes above, which withhold `features` and `model_pack`.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #721.
 
 ---
 
@@ -3033,7 +3096,7 @@ member are each refused with nothing written; the locked stack still answers
 
 All five routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline check
 (§16.1); the rationale and the both-direction test coverage are in
-`docs/reviews/authz-coverage-matrix.md`.
+`docs/authz-coverage-matrix.md`.
 
 ### 22.12 Keep cover only: collapsing a stack to its cover
 
@@ -3164,7 +3227,7 @@ soft-deleted to the Scrapheap.
 Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 (§16.1); the rationale and the both-direction test coverage
 (`tests/test_keep_cover_only.py`) are in
-`docs/reviews/authz-coverage-matrix.md`.
+`docs/authz-coverage-matrix.md`.
 
 ---
 

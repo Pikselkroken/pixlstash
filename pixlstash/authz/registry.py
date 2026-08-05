@@ -17,7 +17,7 @@ non-GET block for READ tokens, ``require_local_for_write``, the ``ALL``
 handlers (``enforce_picture_scope`` / ``fetch_scope_allowed_picture_ids`` /
 ``require_unscoped_owner`` / the ``_require_scope_allows_*`` ladders). The full
 per-route rationale and the reviewer flags live in
-``docs/reviews/authz-coverage-matrix.md`` — that document is the artifact the
+``docs/authz-coverage-matrix.md`` — that document is the artifact the
 adversarial security review consumes.
 
 **Semantics that shape the mapping (verified against the code):**
@@ -328,6 +328,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _PIC, id_param="id"
     ),
     ("GET", "/api/v1/pictures/{id}/detections"): RoutePolicy(_PIC, id_param="id"),
+    ("GET", "/api/v1/pictures/{id}/faces"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/{field}"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/{id}/anomaly_region"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
@@ -691,6 +692,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("GET", "/api/v1/characters/{id}/reference_pictures"): RoutePolicy(
         _CHAR, id_param="id"
     ),
+    ("GET", "/api/v1/characters/{id}/faces"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/characters/{id}/{field}"): RoutePolicy(_CHAR, id_param="id"),
     ("GET", "/api/v1/projects/{project_name}/characters/{character_name}"): RoutePolicy(
         _CHAR,

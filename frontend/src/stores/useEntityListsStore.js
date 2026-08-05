@@ -150,6 +150,24 @@ export const useEntityListsStore = defineStore("entityLists", () => {
     );
   }
 
+  /**
+   * Does this session have any project information at all?
+   *
+   * The reactive form of `canFetch("projects")`, and the ONE definition of
+   * "this credential was granted no project scope" that the UI reads. A token
+   * scoped to a character, a picture or a set is 403'd by `GET /projects`
+   * (`routes/projects.py` checks `resource_type` before it reads anything), so
+   * its project list is not merely empty; it does not exist. Surfaces that
+   * would otherwise render a project control, a project row or a project count
+   * gate on this and render NOTHING instead: absent project information is
+   * omitted, never shown as an empty menu or an error.
+   *
+   * Deliberately false ONLY for a resource-scoped token. An owner and an
+   * unscoped read-only token both keep every project affordance they had,
+   * because over-blocking is its own regression.
+   */
+  const canSeeProjects = computed(() => canFetch("projects"));
+
   function writeList(kind, rows) {
     lists.value = { ...lists.value, [kind]: rows };
     fetchedAt.value = { ...fetchedAt.value, [kind]: Date.now() };
@@ -292,6 +310,7 @@ export const useEntityListsStore = defineStore("entityLists", () => {
     characters,
     pictureSets,
     projects,
+    canSeeProjects,
     has,
     isLoading,
     // actions

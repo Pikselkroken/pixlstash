@@ -51,6 +51,11 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.routes.pictures import FaceListResponse
+from pixlstash.utils.field_allowlist import (
+    CHARACTER_EXTRA_SERVABLE_FIELDS,
+    require_servable_field,
+)
 from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -1164,9 +1169,52 @@ def create_router(server) -> APIRouter:
         return result
 
     @router.get(
+        "/characters/{id}/faces",
+        summary="List character faces",
+        description=(
+            "Returns the face rows assigned to a character: `id`, `picture_id`, "
+            "`character_id`, `frame_index`, `face_index` and the pixel `xyxy` "
+            "`bbox`.\n\n"
+            "The face **embedding** (`features`) and the embedding's model pack "
+            "are not served."
+        ),
+        response_model=FaceListResponse,
+    )
+    def list_character_faces(request: Request, id: int):
+        # Dedicated, projected replacement for `GET /characters/{id}/{field}`
+        # with field="faces", which served the ORM relationship and therefore
+        # the embedding too (issue #721).
+        #
+        # DECLARED HERE, NOT IN characters_faces.py, AND ORDERING IS
+        # LOAD-BEARING. `server.py` includes this router BEFORE
+        # `characters_faces`, so a GET declared over there would be swallowed by
+        # the `/characters/{id}/{field}` catch-all below. Within this router the
+        # order is definition order, so this must stay ABOVE that route. Its
+        # POST/DELETE siblings live in `characters_faces.py` and are unaffected:
+        # they differ by method, and Starlette falls through a path-only match.
+        def fetch_faces(session: Session):
+            # Ordered by id to reproduce the row set and order that the
+            # `Character.faces` relationship produced on the old path.
+            rows = session.exec(
+                select(Face).where(Face.character_id == id).order_by(Face.id)
+            ).all()
+            return [face.to_public_dict() for face in rows]
+
+        return {"faces": server.vault.db.run_immediate_read_task(fetch_faces)}
+
+    @router.get(
         "/characters/{id}/{field}",
         summary="Get character field",
-        description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
+        description=(
+            "Returns one character field value, including generated thumbnail "
+            "handling for `field=thumbnail`.\n\n"
+            "Only the character's own **columns** are readable here, plus the "
+            "synthesised `thumbnail`. ORM relationship names (`project`, "
+            "`pictures`, `reference_picture_set`) are **not** readable and "
+            "answer `400`; use their dedicated endpoints instead. A `400` means "
+            "'not a readable field' and is distinct from `404` "
+            "('character does not exist') and `403` ('not in this token's scope')."
+        ),
         responses={
             200: {
                 "content": {
@@ -1175,10 +1223,25 @@ def create_router(server) -> APIRouter:
                     },
                     "image/png": {},
                 }
-            }
+            },
+            400: {
+                "description": (
+                    "`field` is not a readable field on this endpoint (a "
+                    "relationship name, or a name the model does not have)."
+                )
+            },
+            404: {"description": "The character does not exist."},
         },
     )
     def get_character_field_by_id(request: Request, id: int, field: str):
+        # Deny-by-default: only the character's own column namespace (plus the
+        # declared exceptions, which include the synthesised ``thumbnail``) is
+        # servable. This runs BEFORE any lookup so the refusal cannot depend on
+        # whether the character exists. Object authorization is not this check's
+        # job and must not be added here -- the AuthzGate has already run
+        # (issue #721, §16.6).
+        require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
+
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
@@ -1410,6 +1473,11 @@ def create_router(server) -> APIRouter:
             logger.debug(
                 "Data type for Character field {}: {}".format(field, type(char))
             )
+            # Backstop only. `require_servable_field` above has already refused
+            # anything outside the column namespace with a 400, and a column
+            # name always resolves to an attribute, so this branch is not
+            # reachable today. Kept because it fails closed if the allowlist and
+            # the model ever disagree; it is NOT the load-bearing check.
             if not hasattr(char, field):
                 raise HTTPException(
                     status_code=404, detail=f"Field {field} not found in Character"

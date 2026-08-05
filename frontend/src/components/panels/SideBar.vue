@@ -37,7 +37,7 @@ import {
   deletePictureSet,
   addPictureToSet,
 } from "../../api/pictureSets";
-import { getProjectSummary, deleteProject } from "../../api/projects";
+import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
   listImportFolders,
@@ -260,8 +260,10 @@ const categoryCounts = ref({
   [UNASSIGNED_PICTURES_ID]: 0,
   [SCRAPHEAP_PICTURES_ID]: 0,
 });
-// Counts keyed by project id (number) or UNASSIGNED_PROJECT_KEY (unassigned in project mode)
-const UNASSIGNED_PROJECT_KEY = "UNASSIGNED";
+// Per-project picture counts, keyed by project id. Populated from the shared
+// project list's `image_count` (see `utils/sidebarCounts.js`) and read by the
+// project tree's count badge only; there is no "unassigned" bucket key, since
+// no row renders one.
 const projectCounts = ref({});
 
 const flashCountsNextFetch = ref(false);
@@ -2602,15 +2604,14 @@ async function fetchSidebarData() {
   } catch (e) {
     console.warn("Error fetching scrapheap images summary:", e);
   }
-  try {
-    const body = await getProjectSummary("UNASSIGNED", undefined, {
-      baseUrl: props.backendUrl,
-    });
-    if (isCurrentRequest())
-      projectCounts.value[UNASSIGNED_PROJECT_KEY] = body.image_count;
-  } catch (e) {
-    console.warn("Error fetching unassigned project count:", e);
-  }
+  // There is deliberately no "pictures in no project" count fetched here.
+  // `GET /projects/UNASSIGNED/summary` used to run on every sidebar refresh and
+  // write `projectCounts[UNASSIGNED]`, which no template has ever rendered.
+  // The tree's only count binding is `projectCounts[p.id]` over real project
+  // rows. It cost the owner a round-trip per refresh for nothing, and for a
+  // token scoped to a character / picture / set it is a project route that
+  // 403s, so it logged a warning on every refresh for a number nobody could
+  // have seen. Reinstating it means adding the row that would display it.
   if (isCurrentRequest()) flashCountsNextFetch.value = false;
 }
 
@@ -4075,8 +4076,15 @@ defineExpose({
         </div>
       </div>
     </div>
+    <!-- The docked counterpart of the Global / Projects / Folders tab strip
+         below, and gated on `scopedResourceType` for the same reason it is:
+         a share token scoped to a character, a picture or a set can read no
+         project list at all, so its Projects flyout is an empty box and its
+         Folders flyout is owner-only. Without this the two sidebar widths
+         disagreed: the expanded one omitted the switcher, the docked one
+         still offered it. -->
     <div
-      v-if="sidebarStore.effectiveDocked"
+      v-if="sidebarStore.effectiveDocked && !scopedResourceType"
       class="sidebar-collapsed-project-wrap"
       ref="projectMenuRef"
       @contextmenu.prevent="openSidebarCtxMenu('empty', null, $event)"
@@ -5368,8 +5376,13 @@ defineExpose({
                   ><v-icon size="18">mdi-trash-can-outline</v-icon></span
                 >
                 <span class="sidebar-list-label">Scrapheap</span>
+                <!-- `?? ""`, not `|| ""`: an empty Scrapheap has a count of 0,
+                     and 0 is an answer, so it renders. Only a count that has
+                     not arrived yet is blank. This is the same distinction
+                     `utils/sidebarCounts.js` is a module to protect, and every
+                     sibling badge here already reads this way. -->
                 <span class="sidebar-list-count">{{
-                  categoryCounts[SCRAPHEAP_PICTURES_ID] || ""
+                  categoryCounts[SCRAPHEAP_PICTURES_ID] ?? ""
                 }}</span>
               </div>
             </div>
@@ -5478,7 +5491,7 @@ defineExpose({
                         active:
                           (selectedCharacterIdSet.size > 0
                             ? selectedCharacterIdSet.has(char.id)
-                            : selectedCharacter === char.id) &&
+                            : selectionStore.selectedCharacter === char.id) &&
                           selectionOwnsHighlight,
                         droppable: dragOverCharacter === char.id,
                       },
@@ -5961,7 +5974,8 @@ defineExpose({
                             active:
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
-                                : selectedCharacter === char.id) &&
+                                : selectionStore.selectedCharacter ===
+                                  char.id) &&
                               selectionOwnsHighlight,
                             droppable: dragOverCharacter === char.id,
                           },
