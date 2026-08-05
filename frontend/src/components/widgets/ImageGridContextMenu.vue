@@ -246,6 +246,7 @@
       <!-- ── Set / Character / Project ─────────────────────────────── -->
       <template v-if="!isScrapheapView">
         <AddToEntityControl
+          v-if="entityLists.canSeeProjects"
           type="project"
           placement="right"
           :backend-url="backendUrl"
@@ -634,6 +635,7 @@ import {
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import AddToEntityControl from "./AddToEntityControl.vue";
 
 const props = defineProps({
@@ -793,6 +795,10 @@ watch(restoreSubmenuOpen, async (isOpen) => {
 });
 
 const snapshotsStore = useSnapshotsStore();
+// A token scoped to a character / picture / set was granted no project scope,
+// so the Project row would open a flyout that lists nothing and POSTs a
+// membership read the server 403s. Omit the row instead of offering a dead one.
+const entityLists = useEntityListsStore();
 const recentSnapshots = computed(() =>
   snapshotsStore.snapshots.filter((cp) => cp.is_compatible).slice(0, 5),
 );

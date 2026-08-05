@@ -15,6 +15,7 @@
     <!-- ── Set / Character / Project ─────────────────────── -->
     <template v-if="!isScrapheapView">
       <AddToEntityControl
+        v-if="entityLists.canSeeProjects"
         ref="ateProjectRef"
         type="project"
         placement="right"
@@ -331,6 +332,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { hashCompareSnapshot } from "../../api/snapshots";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
@@ -388,6 +390,10 @@ const emit = defineEmits([
 
 const snapshotsStore = useSnapshotsStore();
 const lockedSetsStore = useLockedSetsStore();
+// A token scoped to a character / picture / set was granted no project scope,
+// so the Project row would open a flyout that lists nothing and POSTs a
+// membership read the server 403s. Omit the row instead of offering a dead one.
+const entityLists = useEntityListsStore();
 
 const selectionMenuPanelRef = ref(null);
 const selectionPanelFlipped = ref(false);
