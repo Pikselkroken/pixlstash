@@ -441,6 +441,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/characters/{id}                                                       | characters      | Update character                                           |
 | DELETE | /api/v1/characters/{id}                                                       | characters      | Delete character                                           |
 | GET    | /api/v1/characters/{id}                                                       | characters      | Get character by id                                        |
+| GET    | /api/v1/characters/{id}/faces                                                 | characters      | List character faces                                       |
 | GET    | /api/v1/characters/{id}/reference_pictures                                    | characters      | List reference pictures                                    |
 | GET    | /api/v1/characters/{id}/summary                                               | characters      | Get character category summary                             |
 | GET    | /api/v1/characters/{id}/{field}                                               | characters      | Get character field                                        |
@@ -520,6 +521,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}.{ext}                                                   | pictures        | Get original picture file                                  |
 | GET    | /api/v1/pictures/{id}/anomaly_region                                          | pictures        | Locate an anomaly region                                   |
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                     |
+| GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                         |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                       |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                         |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                          |
