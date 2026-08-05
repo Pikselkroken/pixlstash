@@ -607,10 +607,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # Node 22, not the 20 used by the e2e job. `npm test` runs
+      # `node --test "dist-test/test/*.test.js"` with the glob QUOTED, so the
+      # shell does not expand it and the test runner has to — and runner-side
+      # glob support only arrived in Node 22. On 20 this fails with
+      # "Could not find .../dist-test/test/*.test.js" and zero tests run.
+      # 22 also matches electron.yml's build job, @types/node, and the
+      # Dockerfile's frontend builder.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
