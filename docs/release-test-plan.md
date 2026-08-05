@@ -26,7 +26,8 @@ plan; legacy § numbers are still cited in spec titles):
 | §1 Authentication (login/logout, tokens, session persistence) | `auth.spec.js` |
 | §2 Import — drag overlay affordance | `import.spec.js` (drop→import stays manual, see Import section) |
 | §3.1–3.3 Grid display, sort, search | `grid.spec.js`, `grid-browse.spec.js` |
-| §3.5 Context menu opens/lists actions | `context-menu.spec.js` (Selection ▾ parity stays manual, #403) |
+| §3.5 Context menu opens/lists actions | `context-menu.spec.js` |
+| §4 Selection ▾ / context-menu parity (was #403) | `menu-parity.spec.js` |
 | §4 ImageOverlay open/navigate/close | `overlay.spec.js` |
 | §5 Tags add/remove | `tags.spec.js` |
 | §6 Star rating — overlay persist + grid stars + grid↔overlay sync | `rating.spec.js` |
@@ -235,8 +236,6 @@ inside the overlay directory), then launch:
 
 ## 4. Grid & browsing — manual remainder
 
-- [ ] **Selection ▾ / context-menu parity:** select 2+ pictures, compare the Selection ▾ dropdown with the right-click context menu — both must list the same selection-scoped actions.
-  - ⚠️ **Known bug — currently FAILS:** the context menu shows **Restore from snapshot** and **Reverse image search** (and, for a single selection, **Share image** / **Find similar faces**) which Selection ▾ lacks. Tracked in [#403](https://github.com/Pikselkroken/pixlstash/issues/403). Mark ❌ until reconciled.
 - [ ] **Stack badge:** the top-left badge on a stack leader shows the member count; clicking it expands the members **in the correct stacking order**, clicking again collapses (the View-menu expand/collapse path is automated; the badge click and visual order are not)
 
 ---
@@ -327,9 +326,19 @@ Two tabs or devices as the same owner (A observes, B mutates):
 - [ ] DevTools → Offline, wait, → Online — the WebSocket reconnects and the grid recovers
 - [ ] ⚠️ **Known gap:** events during the offline window are lost (no replay). Mark ✅ if reconnect itself recovers; note the gap.
 
-### 10.4 Storage-denied clientId
+### 10.4 Storage-denied clientId — not a release check
 
-- [ ] In a private window (or with `sessionStorage` blocked): make an own change, reload immediately — a pill may wrongly appear for the in-flight echo. ⚠️ Documented narrow limitation (#501), not a regression.
+**Nothing to test here.** In a private window (or with `sessionStorage`
+blocked) the per-tab client id cannot persist, so it regenerates on reload and
+an in-flight echo of a pre-reload own change can raise a pill. This is
+**accepted permanent behaviour**, not an open defect: [#501](https://github.com/Pikselkroken/pixlstash/issues/501)
+was closed on that basis, because the only fixes available either break the
+per-tab uniqueness the id exists for (`localStorage`) or invent a fingerprint.
+
+Re-confirming it every release costs a tester several minutes to reproduce a
+result that is known in advance and cannot change without a deliberate design
+decision. It is recorded here so the behaviour is not mistaken for a
+regression when someone stumbles into it — not so that anyone goes looking.
 
 ---
 

@@ -62,20 +62,25 @@ shrinks as automated coverage grows.
 | reflows the grid when the column count changes | Column slider changes `grid-template-columns` track count (§3.1) | ✅ |
 | search filters, records history, then resets | Search narrows results, term enters history, clearing restores all (§3.3) | ✅ |
 
-## Selection ▾ / Context Menu Parity — manual (plan §3.5)
+## Selection ▾ / Context Menu Parity — `menu-parity.spec.js` (plan §4)
 | Test | Covers | Status |
 |------|--------|--------|
-| both menus list the same items for a set of pictures | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | 📝 |
+| both menus list the same actions for a multi-picture selection | Selection ▾ dropdown (`.selection-menu-panel`) and right-click context menu (`.image-ctx-menu`) expose identical selection-scoped actions for the same multi-picture selection | ✅ |
 
-> 📝 **Not automated — no parity spec exists.** The right-click context menu is
-> automated on its own (see the `context-menu.spec.js` section below); the
-> Selection ▾ ↔ context-menu *parity comparison* is manual only.
-> **Known gap — [#403](https://github.com/Pikselkroken/pixlstash/issues/403):**
-> the context menu has actions the Selection ▾ menu lacks — **Restore from
-> snapshot** and **Reverse image search** (plus, for a single selection,
-> **Share image** / **Find similar faces**). Keep this ❌ manually until the
-> menus are reconciled. (Toolbar.vue documents the Selection menu as "mirrors the
-> right-click context menu exactly", so the source intent is parity.)
+> **Why this is automated rather than trusted.** The two menus are separate
+> components (`SelectionMenu.vue`, `ImageGridContextMenu.vue`) that mirror each
+> other by convention — `SelectionMenu.vue` carries a "mirrors
+> ImageGridContextMenu.vue" comment over duplicated handlers. Nothing
+> structural keeps them in step, and the drift has happened twice:
+> [#403](https://github.com/Pikselkroken/pixlstash/issues/403) (Restore from
+> snapshot, Reverse image search) and then **Segment**, which this spec caught
+> on its first run and which was fixed in the same change that added it.
+>
+> Scope is the **multi-picture** selection. Three context-menu items — Share
+> image, Find similar faces, Remove all shares — are deliberately context-only:
+> they act on the specific right-clicked image and its per-image face/share
+> state, which a selection-scoped dropdown has no single target for. They drop
+> out of the context menu above one picture, and the spec asserts that they do.
 
 ## Picture Detail (ImageOverlay) — `overlay.spec.js` (plan §4)
 | Test | Covers | Status |
@@ -279,11 +284,12 @@ Tracked so they aren't forgotten — weighted by blast radius:
 - **Image plugins** — applying a plugin and asserting an output picture
   appears is automatable; the "visibly blurrier/brighter" judgement is not.
   Currently fully manual (plan section 7).
-- **Selection ▾ ↔ context-menu parity is not automated.** `context-menu.spec.js`
-  opens the right-click menu and lists its actions, but no spec compares the two
-  menus' *item lists*, and none clicks through each action. Tracked as the #403
-  parity gap (see the "Selection ▾ / Context Menu Parity" section above). Once
-  #403 is fixed, consider a parity spec plus asserting representative actions fire.
+- **Menu parity is asserted, but no spec clicks through each action.**
+  `menu-parity.spec.js` compares the two menus' item *lists* for a multi-picture
+  selection, which is what caught #403's recurrence. It does not invoke the
+  actions, so an item present in both menus but wired to the wrong handler in
+  one of them would still pass. Asserting that representative actions actually
+  fire is the remaining gap.
 - **Review Sessions — partial loop automation + manual-only signals (plan §20).**
   The board is automated (`review-board.spec.js`, 9 cases). The session loop is
   **partly automated**: create, binary decide, and Escape-close run green
