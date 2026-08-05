@@ -7,6 +7,7 @@ library 1, and a lost hub costs preferences rather than pictures.
 
 import os
 import sqlite3
+import stat
 import threading
 import time
 
@@ -19,6 +20,7 @@ from pixlstash.hub.bootstrap import (
     prepare_legacy_identity,
     prevalidate_library_fingerprint,
 )
+from pixlstash.hub.db import HubDatabase, HubPermissionError
 from pixlstash.hub.registry import LibraryRegistry, read_vault_uuid
 
 
@@ -73,8 +75,6 @@ def vault_query(folder, sql):
 
 
 def bootstrap_upgrade(library_folder, hub_path, *, finalize=True):
-    from pixlstash.hub.db import HubDatabase
-
     preparer_hub = HubDatabase(hub_path)
     prepare_legacy_identity(preparer_hub, library_folder)
     preparer_hub.close()
@@ -222,6 +222,53 @@ class TestFreshInstall:
         assert result.migrated is False
         assert os.path.isdir(image_root)
         result.hub.close()
+
+    def test_hub_directory_is_created_private_under_a_group_writable_umask(
+        self, tmp_path, monkeypatch
+    ):
+        """A stock Ubuntu umask must not lock the very first run out of its hub.
+
+        umask 002 is the Debian/Ubuntu default (every user has their own group).
+        Creating the config directory under it yields 0775, and
+        ``TrustedSQLiteLocation`` refuses a group-writable ancestor, so the hub
+        would refuse to open the directory it had just created. Every missing
+        component must be 0700, not only the leaf: the guard walks the whole
+        chain, so an intermediate created by ``parents=True`` fails it too.
+        """
+        monkeypatch.setattr(os, "umask", lambda _mask: 0o002)
+        os.umask(0o002)
+        try:
+            os.chmod(tmp_path, 0o700)
+            # Two missing components, so the leaf-only mode of
+            # Path.mkdir(parents=True, mode=...) would leave "fresh" at 0775.
+            hub_path = tmp_path / "fresh" / "nested" / "hub.db"
+
+            hub = HubDatabase(str(hub_path))
+
+            for directory in (hub_path.parent.parent, hub_path.parent):
+                mode = stat.S_IMODE(directory.stat().st_mode)
+                assert mode == 0o700, f"{directory} is {oct(mode)}, expected 0o700"
+            hub.close()
+        finally:
+            os.umask(0o022)
+
+    def test_existing_loose_hub_directory_is_reported_not_silently_repaired(
+        self, tmp_path
+    ):
+        """A permission someone else loosened is an event the operator must see.
+
+        Same rule ``check_file_mode`` follows for the hub file: the server
+        raises rather than tightening in place, because silently fixing it hides
+        that it ever happened.
+        """
+        os.chmod(tmp_path, 0o700)
+        parent = tmp_path / "loose"
+        parent.mkdir(mode=0o775)
+
+        with pytest.raises(HubPermissionError, match="group/world-writable"):
+            HubDatabase(str(parent / "hub.db"))
+
+        assert stat.S_IMODE(parent.stat().st_mode) == 0o775
 
     def test_existing_foreign_vault_is_not_an_implicit_identity_source(self, tmp_path):
         hub_path = str(tmp_path / "hub.db")
