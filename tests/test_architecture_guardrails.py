@@ -803,6 +803,147 @@ def test_all_routes_declare_access_policy(built_app):
     )
 
 
+# ---------------------------------------------------------------------------
+# Guardrail: the written coverage matrix matches the registry, row for row
+# ---------------------------------------------------------------------------
+
+COVERAGE_MATRIX_MD = REPO_ROOT / "docs" / "reviews" / "authz-coverage-matrix.md"
+
+# Sections of the matrix document whose tables carry one row per declared route.
+# The main table plus the conditionally-mounted waiver table together must
+# account for every key in ROUTE_POLICIES.
+_MATRIX_ROW_SECTIONS = (
+    "## The matrix (one row per route)",
+    "## Conditionally-mounted routes",
+)
+
+# | METHOD | `/effective/path` | policy | ... |. The policy cell may be wrapped in
+# ** or ` for emphasis, which carries no meaning and is stripped.
+_MATRIX_ROW_RE = re.compile(
+    r"^\|\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\|"
+    r"\s*`([^`]+)`\s*\|"
+    r"\s*([^|]*?)\s*\|"
+)
+
+
+def _parse_coverage_matrix_rows() -> list[tuple[str, str, str, int]]:
+    """Extract (method, path, policy, line_no) from the matrix document's tables.
+
+    Only lines inside the row-bearing sections are considered, so the many
+    narrative tables elsewhere in the document (policy meanings, sign-off
+    findings) cannot contribute phantom rows.
+    """
+    text = COVERAGE_MATRIX_MD.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    rows: list[tuple[str, str, str, int]] = []
+    sections_found = 0
+    inside = False
+    for lineno, line in enumerate(lines, start=1):
+        if line.startswith("## "):
+            inside = any(line.startswith(h) for h in _MATRIX_ROW_SECTIONS)
+            if inside:
+                sections_found += 1
+            continue
+        if not inside:
+            continue
+        match = _MATRIX_ROW_RE.match(line)
+        if match:
+            method, path, policy = match.groups()
+            rows.append(
+                (method, path, policy.replace("*", "").replace("`", "").strip(), lineno)
+            )
+
+    # FAIL-LOUD anti-vacuity: this test's whole value is that it actually reads
+    # the document. A renamed heading or a reformatted table would otherwise
+    # silently reduce it to comparing two empty sets and passing.
+    assert sections_found == len(_MATRIX_ROW_SECTIONS), (
+        f"Expected to find {len(_MATRIX_ROW_SECTIONS)} row-bearing section heading(s) in "
+        f"{COVERAGE_MATRIX_MD.relative_to(REPO_ROOT).as_posix()} but found {sections_found}. "
+        "A heading was renamed; update _MATRIX_ROW_SECTIONS so the rows are still parsed."
+    )
+    assert len(rows) >= 200, (
+        f"Parsed only {len(rows)} route row(s) from the coverage matrix. The document "
+        "declares well over 200, so the row regex has stopped matching the table format. "
+        "Fix _MATRIX_ROW_RE rather than letting this comparison go vacuous."
+    )
+    return rows
+
+
+def test_coverage_matrix_document_matches_the_registry():
+    """The written matrix is machine-checked against ROUTE_POLICIES, both ways.
+
+    docs/reviews/authz-coverage-matrix.md is the human-readable coverage matrix
+    the security process depends on ("completeness must be arithmetic, not
+    judgement"). Before this test nothing read it: the sibling
+    test_all_routes_declare_access_policy compares the registry against the
+    *live app* and never opens the markdown, so the document was free to drift
+    from the code it claims to document, and it did: six declared routes had no
+    row at all and one row was duplicated.
+
+    Failing in BOTH directions is the point. A new route that lands a registry
+    declaration but no row leaves the matrix incomplete, which is exactly the
+    BOLA-by-omission mechanism this repo has shipped three times; a row with no
+    declaration means the document asserts coverage that does not exist. The
+    policy check catches the subtler drift: a row that exists but names the
+    wrong access level is worse than a missing row, because it reads as
+    reviewed.
+    """
+    from pixlstash.authz.registry import ROUTE_POLICIES
+
+    rows = _parse_coverage_matrix_rows()
+
+    seen: dict[tuple[str, str], int] = {}
+    duplicated: list[str] = []
+    for method, path, _policy, lineno in rows:
+        key = (method, path)
+        if key in seen:
+            duplicated.append(f"  {method} {path} (lines {seen[key]} and {lineno})")
+        else:
+            seen[key] = lineno
+
+    assert not duplicated, (
+        "Route(s) appear more than once in the coverage matrix. Duplicated rows break the "
+        "'one row per route' arithmetic and let two rows disagree about a policy:\n"
+        + "\n".join(duplicated)
+    )
+
+    tabled = set(seen)
+    declared = set(ROUTE_POLICIES)
+
+    missing_rows = declared - tabled
+    assert not missing_rows, (
+        "Route(s) are declared in ROUTE_POLICIES but have no row in "
+        f"{COVERAGE_MATRIX_MD.relative_to(REPO_ROOT).as_posix()}. The matrix is the "
+        "artefact the security review reads; a declaration with no row is coverage that "
+        "was never written down:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(missing_rows))
+    )
+
+    orphan_rows = tabled - declared
+    assert not orphan_rows, (
+        "Coverage-matrix row(s) name a route that is not declared in ROUTE_POLICIES "
+        "(route removed or renamed, or the path is mistyped). The document is claiming "
+        "coverage that does not exist:\n"
+        + "\n".join(f"  {m} {p}" for m, p in sorted(orphan_rows))
+    )
+
+    policy_drift: list[str] = []
+    for method, path, policy, lineno in rows:
+        actual = ROUTE_POLICIES[(method, path)].policy.name.lower()
+        if policy.lower() != actual:
+            policy_drift.append(
+                f"  line {lineno}: {method} {path}: document says {policy!r}, "
+                f"registry says {actual!r}"
+            )
+
+    assert not policy_drift, (
+        "Coverage-matrix row(s) name a different access policy than the registry enforces. "
+        "A row that reads as reviewed but states the wrong access level is worse than a "
+        "missing row:\n" + "\n".join(policy_drift)
+    )
+
+
 def test_route_enumeration_is_not_silently_undercounting(built_app):
     """FAIL-LOUD: the enumeration cannot collapse and fake complete coverage.
 
