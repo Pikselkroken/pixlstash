@@ -449,7 +449,7 @@
               class="bar-btn bar-btn--icon tb-export-btn tb-fold-700"
               :class="{ 'bar-btn--open': exportStore.exportMenuOpen }"
               type="button"
-              title="Export current grid to zip"
+              :title="exportActionLabel('Export current grid to zip')"
             >
               <v-icon size="20">mdi-tray-arrow-down</v-icon>
             </button>
@@ -543,7 +543,7 @@
               "
             >
               <v-icon size="18">mdi-tray-arrow-down</v-icon>
-              <span>Export grid to zip</span>
+              <span>{{ exportActionLabel("Export grid to zip") }}</span>
             </button>
             <button
               v-if="!isReadOnly"
@@ -609,7 +609,9 @@
              bar's D-S2): proximity alone cannot separate identical 32px
              icon buttons into "this view's tools" and "the app's chrome". -->
         <div class="bar-separator"></div>
-        <UndoControl v-if="!isReadOnly" />
+        <!-- Mounted in a read-only session too, inert: the demo has to
+             show that undo exists. UndoControl owns that state. -->
+        <UndoControl />
         <!-- ── Toolbar: Settings + stats toggle (shared with the duplicates
              queue, which is why they live in their own component). Never
              folds (amendment #2); the activity dot stays first-class on the
@@ -731,6 +733,19 @@ watch(
   },
   { immediate: true },
 );
+
+// ── Toolbar: Export ────────────────────────────────────────────────────────────
+// The export follows the grid's own selection: with a subset selected,
+// ImageGrid.exportCurrentViewToZip sends those ids and nothing else. Name that
+// subset on the control, so the user knows what lands in the zip before opening
+// the panel (whose count is only refreshed once the menu is already open).
+// `idle` is the caller's whole-grid wording, which differs between the button's
+// tooltip and the overflow row.
+function exportActionLabel(idle) {
+  const count = Number(props.selectedCount) || 0;
+  if (count <= 0) return idle;
+  return `Export ${count} picture${count === 1 ? "" : "s"} to zip`;
+}
 
 const tbComfyuiMenuOpen = ref(false);
 // ── Grid Bar: Sort ─────────────────────────────────────────────────────────────

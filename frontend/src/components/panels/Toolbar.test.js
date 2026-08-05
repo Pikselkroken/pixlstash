@@ -311,16 +311,57 @@ describe("Toolbar — the canonical app-wide tail", () => {
     expect(wrapper.findAllComponents({ name: "UndoControl" })).toHaveLength(1);
   });
 
-  it("drops UndoControl in a read-only session, tail otherwise intact", () => {
+  // A read-only session KEEPS the control and inerts it (the demo has to show
+  // that undo exists), so the tail is the same shape at every access level.
+  // UndoControl owns the disabled state; this pins only that it is still here.
+  it("keeps UndoControl in a read-only session, tail otherwise intact", () => {
     readOnlyRef.value = true;
     const wrapper = mountToolbar();
-    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(
-      false,
-    );
+    expect(wrapper.findComponent({ name: "UndoControl" }).exists()).toBe(true);
     expect(wrapper.findComponent({ name: "TbGlobalActions" }).exists()).toBe(
       true,
     );
     expect(wrapper.find(".tb-overflow").exists()).toBe(true);
+  });
+});
+
+// The zip holds the grid's selection when there is one (ImageGrid's
+// exportCurrentViewToZip sends the selected ids and nothing else), so the
+// control has to name that subset instead of promising the whole grid.
+describe("Toolbar — the export control names what it will export", () => {
+  const exportTitle = (wrapper) =>
+    wrapper
+      .findAll("button.tb-export-btn")
+      .map((b) => b.attributes("title"))
+      .at(0);
+
+  it("offers the whole grid while nothing is selected", () => {
+    expect(exportTitle(mountToolbar({ selectedCount: 0 }))).toBe(
+      "Export current grid to zip",
+    );
+  });
+
+  it("counts the selection when a subset of the grid is selected", () => {
+    expect(exportTitle(mountToolbar({ selectedCount: 12 }))).toBe(
+      "Export 12 pictures to zip",
+    );
+  });
+
+  it("stays singular for one picture", () => {
+    expect(exportTitle(mountToolbar({ selectedCount: 1 }))).toBe(
+      "Export 1 picture to zip",
+    );
+  });
+
+  it("carries the same count into the folded ⋯ row", async () => {
+    const wrapper = mountToolbar({ selectedCount: 3 });
+    await wrapper.find(".tbo-trigger").trigger("click");
+    const labels = wrapper
+      .find(".tbo-panel")
+      .findAll(".tbm-action")
+      .map((b) => b.text());
+    expect(labels).toContain("Export 3 pictures to zip");
+    expect(labels).not.toContain("Export grid to zip");
   });
 });
 
