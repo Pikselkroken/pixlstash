@@ -1473,15 +1473,7 @@ Deliberately **not** equalised — that is a runtime change to a hot read path, 
 
 #### PARTIALLY CLOSED (#719): a picture's scalar `project_id` is narrowed on every picture-row *projection*
 
-**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. It does **not** close the confidentiality boundary those routes are named after, because the two generic field readers also serve the ORM **relationship** namespace, which no projection constrains. Reproduced 2026-08-05 with a `picture`-scoped token:
-
-```
-GET /projects/1            -> 403
-GET /pictures/1/project_id -> {"project_id": null}          # closed by #719
-GET /pictures/1/projects   -> {"projects":[{"id":1,"name":"P1",...}]}   # still open
-```
-
-`Picture.projects` is a `Relationship` and `safe_model_dict` recurses into relationships, so `select_fields=[field]` does not bound the response. The same shape holds for `GET /pictures/{id}/picture_sets` (set names, plus `project_id` again on a sibling key) and for the character twin, `GET /characters/{id}/project` and `GET /characters/{id}/pictures` — the latter serving full `Picture` rows off the relationship, bypassing every narrowing site in the codebase. Tracked as its own issue; the durable fix is an allowlist of servable field names on both readers, not another `if field == ...` branch. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it".
+**Scope of the claim, precisely.** #719 closes the six routes below, which build their payload from `Picture.metadata_fields()` or an explicit `select_fields`. On its own it did **not** close the confidentiality boundary those routes are named after, because the two generic field readers also served the ORM **relationship** namespace, which no projection constrains. That second half is #721, closed below. Do not read the table below as "the id is unreachable" — read it as "these six projections narrow it", and read §*The generic by-name readers serve the column namespace only* for why the sibling name no longer reaches around them.
 
 **Six routes**, all verified by reproduction on 2026-08-04 with a `picture_set`-scoped token whose set is in a project the token cannot see (`GET /projects/{that_id}` 403s it), and all closed by #719:
 
@@ -1516,6 +1508,68 @@ Deriving from the join table rather than intersecting the raw scalar is delibera
 - **Residual (open): the response models provide no containment.** `PictureFullMetadataResponse`, `PictureMetadataResponse` and `LikenessGroupResponse` all set `extra="allow"`, so the handler narrowing is the only filter on these six routes. Flipping any of them to `extra="ignore"` would drop ~40 undeclared metadata columns and gut the endpoint, so it is a schema project, not a one-line hardening.
 - **Residual (open): `GET /pictures` and `GET /pictures/stream` stay clean only via `GridPicture`.** They still select `project_id` and are filtered solely by the response model, as described above. Widening `GridPicture` or dropping the `response_model=` re-opens them silently.
 - **Owner:** backend (`senior-backend-developer`), tracked on issue #719.
+
+#### CLOSED (#721): the generic by-name readers serve the column namespace only
+
+`GET /pictures/{id}/{field}` and `GET /characters/{id}/{field}` hand back an attribute by name and end in `safe_model_dict(getattr(obj, field))`, which recurses into SQLModel instances, lists and `CollectionAdapter`s. `select_fields=[field]` therefore did **not** bound the response: a *relationship* name was served as whole related rows, reaching past every projection and every narrowing site in the codebase. Reproduced 2026-08-05 with the gate enforcing (`picture`-scoped token on picture 1, `character`-scoped token on character 1), each alongside the `403` the same token gets on `GET /projects/1`:
+
+```
+GET /pictures/1/project_id    -> {"project_id": null}                       # closed by #719
+GET /pictures/1/projects      -> {"projects":[{"id":1,"name":"P1",...},…]}  # was OPEN
+GET /pictures/1/picture_sets  -> [{"name":"SharedSet","project_id":1,…}]    # was OPEN
+GET /pictures/1/characters    -> [{"name":"SharedChar","project_id":1,…}]   # was OPEN
+GET /characters/1/project     -> {"project":{"id":1,"name":"P1",…}}         # was OPEN
+GET /characters/1/pictures    -> full Picture rows: project_id, file_path,  # was OPEN
+                                 pixel_sha, original_file_name, metadata_hash,
+                                 comfyui_positive_prompt, comfyui_loras, …
+```
+
+The last is the largest single payload in the class: served straight off `Character.pictures`, it bypasses `Picture.metadata_fields()`, every response model and `narrow_picture_project_ids` alike. `GET /pictures/{id}/characters` was not in the original report and was found while reproducing.
+
+**The fix is a deny-by-default allowlist, not another `if field == …` branch** — [`utils/field_allowlist.py`](../pixlstash/utils/field_allowlist.py), called as the **first statement** of both handlers. The servable set is `Model.scalar_fields()` (the model's own column namespace) plus a small pinned exception set, so a future relationship is refused with no code change and a future column needs none either. This mirrors the gate's own posture (§16.2) at the level the gate cannot reach: the gate answers "may this token reach this *object*", runs before the handler and never sees the response, so it cannot bound *which attributes* come back. **This is response-shape validation, not authorization** — it takes no request, no token and no session, and must never grow into a second scope ladder.
+
+The refusal is **`400`**, deliberately, and the three properties are asserted rather than assumed:
+
+- **Not an object-existence oracle.** The check runs before any database read, so `GET /pictures/999999/projects` and `GET /pictures/1/projects` return byte-identical responses. The cross-token case was never this handler's: the gate 403s an out-of-scope object before the handler runs, whatever the field name.
+- **Not a namespace oracle.** A relationship name and a typo get the same status and the same body template, so the response does not enumerate the model's relationships.
+- **Distinguishable for a client, which `404` would not be.** `400` = not a readable field (render nothing, do not raise), `404` = object does not exist, `403` = not in this token's scope, `5xx` = server fault. `404` would have collided with "Picture not found" and forced clients to string-match `detail`; `403` would have been wrong twice over (not an authorization decision, and it collides with the gate's own 403).
+
+**The full contract, both readers.** A client can branch on the status alone; no `detail` string-matching is required. `{field}` is whatever the caller put in the path segment.
+
+| Field category | Status | Body |
+|---|---|---|
+| Column, ordinary (`width`, `name`, `file_path`, `description`, …) | `200` | `{"<field>": <value>}` |
+| Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`) — value present | `200` | `{"<field>": "<base64>"}` |
+| Column, large binary — value `NULL` | `500` | *(pre-existing bug, see residuals)* |
+| `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}` — narrowed per #719 / R1b |
+| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| `faces`, both readers (declared exception) | `200` | `{"faces": [ … ]}` |
+| **Relationship** (`projects`, `picture_sets`, `characters`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
+| Object does not exist, **denied** field | `400` | identical to the denied-field row — the check runs before the lookup |
+| Object outside the token's scope, any field | `403` | the AuthzGate's own body, e.g. `{"detail": "Token is not authorised for this picture"}` |
+
+Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`.
+
+**Three exceptions across the two readers are declared, pinned and justified**, because denying them would break shipping consumers and none has a dedicated endpoint to move to yet:
+
+| Reader | Exception | Why | Follow-up |
+|---|---|---|---|
+| picture | `faces` (relationship) | `frontend/src/api/pictures.js::listPictureFaces` — the lightbox face-box overlay; also `tests/utils.py::wait_for_faces`. There is **no** `GET /pictures/{id}/faces` route, only `POST /pictures/{id}/face`. | give the overlay a dedicated projected endpoint, then drop the exception (#721) |
+| character | `thumbnail` (synthetic) | not a column at all — the handler generates a 64×64 face crop. Live frontend call (`api/characters.js:193`), and the server hands the SPA these URLs itself. | none; it is a genuine endpoint that happens to live in this handler |
+| character | `faces` (relationship) | `tests/test_server.py`; `/characters/{id}/faces` is `POST`/`DELETE` only. | same as the picture twin |
+
+Serving `faces` is a materially narrower disclosure than the project/set/character relationships now refused — `Face` rows of the caller's *own* object (`picture_id`, `character_id`, `bbox`, and the `features` embedding) — but it is not nothing, and it is why the exception set is not empty.
+
+**One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
+
+**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py`: every relationship is refused for owner *and* scoped token, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening — `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants — a relationship added to the exception set, and the `require_servable_field` call deleted from the handler — were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+
+- **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
+- **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
+- **Residual (open): `faces` still serves the face embedding**, and is still a relationship on both readers. See the exception table.
+- **Owner:** backend (`senior-backend-developer`), tracked on issue #721.
 
 ---
 
