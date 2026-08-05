@@ -51,6 +51,10 @@ from pixlstash.services.project_membership_service import (
 )
 from pixlstash.services.set_lock_service import locked_picture_ids
 from pixlstash.services.stack_membership import expand_picture_ids_to_stacks
+from pixlstash.utils.field_allowlist import (
+    CHARACTER_EXTRA_SERVABLE_FIELDS,
+    require_servable_field,
+)
 from pixlstash.utils.http_cache import conditional_file_response
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
@@ -1114,7 +1118,16 @@ def create_router(server) -> APIRouter:
     @router.get(
         "/characters/{id}/{field}",
         summary="Get character field",
-        description="Returns one character field value, including generated thumbnail handling for field=thumbnail.",
+        description=(
+            "Returns one character field value, including generated thumbnail "
+            "handling for `field=thumbnail`.\n\n"
+            "Only the character's own **columns** are readable here, plus the "
+            "synthesised `thumbnail`. ORM relationship names (`project`, "
+            "`pictures`, `reference_picture_set`) are **not** readable and "
+            "answer `400`; use their dedicated endpoints instead. A `400` means "
+            "'not a readable field' and is distinct from `404` "
+            "('character does not exist') and `403` ('not in this token's scope')."
+        ),
         responses={
             200: {
                 "content": {
@@ -1123,10 +1136,25 @@ def create_router(server) -> APIRouter:
                     },
                     "image/png": {},
                 }
-            }
+            },
+            400: {
+                "description": (
+                    "`field` is not a readable field on this endpoint (a "
+                    "relationship name, or a name the model does not have)."
+                )
+            },
+            404: {"description": "The character does not exist."},
         },
     )
     def get_character_field_by_id(request: Request, id: int, field: str):
+        # Deny-by-default: only the character's own column namespace (plus the
+        # declared exceptions, which include the synthesised ``thumbnail``) is
+        # servable. This runs BEFORE any lookup so the refusal cannot depend on
+        # whether the character exists. Object authorization is not this check's
+        # job and must not be added here -- the AuthzGate has already run
+        # (issue #721, §16.6).
+        require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
+
         if field == "thumbnail":
             thumbnail_cache_version = 6
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
@@ -1358,6 +1386,11 @@ def create_router(server) -> APIRouter:
             logger.debug(
                 "Data type for Character field {}: {}".format(field, type(char))
             )
+            # Backstop only. `require_servable_field` above has already refused
+            # anything outside the column namespace with a 400, and a column
+            # name always resolves to an attribute, so this branch is not
+            # reachable today. Kept because it fails closed if the allowlist and
+            # the model ever disagree; it is NOT the load-bearing check.
             if not hasattr(char, field):
                 raise HTTPException(
                     status_code=404, detail=f"Field {field} not found in Character"
