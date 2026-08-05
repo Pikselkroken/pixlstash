@@ -1543,32 +1543,39 @@ The refusal is **`400`**, deliberately, and the three properties are asserted ra
 | Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
 | `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
 | `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
-| `faces`, both readers (declared exception) | `200` | `{"faces": [ … ]}` |
-| **Relationship** (`projects`, `picture_sets`, `characters`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
+| **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
 | Object does not exist, **denied** field | `400` | identical to the denied-field row; the check runs before the lookup |
 | Object outside the token's scope, any field | `403` | the AuthzGate's own body, e.g. `{"detail": "Token is not authorised for this picture"}` |
 
-Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`.
+Relationship names that a *dedicated* GET route shadows never reach this handler and keep their own contract: `GET /pictures/{id}/faces`, `/detections`, `/tags`, `/tag_predictions`, `/{picture_id}/stack`, and `GET /characters/{id}/faces`.
 
-**Three exceptions across the two readers are declared, pinned and justified**, because denying them would break shipping consumers and none has a dedicated endpoint to move to yet:
+**Exactly one exception remains, and it is not a relationship.** `PICTURE_EXTRA_SERVABLE_FIELDS` is now **empty**; `CHARACTER_EXTRA_SERVABLE_FIELDS` holds only `thumbnail`, which is synthetic (the handler generates a 64x64 face crop and returns image bytes, it is not a `Character` column) and therefore discloses no related rows. It stays because the SPA calls it (`api/characters.js:193`) and the server hands out `/characters/{id}/thumbnail` URLs itself.
 
-| Reader | Exception | Why | Follow-up |
+`faces` briefly sat in both sets, because the SPA's face-box overlay and `tests/utils.py::wait_for_faces` read it and no other route served it. **That is now the worked example of the right fix**: instead of keeping a relationship exception, `faces` got dedicated projected routes and the exception was emptied back out.
+
+| New route | Policy | Serves | Withholds |
 |---|---|---|---|
-| picture | `faces` (relationship) | `frontend/src/api/pictures.js::listPictureFaces`, the lightbox face-box overlay; also `tests/utils.py::wait_for_faces`. There is **no** `GET /pictures/{id}/faces` route, only `POST /pictures/{id}/face`. | give the overlay a dedicated projected endpoint, then drop the exception (#721) |
-| character | `thumbnail` (synthetic) | not a column at all; the handler generates a 64x64 face crop. Live frontend call (`api/characters.js:193`), and the server hands the SPA these URLs itself. | none; it is a genuine endpoint that happens to live in this handler |
-| character | `faces` (relationship) | `tests/test_server.py`; `/characters/{id}/faces` is `POST`/`DELETE` only. | same as the picture twin |
+| `GET /pictures/{id}/faces` (`routes/pictures/_faces.py`) | `PICTURE_SCOPED`, `id_param="id"` | `{"faces": [{id, picture_id, character_id, frame_index, face_index, bbox}]}` | `features` (the ArcFace embedding), `model_pack` |
+| `GET /characters/{id}/faces` (`routes/characters.py`) | `CHARACTER_SCOPED`, `id_param="id"` | same shape | same |
 
-Serving `faces` is a materially narrower disclosure than the project/set/character relationships now refused (`Face` rows of the caller's *own* object: `picture_id`, `character_id`, `bbox`, and the `features` embedding), but it is not nothing, and it is why the exception set is not empty.
+Design notes, each of which is a trap someone will otherwise re-open:
+
+- **The wire shape is unchanged** (`{"faces": [...]}`), so no frontend change was needed. The SPA reads only `frame_index`, `bbox` and `character_id`.
+- **`model_pack` is withheld deliberately.** It is not biometric, but it names the embedding model (`buffalo_l` / `auraface`) and so tells a caller how embeddings obtained elsewhere could be compared against these. No consumer reads it (verified across `frontend/src`, `tests/`, `pixlstash/`, `scripts/`: every hit is server-side model loading). Add it back only with a named consumer.
+- **Registration order is load-bearing.** FastAPI matches in registration order, so a dedicated route registered *after* the `/{id}/{field}` catch-all is dead code that silently never runs. `_faces` is registered before `_crud` in `routes/pictures/__init__.py`; on the character side `server.py` includes `characters` **before** `characters_faces`, so the GET had to be declared in `characters.py` itself, above the by-name route, rather than alongside its `POST`/`DELETE` siblings. Pinned by `test_dedicated_faces_routes_are_declared_and_not_shadowed`, which was confirmed to fail when `_faces` is moved after `_crud`.
+- **Sentinel rows are still served.** `Face.find` filters out `face_index == -1`, the relationship did not, and `wait_for_faces` returns as soon as the list is non-empty; using `Face.find` would turn a picture with no detectable face into a full poll timeout in three suites. The routes use a plain `select` ordered by `Face.id`, reproducing the old row set and order.
+- **`bbox` is unchanged on the wire.** It comes off the `bbox_` text column through the `Face.bbox` property, which does the same `json.loads` that `safe_model_dict`'s trailing-underscore branch did.
+- **The projection is filtered twice**, by `Face.to_public_dict()` and again by `response_model=FaceListResponse` (`extra="ignore"`). That redundancy hides bugs from wire-level tests: putting `features` back into `to_public_dict` still yields a clean HTTP response, verified. `test_face_to_public_dict_is_the_first_filter` asserts the projection directly for that reason.
 
 **One dead branch was removed while doing this.** The picture reader had a `field == "thumbnail"` branch returning `pic.thumbnail`. `Picture` has no `thumbnail` attribute (thumbnails are files, served by `GET /pictures/thumbnails/{id}.webp`), so that branch raised `AttributeError` → **500** on every call. It is gone; the name now answers the same `400` as any other non-column. The character reader's `thumbnail` is unaffected and still returns image bytes.
 
-**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py`: every relationship is refused for owner *and* scoped token, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
+**Both directions are pinned** in `tests/test_generic_field_reader_allowlist.py` (20 tests): every relationship is refused for owner *and* scoped token, the two projected `faces` routes serve their consumers under both an owner and a scoped token while an out-of-scope object still 403s, **and** columns, the large-binary base64 branch, the synthetic character `thumbnail`, and #719's narrowed `project_id` all still answer (over-blocking is its own regression). Two guardrails stop the class reopening: `test_no_new_relationship_becomes_servable` (a relationship added to either model is denied by default; carries anti-vacuity assertions on both enumerations) and `test_declared_servable_exceptions_are_pinned` (the exception set cannot grow silently). Both mutants (a relationship added to the exception set, and the `require_servable_field` call deleted from the handler) were confirmed to fail these tests. The suite subtracts relationship names that a *dedicated* GET route shadows (`detections`, `tags`, `tag_predictions`, `stack`), derived from `route_inventory.api_endpoint_set` rather than a hand-kept list.
 
 - **Residual (open): the column namespace is still wide.** Allowlisting every column still serves `pending_character_id`, `source_picture_id` and `reference_folder_id`, already recorded as known disclosures by `test_picture_metadata_fields_membership_is_pinned`. Narrowing the column set itself is the #719 residual above, not this change.
 - **Residual (open): the large-binary branch 500s on a NULL value.** `GET /pictures/{id}/{image_embedding,text_embedding,likeness_parameters}` runs `base64.b64encode(None)` → `TypeError` → 500 when the column is NULL. Pre-existing, unrelated to the allowlist, and not fixed here.
-- **Residual (open): `faces` still serves the face embedding**, and is still a relationship on both readers. See the exception table.
+- **Closed during #721: `faces` no longer serves the face embedding.** It is a denied relationship name on both by-name readers and is served instead by the two projected routes above, which withhold `features` and `model_pack`.
 - **Owner:** backend (`senior-backend-developer`), tracked on issue #721.
 
 ---

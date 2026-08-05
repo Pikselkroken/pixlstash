@@ -32,19 +32,25 @@ Each route is mapped to the single `AccessPolicy` that reproduces its behaviour 
 | `local_owner_only` | `owner_only` + loopback/LAN/Tailscale IP, or a remote owner iff `allow_remote_host_ops=true` | **none in Step 2** — the §16.3 retarget is a deliberate Step-3 behaviour change (see below) |
 | `loopback_owner_only` | `owner_only` + strict loopback only (127.0.0.0/8 + ::1); `allow_remote_host_ops` can NOT loosen it | **none in Step 2** — §16.3.1 host-shell red line; a deliberate behaviour change (see below) |
 
-## Policy distribution (228 total)
+## Policy distribution (249 total)
 
-Counted from `ROUTE_POLICIES` on 2026-07-29, after the v1.9 backbone merges.
+Recounted from `ROUTE_POLICIES` on 2026-08-05, when #721 added the two projected
+face routes. **The recount also corrected pre-existing drift**: the previous
+block claimed 228 routes as of 2026-07-29 and was stale by 19 before this change
+(`owner_only` alone had grown 92 -> 113). Only the two `faces` rows below belong
+to #721. The route *rows* in this document are enforced against the registry by
+`tests/test_architecture_guardrails.py::test_all_routes_declare_access_policy`;
+these aggregate counts are not machine-checked, which is how they drifted.
 
 | Policy | Count |
 |---|---|
 | `public` | 13 |
-| `any_token` | 16 |
-| `owner_only` | 92 |
-| `picture_scoped` | 35 |
+| `any_token` | 14 |
+| `owner_only` | 113 |
+| `picture_scoped` | 36 |
 | `scoped_list` | 39 |
 | `set_scoped` | 4 |
-| `character_scoped` | 5 |
+| `character_scoped` | 6 |
 | `project_scoped` | 6 |
 | `local_owner_only` | 13 |
 | `loopback_owner_only` | 5 |
@@ -209,6 +215,7 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/pictures/{id}/detections` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/face` | picture_scoped | id=id |  |
 | DELETE | `/api/v1/pictures/{id}/face/{index}` | picture_scoped | id=id |  |
+| GET | `/api/v1/pictures/{id}/faces` | picture_scoped | id=id | Projected face list (`id`, `picture_id`, `character_id`, `frame_index`, `face_index`, `bbox`); replaced serving the `faces` relationship through `/{id}/{field}` (#721) |
 | GET | `/api/v1/pictures/{id}/metadata` | picture_scoped | id=id |  |
 | POST | `/api/v1/pictures/{id}/open-location` | **loopback_owner_only** |  | §16.3.1 RED LINE: opens the file location in the host file manager (host shell); strict loopback only; `allow_remote_host_ops` can NOT loosen it |
 | GET | `/api/v1/pictures/{id}/{field}` | picture_scoped | id=id |  |
@@ -344,6 +351,7 @@ listing to suppress.
 | GET | `/api/v1/characters/{id}` | character_scoped | id=id |  |
 | PATCH | `/api/v1/characters/{id}` | owner_only |  | Update character; PATCH blocked for READ tokens; owner only |
 | DELETE | `/api/v1/characters/{id}` | owner_only |  | Delete character; DELETE blocked for READ tokens; owner only |
+| GET | `/api/v1/characters/{id}/faces` | character_scoped | id=id | Projected face list; replaced serving the `faces` relationship through `/{id}/{field}` (#721) |
 | GET | `/api/v1/characters/{id}/reference_pictures` | character_scoped | id=id |  |
 | GET | `/api/v1/characters/{id}/summary` | character_scoped | id=id |  |
 | GET | `/api/v1/characters/{id}/{field}` | character_scoped | id=id |  |
