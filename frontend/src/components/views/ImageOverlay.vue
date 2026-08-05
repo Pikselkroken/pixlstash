@@ -2906,12 +2906,70 @@ const videoSrc = computed(() => {
 // <img> yields a successful HTTP response followed by a decode error. Wait for
 // the metadata/grid record to provide the real format before creating the
 // native image element.
-const fullImageSrc = computed(() => {
-  const data = image.value;
+function buildFullImageSrc(data) {
   const id = data?.id;
   const fmt = MediaFormat(data);
   if (!id || !fmt || isSupportedVideoFile(`file.${fmt}`)) return "";
   return getFullImageUrl(data);
+}
+
+// The media URL carries `?v=<pixel_sha>` so an in-place pixel edit busts any
+// cached copy. `pixel_sha` is not part of the grid payload, though, so on a
+// normal open it only arrives with fetchOverlayMetadata — a beat AFTER the
+// <img> has already started (usually finished) loading the un-busted URL.
+// Letting that late arrival rewrite the src remounts the element
+// (`:key="fullImageSrc"`) and refetches a URL the HTTP cache has never seen:
+// the blank-then-reload flash on the first view of a picture in a session. It
+// also wasted the neighbour preloads, which build the un-busted URL from the
+// same grid records.
+//
+// Learning the sha is not a pixel change, so the buster baked into the shown
+// URL is pinned for as long as that picture keeps displaying the same bytes. It
+// only moves when the picture changes, when nothing was on screen yet (the cold
+// route, still waiting on the format), or when the sha goes from one KNOWN
+// value to another — a genuine in-place edit, where the reload is the point.
+// Freshness is not at risk in between: the media route answers `no-cache,
+// must-revalidate` with an mtime+size ETag, so the pinned URL is revalidated on
+// every load regardless of the buster.
+const displayedPixelSha = ref(null); // baked into the URL currently rendered
+const knownPixelSha = ref(null); // latest sha observed for that picture
+
+watch(
+  () => {
+    const data = image.value;
+    return {
+      id: data?.id ?? null,
+      sha: data?.pixel_sha ?? null,
+      hasMedia: Boolean(buildFullImageSrc(data)),
+    };
+  },
+  (next, prev) => {
+    const samePicture =
+      prev && next.id !== null && String(next.id) === String(prev.id);
+    if (!samePicture || !prev.hasMedia) {
+      displayedPixelSha.value = next.sha;
+      knownPixelSha.value = next.sha;
+      return;
+    }
+    // A record that simply doesn't carry the field (any grid-shaped refresh of
+    // the same picture) says nothing about the pixels — keep what we know.
+    if (next.sha === null || next.sha === knownPixelSha.value) return;
+    const firstSighting = knownPixelSha.value === null;
+    knownPixelSha.value = next.sha;
+    if (!firstSighting) displayedPixelSha.value = next.sha;
+  },
+  { immediate: true },
+);
+
+const fullImageSrc = computed(() => {
+  const data = image.value;
+  if (!data) return "";
+  const pinned = displayedPixelSha.value;
+  // Rebuilt from the live record so a backend-url, format or share-token change
+  // still flows through; only the cache-buster is held back.
+  return buildFullImageSrc(
+    pinned === (data.pixel_sha ?? null) ? data : { ...data, pixel_sha: pinned },
+  );
 });
 const overlayDims = ref({
   width: 1,

@@ -245,6 +245,81 @@ describe("ImageOverlay cold media bootstrap", () => {
     );
     wrapper.unmount();
   });
+
+  // The flash-and-reload regression: the grid record has no pixel_sha, so the
+  // <img> starts on the un-busted URL and the sha only lands with the metadata
+  // fetch. Adopting it there would swap the src (and, via :key, the element)
+  // for a URL nothing has cached — a blank frame plus a second download of
+  // bytes already on screen.
+  it("keeps the URL it is already loading when pixel_sha lands late", async () => {
+    let resolveMetadata;
+    metadataResponse = new Promise((resolve) => {
+      resolveMetadata = resolve;
+    });
+
+    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: true,
+        initialImageId: 7,
+        allImages: [{ id: 7, format: "png", tags: [] }],
+        backendUrl: "http://test",
+        tagUpdate: { key: 0, pictureIds: [] },
+        descriptionUpdate: { key: 0, pictureIds: [] },
+        smartScoreUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+      attachTo: document.body,
+    });
+
+    const initialSrc = wrapper.find(".overlay-img").attributes("src");
+    expect(initialSrc).toBe("http://test/pictures/7.png");
+    const initialEl = wrapper.find(".overlay-img").element;
+
+    resolveMetadata({ id: 7, format: "png", pixel_sha: "first", tags: [] });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(initialSrc);
+    expect(wrapper.find(".overlay-img").element).toBe(initialEl);
+    wrapper.unmount();
+  });
+
+  // The pin holds the buster steady, it does not disable it: once a sha is
+  // known, a DIFFERENT one means the pixels really were rewritten under the
+  // same id, and that reload is the whole point of the cache-buster.
+  it("does reload when a known pixel_sha changes to another", async () => {
+    metadataResponse = { id: 7, format: "png", pixel_sha: "first", tags: [] };
+
+    const { default: ImageOverlay } = await import("./ImageOverlay.vue");
+    const wrapper = mount(ImageOverlay, {
+      props: {
+        open: true,
+        initialImageId: 7,
+        allImages: [{ id: 7, format: "png", tags: [] }],
+        backendUrl: "http://test",
+        tagUpdate: { key: 0, pictureIds: [] },
+        descriptionUpdate: { key: 0, pictureIds: [] },
+        smartScoreUpdate: { key: 0, pictureIds: [] },
+      },
+      global: { stubs: STUBS },
+      attachTo: document.body,
+    });
+    await flush();
+    await flush();
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+      "http://test/pictures/7.png",
+    );
+
+    // A record whose pixels were rewritten in place.
+    wrapper.vm.image = { ...wrapper.vm.image, pixel_sha: "second" };
+    await flush();
+
+    expect(wrapper.find(".overlay-img").attributes("src")).toBe(
+      "http://test/pictures/7.png?v=second",
+    );
+    wrapper.unmount();
+  });
 });
 
 describe("ImageOverlay zoom — the continuous wheel", () => {
