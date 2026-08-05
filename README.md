@@ -21,6 +21,9 @@ It provides:
 - Plugin system for defining new filter operations that can be performed on a set of images.
 - Sharing of pictures, picture sets, characters and projects.
 - Persistent view URLs — bookmark or refresh any view and land exactly where you left off.
+- Undo and Redo with keyboard shortcuts and history
+- Deduplication helper
+- Tag review helper
 
 PixlStash runs on your machine and serves the UI at a local (or Internet-facing) web address.
 
