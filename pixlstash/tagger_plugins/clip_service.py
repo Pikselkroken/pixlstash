@@ -12,6 +12,8 @@ from typing import Optional
 
 import numpy as np
 
+from pixlstash.utils import model_cache
+
 # ML imports (torch / open_clip, which itself pulls torch, torchvision and
 # transformers) are deliberately FUNCTION-LOCAL throughout
 # this module. They cost seconds to import, and this module sits on the API
@@ -39,6 +41,21 @@ class ClipService:
         self._preprocess = None
         self._tokenizer = None
         self._lock = threading.Lock()
+        # Set by _load(); the shared-cache key this instance's model came from.
+        self._cache_key = None
+
+    def _drop_cuda_cache_entry(self) -> None:
+        """Evict this model from the shared cache after moving it to CPU.
+
+        The OOM handlers below do ``self._model.float().to("cpu")``, which
+        mutates the module in place. The shared cache still has it filed under
+        the CUDA key, so another engine asking for the CUDA model would be
+        handed a CPU one. A no-op when the cache is disabled (production) or
+        when the model was never cached.
+        """
+        if self._cache_key is not None:
+            model_cache.discard(self._cache_key)
+            self._cache_key = None
 
     def is_loaded(self) -> bool:
         """Return True when the model is ready for inference."""
@@ -63,6 +80,23 @@ class ClipService:
         self._tokenizer = None
 
     def _load(self) -> None:
+        # Keyed on device because the block below mutates the model in place
+        # (`.to(device)`, and `.half()` on CUDA) — a CPU entry and a CUDA entry
+        # are different objects and must not collide. The cache is a
+        # pass-through unless something enabled it, so this is production
+        # behaviour unchanged; see pixlstash/utils/model_cache.py.
+        #
+        # The key is remembered so _drop_cuda_cache_entry can evict it when the
+        # OOM paths below move this model to CPU in place.
+        key = ("clip", CLIP_MODEL_NAME, CLIP_MODEL_WEIGHTS, self._device)
+        self._cache_key = key
+        model, preprocess, tokenizer = model_cache.get_or_load(key, self._build)
+        self._model = model
+        self._preprocess = preprocess
+        self._tokenizer = tokenizer
+
+    def _build(self):
+        """Load OpenCLIP from disk. Returns ``(model, preprocess, tokenizer)``."""
         import open_clip
 
         model, _, preprocess = open_clip.create_model_and_transforms(
@@ -71,9 +105,7 @@ class ClipService:
         model = model.to(self._device)
         if self._device == "cuda":
             model = model.half()
-        self._model = model
-        self._preprocess = preprocess
-        self._tokenizer = open_clip.get_tokenizer(CLIP_MODEL_NAME)
+        return model, preprocess, open_clip.get_tokenizer(CLIP_MODEL_NAME)
 
     @property
     def device(self) -> str:
@@ -128,6 +160,7 @@ class ClipService:
                 )
                 self._model = self._model.float().to("cpu")
                 self._device = "cpu"
+                self._drop_cuda_cache_entry()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 try:
@@ -217,6 +250,7 @@ class ClipService:
                     self._device = "cuda"  # will be overridden below
                     self._model = self._model.float().to("cpu")
                     self._device = "cpu"
+                    self._drop_cuda_cache_entry()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                     try:

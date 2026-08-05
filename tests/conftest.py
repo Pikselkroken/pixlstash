@@ -14,6 +14,7 @@ from pathlib import Path
 from _pytest.config.exceptions import UsageError
 from fastapi.testclient import TestClient
 from pixlstash.server import Server
+from pixlstash.utils import model_cache
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
 from pixlstash.tasks.tag_task import TagTask
@@ -378,6 +379,20 @@ def pytest_configure(config):
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
     Server.DEFAULT_INSIGHTFACE_MODEL_PACK = config.getoption("--insightface-model-pack")
 
+    # Reuse loaded model weights across Server/InferenceEngine instances for
+    # the rest of this process. Off in production by default — see
+    # pixlstash/utils/model_cache.py for the contract and the measurement that
+    # motivated it. Every test that boots a Server builds a fresh engine, so
+    # without this the suite reloads ViT-B-32 and a convnext_base checkpoint
+    # per test function; the 508 tests that boot workers AND upload average
+    # 7.11 s against 2.17 s for those that boot workers and do not.
+    #
+    # This does not change what any test exercises: the same weights are used,
+    # the models are read-only during inference, and the objects are keyed by
+    # device so a CPU and a CUDA model never collide. It is exactly the trick
+    # FaceExtractionTask._global_insightface_app already plays for InsightFace.
+    model_cache.enable()
+
 
 def pytest_sessionfinish(session, exitstatus):
     """Release native model/session resources before interpreter teardown."""
@@ -397,6 +412,17 @@ def pytest_sessionfinish(session, exitstatus):
 
     try:
         ImageEmbeddingTask.release_models()
+    except Exception:
+        # Best-effort teardown: ignore cleanup failures during session shutdown.
+        pass
+
+    try:
+        # Must run alongside the releases above, not instead of them: the cache
+        # holds the only remaining strong reference to weights the per-task
+        # helpers have already dropped, and ORT/CUDA free their arenas only on
+        # collection. Skipping this would keep them resident until interpreter
+        # exit — the teardown window these helpers exist to control.
+        model_cache.clear()
     except Exception:
         # Best-effort teardown: ignore cleanup failures during session shutdown.
         pass
