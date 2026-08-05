@@ -436,7 +436,7 @@ jobs:
   build:
     name: build
     if: always()
-    needs: [checks, backend, backend_release_sweep, e2e]
+    needs: [checks, backend, backend_release_sweep, e2e, electron]
     runs-on: ubuntu-latest
     steps:
       # Each dependency is checked against what IT is allowed to report, not
@@ -466,16 +466,18 @@ jobs:
           BACKEND_RESULT: ${{ needs.backend.result }}
           SWEEP_RESULT: ${{ needs.backend_release_sweep.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
+          ELECTRON_RESULT: ${{ needs.electron.result }}
         run: |
           set -euo pipefail
-          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT"
+          echo "checks=$CHECKS_RESULT backend=$BACKEND_RESULT sweep=$SWEEP_RESULT e2e=$E2E_RESULT electron=$ELECTRON_RESULT"
 
           failed=0
-          for job in checks backend e2e; do
+          for job in checks backend e2e electron; do
             case "$job" in
               checks) result="$CHECKS_RESULT" ;;
               backend) result="$BACKEND_RESULT" ;;
               e2e) result="$E2E_RESULT" ;;
+              electron) result="$ELECTRON_RESULT" ;;
             esac
             if [ "$result" != "success" ]; then
               echo "::error::Blocking job '$job' reported '$result' (must be 'success')."
@@ -570,6 +572,58 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Electron main-process unit tests (electron/test/, `node --test` over the
+  # compiled TypeScript). They cover the logic behind real desktop incidents:
+  # overlay install args, the CPU fallback state machine, backends location,
+  # forced-backend parsing, hardware-detector injection, and the media IPC
+  # boundary. Until now they ran only when someone remembered to type
+  # `cd electron && npm test`, so a regression in any of it reached a release
+  # candidate unchallenged — docs/release-test-plan.md called this out as "not
+  # wired into any workflow yet".
+  #
+  # The Electron BINARY is never needed here. These are plain Node tests, and
+  # `require('electron')` outside an Electron runtime returns the path to the
+  # executable, not the Electron API — so `app`/`ipcRenderer` are already
+  # undefined when these tests run locally, and nothing touches them at import
+  # time. That makes the ~100 MB download pure cost:
+  #   - ELECTRON_SKIP_BINARY_DOWNLOAD stops `npm ci` fetching it, but it leaves
+  #     node_modules/electron/path.txt absent, and that package's index.js
+  #     re-attempts the download AT REQUIRE TIME when the file is missing.
+  #   - ELECTRON_OVERRIDE_DIST_PATH is checked BEFORE that existence test, so
+  #     the require resolves to a string and returns without any filesystem or
+  #     network access. The path is never opened; it does not need to exist.
+  # Both are required — either one alone still downloads.
+  # ---------------------------------------------------------------------------
+  electron:
+    name: electron
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install electron deps
+        working-directory: electron
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: electron
+        run: npm run lint
+
+      - name: Run electron unit tests
+        working-directory: electron
+        env:
+          ELECTRON_OVERRIDE_DIST_PATH: /nonexistent/electron-dist
+        run: npm test
 
   # ---------------------------------------------------------------------------
   # Windows only validates OS-sensitive behaviour (file/path/process handling,
