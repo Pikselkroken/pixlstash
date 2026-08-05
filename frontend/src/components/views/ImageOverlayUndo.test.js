@@ -7,9 +7,20 @@
 // the overlay's own handler, which is what these tests drive: they dispatch on
 // `window`, exactly as a real keypress arrives.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+
+// Imported statically, not lazily inside the tests. `vi.mock` is hoisted
+// above every import, so a lazy import buys no mock ordering. It only moves
+// the cost of compiling this 5.7k-line SFC (~7s on a loaded machine) inside
+// the first test's 5s timeout, which is what made this file flake in the full
+// suite while passing on its own.
+import ImageOverlay from "./ImageOverlay.vue";
+
+// A test that fails mid-way must not leave a mounted overlay behind: its
+// window-level keydown listener would answer every later test in this file.
+enableAutoUnmount(afterEach);
 
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/workflow")) {
@@ -68,7 +79,6 @@ const STUBS = {
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function openOverlay() {
-  const { default: ImageOverlay } = await import("./ImageOverlay.vue");
   const wrapper = mount(ImageOverlay, {
     props: {
       open: false,
@@ -122,49 +132,45 @@ describe("ImageOverlay — the undo binding", () => {
   it("undoes on Ctrl+Z while the lightbox is open", async () => {
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
-    const wrapper = await openOverlay();
+    await openOverlay();
 
     const event = press("z", { ctrlKey: true });
     expect(undo).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
-    wrapper.unmount();
   });
 
   it("accepts Meta+Z, so the binding is not platform-specific", async () => {
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
-    const wrapper = await openOverlay();
+    await openOverlay();
 
     press("z", { metaKey: true });
     expect(undo).toHaveBeenCalledTimes(1);
-    wrapper.unmount();
   });
 
   it("redoes on Ctrl+Y and on Ctrl+Shift+Z", async () => {
     const store = useOperationStore();
     const redo = vi.spyOn(store, "redo").mockResolvedValue(null);
-    const wrapper = await openOverlay();
+    await openOverlay();
 
     press("y", { ctrlKey: true });
     press("Z", { ctrlKey: true, shiftKey: true });
     expect(redo).toHaveBeenCalledTimes(2);
-    wrapper.unmount();
   });
 
   it("does not walk the stack on a held key", async () => {
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
-    const wrapper = await openOverlay();
+    await openOverlay();
 
     press("z", { ctrlKey: true, repeat: true });
     expect(undo).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 
   it("leaves a text field its own native undo", async () => {
     const store = useOperationStore();
     const undo = vi.spyOn(store, "undo").mockResolvedValue(null);
-    const wrapper = await openOverlay();
+    await openOverlay();
 
     const input = document.createElement("input");
     document.body.appendChild(input);
@@ -173,7 +179,6 @@ describe("ImageOverlay — the undo binding", () => {
     expect(undo).not.toHaveBeenCalled();
 
     input.remove();
-    wrapper.unmount();
   });
 
   it("still zooms on a bare z", async () => {
@@ -201,7 +206,6 @@ describe("ImageOverlay — the undo binding", () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".zoom-btn-label").text()).toBe("100%");
     expect(undo).not.toHaveBeenCalled();
-    wrapper.unmount();
   });
 
   it("still undoes with the chrome hidden", async () => {
@@ -221,7 +225,6 @@ describe("ImageOverlay — the undo binding", () => {
     // …and the keystroke did not drag the chrome back.
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".overlay-shell").classes()).toContain("chrome-hidden");
-    wrapper.unmount();
   });
 });
 
@@ -236,7 +239,6 @@ describe("ImageOverlay — the narration on this surface", () => {
     expect(wrapper.find(".overlay-receipt .r-text").text()).toBe(
       "Added tag 'portrait'",
     );
-    wrapper.unmount();
   });
 
   it("stands the chrome hint down while a receipt is up, and back after", async () => {
@@ -253,7 +255,6 @@ describe("ImageOverlay — the narration on this surface", () => {
     store.dismissReceipt();
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".overlay-chrome-hint").exists()).toBe(true);
-    wrapper.unmount();
   });
 
   it("keeps the receipt through arrow navigation", async () => {
@@ -268,7 +269,6 @@ describe("ImageOverlay — the narration on this surface", () => {
     press("ArrowRight");
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".overlay-receipt").exists()).toBe(true);
-    wrapper.unmount();
   });
 
   it("gives a keyboard user inside the pill an exit that is not closing the lightbox", async () => {
@@ -283,7 +283,6 @@ describe("ImageOverlay — the narration on this surface", () => {
 
     expect(store.receipt).toBeNull();
     expect(wrapper.emitted("close")).toBeFalsy();
-    wrapper.unmount();
   });
 
   it("closes the lightbox on Escape from anywhere else, receipt or not", async () => {
@@ -298,6 +297,5 @@ describe("ImageOverlay — the narration on this surface", () => {
     // The receipt is NOT dismissed on close: the same one, with its remaining
     // dwell, is handed back to the grid pill already mounted underneath.
     expect(store.receipt).not.toBeNull();
-    wrapper.unmount();
   });
 });
