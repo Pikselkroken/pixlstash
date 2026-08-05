@@ -159,6 +159,10 @@ def _fake_lifespan_server(config, password_set=True):
         _ws_loop=None,
         _shutdown_on_lifespan=False,
         vault=SimpleNamespace(start=lambda: None, close=lambda: None),
+        # lifespan pings telemetry right after vault.start() (cf4da2bf). These
+        # tests only exercise the ready/remote-access logging, so the ping is a
+        # no-op here — consent and payload are covered by the telemetry suite.
+        _maybe_send_telemetry_ping=lambda: None,
     )
 
 

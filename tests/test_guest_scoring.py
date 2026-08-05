@@ -45,8 +45,17 @@ _SID = "test-session-id-0001"
 # ---------------------------------------------------------------------------
 
 
-def _make_png_bytes(width: int = 16, height: int = 16) -> bytes:
-    img = Image.new("RGB", (width, height), color=(200, 100, 50))
+def _make_png_bytes(
+    width: int = 16, height: int = 16, color: tuple[int, int, int] = (200, 100, 50)
+) -> bytes:
+    """Build a solid-colour PNG.
+
+    A test that uploads more than one picture MUST vary ``color`` (or the
+    dimensions) between them: import rejects byte-identical files as duplicates
+    (``status: "duplicate"``), so uploading the same bytes twice yields a single
+    Picture row, not two.
+    """
+    img = Image.new("RGB", (width, height), color=color)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -573,13 +582,15 @@ def test_score_sort_uses_guest_scores():
     with tempfile.TemporaryDirectory() as tmp:
         server, owner_client, read_token = _setup(tmp)
         try:
-            # Upload two pictures
-            png = _make_png_bytes()
+            # Upload two pictures. They must differ in content — identical bytes
+            # are rejected by import as duplicates and would leave only one row.
+            png_a = _make_png_bytes(color=(200, 100, 50))
+            png_b = _make_png_bytes(color=(50, 100, 200))
             resp = owner_client.post(
                 f"{API}/pictures/import",
                 files=[
-                    ("file", ("a.png", png, "image/png")),
-                    ("file", ("b.png", png, "image/png")),
+                    ("file", ("a.png", png_a, "image/png")),
+                    ("file", ("b.png", png_b, "image/png")),
                 ],
             )
             assert resp.status_code == 200, resp.text
@@ -642,12 +653,14 @@ def test_score_sort_fallback_to_picture_score():
     with tempfile.TemporaryDirectory() as tmp:
         server, owner_client, read_token = _setup(tmp)
         try:
-            png = _make_png_bytes()
+            # Distinct content per file — see the note on _make_png_bytes.
+            png_x = _make_png_bytes(color=(200, 100, 50))
+            png_y = _make_png_bytes(color=(50, 100, 200))
             resp = owner_client.post(
                 f"{API}/pictures/import",
                 files=[
-                    ("file", ("x.png", png, "image/png")),
-                    ("file", ("y.png", png, "image/png")),
+                    ("file", ("x.png", png_x, "image/png")),
+                    ("file", ("y.png", png_y, "image/png")),
                 ],
             )
             assert resp.status_code == 200, resp.text
