@@ -34,13 +34,21 @@ duplicate check is debt. ``require_servable_field`` therefore takes no request,
 no token and no session, and is called *before* any database read.
 
 **Known adjacent gap, deliberately not closed here.** Allowlisting the whole
-column namespace still serves ``pending_character_id``, ``source_picture_id`` and
-``reference_folder_id``, cross-object ids that
+column namespace still serves cross-object ids. On ``Picture`` those are
+``pending_character_id``, ``source_picture_id`` and ``reference_folder_id``, which
 ``tests/test_architecture_guardrails.py::test_picture_metadata_fields_membership_is_pinned``
-already records as known disclosures. Narrowing the column set itself is the
-residual tracked in §16.6 under #719; it is a separate change because
-``Picture.metadata_fields()`` is also the default ``select_fields`` of
-``Picture.find`` and feeds the scoring and export paths.
+already records as known disclosures. On ``Character`` it is
+``reference_picture_set_id``: a character-scoped token reading
+``GET /characters/{id}/reference_picture_set_id`` learns the id of a picture set
+it is not scoped to, while the sibling ``project_id`` on the same handler *is*
+narrowed to ``null`` (#719). ``Character`` has no ``metadata_fields()`` pin at
+all, so unlike ``Picture`` its column set is not guarded against a future column
+becoming servable by accident.
+
+Narrowing the column sets themselves is the residual tracked in §16.6 under
+#719; it is a separate change because ``Picture.metadata_fields()`` is also the
+default ``select_fields`` of ``Picture.find`` and feeds the scoring and export
+paths, and because pinning ``Character`` needs its own reviewed baseline.
 """
 
 from typing import Iterable
