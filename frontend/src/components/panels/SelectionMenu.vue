@@ -275,6 +275,23 @@
         <v-icon class="ctx-icon" size="15">mdi-image-search-outline</v-icon>
         Reverse image search
       </button>
+      <!-- ── Segment ───────────────────────────────────────
+           Selection-scoped in the context menu too (gated on
+           `selectedImageIds.length`), so it belongs here as well. Unlike
+           Reverse image search it writes bounding boxes, hence the read-only
+           gate. -->
+      <button
+        class="ctx-item"
+        :disabled="selectedCount === 0 || isReadOnly"
+        title="Detect objects and store bounding boxes"
+        @click="
+          $emit('segment');
+          $emit('close');
+        "
+      >
+        <v-icon class="ctx-icon" size="15">mdi-shape-outline</v-icon>
+        Segment
+      </button>
       <div class="ctx-sep" />
     </template>
 
@@ -380,6 +397,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "open-comfyui-panel",
   "reverse-image-search",
+  "segment",
   "remove-from-group",
   "keep-cover-only",
   "delete-selected",

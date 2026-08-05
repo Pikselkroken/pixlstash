@@ -1108,6 +1108,7 @@
           @auto-tag="handleAutoTag"
           @generate-description="handleGenerateDescription"
           @reverse-image-search="handleReverseImageSearch"
+          @segment="openSegmentDialog"
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
         />
       </template>
