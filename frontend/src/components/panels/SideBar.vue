@@ -5464,7 +5464,7 @@ defineExpose({
                         active:
                           (selectedCharacterIdSet.size > 0
                             ? selectedCharacterIdSet.has(char.id)
-                            : selectedCharacter === char.id) &&
+                            : selectionStore.selectedCharacter === char.id) &&
                           selectionOwnsHighlight,
                         droppable: dragOverCharacter === char.id,
                       },
@@ -5947,7 +5947,8 @@ defineExpose({
                             active:
                               (selectedCharacterIdSet.size > 0
                                 ? selectedCharacterIdSet.has(char.id)
-                                : selectedCharacter === char.id) &&
+                                : selectionStore.selectedCharacter ===
+                                  char.id) &&
                               selectionOwnsHighlight,
                             droppable: dragOverCharacter === char.id,
                           },
