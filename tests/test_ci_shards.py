@@ -1065,8 +1065,8 @@ def test_unknown_tests_keep_their_round_robin_position():
 def test_time_balanced_assignment_is_deterministic():
     """The same collection and data give the identical partition, every time.
 
-    The eight shards decide independently, in eight processes on eight
-    runners, and never compare notes. If the decision depended on dict/set
+    The shards decide independently, one process per runner, and never
+    compare notes. If the decision depended on dict/set
     iteration order, a hash seed, or the order the data happened to be written
     in, two shards could disagree and a test would be run twice or not at all —
     with a green tick on it either way.
@@ -1175,19 +1175,24 @@ def test_committed_durations_map_is_well_formed():
     assert not outside, f"Durations keys must be rooted at tests/: {outside[:5]}"
 
 
-def test_recorded_durations_actually_balance_the_gate():
+def test_recorded_durations_actually_balance_the_gate(workflow):
     """The whole point, asserted: LPT flattens the shards, round-robin does not.
 
-    Modelled over the committed map with the eight shards the gate uses. The
-    positional baseline is computed in sorted-nodeid order, which is a stand-in
-    for collection order rather than the real thing — good enough to show the
-    difference in kind, and it is the *balanced* side that carries the
+    Modelled over the committed map at whatever shard count the gate currently
+    declares, read from the workflow rather than hardcoded — a resize must
+    re-prove the balance, not silently keep asserting it about the old N.
+    Balance matters MORE as N falls: with fewer, larger buckets a single
+    misplaced slow file moves the critical path further.
+
+    The positional baseline is computed in sorted-nodeid order, which is a
+    stand-in for collection order rather than the real thing — good enough to
+    show the difference in kind, and it is the *balanced* side that carries the
     assertion. If a single test ever grows past a shard's share this fails, and
     it should: no assignment can balance that, and the fix is the test.
     """
     durations = _load_recorded_durations(DURATIONS_PATH)
     nodeids = sorted(durations)
-    total = 8
+    total = len(_shard_matrix(workflow["jobs"][_GATE_JOB]))
 
     assignment = _time_balanced_shard_assignment(nodeids, total, durations)
     balanced = _shard_loads(nodeids, assignment, total, durations)
@@ -1290,7 +1295,12 @@ def test_block_shard_mode_never_consults_the_durations_map(monkeypatch):
 
 
 def test_hook_partitions_the_collection_with_the_committed_map():
-    """End to end through the real hook: the eight shards tile the collection."""
+    """End to end through the real hook: the shards tile the collection.
+
+    Deliberately a fixed N rather than the gate's current one — this exercises
+    the hook itself, so it should keep testing a multi-shard split even if the
+    matrix is later resized down to two.
+    """
     nodeids = _synthetic_nodeids(120) + sorted(_load_recorded_durations(DURATIONS_PATH))
     total = 8
 
