@@ -11,8 +11,12 @@ import threading
 from typing import Optional
 
 import numpy as np
-import open_clip
-import torch
+
+# ML imports (torch / open_clip, which itself pulls torch, torchvision and
+# transformers) are deliberately FUNCTION-LOCAL throughout
+# this module. They cost seconds to import, and this module sits on the API
+# server's import path — so importing them at module scope would make server
+# startup and every single test pay that cost before doing any work.
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,8 @@ class ClipService:
         self._tokenizer = None
 
     def _load(self) -> None:
+        import open_clip
+
         model, _, preprocess = open_clip.create_model_and_transforms(
             CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
         )
@@ -96,6 +102,8 @@ class ClipService:
         Returns:
             Float32 numpy array of shape ``(N, D)`` or ``None`` on failure.
         """
+        import torch
+
         if not images:
             return None
         self.ensure_ready()
@@ -151,6 +159,8 @@ class ClipService:
         Returns:
             1-D numpy array or ``None`` on failure.
         """
+        import torch
+
         if not query:
             return None
         self.ensure_ready()
@@ -179,6 +189,8 @@ class ClipService:
             List of 1-D numpy arrays (or ``None`` for failed crops), same
             length as ``crops``.
         """
+        import torch
+
         self.ensure_ready()
         results: list[Optional[np.ndarray]] = []
         for i, crop in enumerate(crops):

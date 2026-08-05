@@ -5,10 +5,9 @@ from __future__ import annotations
 import gc
 import threading
 
-import torch
-
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.model_utils import trim_process_memory
+from pixlstash.utils.vram_utils import empty_cuda_cache
 
 logger = get_logger(__name__)
 
@@ -110,8 +109,7 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during aggressive unload: %s", exc)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cuda_cache()
         gc.collect()
         trim_process_memory()
 
@@ -153,8 +151,7 @@ class ModelLifecycleManager:
         except Exception as exc:
             logger.warning("Exception during safe idle unload: %s", exc)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cuda_cache()
         gc.collect()
         trim_process_memory()
 
@@ -175,5 +172,4 @@ class ModelLifecycleManager:
                 "ModelLifecycleManager: WD14 ONNX session unloaded (CUDA arena freed)."
             )
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            empty_cuda_cache()

@@ -6,8 +6,6 @@ from typing import Optional
 
 import numpy as np
 import requests
-import torch
-import torch.nn as nn
 from PIL import Image
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
@@ -334,6 +332,12 @@ class ImageEmbeddingTask(BaseTask):
             ImageEmbeddingTask._aesthetic_disabled = True
             return
 
+        # Local import: torch costs seconds to import and this module is on the
+        # server's import path. By the time an aesthetic model is being built,
+        # the CLIP workflow has already loaded torch anyway.
+        import torch
+        import torch.nn as nn
+
         try:
             model_path = config["path"]
             model_url = config["url"]
@@ -483,6 +487,10 @@ class ImageEmbeddingTask(BaseTask):
 
         aesthetic_scores = []
         if ImageEmbeddingTask._aesthetic_model is not None and embeddings is not None:
+            # Local import (see _ensure_model): reaching here means the
+            # aesthetic model is already built, so torch is resident.
+            import torch
+
             try:
                 with torch.no_grad():
                     model_param = next(ImageEmbeddingTask._aesthetic_model.parameters())

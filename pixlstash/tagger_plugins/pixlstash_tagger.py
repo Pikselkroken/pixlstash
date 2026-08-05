@@ -12,17 +12,22 @@ import logging
 import os
 import threading
 from io import BytesIO
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import cv2
 import numpy as np
-import torch
-import torch.nn.functional as F
 from PIL import Image
-from torchvision import transforms
+
+if TYPE_CHECKING:  # annotations only — see the function-local import note below
+    from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
+
+# ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
+# this module. They cost seconds to import, and this module sits on the API
+# server's import path — so importing them at module scope would make server
+# startup and every single test pay that cost before doing any work.
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +125,8 @@ class PixlStashTaggerService:
         model_dir: str,
         batch_size_fn: Callable[[], int],
     ) -> None:
+        import torch
+
         self._device = device
         self._model_path = os.path.join(model_dir, PIXLSTASH_TAGGER_FILENAME)
         self._meta_path = os.path.join(model_dir, PIXLSTASH_TAGGER_META_FILENAME)
@@ -249,6 +256,8 @@ class PixlStashTaggerService:
 
     def init(self) -> None:
         """Load the model checkpoint and metadata from disk into memory."""
+        import torch
+
         if not os.path.exists(self._model_path):
             raise FileNotFoundError(
                 f"PixlStash tagger checkpoint not found: {self._model_path}"
@@ -300,6 +309,8 @@ class PixlStashTaggerService:
             True if the model is successfully loaded, False if loading
             failed on both GPU and CPU.
         """
+        import torch
+
         if self.is_loaded():
             return True
         try:
@@ -335,6 +346,8 @@ class PixlStashTaggerService:
         Returns:
             True on success, False if the move failed.
         """
+        import torch
+
         logger.warning("PixlStash tagger GPU inference failed; reloading on CPU...")
         try:
             if self._model is not None:
@@ -395,6 +408,8 @@ class PixlStashTaggerService:
         Returns:
             Dict mapping key to list of tags above threshold, naturalized.
         """
+        import torch
+
         if not items:
             return {}
         if self._model is None or self._labels is None:
@@ -502,6 +517,8 @@ class PixlStashTaggerService:
             - ``tags_by_key``: ``{key: [tag, ...]}`` thresholded and naturalized.
             - ``scores_by_key``: ``{key: {natural_label: float}}`` raw scores.
         """
+        import torch
+
         if not items:
             return {}, {}
         if self._model is None or self._labels is None:
@@ -668,6 +685,8 @@ class PixlStashTaggerService:
         Returns:
             Dict mapping path to ``{label: confidence}`` for each kept label.
         """
+        import torch
+
         if not items:
             return {}
         if self._model is None or self._labels is None:
@@ -809,6 +828,8 @@ class PixlStashTaggerService:
     # ------------------------------------------------------------------ #
 
     def _build_model(self, arch: str, num_labels: int):
+        import torch
+
         from torchvision.models import convnext_tiny, convnext_base
 
         if arch == "convnext_tiny":
@@ -824,6 +845,8 @@ class PixlStashTaggerService:
         raise ValueError(f"Unsupported PixlStash tagger arch: {arch}")
 
     def _build_transform(self, image_size: int) -> transforms.Compose:
+        from torchvision import transforms
+
         return transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
@@ -852,6 +875,9 @@ class PixlStashTaggerService:
         to its original dtype in ``finally`` so the hot tagging path is
         unaffected.
         """
+        import torch.nn.functional as F
+        import torch
+
         model = self._model
         transform = self._get_transform(self._image_size_full)
         inp = (

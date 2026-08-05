@@ -44,9 +44,18 @@ def _checks(device="cuda"):
 
 @pytest.fixture
 def patch_runtime(monkeypatch):
+    """Inject fake torch / onnxruntime modules into ``startup_checks``.
+
+    The real imports are function-local and cached behind ``sc._torch()`` /
+    ``sc._ort()`` so that importing the server does not drag in the ML stack
+    (backend_architecture §3, "ML import discipline"). Seeding the caches here
+    both substitutes the fakes and stops the accessors ever attempting the real
+    import — which is exactly what these tests want.
+    """
+
     def apply(torch_mod, ort_mod):
-        monkeypatch.setattr(sc, "torch", torch_mod)
-        monkeypatch.setattr(sc, "ort", ort_mod)
+        monkeypatch.setattr(sc, "_torch_mod", torch_mod)
+        monkeypatch.setattr(sc, "_ort_mod", ort_mod)
 
     return apply
 
