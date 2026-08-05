@@ -30,14 +30,19 @@ tests below backfill the scalar through ``PATCH /pictures/project`` and assert
 the backfill landed before reading anything.
 """
 
+import json
+
 import pytest
 from sqlmodel import select
 
-from pixlstash.db_models import Character, Picture
-from pixlstash.route_inventory import api_endpoint_set
+from fastapi import HTTPException
+
+from pixlstash.db_models import Character, Face, Picture
+from pixlstash.route_inventory import api_endpoint_set, iter_api_route_contexts
 from pixlstash.utils.field_allowlist import (
     CHARACTER_EXTRA_SERVABLE_FIELDS,
     PICTURE_EXTRA_SERVABLE_FIELDS,
+    require_servable_field,
     servable_field_names,
 )
 from tests import test_multi_project_membership_authz as _multi_project
@@ -70,8 +75,12 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 #: The complete, reviewed set of non-column names each reader may serve. Pinned
 #: rather than merely derived, so *growing* the exception set is a deliberate
 #: edit that fails the build until someone updates this literal.
-_PINNED_PICTURE_EXTRAS = {"faces"}
-_PINNED_CHARACTER_EXTRAS = {"thumbnail", "faces"}
+#: Picture has no exception at all: every relationship is denied.
+_PINNED_PICTURE_EXTRAS: set[str] = set()
+#: Character keeps only the synthetic ``thumbnail``, which discloses no
+#: related rows. ``faces`` retired from both sets when the dedicated
+#: projected routes shipped.
+_PINNED_CHARACTER_EXTRAS = {"thumbnail"}
 
 
 def test_declared_servable_exceptions_are_pinned():
@@ -440,7 +449,7 @@ def test_servable_picture_fields_still_work(env):
     )
     pic_a = env["pic_a"]
 
-    for field in ("width", "file_path", "project_id", "text_embedding", "faces"):
+    for field in ("width", "file_path", "project_id", "text_embedding"):
         assert_real_route(env["server"].api, "GET", f"{API}/pictures/{pic_a}/{field}")
 
     r = owner.get(f"{API}/pictures/{pic_a}/width")
@@ -457,11 +466,6 @@ def test_servable_picture_fields_still_work(env):
     r = owner.get(f"{API}/pictures/{pic_a}/project_id")
     assert r.status_code == 200 and r.json()["project_id"] == projects["P1"], r.text
 
-    # The declared relationship exception still answers its live consumer
-    # (frontend/src/api/pictures.js::listPictureFaces -- the face-box overlay).
-    r = owner.get(f"{API}/pictures/{pic_a}/faces")
-    assert r.status_code == 200 and r.json()["faces"], r.text
-
     with _enforcing(env["server"]):
         hdr = _bearer(mint("picture", pic_a))
         r = anon.get(f"{API}/pictures/{pic_a}/width", headers=hdr)
@@ -469,8 +473,6 @@ def test_servable_picture_fields_still_work(env):
             f"a picture token was blocked from its own picture's column: {r.text}"
         )
         r = anon.get(f"{API}/pictures/{pic_a}/text_embedding", headers=hdr)
-        assert r.status_code == 200, r.text
-        r = anon.get(f"{API}/pictures/{pic_a}/faces", headers=hdr)
         assert r.status_code == 200, r.text
         # ...and #719's narrowing still applies to the scoped token.
         r = anon.get(f"{API}/pictures/{pic_a}/project_id", headers=hdr)
@@ -546,3 +548,365 @@ def test_servable_character_fields_still_work(env):
         assert r.status_code == 200 and r.json()["project_id"] == projects["P1"], (
             f"a P1 token must still learn its own project id: {r.text}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The dedicated, projected faces routes that replaced the relationship
+# ---------------------------------------------------------------------------
+
+#: The exact key set `GET /{pictures,characters}/{id}/faces` may return. Pinned,
+#: because the whole point of the route is that it is a projection: a new `Face`
+#: column must not ride onto the wire, and `features` must never come back.
+_FACE_PUBLIC_KEYS = {
+    "id",
+    "picture_id",
+    "character_id",
+    "frame_index",
+    "face_index",
+    "bbox",
+}
+
+#: Columns that exist on `Face` and are deliberately withheld.
+_FACE_WITHHELD_KEYS = {"features", "model_pack"}
+
+
+def test_face_projection_covers_every_column_deliberately():
+    """Every `Face` column is either served or consciously withheld.
+
+    Arithmetic, not judgement: if someone adds a column and neither serves nor
+    withholds it, this fails and they have to decide. Without it, `to_public_dict`
+    silently keeps returning the old six keys and the new column's status is
+    nobody's decision.
+    """
+    columns = set(Face.__table__.columns.keys())
+    assert len(columns) >= 7, (
+        f"Face has {len(columns)} columns; this check is vacuous if the "
+        f"enumeration collapses"
+    )
+    # The DB column is named `bbox` (the Python attribute is `bbox_`), and it
+    # reaches the wire as `bbox`, so the public key set lines up directly.
+    accounted = _FACE_PUBLIC_KEYS | _FACE_WITHHELD_KEYS
+    unaccounted = columns - accounted
+    assert not unaccounted, (
+        f"New Face column(s) {sorted(unaccounted)} are neither served by "
+        f"Face.to_public_dict() nor recorded as withheld. Decide whether a "
+        f"picture- or character-scoped token may learn each one (#721)."
+    )
+    assert _FACE_WITHHELD_KEYS <= columns, (
+        f"the withheld list names columns Face no longer has: "
+        f"{sorted(_FACE_WITHHELD_KEYS - columns)}"
+    )
+
+
+def test_face_to_public_dict_is_the_first_filter():
+    """`Face.to_public_dict()` itself must emit exactly the projection.
+
+    Asserted directly, not through the API, because the route also declares
+    `response_model=FaceListResponse` with `extra="ignore"`, which independently
+    strips anything undeclared. That makes the two filters indistinguishable
+    over HTTP: putting `features` back into `to_public_dict` still yields a clean
+    wire response (verified -- the wire assertions alone do NOT catch it). If the
+    handler's own projection is to be load-bearing rather than decorative, it has
+    to be pinned here.
+    """
+    face = Face(picture_id=3, frame_index=1, face_index=2, bbox=[1, 2, 3, 4])
+    face.id = 42
+    face.character_id = 7
+    face.features = b"\x00\x01\x02"
+    face.model_pack = "buffalo_l"
+
+    payload = face.to_public_dict()
+    assert set(payload) == _FACE_PUBLIC_KEYS, (
+        f"to_public_dict() emitted {sorted(payload)}, expected "
+        f"{sorted(_FACE_PUBLIC_KEYS)}"
+    )
+    assert payload == {
+        "id": 42,
+        "picture_id": 3,
+        "character_id": 7,
+        "frame_index": 1,
+        "face_index": 2,
+        "bbox": [1, 2, 3, 4],
+    }, payload
+    # Spelled out separately so the failure names the actual risk.
+    for withheld in _FACE_WITHHELD_KEYS:
+        assert withheld not in payload, (
+            f"`{withheld}` is back in the handler projection. The response model "
+            f"would still strip it today, but that makes the projection "
+            f"decorative and one `response_model=` removal from a leak (#721)."
+        )
+
+
+def test_dedicated_faces_routes_are_declared_and_not_shadowed(env):
+    """The dedicated routes must be registered BEFORE the by-name catch-all.
+
+    FastAPI matches in registration order. If `/pictures/{id}/{field}` were
+    registered first it would swallow `/pictures/{id}/faces`, and the new
+    handler would be dead code that silently never runs while the tests below
+    kept passing against the catch-all. Asserted structurally here, and
+    behaviourally by the `features`-absent assertions further down.
+    """
+    app = env["server"].api
+    order = [
+        (method, path)
+        for method, path, _route in iter_api_route_contexts(app)
+        if method == "GET"
+    ]
+    assert len(order) > 50, f"route enumeration collapsed to {len(order)} GETs"
+
+    for base in ("pictures", "characters"):
+        dedicated = f"/api/v1/{base}/{{id}}/faces"
+        catchall = f"/api/v1/{base}/{{id}}/{{field}}"
+        assert dedicated in [p for _m, p in order], (
+            f"{dedicated} is not mounted at all; the projected route is missing"
+        )
+        assert catchall in [p for _m, p in order], (
+            f"{catchall} vanished, so this ordering check no longer proves anything"
+        )
+        i_dedicated = [p for _m, p in order].index(dedicated)
+        i_catchall = [p for _m, p in order].index(catchall)
+        assert i_dedicated < i_catchall, (
+            f"{dedicated} is registered AFTER {catchall}, so the catch-all wins "
+            f"and the projected handler is dead code. Move its register_routes "
+            f"call ahead of the by-name reader's."
+        )
+
+
+def test_faces_is_no_longer_a_servable_by_name_field():
+    """The by-name readers refuse `faces` for both models.
+
+    Asserted at the allowlist rather than over HTTP on purpose: now that the
+    dedicated routes shadow the name, `GET /pictures/{id}/faces` never reaches
+    the by-name reader, so its refusal is not observable through the API. This
+    is what proves the exception is really gone rather than merely unreachable.
+    """
+    for model, extras in (
+        (Picture, PICTURE_EXTRA_SERVABLE_FIELDS),
+        (Character, CHARACTER_EXTRA_SERVABLE_FIELDS),
+    ):
+        assert "faces" in model.relationship_fields(), (
+            f"{model.__name__}.faces is no longer a relationship; this test is stale"
+        )
+        assert "faces" not in servable_field_names(model, extras), (
+            f"{model.__name__} still serves the `faces` relationship by name"
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            require_servable_field(model, "faces", extras)
+        assert excinfo.value.status_code == 400, excinfo.value.detail
+
+
+def test_no_relationship_is_in_either_exception_set():
+    """The escape hatch may hold synthetic names only, never a relationship.
+
+    Stronger and less brittle than the literal pin: a relationship re-entering
+    either set fails here regardless of which name it is.
+    """
+    for model, extras in (
+        (Picture, PICTURE_EXTRA_SERVABLE_FIELDS),
+        (Character, CHARACTER_EXTRA_SERVABLE_FIELDS),
+    ):
+        relationships = set(model.relationship_fields())
+        assert len(relationships) >= 4, "relationship enumeration collapsed"
+        offenders = relationships & set(extras)
+        assert not offenders, (
+            f"{model.__name__} relationship(s) {sorted(offenders)} were added back "
+            f"to the by-name exception set. safe_model_dict recurses into "
+            f"relationships, so this re-opens #721. Give the consumer a dedicated "
+            f"projected route instead, the way GET /{model.__name__.lower()}s/"
+            f"{{id}}/faces was added."
+        )
+
+
+def _assert_face_payload(body, *, where, expect_picture_id=None):
+    assert isinstance(body, dict) and "faces" in body, (
+        f"{where}: the wire shape must stay {{'faces': [...]}}, got {body!r}"
+    )
+    faces = body["faces"]
+    assert faces, f"{where}: no faces returned, so the assertions below are vacuous"
+    for face in faces:
+        keys = set(face)
+        assert keys == _FACE_PUBLIC_KEYS, (
+            f"{where}: face row keys {sorted(keys)} != the projection "
+            f"{sorted(_FACE_PUBLIC_KEYS)}"
+        )
+        for withheld in _FACE_WITHHELD_KEYS:
+            assert withheld not in face, (
+                f"{where}: `{withheld}` reached the wire. Either the projection "
+                f"was bypassed or the by-name catch-all served this request "
+                f"instead of the dedicated route (#721)."
+            )
+        if expect_picture_id is not None:
+            assert face["picture_id"] == expect_picture_id, face
+    return faces
+
+
+def test_dedicated_picture_faces_route_projects_the_row(env):
+    """`GET /pictures/{id}/faces`: same wire shape, no embedding.
+
+    `features` being absent is also what proves the *dedicated* route served the
+    request: the by-name catch-all would have returned it.
+    """
+    _backfilled_env(env)
+    owner, anon, mint = env["owner"], env["anon"], env["mint"]
+    pic_a = env["pic_a"]
+
+    assert_real_route(env["server"].api, "GET", f"{API}/pictures/{pic_a}/faces")
+
+    r = owner.get(f"{API}/pictures/{pic_a}/faces")
+    assert r.status_code == 200, r.text
+    faces = _assert_face_payload(
+        r.json(), where="owner picture faces", expect_picture_id=pic_a
+    )
+
+    # The three fields the SPA actually reads (ImageOverlay.vue).
+    overlay = [
+        f
+        for f in faces
+        if f["frame_index"] == 0 and isinstance(f["bbox"], list) and len(f["bbox"]) == 4
+    ]
+    assert overlay, (
+        f"no face survives the overlay's own filter "
+        f"(frame_index == 0 and a 4-element bbox), so the box would never render: "
+        f"{faces}"
+    )
+    assert any(f["character_id"] is not None for f in faces), (
+        f"character_id is never populated, so the overlay's name lookup is "
+        f"untested here: {faces}"
+    )
+
+    with _enforcing(env["server"]):
+        hdr = _bearer(mint("picture", pic_a))
+        r = anon.get(f"{API}/pictures/{pic_a}/faces", headers=hdr)
+        assert r.status_code == 200, (
+            f"a picture token was blocked from its own picture's faces "
+            f"(over-blocking is its own regression): {r.text}"
+        )
+        _assert_face_payload(
+            r.json(), where="scoped picture faces", expect_picture_id=pic_a
+        )
+
+
+def test_dedicated_character_faces_route_projects_the_row(env):
+    """`GET /characters/{id}/faces`: same wire shape, no embedding."""
+    _backfilled_env(env)
+    owner, anon, mint = env["owner"], env["anon"], env["mint"]
+    char_id = env["char_id"]
+
+    assert_real_route(env["server"].api, "GET", f"{API}/characters/{char_id}/faces")
+
+    r = owner.get(f"{API}/characters/{char_id}/faces")
+    assert r.status_code == 200, r.text
+    faces = _assert_face_payload(r.json(), where="owner character faces")
+    assert all(f["character_id"] == char_id for f in faces), faces
+
+    with _enforcing(env["server"]):
+        hdr = _bearer(mint("character", char_id))
+        r = anon.get(f"{API}/characters/{char_id}/faces", headers=hdr)
+        assert r.status_code == 200, (
+            f"a character token was blocked from its own character's faces: {r.text}"
+        )
+        _assert_face_payload(r.json(), where="scoped character faces")
+
+
+def test_dedicated_faces_routes_enforce_object_scope(env):
+    """Out-of-scope object is refused by the gate; in-scope still answers.
+
+    The gate does this from the `ROUTE_POLICIES` declaration, not from anything
+    in the handler. An undeclared route would 403 everyone, so the positive half
+    is what proves the declaration is right rather than merely present.
+    """
+    _backfilled_env(env)
+    anon, mint = env["anon"], env["mint"]
+    pic_a, pic_b = env["pic_a"], env["pic_b"]
+    char_id, other_char = env["char_id"], env["p1_only_char_id"]
+
+    with _enforcing(env["server"]):
+        hdr = _bearer(mint("picture", pic_a))
+        r = anon.get(f"{API}/pictures/{pic_b}/faces", headers=hdr)
+        assert r.status_code in {403, 404}, (
+            f"a picture-A token read picture B's faces: {r.status_code} {r.text}"
+        )
+        assert anon.get(f"{API}/pictures/{pic_a}/faces", headers=hdr).status_code == 200
+
+        hdr = _bearer(mint("character", char_id))
+        r = anon.get(f"{API}/characters/{other_char}/faces", headers=hdr)
+        assert r.status_code in {403, 404}, (
+            f"a character token read another character's faces: "
+            f"{r.status_code} {r.text}"
+        )
+        assert (
+            anon.get(f"{API}/characters/{char_id}/faces", headers=hdr).status_code
+            == 200
+        )
+
+
+def test_bbox_is_serialised_exactly_as_the_relationship_path_did(env):
+    """`bbox` comes off the `bbox_` text column via the model property.
+
+    The old path went through `safe_model_dict`, which strips the trailing
+    underscore and `json.loads`es the value. `Face.to_public_dict` uses the
+    `bbox` property, which does the same `json.loads` on the same column, so the
+    wire value is unchanged. Asserted against the raw stored text rather than
+    against a hardcoded literal, so it cannot drift.
+    """
+    _backfilled_env(env)
+    owner, pic_a = env["owner"], env["pic_a"]
+
+    def _raw(session):
+        rows = session.exec(
+            select(Face).where(Face.picture_id == pic_a).order_by(Face.id)
+        ).all()
+        return [(int(f.id), f.bbox_) for f in rows]
+
+    raw = env["server"].vault.db.run_immediate_read_task(_raw)
+    assert raw, "no face rows to compare against"
+
+    served = {
+        f["id"]: f["bbox"]
+        for f in owner.get(f"{API}/pictures/{pic_a}/faces").json()["faces"]
+    }
+    assert set(served) == {fid for fid, _ in raw}, (
+        f"the route returned a different row set than the table holds: "
+        f"{sorted(served)} vs {sorted(fid for fid, _ in raw)}"
+    )
+    for face_id, bbox_text in raw:
+        expected = json.loads(bbox_text) if bbox_text else None
+        assert served[face_id] == expected, (
+            f"face {face_id}: served bbox {served[face_id]!r} != json.loads of the "
+            f"stored column {bbox_text!r}"
+        )
+
+
+def test_sentinel_rows_still_reach_the_caller(env):
+    """A `face_index == -1` sentinel must still be listed.
+
+    `Face.find` filters sentinels out; the relationship did not, and
+    `tests/utils.py::wait_for_faces` returns as soon as the list is non-empty.
+    Dropping the sentinel would turn a picture with no detectable face into a
+    full poll timeout in three suites, so the dedicated route deliberately does
+    NOT use `Face.find`.
+    """
+    _backfilled_env(env)
+    owner, pic_b = env["owner"], env["pic_b"]
+
+    def _add_sentinel(session):
+        # frame_index is deliberately far outside the extractor's range: face
+        # extraction has already written its own (frame 0, index -1) sentinel for
+        # this picture, and (picture_id, frame_index, face_index) is unique.
+        face = Face(picture_id=int(pic_b), frame_index=77, face_index=-1)
+        session.add(face)
+        session.commit()
+        session.refresh(face)
+        return int(face.id)
+
+    sentinel_id = env["server"].vault.db.run_task(_add_sentinel)
+
+    body = owner.get(f"{API}/pictures/{pic_b}/faces").json()
+    ids = {f["id"] for f in body["faces"]}
+    assert sentinel_id in ids, (
+        f"the face_index == -1 sentinel was filtered out (ids={sorted(ids)}). "
+        f"wait_for_faces would now block for its full timeout on a picture with "
+        f"no detectable face."
+    )
+    sentinel = next(f for f in body["faces"] if f["id"] == sentinel_id)
+    assert sentinel["face_index"] == -1 and sentinel["bbox"] is None, sentinel
