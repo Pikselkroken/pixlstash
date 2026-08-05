@@ -142,6 +142,20 @@ Shards are therefore equal in test *count*, never in test *time*, and the residu
 
 If asked to do a review on a branch, write the review into docs/reviews/NAME_OF_BRANCH.md
 
+**`docs/reviews/` is gitignored on purpose: reviews stay on the machine that
+wrote them and are not pushed to GitHub.** So do not force-add a review doc, and
+do not "fix" the ignore rule. Two consequences worth knowing:
+
+- The rule only affects *new* files. Review docs added before it exist are still
+  tracked, and `.gitignore` does not apply to a tracked file. Editing one of
+  those: plain `git add` fails with "paths are ignored by one of your .gitignore
+  files", so use `git add -u docs/reviews/<file>`.
+- **Nothing CI-enforced may read a file under `docs/reviews/`**, because a fresh
+  checkout is not guaranteed to have it. Living contract documents therefore live
+  in `docs/` proper, not in `docs/reviews/`. The authz coverage matrix is the
+  worked example: it is `docs/authz-coverage-matrix.md`, tracked, and parsed by
+  `tests/test_architecture_guardrails.py::test_coverage_matrix_document_matches_the_registry`.
+
 ## Security & authorization review process
 
 Mandatory for any change touching authentication, authorization, or access-scope (tokens, sharing, per-object/per-resource access). These exist because a BOLA audit once shipped a "fix" that closed four endpoints and left three siblings of the same severity open (whole-library leaks via `/pictures/{id}/{field}`, `/stacks/{id}/pictures`, and a `character_id=UNASSIGNED` bypass). The misses were completeness and verification failures, not knowledge gaps.
@@ -160,7 +174,7 @@ Mandatory for any change touching authentication, authorization, or access-scope
 - **A new or modified data endpoint's only required action is to add its `(method, effective_path) → RoutePolicy(...)` entry to `ROUTE_POLICIES`.** Pick the `AccessPolicy` that fits: `PICTURE_SCOPED` / `SET_SCOPED` / `CHARACTER_SCOPED` / `PROJECT_SCOPED` (+ `id_param=` or `body_ids=`), `SCOPED_LIST`, `OWNER_ONLY`, `LOCAL_OWNER_ONLY` / `LOOPBACK_OWNER_ONLY` (§16.3 host-capability, `justification=` mandatory), `PUBLIC` (`justification=` mandatory), or `ANY_TOKEN` (returns no per-object data). The enum is closed — a genuinely new access level is a deliberate edit to `policy.py` + tests.
 - **Do NOT** add inline `enforce_picture_scope` / `require_unscoped_owner` / `token_scope` ladders in handlers — the gate owns them, and a duplicate check is debt to be removed, not added. Flag any new per-handler authz check in review.
 - **The only surviving inline object checks** are the 4 name-derived `resolved_inline=True` routes (by-name set/character/project — the gate cannot resolve name→id without duplicating handler logic). All four also carry an inline `enforce_project_path_scope` call on the **project** named in their path, which the gate's query-param chokepoint cannot see; it must run on the resolved id *before* any membership query, or the route's 404 branches become a project-existence oracle (#708). Do not remove either inline check until a shared name→id resolver exists. They are recorded in `docs/backend_architecture.md` §16.1 / §16.6 and the coverage matrix.
-- **The disciplines still apply.** The coverage matrix (`docs/reviews/authz-coverage-matrix.md`) must stay arithmetically complete (the CI guardrail enforces it); tests in both directions (out-of-scope 403 AND in-scope 200 — over-blocking is its own regression) are mandatory for any authz change; and an independent adversarial sign-off (author must not certify their own security work) gates any change to the gate, the registry's scope declarations, or the membership helpers. See `docs/backend_architecture.md` §16.2 (shipped design) and §16.3 for the host-capability tiers.
+- **The disciplines still apply.** The coverage matrix (`docs/authz-coverage-matrix.md`) must stay arithmetically complete (the CI guardrail enforces it); tests in both directions (out-of-scope 403 AND in-scope 200 — over-blocking is its own regression) are mandatory for any authz change; and an independent adversarial sign-off (author must not certify their own security work) gates any change to the gate, the registry's scope declarations, or the membership helpers. See `docs/backend_architecture.md` §16.2 (shipped design) and §16.3 for the host-capability tiers.
 - **Rollback:** `AUTHZ_GATE_ENFORCING = False` in `pixlstash/authz/gate.py` reverts both object-enforcement and unknown-route fail-closed in one line, leaving declarations and helpers in place.
 
 ## Conventions & Patterns
