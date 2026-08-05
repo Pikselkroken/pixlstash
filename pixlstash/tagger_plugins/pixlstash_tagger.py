@@ -22,7 +22,6 @@ if TYPE_CHECKING:  # annotations only — see the function-local import note bel
     from torchvision import transforms
 
 from pixlstash.tagger_plugins.base import TagResult, TaggerPlugin
-from pixlstash.utils import model_cache
 from pixlstash.utils.service.caption_utils import naturalize_tags, sanitise_tag
 
 # ML imports (torch / torchvision) are deliberately FUNCTION-LOCAL throughout
@@ -143,15 +142,9 @@ class PixlStashTaggerService:
         self._transform = None
         self._transform_cache: dict[int, transforms.Compose] = {}
         self._dtype = torch.float32
-        # Set by init(); the shared-cache key this instance's model came from.
-        self._cache_key = None
         # Serialises Grad-CAM localisation runs. The CAM needs gradients in
         # fp32, so it briefly upcasts the shared model; the lock keeps two
         # localisations from racing on that upcast/restore (see localize_anomaly).
-        # Replaced in init() by the lock cached alongside the model, so services
-        # that share a cached model also share the lock guarding it. This
-        # placeholder only covers the window before init(), during which
-        # localize_anomaly raises on the null model anyway.
         self._localize_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -279,6 +272,9 @@ class PixlStashTaggerService:
         arch = meta.get("arch", "convnext_base")
         if not labels:
             raise ValueError("PixlStash tagger metadata missing labels list.")
+        from safetensors.torch import load_file
+
+        state_dict = load_file(self._model_path, device=str(self._device))
         self._labels = labels
         self._label_to_idx = {label: i for i, label in enumerate(labels)}
         self._label_thresholds = {
@@ -289,57 +285,22 @@ class PixlStashTaggerService:
                 "Loaded per-label thresholds for %d labels from meta.json",
                 len(self._label_thresholds),
             )
-        # Only the checkpoint load and weight copy are cached; the metadata
-        # above is a small JSON read and stays per-instance. Device is in the
-        # key because _build_weighted_model mutates in place (`.to`, `.half`
-        # on CUDA). Pass-through unless enabled — see
-        # pixlstash/utils/model_cache.py.
-        #
-        # The localisation lock is cached WITH the model, not left per-instance.
-        # localize_anomaly temporarily upcasts the model to fp32 and restores
-        # the dtype in a `finally`, and that mutation is only safe because a
-        # lock serialises it. Two services sharing one cached model but holding
-        # two different locks would serialise nothing — one could restore fp16
-        # underneath the other's CAM pass. The lock guards the model, so it has
-        # to have the same lifetime as the model.
-        key = (
-            "pixlstash_tagger",
-            self._model_path,
-            arch,
-            len(labels),
-            str(self._device),
-        )
-        # Remembered so _reload_on_cpu can evict it: that path moves this model
-        # to CPU in place while the entry is still filed under the CUDA key.
-        self._cache_key = key
-        self._model, self._localize_lock = model_cache.get_or_load(
-            key, lambda: self._build_weighted_model(arch, len(labels))
-        )
-        self._dtype = torch.float16 if str(self._device) == "cuda" else torch.float32
-        self._transform_cache = {}
-        self._transform = self._build_transform(self._image_size_full)
-
-    def _build_weighted_model(self, arch: str, num_labels: int):
-        """Build the backbone and load the weights. Returns ``(model, lock)``.
-
-        The lock is created here so it is cached alongside the model it guards;
-        see the note at the call site.
-        """
-        from safetensors.torch import load_file
-
-        state_dict = load_file(self._model_path, device=str(self._device))
-        model = self._build_model(arch, num_labels)
+        self._model = self._build_model(arch, len(labels))
         # Normalise dtype first: safetensors weights may be FP16 while the
         # freshly-built classifier head is FP32.  Cast everything to FP32,
         # load the state dict (now a consistent dtype), then promote to FP16
         # on CUDA for faster inference.  CPU always stays FP32.
-        model.float()
-        model.load_state_dict(state_dict)
-        model.to(self._device)
+        self._model.float()
+        self._model.load_state_dict(state_dict)
+        self._model.to(self._device)
         if str(self._device) == "cuda":
-            model.half()
-        model.eval()
-        return model, threading.Lock()
+            self._model.half()
+            self._dtype = torch.float16
+        else:
+            self._dtype = torch.float32
+        self._model.eval()
+        self._transform_cache = {}
+        self._transform = self._build_transform(self._image_size_full)
 
     def init_or_cpu_fallback(self) -> bool:
         """Load the model, falling back to CPU on OOM.
@@ -398,12 +359,6 @@ class PixlStashTaggerService:
                 self._model.float()
             self._device = "cpu"
             self._dtype = torch.float32
-            # The model just moved device in place, so the shared-cache entry
-            # under the CUDA key no longer describes it. No-op in production,
-            # where the cache is disabled.
-            if self._cache_key is not None:
-                model_cache.discard(self._cache_key)
-                self._cache_key = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             logger.debug("PixlStash tagger reloaded on CPU")
@@ -831,9 +786,8 @@ class PixlStashTaggerService:
         path, which yields NaN gradients. To stay correct without permanently
         mutating the shared model, the model is temporarily upcast to fp32 for
         the CAM and its original dtype is restored in a ``finally`` block. A
-        lock cached alongside the model serialises localisation calls so two of
-        them never race on that upcast/restore — including when two services
-        share one cached model.
+        per-service lock serialises localisation calls so two of them never race
+        on that upcast/restore.
 
         Args:
             pil_image: The source image (any mode; converted to RGB).
