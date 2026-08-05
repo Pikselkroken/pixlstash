@@ -4,8 +4,8 @@ This is separate from guarded migration 0092 so a developer vault that already
 ran the earlier feature-lane revision is upgraded instead of silently missing
 the column.
 
-Revision ID: 0095_add_settings_fingerprint
-Revises: 0094_add_pending_score_invalidation
+Revision ID: 0101_add_settings_fingerprint
+Revises: 0100_add_pending_score_invalidation
 Create Date: 2026-08-02
 """
 
@@ -14,8 +14,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0095_add_settings_fingerprint"
-down_revision: Union[str, None] = "0094_add_pending_score_invalidation"
+revision: str = "0101_add_settings_fingerprint"
+down_revision: Union[str, None] = "0100_add_pending_score_invalidation"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

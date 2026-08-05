@@ -25,8 +25,8 @@ user and tokens across. Blanking at this point would destroy the credentials
 this release exists to preserve. It happens in the bootstrap, after a verified
 copy. See ``pixlstash/hub/bootstrap.py``.
 
-Revision ID: 0092_add_library_settings
-Revises: 0091_add_usertoken_library_uuid
+Revision ID: 0098_add_library_settings
+Revises: 0097_add_usertoken_library_uuid
 Create Date: 2026-08-01
 """
 
@@ -35,8 +35,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0092_add_library_settings"
-down_revision: Union[str, None] = "0091_add_usertoken_library_uuid"
+revision: str = "0098_add_library_settings"
+down_revision: Union[str, None] = "0097_add_usertoken_library_uuid"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

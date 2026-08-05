@@ -26,7 +26,7 @@ def make_vault(folder, *, pictures=3, reference_folders=()):
     conn = sqlite3.connect(os.path.join(folder, "vault.db"))
     conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
     conn.execute(
-        "INSERT INTO alembic_version VALUES ('0094_add_pending_score_invalidation')"
+        "INSERT INTO alembic_version VALUES ('0100_add_pending_score_invalidation')"
     )
     conn.execute("CREATE TABLE picture (id INTEGER PRIMARY KEY, file_path TEXT)")
     for index in range(pictures):
@@ -99,7 +99,7 @@ class TestWhatIsInTheArchive:
         assert manifest["library_uuid"] == library.uuid
         assert manifest["library_name"] == "Family Photos"
         assert manifest["picture_count"] == 3
-        assert manifest["vault_revision"] == "0094_add_pending_score_invalidation"
+        assert manifest["vault_revision"] == "0100_add_pending_score_invalidation"
         assert manifest["contains_hub"] is True
 
     def test_a_prepositioned_writable_wal_sidecar_is_refused(

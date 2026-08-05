@@ -21,8 +21,8 @@ guest out once, and guest scores have never had a UI to read them.
 The tables are rebuilt rather than altered because the foreign key lives in the
 table definition, and SQLite cannot drop a constraint in place.
 
-Revision ID: 0093_guest_tables_reference_token_public_id
-Revises: 0092_add_library_settings
+Revision ID: 0099_guest_tables_reference_token_public_id
+Revises: 0098_add_library_settings
 Create Date: 2026-08-01
 """
 
@@ -31,8 +31,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0093_guest_tables_reference_token_public_id"
-down_revision: Union[str, None] = "0092_add_library_settings"
+revision: str = "0099_guest_tables_reference_token_public_id"
+down_revision: Union[str, None] = "0098_add_library_settings"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

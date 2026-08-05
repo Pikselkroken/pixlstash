@@ -28,7 +28,7 @@ def make_vault(folder, *, username="owner", password_hash="a-real-hash", tokens=
     os.chmod(folder, 0o700)
     conn = sqlite3.connect(os.path.join(folder, "vault.db"))
     conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
-    conn.execute("INSERT INTO alembic_version VALUES ('0092_add_library_settings')")
+    conn.execute("INSERT INTO alembic_version VALUES ('0098_add_library_settings')")
     conn.execute("CREATE TABLE picture (id INTEGER PRIMARY KEY, file_path TEXT)")
     conn.execute(
         "CREATE TABLE user (id INTEGER PRIMARY KEY, username TEXT, "
@@ -669,7 +669,7 @@ class TestCrashSafeOrdering:
         conn.execute("INSERT INTO startup_sentinel VALUES ('untouched')")
         conn.execute(
             "UPDATE alembic_version SET version_num = "
-            "'0094_add_pending_score_invalidation'"
+            "'0100_add_pending_score_invalidation'"
         )
         conn.commit()
         conn.close()
@@ -681,7 +681,7 @@ class TestCrashSafeOrdering:
         try:
             assert conn.execute(
                 "SELECT version_num FROM alembic_version"
-            ).fetchone() == ("0094_add_pending_score_invalidation",)
+            ).fetchone() == ("0100_add_pending_score_invalidation",)
             assert {
                 row[1] for row in conn.execute("PRAGMA table_info(library_settings)")
             } == {"id", "library_uuid"}
@@ -741,7 +741,7 @@ class TestCrashSafeOrdering:
         conn.execute("INSERT INTO malformed_fingerprint_sentinel VALUES ('untouched')")
         conn.execute(
             "UPDATE alembic_version SET version_num = "
-            "'0094_add_pending_score_invalidation'"
+            "'0100_add_pending_score_invalidation'"
         )
         conn.commit()
         conn.close()
@@ -753,7 +753,7 @@ class TestCrashSafeOrdering:
         try:
             assert conn.execute(
                 "SELECT version_num FROM alembic_version"
-            ).fetchone() == ("0094_add_pending_score_invalidation",)
+            ).fetchone() == ("0100_add_pending_score_invalidation",)
             assert {
                 row[1] for row in conn.execute("PRAGMA table_info(library_settings)")
             } == {"id", "wrong"}
@@ -782,7 +782,7 @@ class TestCrashSafeOrdering:
         conn = sqlite3.connect(vault_path)
         conn.execute("DROP TABLE library_settings")
         conn.execute(
-            "UPDATE alembic_version SET version_num = '0091_add_usertoken_library_uuid'"
+            "UPDATE alembic_version SET version_num = '0097_add_usertoken_library_uuid'"
         )
         conn.commit()
         conn.close()

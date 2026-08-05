@@ -7,8 +7,8 @@ here too or every query against it fails. It is nullable and unused in the
 vault: identity moves to the hub at first run, after which this table is dead
 weight kept only until a post-1.12 cleanup drops it.
 
-Revision ID: 0091_add_usertoken_library_uuid
-Revises: 0090_add_usertoken_public_id
+Revision ID: 0097_add_usertoken_library_uuid
+Revises: 0096_add_picture_is_video
 Create Date: 2026-08-01
 """
 
@@ -17,8 +17,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0091_add_usertoken_library_uuid"
-down_revision: Union[str, None] = "0090_add_usertoken_public_id"
+revision: str = "0097_add_usertoken_library_uuid"
+down_revision: Union[str, None] = "0096_add_picture_is_video"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

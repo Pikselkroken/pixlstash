@@ -10,8 +10,8 @@ setting is committed to the hub, and it is consumed together with the NULLing in
 a single vault transaction. Both crash points then fail safe. See the model's
 docstring for the full argument.
 
-Revision ID: 0094_add_pending_score_invalidation
-Revises: 0093_guest_tables_reference_token_public_id
+Revision ID: 0100_add_pending_score_invalidation
+Revises: 0099_guest_tables_reference_token_public_id
 Create Date: 2026-08-02
 """
 
@@ -20,8 +20,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0094_add_pending_score_invalidation"
-down_revision: Union[str, None] = "0093_guest_tables_reference_token_public_id"
+revision: str = "0100_add_pending_score_invalidation"
+down_revision: Union[str, None] = "0099_guest_tables_reference_token_public_id"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]

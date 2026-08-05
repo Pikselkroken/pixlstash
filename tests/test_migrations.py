@@ -38,13 +38,14 @@ def test_alembic_upgrade_head_fresh_db():
         assert os.path.isfile(db_path), "Database file was not created"
 
 
-def test_alembic_downgrade_merge_and_reupgrade():
-    """The two feature lanes can be unmerged and merged again cleanly.
+def test_alembic_downgrade_and_reupgrade_multi_library_lane():
+    """The multi-library lane unwinds off develop's head and comes back cleanly.
 
-    A relative ``-1`` is intentionally ambiguous at an Alembic mergepoint:
-    there are two equally valid parents. Name the multi-library parent
-    explicitly, then prove the telemetry parent remains stamped alongside it
-    and that upgrading back to the merged head succeeds.
+    The lane (``0097``-``0101``) is linear on top of
+    ``0096_add_picture_is_video``, so downgrading to that revision unwinds all
+    five migrations at once. Round-tripping keeps every ``downgrade()`` in the
+    lane honest, and asserting the stamped revision in both directions catches
+    a lane that silently re-merges into more than one head.
     """
     with tempfile.TemporaryDirectory() as tmp:
         db_path = os.path.join(tmp, "test_vault.db")
@@ -56,12 +57,12 @@ def test_alembic_downgrade_merge_and_reupgrade():
         )
 
         down = _run_alembic(
-            ["downgrade", "0095_add_settings_fingerprint"],
+            ["downgrade", "0096_add_picture_is_video"],
             db_url,
             _MIGRATIONS_DIR,
         )
         assert down.returncode == 0, (
-            "alembic downgrade to the multi-library parent failed:\n"
+            "alembic downgrade below the multi-library lane failed:\n"
             f"stdout: {down.stdout}\nstderr: {down.stderr}"
         )
 
@@ -70,15 +71,19 @@ def test_alembic_downgrade_merge_and_reupgrade():
                 row[0]
                 for row in conn.execute("SELECT version_num FROM alembic_version")
             }
-        assert revisions == {
-            "0094_add_telemetry_consent",
-            "0095_add_settings_fingerprint",
-        }
+        assert revisions == {"0096_add_picture_is_video"}
 
         reup = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
         assert reup.returncode == 0, (
             f"alembic re-upgrade failed:\nstdout: {reup.stdout}\nstderr: {reup.stderr}"
         )
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            revisions = {
+                row[0]
+                for row in conn.execute("SELECT version_num FROM alembic_version")
+            }
+        assert revisions == {"0101_add_settings_fingerprint"}
 
 
 def test_alembic_upgrade_from_v1_4_1_preserves_data():
@@ -929,7 +934,7 @@ def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
         db_path = os.path.join(tmp, "test_vault.db")
         db_url = f"sqlite:///{db_path}"
         before = _run_alembic(
-            ["upgrade", "0092_add_library_settings"], db_url, _MIGRATIONS_DIR
+            ["upgrade", "0098_add_library_settings"], db_url, _MIGRATIONS_DIR
         )
         assert before.returncode == 0, before.stderr
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
@@ -956,7 +961,7 @@ def test_0093_rebuilds_guest_tables_onto_token_public_id_and_clears_rows():
             conn.commit()
 
         result = _run_alembic(
-            ["upgrade", "0093_guest_tables_reference_token_public_id"],
+            ["upgrade", "0099_guest_tables_reference_token_public_id"],
             db_url,
             _MIGRATIONS_DIR,
         )

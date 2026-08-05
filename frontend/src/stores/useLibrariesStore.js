@@ -1,7 +1,8 @@
-import { computed, markRaw, nextTick, ref, shallowRef } from "vue";
+import { computed, markRaw, nextTick, onScopeDispose, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 
 import { listLibraries, setActiveLibrary } from "../api/libraries";
+import { onSessionReset } from "../utils/apiClient";
 import { reloadPage } from "../utils/reloadPage";
 
 /**
@@ -24,27 +25,59 @@ export const useLibrariesStore = defineStore("libraries", () => {
     libraries.value.find((library) => library.is_active),
   );
 
+  // Discards a registry read that was already on the wire when the credential
+  // changed, so the previous owner's library list cannot land in the new
+  // session's store a few hundred milliseconds after the reset.
+  let epoch = 0;
+
   async function refresh() {
+    const startedAt = epoch;
     loading.value = true;
     loadError.value = "";
     try {
       const body = await listLibraries();
+      if (startedAt !== epoch) return;
       libraries.value = body?.libraries ?? [];
       canManage.value = Boolean(body?.can_manage);
       cliHint.value = body?.cli_hint ?? "";
       inDocker.value = Boolean(body?.in_docker);
       hasLoadedSuccessfully.value = true;
     } catch (error) {
+      if (startedAt !== epoch) return;
       hasLoadedSuccessfully.value = false;
       loadError.value =
         error?.response?.data?.detail ||
         "Could not read the list of libraries.";
     } finally {
-      loading.value = false;
+      if (startedAt === epoch) loading.value = false;
     }
   }
 
+  /**
+   * Drop the registry listing. Called on every auth-context transition.
+   *
+   * The listing is owner-only data (folder paths, the CLI hint, whether this
+   * caller may manage libraries), so it must not survive into a share/read-only
+   * session that is never allowed to ask for it.
+   */
+  function reset() {
+    epoch += 1;
+    libraries.value = [];
+    canManage.value = false;
+    cliHint.value = "";
+    inDocker.value = false;
+    loading.value = false;
+    loadError.value = "";
+    hasLoadedSuccessfully.value = false;
+  }
+
+  // Logout / login / share-token entry / library switch all funnel through the
+  // one chokepoint in apiClient, so there is no second mechanism to keep in sync.
+  const unsubscribe = onSessionReset(reset);
+  onScopeDispose(() => unsubscribe());
+
   return {
+    reset,
     libraries,
     canManage,
     cliHint,

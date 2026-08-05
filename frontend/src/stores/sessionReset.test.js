@@ -51,6 +51,7 @@ import { useSnapshotsStore } from "./useSnapshotsStore";
 import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
+import { useLibrariesStore } from "./useLibrariesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -174,6 +175,21 @@ const STORES = [
       s.canUndo = true;
     },
     isEmpty: (s) => s.operations.length === 0 && s.canUndo === false,
+  },
+  {
+    name: "useLibrariesStore",
+    use: useLibrariesStore,
+    seed: (s) => {
+      s.libraries = [{ uuid: "a", name: "Main", is_active: true }];
+      s.canManage = true;
+      s.cliHint = "pixlstash --library /srv/main";
+      s.hasLoadedSuccessfully = true;
+    },
+    isEmpty: (s) =>
+      s.libraries.length === 0 &&
+      s.canManage === false &&
+      s.cliHint === "" &&
+      s.hasLoadedSuccessfully === false,
   },
 ];
 

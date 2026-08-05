@@ -4130,7 +4130,10 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
 
     service = server.vault.restore_service
     original_swap = service._swap_database
-    original_clear = service._clear_api_tokens
+    # The hub owns the token rows now, so the vault-side task that runs in the
+    # queue gap is the guest-state clear. It is the same position in the restore
+    # sequence the token clear used to occupy.
+    original_clear = service._clear_guest_state
     entered_queue_gap = threading.Event()
     release_token_clear = threading.Event()
 
@@ -4144,7 +4147,7 @@ def test_full_restore_closes_auth_before_swap_and_across_queue_gap(server, monke
         return original_clear(session)
 
     monkeypatch.setattr(service, "_swap_database", _assert_gate_then_swap)
-    monkeypatch.setattr(service, "_clear_api_tokens", _blocked_token_clear)
+    monkeypatch.setattr(service, "_clear_guest_state", _blocked_token_clear)
 
     outcome = {}
 

@@ -1896,6 +1896,19 @@ _ENGINE_FACTORY_ALLOWLIST = {
         "new table, drop, rename) would be hazardous with FK enforcement on. "
         "Deliberately not routed through create_configured_engine."
     ),
+    "pixlstash/hub/engine.py": (
+        "The hub is the cross-library registry, not a vault, and its engine is "
+        "configured explicitly rather than left on SQLite's defaults (WAL, "
+        "synchronous=NORMAL, foreign_keys=ON in _configure_connection). It "
+        "deviates on purpose in three ways create_configured_engine cannot "
+        "express: HUB_BUSY_TIMEOUT_S is 5 s rather than the vault's 30 s "
+        "because hub writes are tiny registry updates contended across "
+        "processes; the vault's custom SQL functions (levenshtein, "
+        "cosine_similarity, character_face_likeness) are meaningless against "
+        "the hub schema; and the vault's 16 MiB per-connection page cache "
+        "would be paid on every pooled hub connection for a database that "
+        "holds a handful of rows."
+    ),
 }
 
 

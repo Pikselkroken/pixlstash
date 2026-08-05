@@ -278,7 +278,7 @@ class TestFailingToSwitch:
         conn.execute("INSERT INTO pre_migration_sentinel VALUES ('untouched')")
         conn.execute(
             "UPDATE alembic_version SET version_num = "
-            "'0094_add_pending_score_invalidation'"
+            "'0100_add_pending_score_invalidation'"
         )
         conn.commit()
         conn.close()
@@ -311,7 +311,7 @@ class TestFailingToSwitch:
             ).fetchone()
         finally:
             conn.close()
-        assert revision == ("0094_add_pending_score_invalidation",)
+        assert revision == ("0100_add_pending_score_invalidation",)
         assert columns == {"id", "library_uuid"}
         assert sentinel == ("untouched",)
 

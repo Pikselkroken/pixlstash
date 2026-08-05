@@ -986,12 +986,13 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 - Baseline: `0001_baseline` calls `SQLModel.metadata.create_all()` for the full current schema.
 - All subsequent migrations use conditional `add_column` (see [.github/copilot-instructions.md](../.github/copilot-instructions.md)) so they are safe on fresh DBs.
 
-The multi-library lane ends at `0095_add_settings_fingerprint`. `0092` creates
-the one-row `library_settings` table and owns `library_uuid` plus
-`similarity_character`; `0095` adds `settings_fingerprint` separately. Do not
-move the latter back into `0092`: feature-lane vaults may already have recorded
-0092, and Alembic only runs forward. Both revisions inspect the live schema so
-fresh databases and partially exercised development databases converge.
+The multi-library lane runs `0097`-`0101`, linearly after develop's
+`0096_add_picture_is_video`. `0098` creates the one-row `library_settings` table
+and owns `library_uuid` plus `similarity_character`; `0101` adds
+`settings_fingerprint` separately. Do not move the latter back into `0098`:
+feature-lane vaults may already have recorded `0098`, and Alembic only runs
+forward. Both revisions inspect the live schema so fresh databases and partially
+exercised development databases converge.
 - `__all__` is declared at the top of each migration to silence static-analysis "unused" warnings.
 - Data regenerations are triggered by `NULL`-resetting work columns — never by application logic in migrations.
 
@@ -1051,7 +1052,17 @@ Selected milestones:
 
 | 0096 | `picture.is_video` — persists what used to be a `CASE` over five `file_path ILIKE '%.ext'` tests in the character-thumbnail ordering (#651). Additive, `NOT NULL DEFAULT 0`, with a set-based extension backfill. NOT NULL is a correctness constraint, not tidiness: SQLite sorts `NULL` first, so a nullable column would let an unclassified row outrank a still image in the very ordering the column exists to serve, and would slip past the backfill's `= 0` guard |
 
-Current head: `0096_add_picture_is_video`.
+| 0097 | `usertoken.library_uuid` so the shared token model maps in both the hub and a vault (§16.4). Additive; the multi-library lane starts here, linearly after `0096` |
+
+| 0098 | The one-row `library_settings` table: owns `library_uuid` and `similarity_character`, the settings that belong to a library rather than to the machine |
+
+| 0099 | Repoints `guest_score` / `guest_session` at `token_public_id` and clears their rows, so guest state survives a token reissue by public id rather than integer id |
+
+| 0100 | `pending_score_invalidation`: the durable record that scores are owed a recompute, so an invalidation raised against a dormant library is not lost across the hub/vault boundary |
+
+| 0101 | `library_settings.settings_fingerprint`, the keyed fingerprint that lets a dormant library detect it has fallen behind owner settings and catch up on activation |
+
+Current head: `0101_add_settings_fingerprint`.
 
 ### 12.1 Two revisions numbered 0086, and why the chain was spliced
 
