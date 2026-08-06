@@ -21,10 +21,10 @@ describe("api/taggers", () => {
     expect(result.plugins).toEqual([{ name: "a" }]);
   });
 
-  it("listTaggers prefixes an explicit backend base", async () => {
+  it("listTaggers requests the taggers route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
-    await listTaggers({ baseUrl: "http://host:9000" });
-    expect(apiClient.get).toHaveBeenCalledWith("http://host:9000/taggers");
+    await listTaggers();
+    expect(apiClient.get).toHaveBeenCalledWith("/taggers");
   });
 
   it("getLabelThresholds sends the previewed offset", async () => {

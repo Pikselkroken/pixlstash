@@ -36,12 +36,6 @@ import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 
-globalThis.ResizeObserver = class {
-  constructor(_callback) {}
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 const VIcon = {
   name: "v-icon",

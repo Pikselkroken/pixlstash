@@ -50,11 +50,6 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 const STUBS = {
   OverlayTagsPanel: {

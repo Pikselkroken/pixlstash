@@ -28,10 +28,10 @@ describe("api/projects", () => {
     expect(result).toEqual([{ id: 1 }]);
   });
 
-  it("listProjects forwards query params and a backend base", async () => {
+  it("listProjects forwards query params", async () => {
     apiClient.get.mockResolvedValue({ data: [] });
-    await listProjects({ baseUrl: "/be", params: { archived: true } });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/projects", {
+    await listProjects({ params: { archived: true } });
+    expect(apiClient.get).toHaveBeenCalledWith("/projects", {
       params: { archived: true },
     });
   });
@@ -59,8 +59,8 @@ describe("api/projects", () => {
 
   it("deleteProject DELETEs under the given base", async () => {
     apiClient.delete.mockResolvedValue({ data: {} });
-    await deleteProject(9, { baseUrl: "/be" });
-    expect(apiClient.delete).toHaveBeenCalledWith("/be/projects/9");
+    await deleteProject(9);
+    expect(apiClient.delete).toHaveBeenCalledWith("/projects/9");
   });
 
   it("getProjectMembership POSTs the picture ids", async () => {

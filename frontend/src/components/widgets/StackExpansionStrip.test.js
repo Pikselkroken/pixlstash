@@ -9,9 +9,11 @@ import { mount } from "@vue/test-utils";
 
 // The thumbnail URL builder pulls in the Axios client; the strip only needs a
 // string for `<img src>`.
+// Mirrors the real builder, which now spells the API base itself rather than
+// taking it from the caller: an <img src> never reaches the Axios interceptor.
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id, options = {}) =>
-    `${options.baseUrl ?? ""}/pictures/thumbnails/${id}.webp?v=${options.version ?? ""}`,
+    `http://backend.test/api/v1/pictures/thumbnails/${id}.webp?v=${options.version ?? ""}`,
 }));
 vi.mock("../../utils/apiClient", () => ({
   API_BASE_URL: "http://backend.test/api/v1",

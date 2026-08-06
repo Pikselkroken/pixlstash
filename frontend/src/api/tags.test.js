@@ -44,8 +44,8 @@ describe("api/tags", () => {
 
   it("addPictureTag POSTs the tag and returns the picture's tag list", async () => {
     apiClient.post.mockResolvedValue({ data: { tags: [{ id: 1 }] } });
-    const result = await addPictureTag(42, "hat", { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/pictures/42/tags", {
+    const result = await addPictureTag(42, "hat");
+    expect(apiClient.post).toHaveBeenCalledWith("/pictures/42/tags", {
       tag: "hat",
     });
     expect(result.tags).toEqual([{ id: 1 }]);

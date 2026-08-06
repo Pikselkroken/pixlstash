@@ -9,7 +9,8 @@
 // resource-scoped batch. They are separate endpoints, so they are separate
 // functions here rather than one function with a mode flag.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Base path of the snapshots collection. */
 const SNAPSHOTS_URL = "/snapshots";
@@ -19,8 +20,7 @@ const SNAPSHOTS_URL = "/snapshots";
  * @returns {Promise<Array<Object>>} the snapshot list (the response body).
  */
 export async function listSnapshots() {
-  const res = await apiClient.get(SNAPSHOTS_URL);
-  return res.data;
+  return unwrap(apiClient.get(SNAPSHOTS_URL));
 }
 
 /**
@@ -29,8 +29,7 @@ export async function listSnapshots() {
  *   in-flight create/restore job, or null when the subsystem is idle.
  */
 export async function getSnapshotStatus() {
-  const res = await apiClient.get(`${SNAPSHOTS_URL}/status`);
-  return res.data;
+  return unwrap(apiClient.get(`${SNAPSHOTS_URL}/status`));
 }
 
 /**
@@ -39,8 +38,7 @@ export async function getSnapshotStatus() {
  * @returns {Promise<Object>} the created snapshot (the response body).
  */
 export async function createSnapshot(label) {
-  const res = await apiClient.post(SNAPSHOTS_URL, label ? { label } : {});
-  return res.data;
+  return unwrap(apiClient.post(SNAPSHOTS_URL, label ? { label } : {}));
 }
 
 /**
@@ -50,8 +48,7 @@ export async function createSnapshot(label) {
  * @returns {Promise<Object>} the updated snapshot (the response body).
  */
 export async function renameSnapshot(id, label) {
-  const res = await apiClient.patch(`${SNAPSHOTS_URL}/${id}`, { label });
-  return res.data;
+  return unwrap(apiClient.patch(`${SNAPSHOTS_URL}/${id}`, { label }));
 }
 
 /**
@@ -60,8 +57,7 @@ export async function renameSnapshot(id, label) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteSnapshot(id) {
-  const res = await apiClient.delete(`${SNAPSHOTS_URL}/${id}`);
-  return res.data;
+  return unwrap(apiClient.delete(`${SNAPSHOTS_URL}/${id}`));
 }
 
 /**
@@ -70,8 +66,7 @@ export async function deleteSnapshot(id) {
  * @returns {Promise<Object>} the preview (the response body).
  */
 export async function previewRestore(id) {
-  const res = await apiClient.get(`${SNAPSHOTS_URL}/${id}/restore/preview`);
-  return res.data;
+  return unwrap(apiClient.get(`${SNAPSHOTS_URL}/${id}/restore/preview`));
 }
 
 /**
@@ -81,11 +76,10 @@ export async function previewRestore(id) {
  * @returns {Promise<Object>} the preview (the response body).
  */
 export async function previewRestoreBatch(id, resources) {
-  const res = await apiClient.post(
+  return unwrap(apiClient.post(
     `${SNAPSHOTS_URL}/${id}/restore/preview/batch`,
     { resources },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -101,10 +95,9 @@ export async function previewRestoreBatch(id, resources) {
  *   the unchanged pictures.
  */
 export async function hashCompareSnapshot(id, pictureIds) {
-  const res = await apiClient.post(`${SNAPSHOTS_URL}/${id}/hash-compare`, {
+  return unwrap(apiClient.post(`${SNAPSHOTS_URL}/${id}/hash-compare`, {
     picture_ids: pictureIds,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -113,8 +106,7 @@ export async function hashCompareSnapshot(id, pictureIds) {
  * @returns {Promise<Object>} the response body (the started restore job).
  */
 export async function executeRestore(id) {
-  const res = await apiClient.post(`${SNAPSHOTS_URL}/${id}/restore`, {});
-  return res.data;
+  return unwrap(apiClient.post(`${SNAPSHOTS_URL}/${id}/restore`, {}));
 }
 
 /**
@@ -134,9 +126,8 @@ export async function executeRestoreBatch(
   resources,
   confirmRestoreDependencies = false,
 ) {
-  const res = await apiClient.post(`${SNAPSHOTS_URL}/${id}/restore/batch`, {
+  return unwrap(apiClient.post(`${SNAPSHOTS_URL}/${id}/restore/batch`, {
     resources,
     confirm_restore_dependencies: confirmRestoreDependencies,
-  });
-  return res.data;
+  }));
 }

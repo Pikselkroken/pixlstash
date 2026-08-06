@@ -602,7 +602,6 @@ export function useStackOrdering(
         const picsData = await listStackPictures(stackId, {
           sort: activeSort || undefined,
           descending: sortStore.selectedDescending,
-          baseUrl: props.backendUrl,
         });
         const pics = Array.isArray(picsData) ? picsData : [];
         const sorted = isStackSort ? sortStackMembers(pics) : pics;
@@ -971,7 +970,6 @@ export function useStackOrdering(
       await setStackOrder(
         stackId,
         orderedIds.map((id) => Number(id)).filter(Number.isFinite),
-        { baseUrl: props.backendUrl },
       );
     } catch (err) {
       console.error(`Failed to save the order of stack ${stackId}`, err);
@@ -1053,7 +1051,7 @@ export function useStackOrdering(
       return ia - ib;
     });
     try {
-      await createStack(sortedIds, { baseUrl: props.backendUrl });
+      await createStack(sortedIds);
       clearSelection();
       preserveScrollOnNextFetch.value = true;
       debouncedFetchAllGridImages();
@@ -1070,9 +1068,7 @@ export function useStackOrdering(
         stackIds.map(async (stackId) => {
           let idsToRemove;
           try {
-            const stack = await getStack(stackId, {
-              baseUrl: props.backendUrl,
-            });
+            const stack = await getStack(stackId);
             idsToRemove = stack?.picture_ids;
           } catch (e) {
             console.error(
@@ -1082,9 +1078,7 @@ export function useStackOrdering(
             idsToRemove = null;
           }
           if (!Array.isArray(idsToRemove) || !idsToRemove.length) return;
-          await removeStackMembers(stackId, idsToRemove, {
-            baseUrl: props.backendUrl,
-          });
+          await removeStackMembers(stackId, idsToRemove);
           const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
           allGridImages.value = allGridImages.value.map((img) => {
             if (!img || !removed.has(getPictureId(img.id))) return img;
@@ -1156,7 +1150,7 @@ export function useStackOrdering(
     let idsToRemove = ids;
     if (!expandedStackIds.value.has(stackId)) {
       try {
-        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const stack = await getStack(stackId);
         const allMemberIds = stack?.picture_ids;
         if (Array.isArray(allMemberIds) && allMemberIds.length) {
           idsToRemove = allMemberIds;
@@ -1170,9 +1164,7 @@ export function useStackOrdering(
     }
 
     try {
-      await removeStackMembers(stackId, idsToRemove, {
-        baseUrl: props.backendUrl,
-      });
+      await removeStackMembers(stackId, idsToRemove);
       const removed = new Set(idsToRemove.map((id) => getPictureId(id)));
       allGridImages.value = allGridImages.value.map((img) => {
         if (!img || !removed.has(getPictureId(img.id))) {
@@ -1292,7 +1284,7 @@ export function useStackOrdering(
 
     try {
       for (const memberIds of groupsToStack) {
-        await createStack(memberIds, { baseUrl: props.backendUrl });
+        await createStack(memberIds);
       }
       if (skippedGroups.length) {
         // Partial outcome: the rest succeeded, so this is a warning, not an error.

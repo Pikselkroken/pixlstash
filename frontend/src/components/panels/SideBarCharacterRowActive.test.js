@@ -64,22 +64,9 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
-vi.mock("vuetify/components", () => {
-  const stubs = new Map();
-  return new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === "__esModule") return true;
-        if (typeof prop !== "string") return undefined;
-        if (!stubs.has(prop)) {
-          stubs.set(prop, { name: prop, template: "<div><slot /></div>" });
-        }
-        return stubs.get(prop);
-      },
-      has: () => true,
-    },
-  );
+vi.mock("vuetify/components", async () => {
+  const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
+  return vuetifyComponentStubs();
 });
 
 vi.mock("vue-router", () => ({
@@ -91,16 +78,7 @@ vi.mock("vue-router", () => ({
   }),
 }));
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
-globalThis.IntersectionObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
 import { useSelectionStore } from "../../stores/useSelectionStore";

@@ -8,7 +8,8 @@
 // `/filesystem/*` is the server-side directory picker that backs the browse
 // dialog. It is grouped here because it exists only to choose a folder path.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Folder kinds, mapped to their collection paths. */
 const FOLDER_URLS = {
@@ -32,8 +33,7 @@ function folderUrl(kind) {
  * @returns {Promise<Object>} the response body, whose `folders` is the list.
  */
 export async function listReferenceFolders() {
-  const res = await apiClient.get(FOLDER_URLS.reference);
-  return res.data;
+  return unwrap(apiClient.get(FOLDER_URLS.reference));
 }
 
 /**
@@ -41,8 +41,7 @@ export async function listReferenceFolders() {
  * @returns {Promise<Object>} the response body, whose `folders` is the list.
  */
 export async function listImportFolders() {
-  const res = await apiClient.get(FOLDER_URLS.import);
-  return res.data;
+  return unwrap(apiClient.get(FOLDER_URLS.import));
 }
 
 /**
@@ -53,8 +52,7 @@ export async function listImportFolders() {
  * @returns {Promise<Object>} the created folder (the response body).
  */
 export async function createFolder(kind, body) {
-  const res = await apiClient.post(folderUrl(kind), body);
-  return res.data;
+  return unwrap(apiClient.post(folderUrl(kind), body));
 }
 
 /**
@@ -65,8 +63,7 @@ export async function createFolder(kind, body) {
  * @returns {Promise<Object>} the updated folder (the response body).
  */
 export async function patchFolder(kind, id, body) {
-  const res = await apiClient.patch(`${folderUrl(kind)}/${id}`, body);
-  return res.data;
+  return unwrap(apiClient.patch(`${folderUrl(kind)}/${id}`, body));
 }
 
 /**
@@ -76,8 +73,7 @@ export async function patchFolder(kind, id, body) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteFolder(kind, id) {
-  const res = await apiClient.delete(`${folderUrl(kind)}/${id}`);
-  return res.data;
+  return unwrap(apiClient.delete(`${folderUrl(kind)}/${id}`));
 }
 
 /**
@@ -92,10 +88,9 @@ export async function deleteFolder(kind, id) {
  *   `found_descriptions`, `description_suffix`.
  */
 export async function detectSidecars(path) {
-  const res = await apiClient.get(`${FOLDER_URLS.reference}/detect-sidecars`, {
+  return unwrap(apiClient.get(`${FOLDER_URLS.reference}/detect-sidecars`, {
     params: { path },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -107,10 +102,9 @@ export async function detectSidecars(path) {
  *   `path` (which may differ from the requested one).
  */
 export async function browseFilesystem(path, { showHidden = false } = {}) {
-  const res = await apiClient.get("/filesystem/browse", {
+  return unwrap(apiClient.get("/filesystem/browse", {
     params: { path: path ?? undefined, show_hidden: showHidden },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -120,8 +114,7 @@ export async function browseFilesystem(path, { showHidden = false } = {}) {
  *   directory as the server resolved it.
  */
 export async function createFilesystemFolder(path) {
-  const res = await apiClient.post("/filesystem/folders", { path });
-  return res.data;
+  return unwrap(apiClient.post("/filesystem/folders", { path }));
 }
 
 /**
@@ -136,11 +129,10 @@ export async function createFilesystemFolder(path) {
  *   `moved_entry_count`, `rewritten_count`.
  */
 export async function relocateReferenceFolder(id, destinationFolder) {
-  const res = await apiClient.post(
+  return unwrap(apiClient.post(
     `${FOLDER_URLS.reference}/${id}/relocate`,
     { destination_folder: destinationFolder },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -161,9 +153,8 @@ export async function movePicturesToReferenceFolder(
 ) {
   const body = { picture_ids: pictureIds };
   if (destinationSubpath) body.destination_subpath = destinationSubpath;
-  const res = await apiClient.post(
+  return unwrap(apiClient.post(
     `${FOLDER_URLS.reference}/${id}/move-pictures`,
     body,
-  );
-  return res.data;
+  ));
 }

@@ -54,11 +54,6 @@ vi.mock("../../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 // (1) Verbatim copy of App.vue's field gate for emitting the detections signal.
 // The backend always stamps a finished DetectionTask `fields: ["detections"]`

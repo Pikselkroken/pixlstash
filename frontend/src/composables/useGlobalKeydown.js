@@ -4,6 +4,7 @@ import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
 import { useOperationStore } from "../stores/useOperationStore";
 import { useSearchStore } from "../stores/useSearchStore";
 import { useSidebarStore } from "../stores/useSidebarStore";
+import { isTypingTarget } from "../utils/dom.js";
 
 /**
  * The app-wide keyboard shortcuts: undo/redo, search focus, sidebar and grid
@@ -67,13 +68,7 @@ export function useGlobalKeydown({
     // Match the strictness the grid and the lightbox already use: a SELECT and an
     // ARIA textbox are typing surfaces too, and the event target matters as much
     // as `document.activeElement` (a Vuetify combobox moves focus around).
-    const isEditable = [e.target, document.activeElement].some(
-      (el) =>
-        el instanceof HTMLElement &&
-        (el.isContentEditable ||
-          ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
-          el.getAttribute("role") === "textbox"),
-    );
+    const isEditable = isTypingTarget(e.target);
 
     // The auto-hide sidebar is revealed by hover (or tap), so WCAG 2.1 SC 1.4.13
     // "Content on Hover or Focus" applies: it must be dismissible without moving

@@ -1,48 +1,39 @@
 // ComfyUI resource — /comfyui/*.
 //
 // PixlStash's own backend proxies ComfyUI; these are PixlStash routes, not
-// calls to a ComfyUI server. Some call sites address them through an explicit
-// backend base (a `backendUrl` prop) rather than a relative path, so every
-// function here takes an optional `baseUrl` prefix and passes the resulting
-// URL to the shared apiClient, which injects the share token on same-origin
-// absolute URLs and leaves foreign hosts alone.
+// calls to a ComfyUI server. Paths are relative: the shared apiClient adds the
+// /api/v1 prefix and the backend origin, injects the share token on same-origin
+// absolute URLs, and leaves foreign hosts alone.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * Build a ComfyUI route, optionally under an explicit backend base.
  * @param {string} path - the route below `/comfyui`, e.g. `"/workflows"`.
- * @param {string} [baseUrl=""] - backend base; empty for a relative URL.
  * @returns {string}
  */
-function comfyUrl(path, baseUrl = "") {
-  return `${baseUrl}/comfyui${path}`;
+function comfyUrl(path) {
+  return `/comfyui${path}`;
 }
 
 /**
  * List the saved ComfyUI workflows.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base, if the caller
- *   has one.
  * @returns {Promise<Object>} the response body, whose `workflows` is the list.
  */
-export async function listWorkflows({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(comfyUrl("/workflows", baseUrl));
-  return res.data;
+export async function listWorkflows() {
+  return unwrap(apiClient.get(comfyUrl("/workflows")));
 }
 
 /**
  * Delete one saved workflow by its file name.
  * @param {string} name - the workflow's `name` as listed (URL-encoded here).
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function deleteWorkflow(name, { baseUrl = "" } = {}) {
-  const res = await apiClient.delete(
-    comfyUrl(`/workflows/${encodeURIComponent(name)}`, baseUrl),
-  );
-  return res.data;
+export async function deleteWorkflow(name) {
+  return unwrap(apiClient.delete(
+    comfyUrl(`/workflows/${encodeURIComponent(name)}`),
+  ));
 }
 
 /**
@@ -55,20 +46,16 @@ export async function deleteWorkflow(name, { baseUrl = "" } = {}) {
  * @param {string} body.name
  * @param {Object} body.workflow - the graph, with placeholders already applied.
  * @param {boolean} [body.overwrite=false]
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
 export async function importWorkflow(
   { name, workflow, overwrite = false },
-  { baseUrl = "" } = {},
 ) {
-  const res = await apiClient.post(comfyUrl("/workflows/import", baseUrl), {
+  return unwrap(apiClient.post(comfyUrl("/workflows/import"), {
     name,
     workflow,
     overwrite,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -80,14 +67,11 @@ export async function importWorkflow(
  * @param {string} [body.caption]
  * @param {string} [body.client_id] - ties progress events back to this tab.
  * @param {boolean} [body.stack] - stack the outputs with their source.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `prompts` are the queued
  *   ComfyUI prompt ids.
  */
-export async function runImageToImage(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(comfyUrl("/run_i2i", baseUrl), body);
-  return res.data;
+export async function runImageToImage(body) {
+  return unwrap(apiClient.post(comfyUrl("/run_i2i"), body));
 }
 
 /**
@@ -97,16 +81,13 @@ export async function runImageToImage(body, { baseUrl = "" } = {}) {
  * case for imported photos rather than an error.
  *
  * @param {number|string} pictureId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: the graph plus its summary,
  *   prompt, models and LoRAs.
  */
-export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(
-    comfyUrl(`/pictures/${pictureId}/workflow`, baseUrl),
-  );
-  return res.data;
+export async function getPictureWorkflow(pictureId) {
+  return unwrap(apiClient.get(
+    comfyUrl(`/pictures/${pictureId}/workflow`),
+  ));
 }
 
 /**
@@ -131,16 +112,12 @@ export async function getPictureWorkflow(pictureId, { baseUrl = "" } = {}) {
  * file came from outside this PixlStash instance, and by which route.
  *
  * @param {number|string} pictureId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base, if the caller
- *   has one.
  * @returns {Promise<Object>} the response body described above.
  */
-export async function getPictureRecipe(pictureId, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(
-    comfyUrl(`/pictures/${pictureId}/recipe`, baseUrl),
-  );
-  return res.data;
+export async function getPictureRecipe(pictureId) {
+  return unwrap(apiClient.get(
+    comfyUrl(`/pictures/${pictureId}/recipe`),
+  ));
 }
 
 /**
@@ -161,14 +138,11 @@ export async function getPictureRecipe(pictureId, { baseUrl = "" } = {}) {
  *   refuses the run with a 400 without it whenever `preflight.checked` is
  *   false, so this must only ever be sent for a run the user acknowledged, and
  *   never as a constant.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{status, prompts: [{picture_id, prompt_id}]}`.
  */
-export async function runRecipe(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(comfyUrl("/run_recipe", baseUrl), body);
-  return res.data;
+export async function runRecipe(body) {
+  return unwrap(apiClient.post(comfyUrl("/run_recipe"), body));
 }
 
 /**
@@ -176,23 +150,17 @@ export async function runRecipe(body, { baseUrl = "" } = {}) {
  *
  * @param {Object} body - the prompt, workflow name, and the view context
  *   (`set_id`, `project_id`, `character_id`) the outputs should land in.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `prompts` are the queued
  *   ComfyUI prompt ids.
  */
-export async function runTextToImage(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(comfyUrl("/run_t2i", baseUrl), body);
-  return res.data;
+export async function runTextToImage(body) {
+  return unwrap(apiClient.post(comfyUrl("/run_t2i"), body));
 }
 
 /**
  * Ask the backend to abort the in-flight ComfyUI run.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function abortRun({ baseUrl = "" } = {}) {
-  const res = await apiClient.post(comfyUrl("/abort", baseUrl));
-  return res.data;
+export async function abortRun() {
+  return unwrap(apiClient.post(comfyUrl("/abort")));
 }

@@ -37,10 +37,6 @@ vi.mock("../../utils/apiClient", async () => {
   };
 });
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  disconnect() {}
-};
 
 const STUBS = {
   OverlayTagsPanel: true,
@@ -201,7 +197,7 @@ describe("ImageOverlay local media commands", () => {
     await flush();
 
     expect(event.defaultPrevented).toBe(true);
-    expect(apiGet).toHaveBeenCalledWith("http://test/pictures/7.jpg", {
+    expect(apiGet).toHaveBeenCalledWith("/pictures/7.jpg", {
       responseType: "blob",
     });
     expect(anchorClick).toHaveBeenCalledTimes(1);
@@ -336,7 +332,7 @@ describe("ImageOverlay local media commands", () => {
     download.click();
     const result = await resultPromise;
     expect(result).toBe(true);
-    expect(apiGet).toHaveBeenCalledWith("http://test/pictures/7.jpg", {
+    expect(apiGet).toHaveBeenCalledWith("/pictures/7.jpg", {
       responseType: "blob",
     });
     expect(anchorClick).toHaveBeenCalledTimes(1);
@@ -402,7 +398,7 @@ describe("ImageOverlay local media commands", () => {
     await wrapper.vm.saveMediaAs({ id: 7, format: "jpg", original_file_name: "holiday.jpg" });
     await wrapper.vm.copyMedia({ id: 7, format: "jpg" });
 
-    expect(apiGet).toHaveBeenCalledWith("http://test/pictures/7.jpg", {
+    expect(apiGet).toHaveBeenCalledWith("/pictures/7.jpg", {
       responseType: "blob",
     });
     expect(beginMediaSaveAs).toHaveBeenCalledWith("holiday.jpg");

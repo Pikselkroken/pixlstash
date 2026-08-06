@@ -446,7 +446,7 @@ async function fetchSelectedImageTags() {
   }
   if (!fetchedTagData.value.length) tagDataLoading.value = true;
   try {
-    const rows = await bulkFetchTags(toFetch, { baseUrl: props.backendUrl });
+    const rows = await bulkFetchTags(toFetch);
     fetchedTagData.value = Array.isArray(rows) ? rows : [];
   } catch {
     fetchedTagData.value = [];
@@ -472,7 +472,6 @@ async function fetchSelectedImagePredictions() {
       ids.map((id) =>
         listTagPredictions(id, {
           status: "REJECTED",
-          baseUrl: props.backendUrl,
         })
           .then((payload) => {
             const predictions = Array.isArray(payload)
@@ -613,7 +612,6 @@ async function confirmPredictionOnAll(
     await Promise.all(
       predEntry.ids.map((id) =>
         confirmTagPrediction(id, predEntry.tag, {
-          baseUrl: props.backendUrl,
           batchId,
         }),
       ),
@@ -668,7 +666,6 @@ async function removeTagFromAll(
         .filter(([, tagId]) => tagId != null)
         .map(([imgId, tagId]) =>
           removePictureTag(imgId, tagId, {
-            baseUrl: props.backendUrl,
             batchId,
           }),
         ),
@@ -698,7 +695,7 @@ async function addTagToRemaining(tagEntry) {
   try {
     await Promise.all(
       missingIds.map((id) =>
-        addPictureTag(id, tagEntry.name, { baseUrl: props.backendUrl }),
+        addPictureTag(id, tagEntry.name),
       ),
     );
     emit("tags-applied", {
@@ -743,7 +740,7 @@ async function generateTagsForAll(model = null) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
+        resetPictureTags(id, body),
       ),
     );
     const suffix = model ? ` with ${model}` : "";
@@ -942,7 +939,7 @@ async function applyTag() {
   tagSuccess.value = "";
   try {
     await Promise.all(
-      ids.map((id) => addPictureTag(id, tag, { baseUrl: props.backendUrl })),
+      ids.map((id) => addPictureTag(id, tag)),
     );
     tagSuccess.value = `Tagged ${ids.length} image${ids.length !== 1 ? "s" : ""} with "${tag}"`;
     tagInput.value = "";
@@ -1004,7 +1001,6 @@ async function rejectTagOnAll(tagEntry, { batchId } = {}) {
     await Promise.all(
       imageIds.map((id) =>
         rejectTagPrediction(id, tagEntry.name, {
-          baseUrl: props.backendUrl,
           batchId,
         }),
       ),

@@ -30,13 +30,13 @@ describe("api/config", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("both calls accept an explicit backend base", async () => {
+  it("both calls address the user-config route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
     apiClient.patch.mockResolvedValue({ data: {} });
-    await getUserConfig({ baseUrl: "/be" });
-    await patchUserConfig({ a: 1 }, { baseUrl: "/be" });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/users/me/config");
-    expect(apiClient.patch).toHaveBeenCalledWith("/be/users/me/config", {
+    await getUserConfig();
+    await patchUserConfig({ a: 1 });
+    expect(apiClient.get).toHaveBeenCalledWith("/users/me/config");
+    expect(apiClient.patch).toHaveBeenCalledWith("/users/me/config", {
       a: 1,
     });
   });

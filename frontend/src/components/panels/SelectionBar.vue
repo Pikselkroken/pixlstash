@@ -332,6 +332,7 @@ import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
+import { isEditableElement } from "../../utils/dom.js";
 
 const props = defineProps({
   selectedCount: Number,
@@ -366,7 +367,6 @@ const props = defineProps({
   captionerPlugins: { type: Array, default: () => [] },
   allGridImages: { type: Array, default: () => [] },
   selectedCharacter: String,
-  selectedSet: String,
   impossibleSources: { type: Array, default: () => [] },
   clearingImpossible: { type: Boolean, default: false },
 });
@@ -458,15 +458,6 @@ const selectedPluginName = ref("");
 const pluginMenuOpen = ref(false);
 const selectionMenuOpen = ref(false);
 const selectionMenuRef = ref(null);
-
-function isEditableElement(el) {
-  if (!(el instanceof HTMLElement)) return false;
-  if (el.isContentEditable) return true;
-  const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-  if (el.getAttribute("role") === "textbox") return true;
-  return false;
-}
 
 function handleSelectionMenuHotkey(event) {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -673,9 +664,7 @@ async function runSelectedComfyWorkflow() {
       client_id: props.comfyuiClientId || undefined,
       stack: stackI2IOutputs.value,
     };
-    const body = await runImageToImage(payload, {
-      baseUrl: props.backendUrl,
-    });
+    const body = await runImageToImage(payload);
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("comfyui-run", {
       prompts,

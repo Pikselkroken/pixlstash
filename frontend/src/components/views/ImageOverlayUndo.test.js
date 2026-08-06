@@ -52,11 +52,6 @@ vi.mock("../../api/operations", () => ({
   undoBatch: vi.fn().mockResolvedValue({ operations: [] }),
 }));
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 import { useOperationStore } from "../../stores/useOperationStore";
 

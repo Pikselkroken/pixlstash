@@ -42,10 +42,10 @@ describe("api/pictures", () => {
     expect(result).toEqual([{ id: 4 }, { id: 5 }]);
   });
 
-  it("listPicturesByIds prefixes an explicit backend base", async () => {
+  it("listPicturesByIds requests the by-ids route", async () => {
     apiClient.get.mockResolvedValue({ data: [] });
-    await listPicturesByIds([4], { baseUrl: "/be" });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/pictures?id=4");
+    await listPicturesByIds([4]);
+    expect(apiClient.get).toHaveBeenCalledWith("/pictures?id=4");
   });
 
   it("listPicturesByIds appends the projection when asked", async () => {
@@ -56,11 +56,9 @@ describe("api/pictures", () => {
 
   it("getPictureCount appends a filter query when there is one", async () => {
     apiClient.get.mockResolvedValue({ data: { count: 12 } });
-    const result = await getPictureCount("stack_leaders_only=true", {
-      baseUrl: "/be",
-    });
+    const result = await getPictureCount("stack_leaders_only=true", { });
     expect(apiClient.get).toHaveBeenCalledWith(
-      "/be/pictures/count?stack_leaders_only=true",
+      "/pictures/count?stack_leaders_only=true",
     );
     expect(result.count).toBe(12);
   });
@@ -293,11 +291,10 @@ describe("api/pictures", () => {
 
     const result = await downloadPicture(42, ".JPG", {
       version: "pixel-hash",
-      baseUrl: "/be",
     });
 
     expect(apiClient.get).toHaveBeenCalledWith(
-      "/be/pictures/42.jpg?v=pixel-hash",
+      "/pictures/42.jpg?v=pixel-hash",
       { responseType: "blob" },
     );
     expect(result).toBe(blob);

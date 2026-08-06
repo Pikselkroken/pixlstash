@@ -10,7 +10,8 @@
 //
 // Per the §src/api rules the URL strings live only here.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 // Public, deployment-independent fallback for remote owners. Unlike cli_hint
 // it contains no host path, interpreter path, or container name.
@@ -36,8 +37,7 @@ const ACTIVE_LIBRARY_URL = "/libraries/active";
  * @returns {Promise<Object>} `{ libraries, can_manage, in_docker, cli_hint }`.
  */
 export async function listLibraries() {
-  const res = await apiClient.get(LIBRARIES_URL);
-  return res.data;
+  return unwrap(apiClient.get(LIBRARIES_URL));
 }
 
 /**
@@ -53,6 +53,5 @@ export async function listLibraries() {
  * @returns {Promise<Object>} `{ status, library, active_share_links }`.
  */
 export async function setActiveLibrary(uuid) {
-  const res = await apiClient.post(ACTIVE_LIBRARY_URL, { uuid });
-  return res.data;
+  return unwrap(apiClient.post(ACTIVE_LIBRARY_URL, { uuid }));
 }

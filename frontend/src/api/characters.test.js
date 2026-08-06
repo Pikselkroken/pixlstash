@@ -32,10 +32,10 @@ describe("api/characters", () => {
     expect(result).toEqual([{ id: 1, name: "Ada" }]);
   });
 
-  it("listCharacters forwards query params and a backend base", async () => {
+  it("listCharacters forwards query params", async () => {
     apiClient.get.mockResolvedValue({ data: [] });
-    await listCharacters({ baseUrl: "/be", params: { project_id: 7 } });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/characters", {
+    await listCharacters({ params: { project_id: 7 } });
+    expect(apiClient.get).toHaveBeenCalledWith("/characters", {
       params: { project_id: 7 },
     });
   });
@@ -99,8 +99,8 @@ describe("api/characters", () => {
 
   it("addCharacterFaces POSTs the ids to the faces sub-resource", async () => {
     apiClient.post.mockResolvedValue({ data: {} });
-    await addCharacterFaces(2, [7], { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/characters/2/faces", {
+    await addCharacterFaces(2, [7]);
+    expect(apiClient.post).toHaveBeenCalledWith("/characters/2/faces", {
       picture_ids: [7],
     });
   });
@@ -110,9 +110,8 @@ describe("api/characters", () => {
     await addCharacterFaceAssignments(
       2,
       [{ picture_id: 7, face_id: 11 }],
-      { baseUrl: "/be" },
     );
-    expect(apiClient.post).toHaveBeenCalledWith("/be/characters/2/faces", {
+    expect(apiClient.post).toHaveBeenCalledWith("/characters/2/faces", {
       face_assignments: [{ picture_id: 7, face_id: 11 }],
     });
   });

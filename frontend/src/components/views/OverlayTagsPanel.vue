@@ -451,9 +451,7 @@ function normalizeTagKey(tag) {
 async function fetchTagPredictions(imageId) {
   if (!imageId || !props.backendUrl) return;
   try {
-    const payload = await listTagPredictions(imageId, {
-      baseUrl: props.backendUrl,
-    });
+    const payload = await listTagPredictions(imageId);
     if (!props.image || props.image.id !== imageId) return;
     const predictions = Array.isArray(payload)
       ? payload
@@ -856,7 +854,6 @@ async function removeAllTag(tag, { batchId = newOperationBatchId() } = {}) {
   if (capturedImageId && props.backendUrl) {
     try {
       await removeTagEverywhere(capturedImageId, label, {
-        baseUrl: props.backendUrl,
         batchId,
       });
     } catch (err) {
@@ -903,7 +900,7 @@ async function confirmPrediction(tag) {
   }
 
   try {
-    await confirmTagPrediction(imageId, tag, { baseUrl: props.backendUrl });
+    await confirmTagPrediction(imageId, tag);
     void fetchTagPredictions(imageId);
   } catch (e) {
     emit("update-tags", prevTags);
@@ -926,7 +923,6 @@ async function rejectPrediction(tag, { batchId } = {}) {
   const key = String(tag).trim().toLowerCase();
   try {
     await rejectTagPrediction(imageId, tag, {
-      baseUrl: props.backendUrl,
       batchId,
     });
     tagPredictions.value = tagPredictions.value.map((p) =>
@@ -975,9 +971,7 @@ async function refreshPictureTags(model = null) {
   isTagsRefreshing.value = true;
   try {
     const body = model ? { model } : {};
-    await resetPictureTags(capturedImageId, body, {
-      baseUrl: props.backendUrl,
-    });
+    await resetPictureTags(capturedImageId, body);
     tagPredictions.value = [];
     emit("update-tags", []);
     emit("overlay-change", {

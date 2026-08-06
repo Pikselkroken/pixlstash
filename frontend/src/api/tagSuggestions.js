@@ -4,7 +4,8 @@
 // per card as the user makes them, which is why aborting a review leaves the
 // decisions already taken in place (see api/reviews.js).
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Base path of the tag-suggestions collection. */
 const SUGGESTIONS_URL = "/tag_suggestions";
@@ -17,8 +18,7 @@ const SUGGESTIONS_URL = "/tag_suggestions";
  * @returns {Promise<Object>} the response body.
  */
 export async function resolveTagSuggestion(id, action) {
-  const res = await apiClient.post(`${SUGGESTIONS_URL}/${id}/${action}`);
-  return res.data;
+  return unwrap(apiClient.post(`${SUGGESTIONS_URL}/${id}/${action}`));
 }
 
 /**
@@ -27,8 +27,7 @@ export async function resolveTagSuggestion(id, action) {
  * @returns {Promise<Object>} the response body.
  */
 export async function skipTagSuggestion(id) {
-  const res = await apiClient.post(`${SUGGESTIONS_URL}/${id}/skip`);
-  return res.data;
+  return unwrap(apiClient.post(`${SUGGESTIONS_URL}/${id}/skip`));
 }
 
 /**
@@ -42,8 +41,7 @@ export async function skipTagSuggestion(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function reopenTagSuggestion(id) {
-  const res = await apiClient.post(`${SUGGESTIONS_URL}/${id}/reopen`);
-  return res.data;
+  return unwrap(apiClient.post(`${SUGGESTIONS_URL}/${id}/reopen`));
 }
 
 /**
@@ -56,8 +54,7 @@ export async function reopenTagSuggestion(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function bulkReopenTagSuggestions(reviewId) {
-  const res = await apiClient.post(`${SUGGESTIONS_URL}/bulk-reopen`, {
+  return unwrap(apiClient.post(`${SUGGESTIONS_URL}/bulk-reopen`, {
     review_id: reviewId,
-  });
-  return res.data;
+  }));
 }

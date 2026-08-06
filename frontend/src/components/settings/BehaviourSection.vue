@@ -4,8 +4,7 @@ import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
 import { listTaggers } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
-import TagPluginsTable from "../widgets/TagPluginsTable.vue";
-import DescriptionPluginsTable from "../widgets/DescriptionPluginsTable.vue";
+import PluginsTable from "../widgets/PluginsTable.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
 import SettingsFieldBlock from "./SettingsFieldBlock.vue";
@@ -289,8 +288,9 @@ watch(
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
-          <TagPluginsTable
+          <PluginsTable
             v-else
+            kind="tag"
             :plugins="taggerPlugins"
             :settings="taggerSettings"
             @update:settings="(s) => (taggerSettings.value = s)"
@@ -300,8 +300,9 @@ watch(
           <div v-if="taggerLoading" class="settings-tagger-loading">
             Loading…
           </div>
-          <DescriptionPluginsTable
+          <PluginsTable
             v-else
+            kind="description"
             :plugins="taggerPlugins"
             :settings="taggerSettings"
             @update:settings="(s) => (taggerSettings.value = s)"

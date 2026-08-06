@@ -5,29 +5,26 @@
 // why "dissolve" is a members-DELETE rather than a stack-DELETE: the pictures
 // survive, only the grouping goes.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * Build a stacks route, optionally under an explicit backend base.
  * @param {string} [path=""] - the route below `/stacks`.
- * @param {string} [baseUrl=""]
  * @returns {string}
  */
-function stacksUrl(path = "", baseUrl = "") {
-  return `${baseUrl}/stacks${path}`;
+function stacksUrl(path = "") {
+  return `/stacks${path}`;
 }
 
 /**
  * Read one stack.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `picture_ids` are the
  *   stack's members.
  */
-export async function getStack(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(stacksUrl(`/${id}`, baseUrl));
-  return res.data;
+export async function getStack(id) {
+  return unwrap(apiClient.get(stacksUrl(`/${id}`)));
 }
 
 /**
@@ -39,22 +36,20 @@ export async function getStack(id, { baseUrl = "" } = {}) {
  *   the grid fields, and asking for the full record is markedly slower.
  * @param {string} [options.sort] - omitted for the stack's own order.
  * @param {boolean} [options.descending] - omitted unless a sort is given.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the member pictures (the response body).
  */
 export async function listStackPictures(
   id,
-  { fields = "grid", sort, descending, baseUrl = "" } = {},
+  { fields = "grid", sort, descending } = {},
 ) {
   const params = { fields };
   if (sort) params.sort = sort;
   if (typeof descending === "boolean") {
     params.descending = descending ? "true" : "false";
   }
-  const res = await apiClient.get(stacksUrl(`/${id}/pictures`, baseUrl), {
+  return unwrap(apiClient.get(stacksUrl(`/${id}/pictures`), {
     params,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -64,30 +59,24 @@ export async function listStackPictures(
  * calling rather than relying on the server.
  *
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the created stack (the response body).
  */
-export async function createStack(pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(stacksUrl("", baseUrl), {
+export async function createStack(pictureIds) {
+  return unwrap(apiClient.post(stacksUrl(""), {
     picture_ids: pictureIds,
-  });
-  return res.data;
+  }));
 }
 
 /**
  * Persist a stack's member order.
  * @param {number|string} id
  * @param {Array<number>} pictureIds - the members in their new order.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function setStackOrder(id, pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.patch(stacksUrl(`/${id}/order`, baseUrl), {
+export async function setStackOrder(id, pictureIds) {
+  return unwrap(apiClient.patch(stacksUrl(`/${id}/order`), {
     picture_ids: pictureIds,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -98,19 +87,12 @@ export async function setStackOrder(id, pictureIds, { baseUrl = "" } = {}) {
  *
  * @param {number|string} id
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function removeStackMembers(
-  id,
-  pictureIds,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.delete(stacksUrl(`/${id}/members`, baseUrl), {
+export async function removeStackMembers(id, pictureIds) {
+  return unwrap(apiClient.delete(stacksUrl(`/${id}/members`), {
     data: { picture_ids: pictureIds },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -156,7 +138,6 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
  * @param {Array<number|string>} [selection.stackIds] - stacks named directly.
  * @param {Array<number|string>} [selection.pictureIds] - the grid selection;
  *   each resolves to its stack.
- * @param {string} [selection.baseUrl=""]
  * @returns {Promise<Object>} `{ stacks_selected, stacks_eligible,
  *   stacks_skipped_locked, stacks_skipped_character_on_copy,
  *   stacks_skipped_single_member, pictures_moving, picture_ids_moving,
@@ -167,13 +148,11 @@ function keepCoverOnlyBody({ stackIds, pictureIds } = {}) {
 export async function previewKeepCoverOnly({
   stackIds,
   pictureIds,
-  baseUrl = "",
 } = {}) {
-  const res = await apiClient.post(
-    stacksUrl("/keep-cover-only/preview", baseUrl),
+  return unwrap(apiClient.post(
+    stacksUrl("/keep-cover-only/preview"),
     keepCoverOnlyBody({ stackIds, pictureIds }),
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -192,7 +171,6 @@ export async function previewKeepCoverOnly({
  * @param {Array<number|string>} [selection.pictureIds]
  * @param {string} [selection.batchId] - client-namespaced `cli-…` batch id, so
  *   one gesture stays a single undo. Omit and the server mints one.
- * @param {string} [selection.baseUrl=""]
  * @returns {Promise<Object>} `{ status, stacks_collapsed, stack_ids_collapsed,
  *   pictures_moved, picture_ids_moved, cover_picture_ids,
  *   covers_gaining_metadata, tags_added, scores_lifted,
@@ -204,10 +182,8 @@ export async function keepCoverOnly({
   stackIds,
   pictureIds,
   batchId,
-  baseUrl = "",
 } = {}) {
   const body = keepCoverOnlyBody({ stackIds, pictureIds });
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(stacksUrl("/keep-cover-only", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(stacksUrl("/keep-cover-only"), body));
 }

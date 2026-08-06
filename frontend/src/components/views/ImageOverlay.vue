@@ -851,7 +851,19 @@ import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
-import { faceBoxColor, getStackColor, toggleScore } from "../../utils/utils.js";
+import {
+  applyStackBackgroundAlpha,
+  faceBoxColor,
+  getStackColor,
+  getStackColorIndexFromId,
+  toggleScore,
+} from "../../utils/utils.js";
+import { isEditableElement, isTypingTarget } from "../../utils/dom.js";
+import {
+  getPictureStackId,
+  getStackPositionValue,
+  sortStackMembers,
+} from "../../utils/stack.js";
 import { dedupeTagList, getTagList } from "../../utils/tags.js";
 
 // Failures report through the notice surface instead of a blocking native
@@ -1034,7 +1046,7 @@ const allImagesByStackId = computed(() => {
   const map = new Map();
   const list = overlayImages.value;
   for (const item of list) {
-    const stackId = getOverlayStackId(item);
+    const stackId = getPictureStackId(item);
     if (!stackId || item?.id == null) continue;
     if (!map.has(stackId)) {
       map.set(stackId, []);
@@ -1042,7 +1054,7 @@ const allImagesByStackId = computed(() => {
     map.get(stackId).push(item);
   }
   for (const [stackId, members] of map.entries()) {
-    map.set(stackId, sortOverlayStackMembers(members));
+    map.set(stackId, sortStackMembers(members));
   }
   return map;
 });
@@ -1532,7 +1544,7 @@ function isImageInFilmstrip(targetId) {
 async function ensureOverlayFilmstripForImage() {
   const targetId = image.value?.id ?? null;
   if (!targetId) return;
-  const stackId = getOverlayStackId(image.value);
+  const stackId = getPictureStackId(image.value);
   if (!stackId) return;
   const shouldExpand = !isImageInFilmstrip(targetId) && !!stackId;
   if (!shouldExpand) return;
@@ -1544,60 +1556,6 @@ async function ensureOverlayFilmstripForImage() {
     overlayExpandedStackIds.value = nextIds;
   }
   await ensureOverlayStackMembersLoaded(stackId, image.value);
-}
-
-function getOverlayStackId(img) {
-  const stackId = img?.stack_id ?? img?.stackId ?? null;
-  if (stackId === null || stackId === undefined) return null;
-  return String(stackId);
-}
-
-function getOverlayStackPositionValue(img) {
-  if (!img) return null;
-  const raw = img.stack_position ?? img.stackPosition ?? null;
-  if (raw === null || raw === undefined) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
-}
-
-function getOverlayStackSmartScoreValue(img) {
-  const raw = img?.smartScore ?? img?.smart_score ?? null;
-  if (raw === null || raw === undefined) return 0;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function getOverlayStackCreatedAtTs(img) {
-  if (!img?.created_at) return 0;
-  const ts = new Date(img.created_at).getTime();
-  return Number.isFinite(ts) ? ts : 0;
-}
-
-function compareOverlayStackOrder(a, b) {
-  const posA = getOverlayStackPositionValue(a);
-  const posB = getOverlayStackPositionValue(b);
-  if (posA !== null || posB !== null) {
-    if (posA === null) return 1;
-    if (posB === null) return -1;
-    if (posA !== posB) return posA - posB;
-  }
-  const scoreA = Number(a?.score ?? 0);
-  const scoreB = Number(b?.score ?? 0);
-  if (scoreA !== scoreB) return scoreB - scoreA;
-  const smartA = getOverlayStackSmartScoreValue(a);
-  const smartB = getOverlayStackSmartScoreValue(b);
-  if (smartA !== smartB) return smartB - smartA;
-  const dateA = getOverlayStackCreatedAtTs(a);
-  const dateB = getOverlayStackCreatedAtTs(b);
-  if (dateA !== dateB) return dateB - dateA;
-  const idA = Number(a?.id ?? 0);
-  const idB = Number(b?.id ?? 0);
-  return idA - idB;
-}
-
-function sortOverlayStackMembers(members) {
-  if (!Array.isArray(members)) return [];
-  return members.slice().sort(compareOverlayStackOrder);
 }
 
 function getOverlayLocalStackMembers(stackId) {
@@ -1612,7 +1570,7 @@ function getOverlayStackSignature(stackId) {
   if (!members.length) return "";
   const parts = members.map((img) => {
     const id = img?.id != null ? String(img.id) : "";
-    const pos = getOverlayStackPositionValue(img);
+    const pos = getStackPositionValue(img);
     return `${id}:${pos === null ? "x" : String(pos)}`;
   });
   return `${members.length}|${parts.join(",")}`;
@@ -1625,17 +1583,17 @@ function normalizeOverlayStackMembersForStack(stackId, members) {
     if (!member || member.id == null) continue;
     const id = String(member.id);
     const latest = allImageById.value.get(id) || member;
-    if (getOverlayStackId(latest) !== stackId) continue;
+    if (getPictureStackId(latest) !== stackId) continue;
     normalized.push(latest);
   }
-  return sortOverlayStackMembers(normalized);
+  return sortStackMembers(normalized);
 }
 
 const overlayStackCounts = computed(() => {
   const counts = new Map();
   const list = overlayImages.value;
   for (const img of list) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) continue;
     counts.set(stackId, (counts.get(stackId) || 0) + 1);
   }
@@ -1645,24 +1603,12 @@ const overlayStackCounts = computed(() => {
 function getOverlayStackCount(item) {
   const count = Number(item?.stackCount ?? item?.stack_count ?? 0);
   if (Number.isFinite(count) && count > 0) return count;
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return 0;
   const expanded = overlayExpandedStackMembers.value.get(stackId);
   const ids = Array.isArray(expanded?.ids) ? expanded.ids : [];
   if (ids.length) return ids.length;
   return overlayStackCounts.value.get(stackId) || 0;
-}
-
-function getStackColorIndexFromId(stackId) {
-  if (stackId === null || stackId === undefined) return null;
-  const numeric = Number(stackId);
-  if (Number.isFinite(numeric)) return numeric;
-  const raw = String(stackId);
-  let hash = 0;
-  for (let i = 0; i < raw.length; i += 1) {
-    hash = (hash * 31 + raw.charCodeAt(i)) % 2147483647;
-  }
-  return hash || null;
 }
 
 function getOverlayStackColor(item) {
@@ -1679,34 +1625,10 @@ function getOverlayStackColor(item) {
   if (typeof stackIndex === "number") {
     return getStackColor(stackIndex);
   }
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   const index = getStackColorIndexFromId(stackId);
   if (index === null) return null;
   return getStackColor(index);
-}
-
-function applyOverlayStackBackgroundAlpha(color) {
-  if (!color || typeof color !== "string") return color;
-  const trimmed = color.trim();
-  if (!trimmed) return color;
-  if (trimmed.startsWith("hsla(") || trimmed.startsWith("rgba(")) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("hsl(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `hsla(${inner}, 0.6)`;
-    }
-    return `hsl(${inner} / 0.6)`;
-  }
-  if (trimmed.startsWith("rgb(")) {
-    const inner = trimmed.slice(4, -1).trim();
-    if (inner.includes(",")) {
-      return `rgba(${inner}, 0.6)`;
-    }
-    return `rgb(${inner} / 0.6)`;
-  }
-  return trimmed;
 }
 
 function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
@@ -1736,7 +1658,7 @@ function buildOverlayExpandedStackImages(stackId, fallbackItem, stackCount) {
     ordered.push(img);
   };
 
-  const orderedIds = sortOverlayStackMembers(
+  const orderedIds = sortStackMembers(
     Array.from(imageById.values()),
   ).map((img) => String(img.id));
   for (const id of orderedIds) {
@@ -1757,7 +1679,7 @@ function collapseOverlayStackImages(images) {
   if (!Array.isArray(images) || images.length === 0) return [];
   const counts = new Map();
   for (const img of images) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) continue;
     counts.set(stackId, (counts.get(stackId) || 0) + 1);
   }
@@ -1766,7 +1688,7 @@ function collapseOverlayStackImages(images) {
   const seen = new Set();
   const collapsed = [];
   for (const img of images) {
-    const stackId = getOverlayStackId(img);
+    const stackId = getPictureStackId(img);
     if (!stackId) {
       collapsed.push(img);
       continue;
@@ -1809,7 +1731,7 @@ async function ensureOverlayStackMembersLoaded(
     referenceItem?.stackCount ?? referenceItem?.stack_count ?? 0,
   );
   if (!forceReload && localMembers.length > 1) {
-    const orderedLocal = sortOverlayStackMembers(localMembers);
+    const orderedLocal = sortStackMembers(localMembers);
     if (!Number.isFinite(expectedCount) || expectedCount <= 0) {
       const ids = orderedLocal
         .filter((img) => img && img.id != null)
@@ -1884,7 +1806,7 @@ function getOverlayStackLeaderId(stackId) {
     return String(cachedIds[0]);
   }
   const cachedImages = Array.isArray(cached?.images) ? cached.images : [];
-  const orderedCached = sortOverlayStackMembers(cachedImages);
+  const orderedCached = sortStackMembers(cachedImages);
   if (orderedCached.length && orderedCached[0]?.id != null) {
     return String(orderedCached[0].id);
   }
@@ -1892,10 +1814,10 @@ function getOverlayStackLeaderId(stackId) {
 }
 
 async function toggleFilmstripStackExpand(item) {
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return;
   if (overlayExpandedStackIds.value.has(stackId)) {
-    const currentStackId = getOverlayStackId(image.value);
+    const currentStackId = getPictureStackId(image.value);
     if (currentStackId === stackId && image.value?.id != null) {
       // Always navigate to the leader when collapsing, regardless of showStacks.
       // If the current image is a non-leader it will no longer be visible in the
@@ -1918,7 +1840,7 @@ async function toggleFilmstripStackExpand(item) {
 }
 
 function prefetchFilmstripStackMembers(item) {
-  const stackId = getOverlayStackId(item);
+  const stackId = getPictureStackId(item);
   if (!stackId) return;
   void ensureOverlayStackMembersLoaded(stackId, item);
 }
@@ -1945,7 +1867,7 @@ async function applyAllImagesUpdate() {
   }
   void ensureOverlayFilmstripForImage();
 
-  const stackId = getOverlayStackId(image.value);
+  const stackId = getPictureStackId(image.value);
   if (!stackId) return;
   const nextSignature = getOverlayStackSignature(stackId);
   if (!nextSignature) return;
@@ -2126,18 +2048,6 @@ function showNextImage() {
  * @param {EventTarget|null} target - the keydown target.
  * @returns {boolean}
  */
-function isTypingTarget(target) {
-  const active =
-    typeof document === "undefined" ? null : document.activeElement;
-  return [target, active].some(
-    (el) =>
-      el instanceof HTMLElement &&
-      (el.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) ||
-        el.getAttribute("role") === "textbox"),
-  );
-}
-
 function hasNativeCopyContext(target) {
   if (isTypingTarget(target)) return true;
   const selection = typeof window === "undefined" ? null : window.getSelection?.();
@@ -2157,13 +2067,7 @@ function handleKeydown(e) {
   // native menu (paste / spellcheck) still works in the tag and description
   // fields.
   if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
-    const t = e.target;
-    const typing =
-      t instanceof HTMLElement &&
-      (t.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) ||
-        t.getAttribute("role") === "textbox");
-    if (!typing) {
+    if (!isEditableElement(e.target)) {
       e.preventDefault();
       handleUserActivity();
       openContextMenuFromKeyboard();
@@ -2291,12 +2195,7 @@ function handleKeydown(e) {
   // Block shortcuts when any other editable element (e.g. plugin parameter inputs) has focus.
   // Still allow ESC to close the plugin/comfyui menu if open.
   const target = e.target;
-  const isEditable =
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-      target.getAttribute("role") === "textbox");
-  if (isEditable) {
+  if (isEditableElement(target)) {
     if (e.key === "Escape") {
       if (pluginMenuOpen.value) {
         pluginMenuOpen.value = false;
@@ -2756,9 +2655,9 @@ const filmstripCanvasData = computed(() => {
   }
   const items = indices.map((idx) => {
     const item = images[idx];
-    const stackId = getOverlayStackId(item);
+    const stackId = getPictureStackId(item);
     const prevItem = idx > 0 ? images[idx - 1] : null;
-    const prevStackId = getOverlayStackId(prevItem);
+    const prevStackId = getPictureStackId(prevItem);
     const isStackExpanded = stackId
       ? overlayExpandedStackIds.value.has(stackId)
       : false;
@@ -2788,7 +2687,7 @@ const filmstripCanvasData = computed(() => {
     const stackColor = getOverlayStackColor(item);
     const stackTileStyle = (() => {
       if (!isStackExpanded) return {};
-      const color = applyOverlayStackBackgroundAlpha(stackColor);
+      const color = applyStackBackgroundAlpha(stackColor);
       return color ? { "--filmstrip-stack-bg": color } : {};
     })();
 

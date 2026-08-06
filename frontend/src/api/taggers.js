@@ -4,18 +4,15 @@
 // settings in one body; the settings are written back through the user config
 // (see api/config.js), which is why there is no PATCH here.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * List the installed tagger plugins together with their current settings.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base, for the call
- *   sites that address the backend absolutely.
  * @returns {Promise<Object>} the response body: `plugins` and `settings`.
  */
-export async function listTaggers({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/taggers`);
-  return res.data;
+export async function listTaggers() {
+  return unwrap(apiClient.get(`/taggers`));
 }
 
 /**
@@ -27,8 +24,7 @@ export async function listTaggers({ baseUrl = "" } = {}) {
  * @returns {Promise<Array<Object>>} the threshold rows (the response body).
  */
 export async function getLabelThresholds(offset) {
-  const res = await apiClient.get("/tagger/label-thresholds", {
+  return unwrap(apiClient.get("/tagger/label-thresholds", {
     params: offset != null ? { offset } : {},
-  });
-  return res.data;
+  }));
 }

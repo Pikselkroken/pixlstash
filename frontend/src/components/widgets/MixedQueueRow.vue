@@ -185,7 +185,6 @@ import { computed, useId } from "vue";
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
-import { API_BASE_URL } from "../../utils/apiClient";
 import {
   isMixedStackStackable,
   mixedStackLockNote,
@@ -345,7 +344,7 @@ const tiles = computed(() =>
     return {
       key: member.key,
       member,
-      src: pictureThumbnailUrl(member.pictureId, { baseUrl: API_BASE_URL }),
+      src: pictureThumbnailUrl(member.pictureId),
       ariaLabel: memberLabel(member, i),
       title: memberTitle(member),
       pressed: marked,

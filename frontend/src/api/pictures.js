@@ -4,7 +4,8 @@
 // have already migrated; the counts, scores, thumbnails, and export endpoints
 // join it as the grid and overlay move over.
 
-import { apiClient, appendShareToken } from "../utils/apiClient";
+import { apiClient, appendShareToken, API_BASE_URL} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * The URL a browser loads a picture's thumbnail from.
@@ -18,15 +19,18 @@ import { apiClient, appendShareToken } from "../utils/apiClient";
  * @param {Object} [options]
  * @param {number|string} [options.version] - cache-buster, bumped when the
  *   thumbnail is regenerated.
- * @param {string} [options.baseUrl=""]
  * @returns {string}
  */
-export function pictureThumbnailUrl(id, { version, baseUrl = "" } = {}) {
+export function pictureThumbnailUrl(id, { version } = {}) {
   const query =
     version === undefined || version === null
       ? ""
       : `?v=${encodeURIComponent(version)}`;
-  return appendShareToken(`${baseUrl}/pictures/thumbnails/${id}.webp${query}`);
+  // An <img src> never reaches the apiClient interceptor, so the API base has
+  // to be spelled out here rather than left for axios to prepend.
+  return appendShareToken(
+    `${API_BASE_URL}/pictures/thumbnails/${id}.webp${query}`,
+  );
 }
 
 /**
@@ -36,16 +40,13 @@ export function pictureThumbnailUrl(id, { version, baseUrl = "" } = {}) {
  * grid uses it to size its placeholder scroll area before any row has loaded.
  *
  * @param {string} [query=""] - pre-encoded filter query string, no leading `?`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `count` is the total.
  */
-export async function getPictureCount(query = "", { baseUrl = "" } = {}) {
+export async function getPictureCount(query = "") {
   const url = query
-    ? `${baseUrl}/pictures/count?${query}`
-    : `${baseUrl}/pictures/count`;
-  const res = await apiClient.get(url);
-  return res.data;
+    ? `/pictures/count?${query}`
+    : `/pictures/count`;
+  return unwrap(apiClient.get(url));
 }
 
 /**
@@ -59,17 +60,15 @@ export async function getPictureCount(query = "", { baseUrl = "" } = {}) {
  * @param {Object} options
  * @param {number} options.offset
  * @param {number} options.batchLimit
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `pictures` is the batch.
  */
 export async function streamPictures(
   query,
-  { offset, batchLimit, baseUrl = "" },
+  { offset, batchLimit },
 ) {
-  const res = await apiClient.get(
-    `${baseUrl}/pictures/stream?${query}&offset=${offset}&batch_limit=${batchLimit}`,
-  );
-  return res.data;
+  return unwrap(apiClient.get(
+    `/pictures/stream?${query}&offset=${offset}&batch_limit=${batchLimit}`,
+  ));
 }
 
 /**
@@ -77,21 +76,17 @@ export async function streamPictures(
  *
  * @param {number|string} threshold - similarity cut-off.
  * @param {string} [query=""] - pre-encoded filter query string.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the grouped pictures (the response body).
  */
 export async function getLikenessGroups(
   threshold,
   query = "",
-  { baseUrl = "" } = {},
 ) {
-  const res = await apiClient.get(
-    `${baseUrl}/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
+  return unwrap(apiClient.get(
+    `/pictures/likeness-groups?threshold=${encodeURIComponent(threshold)}${
       query ? `&${query}` : ""
     }`,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -107,22 +102,20 @@ export async function getLikenessGroups(
  * @param {Object} [options]
  * @param {number} [options.topN=500]
  * @param {number} [options.threshold] - minimum likeness to include.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
 export async function faceSearch(
   sourceFaceId,
-  { topN = 500, threshold, baseUrl = "" } = {},
+  { topN = 500, threshold } = {},
 ) {
   const params = new URLSearchParams({
     source_face_id: String(sourceFaceId),
     top_n: String(topN),
   });
   if (threshold != null) params.append("threshold", String(threshold));
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/face-search?${params.toString()}`,
-  );
-  return res.data;
+  return unwrap(apiClient.post(
+    `/pictures/face-search?${params.toString()}`,
+  ));
 }
 
 /**
@@ -149,7 +142,6 @@ export async function faceSearch(
  *   than the UI's default cut so the slider can be widened without a refetch.
  * @param {boolean} [options.excludeAssigned=true]
  * @param {boolean} [options.includeReferenceScores=true]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
 export async function characterFaceSearch(
@@ -159,7 +151,6 @@ export async function characterFaceSearch(
     threshold = 0.5,
     excludeAssigned = true,
     includeReferenceScores = true,
-    baseUrl = "",
   } = {},
 ) {
   const params = new URLSearchParams({
@@ -173,10 +164,9 @@ export async function characterFaceSearch(
   if (includeReferenceScores) {
     params.append("include_reference_scores", "true");
   }
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/face-search?${params.toString()}`,
-  );
-  return res.data;
+  return unwrap(apiClient.post(
+    `/pictures/face-search?${params.toString()}`,
+  ));
 }
 
 /**
@@ -189,12 +179,11 @@ export async function characterFaceSearch(
  * @param {Object} [options]
  * @param {number} [options.topN=500]
  * @param {number} [options.threshold=0.05]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
 export async function likenessSearch(
   sourcePictureIds,
-  { topN = 500, threshold = 0.05, baseUrl = "" } = {},
+  { topN = 500, threshold = 0.05 } = {},
 ) {
   const params = new URLSearchParams();
   sourcePictureIds.forEach((id) =>
@@ -202,10 +191,9 @@ export async function likenessSearch(
   );
   params.append("top_n", String(topN));
   params.append("threshold", String(threshold));
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/likeness-search?${params.toString()}`,
-  );
-  return res.data;
+  return unwrap(apiClient.post(
+    `/pictures/likeness-search?${params.toString()}`,
+  ));
 }
 
 /**
@@ -217,19 +205,15 @@ export async function likenessSearch(
  * @param {number} [options.topN=10000]
  * @param {string} [options.query=""] - pre-encoded filter query string to
  *   narrow the search to the current scope.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the matching pictures (the response body).
  */
 export async function searchPictures(
   text,
-  { threshold = 0.1, topN = 10000, query = "", baseUrl = "" } = {},
+  { threshold = 0.1, topN = 10000, query = "" } = {},
 ) {
-  const res = await apiClient.get(
-    `${baseUrl}/pictures/search?query=${encodeURIComponent(
-      text,
-    )}&threshold=${threshold}&top_n=${topN}${query ? `&${query}` : ""}`,
-  );
-  return res.data;
+  return unwrap(apiClient.get(
+    `/pictures/search?query=${encodeURIComponent(text)}&threshold=${threshold}&top_n=${topN}${query ? `&${query}` : ""}`,
+  ));
 }
 
 /**
@@ -240,109 +224,86 @@ export async function searchPictures(
  *   which is markedly more expensive than the plain read.
  * @param {string|number} [options.cacheBuster] - forces a fresh read past any
  *   HTTP cache; pass a changing value only when a stale answer is unacceptable.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the metadata (the response body).
  */
 export async function getPictureMetadata(
   id,
-  { smartScore = false, cacheBuster, baseUrl = "" } = {},
+  { smartScore = false, cacheBuster } = {},
 ) {
   const params = new URLSearchParams();
   if (smartScore) params.set("smart_score", "true");
   if (cacheBuster != null) params.set("cb", String(cacheBuster));
   const query = params.toString();
-  const res = await apiClient.get(
+  return unwrap(apiClient.get(
     query
-      ? `${baseUrl}/pictures/${id}/metadata?${query}`
-      : `${baseUrl}/pictures/${id}/metadata`,
-  );
-  return res.data;
+      ? `/pictures/${id}/metadata?${query}`
+      : `/pictures/${id}/metadata`,
+  ));
 }
 
 /**
  * List the faces detected in a picture.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>|Object>} the response body: either a bare
  *   array of faces or an object nesting them under `faces`, depending on
  *   server version.
  */
-export async function listPictureFaces(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/${id}/faces`);
-  return res.data;
+export async function listPictureFaces(id) {
+  return unwrap(apiClient.get(`/pictures/${id}/faces`));
 }
 
 /**
  * List the object detections on a picture.
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the detection rows (the response body).
  */
-export async function listPictureDetections(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/${id}/detections`);
-  return res.data;
+export async function listPictureDetections(id) {
+  return unwrap(apiClient.get(`/pictures/${id}/detections`));
 }
 
 /**
  * Add a hand-drawn face box to a picture.
  * @param {number|string} id
  * @param {Object} body - `{ bbox: [x1, y1, x2, y2], frame_index }`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function addPictureFace(id, body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/pictures/${id}/face`, body);
-  return res.data;
+export async function addPictureFace(id, body) {
+  return unwrap(apiClient.post(`/pictures/${id}/face`, body));
 }
 
 /**
  * Patch one picture's editable fields.
  * @param {number|string} id
  * @param {Object} body - only the keys to change.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the updated picture (the response body).
  */
-export async function patchPicture(id, body, { baseUrl = "" } = {}) {
-  const res = await apiClient.patch(`${baseUrl}/pictures/${id}`, body);
-  return res.data;
+export async function patchPicture(id, body) {
+  return unwrap(apiClient.patch(`/pictures/${id}`, body));
 }
 
 /**
  * List the ComfyUI models referenced by pictures in the library.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the response body.
  */
-export async function listComfyuiModels({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/comfyui_models`);
-  return res.data;
+export async function listComfyuiModels() {
+  return unwrap(apiClient.get(`/pictures/comfyui_models`));
 }
 
 /**
  * List the ComfyUI LoRAs referenced by pictures in the library.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the response body.
  */
-export async function listComfyuiLoras({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/comfyui_loras`);
-  return res.data;
+export async function listComfyuiLoras() {
+  return unwrap(apiClient.get(`/pictures/comfyui_loras`));
 }
 
 /**
  * Resolve thumbnail URLs for a batch of pictures.
  * @param {Array<number|string>} ids
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: picture id → thumbnail record.
  */
-export async function getThumbnails(ids, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/pictures/thumbnails`, { ids });
-  return res.data;
+export async function getThumbnails(ids) {
+  return unwrap(apiClient.post(`/pictures/thumbnails`, { ids }));
 }
 
 /**
@@ -353,15 +314,12 @@ export async function getThumbnails(ids, { baseUrl = "" } = {}) {
  * whole request applied.
  *
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, including `skipped_locked`.
  */
-export async function deletePictures(pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.delete(`${baseUrl}/pictures`, {
+export async function deletePictures(pictureIds) {
+  return unwrap(apiClient.delete(`/pictures`, {
     data: { picture_ids: pictureIds },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -371,18 +329,16 @@ export async function deletePictures(pictureIds, { baseUrl = "" } = {}) {
  * @param {Object} [options]
  * @param {"add"|"remove"} [options.mode] - omitted to SET the project,
  *   replacing whatever was there.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
 export async function setPicturesProject(
   pictureIds,
   projectId,
-  { mode, baseUrl = "" } = {},
+  { mode } = {},
 ) {
   const body = { picture_ids: pictureIds, project_id: projectId };
   if (mode) body.mode = mode;
-  const res = await apiClient.patch(`${baseUrl}/pictures/project`, body);
-  return res.data;
+  return unwrap(apiClient.patch(`/pictures/project`, body));
 }
 
 /**
@@ -396,20 +352,16 @@ export async function setPicturesProject(
  * so this call is a required step, not an optional courtesy.
  *
  * @param {Array<number|string>|null} [ids=null] - null means the whole heap.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the counts, the protected-file list, and
  *   `confirm_token`.
  */
 export async function previewScrapheapDelete(
   ids = null,
-  { baseUrl = "" } = {},
 ) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/scrapheap/delete-preview`,
+  return unwrap(apiClient.post(
+    `/pictures/scrapheap/delete-preview`,
     { ids },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -429,37 +381,31 @@ export async function previewScrapheapDelete(
  * @param {Array<number|string>} [options.pictureIds]
  * @param {boolean} [options.includeProtected=false]
  * @param {string} options.confirmToken - from the matching preview.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, including `skipped_locked`.
  */
 export async function purgeScrapheap({
   pictureIds,
   includeProtected = false,
   confirmToken,
-  baseUrl = "",
 } = {}) {
   const data = {
     include_protected: includeProtected,
     confirm_token: confirmToken,
   };
   if (pictureIds) data.picture_ids = pictureIds;
-  const res = await apiClient.delete(`${baseUrl}/pictures/scrapheap`, { data });
-  return res.data;
+  return unwrap(apiClient.delete(`/pictures/scrapheap`, { data }));
 }
 
 /**
  * Restore pictures from the scrapheap; omit the ids to restore all of them.
  * @param {Array<number|string>} [pictureIds]
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function restoreScrapheap(pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/scrapheap/restore`,
+export async function restoreScrapheap(pictureIds) {
+  return unwrap(apiClient.post(
+    `/pictures/scrapheap/restore`,
     pictureIds ? { picture_ids: pictureIds } : undefined,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -468,13 +414,10 @@ export async function restoreScrapheap(pictureIds, { baseUrl = "" } = {}) {
  * Fails on a headless or remote server, which has no file manager to open.
  *
  * @param {number|string} id
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function openPictureLocation(id, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/pictures/${id}/open-location`);
-  return res.data;
+export async function openPictureLocation(id) {
+  return unwrap(apiClient.post(`/pictures/${id}/open-location`));
 }
 
 /**
@@ -485,31 +428,21 @@ export async function openPictureLocation(id, { baseUrl = "" } = {}) {
  *
  * @param {Array<number|string>} pictureIds
  * @param {string} prompt
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function detectPictures(
-  pictureIds,
-  prompt,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.post(`${baseUrl}/pictures/detect`, {
+export async function detectPictures(pictureIds, prompt) {
+  return unwrap(apiClient.post(`/pictures/detect`, {
     picture_ids: pictureIds,
     prompt,
-  });
-  return res.data;
+  }));
 }
 
 /**
  * List the installed picture plugins.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `plugins` is the list.
  */
-export async function listPicturePlugins({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/plugins`);
-  return res.data;
+export async function listPicturePlugins() {
+  return unwrap(apiClient.get(`/pictures/plugins`));
 }
 
 /**
@@ -517,16 +450,13 @@ export async function listPicturePlugins({ baseUrl = "" } = {}) {
  * @param {string} name - the plugin's name (URL-encoded here).
  * @param {Object} body - `picture_ids`, `parameters`, optional `captions`,
  *   and whether to `stack` the outputs with their sources.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function runPicturePlugin(name, body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/plugins/${encodeURIComponent(name)}`,
+export async function runPicturePlugin(name, body) {
+  return unwrap(apiClient.post(
+    `/pictures/plugins/${encodeURIComponent(name)}`,
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -534,72 +464,55 @@ export async function runPicturePlugin(name, body, { baseUrl = "" } = {}) {
  * @param {number|string} id
  * @param {Object} [body] - `{ model }` to pick a tagger, or empty for the
  *   configured one.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function resetPictureTags(id, body = {}, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/${id}/reset_tags`,
+export async function resetPictureTags(id, body = {}) {
+  return unwrap(apiClient.post(
+    `/pictures/${id}/reset_tags`,
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
  * Re-run captioning on one picture, replacing its description.
  * @param {number|string} id
  * @param {Object} [body] - `{ model }` to pick a captioner.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
 export async function resetPictureDescription(
   id,
   body = {},
-  { baseUrl = "" } = {},
 ) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/${id}/reset_description`,
+  return unwrap(apiClient.post(
+    `/pictures/${id}/reset_description`,
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
  * Remove tags the model could not possibly be right about.
  * @param {Array<number|string>} pictureIds
  * @param {Object} filters - the scope the caller is viewing.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `count` and the `removed`
  *   picture/tag pairs, which are what an undo restores.
  */
-export async function clearImpossibleTags(
-  pictureIds,
-  filters,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/impossible-tags/clear`,
+export async function clearImpossibleTags(pictureIds, filters) {
+  return unwrap(apiClient.post(
+    `/pictures/impossible-tags/clear`,
     { picture_ids: pictureIds, filters },
-  );
-  return res.data;
+  ));
 }
 
 /**
  * Put back the picture/tag pairs a previous clear removed.
  * @param {Array<Object>} pairs - as returned by {@link clearImpossibleTags}.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function restoreImpossibleTags(pairs, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    `${baseUrl}/pictures/impossible-tags/restore`,
+export async function restoreImpossibleTags(pairs) {
+  return unwrap(apiClient.post(
+    `/pictures/impossible-tags/restore`,
     { pairs },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -608,42 +521,34 @@ export async function restoreImpossibleTags(pairs, { baseUrl = "" } = {}) {
  * @param {Object} [options]
  * @param {boolean} [options.onlyUnscored=false] - leave already-scored
  *   pictures alone.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
 export async function applyScores(
   scores,
-  { onlyUnscored = false, baseUrl = "" } = {},
+  { onlyUnscored = false } = {},
 ) {
-  const res = await apiClient.post(`${baseUrl}/pictures/apply-scores`, {
+  return unwrap(apiClient.post(`/pictures/apply-scores`, {
     scores,
     only_unscored: onlyUnscored,
-  });
-  return res.data;
+  }));
 }
 
 /**
  * Read the scores collected from this guest session.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `scores` maps picture id
  *   to score.
  */
-export async function getGuestScores({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/guest-scores`);
-  return res.data;
+export async function getGuestScores() {
+  return unwrap(apiClient.get(`/pictures/guest-scores`));
 }
 
 /**
  * Submit scores from a guest (share-token) session.
  * @param {Object} payload - `session_id`, `set_cookie`, and `scores`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function submitGuestScores(payload, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}/pictures/guest-scores`, payload);
-  return res.data;
+export async function submitGuestScores(payload) {
+  return unwrap(apiClient.post(`/pictures/guest-scores`, payload));
 }
 
 /**
@@ -654,32 +559,26 @@ export async function submitGuestScores(payload, { baseUrl = "" } = {}) {
  * {@link downloadExport}.
  *
  * @param {string} [query=""] - pre-encoded selection/filter query string.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `task_id` drives polling.
  */
-export async function startExport(query = "", { baseUrl = "" } = {}) {
-  const res = await apiClient.get(
+export async function startExport(query = "") {
+  return unwrap(apiClient.get(
     query
-      ? `${baseUrl}/pictures/export?${query}`
-      : `${baseUrl}/pictures/export`,
-  );
-  return res.data;
+      ? `/pictures/export?${query}`
+      : `/pictures/export`,
+  ));
 }
 
 /**
  * Poll a running export.
  * @param {string} taskId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `status`, `processed`,
  *   `total`, and once complete, `download_url`.
  */
-export async function getExportStatus(taskId, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}/pictures/export/status`, {
+export async function getExportStatus(taskId) {
+  return unwrap(apiClient.get(`/pictures/export/status`, {
     params: { task_id: taskId },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -691,13 +590,11 @@ export async function getExportStatus(taskId, { baseUrl = "" } = {}) {
  * still does not escape this layer.
  *
  * @param {string} downloadUrl - the path from {@link getExportStatus}.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<{blob: Blob, filename: string}>} the archive and the name
  *   the server gave it (falling back to `pixlstash_export.zip`).
  */
-export async function downloadExport(downloadUrl, { baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}${downloadUrl}`, {
+export async function downloadExport(downloadUrl) {
+  const res = await apiClient.get(`${downloadUrl}`, {
     responseType: "blob",
   });
   let filename = "pixlstash_export.zip";
@@ -716,13 +613,12 @@ export async function downloadExport(downloadUrl, { baseUrl = "" } = {}) {
  * @param {string} format - file extension without a leading dot.
  * @param {Object} [options]
  * @param {number|string} [options.version] - pixel hash cache-buster.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Blob>} the picture media.
  */
 export async function downloadPicture(
   id,
   format,
-  { version, baseUrl = "" } = {},
+  { version } = {},
 ) {
   const ext = String(format || "").replace(/^\./, "").toLowerCase();
   if (!id || !ext) throw new Error("Picture id and format are required");
@@ -730,11 +626,10 @@ export async function downloadPicture(
     version === undefined || version === null
       ? ""
       : `?v=${encodeURIComponent(version)}`;
-  const res = await apiClient.get(
-    `${baseUrl}/pictures/${id}.${encodeURIComponent(ext)}${query}`,
+  return unwrap(apiClient.get(
+    `/pictures/${id}.${encodeURIComponent(ext)}${query}`,
     { responseType: "blob" },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -755,8 +650,7 @@ export async function downloadPicture(
  */
 export async function getPictureStats(query = "", params) {
   const url = query ? `/pictures/stats?${query}` : "/pictures/stats";
-  const res = await apiClient.get(url, params ? { params } : undefined);
-  return res.data;
+  return unwrap(apiClient.get(url, params ? { params } : undefined));
 }
 
 /**
@@ -764,8 +658,7 @@ export async function getPictureStats(query = "", params) {
  * @returns {Promise<Object>} the response body.
  */
 export async function clearGuestScoreSession() {
-  const res = await apiClient.delete("/pictures/guest-scores/session");
-  return res.data;
+  return unwrap(apiClient.delete("/pictures/guest-scores/session"));
 }
 
 /**
@@ -779,15 +672,13 @@ export async function clearGuestScoreSession() {
  * @param {Object} [options]
  * @param {string} [options.fields] - projection, e.g. `"grid"`; omitted for
  *   the full record.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the pictures (the response body).
  */
-export async function listPicturesByIds(ids, { fields, baseUrl = "" } = {}) {
+export async function listPicturesByIds(ids, { fields } = {}) {
   const params = new URLSearchParams();
   ids.forEach((id) => params.append("id", String(id)));
   if (fields) params.append("fields", fields);
-  const res = await apiClient.get(`${baseUrl}/pictures?${params.toString()}`);
-  return res.data;
+  return unwrap(apiClient.get(`/pictures?${params.toString()}`));
 }
 
 /**
@@ -802,8 +693,7 @@ export async function listPicturesByIds(ids, { fields, baseUrl = "" } = {}) {
  * @returns {Promise<Object>} the region (the response body).
  */
 export async function getAnomalyRegion(pictureId, tag) {
-  const res = await apiClient.get(`/pictures/${pictureId}/anomaly_region`, {
+  return unwrap(apiClient.get(`/pictures/${pictureId}/anomaly_region`, {
     params: { tag },
-  });
-  return res.data;
+  }));
 }

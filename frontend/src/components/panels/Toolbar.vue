@@ -650,7 +650,6 @@ const props = defineProps({
   selectedCharacter: String,
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
-  unassignedPicturesId: { type: String, required: true },
   backendUrl: { type: String, required: true },
   comfyuiConfigured: { type: Boolean, default: false },
 });

@@ -160,15 +160,13 @@ const previewPic = ref(null);
 async function fetchReferencePictures(characterId) {
   referencePicturesLoading.value = true;
   try {
-    const refBody = await getReferencePictures(characterId, {
-      baseUrl: props.backendUrl,
-    });
+    const refBody = await getReferencePictures(characterId);
     const ids = refBody?.reference_picture_ids ?? [];
     if (!ids.length) {
       referencePictures.value = [];
       return;
     }
-    const rows = await listPicturesByIds(ids, { baseUrl: props.backendUrl });
+    const rows = await listPicturesByIds(ids);
     const pics = Array.isArray(rows) ? rows : [];
     const picsById = new Map(pics.map((p) => [String(p.id), p]));
     referencePictures.value = ids

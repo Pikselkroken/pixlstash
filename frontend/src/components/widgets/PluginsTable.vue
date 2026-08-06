@@ -1,10 +1,16 @@
 <script setup>
 /**
- * Table of description-capable plugins with active radio and settings gear.
+ * Table of plugins of one capability, with an active radio and a settings gear.
  *
  * Columns: Active (radio) | Name (+ description tooltip) | Loaded | Settings
  *
- * Exactly one plugin may be the active description plugin (or none).
+ * Exactly one plugin may be active for the capability (or none).
+ *
+ * Replaces the former TagPluginsTable / DescriptionPluginsTable, which were the
+ * same table twice over: they differed only in which capability flag they
+ * filtered on, which config key they wrote, and — as pure drift, not intent — a
+ * 52px vs 44px radio column and the error line's spacing. Those two now render
+ * identically, which is the point of having one component.
  */
 import { computed, ref } from "vue";
 import { patchUserConfig } from "../../api/config";
@@ -15,17 +21,31 @@ const props = defineProps({
   plugins: { type: Array, default: () => [] },
   /** Current tagger_settings object. */
   settings: { type: Object, default: () => ({}) },
+  /**
+   * Which capability this table lists: "tag" or "description". Drives the
+   * plugin filter (`supports_tags` / `supports_descriptions`), the config key
+   * (`active_tag_plugin` / `active_description_plugin`), the radio group name,
+   * and the empty-state wording.
+   */
+  kind: {
+    type: String,
+    required: true,
+    validator: (v) => ["tag", "description"].includes(v),
+  },
 });
 
 const emit = defineEmits(["update:settings"]);
 
-const descPlugins = computed(() =>
-  props.plugins.filter((p) => p.supports_descriptions),
+const supportsFlag = computed(() =>
+  props.kind === "tag" ? "supports_tags" : "supports_descriptions",
+);
+const activeKey = computed(() => `active_${props.kind}_plugin`);
+
+const capablePlugins = computed(() =>
+  props.plugins.filter((p) => p[supportsFlag.value]),
 );
 
-const activePlugin = computed(
-  () => props.settings?.active_description_plugin ?? null,
-);
+const activePlugin = computed(() => props.settings?.[activeKey.value] ?? null);
 
 function pluginParams(plugin) {
   return props.settings?.plugins?.[plugin.name]?.params ?? {};
@@ -49,11 +69,11 @@ async function setActive(pluginName) {
   const next = activePlugin.value === pluginName ? null : pluginName;
   try {
     await patchUserConfig({
-      tagger_settings: { active_description_plugin: next },
+      tagger_settings: { [activeKey.value]: next },
     });
     emit("update:settings", {
       ...props.settings,
-      active_description_plugin: next,
+      [activeKey.value]: next,
     });
   } catch (e) {
     activeError.value = e?.response?.data?.detail || "Failed to update.";
@@ -81,36 +101,36 @@ function onParamsSaved({ name, params }) {
 </script>
 
 <template>
-  <div class="desc-plugins-table">
-    <table class="dpt-table">
+  <div class="plugins-table">
+    <table class="pt-table">
       <thead>
         <tr>
-          <th class="dpt-col-active">Active</th>
-          <th class="dpt-col-name">Plugin</th>
-          <th class="dpt-col-loaded">Loaded</th>
-          <th class="dpt-col-actions"></th>
+          <th class="pt-col-active">Active</th>
+          <th class="pt-col-name">Plugin</th>
+          <th class="pt-col-loaded">Loaded</th>
+          <th class="pt-col-actions"></th>
         </tr>
       </thead>
       <tbody>
         <tr
-          v-for="plugin in descPlugins"
+          v-for="plugin in capablePlugins"
           :key="plugin.name"
-          class="dpt-row"
-          :class="{ 'dpt-row--unavailable': !!plugin.load_error }"
+          class="pt-row"
+          :class="{ 'pt-row--unavailable': !!plugin.load_error }"
         >
-          <td class="dpt-col-active">
+          <td class="pt-col-active">
             <input
               type="radio"
-              :name="`active-desc-plugin`"
+              :name="`active-${kind}-plugin`"
               :value="plugin.name"
               :checked="activePlugin === plugin.name"
               :disabled="!!plugin.load_error || settingActive"
-              class="dpt-radio"
+              class="pt-radio"
               @change="setActive(plugin.name)"
             />
           </td>
 
-          <td class="dpt-col-name">
+          <td class="pt-col-name">
             <v-tooltip
               v-if="plugin.description"
               :text="plugin.description"
@@ -118,23 +138,21 @@ function onParamsSaved({ name, params }) {
               max-width="280"
             >
               <template #activator="{ props: tip }">
-                <span v-bind="tip" class="dpt-plugin-name">
+                <span v-bind="tip" class="pt-plugin-name">
                   {{ plugin.display_name }}
-                  <v-icon size="13" class="dpt-info-icon"
+                  <v-icon size="13" class="pt-info-icon"
                     >mdi-information-outline</v-icon
                   >
                 </span>
               </template>
             </v-tooltip>
-            <span v-else class="dpt-plugin-name">{{
-              plugin.display_name
-            }}</span>
-            <span v-if="plugin.load_error" class="dpt-unavailable-label">
+            <span v-else class="pt-plugin-name">{{ plugin.display_name }}</span>
+            <span v-if="plugin.load_error" class="pt-unavailable-label">
               (unavailable)
             </span>
           </td>
 
-          <td class="dpt-col-loaded">
+          <td class="pt-col-loaded">
             <v-icon
               :color="plugin.is_loaded ? 'success' : 'default'"
               size="16"
@@ -144,7 +162,7 @@ function onParamsSaved({ name, params }) {
             </v-icon>
           </td>
 
-          <td class="dpt-col-actions">
+          <td class="pt-col-actions">
             <v-btn
               variant="text"
               size="x-small"
@@ -156,15 +174,13 @@ function onParamsSaved({ name, params }) {
           </td>
         </tr>
 
-        <tr v-if="!descPlugins.length">
-          <td colspan="4" class="dpt-empty">
-            No description plugins registered.
-          </td>
+        <tr v-if="!capablePlugins.length">
+          <td colspan="4" class="pt-empty">No {{ kind }} plugins registered.</td>
         </tr>
       </tbody>
     </table>
 
-    <div v-if="activeError" class="dpt-error">{{ activeError }}</div>
+    <div v-if="activeError" class="pt-error">{{ activeError }}</div>
 
     <TaggerPluginSettingsDialog
       v-if="dialogPlugin"
@@ -177,17 +193,17 @@ function onParamsSaved({ name, params }) {
 </template>
 
 <style scoped>
-.desc-plugins-table {
+.plugins-table {
   width: 100%;
 }
 
-.dpt-table {
+.pt-table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
 
-.dpt-table th {
+.pt-table th {
   text-align: left;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -198,62 +214,61 @@ function onParamsSaved({ name, params }) {
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
-.dpt-table td {
+.pt-table td {
   padding: var(--space-2) var(--space-3);
   vertical-align: middle;
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.06);
 }
 
-.dpt-row--unavailable td {
+.pt-row--unavailable td {
   opacity: 0.5;
 }
 
-.dpt-col-active {
-  width: 44px;
+.pt-col-active {
+  width: 52px;
 }
 
-.dpt-col-loaded {
+.pt-col-loaded {
   width: 44px;
   text-align: center;
 }
 
-.dpt-col-actions {
+.pt-col-actions {
   width: 36px;
   text-align: right;
 }
 
-.dpt-radio {
-  cursor: pointer;
-  accent-color: rgb(var(--v-theme-primary));
-  width: 16px;
-  height: 16px;
-}
-
-.dpt-plugin-name {
+.pt-plugin-name {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   cursor: default;
 }
 
-.dpt-info-icon {
+.pt-info-icon {
   opacity: 0.5;
 }
 
-.dpt-unavailable-label {
+.pt-radio {
+  cursor: pointer;
+  accent-color: rgb(var(--v-theme-primary));
+  width: 16px;
+  height: 16px;
+}
+
+.pt-unavailable-label {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), 0.45);
   margin-left: var(--space-2);
 }
 
-.dpt-error {
+.pt-error {
   font-size: var(--text-2xs);
   color: rgb(var(--v-theme-error));
   margin-top: var(--space-2);
-  padding-left: var(--space-3);
 }
 
-.dpt-empty {
+.pt-empty {
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), 0.45);
   padding: var(--space-3) var(--space-3);

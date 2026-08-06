@@ -705,8 +705,8 @@ async function onOpen() {
   selectedMode.value = "";
   await Promise.all([
     loadTemplates(generation, imageId, backendUrl),
-    loadRecipe(generation, imageId, backendUrl),
-    loadDescription(generation, imageId, backendUrl),
+    loadRecipe(generation, imageId),
+    loadDescription(generation, imageId),
   ]);
   if (!isCurrentLoad(generation, imageId)) return;
   // Fixed defaults to the seed the original run used — flagged as "same as
@@ -745,12 +745,10 @@ function normaliseDescription(value) {
  * "this image has no description yet" for pictures that plainly have one.
  * Only runs when the prop didn't already provide a usable description.
  */
-async function loadDescription(generation, imageId, backendUrl) {
+async function loadDescription(generation, imageId) {
   if (description.value || !imageId) return;
   try {
-    const data = await getPictureMetadata(imageId, {
-      baseUrl: backendUrl,
-    });
+    const data = await getPictureMetadata(imageId);
     if (!isCurrentLoad(generation, imageId)) return;
     const fetched = normaliseDescription(data?.description);
     if (!fetched) return;
@@ -810,14 +808,12 @@ async function loadTemplates(generation, imageId, backendUrl) {
   }
 }
 
-async function loadRecipe(generation, imageId, backendUrl) {
+async function loadRecipe(generation, imageId) {
   if (!imageId) return;
   recipeLoading.value = true;
   recipeError.value = "";
   try {
-    const nextRecipe = await getPictureRecipe(imageId, {
-      baseUrl: backendUrl,
-    });
+    const nextRecipe = await getPictureRecipe(imageId);
     if (!isCurrentLoad(generation, imageId)) return;
     recipe.value = nextRecipe;
   } catch (err) {
@@ -852,7 +848,7 @@ async function recheckRecipe() {
   liveMessage.value = "";
   const generation = loadGeneration;
   const imageId = props.image?.id;
-  await loadRecipe(generation, imageId, props.backendUrl);
+  await loadRecipe(generation, imageId);
   if (!isCurrentLoad(generation, imageId)) return;
   await nextTick();
   if (recipeState.value === "unreachable") {
@@ -967,7 +963,6 @@ async function submit() {
               // be submitted from this surface at all, and the backend
               // refuses it independently.
             },
-            { baseUrl: props.backendUrl },
           )
         : await runImageToImage(
             {
@@ -979,7 +974,6 @@ async function submit() {
               client_id: props.clientId || undefined,
               stack: props.stackOutputs,
             },
-            { baseUrl: props.backendUrl },
           );
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     emit("run", {

@@ -54,7 +54,6 @@
       :selectedCharacter="String(selectionStore.selectedCharacter)"
       :selectedSort="sortStore.selectedSort"
       :allPicturesId="String(ALL_PICTURES_ID)"
-      :unassignedPicturesId="String(UNASSIGNED_PICTURES_ID)"
       :backend-url="props.backendUrl"
       :comfyui-configured="filterStore.comfyuiConfigured"
       @comfyui-run-grid="runComfyuiOnGridImages"
@@ -108,7 +107,6 @@
       :selected-image-ids="selectedImageIds"
       :selected-media-support="selectedMediaSupport"
       :selected-character="String(selectionStore.selectedCharacter)"
-      :selected-set="String(selectionStore.selectedSet)"
       :selected-group-name="selectedGroupName"
       :selected-sort="sortStore.selectedSort"
       :all-pictures-id="String(ALL_PICTURES_ID)"
@@ -1086,8 +1084,7 @@
           :captioner-plugins="captionerPlugins"
           :all-grid-images="allGridImages"
           :selected-character="String(selectionStore.selectedCharacter)"
-          :selected-set="String(selectionStore.selectedSet)"
-          :impossible-sources="filterStore.impossibleSources"
+              :impossible-sources="filterStore.impossibleSources"
           :clearing-impossible="clearingImpossibleTags"
           @clear-impossible-tags="handleClearImpossibleTags"
           @clear-selection="clearSelection"
@@ -1325,7 +1322,6 @@ const sidebarStore = useSidebarStore();
 const userPrefsStore = useUserPrefsStore();
 
 const emit = defineEmits([
-  "open-overlay",
   "update:overlay-open",
   "refresh-sidebar",
   "clear-search",
@@ -1578,9 +1574,7 @@ async function handleClearImpossibleTags() {
   }
   clearingImpossibleTags.value = true;
   try {
-    const body = await clearImpossibleTags(pictureIds, filters, {
-      baseUrl: props.backendUrl,
-    });
+    const body = await clearImpossibleTags(pictureIds, filters);
     const removed = Array.isArray(body?.removed) ? body.removed : [];
     const count = typeof body?.count === "number" ? body.count : removed.length;
     lastImpossibleRemoved.value = removed;
@@ -1604,7 +1598,7 @@ async function handleUndoImpossibleTags() {
   const pairs = lastImpossibleRemoved.value;
   if (!Array.isArray(pairs) || !pairs.length) return;
   try {
-    await restoreImpossibleTags(pairs, { baseUrl: props.backendUrl });
+    await restoreImpossibleTags(pairs);
     impossibleSnackbarVisible.value = false;
     lastImpossibleRemoved.value = [];
     debouncedFetchAllGridImages({ force: true });
@@ -1719,7 +1713,7 @@ async function handleAutoTag({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureTags(id, body, { baseUrl: props.backendUrl }),
+        resetPictureTags(id, body),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1737,7 +1731,7 @@ async function handleGenerateDescription({ model } = {}) {
     const body = model ? { model } : {};
     await Promise.all(
       ids.map((id) =>
-        resetPictureDescription(id, body, { baseUrl: props.backendUrl }),
+        resetPictureDescription(id, body),
       ),
     );
     debouncedFetchAllGridImages({ force: true });
@@ -1789,7 +1783,6 @@ async function runPluginWithParameters(
         captions: Array.isArray(captions) ? captions : undefined,
         stack,
       },
-      { baseUrl: props.backendUrl },
     );
     const createdIds = Array.isArray(res?.created_picture_ids)
       ? res.created_picture_ids
@@ -1972,7 +1965,7 @@ async function runComfyuiOnGridImages({
       project_id: contextProjectId,
       character_id: contextCharacterId,
     };
-    const body = await runTextToImage(payload, { baseUrl: props.backendUrl });
+    const body = await runTextToImage(payload);
     const prompts = Array.isArray(body?.prompts) ? body.prompts : [];
     handleComfyuiRun({ prompts });
   } catch (err) {
@@ -3147,7 +3140,6 @@ function pauseVideo(id) {
 // ============================================================
 async function removeFromGroup() {
   if (!selectedImageIds.value.length && !selectedFaceIds.value.length) return;
-  const backendUrl = props.backendUrl;
   const faceIds = selectedFaceIds.value
     .map((entry) => entry.faceId)
     .filter((id) => id !== undefined && id !== null);
@@ -3157,7 +3149,7 @@ async function removeFromGroup() {
       clearFaceSelection();
       return;
     }
-    restoreScrapheap(pictureIds, { baseUrl: backendUrl })
+    restoreScrapheap(pictureIds)
       .catch((err) => {
         console.error("Failed to restore pictures from the scrapheap", err);
         noticeStore.error(
@@ -3190,9 +3182,7 @@ async function removeFromGroup() {
     const requests = [];
     if (pictureIds.length) {
       requests.push(
-        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds, {
-          baseUrl: backendUrl,
-        }),
+        removeCharacterFaces(selectionStore.selectedCharacter, pictureIds),
       );
     }
     if (faceIds.length) {
@@ -3200,9 +3190,6 @@ async function removeFromGroup() {
         removeCharacterFacesByFaceId(
           selectionStore.selectedCharacter,
           faceIds,
-          {
-            baseUrl: backendUrl,
-          },
         ),
       );
     }
@@ -3287,7 +3274,7 @@ async function removeFromGroup() {
         memberIds = cached.ids;
       } else {
         try {
-          const stack = await getStack(stackId, { baseUrl: backendUrl });
+          const stack = await getStack(stackId);
           memberIds = stack?.picture_ids ?? [];
         } catch (err) {
           // Fallback: only remove the originally-selected picture(s). That is a
@@ -3314,9 +3301,7 @@ async function removeFromGroup() {
       // Remove from picture set (all affected IDs in parallel).
       await Promise.all(
         [...idsToRemoveFromSet].map((id) =>
-          removePictureFromSet(selectionStore.selectedSet, id, {
-            baseUrl: backendUrl,
-          }).catch((err) => {
+          removePictureFromSet(selectionStore.selectedSet, id).catch((err) => {
             // Expected when the picture was not in the set (the selection can
             // span sets); log rather than drop it so a real failure is visible.
             console.debug(
@@ -3332,7 +3317,7 @@ async function removeFromGroup() {
       if (stackRemovalsForExpanded.size) {
         await Promise.all(
           [...stackRemovalsForExpanded.entries()].map(([stackId, ids]) =>
-            removeStackMembers(stackId, ids, { baseUrl: backendUrl }).catch(
+            removeStackMembers(stackId, ids).catch(
               (err) => {
                 console.error("Failed to remove from stack:", err);
                 // The set removal below still runs, so the user sees the
@@ -3549,13 +3534,9 @@ async function handleCreatePersonSaved(savedCharacter) {
   }
   try {
     if (pending.mode === "faces") {
-      await addCharacterFacesByFaceId(characterId, pending.ids, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFacesByFaceId(characterId, pending.ids);
     } else {
-      await addCharacterFaces(characterId, pending.ids, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFaces(characterId, pending.ids);
     }
     const n = pending.ids.length;
     const unit = pending.mode === "faces" ? "face" : "picture";
@@ -3702,7 +3683,7 @@ async function deleteSelected(idsOverride = null) {
 
     for (const stackId of collapsedStackIds) {
       try {
-        const stack = await getStack(stackId, { baseUrl: props.backendUrl });
+        const stack = await getStack(stackId);
         const memberIds = stack?.picture_ids;
         if (Array.isArray(memberIds) && memberIds.length) {
           for (const mid of memberIds) resolved.add(mid);
@@ -3752,7 +3733,6 @@ async function deleteSelected(idsOverride = null) {
     return;
   }
 
-  const backendUrl = props.backendUrl;
   try {
     // Soft-delete via the bulk endpoint instead of one DELETE per id, which
     // floods the browser/Electron per-host connection pool on large selections
@@ -3765,7 +3745,7 @@ async function deleteSelected(idsOverride = null) {
     const skippedLocked = new Set();
     for (let i = 0; i < idsToRemove.length; i += BULK_DELETE_CHUNK) {
       const chunk = idsToRemove.slice(i, i + BULK_DELETE_CHUNK);
-      const resp = await deletePictures(chunk, { baseUrl: backendUrl });
+      const resp = await deletePictures(chunk);
       const skipped = resp?.skipped_locked;
       if (Array.isArray(skipped)) {
         for (const id of skipped) skippedLocked.add(String(id));
@@ -3864,7 +3844,6 @@ async function openKeepCoverOnly() {
   try {
     const report = await previewKeepCoverOnly({
       stackIds,
-      baseUrl: props.backendUrl,
     });
     if (token !== keepCoverOnlyRunToken) return;
     keepCoverOnlyPreview.value = report;
@@ -3901,7 +3880,6 @@ async function runKeepCoverOnly() {
   try {
     const result = await keepCoverOnly({
       stackIds,
-      baseUrl: props.backendUrl,
     });
     const movedIds = Array.isArray(result?.picture_ids_moved)
       ? result.picture_ids_moved
@@ -3992,17 +3970,13 @@ async function handleSetProjectForSelected(payload) {
       }
       await setPicturesProject(pictureIds, nextProjectId, {
         mode: "remove",
-        baseUrl: props.backendUrl,
       });
     } else if (action === "added") {
       await setPicturesProject(pictureIds, nextProjectId, {
         mode: "add",
-        baseUrl: props.backendUrl,
       });
     } else {
-      await setPicturesProject(pictureIds, nextProjectId, {
-        baseUrl: props.backendUrl,
-      });
+      await setPicturesProject(pictureIds, nextProjectId);
     }
 
     // Project membership only scopes the grid query in the project view:
@@ -4543,9 +4517,7 @@ async function loadDeletePreview(ids) {
   deleteForeverConfirmToken.value = "";
   try {
     const d =
-      (await previewScrapheapDelete(ids ?? null, {
-        baseUrl: props.backendUrl,
-      })) ?? {};
+      (await previewScrapheapDelete(ids ?? null)) ?? {};
     deleteForeverConfirmToken.value = String(d.confirm_token ?? "");
     deleteForeverTotalCount.value = Number(d.total_count) || 0;
     deleteForeverProtectedCount.value = Number(d.protected_count) || 0;
@@ -4610,14 +4582,12 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     deleteForeverOpen.value = false;
     return;
   }
-  const backendUrl = props.backendUrl;
   deleteForeverBusy.value = true;
   try {
     const resp = await purgeScrapheap({
       pictureIds: idsToRemove,
       includeProtected,
       confirmToken: deleteForeverConfirmToken.value,
-      baseUrl: backendUrl,
     });
     // Locked pictures survive a purge too, and this endpoint reports them under
     // the same `skipped_locked` name as the bulk soft-delete. Same rule as
@@ -4711,7 +4681,6 @@ async function runEmptyScrapheap(includeProtected) {
     const resp = await purgeScrapheap({
       includeProtected,
       confirmToken: deleteForeverConfirmToken.value,
-      baseUrl: props.backendUrl,
     });
     // Clear + refetch reconciles either case: when only the unprotected subset
     // was purged, the refetch brings the kept protected originals back.
@@ -4747,7 +4716,7 @@ async function confirmRestoreScrapheap() {
   if (!confirmed) return;
   scrapheapRestoring.value = true;
   try {
-    await restoreScrapheap(undefined, { baseUrl: props.backendUrl });
+    await restoreScrapheap(undefined);
     allGridImages.value = [];
     selectedImageIds.value = [];
     selectedFaceIds.value = [];
@@ -4769,7 +4738,7 @@ async function confirmRestoreScrapheap() {
 
 async function openReferenceLocation(picId) {
   try {
-    await openPictureLocation(picId, { baseUrl: props.backendUrl });
+    await openPictureLocation(picId);
   } catch (err) {
     // Was a silent ignore ("the OS might not support it"), which left a click
     // doing nothing with no explanation. The cause is worth stating: it is
@@ -4812,15 +4781,11 @@ async function handleImagesUploaded(payload) {
       if (selectedSetId != null && selectedSetId !== "") {
         await Promise.all(
           pictureIds.map((id) =>
-            addPictureToSet(selectedSetId, id, {
-              baseUrl: props.backendUrl,
-            }),
+            addPictureToSet(selectedSetId, id),
           ),
         );
       } else if (!skipCharacter && selectedCharacterId != null) {
-        await addCharacterFaces(selectedCharacterId, pictureIds, {
-          baseUrl: props.backendUrl,
-        });
+        await addCharacterFaces(selectedCharacterId, pictureIds);
       }
     } catch (e) {
       console.error("Failed to associate imported pictures:", e);
@@ -5640,9 +5605,7 @@ async function updateSelectedGroupName() {
     selectionStore.selectedCharacter !== `${SCRAPHEAP_PICTURES_ID}`
   ) {
     try {
-      const char = await getCharacter(selectionStore.selectedCharacter, {
-        baseUrl: props.backendUrl,
-      });
+      const char = await getCharacter(selectionStore.selectedCharacter);
       name = char.name || "";
     } catch (e) {
       console.error("Character fetch failed:", e);
@@ -5653,9 +5616,7 @@ async function updateSelectedGroupName() {
       return;
     }
     try {
-      const set = await getPictureSet(primarySelectedSetId.value, {
-        baseUrl: props.backendUrl,
-      });
+      const set = await getPictureSet(primarySelectedSetId.value);
       name = set.set.name || "";
     } catch (e) {
       console.error("Set fetch failed:", e);
@@ -5767,7 +5728,6 @@ async function fetchImageInfo(imageId, options = {}) {
     return await getPictureMetadata(imageId, {
       smartScore: !!options.smartScore,
       cacheBuster: options.force ? Date.now() : undefined,
-      baseUrl: props.backendUrl,
     });
   } catch (e) {
     console.error("Tag fetch failed:", e);
@@ -5859,7 +5819,6 @@ async function refreshStackFacets(pictureIds) {
     try {
       rows = await listPicturesByIds(chunk, {
         fields: "grid",
-        baseUrl: props.backendUrl,
       });
     } catch (e) {
       console.error(
@@ -6542,9 +6501,7 @@ async function fetchThumbnailsBatch(start, end, meta = {}) {
     );
     let overlayNeedsRedraw = false;
     if (ids.length) {
-      const thumbData = await getThumbnails(ids, {
-        baseUrl: props.backendUrl,
-      });
+      const thumbData = await getThumbnails(ids);
       if (requestEpoch !== thumbnailRequestEpoch.value) {
         return;
       }
@@ -6963,7 +6920,7 @@ async function handleOverlayScrapheapRestore() {
   const id = overlayCtxImage.value?.id;
   if (id == null) return;
   try {
-    await restoreScrapheap([id], { baseUrl: props.backendUrl });
+    await restoreScrapheap([id]);
   } catch (err) {
     console.error("Failed to restore picture from the scrapheap", err);
     noticeStore.error(`Couldn't restore that picture. ${errorDetail(err)}`, {
@@ -7012,9 +6969,7 @@ async function confirmSegment() {
   // on the resulting CHANGED_PICTURES event (detections is a card-content
   // field), and the overlay reconciles too if open.
   try {
-    await detectPictures(ids, segmentPrompt.value.trim(), {
-      baseUrl: props.backendUrl,
-    });
+    await detectPictures(ids, segmentPrompt.value.trim());
     // Nudge the tasks poller so the activity light / Tasks-tab pulse appear
     // within one poll RTT instead of up to the 5 s idle interval later.
     tasksStore.nudge();
@@ -7052,9 +7007,7 @@ function scheduleSharedPictureFetch() {
     const ids = visibleSlice.map((img) => img.id).filter(Boolean);
     if (!ids.length) return;
     try {
-      const body = await getSharedPictureIds(ids, {
-        baseUrl: props.backendUrl,
-      });
+      const body = await getSharedPictureIds(ids);
       const shared = new Set(body?.shared_ids ?? []);
       // Update: remove any id from the queried batch that is no longer shared,
       // and add any that are now shared. This keeps the set accurate when
@@ -7089,9 +7042,7 @@ async function confirmRevokePictureShares() {
   revokeSharesPending.value = null;
   if (!pending?.pictureId) return;
   try {
-    await revokeTokensByResource("picture", pending.pictureId, {
-      baseUrl: props.backendUrl,
-    });
+    await revokeTokensByResource("picture", pending.pictureId);
     const next = new Set(sharedPictureIds.value);
     next.delete(pending.pictureId);
     sharedPictureIds.value = next;
@@ -7156,7 +7107,7 @@ async function removeTagFromImage(imageId, tag) {
       return;
     }
     const tagKey = String(tagId);
-    await removePictureTag(imageId, tagKey, { baseUrl: props.backendUrl });
+    await removePictureTag(imageId, tagKey);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
     );
@@ -7172,9 +7123,7 @@ async function removeTagFromImage(imageId, tag) {
 
 async function addTagToImage(imageId, tag) {
   try {
-    const response = await addPictureTag(imageId, tag, {
-      baseUrl: props.backendUrl,
-    });
+    const response = await addPictureTag(imageId, tag);
     const responseTags = getTagList(response?.tags);
     const gridImg = allGridImages.value.find(
       (img) => img && img.id === imageId,
@@ -7535,9 +7484,7 @@ async function exportCurrentViewToZip(options = {}) {
     exportProgress.message = "Preparing export...";
     exportProgress.cancelRequested = false;
 
-    const startBody = await startExport(exportQuery, {
-      baseUrl: props.backendUrl,
-    });
+    const startBody = await startExport(exportQuery);
     const taskId = startBody?.task_id;
     if (!taskId) {
       throw new Error("Missing task_id from export response.");
@@ -7552,9 +7499,7 @@ async function exportCurrentViewToZip(options = {}) {
         exportProgress.visible = false;
         return;
       }
-      const statusBody = await getExportStatus(taskId, {
-        baseUrl: props.backendUrl,
-      });
+      const statusBody = await getExportStatus(taskId);
       const status = statusBody?.status;
       exportProgress.status = status || "in_progress";
       exportProgress.processed = statusBody?.processed || 0;
@@ -7584,9 +7529,7 @@ async function exportCurrentViewToZip(options = {}) {
       throw new Error("Export timed out waiting for ZIP.");
     }
 
-    const { blob, filename } = await downloadExport(downloadUrl, {
-      baseUrl: props.backendUrl,
-    });
+    const { blob, filename } = await downloadExport(downloadUrl);
 
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -7828,9 +7771,7 @@ async function handleAssignFaceSearchResults() {
   }
   faceSearchAssignBusy.value = true;
   try {
-    await addCharacterFaceAssignments(character.id, assignments, {
-      baseUrl: props.backendUrl,
-    });
+    await addCharacterFaceAssignments(character.id, assignments);
     selectedImageIds.value = [];
     clearFaceSelection();
     lastSelectedImageId.value = null;

@@ -60,7 +60,6 @@ async function save() {
           name: name.value.trim(),
           description: description.value.trim() || null,
         },
-        { baseUrl: props.backendUrl },
       );
       emit("saved", null);
     } else {
@@ -69,7 +68,6 @@ async function save() {
           name: name.value.trim(),
           description: description.value.trim() || null,
         },
-        { baseUrl: props.backendUrl },
       );
       emit("saved", created?.id ?? null);
     }
@@ -92,9 +90,7 @@ async function deleteProject() {
   deleting.value = true;
   error.value = null;
   try {
-    await deleteProjectRequest(props.project.id, {
-      baseUrl: props.backendUrl,
-    });
+    await deleteProjectRequest(props.project.id);
     emit("deleted", props.project.id);
   } catch (e) {
     error.value = e?.response?.data?.detail || e.message || "Delete failed.";

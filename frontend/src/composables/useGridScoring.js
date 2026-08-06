@@ -97,7 +97,7 @@ export function useGridScoring({
   async function _submitGuestScores(scores, setCookie) {
     const sid = _getOrCreateGuestSessionId();
     const payload = { session_id: sid, set_cookie: setCookie, scores };
-    await submitGuestScores(payload, { baseUrl: backendUrl });
+    await submitGuestScores(payload);
   }
 
   function setGuestScore(img, n) {
@@ -486,7 +486,6 @@ export function useGridScoring({
     try {
       const rows = await listPicturesByIds(toFetch, {
         fields: "grid",
-        baseUrl: backendUrl,
       });
       fetched = Array.isArray(rows) ? rows : [];
     } catch (e) {
@@ -572,7 +571,7 @@ export function useGridScoring({
       scoresPayload[String(id)] = Number(score);
     }
 
-    await applyScores(scoresPayload, { baseUrl: backendUrl });
+    await applyScores(scoresPayload);
 
     const scoreMap = new Map(
       entries.map(([id, score]) => [String(id), Number(score)]),

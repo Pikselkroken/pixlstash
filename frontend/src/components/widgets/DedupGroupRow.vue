@@ -336,7 +336,6 @@ import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupPictureStrip from "./DedupPictureStrip.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
-import { API_BASE_URL } from "../../utils/apiClient";
 import {
   candidateSmartScore,
   groupUnits,
@@ -598,7 +597,6 @@ function thumbUrl(unit) {
   // the dev server, the demo and Electron, so a relative /pictures/... 404s.
   return pictureThumbnailUrl(unit.coverPictureId, {
     version: unit.thumbnailVersion,
-    baseUrl: API_BASE_URL,
   });
 }
 

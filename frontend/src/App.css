@@ -224,19 +224,6 @@ body {
   z-index: 145;
   background: var(--scrim-drawer);
 }
-/* Same duration and curve as the panel's slide. The scrim's opacity is a proxy
-   for the panel's presence, so the two must not diverge; the panel uses
-   --ease-decelerate in both directions, so this does too. No accelerate-out: on
-   a pure opacity ramp the curve is imperceptible, and a faster leave would
-   strand the panel mid-slide over undimmed content. */
-.backdrop-fade-enter-active,
-.backdrop-fade-leave-active {
-  transition: opacity var(--dur-2) var(--ease-decelerate);
-}
-.backdrop-fade-enter-from,
-.backdrop-fade-leave-to {
-  opacity: 0;
-}
 /* Reduced-motion exception, matching .sidebar-shell.sidebar-overlay above, and
    it must match, because the scrim and the panel are one object. If the panel
    keeps its 200ms slide while the scrim snaps, a full-shell dim appears
@@ -334,24 +321,7 @@ button:focus:not(:focus-visible) {
   box-shadow: none !important;
 }
 
-.media-type-toggle {
-  border-radius: var(--radius-md);
-  margin-left: var(--space-2);
-  display: inline-flex;
-}
 
-.media-type-toggle .v-btn {
-  color: rgb(var(--v-theme-on-secondary)) !important;
-  height: 32px;
-  width: 32px;
-  background-color: rgba(var(--v-theme-surface), 0.3) !important;
-  align-items: center;
-}
-
-.media-type-toggle .v-btn--active {
-  background-color: rgb(var(--v-theme-secondary)) !important;
-  color: rgb(var(--v-theme-on-secondary)) !important;
-}
 .face-bbox-toggle-btn .face-bbox-icon-wrapper {
   display: inline-flex;
   align-items: center;
@@ -469,41 +439,6 @@ kbd {
   line-height: 1.5;
 }
 
-.update-check-dialog {
-  padding: var(--space-3) var(--space-2);
-}
-
-.update-check-title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  padding-bottom: var(--space-2);
-}
-
-.update-check-body {
-  color: rgb(var(--v-theme-on-surface));
-  line-height: 1.6;
-}
-
-.update-check-note {
-  font-size: var(--text-sm);
-  opacity: 0.7;
-}
-
-.update-check-actions {
-  justify-content: flex-end;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
-}
-
-/* ── Popup panel base — shared by all floating dropdown/popover panels ─────── */
-.popup-panel {
-  border-radius: var(--radius-md);
-  box-shadow: var(--elevation-3);
-  background: rgba(var(--v-theme-background), 0.96);
-  color: rgb(var(--v-theme-on-background));
-  display: flex;
-  flex-direction: column;
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toolbar menus — shared chrome for the Sort / Filter / Grid-view popovers.
@@ -568,11 +503,6 @@ kbd {
   font-weight: var(--weight-semibold);
   letter-spacing: 0.01em;
   white-space: nowrap;
-}
-.tbm-subtitle {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-panel), 0.6);
-  margin-top: var(--space-1);
 }
 .tbm-spacer {
   flex: 1 1 auto;
@@ -647,9 +577,6 @@ kbd {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: var(--space-3);
-}
-.tbm-header--top {
-  align-items: flex-start;
 }
 .tbm-mono {
   font-family: var(--font-mono);
@@ -796,9 +723,6 @@ kbd {
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
-}
-.tbm-seg--full {
-  display: flex;
 }
 .tbm-seg-btn {
   flex: 1;

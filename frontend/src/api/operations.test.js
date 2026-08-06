@@ -105,24 +105,24 @@ describe("api/operations", () => {
     );
   });
 
-  it("every call accepts an explicit backend base", async () => {
+  it("every call addresses its own operations route", async () => {
     apiClient.get.mockResolvedValue({ data: {} });
     apiClient.post.mockResolvedValue({ data: {} });
-    await listOperations({ baseUrl: "/be" });
-    await getUndoState({ baseUrl: "/be" });
-    await undoLastOperation({ baseUrl: "/be" });
-    await redoOperation({ baseUrl: "/be" });
-    await undoOperation(5, { baseUrl: "/be" });
-    await undoBatch("b-2", { baseUrl: "/be" });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/operations", {
+    await listOperations();
+    await getUndoState();
+    await undoLastOperation();
+    await redoOperation();
+    await undoOperation(5);
+    await undoBatch("b-2");
+    expect(apiClient.get).toHaveBeenCalledWith("/operations", {
       params: { limit: 50 },
     });
-    expect(apiClient.get).toHaveBeenCalledWith("/be/operations/undo-state");
-    expect(apiClient.post).toHaveBeenCalledWith("/be/operations/undo");
-    expect(apiClient.post).toHaveBeenCalledWith("/be/operations/redo");
-    expect(apiClient.post).toHaveBeenCalledWith("/be/operations/5/undo");
+    expect(apiClient.get).toHaveBeenCalledWith("/operations/undo-state");
+    expect(apiClient.post).toHaveBeenCalledWith("/operations/undo");
+    expect(apiClient.post).toHaveBeenCalledWith("/operations/redo");
+    expect(apiClient.post).toHaveBeenCalledWith("/operations/5/undo");
     expect(apiClient.post).toHaveBeenCalledWith(
-      "/be/operations/batches/b-2/undo",
+      "/operations/batches/b-2/undo",
     );
   });
 

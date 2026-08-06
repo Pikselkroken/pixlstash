@@ -4,7 +4,8 @@
 // bookkeeping (create / list / refresh / archive / abort) lives here; the
 // per-card decisions are a separate resource (see api/tagSuggestions.js).
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Base path of the reviews collection. */
 const REVIEWS_URL = "/reviews";
@@ -15,8 +16,7 @@ const REVIEWS_URL = "/reviews";
  * @returns {Promise<Array<Object>>} the review list (the response body).
  */
 export async function listReviews(status) {
-  const res = await apiClient.get(REVIEWS_URL, { params: { status } });
-  return res.data;
+  return unwrap(apiClient.get(REVIEWS_URL, { params: { status } }));
 }
 
 /**
@@ -25,8 +25,7 @@ export async function listReviews(status) {
  * @returns {Promise<Object>} the review (the response body).
  */
 export async function getReview(id) {
-  const res = await apiClient.get(`${REVIEWS_URL}/${id}`);
-  return res.data;
+  return unwrap(apiClient.get(`${REVIEWS_URL}/${id}`));
 }
 
 /**
@@ -37,10 +36,9 @@ export async function getReview(id) {
  *   `{ items }` envelope or a bare array, depending on server version.
  */
 export async function listReviewSuggestions(id, params) {
-  const res = await apiClient.get(`${REVIEWS_URL}/${id}/suggestions`, {
+  return unwrap(apiClient.get(`${REVIEWS_URL}/${id}/suggestions`, {
     params,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -50,8 +48,7 @@ export async function listReviewSuggestions(id, params) {
  * @returns {Promise<Object>} the created review (the response body).
  */
 export async function createReview(body) {
-  const res = await apiClient.post(REVIEWS_URL, body);
-  return res.data;
+  return unwrap(apiClient.post(REVIEWS_URL, body));
 }
 
 /**
@@ -64,8 +61,7 @@ export async function createReview(body) {
  * @returns {Promise<Object>} the response body.
  */
 export async function refreshReview(id) {
-  const res = await apiClient.post(`${REVIEWS_URL}/${id}/refresh`);
-  return res.data;
+  return unwrap(apiClient.post(`${REVIEWS_URL}/${id}/refresh`));
 }
 
 /**
@@ -74,8 +70,7 @@ export async function refreshReview(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function archiveReview(id) {
-  const res = await apiClient.post(`${REVIEWS_URL}/${id}/archive`);
-  return res.data;
+  return unwrap(apiClient.post(`${REVIEWS_URL}/${id}/archive`));
 }
 
 /**
@@ -85,8 +80,7 @@ export async function archiveReview(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function abortReview(id) {
-  const res = await apiClient.post(`${REVIEWS_URL}/${id}/abort`);
-  return res.data;
+  return unwrap(apiClient.post(`${REVIEWS_URL}/${id}/abort`));
 }
 
 /**
@@ -96,8 +90,7 @@ export async function abortReview(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteReview(id) {
-  const res = await apiClient.delete(`${REVIEWS_URL}/${id}`);
-  return res.data;
+  return unwrap(apiClient.delete(`${REVIEWS_URL}/${id}`));
 }
 
 /**
@@ -110,6 +103,5 @@ export async function deleteReview(id) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteReviewsByStatus(status) {
-  const res = await apiClient.delete(REVIEWS_URL, { params: { status } });
-  return res.data;
+  return unwrap(apiClient.delete(REVIEWS_URL, { params: { status } }));
 }

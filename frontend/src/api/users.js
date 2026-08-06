@@ -8,7 +8,8 @@
 // Share links are created from here too: a share link IS a READ-scoped token
 // pinned to one resource, so `createToken` is the single place that mints one.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** Base path of the current-user resource. */
 const ME_URL = "/users/me";
@@ -19,8 +20,7 @@ const ME_URL = "/users/me";
  *   (false on a fresh install that has not claimed an account yet).
  */
 export async function getAuthState() {
-  const res = await apiClient.get(`${ME_URL}/auth`);
-  return res.data;
+  return unwrap(apiClient.get(`${ME_URL}/auth`));
 }
 
 /**
@@ -33,19 +33,15 @@ export async function getAuthState() {
  * @returns {Promise<Object>} the response body.
  */
 export async function changePassword(body) {
-  const res = await apiClient.post(`${ME_URL}/auth`, body);
-  return res.data;
+  return unwrap(apiClient.post(`${ME_URL}/auth`, body));
 }
 
 /**
  * List the tokens this user has minted (API tokens and share links alike).
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Array<Object>>} the token list (the response body).
  */
-export async function listTokens({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(`${baseUrl}${ME_URL}/token`);
-  return res.data;
+export async function listTokens() {
+  return unwrap(apiClient.get(`${ME_URL}/token`));
 }
 
 /**
@@ -57,13 +53,10 @@ export async function listTokens({ baseUrl = "" } = {}) {
  *
  * @param {Object} body - `scope`, optional `description`, `resource_type`,
  *   `resource_id`, `expires_at`, `include_attachments`, `watermark`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `token` is the secret.
  */
-export async function createToken(body, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}${ME_URL}/token`, body);
-  return res.data;
+export async function createToken(body) {
+  return unwrap(apiClient.post(`${ME_URL}/token`, body));
 }
 
 /**
@@ -73,8 +66,7 @@ export async function createToken(body, { baseUrl = "" } = {}) {
  * @returns {Promise<Object>} the response body.
  */
 export async function patchToken(id, body) {
-  const res = await apiClient.patch(`${ME_URL}/token/${id}`, body);
-  return res.data;
+  return unwrap(apiClient.patch(`${ME_URL}/token/${id}`, body));
 }
 
 /**
@@ -83,8 +75,7 @@ export async function patchToken(id, body) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteToken(id) {
-  const res = await apiClient.delete(`${ME_URL}/token/${id}`);
-  return res.data;
+  return unwrap(apiClient.delete(`${ME_URL}/token/${id}`));
 }
 
 /**
@@ -94,71 +85,36 @@ export async function deleteToken(id) {
  * token must clear the badge, not just a new share set it.
  *
  * @param {Array<number|string>} pictureIds
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, whose `shared_ids` is the
  *   shared subset of the ids asked about.
  */
-export async function getSharedPictureIds(pictureIds, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(`${baseUrl}${ME_URL}/shared-picture-ids/batch`, {
+export async function getSharedPictureIds(pictureIds) {
+  return unwrap(apiClient.post(`${ME_URL}/shared-picture-ids/batch`, {
     picture_ids: pictureIds,
-  });
-  return res.data;
+  }));
 }
 
 /**
  * List the resource ids of one type that this user has shared.
  * @param {string} resourceType - e.g. `"character"`, `"picture_set"`.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function getSharedResourceIds(
-  resourceType,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.get(`${baseUrl}${ME_URL}/shared-resource-ids`, {
+export async function getSharedResourceIds(resourceType) {
+  return unwrap(apiClient.get(`${ME_URL}/shared-resource-ids`, {
     params: { resource_type: resourceType },
-  });
-  return res.data;
-}
-
-/**
- * List the tokens sharing one specific resource.
- * @param {string} resourceType
- * @param {number|string} resourceId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
- * @returns {Promise<Array<Object>>} the tokens (the response body).
- */
-export async function listTokensByResource(
-  resourceType,
-  resourceId,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.get(`${baseUrl}${ME_URL}/tokens/by-resource`, {
-    params: { resource_type: resourceType, resource_id: resourceId },
-  });
-  return res.data;
+  }));
 }
 
 /**
  * Revoke every token sharing one specific resource.
  * @param {string} resourceType
  * @param {number|string} resourceId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body.
  */
-export async function revokeTokensByResource(
-  resourceType,
-  resourceId,
-  { baseUrl = "" } = {},
-) {
-  const res = await apiClient.delete(`${baseUrl}${ME_URL}/tokens/by-resource`, {
+export async function revokeTokensByResource(resourceType, resourceId) {
+  return unwrap(apiClient.delete(`${ME_URL}/tokens/by-resource`, {
     params: { resource_type: resourceType, resource_id: resourceId },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -173,10 +129,9 @@ export async function revokeTokensByResource(
 export async function uploadWatermark(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await apiClient.post(`${ME_URL}/watermark`, form, {
+  return unwrap(apiClient.post(`${ME_URL}/watermark`, form, {
     headers: { "Content-Type": "multipart/form-data" },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -184,8 +139,7 @@ export async function uploadWatermark(file) {
  * @returns {Promise<Object>} the response body.
  */
 export async function deleteWatermark() {
-  const res = await apiClient.delete(`${ME_URL}/watermark`);
-  return res.data;
+  return unwrap(apiClient.delete(`${ME_URL}/watermark`));
 }
 
 /**
@@ -199,6 +153,5 @@ export async function deleteWatermark() {
  *   `smart_score_penalised_tags` is an array or a tag→weight map.
  */
 export async function getPenalisedTags() {
-  const res = await apiClient.get(`${ME_URL}/penalised-tags`);
-  return res.data;
+  return unwrap(apiClient.get(`${ME_URL}/penalised-tags`));
 }

@@ -1290,7 +1290,7 @@ async function deleteProjectById(project) {
   )
     return;
   try {
-    await deleteProject(project.id, { baseUrl: props.backendUrl });
+    await deleteProject(project.id);
     await projectDeleted(project.id);
   } catch (e) {
     console.error("Failed to delete project", e);
@@ -1938,7 +1938,7 @@ async function deleteSetById(id) {
   )
     return;
   try {
-    await deletePictureSet(id, { baseUrl: props.backendUrl });
+    await deletePictureSet(id);
     emit("select-set", null);
     await fetchPictureSets();
     await fetchSidebarData();
@@ -1970,7 +1970,7 @@ async function deleteSetsByIds(ids) {
   try {
     await Promise.all(
       normalizedIds.map((id) =>
-        deletePictureSet(id, { baseUrl: props.backendUrl }),
+        deletePictureSet(id),
       ),
     );
     emit("select-set", null);
@@ -2314,7 +2314,7 @@ async function applySetAppearance(setId, icon, color) {
   if (icon !== null) payload.set_icon = icon;
   if (color !== null) payload.set_color = color;
   try {
-    await patchPictureSet(setId, payload, { baseUrl: props.backendUrl });
+    await patchPictureSet(setId, payload);
     refreshSidebar();
   } catch (e) {
     console.error("Failed to update set appearance", e);
@@ -2333,7 +2333,6 @@ async function toggleSetLock(set) {
     await patchPictureSet(
       set.id,
       { locked: !set.locked },
-      { baseUrl: props.backendUrl },
     );
     refreshSidebar();
     lockedSetsStore.fetch();
@@ -2534,8 +2533,8 @@ async function fetchSidebarData() {
   // computing the key instead would be a bug: a cold list landing mid-flight
   // changes the key and every count write would be discarded as stale.)
   const [characterRows, projectRows] = await Promise.all([
-    entityLists.refresh("characters", { baseUrl: props.backendUrl }),
-    entityLists.refresh("projects", { baseUrl: props.backendUrl }),
+    entityLists.refresh("characters"),
+    entityLists.refresh("projects"),
   ]);
   const requestKey = sidebarCountRequestKey();
   const isCurrentRequest = () =>
@@ -2566,9 +2565,7 @@ async function fetchSidebarData() {
   // Fetch total image count for END key logic
   try {
     // All images summary
-    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getCharacterSummary(ALL_PICTURES_ID, undefined);
     if (isCurrentRequest())
       setCategoryCount(ALL_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
@@ -2588,7 +2585,6 @@ async function fetchSidebarData() {
     const data = await getCharacterSummary(
       UNASSIGNED_PICTURES_ID,
       unassignedParams,
-      { baseUrl: props.backendUrl },
     );
     if (isCurrentRequest())
       setCategoryCount(UNASSIGNED_PICTURES_ID, data.image_count, shouldFlash);
@@ -2596,9 +2592,7 @@ async function fetchSidebarData() {
     console.warn("Error fetching unassigned images summary:", e);
   }
   try {
-    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getCharacterSummary(SCRAPHEAP_PICTURES_ID, undefined);
     if (isCurrentRequest())
       setCategoryCount(SCRAPHEAP_PICTURES_ID, data.image_count, shouldFlash);
   } catch (e) {
@@ -2619,9 +2613,7 @@ async function fetchCharacters() {
   setLoading(true);
   setError(null);
   try {
-    const nextCharacters = await entityLists.refresh("characters", {
-      baseUrl: props.backendUrl,
-    });
+    const nextCharacters = await entityLists.refresh("characters");
     entityNames.mergeCharacterNames(nextCharacters);
     for (const char of nextCharacters) {
       fetchCharacterThumbnail(char.id);
@@ -2709,16 +2701,14 @@ async function fetchSortOptions() {
 async function fetchProjects() {
   // The store declines the call outright for a token scoped to a non-project
   // resource, which cannot read the projects list.
-  const rows = await entityLists.refresh("projects", {
-    baseUrl: props.backendUrl,
-  });
+  const rows = await entityLists.refresh("projects");
   entityNames.mergeProjectNames(rows);
 }
 
 async function fetchPictureSets() {
   // Always fetch all sets — in the flat project tree each project filters
   // its own sets client-side, so we must not scope this call to a single project.
-  const sets = await entityLists.refresh("sets", { baseUrl: props.backendUrl });
+  const sets = await entityLists.refresh("sets");
   entityNames.mergeSetNames(sets);
   await updateSetThumbnails(sets);
 }
@@ -2943,7 +2933,7 @@ async function handleDropOnSet(setId, event) {
   try {
     // Add each image to the set
     const addPromises = draggedIds.map(async (picId) => {
-      await addPictureToSet(setId, picId, { baseUrl: props.backendUrl });
+      await addPictureToSet(setId, picId);
     });
 
     await Promise.all(addPromises);
@@ -3088,7 +3078,6 @@ async function onProjectDrop(projectId, event) {
     // membership the project view queries — that returns 200 but shows nothing.)
     await setPicturesProject(imageIds, projectId, {
       mode: "add",
-      baseUrl: props.backendUrl,
     });
     emit("images-moved", { imageIds });
   } catch (e) {
@@ -3175,9 +3164,7 @@ async function onCharacterDrop(characterId, event) {
   if (dragType === "face-bbox" && faceIds.length > 0) {
     // Assign faces to character
     try {
-      await addCharacterFacesByFaceId(characterId, faceIds, {
-        baseUrl: props.backendUrl,
-      });
+      await addCharacterFacesByFaceId(characterId, faceIds);
       await fetchSidebarData();
       await fetchCharacterThumbnail(characterId);
       emit("faces-assigned-to-character", { characterId, faceIds });
@@ -3197,9 +3184,7 @@ async function onCharacterDrop(characterId, event) {
 
   try {
     // Fallback: assign images to character
-    await addCharacterFaces(characterId, imageIds, {
-      baseUrl: props.backendUrl,
-    });
+    await addCharacterFaces(characterId, imageIds);
     await fetchSidebarData();
     await fetchCharacterThumbnail(characterId);
     emit("images-assigned-to-character", { characterId, imageIds });
@@ -3580,7 +3565,6 @@ async function toggleCharacterProjectMembership(charId) {
     await patchCharacter(
       charId,
       membershipPatch,
-      { baseUrl: props.backendUrl },
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
@@ -3607,7 +3591,6 @@ async function toggleSetProjectMembership(setId) {
     await patchPictureSet(
       setId,
       membershipPatch,
-      { baseUrl: props.backendUrl },
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {
@@ -3663,7 +3646,6 @@ async function moveCharacterToProject(charId, projectId) {
     await patchCharacter(
       charId,
       { project_id: projectId },
-      { baseUrl: props.backendUrl },
     );
     const idx = characters.value.findIndex((c) => c.id === charId);
     if (idx !== -1) {
@@ -3693,7 +3675,6 @@ async function moveSetToProject(setId, projectId) {
     await patchPictureSet(
       setId,
       { project_id: projectId },
-      { baseUrl: props.backendUrl },
     );
     const idx = pictureSets.value.findIndex((s) => s.id === setId);
     if (idx !== -1) {

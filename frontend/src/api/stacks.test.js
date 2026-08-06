@@ -60,8 +60,8 @@ describe("api/stacks", () => {
 
   it("createStack sends the ids in the caller's order", async () => {
     apiClient.post.mockResolvedValue({ data: { id: 9 } });
-    await createStack([5, 3, 4], { baseUrl: "/be" });
-    expect(apiClient.post).toHaveBeenCalledWith("/be/stacks", {
+    await createStack([5, 3, 4]);
+    expect(apiClient.post).toHaveBeenCalledWith("/stacks", {
       picture_ids: [5, 3, 4],
     });
   });

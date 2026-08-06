@@ -50,11 +50,6 @@ vi.mock("../../utils/apiClient", () => ({
   isReadOnly: { value: false },
 }));
 
-globalThis.ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
 
 // (1) Verbatim copy of fetchOverlayMetadata's smart-score merge. `data` is the
 // authoritative /pictures/{id}/metadata?smart_score=true response; `image` is

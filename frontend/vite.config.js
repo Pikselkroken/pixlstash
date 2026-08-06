@@ -54,6 +54,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.{js,ts}'],
+    // jsdom has no layout, so the observer APIs any measuring component needs
+    // are stubbed once here rather than re-declared per suite.
+    setupFiles: ['src/testing/setup.js'],
     server: {
       deps: {
         // Vuetify ships its component CSS as sibling `.css` imports, which Node

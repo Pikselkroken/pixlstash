@@ -492,7 +492,6 @@ function previewUrl(pictureId, record, version = "") {
   }
   return pictureThumbnailUrl(pictureId, {
     version: record?.thumbnail_version ?? version,
-    baseUrl: API_BASE_URL,
   });
 }
 

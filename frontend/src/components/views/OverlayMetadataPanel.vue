@@ -299,7 +299,7 @@ async function copyMetadataValue(value) {
 async function openSourceFileLocation() {
   if (!props.image?.id) return;
   try {
-    await openPictureLocation(props.image.id, { baseUrl: props.backendUrl });
+    await openPictureLocation(props.image.id);
   } catch (e) {
     // Expected on a headless or remote server, which has no desktop file
     // manager to open. Log it rather than let the click do nothing silently.

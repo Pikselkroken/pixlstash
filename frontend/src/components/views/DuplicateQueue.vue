@@ -701,7 +701,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useDedupStore } from "../../stores/useDedupStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
-import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
 import {
   candidateId,
   groupUnits,
@@ -1530,7 +1530,6 @@ function prefetchNextGroup() {
     // backend origin, or the warmed URL is not the one the row will render.
     img.src = pictureThumbnailUrl(candidateId(candidate), {
       version: candidate.thumbnail_version,
-      baseUrl: API_BASE_URL,
     });
   }
 }

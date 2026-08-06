@@ -237,9 +237,7 @@ async function saveDescription() {
   const newDescription = descriptionDraft.value.trim();
   const payload = { description: newDescription || null };
   try {
-    await patchPicture(capturedImageId, payload, {
-      baseUrl: props.backendUrl,
-    });
+    await patchPicture(capturedImageId, payload);
     emit("update-description", capturedImageId, newDescription);
     isEditingDescription.value = false;
     // Same contract as cancel: a save ends the edit, so the keyboard goes
@@ -309,13 +307,11 @@ async function refreshDescription(model = null) {
       await resetPictureDescription(
         capturedImageId,
         { model },
-        { baseUrl: props.backendUrl },
       );
     } else {
       await patchPicture(
         capturedImageId,
         { description: null },
-        { baseUrl: props.backendUrl },
       );
     }
     emit("update-description", capturedImageId, null);

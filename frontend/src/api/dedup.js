@@ -65,7 +65,8 @@
 // Every route is owner-scoped on the backend. Guarding a read-only session is
 // the caller's job; this module is pure transport.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /** The whole-vault scope. Every other scope type requires a `scope_id`. */
 export const GLOBAL_SCOPE = "global";
@@ -73,11 +74,10 @@ export const GLOBAL_SCOPE = "global";
 /**
  * Build a dedup route, optionally under an explicit backend base.
  * @param {string} [path=""] - the route below `/dedup`.
- * @param {string} [baseUrl=""] - explicit backend base.
  * @returns {string}
  */
-function dedupUrl(path = "", baseUrl = "") {
-  return `${baseUrl}/dedup${path}`;
+function dedupUrl(path = "") {
+  return `/dedup${path}`;
 }
 
 /**
@@ -143,16 +143,13 @@ export function policyBody({
  * The single reason no threshold, tier id, prerequisite or scope type is
  * hardcoded in the client. Fetch this before rendering the tier controls.
  *
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `{ defaults, bounds }`, where
  *   `bounds` carries `min_threshold`, `max_threshold`, `tiers` (strongest
  *   first), `always_on_tiers`, `tier_requires`, `scope_types`, `verdicts` and
  *   `max_page_size`.
  */
-export async function getPolicy({ baseUrl = "" } = {}) {
-  const res = await apiClient.get(dedupUrl("/policy", baseUrl));
-  return res.data;
+export async function getPolicy() {
+  return unwrap(apiClient.get(dedupUrl("/policy")));
 }
 
 /**
@@ -186,7 +183,6 @@ export async function getPolicy({ baseUrl = "" } = {}) {
  *   is every decision. The server refuses it without `decided`, because an
  *   open-queue group carries no verdict and the filter would silently empty
  *   the queue.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ groups, total, offset, limit, policy, scope, verdicts, by_verdict,
  *   scan }`, plus `next_cursor` from a cursor-paging server: an opaque string
@@ -207,7 +203,6 @@ export async function listGroups({
   limit = 20,
   decided = false,
   verdicts = [],
-  baseUrl = "",
 } = {}) {
   const params = {
     near_enabled: nearEnabled,
@@ -224,14 +219,13 @@ export async function listGroups({
   else params.offset = offset;
   if (Number.isFinite(threshold)) params.threshold = threshold;
   Object.assign(params, scopeBody(scopeType, scopeId));
-  const res = await apiClient.get(dedupUrl("/groups", baseUrl), {
+  return unwrap(apiClient.get(dedupUrl("/groups"), {
     params,
     // `verdict` is a repeatable query param, which is what FastAPI's
     // `list[...]` reads. Axios' default array form is `verdict[]=`, a key the
     // server does not know, so the filter would be silently dropped.
     paramsSerializer: { indexes: null },
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -263,7 +257,6 @@ export const MAX_STACK_MEMBER_PAGE = 200;
  *   order. Use the previous page's `next_offset`.
  * @param {number} [options.limit] - members per page, at most
  *   {@link MAX_STACK_MEMBER_PAGE}. Omitted means the server's default (50).
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ stack_id, member_count, leader_picture_id, leader_thumbnail_version,
  *   stackable, blocked_by_sets, offset, limit, next_offset, members }`. Each
@@ -274,17 +267,16 @@ export const MAX_STACK_MEMBER_PAGE = 200;
  */
 export async function listStackMembers(
   stackId,
-  { offset = 0, limit, baseUrl = "" } = {},
+  { offset = 0, limit } = {},
 ) {
   const params = { offset };
   if (Number.isFinite(limit)) {
     params.limit = Math.min(limit, MAX_STACK_MEMBER_PAGE);
   }
-  const res = await apiClient.get(
-    dedupUrl(`/stacks/${stackId}/members`, baseUrl),
+  return unwrap(apiClient.get(
+    dedupUrl(`/stacks/${stackId}/members`),
     { params },
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -301,17 +293,15 @@ export async function listStackMembers(
  * @param {Object} [options.policy] - see {@link policyBody}.
  * @param {Array<{scopeType: string, scopeId: (number|string|null)}>}
  *   [options.scopes=[]] - extra scopes to count.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ unresolved_groups, by_tier, scopes, policy, scan }`, where each entry of
  *   `scopes` is `{ scope_type, scope_id, key, unresolved_groups }`.
  */
-export async function getCounts({ policy, scopes = [], baseUrl = "" } = {}) {
+export async function getCounts({ policy, scopes = [] } = {}) {
   const body = { scopes: scopes.map((s) => scopeBody(s.scopeType, s.scopeId)) };
   const policyFragment = policyBody(policy);
   if (Object.keys(policyFragment).length) body.policy = policyFragment;
-  const res = await apiClient.post(dedupUrl("/counts", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/counts"), body));
 }
 
 /**
@@ -325,7 +315,6 @@ export async function getCounts({ policy, scopes = [], baseUrl = "" } = {}) {
  * @param {Object} [options.policy] - see {@link policyBody}.
  * @param {string} [options.scopeType=GLOBAL_SCOPE]
  * @param {number|string} [options.scopeId]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ status, scanned_pictures, total_pictures, scanned_buckets,
  *   total_buckets, groups_found, error }`.
@@ -334,13 +323,11 @@ export async function startScan({
   policy,
   scopeType = GLOBAL_SCOPE,
   scopeId = null,
-  baseUrl = "",
 } = {}) {
   const body = { scope: scopeBody(scopeType, scopeId) };
   const policyFragment = policyBody(policy);
   if (Object.keys(policyFragment).length) body.policy = policyFragment;
-  const res = await apiClient.post(dedupUrl("/scan", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/scan"), body));
 }
 
 /**
@@ -361,14 +348,13 @@ export async function startScan({
  *   does not treat it as an unfinished decision.
  * @param {string} [options.batchId] - operation-log batch to record under, so
  *   several verdicts can reverse as one undo.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ signature, verdict, stack_id, cover_picture_id, picture_ids,
  *   excluded_picture_ids, batch_id, metadata_union }`.
  */
 export async function stackGroup(
   signature,
-  { coverPictureId, excludedPictureIds = [], batchId, baseUrl = "" } = {},
+  { coverPictureId, excludedPictureIds = [], batchId } = {},
 ) {
   const body = { signature };
   if (coverPictureId !== undefined && coverPictureId !== null) {
@@ -378,8 +364,7 @@ export async function stackGroup(
     body.excluded_picture_ids = excludedPictureIds;
   }
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(dedupUrl("/verdicts/stack", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/verdicts/stack"), body));
 }
 
 /**
@@ -394,21 +379,19 @@ export async function stackGroup(
  * @param {string} signature - the group signature.
  * @param {Object} [options]
  * @param {string} [options.batchId]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body, the same `VerdictResponse`
  *   shape as {@link stackGroup} with `verdict: "keep_separate"`.
  */
 export async function keepGroupSeparate(
   signature,
-  { batchId, baseUrl = "" } = {},
+  { batchId } = {},
 ) {
   const body = { signature };
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(
-    dedupUrl("/verdicts/keep-separate", baseUrl),
+  return unwrap(apiClient.post(
+    dedupUrl("/verdicts/keep-separate"),
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -421,12 +404,11 @@ export async function keepGroupSeparate(
  * @param {Array<Object>} actions
  * @param {Object} [options]
  * @param {string} [options.batchId]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} `{ batch_id, results }`.
  */
 export async function applyVerdictBatch(
   actions,
-  { batchId, baseUrl = "" } = {},
+  { batchId } = {},
 ) {
   const body = {
     actions: actions.map((action) => {
@@ -447,8 +429,7 @@ export async function applyVerdictBatch(
     }),
   };
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(dedupUrl("/verdicts/batch", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/verdicts/batch"), body));
 }
 
 /**
@@ -467,18 +448,16 @@ export async function applyVerdictBatch(
  * @param {Object} [options]
  * @param {string} [options.batchId] - operation-log batch to record under, so
  *   several clears can reverse as one undo.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ signature, previous_verdict, reopened_at, group_returned_to_queue,
  *   batch_id, unstacked_picture_ids }`.
  *   `group_returned_to_queue` is false when the group has not been re-detected
  *   yet, in which case the next scan brings it back.
  */
-export async function reopenGroup(signature, { batchId, baseUrl = "" } = {}) {
+export async function reopenGroup(signature, { batchId } = {}) {
   const body = { signature };
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(dedupUrl("/verdicts/reopen", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/verdicts/reopen"), body));
 }
 
 /**
@@ -496,7 +475,6 @@ export async function reopenGroup(signature, { batchId, baseUrl = "" } = {}) {
  * @param {number|string} [options.scopeId]
  * @param {string} [options.batchId] - omit to have the server mint one.
  * @param {number} [options.limit] - cap the groups acted on, for a paged run.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body:
  *   `{ batch_id, dry_run, groups, pictures, scope, dry_run_summary, results,
  *   failures }`. `dry_run_summary` is present on a dry run only and carries
@@ -516,13 +494,11 @@ export async function autoStackExact({
   scopeId = null,
   batchId,
   limit,
-  baseUrl = "",
 } = {}) {
   const body = { scope: scopeBody(scopeType, scopeId), dry_run: dryRun };
   if (batchId) body.batch_id = batchId;
   if (Number.isFinite(limit)) body.limit = limit;
-  const res = await apiClient.post(dedupUrl("/auto-stack", baseUrl), body);
-  return res.data;
+  return unwrap(apiClient.post(dedupUrl("/auto-stack"), body));
 }
 
 // ── Mixed stacks (design D5) ────────────────────────────────────────────────
@@ -560,7 +536,6 @@ export const MAX_MIXED_STACK_PAGE = 200;
  *   {@link MAX_MIXED_STACK_PAGE}. Omitted means the server's default (20).
  * @param {boolean} [options.includeKept=false] - include stacks a `Keep`
  *   covers, each marked `kept: true`. `kept_total` is reported either way.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `{ threshold, total,
  *   kept_total, live_stack_count, offset, limit, next_offset, stacks }`. Each
  *   stack carries `stack_id`, `member_count`, `member_ids`,
@@ -578,7 +553,6 @@ export async function listMixedStacks({
   offset = 0,
   limit,
   includeKept = false,
-  baseUrl = "",
 } = {}) {
   const params = { offset };
   if (Number.isFinite(threshold)) params.threshold = threshold;
@@ -586,10 +560,9 @@ export async function listMixedStacks({
     params.limit = Math.min(limit, MAX_MIXED_STACK_PAGE);
   }
   if (includeKept) params.include_kept = true;
-  const res = await apiClient.get(dedupUrl("/mixed-stacks", baseUrl), {
+  return unwrap(apiClient.get(dedupUrl("/mixed-stacks"), {
     params,
-  });
-  return res.data;
+  }));
 }
 
 /**
@@ -621,13 +594,12 @@ export async function listMixedStacks({
  *   `pictureIds` is omitted, and bounds it when it is supplied.
  * @param {string} [options.batchId] - a client-namespaced `cli-…` id; omit to
  *   have the server mint an `srv-` one.
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `{ stack_id,
  *   split_picture_ids, remaining_picture_ids, stack_dissolved, batch_id }`.
  */
 export async function splitMixedStack(
   stackId,
-  { pictureIds, threshold, batchId, baseUrl = "" } = {},
+  { pictureIds, threshold, batchId } = {},
 ) {
   const body = {};
   if (Array.isArray(pictureIds) && pictureIds.length) {
@@ -635,11 +607,10 @@ export async function splitMixedStack(
   }
   if (Number.isFinite(threshold)) body.threshold = threshold;
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(
-    dedupUrl(`/mixed-stacks/${stackId}/split`, baseUrl),
+  return unwrap(apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/split`),
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -656,21 +627,19 @@ export async function splitMixedStack(
  * @param {number|string} stackId
  * @param {Object} [options]
  * @param {string} [options.batchId]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the same `MixedStackActionResponse` shape as
  *   {@link splitMixedStack}, with `stack_dissolved: true`.
  */
 export async function unstackMixedStack(
   stackId,
-  { batchId, baseUrl = "" } = {},
+  { batchId } = {},
 ) {
   const body = {};
   if (batchId) body.batch_id = batchId;
-  const res = await apiClient.post(
-    dedupUrl(`/mixed-stacks/${stackId}/unstack`, baseUrl),
+  return unwrap(apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/unstack`),
     body,
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -686,17 +655,14 @@ export async function unstackMixedStack(
  * unchanged stack returns `created: false` and writes nothing.
  *
  * @param {number|string} stackId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `{ stack_id, dismissed,
  *   created, membership_fingerprint, member_count }`.
  */
-export async function keepMixedStack(stackId, { baseUrl = "" } = {}) {
-  const res = await apiClient.post(
-    dedupUrl(`/mixed-stacks/${stackId}/keep`, baseUrl),
+export async function keepMixedStack(stackId) {
+  return unwrap(apiClient.post(
+    dedupUrl(`/mixed-stacks/${stackId}/keep`),
     {},
-  );
-  return res.data;
+  ));
 }
 
 /**
@@ -707,14 +673,11 @@ export async function keepMixedStack(stackId, { baseUrl = "" } = {}) {
  * never kept returns `removed: 0`.
  *
  * @param {number|string} stackId
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""]
  * @returns {Promise<Object>} the response body: `{ stack_id, dismissed: false,
  *   removed }`.
  */
-export async function clearMixedStackKeep(stackId, { baseUrl = "" } = {}) {
-  const res = await apiClient.delete(
-    dedupUrl(`/mixed-stacks/${stackId}/keep`, baseUrl),
-  );
-  return res.data;
+export async function clearMixedStackKeep(stackId) {
+  return unwrap(apiClient.delete(
+    dedupUrl(`/mixed-stacks/${stackId}/keep`),
+  ));
 }

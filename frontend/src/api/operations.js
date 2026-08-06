@@ -10,7 +10,8 @@
 // module is pure transport and a call made in a read-only session will simply
 // come back 403.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient} from "../utils/apiClient";
+import { unwrap } from "../utils/unwrap";
 
 /**
  * List recorded operations, newest first.
@@ -26,7 +27,6 @@ import { apiClient } from "../utils/apiClient";
  * @param {string} [options.batchId] - filter to all operations of one bulk
  *   action.
  * @param {string} [options.opType] - filter to one operation type.
- * @param {string} [options.baseUrl=""] - explicit backend base, for callers
  *   that do not talk to the default backend.
  * @returns {Promise<Array<Object>>} the operations (the response body).
  */
@@ -35,7 +35,6 @@ export async function listOperations({
   status,
   batchId,
   opType,
-  baseUrl = "",
   signal,
 } = {}) {
   const params = { limit };
@@ -43,8 +42,7 @@ export async function listOperations({
   if (batchId) params.batch_id = batchId;
   if (opType) params.op_type = opType;
   const config = signal ? { params, signal } : { params };
-  const res = await apiClient.get(`${baseUrl}/operations`, config);
-  return res.data;
+  return unwrap(apiClient.get(`/operations`, config));
 }
 
 /**
@@ -53,14 +51,12 @@ export async function listOperations({
  * Lets the UI label and enable its undo affordances without fetching the whole
  * log.
  *
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base.
  * @returns {Promise<Object>} the response body:
  *   `{ can_undo, can_redo, next_undo, next_redo }`, where the two operations
  *   are `null` when there is nothing to act on.
  */
-export async function getUndoState({ baseUrl = "", signal } = {}) {
-  const url = `${baseUrl}/operations/undo-state`;
+export async function getUndoState({ signal } = {}) {
+  const url = `/operations/undo-state`;
   const res = signal
     ? await apiClient.get(url, { signal })
     : await apiClient.get(url);
@@ -80,16 +76,14 @@ export async function getUndoState({ baseUrl = "", signal } = {}) {
  * @param {number|null} [options.operationId=null] - undo this specific
  *   operation instead of the newest reversible one. Sent as a body only when
  *   given.
- * @param {string} [options.baseUrl=""] - explicit backend base.
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
 export async function undoLastOperation({
   operationId = null,
-  baseUrl = "",
   signal,
 } = {}) {
-  const url = `${baseUrl}/operations/undo`;
+  const url = `/operations/undo`;
   let res;
   if (operationId === null) {
     res = signal
@@ -112,13 +106,11 @@ export async function undoLastOperation({
  * replays onto the history it was undone from. 409 when there is nothing to
  * redo.
  *
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base.
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
-export async function redoOperation({ baseUrl = "", signal } = {}) {
-  const url = `${baseUrl}/operations/redo`;
+export async function redoOperation({ signal } = {}) {
+  const url = `/operations/redo`;
   const res = signal
     ? await apiClient.post(url, undefined, { signal })
     : await apiClient.post(url);
@@ -132,16 +124,14 @@ export async function redoOperation({ baseUrl = "", signal } = {}) {
  * any member of a batch reverts the whole batch.
  *
  * @param {number|string} operationId - the operation to revert.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base.
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
 export async function undoOperation(
   operationId,
-  { baseUrl = "", signal } = {},
+  { signal } = {},
 ) {
-  const url = `${baseUrl}/operations/${operationId}/undo`;
+  const url = `/operations/${operationId}/undo`;
   const res = signal
     ? await apiClient.post(url, undefined, { signal })
     : await apiClient.post(url);
@@ -157,13 +147,11 @@ export async function undoOperation(
  *
  * @param {string} batchId - the batch id shared by the bulk action's
  *   operations. URL-encoded here, since it is a server-issued opaque string.
- * @param {Object} [options]
- * @param {string} [options.baseUrl=""] - explicit backend base.
  * @returns {Promise<Object>} the response body:
  *   `{ operations, picture_ids, picture_count }`.
  */
-export async function undoBatch(batchId, { baseUrl = "", signal } = {}) {
-  const url = `${baseUrl}/operations/batches/${encodeURIComponent(batchId)}/undo`;
+export async function undoBatch(batchId, { signal } = {}) {
+  const url = `/operations/batches/${encodeURIComponent(batchId)}/undo`;
   const res = signal
     ? await apiClient.post(url, undefined, { signal })
     : await apiClient.post(url);

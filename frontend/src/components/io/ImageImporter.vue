@@ -112,9 +112,7 @@ function offerScrapheapRestore(fileCount, pictureIds) {
       label: `Restore ${plural(ids.length, "picture")}`,
       handler: async () => {
         try {
-          const data = await restoreScrapheap(ids, {
-            baseUrl: props.backendUrl,
-          });
+          const data = await restoreScrapheap(ids);
           // The offer is not a promise: retention can sweep a match away
           // between the import and the click. Report what came back.
           const restored = Number(data?.restored_count ?? 0);

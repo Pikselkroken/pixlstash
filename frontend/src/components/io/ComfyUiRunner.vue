@@ -315,9 +315,7 @@ function hasComfyuiRefreshRetry(pictureId) {
 async function fetchStackIdForPicture(pictureId) {
   if (!pictureId || !props.backendUrl) return null;
   try {
-    const data = await getPictureMetadata(pictureId, {
-      baseUrl: props.backendUrl,
-    });
+    const data = await getPictureMetadata(pictureId);
     const stackId = data?.stack_id ?? data?.stackId ?? null;
     return stackId != null ? String(stackId) : null;
   } catch (err) {
@@ -332,9 +330,7 @@ async function fetchStackIdForPicture(pictureId) {
 async function fetchStackMembersForOverlay(stackId) {
   if (!stackId || !props.backendUrl) return [];
   try {
-    const rows = await listStackPictures(stackId, {
-      baseUrl: props.backendUrl,
-    });
+    const rows = await listStackPictures(stackId);
     return Array.isArray(rows) ? rows : [];
   } catch (err) {
     logComfyuiDebug("stack-members-fetch-failed", {

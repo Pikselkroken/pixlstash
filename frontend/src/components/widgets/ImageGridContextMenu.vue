@@ -648,7 +648,6 @@ const props = defineProps({
     default: () => ({ hasImages: false, hasVideos: false }),
   },
   selectedCharacter: { type: String, default: "" },
-  selectedSet: { type: String, default: "" },
   selectedGroupName: { type: String, default: "" },
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
@@ -850,9 +849,7 @@ async function loadFaceCharacterNames() {
   await Promise.all(
     pending.map(async (face) => {
       try {
-        const body = await getCharacterName(face.character_id, {
-          baseUrl: props.backendUrl,
-        });
+        const body = await getCharacterName(face.character_id);
         faceCharacterNames.value = {
           ...faceCharacterNames.value,
           [face.id]: body?.name || null,
