@@ -47,9 +47,13 @@ _MAX_SEED_LINK_DEPTH = 4
 # randomize width/height primitives.
 SEED_PASSTHROUGH_CLASSES = frozenset({"PrimitiveInt", "SeedNode", "Seed"})
 
-# Nodes that write an image file. A graph with none of these produces no
+# Nodes that end a graph with an image PixlStash can end up owning: either a
+# written file it collects from ComfyUI's history, or a ComfyUI-PixlStash saver
+# that uploads into the vault itself. A graph with none of these produces no
 # importable output no matter how long it runs.
-SAVE_IMAGE_CLASSES = frozenset({"SaveImage", "SaveImageWebsocket"})
+SAVE_IMAGE_CLASSES = frozenset(
+    {"SaveImage", "SaveImageWebsocket", "PixlStashPictureSaver"}
+)
 
 # Fields naming a file in ComfyUI's *input* directory rather than a model.
 # Kept separate from MODEL_FILENAME_FIELDS: ComfyUI validates these by file

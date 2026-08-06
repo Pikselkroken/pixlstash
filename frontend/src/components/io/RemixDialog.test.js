@@ -17,10 +17,12 @@ const getPictureRecipe = vi.fn();
 const runImageToImage = vi.fn();
 const runRecipe = vi.fn();
 const getPictureMetadata = vi.fn();
+const getPictureWorkflow = vi.fn();
 
 vi.mock("../../api/comfyui", () => ({
   listWorkflows: (...a) => listWorkflows(...a),
   getPictureRecipe: (...a) => getPictureRecipe(...a),
+  getPictureWorkflow: (...a) => getPictureWorkflow(...a),
   runImageToImage: (...a) => runImageToImage(...a),
   runRecipe: (...a) => runRecipe(...a),
 }));
@@ -307,36 +309,32 @@ describe("RemixDialog node-class disclosure", () => {
     expect(w.find(".remix-disclosure").attributes("open")).toBeUndefined();
   });
 
-  it("opens the disclosure unprompted when the source is imported", async () => {
+  it("stays shut for an imported source too", async () => {
+    // Owner decision: a watched folder on the user's own ComfyUI output makes
+    // every self-generated image "imported", so it is not a reason to force
+    // the disclosure open.
     getPictureRecipe.mockResolvedValue(IMPORTED_RECIPE);
     const w = await settle(mountDialog());
-    expect(w.find(".remix-disclosure").attributes("open")).toBeDefined();
+    expect(w.find(".remix-disclosure").attributes("open")).toBeUndefined();
   });
 });
 
-describe("RemixDialog imported-source warning", () => {
-  it("says the workflow came from outside, and by which route", async () => {
+describe("RemixDialog imported source", () => {
+  it("raises no banner, but keeps the route in inside the disclosure", async () => {
+    // Warning on "imported" fired on the common case: a watched folder on the
+    // user's own ComfyUI output makes every self-generated image imported.
+    // The fact stays available to anyone who opens the disclosure.
     getPictureRecipe.mockResolvedValue(IMPORTED_RECIPE);
     const w = await settle(mountDialog());
-    const alert = w.find("#remix-alert-imported");
-    expect(alert.exists()).toBe(true);
-    expect(alert.text()).toContain("imported, not generated here");
+    expect(w.find("#remix-alert-imported").exists()).toBe(false);
     expect(w.find(".remix-recipe").text()).toContain("Watched folder");
   });
 
-  it("informs without gating: no checkbox, Generate still enabled", async () => {
-    // Gating a state most of a library is in is exactly what turns an
-    // acknowledgement into a reflex, and it would drag the rare unchecked
-    // gate down with it.
+  it("does not gate: no checkbox, Generate still enabled", async () => {
     getPictureRecipe.mockResolvedValue(IMPORTED_RECIPE);
     const w = await settle(mountDialog());
     expect(w.find(".remix-ack").exists()).toBe(false);
     expect(w.find(".app-btn:last-child").attributes("disabled")).toBeUndefined();
-  });
-
-  it("says nothing when the picture was generated here", async () => {
-    const w = await settle(mountDialog());
-    expect(w.find("#remix-alert-imported").exists()).toBe(false);
   });
 });
 
@@ -687,5 +685,69 @@ describe("RemixDialog submit", () => {
     expect(w.emitted("close")).toBeFalsy();
     const alert = w.find('[role="alert"]');
     expect(alert.text()).toContain("Your ComfyUI is missing: Foo");
+  });
+});
+
+
+describe("RemixDialog PixlStash-node workflows", () => {
+  /** A recipe the backend refused: the graph calls back into PixlStash. */
+  const PIXLSTASH_NODE_RECIPE = {
+    ...CLEAN_RECIPE,
+    available: false,
+    reason: "pixlstash_nodes",
+  };
+
+  it("explains why it cannot re-run, in terms of what would go wrong", async () => {
+    getPictureRecipe.mockResolvedValue(PIXLSTASH_NODE_RECIPE);
+    const w = await settle(mountDialog());
+    const reason = w.find("#remix-reason-recipe");
+    expect(reason.exists()).toBe(true);
+    expect(reason.text()).toContain("PixlStash nodes");
+    expect(reason.text()).toContain("not this picture's");
+  });
+
+  it("offers the workflow for ComfyUI instead of a dead end", async () => {
+    getPictureRecipe.mockResolvedValue(PIXLSTASH_NODE_RECIPE);
+    getPictureWorkflow.mockResolvedValue({ workflow: { 9: { type: "SaveImage" } } });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const w = await settle(mountDialog());
+    const button = w
+      .findAll("button")
+      .find((b) => b.text().includes("Copy workflow"));
+    expect(button).toBeTruthy();
+
+    await button.trigger("click");
+    await nextTick();
+    await nextTick();
+
+    expect(getPictureWorkflow).toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith(
+      JSON.stringify({ 9: { type: "SaveImage" } }, null, 2),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("says so when the clipboard refuses, rather than looking broken", async () => {
+    // navigator.clipboard is undefined on an insecure origin.
+    getPictureRecipe.mockResolvedValue(PIXLSTASH_NODE_RECIPE);
+    getPictureWorkflow.mockResolvedValue({ workflow: { 9: {} } });
+    vi.stubGlobal("navigator", {});
+    const w = await settle(mountDialog());
+    const button = w
+      .findAll("button")
+      .find((b) => b.text().includes("Copy workflow"));
+    await button.trigger("click");
+    await nextTick();
+    await nextTick();
+    expect(w.find(".remix-live").text()).toContain("Could not copy");
+    vi.unstubAllGlobals();
+  });
+
+  it("says nothing of the sort for an ordinary recipe", async () => {
+    const w = await settle(mountDialog());
+    const copy = w.findAll("button").find((b) => b.text().includes("Copy workflow"));
+    expect(copy).toBeUndefined();
   });
 });

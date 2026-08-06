@@ -57,6 +57,8 @@ from pixlstash.services.comfyui_service import (
     _replace_placeholders,
     _submit_comfyui_prompt,
     _upload_image_to_comfyui,
+    graph_has_pixlstash_nodes,
+    graph_has_pixlstash_saver,
 )
 
 # Re-exported so existing call sites and tests that import these helpers from
@@ -816,7 +818,9 @@ def create_router(server) -> APIRouter:
                     prefix_value = build_stack_filename_prefix(
                         prefix_seed, stack_id, pic_id
                     )
-                    if not _apply_filename_prefix(workflow_instance, prefix_value):
+                    if not _apply_filename_prefix(
+                        workflow_instance, prefix_value
+                    ) and not graph_has_pixlstash_saver(workflow_instance):
                         logger.warning(
                             "ComfyUI workflow has no SaveImage node to tag for stack %s",
                             stack_id,
@@ -1083,13 +1087,22 @@ def create_router(server) -> APIRouter:
         stats = summarize_comfy_workflow(graph)
         preflight, seed_targets = _inspect_recipe(comfyui_url, graph)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
+        # A graph that calls back into PixlStash cannot be replayed as "a
+        # variant of this picture" — see run_recipe's refusal for why. Reported
+        # here so the dialog can say so before the user commits to a run, and
+        # offer the workflow to paste into ComfyUI instead.
+        has_pixlstash_nodes = graph_has_pixlstash_nodes(graph)
         return {
             # "Same workflow, new seed" is only a meaningful offer when there
             # IS a seed to change. Without one the re-run is byte-identical,
             # the import dedupes it on pixel_sha, and the user sees nothing
             # happen at all — so report it as unavailable, with the reason.
-            "available": bool(seed_targets),
-            "reason": None if seed_targets else "no_seed_input",
+            "available": bool(seed_targets) and not has_pixlstash_nodes,
+            "reason": (
+                "pixlstash_nodes"
+                if has_pixlstash_nodes
+                else (None if seed_targets else "no_seed_input")
+            ),
             "summary": f"API Workflow · {stats['node_count']} nodes",
             "positive_prompt": gen_info["positive_prompt"],
             "seed": gen_info["seed"],
@@ -1157,6 +1170,33 @@ def create_router(server) -> APIRouter:
             )
         workflow_instance = sanitize_prompt_graph(prompt_graph)
 
+        # Refused before the pre-flight, because this is not about whether the
+        # graph *can* run — it is that replaying it cannot mean what Generate
+        # variants promises. A ComfyUI-PixlStash graph calls back into PixlStash
+        # while PixlStash is running it, and every id it carries was frozen when
+        # the file was written: the loaders serialise a choice as "<name> #<id>".
+        # So the graph re-applies a project/set/character that may since have
+        # been deleted or split into another library (the FOREIGN KEY failure
+        # this refusal replaces), sources its input by a baked picture id rather
+        # than the picture the user right-clicked — or, with that field empty,
+        # auto-selects by its own sort and filters — and imports its outputs
+        # itself, competing with the import PixlStash is already doing for the
+        # variant. The owner's own associations are what a variant should
+        # inherit, and PixlStash copies those from the source picture already.
+        # Running such a graph from a template is fine: the ids are the ones the
+        # owner picked just now, and nothing claims the result is a variant.
+        if graph_has_pixlstash_nodes(workflow_instance):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This workflow uses PixlStash nodes, which read and write "
+                    "the library while it runs. Re-running it here would use "
+                    "the projects, sets and pictures it was saved with, not "
+                    "this picture's. Copy the workflow into ComfyUI and run it "
+                    "there instead."
+                ),
+            )
+
         user = server.auth.get_user_for_request(request)
         comfyui_url = getattr(user, "comfyui_url", None) if user else None
         comfyui_url = (comfyui_url or DEFAULT_COMFYUI_URL).rstrip("/")
@@ -1206,8 +1246,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "This workflow has no SaveImage node, so it produces nothing "
-                    "PixlStash can import."
+                    "This workflow has no node that saves images (SaveImage or "
+                    "PixlStash Picture Saver), so it produces nothing PixlStash "
+                    "can import."
                 ),
             )
         if not seed_targets:
@@ -1240,7 +1281,9 @@ def create_router(server) -> APIRouter:
                 prefix_value = build_stack_filename_prefix(
                     prefix_seed, stack_id, pic_id
                 )
-                if not _apply_filename_prefix(workflow_instance, prefix_value):
+                if not _apply_filename_prefix(
+                    workflow_instance, prefix_value
+                ) and not graph_has_pixlstash_saver(workflow_instance):
                     logger.warning(
                         "Embedded recipe for picture %s has no SaveImage node to tag "
                         "for stack %s; the output will import unstacked.",
