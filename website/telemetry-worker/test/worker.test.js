@@ -81,8 +81,15 @@ describe("validatePing", () => {
     assert.equal(validatePing({ ...VALID, is_new_install: "true" }).ok, false);
   });
 
-  it("rejects an install_type outside the four buckets", () => {
+  it("rejects an install_type outside the known buckets", () => {
     assert.equal(validatePing({ ...VALID, install_type: "snap" }).ok, false);
+  });
+
+  it("accepts the dev install type", () => {
+    // Accepted at ingestion on purpose: a development machine's ping is stored
+    // and stays visible, and is excluded when the day's numbers are built. A
+    // rejection here would 400 every dev install hourly instead.
+    assert.equal(validatePing({ ...VALID, install_type: "dev" }).ok, true);
   });
 
   it("rejects arrays and null", () => {
@@ -271,6 +278,31 @@ describe("buildAggregate", () => {
     const stale = cohortRows(4, "2026-01-01", "2026-02-01", 1n);
     const agg = buildAggregate([...recent, ...stale], "2026-07-20");
     assert.equal(agg.active_installs, 3);
+  });
+
+  it("keeps dev installs out of active_installs but visible in the breakdown", () => {
+    const real = cohortRows(3, "2026-01-01", "2026-07-20", 1n);
+    const dev = cohortRows(2, "2026-01-01", "2026-07-20", 1n).map((r) => ({
+      ...r,
+      install_id: `dev-${r.install_id}`,
+      install_type: "dev",
+    }));
+    const agg = buildAggregate([...real, ...dev], "2026-07-20");
+    assert.equal(agg.active_installs, 3, "dev is not a user");
+    assert.equal(agg.active_installs_by_type.dev, 2, "but its size stays visible");
+    assert.equal(agg.active_installs_by_type.pip, 3);
+  });
+
+  it("keeps dev installs out of cohorts and resurrection entirely", () => {
+    // On their own these would clear MIN_COHORT and publish a retention row.
+    const dev = cohortRows(MIN_COHORT + 5, "2026-07-01", "2026-07-20", 1n).map(
+      (r) => ({ ...r, install_type: "dev", has_resurrected: 1 }),
+    );
+    const agg = buildAggregate(dev, "2026-07-20");
+    assert.deepEqual(agg.cohort_retention, {});
+    assert.equal(agg.suppressed_cohorts, 0, "not cohorted at all, not suppressed");
+    assert.equal(agg.new_installs_last_7d, 0);
+    assert.equal(agg.resurrection_rate, null, "never eligible, so nothing to divide by");
   });
 
   it("reports resurrection_rate as null when nothing is eligible yet", () => {

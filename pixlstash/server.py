@@ -124,12 +124,14 @@ class VersionResponse(BaseModel):
             "the `PIXLSTASH_IN_DOCKER=1` env flag or the presence of "
             "`/.dockerenv`), `pip` (the default for a plain Python/pip "
             "install), `electron` (the cross-platform desktop app, which "
-            "declares `PIXLSTASH_INSTALL_TYPE=electron`), or `other` (the "
+            "declares `PIXLSTASH_INSTALL_TYPE=electron`), `other` (the "
             "uncertain fallback — e.g. the Windows Inno Setup build that "
-            "declares `PIXLSTASH_INSTALL_TYPE=other`). Clients should treat "
-            "any unrecognised value as `other`."
+            "declares `PIXLSTASH_INSTALL_TYPE=other`), or `dev` (a development "
+            "machine that declares `PIXLSTASH_INSTALL_TYPE=dev`; it reports "
+            "normally but is subtracted from the published usage numbers). "
+            "Clients should treat any unrecognised value as `other`."
         ),
-        examples=["docker", "pip", "electron", "other"],
+        examples=["docker", "pip", "electron", "other", "dev"],
     )
     docker_variant: str = Field(
         description=(
@@ -259,10 +261,19 @@ class Server(
         return False
 
     # install_type telemetry: exactly these three values may ever be reported.
-    # "docker" is the reliable signal, "pip" the default, "other" the explicit
-    # opt-out used by installers (e.g. the Windows Inno Setup wheel build) that
-    # otherwise look like a plain pip install.
-    INSTALL_TYPES = ("docker", "pip", "electron", "other")
+    # "docker" is the reliable signal, "pip" the default, and "other" the
+    # channel declared by installers (e.g. the Windows Inno Setup wheel build)
+    # that would otherwise look like a plain pip install. None of those three
+    # opts out of anything; they choose which real bucket you land in.
+    #
+    # "dev" is the one that does. It marks a machine running PixlStash to
+    # develop it rather than to use it, and is reported normally on both
+    # channels — the version-check path and the install ping — so the size of
+    # our own signal stays visible. Both consumers then subtract it: the
+    # collector excludes the bucket from the active-install total, and the
+    # ingestion Worker keeps it out of active installs, cohorts and retention
+    # while still reporting it under `active_installs_by_type.dev`.
+    INSTALL_TYPES = ("docker", "pip", "electron", "other", "dev")
 
     @staticmethod
     def detect_install_type() -> str:
@@ -272,9 +283,10 @@ class Server(
 
         1. ``PIXLSTASH_INSTALL_TYPE`` override — if set to one of the allowed
            values it wins outright, letting an installer declare its channel
-           (e.g. ``other`` for the Windows build) without a code change. An
-           empty or invalid value is ignored (and logged) so a typo can never
-           leak a junk value into telemetry.
+           (e.g. ``other`` for the Windows build) without a code change, or a
+           developer declare ``dev`` in a shell profile to keep their machine
+           out of the usage metrics. An empty or invalid value is ignored (and
+           logged) so a typo can never leak a junk value into telemetry.
         2. Docker detection (:meth:`running_in_docker`) — the reliable signal.
         3. Default to ``pip``.
 

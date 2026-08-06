@@ -3322,6 +3322,42 @@ Both are covered in both directions by
 `tests/test_telemetry_install_id_authz.py` (out-of-scope 403 **and** in-scope
 200), per the §16 discipline.
 
+### 23.5 The `dev` install type: subtracting our own signal
+
+`Server.INSTALL_TYPES` carries a fifth value, `dev`, declared by setting
+`PIXLSTASH_INSTALL_TYPE=dev` (typically once in a shell profile). It marks a
+machine that runs PixlStash in order to develop it. Unlike `docker`/`pip`/
+`electron`/`other`, which choose *which* real bucket an install lands in, `dev`
+takes it out of the published numbers entirely.
+
+**It reports normally on both channels and is subtracted by both consumers.**
+That is the design constraint: suppressing transmission would hide the size of
+our own signal, so instead the signal is emitted, labelled, and removed at the
+point of counting.
+
+| Channel | What is sent | Who subtracts it |
+|---|---|---|
+| Version check | `/latest-version/{version}/dev.json` | `pixlstash-metrics` — `dev` is its own bucket, outside `REAL_BUCKETS`, and the declared marker beats the version (a dev machine on a shipped release is still ours) |
+| Install ping | `install_type: "dev"`, real install ID | The ingestion Worker — accepted and stored, excluded from active installs, cohorts, new installs and resurrection, but still reported under `active_installs_by_type.dev` |
+| Upgrade-page click | `/upgrade-dev.html` instead of `/upgrade.html` | `pixlstash-metrics` — the upgrade metric is a path filter (`%/upgrade.html%`) and the install type rides in the query string, which a path filter cannot see, so the marker has to be in the path |
+
+Three things are load-bearing and easy to break:
+
+* **The frontend bucket allowlist must list `dev`** (`useVersionCheck.js`). An
+  unlisted type collapses to `other`, which *is* counted — so forgetting it makes
+  a development machine count more firmly than never setting the variable.
+* **The Worker must accept `dev` at ingestion**, not reject it. Its validator is
+  reject-by-default, and an unknown `install_type` is a 400 for the whole request,
+  which would make every development machine log a failed ping hourly.
+* **The dev upgrade path must not contain `/upgrade.html`** as a substring.
+  `%/upgrade.html%` is a SQL `LIKE` pattern, so `/dev/upgrade.html` would match it
+  and keep counting us; `/upgrade-dev.html` does not.
+
+Because `dev` is declared explicitly, `pixlstash-metrics` no longer infers "ours"
+from a pre-release version number: an `rc` tester is counted as the real user they
+are. A version never published as a release tag is still excluded, so an
+undeclared mid-development checkout does not leak in.
+
 ---
 
 *Last updated: 2026-08-02. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*

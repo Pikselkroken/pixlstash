@@ -41,7 +41,12 @@ two pieces of information, both in the request URL:
 
 1. **Your current app version**, and
 2. **Your installation type**, as a coarse category: `docker`, `pip`,
-   `electron` (the desktop app), or `other`.
+   `electron` (the desktop app), `other`, or `dev`.
+
+`dev` is for machines that run PixlStash in order to develop it, and is declared
+by setting `PIXLSTASH_INSTALL_TYPE=dev`. It reports like any other type, and both
+of our counting systems then subtract it, so our own machines do not appear in
+any usage count.
 
 As with any request to any website, the receiving server and its content-delivery
 network (Cloudflare) also see ordinary request information such as your IP address,
@@ -93,7 +98,9 @@ telemetry was enabled as part of the first consent decision on a fresh install.
 It is false for upgrades and for people who decline first and opt in later, so
 people who have used PixlStash for months are not counted as brand new.
 `install_type` is the same coarse category as the update check, where `pip` also
-covers the Windows server installer.
+covers the Windows server installer and `dev` marks a development machine. A ping
+declaring `dev` is accepted and stored like any other, and then left out of every
+published number: active installs, new installs, returning installs and retention.
 
 Two things about how the identifier is made:
 

@@ -11,8 +11,28 @@
 /** Maximum accepted request body, in bytes. A valid ping is under 150. */
 export const MAX_BODY_BYTES = 512;
 
-/** The only install types we record. Four coarse buckets, no free text. */
-export const INSTALL_TYPES = Object.freeze(["docker", "pip", "electron", "other"]);
+/**
+ * Install type for a machine that runs PixlStash to develop it, not to use it.
+ *
+ * Declared locally with `PIXLSTASH_INSTALL_TYPE=dev`. It is accepted and stored
+ * like any other type so the signal stays visible in
+ * `active_installs_by_type.dev`, and excluded from every published number:
+ * active installs, new installs, resurrection and cohort retention. See
+ * `accumulateRow` in aggregate.js.
+ */
+export const DEV_INSTALL_TYPE = "dev";
+
+/**
+ * The only install types we record. Four coarse real buckets plus `dev`, which
+ * is a self-signal rather than a user. No free text in either case.
+ */
+export const INSTALL_TYPES = Object.freeze([
+  "docker",
+  "pip",
+  "electron",
+  "other",
+  DEV_INSTALL_TYPE,
+]);
 
 /** The exact key set. Not a minimum: extra keys are a rejection, not noise. */
 const REQUIRED_KEYS = Object.freeze(["install_id", "is_new_install", "install_type"]);

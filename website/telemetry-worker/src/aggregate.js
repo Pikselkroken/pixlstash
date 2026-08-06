@@ -18,6 +18,7 @@ import {
   decodeActivity,
   weekStart,
 } from "./activity.js";
+import { DEV_INSTALL_TYPE } from "./validate.js";
 
 /**
  * Smallest cohort we will publish a percentage for.
@@ -132,7 +133,7 @@ export function hasResurrected(activity) {
 export function createAccumulator() {
   return {
     active: 0,
-    byType: { docker: 0, pip: 0, electron: 0, other: 0 },
+    byType: { docker: 0, pip: 0, electron: 0, other: 0, [DEV_INSTALL_TYPE]: 0 },
     newLast7d: 0,
     resurrectionEligible: 0,
     resurrected: 0,
@@ -171,13 +172,22 @@ export function deserializeAccumulator(serialized) {
  * @param {string} today UTC date.
  */
 export function accumulateRow(state, row, today) {
+  // A development machine is our own noise, not a user. It is counted in the
+  // per-type breakdown so the size of that noise stays visible, and excluded
+  // from every published number below: an active install we made ourselves
+  // inflates the count it exists to measure, and a handful of self-installs in
+  // a young cohort moves a retention percentage a long way.
+  const isDev = row.install_type === DEV_INSTALL_TYPE;
+
   if (daysBetween(row.last_seen, today) <= ACTIVE_WINDOW_DAYS) {
-    state.active += 1;
+    if (!isDev) state.active += 1;
     if (state.byType[row.install_type] === undefined) {
       state.byType[row.install_type] = 0;
     }
     state.byType[row.install_type] += 1;
   }
+
+  if (isDev) return;
 
   if (daysBetween(row.first_seen, today) >= RESURRECTION_GAP_DAYS) {
     state.resurrectionEligible += 1;
@@ -238,6 +248,10 @@ export function finalizeAggregate(state, today) {
 
   return {
     date: today,
+    // Excludes the `dev` bucket. `active_installs_by_type` does NOT: it is the
+    // one place the size of our own signal stays visible, so the two do not sum
+    // to each other by design. A consumer wanting the published total must read
+    // `active_installs` rather than adding the breakdown up.
     active_installs: state.active,
     active_installs_by_type: state.byType,
     new_installs_last_7d: state.newLast7d,

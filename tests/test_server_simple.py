@@ -980,7 +980,7 @@ def test_read_version(server):
     # The install_type contract is exactly this set of values; the frontend
     # guards anything else to "other", but the backend must never emit a value
     # outside the set in the first place.
-    assert data["install_type"] in {"docker", "pip", "electron", "other"}
+    assert data["install_type"] in {"docker", "pip", "electron", "other", "dev"}
 
 
 def test_read_version_install_type_docker(server, monkeypatch):
@@ -1026,6 +1026,22 @@ def test_read_version_install_type_electron(server, monkeypatch):
     response = client.get("/version")
     assert response.status_code == 200
     assert response.json()["install_type"] == "electron"
+
+
+def test_read_version_install_type_dev(server, monkeypatch):
+    """A development machine declares ``dev`` and it survives to /version.
+
+    The value has to reach the frontend intact: it is what puts ``dev`` in the
+    version-check path and in the install ping, which is how both consumers know
+    to subtract this machine. Falling back to ``pip`` here would count it.
+    """
+    monkeypatch.setenv("PIXLSTASH_IN_DOCKER", "1")
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "dev")
+    client = TestClient(server.api)
+    response = client.get("/version")
+    assert response.status_code == 200
+    # Wins over docker detection, like any other explicit declaration.
+    assert response.json()["install_type"] == "dev"
 
 
 def test_read_version_install_type_invalid_override_ignored(server, monkeypatch):

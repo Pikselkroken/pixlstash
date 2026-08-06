@@ -40,13 +40,28 @@ function isRemoteNewer(current, remote) {
 const LATEST_VERSION_BASE_URL = "https://pixlstash.dev/latest-version";
 // Install-type buckets allowed in the telemetry path; anything else (or
 // empty) collapses to "other". Detection must never block the check.
+//
+// "dev" has to be listed or it collapses to "other", which the collector counts
+// as a real install — a development machine would then be counted more firmly
+// than if the variable had never been set.
+const DEV_INSTALL_TYPE = "dev";
 const TELEMETRY_INSTALL_BUCKETS = new Set([
   "docker",
   "pip",
   "electron",
   "other",
+  DEV_INSTALL_TYPE,
 ]);
 const UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade.html";
+// Same page, distinct path, for development machines.
+//
+// The collector counts upgrade-page visits with a path filter (`%/upgrade.html%`)
+// and the install type rides in the query string, where a path filter cannot see
+// it. A separate path is therefore the only way to make this visit both visible
+// as our own signal and subtractable from the published number. It must not
+// contain "/upgrade.html" as a substring, or the filter matches it anyway —
+// which is why this is `upgrade-dev.html` and not `dev/upgrade.html`.
+const DEV_UPDATE_PAGE_URL = "https://pixlstash.dev/upgrade-dev.html";
 
 const VERSION_CHECK_STORAGE_KEY = "pixlstash:lastVersionCheck";
 const VERSION_CHECK_SECURITY_KEY = "pixlstash:lastSecurityLevel";
@@ -108,7 +123,9 @@ export function useVersionCheck(installType, checkForUpdates, enabled = true) {
         if (remote && isRemoteNewer(appVersion, remote)) {
           const dismissed = localStorage.getItem(VERSION_CHECK_DISMISSED_KEY);
           latestVersion.value = remote;
-          latestVersionUrl.value = `${UPDATE_PAGE_URL}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(type ?? "pip")}`;
+          const updatePage =
+            bucket === DEV_INSTALL_TYPE ? DEV_UPDATE_PAGE_URL : UPDATE_PAGE_URL;
+          latestVersionUrl.value = `${updatePage}?v=${encodeURIComponent(appVersion)}&i=${encodeURIComponent(type ?? "pip")}`;
           latestSecurityLevel.value = data?.security ?? null;
           updateDismissed.value = dismissed === remote;
         }

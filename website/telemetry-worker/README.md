@@ -91,11 +91,20 @@ Defences, in the order they run:
 | Rate limit | 20/minute per IP, `429` past that |
 | Size cap | 512 bytes. `Content-Length` is checked first as a cheap rejection, then the actual read is capped independently, because the header is attacker-controlled |
 | Parse | Malformed JSON is `400` |
-| Schema | Reject-by-default: an unrecognised key, a missing key, a wrong type, a non-canonical UUIDv4, or an install type outside the four buckets is `400` and nothing is stored |
+| Schema | Reject-by-default: an unrecognised key, a missing key, a wrong type, a non-canonical UUIDv4, or an install type outside the known buckets is `400` and nothing is stored |
 | Response | Fixed strings from our own constants. Submitted input is never reflected |
 
 `first_seen` and `is_new_install` are write-once. A later ping cannot rewrite an
 install's cohort or move it into the new-install population.
+
+`install_type` is one of `docker`, `pip`, `electron`, `other` or `dev`. `dev` is a
+machine that declared `PIXLSTASH_INSTALL_TYPE=dev` to say it runs PixlStash in
+order to develop it. It is accepted and stored like any other ping, and then left
+out of every published number — active installs, new installs, resurrection and
+cohort retention — while still being reported under `active_installs_by_type.dev`
+so the size of our own signal stays visible. Rejecting it at ingestion instead
+would 400 every development machine hourly, which is why it is a known bucket
+rather than an unknown one.
 
 ### `GET /v1/aggregates`
 
@@ -106,6 +115,11 @@ misconfiguration fails closed.
 Pulled by `pixlstash-metrics`, never pushed. A push design would mean storing a
 long-lived GitHub write token in Cloudflare; this way the Worker holds no
 credential that can write to anything of ours.
+
+**`active_installs_by_type` does not sum to `active_installs`.** The breakdown
+includes the `dev` bucket and the total excludes it, deliberately: the total is
+the published figure and the breakdown is where our own signal stays visible.
+Read `active_installs` for the number, never the sum of the breakdown.
 
 ## How the counting works
 

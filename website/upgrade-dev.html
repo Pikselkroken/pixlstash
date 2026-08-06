@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Update a PixlStash development build</title>
+    <meta
+      name="description"
+      content="How to update a PixlStash checkout you build from source."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Tiny5&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script>try{if(localStorage.getItem('pixlstash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+    <link rel="stylesheet" href="pixlstash.css" />
+    <style>
+      /* ── upgrade-dev.html page-specific ── */
+
+      /* Matches the hero treatment in upgrade.html: one short sentence that
+         fits the 1320px shell, balanced so a narrow viewport wraps evenly. */
+      .page-hero p {
+        max-width: 62rem;
+        text-wrap: balance;
+      }
+
+      .dev-card {
+        background: var(--panel);
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--border);
+        box-shadow: 0 8px 32px var(--shadow);
+        padding: 28px;
+        max-width: 46rem;
+        margin: 0 auto;
+      }
+
+      .dev-card h2 {
+        font-family: var(--display);
+        margin: 0 0 6px;
+      }
+
+      .dev-card pre {
+        background: var(--panel-strong);
+        border-radius: var(--radius-md);
+        font-family: var(--mono);
+        margin: 0 0 20px;
+        overflow-x: auto;
+        padding: 16px;
+      }
+
+      .dev-note {
+        color: var(--muted);
+        margin: 0;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="shell">
+      <div id="nav-placeholder"></div>
+      <script src="nav.js"></script>
+
+      <div class="page-hero">
+        <h1>You are running a development build</h1>
+        <p>
+          This machine declares <code>PIXLSTASH_INSTALL_TYPE=dev</code>, so it is
+          reported as our own signal and subtracted from the published usage
+          numbers. Update it from source rather than from a release artifact.
+        </p>
+      </div>
+
+      <div class="dev-card">
+        <h2>Update from source</h2>
+        <pre>git pull
+pip install -e .
+cd frontend &amp;&amp; npm install &amp;&amp; npm run build</pre>
+        <p class="dev-note">
+          Restart <code>python -m pixlstash.app</code> to load the new code. If
+          you meant to follow the packaged instructions instead, unset
+          <code>PIXLSTASH_INSTALL_TYPE</code> and reload.
+        </p>
+      </div>
+
+      <div class="page-footer">
+        <p>
+          See the
+          <a
+            href="https://github.com/pikselkroken/pixlstash/releases"
+            target="_blank"
+            rel="noopener"
+            >full changelog</a
+          >
+          for what's new in each release. &nbsp;·&nbsp;
+          <a href="index.html">Back to PixlStash home</a>
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
