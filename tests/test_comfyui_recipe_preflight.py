@@ -397,6 +397,14 @@ class TestSaveImageDetection:
         graph = {"9": {"class_type": "SaveImage", "inputs": {}}}
         assert preflight_prompt(graph, {"SaveImage": {}})["has_save_image"] is True
 
+    def test_reports_a_graph_saved_by_the_pixlstash_node(self):
+        # The PixlStash saver uploads into the vault itself instead of writing
+        # a file. Refusing it as "produces nothing importable" blocked variants
+        # on every workflow built around the ComfyUI-PixlStash pack.
+        graph = {"9": {"class_type": "PixlStashPictureSaver", "inputs": {}}}
+        info = {"PixlStashPictureSaver": {}}
+        assert preflight_prompt(graph, info)["has_save_image"] is True
+
     def test_reports_a_graph_that_writes_nothing_importable(self):
         graph = {"9": {"class_type": "SaveAnimatedWEBP", "inputs": {}}}
         info = {"SaveAnimatedWEBP": {}}

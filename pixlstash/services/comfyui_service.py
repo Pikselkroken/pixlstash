@@ -46,6 +46,16 @@ logger = get_logger(__name__)
 SEED_FIELDS = {"noise_seed", "seed"}
 SEED_NODE_CLASSES = {"RandomNoise", "KSampler", "KSamplerAdvanced"}
 
+# Nodes from the ComfyUI-PixlStash pack that upload straight into the vault
+# instead of writing a file for PixlStash to collect. Their history entry
+# carries the ids they created under PIXLSTASH_IDS_KEY, and the images they do
+# report are `type: "temp"` previews of pictures that are already imported.
+PIXLSTASH_SAVER_CLASSES = frozenset({"PixlStashPictureSaver"})
+PIXLSTASH_IDS_KEY = "picture_ids"
+
+# Every class that ends a graph with an image PixlStash can end up owning.
+SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | PIXLSTASH_SAVER_CLASSES
+
 
 def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
     if not isinstance(history_payload, dict):
@@ -364,9 +374,24 @@ def _extract_output_node_ids(workflow: dict, payload: dict) -> list[str]:
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") == "SaveImage":
+        if node.get("class_type") in SAVE_NODE_CLASSES:
             save_nodes.append(str(node_id))
     return save_nodes
+
+
+def graph_has_pixlstash_saver(workflow: dict) -> bool:
+    """True when *workflow* ends in a node that imports into the vault itself.
+
+    Such a graph needs no ``filename_prefix`` tagging to be stacked: the saver
+    reports the picture ids it created and ``_process_comfyui_outputs`` adopts
+    them directly.
+    """
+    if not isinstance(workflow, dict):
+        return False
+    return any(
+        isinstance(node, dict) and node.get("class_type") in PIXLSTASH_SAVER_CLASSES
+        for node in workflow.values()
+    )
 
 
 def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
@@ -403,11 +428,12 @@ def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
         ) from exc
 
 
-def _extract_comfyui_output_images(
+def _iter_output_nodes(
     history_payload: dict,
     prompt_id: str,
     output_node_ids: list[str] | None,
-) -> list[dict]:
+):
+    """Yield the ``outputs`` payload of each history node in scope."""
     outputs = {}
     if isinstance(history_payload, dict):
         if "outputs" in history_payload:
@@ -416,14 +442,54 @@ def _extract_comfyui_output_images(
             outputs = history_payload.get(prompt_id, {}).get("outputs") or {}
 
     if not isinstance(outputs, dict):
-        return []
+        return
 
     node_filter = set(output_node_ids or [])
-    images = []
     for node_id, node_payload in outputs.items():
         if node_filter and str(node_id) not in node_filter:
             continue
         if not isinstance(node_payload, dict):
+            continue
+        yield node_payload
+
+
+def _extract_pixlstash_picture_ids(
+    history_payload: dict,
+    prompt_id: str,
+    output_node_ids: list[str] | None,
+) -> list[int] | None:
+    """Picture ids a PixlStash saver node imported, or None if none ran.
+
+    The empty list is meaningful and distinct from None: the node ran but every
+    image it uploaded was a duplicate of one already in the vault, so there is
+    nothing new to stack — and nothing to gain from downloading its previews.
+    """
+    ids: list[int] | None = None
+    for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
+        if PIXLSTASH_IDS_KEY not in node_payload:
+            continue
+        if ids is None:
+            ids = []
+        for value in node_payload.get(PIXLSTASH_IDS_KEY) or []:
+            # The node joins its ids into one comma-separated string so that
+            # downstream ComfyUI nodes can consume them as a STRING.
+            for part in str(value).split(","):
+                part = part.strip()
+                if part.isdigit():
+                    ids.append(int(part))
+    return ids
+
+
+def _extract_comfyui_output_images(
+    history_payload: dict,
+    prompt_id: str,
+    output_node_ids: list[str] | None,
+) -> list[dict]:
+    images = []
+    for node_payload in _iter_output_nodes(history_payload, prompt_id, output_node_ids):
+        if PIXLSTASH_IDS_KEY in node_payload:
+            # A PixlStash saver's images are temp previews of pictures it has
+            # already imported. Downloading them would re-import a duplicate.
             continue
         for image in node_payload.get("images") or []:
             if not isinstance(image, dict):
@@ -447,7 +513,12 @@ def _wait_for_comfyui_outputs(
     output_node_ids: list[str] | None,
     timeout_s: float = 300.0,
     poll_s: float = 1.0,
-) -> list[dict]:
+) -> tuple[list[dict], list[int] | None]:
+    """Poll history until the prompt produces output.
+
+    Returns the images to download and import, plus the picture ids a PixlStash
+    saver node imported on its own (None when no such node ran).
+    """
     # 5 min budget covers cold model loading plus generation before giving up.
     deadline = time.time() + timeout_s
     last_images = []
@@ -456,18 +527,21 @@ def _wait_for_comfyui_outputs(
         images = _extract_comfyui_output_images(
             history_payload, prompt_id, output_node_ids
         )
+        pixlstash_ids = _extract_pixlstash_picture_ids(
+            history_payload, prompt_id, output_node_ids
+        )
         status_str, error_text = _extract_history_status_and_error(
             history_payload, prompt_id
         )
-        if images:
-            return images
+        if images or pixlstash_ids is not None:
+            return images, pixlstash_ids
         if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
             raise RuntimeError(error_text or f"ComfyUI status={status_str}")
         if error_text and status_str != "success":
             raise RuntimeError(error_text)
         last_images = images
         time.sleep(poll_s)
-    return last_images
+    return last_images, None
 
 
 def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
@@ -886,8 +960,10 @@ def _process_comfyui_outputs(
     ``_emit_comfyui_failure_progress`` and never a ``PICTURE_IMPORTED`` event.
     """
     try:
-        images = _wait_for_comfyui_outputs(base_url, prompt_id, output_node_ids)
-        if not images:
+        images, pixlstash_ids = _wait_for_comfyui_outputs(
+            base_url, prompt_id, output_node_ids
+        )
+        if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
             _emit_comfyui_failure_progress(
                 server,
@@ -928,6 +1004,17 @@ def _process_comfyui_outputs(
             reference_folder_id=ref_folder_id,
             source_file_stem=source_file_stem,
         )
+        if pixlstash_ids:
+            # A PixlStash saver node uploaded these itself, so there is nothing
+            # left to import — but everything below (stacking, source lineage,
+            # set/project inheritance, the single import event) still has to
+            # run, and it needs the ids the node reported.
+            #
+            # ponytail: assumes the node points at this vault, which is what
+            # ComfyUI Settings is configured with. Cross-wiring it at a second
+            # vault would adopt ids belonging to unrelated pictures; the fix is
+            # for the node to report its target URL, not a heuristic here.
+            new_ids = new_ids + [pid for pid in pixlstash_ids if pid not in new_ids]
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(server, stack_id, new_ids)
         if new_ids:

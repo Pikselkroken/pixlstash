@@ -309,6 +309,7 @@ jobs:
           tests/test_ci_shards.py
           tests/test_clip_text_embedding_similarity.py
           tests/test_comfyui_api_prompt_extraction.py
+          tests/test_comfyui_pixlstash_saver.py
           tests/test_comfyui_recipe_preflight.py
           tests/test_comfyui_recipe_route.py
           tests/test_comfyui_stack_filter.py

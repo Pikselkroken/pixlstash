@@ -57,6 +57,7 @@ from pixlstash.services.comfyui_service import (
     _replace_placeholders,
     _submit_comfyui_prompt,
     _upload_image_to_comfyui,
+    graph_has_pixlstash_saver,
 )
 
 # Re-exported so existing call sites and tests that import these helpers from
@@ -816,7 +817,9 @@ def create_router(server) -> APIRouter:
                     prefix_value = build_stack_filename_prefix(
                         prefix_seed, stack_id, pic_id
                     )
-                    if not _apply_filename_prefix(workflow_instance, prefix_value):
+                    if not _apply_filename_prefix(
+                        workflow_instance, prefix_value
+                    ) and not graph_has_pixlstash_saver(workflow_instance):
                         logger.warning(
                             "ComfyUI workflow has no SaveImage node to tag for stack %s",
                             stack_id,
@@ -1206,8 +1209,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "This workflow has no SaveImage node, so it produces nothing "
-                    "PixlStash can import."
+                    "This workflow has no node that saves images (SaveImage or "
+                    "PixlStash Picture Saver), so it produces nothing PixlStash "
+                    "can import."
                 ),
             )
         if not seed_targets:
@@ -1240,7 +1244,9 @@ def create_router(server) -> APIRouter:
                 prefix_value = build_stack_filename_prefix(
                     prefix_seed, stack_id, pic_id
                 )
-                if not _apply_filename_prefix(workflow_instance, prefix_value):
+                if not _apply_filename_prefix(
+                    workflow_instance, prefix_value
+                ) and not graph_has_pixlstash_saver(workflow_instance):
                     logger.warning(
                         "Embedded recipe for picture %s has no SaveImage node to tag "
                         "for stack %s; the output will import unstacked.",
